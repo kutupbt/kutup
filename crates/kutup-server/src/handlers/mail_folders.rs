@@ -614,11 +614,11 @@ mod tests {
             assert!(check_color(bad).is_err(), "{bad}");
         }
         assert!(check_sealed("not base64!").is_err());
-        assert!(check_sealed(&STANDARD.encode(b"KUTMN1\0\0short")).is_err());
+        assert!(check_sealed(&STANDARD.encode(b"KUTMN2\0\0short")).is_err());
         let key = kutup_crypto::mail_names::derive_names_key(&[1; 32]).unwrap();
         let sealed = kutup_crypto::mail_names::seal_name(
             &key,
-            "alice@kutup.dev",
+            "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
             kutup_crypto::mail_names::MailNameKind::Folder,
             &[2; 16],
             "Faturalar",

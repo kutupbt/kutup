@@ -56,7 +56,7 @@ export function useOwnProfile() {
       const sealed = await fetchSealed()
       if (!sealed) return { sealed: null, view: null }
       const wasm = await loadChatWasm()
-      return { sealed, view: wasm.accountProfileOpen(session.masterKey, sealed, address!) }
+      return { sealed, view: wasm.accountProfileOpen(session.masterKey, sealed, address!, session.envelopeBinding) }
     },
   })
 }
@@ -72,7 +72,7 @@ export function useSaveProfile() {
       // Seal over what the server holds now, so another device's edit is
       // not lost to a stale copy.
       const current = await fetchSealed()
-      const upload = wasm.accountProfileSeal(session.masterKey, current, update, address)
+      const upload = wasm.accountProfileSeal(session.masterKey, current, update, address, session.envelopeBinding)
       await api.put('/chat/profile', upload)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: profileKey }),

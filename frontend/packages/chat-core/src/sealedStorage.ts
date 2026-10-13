@@ -23,21 +23,13 @@ export class SealedStorage {
   }
 
   /**
-   * The value kept as `name`. A value an older version kept in plaintext
-   * under `legacyKey` is taken over: sealed here and the plaintext removed.
-   * Unreadable values read as absent.
+   * The value kept as `name`. Unreadable values read as absent; nothing kept
+   * in plaintext is ever taken over.
    */
-  read<T>(name: string, legacyKey?: string): T | undefined {
+  read<T>(name: string): T | undefined {
     try {
       const sealed = this.storage.getItem(this.key(name))
-      if (sealed !== null) return this.openValues<T>([{ name, sealed: fromBase64(sealed) }])[0]
-      if (legacyKey === undefined) return undefined
-      const plain = this.storage.getItem(legacyKey)
-      if (plain === null) return undefined
-      const value = JSON.parse(plain) as T
-      this.write(name, value)
-      this.storage.removeItem(legacyKey)
-      return value
+      return sealed === null ? undefined : this.openValues<T>([{ name, sealed: fromBase64(sealed) }])[0]
     } catch {
       return undefined
     }

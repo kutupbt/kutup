@@ -23,7 +23,7 @@ const PATH: &str = concat!(
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     address: String,
-    login_email: String,
+    binding: String,
     master_key: String,
     created_at: u32,
     secret_key: String,
@@ -130,7 +130,7 @@ fn write_vectors() {
     );
     let vectors = Vectors {
         address: address.into(),
-        login_email: "Alice@Example.com".into(),
+        binding: "Alice@Example.com".into(),
         master_key: STANDARD.encode(master),
         created_at: 1_790_000_000,
         secret_key: STANDARD.encode(&*key.secret_key),
@@ -169,7 +169,7 @@ fn checked_in_vectors_hold() {
     // and it opens only for its own address, fingerprint and account.
     let sealed = seal_address_key_with_nonce(
         &master,
-        &v.login_email,
+        &v.binding,
         &v.address,
         &b64(&v.secret_key),
         &b64(&v.envelope_nonce),
@@ -179,7 +179,7 @@ fn checked_in_vectors_hold() {
     let opened = open_address_key(
         &b64(&v.envelope),
         &master,
-        &v.login_email,
+        &v.binding,
         &v.address,
         &fingerprint,
     )
@@ -188,7 +188,7 @@ fn checked_in_vectors_hold() {
     assert!(open_address_key(
         &b64(&v.envelope),
         &master,
-        &v.login_email,
+        &v.binding,
         "bob@kutup.dev",
         &fingerprint
     )

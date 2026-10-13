@@ -18,7 +18,7 @@ const PATH: &str = concat!(
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     master_key: String,
-    login_email: String,
+    binding: String,
     file_id: String,
     password: String,
     key_file: String,
@@ -57,7 +57,7 @@ fn write_vectors() {
     .unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
-        login_email: email.into(),
+        binding: email.into(),
         file_id: file_id.to_string(),
         password: password.into(),
         key_file: STANDARD.encode(KEY_FILE),
@@ -75,21 +75,16 @@ fn checked_in_vectors_hold() {
     let key_file = STANDARD.decode(&v.key_file).unwrap();
     let nonce = STANDARD.decode(&v.nonce).unwrap();
     let expected = secret(&v.password, &key_file);
-    let sealed = seal_vault_secret_with_nonce(
-        &master,
-        &v.login_email,
-        file_id.as_bytes(),
-        &expected,
-        &nonce,
-    )
-    .unwrap();
+    let sealed =
+        seal_vault_secret_with_nonce(&master, &v.binding, file_id.as_bytes(), &expected, &nonce)
+            .unwrap();
     assert_eq!(STANDARD.encode(&sealed), v.sealed);
     assert_eq!(
-        open_vault_secret(&sealed, &master, &v.login_email, file_id.as_bytes()).unwrap(),
+        open_vault_secret(&sealed, &master, &v.binding, file_id.as_bytes()).unwrap(),
         expected
     );
     // Another vault's id does not open it.
-    assert!(open_vault_secret(&sealed, &master, &v.login_email, &[0; 16]).is_err());
+    assert!(open_vault_secret(&sealed, &master, &v.binding, &[0; 16]).is_err());
     assert_eq!(
         kutup_crypto::account_envelope::inspect(&sealed)
             .unwrap()

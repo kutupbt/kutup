@@ -133,20 +133,21 @@ describe('ChatBackupStore durable transactions', () => {
     db.close()
   })
 
-  it('seals records an older version kept in plaintext, and refuses ones that do not open', async () => {
-    const db = await openBackupStore(databaseName('legacy'))
-    const legacy = { id: 'legacy-1', fingerprint: 'f', record: { value: 'plain' }, local: true }
+  it('refuses a record that is not sealed, or does not open, as a damaged store', async () => {
+    const db = await openBackupStore(databaseName('unsealed'))
+    const plain = { id: 'plain-1', fingerprint: 'f', record: { value: 'plain' }, local: true }
     const write = db.transaction('records', 'readwrite')
-    write.objectStore('records').put(legacy)
+    write.objectStore('records').put(plain)
     await new Promise((resolve) => { write.oncomplete = resolve })
 
-    expect(await readBackupRecords(db, testSealer)).toEqual([legacy])
-    expect(JSON.stringify(await getAll(db, 'records'))).not.toContain('plain')
-    expect(await readBackupRecords(db, testSealer)).toEqual([legacy])
+    // Not taken over: an unsealed row is never adopted, and stays as it was.
+    await expect(readBackupRecords(db, testSealer)).rejects.toThrow('do not open')
+    expect(await getAll(db, 'records')).toEqual([plain])
 
-    const foreign = db.transaction('records', 'readwrite')
-    foreign.objectStore('records').put({ id: 'moved', sealed: testSealer.sealValues([{ name: 'backup-record:other', value: {} }])[0] })
-    await new Promise((resolve) => { foreign.oncomplete = resolve })
+    const clear = db.transaction('records', 'readwrite')
+    clear.objectStore('records').clear()
+    clear.objectStore('records').put({ id: 'moved', sealed: testSealer.sealValues([{ name: 'backup-record:other', value: {} }])[0] })
+    await new Promise((resolve) => { clear.oncomplete = resolve })
     await expect(readBackupRecords(db, testSealer)).rejects.toThrow('do not open')
     db.close()
   })

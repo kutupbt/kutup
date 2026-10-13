@@ -148,8 +148,7 @@ struct KdfVec {
 #[derive(Deserialize)]
 struct RecoveryAuthVec {
     entropy: String,
-    #[serde(rename = "loginEmail")]
-    login_email: String,
+    binding: String,
     expected: String,
 }
 #[derive(Deserialize)]
@@ -174,8 +173,7 @@ struct AccountEnvelopeVec {
     plaintext: String,
     key: String,
     purpose: u8,
-    #[serde(rename = "loginEmail")]
-    login_email: String,
+    binding: String,
     #[serde(rename = "objectId", default)]
     object_id: String,
     /// The AEAD key derived for this envelope.
@@ -333,7 +331,7 @@ fn kdf_matches_go() {
 #[test]
 fn recovery_auth_proof_vector() {
     let v = load_crypto().recovery_auth;
-    let proof = kdf::derive_recovery_auth_proof(&b64(&v.entropy), &v.login_email).unwrap();
+    let proof = kdf::derive_recovery_auth_proof(&b64(&v.entropy), &v.binding).unwrap();
     assert_eq!(proof.as_slice(), &b64(&v.expected));
 }
 
@@ -373,7 +371,7 @@ fn account_envelope_vector() {
         &b64(&vector.plaintext),
         &b64(&vector.key),
         purpose,
-        &vector.login_email,
+        &vector.binding,
         &object,
         &b64(&vector.nonce),
     )
@@ -387,7 +385,7 @@ fn account_envelope_vector() {
             &envelope,
             &b64(&vector.key),
             purpose,
-            &vector.login_email,
+            &vector.binding,
             &object
         )
         .unwrap(),
@@ -399,7 +397,7 @@ fn account_envelope_vector() {
             account_envelope::v2_aead_key_for_vectors(
                 &b64(&vector.key),
                 purpose,
-                &vector.login_email,
+                &vector.binding,
                 &object
             )
             .unwrap()
@@ -412,7 +410,7 @@ fn account_envelope_vector() {
     let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
         account_envelope::open_object(envelope, &key, purpose, binding, object).is_err()
     };
-    assert!(refused(&envelope, purpose, &vector.login_email, &[0; 16]));
+    assert!(refused(&envelope, purpose, &vector.binding, &[0; 16]));
     assert!(refused(
         &envelope,
         purpose,
@@ -422,19 +420,19 @@ fn account_envelope_vector() {
     assert!(refused(
         &envelope,
         AccountEnvelopePurpose::PasswordMasterKey,
-        &vector.login_email,
+        &vector.binding,
         &object
     ));
     let mut downgraded = envelope.clone();
     downgraded[9] = 1;
-    assert!(refused(&downgraded, purpose, &vector.login_email, &object));
-    assert!(refused(&downgraded, purpose, &vector.login_email, &[]));
-    let object_at = 14 + vector.login_email.len() + 1;
+    assert!(refused(&downgraded, purpose, &vector.binding, &object));
+    assert!(refused(&downgraded, purpose, &vector.binding, &[]));
+    let object_at = 14 + vector.binding.len() + 1;
     let mut moved = envelope.clone();
     moved[object_at] ^= 0x01;
     let mut moved_object = object.clone();
     moved_object[0] ^= 0x01;
-    assert!(refused(&moved, purpose, &vector.login_email, &moved_object));
+    assert!(refused(&moved, purpose, &vector.binding, &moved_object));
 }
 
 #[test]

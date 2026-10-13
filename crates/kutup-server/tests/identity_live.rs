@@ -140,7 +140,7 @@ fn identity_pins_sync_by_revision() {
     let base = base.trim_end_matches('/').to_string();
     let c = Client::new();
     let owner = register(&c, &base);
-    let account = owner.account.clone();
+    let binding = owner.binding.clone();
     let key = identity_pins::derive_key(&owner.master_key).unwrap();
     let friend = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
     let list = IdentityPinsV1 {
@@ -170,7 +170,7 @@ fn identity_pins_sync_by_revision() {
         .unwrap()
     };
     assert_eq!(get().status(), StatusCode::NOT_FOUND);
-    let seal = |revision: u64| b64(&identity_pins::seal(&key, &account, revision, &list).unwrap());
+    let seal = |revision: u64| b64(&identity_pins::seal(&key, &binding, revision, &list).unwrap());
 
     // Revisions follow one another; a write that missed one is refused with the current one.
     assert_eq!(put(2, seal(2)).status(), StatusCode::CONFLICT);
@@ -183,15 +183,15 @@ fn identity_pins_sync_by_revision() {
     assert_eq!(put(2, seal(2)).status(), StatusCode::NO_CONTENT);
     assert_eq!(put(2, seal(2)).status(), StatusCode::CONFLICT);
 
-    // What comes back opens only at its revision, for its owner.
+    // What comes back opens only at its revision, for its owner's key binding.
     let stored: Value = get().json().unwrap();
     assert_eq!(stored["revision"], 2);
     let sealed = base64_decode(stored["envelope"].as_str().unwrap());
     assert_eq!(
-        identity_pins::open(&key, &account, 2, &sealed).unwrap(),
+        identity_pins::open(&key, &binding, 2, &sealed).unwrap(),
         list
     );
-    assert!(identity_pins::open(&key, &account, 1, &sealed).is_err());
+    assert!(identity_pins::open(&key, &binding, 1, &sealed).is_err());
 
     // Not a sealed list: refused.
     assert_eq!(put(3, b64(b"plain text")).status(), StatusCode::BAD_REQUEST);

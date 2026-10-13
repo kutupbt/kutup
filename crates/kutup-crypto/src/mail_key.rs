@@ -235,7 +235,7 @@ fn sha256_fingerprint_of(key: &SignedPublicKey) -> Result<[u8; 32]> {
 /// address and the key's own fingerprint.
 pub fn seal_address_key(
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     address: &str,
     secret_key: &[u8],
 ) -> Result<Vec<u8>> {
@@ -244,14 +244,14 @@ pub fn seal_address_key(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
-        login_email,
+        binding,
     )
 }
 
 /// [`seal_address_key`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_address_key_with_nonce(
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     address: &str,
     secret_key: &[u8],
     nonce: &[u8],
@@ -261,7 +261,7 @@ pub fn seal_address_key_with_nonce(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
-        login_email,
+        binding,
         nonce,
     )
 }
@@ -296,7 +296,7 @@ fn secret_key_fingerprint(secret_key: &[u8]) -> Result<[u8; FINGERPRINT_LEN]> {
 pub fn open_address_key(
     envelope: &[u8],
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     address: &str,
     fingerprint: &[u8; FINGERPRINT_LEN],
 ) -> Result<Zeroizing<Vec<u8>>> {
@@ -305,7 +305,7 @@ pub fn open_address_key(
         envelope,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
-        login_email,
+        binding,
     )?);
     let mut rest = payload
         .strip_prefix(PRIVATE_KEY_DOMAIN)

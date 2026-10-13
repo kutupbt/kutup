@@ -31,32 +31,27 @@ function sealRecords<T>(sealer: BackupRecordSealer, records: StoredBackupRecord<
 }
 
 /**
- * Every record of the mirror, opened in one batch. Rows an older version
- * kept in plaintext are sealed now. A row that does not open is a damaged or
- * foreign store, not an empty one.
+ * Every record of the mirror, opened in one batch. A row that is not sealed,
+ * or that does not open, is a damaged or foreign store, not an empty one:
+ * nothing is ever kept in plaintext, so nothing unsealed is taken over.
  */
 export async function readBackupRecords<T>(
   db: IDBDatabase,
   sealer: BackupRecordSealer,
 ): Promise<StoredBackupRecord<T>[]> {
-  const rows = await getAll<SealedRecordRow | StoredBackupRecord<T>>(db, 'records')
-  const sealed = rows.filter((row): row is SealedRecordRow => 'sealed' in row)
-  const legacy = rows.filter((row): row is StoredBackupRecord<T> => !('sealed' in row))
+  const rows = await getAll<Partial<SealedRecordRow>>(db, 'records')
+  if (rows.some((row) => typeof row.id !== 'string' || !(row.sealed instanceof Uint8Array))) {
+    throw new Error('Chat backup records do not open with this account')
+  }
+  const sealed = rows as SealedRecordRow[]
   const opened = sealer.openValues<Omit<StoredBackupRecord<T>, 'id'>>(
     sealed.map((row) => ({ name: recordName(row.id), sealed: row.sealed })),
   )
-  const records = sealed.map((row, i) => {
+  return sealed.map((row, i) => {
     const value = opened[i]
     if (!value) throw new Error('Chat backup records do not open with this account')
     return { id: row.id, ...value }
   })
-  if (legacy.length > 0) {
-    const transaction = db.transaction('records', 'readwrite')
-    const store = transaction.objectStore('records')
-    for (const row of sealRecords(sealer, legacy)) store.put(row)
-    await transactionDone(transaction)
-  }
-  return [...records, ...legacy]
 }
 
 export interface BackupOutboxEntry {

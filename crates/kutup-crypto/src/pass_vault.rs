@@ -99,7 +99,7 @@ fn take_value<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8]> {
 /// the master key.
 pub fn seal_vault_secret(
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     file_id: &[u8; 16],
     secret: &VaultSecretV1,
 ) -> Result<Vec<u8>> {
@@ -107,7 +107,7 @@ pub fn seal_vault_secret(
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
-        login_email,
+        binding,
         file_id,
     )
 }
@@ -115,7 +115,7 @@ pub fn seal_vault_secret(
 /// [`seal_vault_secret`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_vault_secret_with_nonce(
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     file_id: &[u8; 16],
     secret: &VaultSecretV1,
     nonce: &[u8],
@@ -125,7 +125,7 @@ pub fn seal_vault_secret_with_nonce(
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
-        login_email,
+        binding,
         file_id,
         nonce,
     )
@@ -136,14 +136,14 @@ pub fn seal_vault_secret_with_nonce(
 pub fn open_vault_secret(
     envelope: &[u8],
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     file_id: &[u8; 16],
 ) -> Result<VaultSecretV1> {
     let plain = Zeroizing::new(account_envelope::open_object(
         envelope,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
-        login_email,
+        binding,
         file_id,
     )?);
     let mut rest = plain.strip_prefix(DOMAIN).ok_or(CryptoError::AuthFailed)?;

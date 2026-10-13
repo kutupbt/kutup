@@ -109,6 +109,7 @@ fn encrypted_install_registers_once_and_reopens() {
         "alice".into(),
         "chat.test".into(),
         vec![9; 32],
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
         http.clone(),
     ))
     .unwrap();
@@ -146,6 +147,7 @@ fn encrypted_install_registers_once_and_reopens() {
         "alice".into(),
         "chat.test".into(),
         vec![9; 32],
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
         http.clone(),
     ));
     assert!(matches!(wrong_key, Err(KutupChatError::Storage { .. })));
@@ -156,6 +158,7 @@ fn encrypted_install_registers_once_and_reopens() {
         "alice".into(),
         "chat.test".into(),
         vec![9; 32],
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
         http.clone(),
     ))
     .unwrap();

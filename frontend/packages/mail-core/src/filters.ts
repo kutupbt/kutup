@@ -62,7 +62,7 @@ export function useFilters() {
       return Promise.all(
         data.map(async (filter) => ({
           ...filter,
-          name: await openMailName(masterKey, address!, 'filter', filter.id, filter.name).catch(() => '…'),
+          name: await openMailName(masterKey, session.envelopeBinding, 'filter', filter.id, filter.name).catch(() => '…'),
         })),
       )
     },
@@ -78,7 +78,7 @@ function useFilterMutation<T, R>(fn: (input: T, seal: (id: string, name: string)
       const address = account.data?.address
       if (!address) throw new Error('mail is not ready')
       const masterKey = toBase64(session.masterKey)
-      return fn(input, (id, name) => sealMailName(masterKey, address, 'filter', id, name))
+      return fn(input, (id, name) => sealMailName(masterKey, session.envelopeBinding, 'filter', id, name))
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: filtersKey }),
   })

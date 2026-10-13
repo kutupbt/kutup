@@ -145,7 +145,7 @@ pub async fn provision(
     .fetch_one(&mut *transaction)
     .await?;
     let (binding, account_incarnation_id, authority_public_key, authority_key_id) = user_row;
-    if envelope_header.canonical_login_email != binding {
+    if envelope_header.canonical_binding != binding {
         return Err(AppError::bad_request(
             "Chat backup root envelope account binding mismatch",
         ));

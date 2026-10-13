@@ -93,7 +93,7 @@ async function ownLookup(me: DriveIdentity): Promise<ProfileLookup | null> {
     throw error
   }
   const wasm = await loadChatWasm()
-  return wasm.accountProfileKey(me.masterKey, sealed, me.account)
+  return wasm.accountProfileKey(me.masterKey, sealed, me.account, me.binding)
 }
 
 /** Give someone your current profile key, if they do not have it yet. */

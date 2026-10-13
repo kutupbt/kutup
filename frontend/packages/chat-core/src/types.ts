@@ -1999,16 +1999,22 @@ export interface ProfileLookup {
 }
 
 export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
-  /** The account's own profile key, from the master key. */
-  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string): ProfileLookup
+  /**
+   * The account's own profile key, from the master key and the key binding
+   * (`session.envelopeBinding`) its own copy is wrapped to.
+   */
+  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string, binding: string): ProfileLookup
   /** Where to fetch a profile, from its key (standard base64). */
   profileLookup(key: string): ProfileLookup
   /** Open someone's fetched profile with their key (standard base64). */
   profileOpenPeer(peer: string, encrypted: unknown, key: string): AccountProfileView
-  /** Open the account's profile from the master key (no chat device). */
-  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string): AccountProfileView
-  /** Seal the next profile revision (or the first) as the account app. */
-  accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string): unknown
+  /** Open the account's profile from the master key and key binding (no chat device). */
+  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string, binding: string): AccountProfileView
+  /**
+   * Seal the next profile revision (or the first) as the account app: the
+   * profile names `account`; its own copy of the key binds `binding`.
+   */
+  accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string, binding: string): unknown
   /** Seal small browser-side values for an account scope, one purpose each. */
   sealLocalData(masterKey: Uint8Array, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
   /** Open what `sealLocalData` sealed; a value that does not open is `null`. */
@@ -2021,6 +2027,8 @@ export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
       serverName: string,
       sealedSenderEnabled: boolean,
       masterKey: Uint8Array,
+      /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
+      binding: string,
       transport: ChatTransportPort,
     ): Promise<WasmChatClientHandle>
   }

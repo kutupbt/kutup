@@ -1338,17 +1338,17 @@ fn address_keys_rotate_and_change_flags() {
     assert_eq!(list3.list.sequence, 3);
 }
 
-/// A name sealed the way Mail seals it in the browser.
+/// A name sealed the way Mail seals it in the browser: bound to the
+/// account's key binding.
 fn sealed_name(
     user: &User,
-    account: &str,
     kind: kutup_crypto::mail_names::MailNameKind,
     id: &str,
     name: &str,
 ) -> String {
     let key = kutup_crypto::mail_names::derive_names_key(&user.master_key).unwrap();
     let id = *uuid::Uuid::parse_str(id).unwrap().as_bytes();
-    b64(&kutup_crypto::mail_names::seal_name(&key, account, kind, &id, name).unwrap())
+    b64(&kutup_crypto::mail_names::seal_name(&key, &user.binding, kind, &id, name).unwrap())
 }
 
 #[test]
@@ -1381,7 +1381,7 @@ fn folders_and_labels() {
     let new_folder = |parent: Option<&str>, name: &str| {
         let id = uuid::Uuid::new_v4().to_string();
         let r = bearer(c.post(format!("{base}/api/mail/folders")), &user.token)
-            .json(&json!({ "id": id, "parentId": parent, "name": sealed_name(&user, &account, Folder, &id, name), "color": "#3366cc" }))
+            .json(&json!({ "id": id, "parentId": parent, "name": sealed_name(&user, Folder, &id, name), "color": "#3366cc" }))
             .send()
             .unwrap();
         (id, r.status().as_u16())
@@ -1443,7 +1443,8 @@ fn folders_and_labels() {
     .unwrap();
     let acme_bytes = *uuid::Uuid::parse_str(&acme).unwrap().as_bytes();
     assert_eq!(
-        kutup_crypto::mail_names::open_name(&key, &account, Folder, &acme_bytes, &sealed).unwrap(),
+        kutup_crypto::mail_names::open_name(&key, &user.binding, Folder, &acme_bytes, &sealed)
+            .unwrap(),
         "Acme"
     );
 
@@ -1484,7 +1485,7 @@ fn folders_and_labels() {
     // A label on the message: listed and counted, kept through a move.
     let label = uuid::Uuid::new_v4().to_string();
     let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
-        .json(&json!({ "id": label, "name": sealed_name(&user, &account, Label, &label, "Faturalar"), "color": "#22aa55" }))
+        .json(&json!({ "id": label, "name": sealed_name(&user, Label, &label, "Faturalar"), "color": "#22aa55" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 201);
@@ -1575,7 +1576,6 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     let c = client();
     let user = register(&c, &base);
     let address = set_up_address(&c, &base, &user);
-    let account = address.address.clone();
     let post = |path: &str, body: Value| {
         bearer(c.post(format!("{base}{path}")), &user.token)
             .json(&body)
@@ -1587,9 +1587,9 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     send_to_self(&c, &base, &user, &address, "Eski fatura");
 
     let invoices = uuid::Uuid::new_v4().to_string();
-    assert_eq!(post("/api/mail/folders", json!({ "id": invoices, "name": sealed_name(&user, &account, Folder, &invoices, "Faturalar"), "color": "#3366cc" })).status().as_u16(), 201);
+    assert_eq!(post("/api/mail/folders", json!({ "id": invoices, "name": sealed_name(&user, Folder, &invoices, "Faturalar"), "color": "#3366cc" })).status().as_u16(), 201);
     let paid = uuid::Uuid::new_v4().to_string();
-    assert_eq!(post("/api/mail/labels", json!({ "id": paid, "name": sealed_name(&user, &account, Label, &paid, "Ödenecek"), "color": "#22aa55" })).status().as_u16(), 201);
+    assert_eq!(post("/api/mail/labels", json!({ "id": paid, "name": sealed_name(&user, Label, &paid, "Ödenecek"), "color": "#22aa55" })).status().as_u16(), 201);
 
     // Subject contains "FATURA" (any case, Turkish İ folded): into the folder, labelled, starred.
     let filter = uuid::Uuid::new_v4().to_string();
@@ -1597,7 +1597,7 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
         "/api/mail/filters",
         json!({
             "id": filter,
-            "name": sealed_name(&user, &account, Filter, &filter, "Faturalar"),
+            "name": sealed_name(&user, Filter, &filter, "Faturalar"),
             "match": "all",
             "conditions": [{ "field": "subject", "op": "contains", "value": "FATURA" }],
             "actions": { "folder": format!("custom:{invoices}"), "labels": [paid], "star": true },
@@ -1606,7 +1606,7 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
     assert_eq!(r.status().as_u16(), 201);
     // A filter that names no action, or someone else's folder, is refused.
     let bad = uuid::Uuid::new_v4().to_string();
-    let name = sealed_name(&user, &account, Filter, &bad, "Bad");
+    let name = sealed_name(&user, Filter, &bad, "Bad");
     assert_eq!(post("/api/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": {} })).status().as_u16(), 400);
     assert_eq!(post("/api/mail/filters", json!({ "id": bad, "name": name, "match": "all", "conditions": [{ "field": "subject", "value": "x" }], "actions": { "folder": format!("custom:{}", uuid::Uuid::new_v4()) } })).status().as_u16(), 400);
 
@@ -3707,7 +3707,6 @@ fn select_all_changes_a_whole_place() {
     let c = client();
     let user = register(&c, &base);
     let address = set_up_address(&c, &base, &user);
-    let account = address.address.clone();
     for subject in ["Bir", "İki", "Üç"] {
         send_to_self(&c, &base, &user, &address, subject);
     }
@@ -3747,7 +3746,7 @@ fn select_all_changes_a_whole_place() {
     // A label on everything archived, then off.
     let label = uuid::Uuid::new_v4().to_string();
     let r = bearer(c.post(format!("{base}/api/mail/labels")), &user.token)
-        .json(&json!({ "id": label, "name": sealed_name(&user, &account, Label, &label, "Hepsi"), "color": "#22aa55" }))
+        .json(&json!({ "id": label, "name": sealed_name(&user, Label, &label, "Hepsi"), "color": "#22aa55" }))
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 201);
@@ -4198,7 +4197,6 @@ fn body_search_lists_what_to_index_and_follows_changes() {
     let label = uuid::Uuid::new_v4().to_string();
     let name = sealed_name(
         &alice,
-        &alice_address.address,
         kutup_crypto::mail_names::MailNameKind::Label,
         &label,
         "Faturalar",

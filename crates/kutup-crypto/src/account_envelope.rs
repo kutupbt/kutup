@@ -105,7 +105,7 @@ pub struct AccountEnvelopeHeader {
     pub suite: AccountEnvelopeSuiteId,
     pub purpose: AccountEnvelopePurpose,
     /// What the account is bound by: its key binding, canonical.
-    pub canonical_login_email: String,
+    pub canonical_binding: String,
     /// The object the secret belongs to (empty when the purpose has one
     /// secret per account).
     pub object_id: Vec<u8>,
@@ -121,14 +121,14 @@ struct ParsedEnvelope<'a> {
 
 /// A binding as headers carry it: trimmed and lowercased (a key binding is
 /// already).
-pub fn canonical_login_email(value: &str) -> Result<String> {
+pub fn canonical_binding(value: &str) -> Result<String> {
     let canonical = value.trim().to_ascii_lowercase();
     if canonical.is_empty()
         || canonical.len() > MAX_CONTEXT_LEN
         || canonical.as_bytes().contains(&0)
     {
         return Err(CryptoError::InvalidInput(
-            "account-envelope login email is invalid".into(),
+            "account-envelope binding is invalid".into(),
         ));
     }
     Ok(canonical)
@@ -197,7 +197,7 @@ pub fn v2_aead_key_for_vectors(
     object_id: &[u8],
 ) -> Result<[u8; 32]> {
     check_key(key)?;
-    let binding = canonical_login_email(binding)?;
+    let binding = canonical_binding(binding)?;
     Ok(*aead_key(
         AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
         key,
@@ -223,9 +223,9 @@ pub fn seal(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
-    login_email: &str,
+    binding: &str,
 ) -> Result<Vec<u8>> {
-    seal_object(plaintext, key, purpose, login_email, &[])
+    seal_object(plaintext, key, purpose, binding, &[])
 }
 
 /// Seals a secret of `purpose` belonging to `object_id` (suite 2).
@@ -254,7 +254,7 @@ pub fn seal_with_nonce(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
-    login_email: &str,
+    binding: &str,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
     seal_suite(
@@ -262,7 +262,7 @@ pub fn seal_with_nonce(
         plaintext,
         key,
         purpose,
-        login_email,
+        binding,
         &[],
         nonce,
     )
@@ -293,7 +293,7 @@ pub fn seal_suite(
         expected: NONCE_LEN,
         got: nonce.len(),
     })?;
-    let binding = canonical_login_email(binding)?;
+    let binding = canonical_binding(binding)?;
     let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("account-envelope plaintext is too long".into()))?;
     let header = build_header(suite, purpose, &binding, object_id, &nonce, ciphertext_len)?;
@@ -347,8 +347,8 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
     }
     let context = std::str::from_utf8(&envelope[cursor..after_context])
         .map_err(|_| CryptoError::InvalidInput("account-envelope context is not UTF-8".into()))?;
-    let canonical_email = canonical_login_email(context)?;
-    if canonical_email != context {
+    let canonical = canonical_binding(context)?;
+    if canonical != context {
         return Err(CryptoError::InvalidInput(
             "account-envelope context is not canonical".into(),
         ));
@@ -393,7 +393,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         header: AccountEnvelopeHeader {
             suite,
             purpose,
-            canonical_login_email: canonical_email,
+            canonical_binding: canonical,
             object_id,
             ciphertext_len,
         },
@@ -411,12 +411,12 @@ pub fn inspect(envelope: &[u8]) -> Result<AccountEnvelopeHeader> {
 pub fn validate(
     envelope: &[u8],
     expected_purpose: AccountEnvelopePurpose,
-    expected_login_email: &str,
+    expected_binding: &str,
     expected_plaintext_len: usize,
 ) -> Result<()> {
     let parsed = parse(envelope)?;
     if parsed.header.purpose != expected_purpose
-        || parsed.header.canonical_login_email != canonical_login_email(expected_login_email)?
+        || parsed.header.canonical_binding != canonical_binding(expected_binding)?
         || parsed.ciphertext.len() != expected_plaintext_len.saturating_add(TAG_LEN)
     {
         return Err(CryptoError::InvalidInput(
@@ -431,9 +431,9 @@ pub fn open(
     envelope: &[u8],
     key: &[u8],
     expected_purpose: AccountEnvelopePurpose,
-    expected_login_email: &str,
+    expected_binding: &str,
 ) -> Result<Vec<u8>> {
-    open_object(envelope, key, expected_purpose, expected_login_email, &[])
+    open_object(envelope, key, expected_purpose, expected_binding, &[])
 }
 
 /// Opens an envelope sealed for `object_id`.
@@ -448,7 +448,7 @@ pub fn open_object(
     let parsed = parse(envelope)?;
     let suite = parsed.header.suite;
     if parsed.header.purpose != expected_purpose
-        || parsed.header.canonical_login_email != canonical_login_email(expected_binding)?
+        || parsed.header.canonical_binding != canonical_binding(expected_binding)?
         || parsed.header.object_id != object_id
     {
         return Err(CryptoError::AuthFailed);
@@ -457,7 +457,7 @@ pub fn open_object(
         suite,
         key,
         expected_purpose,
-        &parsed.header.canonical_login_email,
+        &parsed.header.canonical_binding,
         &parsed.header.object_id,
     )?;
     XChaCha20Poly1305::new(aead.as_slice().into())
@@ -475,14 +475,9 @@ pub fn seal_b64(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
-    login_email: &str,
+    binding: &str,
 ) -> Result<String> {
-    Ok(base64::engine::general_purpose::STANDARD.encode(seal(
-        plaintext,
-        key,
-        purpose,
-        login_email,
-    )?))
+    Ok(base64::engine::general_purpose::STANDARD.encode(seal(plaintext, key, purpose, binding)?))
 }
 
 pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {
@@ -499,13 +494,13 @@ pub fn open_b64(
     envelope_b64: &str,
     key: &[u8],
     expected_purpose: AccountEnvelopePurpose,
-    expected_login_email: &str,
+    expected_binding: &str,
 ) -> Result<Vec<u8>> {
     open(
         &decode_canonical_b64(envelope_b64)?,
         key,
         expected_purpose,
-        expected_login_email,
+        expected_binding,
     )
 }
 
@@ -534,7 +529,7 @@ mod tests {
             header.suite,
             AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
         );
-        assert_eq!(header.canonical_login_email, BINDING);
+        assert_eq!(header.canonical_binding, BINDING);
         assert!(header.object_id.is_empty());
         assert_eq!(header.ciphertext_len, 48);
         validate(

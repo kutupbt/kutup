@@ -7,6 +7,8 @@ export interface DriveIdentity {
   userId: string
   /** `username@server`, as named shares bind it. */
   account: string
+  /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
+  binding: string
   incarnationId: string
   masterKey: Uint8Array
   privateKey: Uint8Array
@@ -35,6 +37,7 @@ export function useDriveIdentity() {
       return {
         userId: session.userId,
         account: `${session.username}@${serverName}`,
+        binding: session.envelopeBinding,
         incarnationId: identity.incarnationId,
         masterKey: session.masterKey,
         privateKey: session.privateKey,

@@ -41,8 +41,8 @@ function runWorker(request: KDFWorkerRequest): Promise<KDFWorkerResponse> {
   )
 }
 
-export async function generateRegistrationInWorker(password: string, loginEmail: string): Promise<RegistrationKeys> {
-  const response = await runWorker({ type: 'register', password, loginEmail })
+export async function generateRegistrationInWorker(password: string, binding: string): Promise<RegistrationKeys> {
+  const response = await runWorker({ type: 'register', password, binding })
   if (response.type !== 'register') throw new Error('KDF worker returned an unexpected response')
   return response.keys
 }

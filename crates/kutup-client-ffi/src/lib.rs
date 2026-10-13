@@ -183,7 +183,9 @@ impl Drop for NativeChatClient {
 
 /// Open or restart-safely register an account's native chat device. Key bytes
 /// are moved to the engine worker, used to unlock/derive state, and zeroized
-/// before the first result crosses back to Swift/Kotlin.
+/// before the first result crosses back to Swift/Kotlin. `binding` is the
+/// account's key binding (the session's `envelopeBinding`), which the
+/// account's own seals bind.
 #[uniffi::export]
 pub async fn open_native_chat_client(
     database_path: String,
@@ -191,6 +193,7 @@ pub async fn open_native_chat_client(
     user: String,
     server_name: String,
     master_key: Vec<u8>,
+    binding: String,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     if database_path.trim().is_empty() {
@@ -221,6 +224,7 @@ pub async fn open_native_chat_client(
                     database_path,
                     database_key,
                     master_key,
+                    binding,
                     user: worker_user,
                     server_name,
                     http,
@@ -257,6 +261,7 @@ struct WorkerConfig {
     database_path: String,
     database_key: [u8; 32],
     master_key: [u8; 32],
+    binding: String,
     user: String,
     server_name: String,
     http: Arc<dyn ChatHttpClient>,
@@ -317,7 +322,7 @@ fn worker_main(
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
         engine.set_local_server(&config.server_name)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
-        engine.enable_identity_pins(&config.master_key)?;
+        engine.enable_identity_pins(&config.master_key, &config.binding)?;
         config.master_key.zeroize();
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))

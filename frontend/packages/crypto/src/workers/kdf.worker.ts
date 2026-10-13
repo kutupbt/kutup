@@ -4,7 +4,7 @@ import { generateRegistrationKeys, deriveAccountProtectionKeys } from '../index'
 import type { AccountProtectionConfig } from '../kdf'
 
 export type KDFWorkerRequest =
-  | { type: 'register'; password: string; loginEmail: string }
+  | { type: 'register'; password: string; binding: string }
   | { type: 'deriveKeys'; password: string; accountProtection: AccountProtectionConfig }
 
 export type KDFWorkerResponse =
@@ -25,7 +25,7 @@ self.onmessage = async (e: MessageEvent<KDFWorkerRequest>) => {
   try {
     const req = e.data
     if (req.type === 'register') {
-      const keys = await generateRegistrationKeys(req.password, req.loginEmail)
+      const keys = await generateRegistrationKeys(req.password, req.binding)
       self.postMessage({ type: 'register', keys } satisfies KDFWorkerResponse)
     } else if (req.type === 'deriveKeys') {
       const { keyEncryptionKey, loginKey } = await deriveAccountProtectionKeys(

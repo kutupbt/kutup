@@ -12,18 +12,18 @@ export interface PassVaultSecret {
 
 export async function sealPassVaultSecret(
   masterKeyBase64: string,
-  loginEmail: string,
+  binding: string,
   fileId: string,
   secret: PassVaultSecret,
 ): Promise<string> {
-  return (await getCryptoWasm()).sealPassVaultSecret(masterKeyBase64, loginEmail, fileId, secret.password, secret.keyFile)
+  return (await getCryptoWasm()).sealPassVaultSecret(masterKeyBase64, binding, fileId, secret.password, secret.keyFile)
 }
 
 export async function openPassVaultSecret(
   envelope: string,
   masterKeyBase64: string,
-  loginEmail: string,
+  binding: string,
   fileId: string,
 ): Promise<PassVaultSecret> {
-  return (await getCryptoWasm()).openPassVaultSecret(envelope, masterKeyBase64, loginEmail, fileId)
+  return (await getCryptoWasm()).openPassVaultSecret(envelope, masterKeyBase64, binding, fileId)
 }

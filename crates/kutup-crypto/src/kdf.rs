@@ -148,22 +148,22 @@ pub fn derive_account_protection_keys_b64(
 /// never sent to the server.
 pub fn derive_recovery_auth_proof(
     recovery_entropy: &[u8],
-    login_email: &str,
+    binding: &str,
 ) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     if recovery_entropy.len() != KEY_LEN {
         return Err(CryptoError::InvalidInput(
             "recovery entropy must be 32 bytes".into(),
         ));
     }
-    let canonical_email = login_email.trim().to_ascii_lowercase();
-    if canonical_email.is_empty() {
+    let canonical = binding.trim().to_ascii_lowercase();
+    if canonical.is_empty() {
         return Err(CryptoError::InvalidInput(
-            "recovery login email is empty".into(),
+            "recovery binding is empty".into(),
         ));
     }
     let hkdf = Hkdf::<Sha256>::new(Some(RECOVERY_AUTH_SALT), recovery_entropy);
     let mut proof = Zeroizing::new([0u8; KEY_LEN]);
-    hkdf.expand(canonical_email.as_bytes(), proof.as_mut_slice())
+    hkdf.expand(canonical.as_bytes(), proof.as_mut_slice())
         .map_err(|_| CryptoError::Backend("recovery proof HKDF expand".into()))?;
     Ok(proof)
 }
@@ -173,7 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recovery_proof_is_email_normalized_and_not_raw_entropy() {
+    fn recovery_proof_is_binding_normalized_and_not_raw_entropy() {
         let entropy = [9u8; 32];
         let first = derive_recovery_auth_proof(&entropy, " Alice@Example.COM ").unwrap();
         let second = derive_recovery_auth_proof(&entropy, "alice@example.com").unwrap();

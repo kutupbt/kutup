@@ -552,7 +552,7 @@ pub fn derive_account_protection_keys(
 #[wasm_bindgen(js_name = deriveRecoveryAuthProof)]
 pub fn derive_recovery_auth_proof(
     recovery_entropy_base64: &str,
-    login_email: &str,
+    binding: &str,
 ) -> Result<String, JsValue> {
     let entropy = STANDARD
         .decode(recovery_entropy_base64)
@@ -560,7 +560,7 @@ pub fn derive_recovery_auth_proof(
     if STANDARD.encode(&entropy) != recovery_entropy_base64 {
         return Err(js_error("recovery entropy must be canonical base64"));
     }
-    let proof = kdf::derive_recovery_auth_proof(&entropy, login_email)
+    let proof = kdf::derive_recovery_auth_proof(&entropy, binding)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(proof.as_slice()))
 }
@@ -598,12 +598,12 @@ pub fn seal_account_envelope(
     plaintext_base64: &str,
     key_base64: &str,
     purpose: u8,
-    login_email: &str,
+    binding: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(purpose)?;
-    account_envelope::seal_b64(&plaintext, &key, purpose, login_email)
+    account_envelope::seal_b64(&plaintext, &key, purpose, binding)
         .map_err(|error| js_error(&error.to_string()))
 }
 
@@ -613,11 +613,11 @@ pub fn open_account_envelope(
     envelope_base64: &str,
     key_base64: &str,
     expected_purpose: u8,
-    login_email: &str,
+    binding: &str,
 ) -> Result<String, JsValue> {
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(expected_purpose)?;
-    let plaintext = account_envelope::open_b64(envelope_base64, &key, purpose, login_email)
+    let plaintext = account_envelope::open_b64(envelope_base64, &key, purpose, binding)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
 }
@@ -1816,20 +1816,16 @@ fn master_key_32(master_key_base64: &str) -> Result<[u8; 32], JsValue> {
 #[wasm_bindgen(js_name = generateMailAddressKey)]
 pub fn generate_mail_address_key(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     created_at_secs: u32,
 ) -> Result<JsValue, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
     let key = kutup_crypto::mail_key::generate_address_key(address, created_at_secs)
         .map_err(|error| js_error(&error.to_string()))?;
-    let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key,
-        login_email,
-        address,
-        &key.secret_key,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
+    let envelope =
+        kutup_crypto::mail_key::seal_address_key(&master_key, binding, address, &key.secret_key)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&MailAddressKeyView {
         public_key: STANDARD.encode(&key.public_key),
         envelope: STANDARD.encode(envelope),
@@ -1844,7 +1840,7 @@ pub fn generate_mail_address_key(
 #[wasm_bindgen(js_name = exportMailAddressKey)]
 pub fn export_mail_address_key(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -1852,7 +1848,7 @@ pub fn export_mail_address_key(
 ) -> Result<String, JsValue> {
     let secret = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -1868,7 +1864,7 @@ pub fn export_mail_address_key(
 #[wasm_bindgen(js_name = importMailAddressKey)]
 pub fn import_mail_address_key(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     file: &[u8],
     passphrase: &str,
@@ -1879,13 +1875,9 @@ pub fn import_mail_address_key(
             kutup_crypto::CryptoError::AuthFailed => js_error("wrong passphrase"),
             error => js_error(&error.to_string()),
         })?;
-    let envelope = kutup_crypto::mail_key::seal_address_key(
-        &master_key,
-        login_email,
-        address,
-        &key.secret_key,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
+    let envelope =
+        kutup_crypto::mail_key::seal_address_key(&master_key, binding, address, &key.secret_key)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&MailAddressKeyView {
         public_key: STANDARD.encode(&key.public_key),
         envelope: STANDARD.encode(envelope),
@@ -1922,7 +1914,7 @@ pub fn inspect_mail_address_public_key(
 
 fn open_mail_secret(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -1933,14 +1925,8 @@ fn open_mail_secret(
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| js_error("fingerprint must be 40 hex digits"))?;
-    kutup_crypto::mail_key::open_address_key(
-        &envelope,
-        &master_key,
-        login_email,
-        address,
-        &fingerprint,
-    )
-    .map_err(|error| js_error(&error.to_string()))
+    kutup_crypto::mail_key::open_address_key(&envelope, &master_key, binding, address, &fingerprint)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 /// A message opened with an address key (docs/plans/mail.md).
@@ -1979,7 +1965,7 @@ impl OpenedMailJs {
 #[allow(clippy::too_many_arguments)]
 pub fn open_mail_message(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -1988,7 +1974,7 @@ pub fn open_mail_message(
 ) -> Result<OpenedMailJs, JsValue> {
     let secret = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2034,7 +2020,7 @@ impl SealedMailJs {
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_message(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2043,7 +2029,7 @@ pub fn encrypt_mail_message(
 ) -> Result<SealedMailJs, JsValue> {
     let secret = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2105,7 +2091,7 @@ fn seal_shares(group_secret: &[u8], member_public_keys: &[String]) -> Result<Vec
 #[allow(clippy::too_many_arguments)]
 fn open_group_secret(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2114,7 +2100,7 @@ fn open_group_secret(
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
     let member = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2154,7 +2140,7 @@ pub fn generate_mail_group_key(
 #[allow(clippy::too_many_arguments)]
 pub fn reshare_mail_group_key(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2164,7 +2150,7 @@ pub fn reshare_mail_group_key(
 ) -> Result<Vec<String>, JsValue> {
     let secret = open_group_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2180,7 +2166,7 @@ pub fn reshare_mail_group_key(
 #[allow(clippy::too_many_arguments)]
 pub fn open_mail_group_message(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2191,7 +2177,7 @@ pub fn open_mail_group_message(
 ) -> Result<OpenedMailJs, JsValue> {
     let secret = open_group_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2257,7 +2243,7 @@ pub fn encrypt_mail_pgp_unsigned(
 #[wasm_bindgen(js_name = signMailDetached)]
 pub fn sign_mail_detached(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2265,7 +2251,7 @@ pub fn sign_mail_detached(
 ) -> Result<String, JsValue> {
     let secret = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2279,7 +2265,7 @@ pub fn sign_mail_detached(
 #[wasm_bindgen(js_name = signMailCleartext)]
 pub fn sign_mail_cleartext(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2287,7 +2273,7 @@ pub fn sign_mail_cleartext(
 ) -> Result<String, JsValue> {
     let secret = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2301,7 +2287,7 @@ pub fn sign_mail_cleartext(
 #[allow(clippy::too_many_arguments)]
 pub fn sign_mail_cleartext_as_group(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2311,7 +2297,7 @@ pub fn sign_mail_cleartext_as_group(
 ) -> Result<String, JsValue> {
     let secret = open_group_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2327,7 +2313,7 @@ pub fn sign_mail_cleartext_as_group(
 #[allow(clippy::too_many_arguments)]
 pub fn sign_mail_detached_as_group(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2337,7 +2323,7 @@ pub fn sign_mail_detached_as_group(
 ) -> Result<String, JsValue> {
     let secret = open_group_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2352,7 +2338,7 @@ pub fn sign_mail_detached_as_group(
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_message_as_group(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2363,7 +2349,7 @@ pub fn encrypt_mail_message_as_group(
 ) -> Result<SealedMailJs, JsValue> {
     let secret = open_group_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2392,7 +2378,7 @@ pub fn encrypt_mail_message_as_group(
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_pgp_as_group(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2403,7 +2389,7 @@ pub fn encrypt_mail_pgp_as_group(
 ) -> Result<String, JsValue> {
     let secret = open_group_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2509,7 +2495,7 @@ pub fn describe_external_mail_key_details(
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_pgp(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
@@ -2518,7 +2504,7 @@ pub fn encrypt_mail_pgp(
 ) -> Result<String, JsValue> {
     let secret = open_mail_secret(
         master_key_base64,
-        login_email,
+        binding,
         address,
         envelope_base64,
         fingerprint_hex,
@@ -2828,11 +2814,12 @@ fn pins_revision(revision: f64) -> Result<u64, JsValue> {
     Ok(revision as u64)
 }
 
-/// Seals the account's identity pin list (canonical JSON) at `revision`.
+/// Seals the account's identity pin list (canonical JSON) at `revision`,
+/// bound to the account's key binding.
 #[wasm_bindgen(js_name = sealIdentityPins)]
 pub fn seal_identity_pins(
     master_key_base64: &str,
-    owner: &str,
+    binding: &str,
     revision: f64,
     pins_json: &str,
 ) -> Result<String, JsValue> {
@@ -2841,16 +2828,17 @@ pub fn seal_identity_pins(
         .map_err(|error| js_error(&format!("identity pins: {error}")))?;
     let key = kutup_crypto::identity_pins::derive_key(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
-    let sealed = kutup_crypto::identity_pins::seal(&key, owner, pins_revision(revision)?, &list)
+    let sealed = kutup_crypto::identity_pins::seal(&key, binding, pins_revision(revision)?, &list)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(sealed))
 }
 
-/// Opens the account's identity pin list stored at `revision`; returns its JSON.
+/// Opens the identity pin list of the account whose key binding is
+/// `binding`, stored at `revision`; returns its JSON.
 #[wasm_bindgen(js_name = openIdentityPins)]
 pub fn open_identity_pins(
     master_key_base64: &str,
-    owner: &str,
+    binding: &str,
     revision: f64,
     sealed_base64: &str,
 ) -> Result<String, JsValue> {
@@ -2858,7 +2846,7 @@ pub fn open_identity_pins(
     let key = kutup_crypto::identity_pins::derive_key(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
     let sealed = decode_canonical_base64(sealed_base64, "identity pins")?;
-    let list = kutup_crypto::identity_pins::open(&key, owner, pins_revision(revision)?, &sealed)
+    let list = kutup_crypto::identity_pins::open(&key, binding, pins_revision(revision)?, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     String::from_utf8(
         kutup_crypto::identity_pins::encode(&list).map_err(|error| js_error(&error.to_string()))?,
@@ -2877,11 +2865,11 @@ struct SignedContactSummaryView {
 }
 
 /// Canonicalizes and signs a contact summary (JSON text) with the account
-/// authority derived from the master key.
+/// authority derived from the master key, bound to the account's key binding.
 #[wasm_bindgen(js_name = signContactSummary)]
 pub fn sign_contact_summary(
     master_key_base64: &str,
-    account: &str,
+    binding: &str,
     summary_json: &str,
 ) -> Result<JsValue, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
@@ -2891,7 +2879,7 @@ pub fn sign_contact_summary(
         .map_err(|error| js_error(&error.to_string()))?;
     let (bytes, signature) = kutup_crypto::contact_card::sign_summary(
         &summary,
-        account,
+        binding,
         identity.authority_signing_key(),
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -2908,7 +2896,7 @@ pub fn sign_contact_summary(
 pub fn verify_contact_summary(
     summary: &str,
     signature_base64: &str,
-    account: &str,
+    binding: &str,
     authority_public_key_base64: &str,
 ) -> Result<JsValue, JsValue> {
     let authority: [u8; 32] =
@@ -2919,7 +2907,7 @@ pub fn verify_contact_summary(
     let parsed = kutup_crypto::contact_card::verify_summary(
         summary.as_bytes(),
         &signature,
-        account,
+        binding,
         &authority,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -2931,14 +2919,14 @@ pub fn verify_contact_summary(
 #[wasm_bindgen(js_name = sealContactCard)]
 pub fn seal_contact_card(
     master_key_base64: &str,
-    account: &str,
+    binding: &str,
     uid: &str,
     vcard: &str,
 ) -> Result<String, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
     let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
-    let sealed = kutup_crypto::contact_card::seal_card(&key, account, uid, vcard.as_bytes())
+    let sealed = kutup_crypto::contact_card::seal_card(&key, binding, uid, vcard.as_bytes())
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(sealed))
 }
@@ -2964,17 +2952,18 @@ fn mail_name_parts(
 }
 
 /// Seals the name of a mail folder, label or filter (`kind`) with id `id`
-/// (a UUID) for `account` (docs/plans/mail-filters.md).
+/// (a UUID) for the account whose key binding is `binding`
+/// (docs/plans/mail-filters.md).
 #[wasm_bindgen(js_name = sealMailName)]
 pub fn seal_mail_name(
     master_key_base64: &str,
-    account: &str,
+    binding: &str,
     kind: &str,
     id: &str,
     name: &str,
 ) -> Result<String, JsValue> {
     let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
-    let sealed = kutup_crypto::mail_names::seal_name(&key, account, kind, &id, name)
+    let sealed = kutup_crypto::mail_names::seal_name(&key, binding, kind, &id, name)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(sealed))
 }
@@ -2983,14 +2972,14 @@ pub fn seal_mail_name(
 #[wasm_bindgen(js_name = openMailName)]
 pub fn open_mail_name(
     master_key_base64: &str,
-    account: &str,
+    binding: &str,
     kind: &str,
     id: &str,
     sealed_base64: &str,
 ) -> Result<String, JsValue> {
     let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
     let sealed = decode_canonical_base64(sealed_base64, "name")?;
-    kutup_crypto::mail_names::open_name(&key, account, kind, &id, &sealed)
+    kutup_crypto::mail_names::open_name(&key, binding, kind, &id, &sealed)
         .map_err(|error| js_error(&error.to_string()))
 }
 
@@ -2998,7 +2987,7 @@ pub fn open_mail_name(
 #[wasm_bindgen(js_name = openContactCard)]
 pub fn open_contact_card(
     master_key_base64: &str,
-    account: &str,
+    binding: &str,
     uid: &str,
     sealed_base64: &str,
 ) -> Result<String, JsValue> {
@@ -3006,7 +2995,7 @@ pub fn open_contact_card(
     let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
     let sealed = decode_canonical_base64(sealed_base64, "card")?;
-    let vcard = kutup_crypto::contact_card::open_card(&key, account, uid, &sealed)
+    let vcard = kutup_crypto::contact_card::open_card(&key, binding, uid, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))
 }
@@ -3031,7 +3020,7 @@ fn vault_id(file_id: &str) -> Result<[u8; 16], JsValue> {
 #[wasm_bindgen(js_name = sealPassVaultSecret)]
 pub fn seal_pass_vault_secret(
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     file_id: &str,
     password: Option<String>,
     key_file_base64: Option<String>,
@@ -3046,7 +3035,7 @@ pub fn seal_pass_vault_secret(
     };
     let sealed = kutup_crypto::pass_vault::seal_vault_secret(
         &master_key,
-        login_email,
+        binding,
         &vault_id(file_id)?,
         &secret,
     )
@@ -3060,7 +3049,7 @@ pub fn seal_pass_vault_secret(
 pub fn open_pass_vault_secret(
     envelope_base64: &str,
     master_key_base64: &str,
-    login_email: &str,
+    binding: &str,
     file_id: &str,
 ) -> Result<JsValue, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
@@ -3068,7 +3057,7 @@ pub fn open_pass_vault_secret(
     let secret = kutup_crypto::pass_vault::open_vault_secret(
         &envelope,
         &master_key,
-        login_email,
+        binding,
         &vault_id(file_id)?,
     )
     .map_err(|error| js_error(&error.to_string()))?;

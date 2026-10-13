@@ -45,14 +45,17 @@ export async function incarnationIdOfAuthority(authorityPublicKey: string): Prom
   return (await getCryptoWasm()).incarnationIdOfAuthority(authorityPublicKey)
 }
 
-/** Seals the pin list of `owner` at `revision` (pins sorted by account). */
-export async function sealIdentityPins(masterKeyBase64: string, owner: string, revision: number, list: IdentityPins): Promise<string> {
-  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, owner, revision, JSON.stringify(list))
+/**
+ * Seals the pin list at `revision` (pins sorted by account), bound to the
+ * account's key binding (`session.envelopeBinding`), never its address.
+ */
+export async function sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, list: IdentityPins): Promise<string> {
+  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, binding, revision, JSON.stringify(list))
 }
 
-/** Opens the pin list of `owner` stored at `revision`. */
-export async function openIdentityPins(masterKeyBase64: string, owner: string, revision: number, sealed: string): Promise<IdentityPins> {
-  return JSON.parse((await getCryptoWasm()).openIdentityPins(masterKeyBase64, owner, revision, sealed)) as IdentityPins
+/** Opens the pin list of the account whose key binding is `binding`, stored at `revision`. */
+export async function openIdentityPins(masterKeyBase64: string, binding: string, revision: number, sealed: string): Promise<IdentityPins> {
+  return JSON.parse((await getCryptoWasm()).openIdentityPins(masterKeyBase64, binding, revision, sealed)) as IdentityPins
 }
 
 /** The safety number two accounts compare in person: the same in Chat, Drive and the CLI. */

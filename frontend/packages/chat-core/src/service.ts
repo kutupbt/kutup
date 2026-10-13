@@ -334,6 +334,7 @@ export class ChatService {
           capabilities.serverName!,
           capabilities.sealedSender,
           options.masterKey,
+          options.envelopeBinding,
           transport,
         )
         // Taken over before there was a client to claim with: claim now.
