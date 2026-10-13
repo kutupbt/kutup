@@ -487,6 +487,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::ui_preferences::UiPreferences,
         crate::handlers::name_hashes::ContentHashRequest,
         crate::handlers::name_hashes::AvailableHashesRequest,
+        crate::handlers::trash::RestoreRequest,
         crate::handlers::name_hashes::AvailableHashes,
         crate::photos::PhotosPreferences,
         crate::photos::PhotosLibraryRecord,

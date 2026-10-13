@@ -151,10 +151,11 @@ mod tests {
     #[test]
     fn hashes_are_64_lowercase_hex_digits() {
         let good = "a".repeat(64);
-        assert_eq!(parse_name_hash(Some(&good)).unwrap(), Some(good.clone()));
-        assert_eq!(parse_name_hash(None).unwrap(), None);
-        assert!(parse_name_hash(Some(&"A".repeat(64))).is_err());
-        assert!(parse_name_hash(Some(&"a".repeat(63))).is_err());
+        assert_eq!(require_name_hash(Some(&good)).unwrap(), good.clone());
+        // Required on every write, as Proton's Hash.
+        assert!(require_name_hash(None).is_err());
+        assert!(require_name_hash(Some(&"A".repeat(64))).is_err());
+        assert!(require_name_hash(Some(&"a".repeat(63))).is_err());
         assert!(parse_content_hash(Some("zz")).is_err());
     }
 }

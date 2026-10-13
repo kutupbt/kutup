@@ -153,7 +153,10 @@ async fn free_of(
     let mut available = Vec::new();
     for hash in &req.hashes {
         let hash = drive_names::require_name_hash(Some(hash))?;
-        if drive_names::ensure_name_free(tx, place, &hash, None).await.is_ok() {
+        if drive_names::ensure_name_free(tx, place, &hash, None)
+            .await
+            .is_ok()
+        {
             available.push(hash);
         }
     }

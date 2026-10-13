@@ -262,7 +262,7 @@ fn names_are_unique_in_a_folder() {
     assert_taken(r, "file", &first.id);
 
     // A file in the trash holds no name; restored after the name was taken,
-    // it comes back without its hash for the client to rename.
+    // it is refused, and comes back under a name of its own given then.
     let r = bearer(
         c.delete(format!("{base}/api/files/{}", first.id)),
         &owner.token,
@@ -275,17 +275,40 @@ fn names_are_unique_in_a_folder() {
             .status()
             .is_success()
     );
-    let r = bearer(
-        c.post(format!("{base}/api/trash/{}/restore", first.id)),
-        &owner.token,
+    let restore = |body: Option<Value>| {
+        let request = bearer(
+            c.post(format!("{base}/api/trash/{}/restore", first.id)),
+            &owner.token,
+        );
+        match body {
+            Some(body) => request.json(&body),
+            None => request,
+        }
+        .send()
+        .unwrap()
+    };
+    assert_taken(restore(None), "file", &second.id);
+    let copy = name(&folder, "report (2).txt");
+    let renamed = drive_envelope::seal_b64(
+        br#"{"name":"report (2).txt","mimeType":"text/plain","size":1}"#,
+        &first.key,
+        kutup_crypto::drive_envelope::DriveEnvelopeContextV1::file_metadata(&first.id, 1, 2)
+            .unwrap(),
     )
-    .send()
     .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
+    // A new name without its hash is refused.
     assert_eq!(
-        row(&c, &base, &owner, &folder, &first.id)["nameHash"],
-        Value::Null
+        restore(Some(
+            json!({ "metadataEnvelope": renamed, "metadataRevision": 2 })
+        ))
+        .status(),
+        StatusCode::BAD_REQUEST
     );
+    let r = restore(Some(json!({
+        "nameHash": copy, "metadataEnvelope": renamed, "metadataRevision": 2,
+    })));
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(row(&c, &base, &owner, &folder, &first.id)["nameHash"], copy);
     assert_eq!(
         row(&c, &base, &owner, &folder, &second.id)["nameHash"],
         report
@@ -310,52 +333,38 @@ fn names_are_unique_in_a_folder() {
         late_name
     );
 
-    // Filling in: items without a hash get one; the later of two with the
-    // same name is reported, to be renamed.
-    let old_a = seal_file(&folder, &uuid(), b"a");
-    let old_b = seal_file(&folder, &uuid(), b"b");
-    assert!(upload_named(&c, &base, &owner, &folder, &old_a, None)
-        .status()
-        .is_success());
-    assert!(upload_named(&c, &base, &owner, &folder, &old_b, None)
-        .status()
-        .is_success());
-    let notes = name(&folder, "notes.txt");
-    let r = bearer(
-        c.post(format!("{base}/api/collections/{}/name-hashes", folder.id)),
-        &owner.token,
-    )
-    .json(&json!({ "files": [
-        { "id": old_a.id, "nameHash": notes },
-        { "id": old_b.id, "nameHash": notes },
-        // Already hashed: left alone.
-        { "id": second.id, "nameHash": notes },
-    ]}))
-    .send()
-    .unwrap();
+    // Every upload names itself: one without a hash is refused.
+    let unnamed = seal_file(&folder, &uuid(), b"a");
+    assert_eq!(
+        upload_named(&c, &base, &owner, &folder, &unnamed, None).status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Which names are free (Proton's checkAvailableHashes): ten at a time,
+    // for whoever can write the folder.
+    let free = name(&folder, "free.txt");
+    let ask = |user: &User, hashes: Vec<String>| {
+        bearer(
+            c.post(format!(
+                "{base}/api/collections/{}/available-hashes",
+                folder.id
+            )),
+            &user.token,
+        )
+        .json(&json!({ "hashes": hashes }))
+        .send()
+        .unwrap()
+    };
+    let r = ask(&owner, vec![report.clone(), free.clone(), copy.clone()]);
     assert_eq!(r.status(), StatusCode::OK);
-    let body: Value = r.json().unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["available"], json!([free]));
     assert_eq!(
-        body["clashes"],
-        json!([{ "id": old_b.id, "holderKind": "file", "holderId": old_a.id }])
+        ask(&owner, vec![free.clone(); 11]).status(),
+        StatusCode::BAD_REQUEST
     );
-    assert_eq!(
-        row(&c, &base, &owner, &folder, &old_a.id)["nameHash"],
-        notes
-    );
-    assert_eq!(
-        row(&c, &base, &owner, &folder, &second.id)["nameHash"],
-        report
-    );
-    // Someone who cannot write the folder fills nothing in.
+    assert_eq!(ask(&owner, Vec::new()).status(), StatusCode::BAD_REQUEST);
     let stranger = register(&c, &base);
-    let r = bearer(
-        c.post(format!("{base}/api/collections/{}/name-hashes", folder.id)),
-        &stranger.token,
-    )
-    .json(&json!({ "files": [{ "id": old_b.id, "nameHash": name(&folder, "x") }] }))
-    .send()
-    .unwrap();
+    let r = ask(&stranger, vec![free]);
     assert!(r.status() == StatusCode::FORBIDDEN || r.status() == StatusCode::NOT_FOUND);
 }
 
@@ -416,7 +425,8 @@ fn top_level_folder_names_are_unique_per_owner() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
 
-    // A folder restored after its name was taken comes back without it.
+    // A folder restored after its name was taken is refused, and comes
+    // back under a new name given then.
     let r = bearer(
         c.delete(format!("{base}/api/collections/{}", first.id)),
         &owner.token,
@@ -432,6 +442,31 @@ fn top_level_folder_names_are_unique_per_owner() {
     )
     .send()
     .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let other = drive_names::name_hash(&top, "Projects (2)").unwrap();
+    let renamed = {
+        use kutup_crypto::drive_envelope::{DriveEnvelopeContextV1, DriveEnvelopePurpose};
+        drive_envelope::seal_b64(
+            b"Projects (2)",
+            &first.key,
+            DriveEnvelopeContextV1::new(
+                DriveEnvelopePurpose::CollectionName,
+                1,
+                2,
+                &first.id,
+                &owner.id,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    };
+    let r = bearer(
+        c.post(format!("{base}/api/trash/{}/restore", first.id)),
+        &owner.token,
+    )
+    .json(&json!({ "nameHash": other, "nameEnvelope": renamed, "nameRevision": 2 }))
+    .send()
+    .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     let restored: Value = bearer(
         c.get(format!("{base}/api/collections/{}", first.id)),
@@ -441,7 +476,7 @@ fn top_level_folder_names_are_unique_per_owner() {
     .unwrap()
     .json()
     .unwrap();
-    assert_eq!(restored["nameHash"], Value::Null, "{restored}");
+    assert_eq!(restored["nameHash"], other, "{restored}");
 }
 
 fn tus_create_named(

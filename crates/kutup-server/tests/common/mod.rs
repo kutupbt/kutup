@@ -317,6 +317,7 @@ pub fn upload(c: &Client, base: &str, token: &str, folder: &Folder, file: &Seale
         .text("collectionId", folder.id.clone())
         .text("fileKeyEnvelope", file.file_key_envelope.clone())
         .text("metadataEnvelope", file.metadata_envelope.clone())
+        .text("nameHash", test_name_hash(&file.id))
         .part(
             "file",
             multipart::Part::bytes(file.blob.clone()).file_name("encrypted"),
@@ -386,11 +387,13 @@ pub fn tus_create(
     file: &Sealed,
     length: i64,
 ) -> Response {
+    let name_hash = test_name_hash(&file.id);
     let meta = [
         ("fileId", file.id.as_str()),
         ("collectionId", folder.id.as_str()),
         ("metadataEnvelope", file.metadata_envelope.as_str()),
         ("fileKeyEnvelope", file.file_key_envelope.as_str()),
+        ("nameHash", name_hash.as_str()),
     ]
     .iter()
     .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
