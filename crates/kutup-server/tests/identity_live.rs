@@ -114,6 +114,8 @@ fn identity_pins_sync_by_revision() {
             state: PinState::Seen,
             since: "2026-10-10T12:00:00Z".into(),
             replaced: vec![],
+            formerly: vec![],
+            renames: None,
         }],
     };
     let get = || {

@@ -2883,6 +2883,108 @@ pub fn open_identity_pins(
     revisioned(json, revision)
 }
 
+fn pins_arg(pins_json: &str) -> Result<kutup_crypto::identity_pins::IdentityPinsV1, JsValue> {
+    let list: kutup_crypto::identity_pins::IdentityPinsV1 = serde_json::from_str(pins_json)
+        .map_err(|error| js_error(&format!("identity pins: {error}")))?;
+    list.validate()
+        .map_err(|error| js_error(&error.to_string()))?;
+    Ok(list)
+}
+
+fn pins_json(list: &kutup_crypto::identity_pins::IdentityPinsV1) -> Result<String, JsValue> {
+    String::from_utf8(
+        kutup_crypto::identity_pins::encode(list).map_err(|error| js_error(&error.to_string()))?,
+    )
+    .map_err(|_| js_error("identity pins are not UTF-8"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PinsChanged<T: Serialize> {
+    /// The list after, canonical JSON.
+    pins: String,
+    #[serde(flatten)]
+    result: T,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Changed {
+    changed: bool,
+}
+
+/// Records what a client learned about `account` (`update`: `firstSeen`,
+/// `accepted` or `verified`), by the rules every app shares:
+/// `{ pins, changed }`.
+#[wasm_bindgen(js_name = recordIdentityPin)]
+pub fn record_identity_pin(
+    pins_json_text: &str,
+    account: &str,
+    authority_public_base64: &str,
+    update: &str,
+    since: &str,
+) -> Result<JsValue, JsValue> {
+    let mut list = pins_arg(pins_json_text)?;
+    let update: kutup_crypto::identity_pins::PinUpdate =
+        serde_json::from_value(serde_json::Value::String(update.to_owned()))
+            .map_err(|_| js_error("unknown pin update"))?;
+    let changed = kutup_crypto::identity_pins::record(
+        &mut list,
+        account,
+        authority_public_base64,
+        update,
+        since,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    PinsChanged {
+        pins: pins_json(&list)?,
+        result: Changed { changed },
+    }
+    .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// What the pin list says about `address`, given the authority its server
+/// publishes now (absent: nobody, or not looked up): `{ kind: "pinned" |
+/// "renamed" | "moved" | "new", pin?, sameAuthority? }`.
+#[wasm_bindgen(js_name = lookupIdentityPin)]
+pub fn lookup_identity_pin(
+    pins_json_text: &str,
+    address: &str,
+    published_authority_base64: Option<String>,
+) -> Result<JsValue, JsValue> {
+    let list = pins_arg(pins_json_text)?;
+    let found =
+        kutup_crypto::identity_pins::lookup(&list, address, published_authority_base64.as_deref());
+    found
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// Follows a rename chain of the account whose authority is given: its pin
+/// moves to the chain's current address, with its trust and history.
+/// `{ pins, from, to, changed, displaced }`; throws for a chain that does not
+/// verify, concerns no pinned account, or rolls back the one pinned.
+#[wasm_bindgen(js_name = applyAccountRenameToPins)]
+pub fn apply_account_rename_to_pins(
+    pins_json_text: &str,
+    authority_public_base64: &str,
+    chain_json: &str,
+) -> Result<JsValue, JsValue> {
+    let mut list = pins_arg(pins_json_text)?;
+    let authority = public_key_32(authority_public_base64, "authority key")?;
+    let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
+        serde_json::from_str(chain_json).map_err(|_| js_error("invalid rename chain"))?;
+    let applied = kutup_crypto::identity_pins::apply_rename(&mut list, &authority, &chain)
+        .map_err(|error| js_error(&error.to_string()))?;
+    PinsChanged {
+        pins: pins_json(&list)?,
+        result: applied,
+    }
+    .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
 // --- contacts (docs/plans/contacts.md) ---------------------------------------
 
 #[derive(Serialize)]
@@ -3167,7 +3269,9 @@ pub fn verify_account_rename_chain(
         let known: Vec<String> =
             serde_json::from_str(&known).map_err(|_| js_error("invalid known digests"))?;
         if known.len() > digests.len() || digests[..known.len()] != known[..] {
-            return Err(js_error("the rename chain does not extend the one seen before"));
+            return Err(js_error(
+                "the rename chain does not extend the one seen before",
+            ));
         }
     }
     serde_wasm_bindgen::to_value(&RenameChainJs {

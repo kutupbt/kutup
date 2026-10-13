@@ -4,6 +4,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // a binding "verifies" when it names the authority it was made with, an
 // incarnation is the authority's name, and a sealed list is its JSON, which
 // opens only for the key binding and revision it was sealed with.
+interface Pin {
+  account: string
+  authorityPublicKey: string
+  state: 'seen' | 'verified'
+  since: string
+  replaced?: string[]
+}
+
 vi.mock('@kutup/crypto/identityPins', () => ({
   verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string) =>
     Promise.resolve(binding === `bound-by-${authority}`),
@@ -15,6 +23,31 @@ vi.mock('@kutup/crypto/identityPins', () => ({
   ),
   safetyQrMatches: vi.fn((la: string, pa: string, scanned: string) =>
     Promise.resolve(scanned === `qr:${la}:${pa}`),
+  ),
+  // Rust's identity_pins::record, modelled: first use pins, accepted or
+  // verified replace (the old incarnation kept), the same authority keeps its history.
+  recordIdentityPin: vi.fn(
+    (list: { pins: Pin[] }, account: string, authority: string, update: 'firstSeen' | 'accepted' | 'verified', since: string) => {
+      const pins = list.pins.map((pin) => ({ ...pin }))
+      const at = pins.findIndex((pin) => pin.account === account)
+      const state = update === 'verified' ? 'verified' : 'seen'
+      const unchanged = Promise.resolve({ list: { pins }, changed: false })
+      if (at < 0) {
+        pins.push({ account, authorityPublicKey: authority, state, since })
+        pins.sort((a, b) => (a.account < b.account ? -1 : 1))
+        return Promise.resolve({ list: { pins }, changed: true })
+      }
+      const pin = pins[at]
+      if (pin.authorityPublicKey === authority) {
+        if (update !== 'verified' || pin.state === 'verified') return unchanged
+        pins[at] = { ...pin, state: 'verified', since }
+        return Promise.resolve({ list: { pins }, changed: true })
+      }
+      if (update === 'firstSeen') return unchanged
+      const replaced = [...(pin.replaced ?? []), `inc-${pin.authorityPublicKey}`].slice(-10)
+      pins[at] = { account, authorityPublicKey: authority, state, since, replaced }
+      return Promise.resolve({ list: { pins }, changed: true })
+    },
   ),
   sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ binding, revision, list }))),
   openIdentityPins: vi.fn((_m: string, binding: string, sealed: string) => {

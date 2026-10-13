@@ -102,6 +102,39 @@ retry). Each browser (`RevisionGuard`), the CLI and the Chat core remember
 the highest revision they have seen, so the server cannot quietly hand back
 an older list; a device with no history trusts the first list it reads.
 
+**Renames** (docs/plans/username-renames.md). A pin also carries
+`formerly` (the addresses the same incarnation had before `account`, oldest
+first, at most 32, all on its server) and `renames: { sequence, digest }`, the
+head of the account's rename chain this list has verified. Both are absent
+for an account that was never renamed, so such a list encodes exactly as
+before. The anchor is the rollback guard on every device of the account: a
+later chain is followed only if it holds that statement at that sequence.
+
+**One set of rules for every app** (`identity_pins`, also through WASM), so
+a pin one app writes is never undone or misread by another:
+
+- `record(list, account, authority, update, since)`: `firstSeen` pins only
+  an address with no pin (it never replaces one); `accepted` and `verified`
+  replace another authority, keeping its incarnation in `replaced`; the same
+  authority keeps its history (`replaced`, `formerly`, `renames`). Drive, Chat
+  core and the CLI all write through it.
+- `lookup(list, address, publishedAuthority)`: `pinned` (with whether the
+  authority published there is still the pinned one), `renamed` (the authority
+  there is pinned under another address: fetch its chain), `moved` (a pinned
+  account had the address before and is now `pin.account`: whoever is there
+  now is someone else), or `new`.
+- `apply_rename(list, authority, chain)`: verifies the chain against the
+  pinned authority and its anchor, then moves the pin to the chain's current
+  address. The pin keeps its trust, since the safety number did not change. Its
+  `formerly` comes from the chain and its anchor is the chain's head. A pin of
+  another incarnation at the new address goes into `replaced`, and the caller
+  tells the user. Two pins of the same account, made by apps that met it under
+  two names, are merged. Applying the same chain twice changes nothing.
+
+The vectors (`identity-pins-v2.json`, `renames`) cover one rename followed,
+the rollback refused, each lookup kind, the record rules, and the lists the
+format refuses.
+
 ### 4. Checking a person (web)
 
 `checkIdentity(me, account, claimed)` in `@kutup/drive-core` (`identityPins.ts`):

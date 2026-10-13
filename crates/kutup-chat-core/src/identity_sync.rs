@@ -20,8 +20,7 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::identity::incarnation_id_from_authority_public;
-use kutup_crypto::identity_pins::{self, IdentityPinV1, IdentityPinsV1, PinState};
+use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate};
 use zeroize::Zeroizing;
 
 use crate::db::{AuthorityTrust, ManifestTrust};
@@ -136,47 +135,28 @@ impl IdentityPinsSync {
         if trust.continuity_gap || trust.trust == AuthorityTrust::Quarantined {
             return Ok(());
         }
-        let verified = trust.trust == AuthorityTrust::Verified;
+        // The rules every app shares (identity_pins::record): a contact met
+        // through a trusted manifest is pinned on first use, and one verified
+        // in person replaces whatever was pinned.
+        let update = if trust.trust == AuthorityTrust::Verified {
+            PinUpdate::Verified
+        } else {
+            PinUpdate::FirstSeen
+        };
         for _ in 0..5 {
             let (revision, mut list) = self.load(transport).await?;
-            let index = list
-                .pins
-                .iter()
-                .position(|pin| pin.account == trust.account);
-            let wanted = match index.map(|i| &list.pins[i]) {
-                None => true,
-                Some(pin) if verified => {
-                    pin.authority_public_key != trust.self_authority_key
-                        || pin.state != PinState::Verified
-                }
-                Some(_) => false,
-            };
-            if !wanted {
+            let since = identity_pins::since_from_unix(now_seconds);
+            if !identity_pins::record(
+                &mut list,
+                &trust.account,
+                &trust.self_authority_key,
+                update,
+                &since,
+            )
+            .map_err(crypto)?
+            {
                 return Ok(());
             }
-            let mut replaced = Vec::new();
-            if let Some(i) = index {
-                let previous = list.pins.remove(i);
-                replaced = previous.replaced.clone();
-                if previous.authority_public_key != trust.self_authority_key {
-                    let authority: [u8; 32] = previous.authority().map_err(crypto)?;
-                    replaced.push(incarnation_id_from_authority_public(&authority));
-                }
-            }
-            let excess = replaced.len().saturating_sub(identity_pins::MAX_REPLACED);
-            replaced.drain(..excess);
-            list.pins.push(IdentityPinV1 {
-                account: trust.account.clone(),
-                authority_public_key: trust.self_authority_key.clone(),
-                state: if verified {
-                    PinState::Verified
-                } else {
-                    PinState::Seen
-                },
-                since: identity_pins::since_from_unix(now_seconds),
-                replaced,
-            });
-            list.pins.sort_by(|a, b| a.account.cmp(&b.account));
             // A time, above every revision seen (docs/plans/drive-identity-pins.md).
             let next = now_seconds
                 .saturating_mul(1000)
@@ -218,6 +198,7 @@ mod tests {
     use super::*;
     use crate::transport::IdentityPinsRecord;
     use crate::transport::SendOutcome;
+    use kutup_crypto::identity_pins::IdentityPinV1;
 
     /// Only the identity pin calls; the server's list, revision by revision.
     #[derive(Default)]

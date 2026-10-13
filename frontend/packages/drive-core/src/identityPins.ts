@@ -17,11 +17,13 @@ import {
   deriveSafetyNumber,
   incarnationIdOfAuthority,
   openIdentityPins,
+  recordIdentityPin,
   safetyQrMatches,
   sealIdentityPins,
   verifyDriveKeyBinding,
   type IdentityPin,
   type IdentityPins,
+  type PinUpdate,
 } from '@kutup/crypto/identityPins'
 import { OlderThanSeenError, revisionGuard, toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
@@ -223,6 +225,20 @@ function now(): string {
   return new Date().toISOString()
 }
 
+/**
+ * Records `update` about `account` in `next` by the rules every app shares
+ * (Rust `identity_pins::record`): pinned on first use, replaced only when
+ * accepted or verified, the history of the same authority kept.
+ */
+async function recordPin(next: Map<string, IdentityPin>, account: string, authority: string, update: PinUpdate): Promise<boolean> {
+  const list: IdentityPins = { pins: [...next.values()].sort((a, b) => (a.account < b.account ? -1 : 1)) }
+  const result = await recordIdentityPin(list, account, authority, update, now())
+  if (!result.changed) return false
+  next.clear()
+  for (const pin of result.list.pins) next.set(pin.account, pin)
+  return true
+}
+
 // -------------------------------------------------------------- checks
 
 /**
@@ -270,11 +286,7 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
     return { kind: 'changed' }
   }
   // First met: trusted from now on.
-  await updatePins(me, (next) => {
-    if (next.has(account)) return false
-    next.set(account, { account, authorityPublicKey: person.accountAuthorityPublicKey, state: 'seen', since: now() })
-    return true
-  }).catch(() => undefined)
+  await updatePins(me, (next) => recordPin(next, account, person.accountAuthorityPublicKey, 'firstSeen')).catch(() => undefined)
   return { kind: 'ok', verified: false }
 }
 
@@ -330,20 +342,7 @@ export async function acceptIdentity(me: DriveIdentity, account: string): Promis
     person.driveKeyBinding,
   )
   if (!bound) throw new Error('the keys are not signed by this account')
-  await updatePins(me, async (next) => {
-    const previous = next.get(account)
-    if (previous?.authorityPublicKey === person.accountAuthorityPublicKey) return false
-    const replaced = previous ? [...(previous.replaced ?? [])] : []
-    if (previous) replaced.push(await incarnationIdOfAuthority(previous.authorityPublicKey))
-    next.set(account, {
-      account,
-      authorityPublicKey: person.accountAuthorityPublicKey,
-      state: 'seen',
-      since: now(),
-      ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
-    })
-    return true
-  })
+  await updatePins(me, (next) => recordPin(next, account, person.accountAuthorityPublicKey, 'accepted'))
 }
 
 /** A person's published identity, once their binding is checked; throws otherwise. */
@@ -394,22 +393,7 @@ export async function verifyPerson(me: DriveIdentity, account: string, scanned: 
   const person = await boundIdentity(me, account)
   const matches = await safetyQrMatches(me.authorityPublicKey, person.accountAuthorityPublicKey, scanned)
   if (!matches) throw new SafetyNumberMismatch()
-  await updatePins(me, async (next) => {
-    const previous = next.get(account)
-    if (previous?.authorityPublicKey === person.accountAuthorityPublicKey && previous.state === 'verified') return false
-    const replaced = [...(previous?.replaced ?? [])]
-    if (previous && previous.authorityPublicKey !== person.accountAuthorityPublicKey) {
-      replaced.push(await incarnationIdOfAuthority(previous.authorityPublicKey))
-    }
-    next.set(account, {
-      account,
-      authorityPublicKey: person.accountAuthorityPublicKey,
-      state: 'verified',
-      since: now(),
-      ...(replaced.length ? { replaced: replaced.slice(-10) } : {}),
-    })
-    return true
-  })
+  await updatePins(me, (next) => recordPin(next, account, person.accountAuthorityPublicKey, 'verified'))
 }
 
 /** Test seam: forget what this page has looked up and pinned. */

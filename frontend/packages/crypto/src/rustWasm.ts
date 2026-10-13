@@ -52,6 +52,9 @@ export interface CryptoWasmModule {
     chainJson: string,
     knownDigestsJson?: string | null,
   ): { incarnationId: string; first: string; current: string; addresses: string[]; sequence: number; digests: string[] }
+  recordIdentityPin(pinsJson: string, account: string, authorityPublicBase64: string, update: string, since: string): { pins: string; changed: boolean }
+  lookupIdentityPin(pinsJson: string, address: string, publishedAuthorityBase64?: string): unknown
+  applyAccountRenameToPins(pinsJson: string, authorityPublicBase64: string, chainJson: string): unknown
   verifyDriveKeyBinding(
     account: string,
     authorityPublicKeyBase64: string,

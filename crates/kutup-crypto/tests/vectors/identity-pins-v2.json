@@ -8,51 +8,51 @@
   "driveKeyBinding": "DTb3yO8nakOF0/JQpqeOQChug42QL4+bmyDmuPhZEG23Ns0RXMm8I4OMuQRwFUjU2wQEswSJROb1rOxK6ZrPBQ==",
   "pinsKey": "9wRlOY3Qxip5tOtIJpAvqqp3f+0079Dw3VuQH3zAH9U=",
   "revision": 7,
-  "pins": "{\"pins\":[{\"account\":\"bob@kutup.dev\",\"authorityPublicKey\":\"NtTt6Y2mlS7yLMBo1r/CJ6tnIMCecuIn4EHRlujaang=\",\"state\":\"seen\",\"since\":\"2026-10-10T12:00:00Z\"},{\"account\":\"carol@example.org\",\"authorityPublicKey\":\"wh/ihJY5mNaYEaqo6SwOW6oRcympd7BAvKW5LboF7RE=\",\"state\":\"verified\",\"since\":\"2026-10-11T08:30:00.250Z\",\"replaced\":[\"1441e29c58699c0ee89f3422647af95a1682a92a28e7bb64e515a49fcbdf9304\"]}]}",
+  "pins": "{\"pins\":[{\"account\":\"bob@kutup.dev\",\"authorityPublicKey\":\"NtTt6Y2mlS7yLMBo1r/CJ6tnIMCecuIn4EHRlujaang=\",\"state\":\"seen\",\"since\":\"2026-10-10T12:00:00Z\"},{\"account\":\"cara@kutup.dev\",\"authorityPublicKey\":\"5SPlvCdaXvXQ3RJOnkGPIFMHjC6UtQJduGPvb2wrL8w=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"cora@kutup.dev\",\"corinne@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f\"}},{\"account\":\"carol@example.org\",\"authorityPublicKey\":\"wh/ihJY5mNaYEaqo6SwOW6oRcympd7BAvKW5LboF7RE=\",\"state\":\"verified\",\"since\":\"2026-10-11T08:30:00.250Z\",\"replaced\":[\"1441e29c58699c0ee89f3422647af95a1682a92a28e7bb64e515a49fcbdf9304\"]}]}",
   "nonce": "RERERERERERERERERERERERERERERERE",
-  "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q",
+  "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ==",
   "refused": [
     {
       "case": "another account's key binding",
       "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
       "revision": 7,
-      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q"
+      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ=="
     },
     {
       "case": "the owner's address instead of its binding",
       "binding": "alice@kutup.dev",
       "revision": 7,
-      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q"
+      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ=="
     },
     {
       "case": "relabelled as another revision",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "revision": 8,
-      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAIRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q"
+      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAIRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ=="
     },
     {
       "case": "magic changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "revision": 7,
-      "sealed": "S1VUSVAxAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q"
+      "sealed": "S1VUSVAxAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ=="
     },
     {
       "case": "suite changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "revision": 7,
-      "sealed": "S1VUSVAyAAAAAQAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q"
+      "sealed": "S1VUSVAyAAAAAQAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ=="
     },
     {
       "case": "nonce changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "revision": 7,
-      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRURERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6q"
+      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRURERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgQ=="
     },
     {
       "case": "ciphertext changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
       "revision": 7,
-      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHgAHVjS70eo6ybrY9i0P1bru6T+pFWgMgt3NyJ5chuArnN9oedM0CRly/coshiVmVLsmWOmBEAZ7XesIkfBbyaJPfua7ZUyIuCFHhehcttofV5Vy7uumdNpzgwGrG9c39Lt7O5ze10la/ksBs9PZSlkLZx7Hc0Ygb6NtAwmtVSfjclNiMX2I3tuwDomvlpGUDYj5j9qROKry81sIojnX5Um1zW6QW2SgUlqwWGf5FIWUGRXsAcIbcdoXxzVtFeQj1CNRxpDF8ejq0dTc56FZxUfT5BY5evKiTrhtycb+SwyxIhtADa9gbyccgJbGHmPem3IpCM3s7Cy+/j1NikMe9gQthi5p0JXygFzbxA6Y0Epu9NN4fpH7C0atF1bfFY1XqpBh+17F8iV97xinQoLH7yYlvPx7/CgSjTWu46qD4sN8qOKHy1ULkPJUHhahOA86StA3JBjxp2smL4mQXj9vB5A06cLruIQBYg6r"
+      "sealed": "S1VUSVAyAAAAAgAAAAAAAAAHRERERERERERERERERERERERERERERERE5Rm44bMgZ4n7aJ0YZb2jmbO0Kp8axYvT0USEwGg4J35W4a4VxZdAR9zRXUm3rjUgMLeN7Y4umrcmMcGV34J5JGfRVfbR2mThjnMEAMkM5BSVOoydqXheeJ2mLFfmLt1aX8gNNZDJj3YQFzvQ6sTsNXprEZPMJchtrmDQR3sFMKZjdbCaplMvk0YucUtlix8vOewEuUWTmDfS41tTngsvtYlOypvFHg4rfSS3xfdkwbqAu3NKluO44CWvFHMHu9zW9IJdoewx9YAzbrpGEgce8MM+qUhaKYg1UuabOGBhbOkXzdw//69zROb5YF2IkUQFu8YLh9BvPoojtqihZZk9xFX0S8g077d5cNWYhgwW7kdN6pTJQEkPeh3Bc0YiFqJlbQmlVSTjEkF+PSnSnOz3UMek0dujTojzmZnrCP23sh8Xo26YpFCvmDjbUTqrUiLiSyC4VpnGSFSvOtcMYo5PnmppX/R4nTlHlIPSorLsgcfTtLlCx03W5QN0a/i0WYMl8o4YfmqERC4mOMlVCRJ6tfDzeFa4rhQcbviK2UqLmAgrvyUrkDFLs0hctqCUtTruojv+5SxbkuYeS/fObWTQanqkN+w0yf8UlSrnyAcejmrILsKil0dIzJAe0kdg6heCwcv2lqsT2ovzsgV+8p49fV3EQS0AaKdfC3GZ7TITQseH3g2psLYlIJcjK2vZxiYztO1/ztUHnBxCRQlL7V8qSfZ1oL0Ag5qotxdtw7GWPlIyqwZyrdApDRESa3hjIZ8Jn663yOZnTPhE/c8u7uszethok0oS1gp148QYinkUiUQmPGT7UEbYMkqsMlc1sERyVXJJCH9sLKeIz/kBoLkKnbJZmfdVRv2t5OyHxioFlMABZt9N8ODqjdrxg+4vKMoRiXrKNXGnQd/hVX8ULfZYmXAMeQMVgOEyLtPky6regXkzUqJHyYnq5vJwU+RY0x2jOkG+EykgRKG7DBYJxXRALv1niEa4uCio1GXOJiFZGaFpBlDqMQ0IwCUNA/hfqV/2H8c2+mNCq/9Vyq9wSpBWgA=="
     },
     {
       "case": "suite 1, bound to the address",
@@ -66,5 +66,254 @@
       "revision": 7,
       "sealed": "S1VUSVAxAAAAAUREREREREREREREREREREREREREREREROUZuOGzIGeJ+2idGGW9o5mztCqfGsWL09FEhMBoOCd+VuGuFcWXQEfc0V1Jt641IDC3je2OLpq3JjHBld+CeSRn0VX20dpk4Y5zBADJDOQUlTqMnal4XnidpixX5i7dWl/IDTWQyY92EBc70OrE7DV6axGTzCXIba5g0Ed7BTCmY3WwmqZTL5NGLnFLZYsfLznsBLlFk5g30uNbU54LL7WJTsqbxR4AB1Y0u9HqOsm62PYtD9W67uk/qRVoDILdzcieXIbgK5zfaHnTNAkZcv3KLIYlZlS7JljpgRAGe13rCJHwW8miT37mu2VMiLghR4XoXLbaH1eVcu7rpnTac4MBqxvXN/S7ezuc3tdJWv5LAbPT2UpZC2cex3NGIG+jbQMJrVUn43JTYjF9iN7bsA6Jr5aRlA2I+Y/akTiq8vNbCKI51+VJtc1ukFtkoFJasFhn+RSFlBkV7AHCG3HaF8c1bRXkI9QjUcaQxfHo6tHU3OehWcVH0+QWOXryok64bcnGI32szt2Ok9+VqY3i0ASW0Q=="
     }
-  ]
+  ],
+  "renames": {
+    "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+    "chain": [
+      {
+        "incarnationId": "59e8d537e29628e88fc769daef7929239dd6d01a40c0138de3175757fe5e8574",
+        "sequence": 1,
+        "previous": "dave@kutup.dev",
+        "current": "davey@kutup.dev",
+        "issuedAtMs": 1791800000000,
+        "signature": "o687t4hIi7kXoV/FEhiqKebjdOJcLWxjEhvBspr2Z0pe99GDJ0b4wvPERYfb11qSm7HnoSZHXRt4cJazYkIeDA=="
+      },
+      {
+        "incarnationId": "59e8d537e29628e88fc769daef7929239dd6d01a40c0138de3175757fe5e8574",
+        "sequence": 2,
+        "previous": "davey@kutup.dev",
+        "current": "david@kutup.dev",
+        "issuedAtMs": 1791800001000,
+        "signature": "Sy6n8foU7Zpu8Wxl7NWBjwgbB3X1wPWdSSbI/cSaLuajJIFBlvXXvgJklmNGgdiZEyXNXK7swP52bWjJoiUeDg=="
+      }
+    ],
+    "before": "{\"pins\":[{\"account\":\"dave@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\"},{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+    "after": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+    "applied": {
+      "from": "dave@kutup.dev",
+      "to": "david@kutup.dev",
+      "changed": true,
+      "displaced": "9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206"
+    },
+    "rollback": [
+      {
+        "incarnationId": "59e8d537e29628e88fc769daef7929239dd6d01a40c0138de3175757fe5e8574",
+        "sequence": 1,
+        "previous": "dave@kutup.dev",
+        "current": "davey@kutup.dev",
+        "issuedAtMs": 1791800000000,
+        "signature": "o687t4hIi7kXoV/FEhiqKebjdOJcLWxjEhvBspr2Z0pe99GDJ0b4wvPERYfb11qSm7HnoSZHXRt4cJazYkIeDA=="
+      }
+    ],
+    "lookups": [
+      {
+        "address": "david@kutup.dev",
+        "published": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+        "result": {
+          "kind": "pinned",
+          "pin": {
+            "account": "david@kutup.dev",
+            "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+            "state": "verified",
+            "since": "2026-10-12T09:00:00Z",
+            "replaced": [
+              "9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206"
+            ],
+            "formerly": [
+              "dave@kutup.dev",
+              "davey@kutup.dev"
+            ],
+            "renames": {
+              "sequence": 2,
+              "digest": "5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925"
+            }
+          },
+          "sameAuthority": true
+        }
+      },
+      {
+        "address": "dave@kutup.dev",
+        "published": "mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=",
+        "result": {
+          "kind": "moved",
+          "pin": {
+            "account": "david@kutup.dev",
+            "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+            "state": "verified",
+            "since": "2026-10-12T09:00:00Z",
+            "replaced": [
+              "9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206"
+            ],
+            "formerly": [
+              "dave@kutup.dev",
+              "davey@kutup.dev"
+            ],
+            "renames": {
+              "sequence": 2,
+              "digest": "5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925"
+            }
+          }
+        }
+      },
+      {
+        "address": "davey@kutup.dev",
+        "published": null,
+        "result": {
+          "kind": "moved",
+          "pin": {
+            "account": "david@kutup.dev",
+            "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+            "state": "verified",
+            "since": "2026-10-12T09:00:00Z",
+            "replaced": [
+              "9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206"
+            ],
+            "formerly": [
+              "dave@kutup.dev",
+              "davey@kutup.dev"
+            ],
+            "renames": {
+              "sequence": 2,
+              "digest": "5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925"
+            }
+          }
+        }
+      },
+      {
+        "address": "frank@example.org",
+        "published": "mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=",
+        "result": {
+          "kind": "pinned",
+          "pin": {
+            "account": "frank@example.org",
+            "authorityPublicKey": "yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=",
+            "state": "seen",
+            "since": "2026-10-12T09:00:00Z"
+          },
+          "sameAuthority": false
+        }
+      },
+      {
+        "address": "dave2@kutup.dev",
+        "published": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+        "result": {
+          "kind": "renamed",
+          "pin": {
+            "account": "david@kutup.dev",
+            "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+            "state": "verified",
+            "since": "2026-10-12T09:00:00Z",
+            "replaced": [
+              "9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206"
+            ],
+            "formerly": [
+              "dave@kutup.dev",
+              "davey@kutup.dev"
+            ],
+            "renames": {
+              "sequence": 2,
+              "digest": "5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925"
+            }
+          }
+        }
+      },
+      {
+        "address": "nobody@kutup.dev",
+        "published": "mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=",
+        "result": {
+          "kind": "new"
+        }
+      }
+    ],
+    "records": [
+      {
+        "case": "first met: pinned",
+        "before": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "account": "gina@kutup.dev",
+        "authority": "mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=",
+        "update": "firstSeen",
+        "since": "2026-10-13T12:00:00Z",
+        "after": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"},{\"account\":\"gina@kutup.dev\",\"authorityPublicKey\":\"mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=\",\"state\":\"seen\",\"since\":\"2026-10-13T12:00:00Z\"}]}",
+        "changed": true
+      },
+      {
+        "case": "first met again, another authority: kept",
+        "before": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "account": "frank@example.org",
+        "authority": "mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=",
+        "update": "firstSeen",
+        "since": "2026-10-13T12:00:00Z",
+        "after": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "changed": false
+      },
+      {
+        "case": "verified, same authority: history kept",
+        "before": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "account": "david@kutup.dev",
+        "authority": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+        "update": "verified",
+        "since": "2026-10-13T12:00:00Z",
+        "after": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-13T12:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "changed": true
+      },
+      {
+        "case": "first met, the renamed pin: unchanged",
+        "before": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "account": "david@kutup.dev",
+        "authority": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+        "update": "firstSeen",
+        "since": "2026-10-13T12:00:00Z",
+        "after": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "changed": false
+      },
+      {
+        "case": "accepted, another authority: replaced",
+        "before": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}",
+        "account": "frank@example.org",
+        "authority": "mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=",
+        "update": "accepted",
+        "since": "2026-10-13T12:00:00Z",
+        "after": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"replaced\":[\"9694b9772a2c6cc8e58a9ceac4382af00c03001cf265544997c41ad136e82206\"],\"formerly\":[\"dave@kutup.dev\",\"davey@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":\"frank@example.org\",\"authorityPublicKey\":\"mrI2rm6tPMjC71Ru9n+hFCkCnKb1fmJQ1OCEajZsrMc=\",\"state\":\"seen\",\"since\":\"2026-10-13T12:00:00Z\",\"replaced\":[\"1be4088353bbca5fb025ff646dff5444b5f3c91058a896675c20632f012001da\"]}]}",
+        "changed": true
+      }
+    ],
+    "refusedLists": [
+      {
+        "case": "its own address as a former one",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"david@kutup.dev\"],\"renames\":{\"sequence\":1,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      },
+      {
+        "case": "a former address on another server",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"dave@other.dev\"],\"renames\":{\"sequence\":1,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      },
+      {
+        "case": "a former address twice",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"dave@kutup.dev\",\"dave@kutup.dev\"],\"renames\":{\"sequence\":2,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      },
+      {
+        "case": "a former address not canonical",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"Dave@kutup.dev\"],\"renames\":{\"sequence\":1,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      },
+      {
+        "case": "former addresses without an anchor",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"dave@kutup.dev\"]}]}"
+      },
+      {
+        "case": "an anchor without former addresses",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"renames\":{\"sequence\":1,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      },
+      {
+        "case": "anchor sequence 0",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"dave@kutup.dev\"],\"renames\":{\"sequence\":0,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      },
+      {
+        "case": "anchor digest in capitals",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"dave@kutup.dev\"],\"renames\":{\"sequence\":1,\"digest\":\"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\"}}]}"
+      },
+      {
+        "case": "an unknown field",
+        "pins": "{\"pins\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"later\":1,\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"formerly\":[\"dave@kutup.dev\"],\"renames\":{\"sequence\":1,\"digest\":\"abababababababababababababababababababababababababababababababab\"}}]}"
+      }
+    ]
+  }
 }

@@ -2468,6 +2468,8 @@ fn pin_of(
         state,
         since: "2026-10-10T12:00:00Z".into(),
         replaced: vec![],
+        formerly: vec![],
+        renames: None,
     }
 }
 
