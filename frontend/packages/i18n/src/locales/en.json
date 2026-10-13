@@ -186,8 +186,22 @@
       "applyToAll": "Do the same for the other name clashes in this upload",
       "replace": "Replace",
       "keepBoth": "Keep both",
-      "skip": "Skip",
-      "replaceTooLarge": "Replace is not offered for files over 2 GB: keep both, or skip."
+      "skip": "Skip"
+    },
+    "replaceProblem": {
+      "changed": {
+        "title": "“{{name}}” changed meanwhile",
+        "description": "The file in {{folder}} changed while this one was being sent, so nothing was replaced."
+      },
+      "ownUpload": {
+        "title": "“{{name}}” has an unfinished replacement",
+        "description": "An earlier replacement of this file in {{folder}} stopped over an hour ago. Cancel it and start again, keep both, or skip."
+      },
+      "othersUpload": {
+        "title": "“{{name}}” is being replaced right now",
+        "description": "A new version of this file in {{folder}} is being uploaded right now, maybe from another device. Keep both, or skip."
+      },
+      "restart": "Cancel it and start again"
     }
   },
   "contactSuggest": {

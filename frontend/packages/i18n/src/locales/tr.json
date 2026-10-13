@@ -186,8 +186,22 @@
       "applyToAll": "Bu yüklemedeki diğer ad çakışmalarında da aynısını yap",
       "replace": "Değiştir",
       "keepBoth": "İkisini de tut",
-      "skip": "Atla",
-      "replaceTooLarge": "2 GB'tan büyük dosyalar için Değiştir sunulmaz: ikisini de tutun ya da atlayın."
+      "skip": "Atla"
+    },
+    "replaceProblem": {
+      "changed": {
+        "title": "“{{name}}” bu arada değişti",
+        "description": "{{folder}} içindeki dosya bu dosya gönderilirken değişti, bu yüzden hiçbir şey değiştirilmedi."
+      },
+      "ownUpload": {
+        "title": "“{{name}}” için bitmemiş bir değiştirme var",
+        "description": "{{folder}} içindeki bu dosyanın önceki değiştirilmesi bir saatten uzun süre önce durdu. İptal edip yeniden başlatın, ikisini de tutun ya da atlayın."
+      },
+      "othersUpload": {
+        "title": "“{{name}}” şu anda değiştiriliyor",
+        "description": "{{folder}} içindeki bu dosyanın yeni bir sürümü şu anda, belki başka bir cihazdan yükleniyor. İkisini de tutun ya da atlayın."
+      },
+      "restart": "İptal et ve yeniden başlat"
     }
   },
   "contactSuggest": {
