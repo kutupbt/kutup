@@ -20,6 +20,7 @@ import {
   Search,
   Send,
   Settings,
+  SlidersHorizontal,
   Star,
   Trash2,
   UserRound,
@@ -39,8 +40,12 @@ import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@kutup/ui/components/popover'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { AdvancedSearch } from '../features/AdvancedSearch'
+import { NotificationBanner } from '../features/NotificationBanner'
+import { useNewMailNotifications } from '../features/useNewMailNotifications'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAILTO_HASH, parseMailto } from '../features/mailto'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
@@ -114,13 +119,14 @@ function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
   )
 }
 
-/** Searches subjects and addresses in all mail, as Proton's search box does. */
+/** Searches subjects and addresses in all mail, as Proton's search box does; its options open advanced search. */
 function SearchBox() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { folder } = useParams()
   const [params] = useSearchParams()
   const [value, setValue] = useState(params.get('q') ?? '')
+  const [advanced, setAdvanced] = useState(false)
   useEffect(() => setValue(params.get('q') ?? ''), [params])
   return (
     <form
@@ -140,8 +146,18 @@ function SearchBox() {
         onChange={(e) => setValue(e.target.value)}
         placeholder={t('search.placeholder')}
         aria-label={t('search.label')}
-        className="pl-9"
+        className="pl-9 pr-10"
       />
+      <Popover open={advanced} onOpenChange={setAdvanced}>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" className="absolute right-1 top-1/2 size-8 -translate-y-1/2" aria-label={t('search.advanced')} title={t('search.advanced')}>
+            <SlidersHorizontal className="size-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-[min(26rem,calc(100vw-2rem))]">
+          <AdvancedSearch onDone={() => setAdvanced(false)} />
+        </PopoverContent>
+      </Popover>
     </form>
   )
 }
@@ -152,6 +168,7 @@ export function MailShell() {
   const session = useRequiredSession()
   useAccountUiPreferences()
   const counts = useCounts()
+  useNewMailNotifications()
   const actions = useMailActions()
   const groups = useMyGroups()
   const shared = (groups.data ?? []).filter((group) => group.kind === 'shared')
@@ -289,6 +306,7 @@ export function MailShell() {
       }
     >
       <Outlet />
+      <NotificationBanner />
       <SaveContactHost />
       <PlacesHost />
       <BlockSenderHost />

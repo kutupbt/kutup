@@ -15,7 +15,20 @@
   },
   "search": {
     "label": "Search mail",
-    "placeholder": "Search subjects and addresses"
+    "placeholder": "Search subjects and addresses",
+    "advanced": "Advanced search",
+    "keyword": "Keyword",
+    "location": "Location",
+    "since": "Start date",
+    "until": "End date",
+    "from": "Sender",
+    "to": "Recipient",
+    "personPlaceholder": "Name or email address",
+    "address": "Address",
+    "allAddresses": "All",
+    "hasAttachments": "Has attachments",
+    "reset": "Reset",
+    "submit": "Search"
   },
   "folders": {
     "inbox": "Inbox",
@@ -74,7 +87,8 @@
     "resize": "Resize the list",
     "me": "me",
     "inConversation_one": "{{count}} message in this conversation",
-    "inConversation_other": "{{count}} messages in this conversation"
+    "inConversation_other": "{{count}} messages in this conversation",
+    "advancedResults": "Search results in {{place}}"
   },
   "read": {
     "notFound": "This conversation no longer exists.",
@@ -122,7 +136,9 @@
     "headersTitle": "Message headers",
     "download": "Download",
     "from": "From",
-    "date": "Date"
+    "date": "Date",
+    "embeddedBlocked": "This message contains embedded images.",
+    "loadEmbedded": "Load embedded images"
   },
   "actions": {
     "archive": "Archive",
@@ -907,7 +923,29 @@
     "noSenders": "No senders yet.",
     "remove": "Remove {{address}}",
     "removeShort": "Remove",
-    "removed": "Images from {{address}} will be asked for again."
+    "removed": "Images from {{address}} will be asked for again.",
+    "bodyProxy": "They load through the Kutup server, so the sender does not see your IP address or browser, but can still tell that and when the message was opened.",
+    "proxyTitle": "Protect against email tracking",
+    "proxyHint": "Remote images come through Kutup instead of your browser, so senders do not see your IP address or browser; they can still tell that and when a message was opened. Known tracking pixels never load, and tracking parameters are taken out of links.",
+    "embeddedTitle": "Auto show embedded images",
+    "embeddedHint": "Images sent inside a message show at once. Turned off, they wait until you load them.",
+    "metadataTitle": "Remove image metadata",
+    "metadataHint": "Where “Remove metadata” starts when you insert an image: location, device and time are taken out of JPEG, PNG and WebP images."
+  },
+  "tracking": {
+    "trackersBlocked_one": "{{count}} tracker blocked",
+    "trackersBlocked_other": "{{count}} trackers blocked",
+    "linksCleaned_one": "{{count}} link cleaned",
+    "linksCleaned_other": "{{count}} links cleaned",
+    "title": "Email tracker protection",
+    "body": "Tracking pixels tell a sender when and where a message was opened; tracking parameters tie a click to you. Kutup never loads the first and takes the second out of links.",
+    "trackersList": "Blocked trackers",
+    "linksList": "Cleaned links",
+    "unknownProvider": "Tracker",
+    "removed": "Removed: {{names}}",
+    "proxyFailed": "Tracker protection prevented some images from loading. Load them if you trust the sender.",
+    "loadDirect": "Load",
+    "loadDirectHint": "Images will be loaded without the Kutup server"
   },
   "schedule": {
     "menu": "Schedule send",
@@ -966,5 +1004,26 @@
     "outside": "Expiring messages go to Kutup recipients only: a copy sent outside Kutup cannot be deleted later.",
     "banner": "This message will expire on {{date}}.",
     "row": "Expires {{date}}"
+  },
+  "notifications": {
+    "title": "New email received",
+    "body": "From: {{sender}} - {{subject}}",
+    "grouped_one": "{{count}} new message",
+    "grouped_other": "{{count}} new messages",
+    "banner": "Kutup Mail needs your permission to show desktop notifications for new mail.",
+    "bannerLabel": "Desktop notifications",
+    "enable": "Enable desktop notifications",
+    "dismiss": "Not now",
+    "settingsTitle": "Desktop notifications",
+    "settingsHint": "New mail in the Inbox, Starred or a folder with notifications on, while Mail is open.",
+    "status": {
+      "granted": "Desktop notifications are on",
+      "default": "Desktop notifications are off",
+      "denied": "Desktop notifications are blocked in this browser’s site settings",
+      "unsupported": "This browser cannot show desktop notifications"
+    },
+    "test": "Send test notification",
+    "testTitle": "You have a new email",
+    "testBody": "This is how new mail will look."
   }
 }

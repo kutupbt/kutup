@@ -15,7 +15,20 @@
   },
   "search": {
     "label": "Postalarda ara",
-    "placeholder": "Konu ve adreslerde ara"
+    "placeholder": "Konu ve adreslerde ara",
+    "advanced": "Gelişmiş arama",
+    "keyword": "Anahtar kelime",
+    "location": "Konum",
+    "since": "Başlangıç tarihi",
+    "until": "Bitiş tarihi",
+    "from": "Gönderen",
+    "to": "Alıcı",
+    "personPlaceholder": "Ad veya e-posta adresi",
+    "address": "Adres",
+    "allAddresses": "Tümü",
+    "hasAttachments": "Eki olanlar",
+    "reset": "Sıfırla",
+    "submit": "Ara"
   },
   "folders": {
     "inbox": "Gelen kutusu",
@@ -74,7 +87,8 @@
     "resize": "Listeyi yeniden boyutlandır",
     "me": "ben",
     "inConversation_one": "Bu konuşmada {{count}} ileti",
-    "inConversation_other": "Bu konuşmada {{count}} ileti"
+    "inConversation_other": "Bu konuşmada {{count}} ileti",
+    "advancedResults": "{{place}} içinde arama sonuçları"
   },
   "read": {
     "notFound": "Bu yazışma artık yok.",
@@ -122,7 +136,9 @@
     "headersTitle": "İleti üst bilgileri",
     "download": "İndir",
     "from": "Kimden",
-    "date": "Tarih"
+    "date": "Tarih",
+    "embeddedBlocked": "Bu iletide gömülü görseller var.",
+    "loadEmbedded": "Gömülü görselleri yükle"
   },
   "actions": {
     "archive": "Arşivle",
@@ -907,7 +923,29 @@
     "noSenders": "Henüz gönderen yok.",
     "remove": "{{address}} adresini kaldır",
     "removeShort": "Kaldır",
-    "removed": "{{address}} adresinden gelen görseller yine sorulacak."
+    "removed": "{{address}} adresinden gelen görseller yine sorulacak.",
+    "bodyProxy": "Görseller Kutup sunucusu üzerinden yüklenir; gönderen IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir.",
+    "proxyTitle": "E-posta izlemeye karşı koruma",
+    "proxyHint": "Uzak görseller tarayıcınız yerine Kutup üzerinden gelir; gönderenler IP adresinizi ve tarayıcınızı görmez, ama iletinin açıldığını ve ne zaman açıldığını yine de anlayabilir. Bilinen izleme pikselleri hiç yüklenmez ve bağlantılardaki izleme parametreleri çıkarılır.",
+    "embeddedTitle": "Gömülü görselleri otomatik göster",
+    "embeddedHint": "İletinin içinde gönderilen görseller hemen gösterilir. Kapalıyken siz yükleyene kadar bekler.",
+    "metadataTitle": "Görsel üst verisini kaldır",
+    "metadataHint": "Görsel eklerken “Üst veriyi kaldır” seçeneğinin başlangıç değeri: JPEG, PNG ve WebP görsellerden konum, cihaz ve zaman bilgisi çıkarılır."
+  },
+  "tracking": {
+    "trackersBlocked_one": "{{count}} izleyici engellendi",
+    "trackersBlocked_other": "{{count}} izleyici engellendi",
+    "linksCleaned_one": "{{count}} bağlantı temizlendi",
+    "linksCleaned_other": "{{count}} bağlantı temizlendi",
+    "title": "E-posta izleyici koruması",
+    "body": "İzleme pikselleri gönderene iletinin ne zaman ve nerede açıldığını söyler; izleme parametreleri bir tıklamayı size bağlar. Kutup ilkini hiç yüklemez, ikincisini bağlantılardan çıkarır.",
+    "trackersList": "Engellenen izleyiciler",
+    "linksList": "Temizlenen bağlantılar",
+    "unknownProvider": "İzleyici",
+    "removed": "Çıkarılanlar: {{names}}",
+    "proxyFailed": "İzleyici koruması bazı görsellerin yüklenmesini engelledi. Gönderene güveniyorsanız yükleyin.",
+    "loadDirect": "Yükle",
+    "loadDirectHint": "Görseller Kutup sunucusu olmadan yüklenecek"
   },
   "schedule": {
     "menu": "Gönderimi planla",
@@ -966,5 +1004,26 @@
     "outside": "Süreli iletiler yalnızca Kutup alıcılarına gider: Kutup dışına giden bir kopya sonradan silinemez.",
     "banner": "Bu ileti {{date}} tarihinde silinecek.",
     "row": "{{date}} silinecek"
+  },
+  "notifications": {
+    "title": "Yeni e-posta geldi",
+    "body": "Gönderen: {{sender}} - {{subject}}",
+    "grouped_one": "{{count}} yeni ileti",
+    "grouped_other": "{{count}} yeni ileti",
+    "banner": "Kutup Posta, yeni postalar için masaüstü bildirimi göstermek üzere izninize ihtiyaç duyuyor.",
+    "bannerLabel": "Masaüstü bildirimleri",
+    "enable": "Masaüstü bildirimlerini aç",
+    "dismiss": "Şimdi değil",
+    "settingsTitle": "Masaüstü bildirimleri",
+    "settingsHint": "Posta açıkken Gelen Kutusu’na, Yıldızlı’ya veya bildirimi açık bir klasöre gelen yeni postalar.",
+    "status": {
+      "granted": "Masaüstü bildirimleri açık",
+      "default": "Masaüstü bildirimleri kapalı",
+      "denied": "Masaüstü bildirimleri bu tarayıcının site ayarlarında engellenmiş",
+      "unsupported": "Bu tarayıcı masaüstü bildirimi gösteremiyor"
+    },
+    "test": "Deneme bildirimi gönder",
+    "testTitle": "Yeni bir e-postanız var",
+    "testBody": "Yeni postalar böyle görünecek."
   }
 }

@@ -697,6 +697,14 @@ fn build_router(state: AppState) -> Router {
             get(handlers::mail_keys::list_addresses),
         )
         .route(
+            "/api/mail/notifications",
+            get(handlers::mail_notifications::new_mail),
+        )
+        .route(
+            "/api/mail/search-addresses",
+            get(handlers::mail::search_addresses),
+        )
+        .route(
             "/api/mail/messages",
             get(handlers::mail::list_messages).patch(handlers::mail::update_messages),
         )
@@ -748,6 +756,7 @@ fn build_router(state: AppState) -> Router {
             "/api/mail/image-senders",
             get(handlers::mail_image_senders::list).post(handlers::mail_image_senders::add),
         )
+        .route("/api/mail/images", post(handlers::mail_images::fetch))
         .route(
             "/api/mail/image-senders/delete",
             post(handlers::mail_image_senders::delete),

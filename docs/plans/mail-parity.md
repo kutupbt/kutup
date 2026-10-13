@@ -35,7 +35,7 @@ reference only where Proton has nothing.
 | Attachment thumbnails in the list, preview, download all | `ItemAttachmentThumbnails.tsx`, `AttachmentPreview.tsx` | ✅ preview (images, PDF, text, audio, video) with previous/next, Download all as `Attachments-<subject>.zip` (spec 96); the files as chips under list rows, 2 in columns or 3 in rows then "+N", not in compact rows or Spam, invites and keys left out, a chip opening the preview (spec 96). Names, types and sizes are readable metadata, as Proton's AttachmentsMetadata |
 | Print, view headers, view HTML, export .eml | `MessagePrintModal.tsx`, `MessageHeadersModal.tsx` | ✅ a message's More actions: Export, Print, View headers (and download), View HTML / rendered |
 | Remote images blocked until allowed | `ExtraImages.tsx` | ✅ |
-| Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | 🔶 remote images blocked until loaded; loading asks first and can remember the sender ("Always load images from …", Kutup's own: Proton asks each time), never automatic in Spam (spec 101); ❌ image proxy, tracker stripping |
+| Image proxy, tracker protection (pixels, UTM links) | `transformRemote.ts`, `SpyTrackerModal.tsx` | ✅ remote images blocked until loaded; loading asks first and can remember the sender ("Always load images from …", Kutup's own: Proton asks each time), never automatic in Spam (spec 101). Tracker protection, on by default: images load through the Kutup server (`GET /api/mail/images`: fetched on demand, nothing stored; public http/https only, raster types by their bytes, no SVG; 5 MiB an image, 300 images and 64 MiB a minute per account, 32 fetches at once on the server), known tracking pixels are named before anything loads (`POST /api/mail/images/check`) and never fetched, tracking parameters leave links (HTML and plain text), "N trackers blocked · M links cleaned" with the details; an image the proxy cannot get loads directly only when asked (spec 109) |
 | Link confirmation | `LinkConfirmationModal.tsx` | ✅ outside links ask first ("Confirm link URLs" in General, "Don't ask again"); punycode and bidi warnings; Spam always asks with "I understand the risk"; mailto: opens the composer |
 | Phishing report, spam score banner | `MessagePhishingModal.tsx`, `ExtraSpamScore.tsx` | ❌ deferred (2026-10-12). Option when taken up: reports go to `security@<domain>` (with `abuse@` and `postmaster@`, RFC 2142, reserved names), to the group that owns the address, else to the admins' Inboxes; the original attached as `message/rfc822`, then moved to Spam, sender optionally blocked |
 | Unsubscribe banner (List-Unsubscribe), auto-unsubscribe | `ExtraUnsubscribe.tsx` | ✅ banner: one click sent by the server (RFC 8058), a web page, or an email from you; "Unsubscribed" after; on moving list mail to Spam, "Move to spam and unsubscribe" (asked, or always/never in Settings → General as Proton's Auto-unsubscribe): arrival notes only that a message is from a list, the ways out are read on the device |
@@ -63,8 +63,8 @@ reference only where Proton has nothing.
 | Scheduled send, Scheduled folder | `ScheduleSendActions.tsx` | ✅ Send's menu: tomorrow morning, Monday morning, or a day and time (a minute to 90 days ahead, 100 at most); the server holds it in the outbox, the draft waits in Scheduled (shown only when something is), the row shows when it goes, the message says so with Edit back to Drafts and the composer (spec 103) |
 | Undo send (delay) | `DelaySendSecondsSelect.tsx` | ✅ 0, 5, 10 (default) or 20 seconds in Settings → General; the server checks a send at once, holds it (`mail::outbox`) and sends it when the delay is up, also with the tab closed; "Message sent" offers Undo, which opens the draft again; a send interrupted by a restart fails rather than going twice (spec 102) |
 | Expiring messages | `ComposerExpirationModal.tsx` | 🔶 More options → Set expiration (a minute to 4 weeks, Proton's limit); the server deletes every Kutup copy then and frees its storage (spec 108); outside recipients refused until password-protected mail, as Proton requires a password there |
-| Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ❌ |
-| Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | 🔶 "Remove metadata" in the insert question, on by default: JPEG, PNG and WebP drawn again without EXIF; ❌ the account-wide toggle |
+| Password-protected mail to outside people, their reply page | `ComposerPasswordModal.tsx`, `eo/` | ➖ dropped (2026-10-12): an encrypted file and a password sent another way covers it for Kutup; expiring messages to outside people stay refused (`expiringOutside`) |
+| Remove image metadata on upload | `RemoveImageMetadataToggle.tsx` | ✅ "Remove metadata" in the insert question: JPEG, PNG and WebP drawn again without EXIF; where it starts is Settings → General "Remove image metadata" (on by default; Proton's is off) (spec 110) |
 | Mailto handler, "default mail app" | `useMailtoHash.ts` | ✅ Settings → General: "Set as default" registers Kutup Mail for mailto links (`#mailto=`, as Proton's); a link opens the composer with its To, Cc, Bcc, subject and body (spec 107) |
 | Request a read receipt | `MoreActionsExtension.tsx` | ✅ "Read receipt" in the composer (`Disposition-Notification-To`), kept in the draft (spec 100) |
 | Writing assistant | `ComposerAssistant.tsx` | ➖ not planned |
@@ -82,7 +82,7 @@ reference only where Proton has nothing.
 | Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
 | Sieve editor | `AdvancedFilterModal.tsx` | 🔶 F4 |
 | Search on subject and addresses | | ✅ |
-| Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ❌ |
+| Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ✅ the search box's options: keyword, location (any folder, label or All mail), start and end date (the end day included, the reader's time zone), sender, recipient (To, Cc, Bcc), address (your own and the distribution lists you are in, Kutup's own: Proton lists your addresses only; a shared mailbox's own), has attachments; kept in the address bar (`q`, `from`, `to`, `since`, `until`, `address`, `filter`); Reset; over the readable fields, no body search yet (spec 111) |
 | Body search in the browser (encrypted local index) | `contentSearch/` | ❌ (C2f; [`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Category tabs (Primary, Promotions, …) | `categoriesTabs` | ❌ |
 | Newsletter subscriptions view | `NewsletterSubscriptionView.tsx` | ❌ |
@@ -109,8 +109,8 @@ reference only where Proton has nothing.
 | Feature | Proton | Kutup |
 |---|---|---|
 | Unread count in the title | `useMailboxFavicon.ts` | ✅ (favicon count missing) |
-| Desktop notifications for new mail | `useNewEmailNotification.ts` | ❌ |
-| Web push | | ❌ (C2f) |
+| Desktop notifications for new mail | `useNewEmailNotification.ts` | ✅ while Mail is open: "New email received", "From: sender - subject" for each new unread message in the Inbox, Starred or a folder with notifications on (snoozed mail coming back too), one "N new messages" past three (Proton groups on Windows only); a click opens it; Settings → General shows the browser's permission, Enable and Send test notification; a banner asks once (`GET /api/mail/notifications`, `notify_at`; spec 112). Your own mailbox only, as Proton |
+| Web push | | ❌ deferred (2026-10-12): Proton's web app has none (its notifications come while a tab is open, as Kutup's desktop notifications do). Chat's web push could carry it later |
 | Daily email summary | `DailyEmailNotificationToggle` | ❌ |
 | Per-folder notifications | label `Notify` | 🔶 F1 (the switch), with push |
 
@@ -124,7 +124,7 @@ reference only where Proton has nothing.
 | Mobile apps | | ➖ native apps' plans |
 | Offline cache | (none; local search index only) | ❌ ([`browser-storage`](../research/16-browser-storage-architecture.md)) |
 | Calendar invitations in mail (Accept, Decline) | `ExtraEvent.tsx` | ➖ with Calendar |
-| Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | 🔶 Settings → General: Load remote images (Ask each time, Always: Proton's "Auto show remote images"), the senders whose images always load with Remove, Confirm link URLs; ❌ tracker protection, embedded images |
+| Privacy settings page (remote content, tracking, links, embedded images) | `EmailPrivacySection.tsx` | ✅ Settings → General: Load remote images (Ask each time, Always: Proton's "Auto show remote images"), the senders whose images always load with Remove, Confirm link URLs, Protect against email tracking (on by default), Auto show embedded images (off: "Load embedded images", spec 110) |
 | Security logs | `LogsSection.tsx` | 🔶 account app has sessions |
 | Language, date format | `LanguageAndTimeSection.tsx` | ✅ (account preferences) |
 | Settings for mail (one place) | mail routes | ✅ Mail → Settings: General, Appearance, Identity, Auto-reply, Folders and labels, Filters, Block and allow; keys in Account |
@@ -150,8 +150,8 @@ Each is its own plan and pull request, Proton first:
    shortcuts (R, Shift+R, F).
 5. **P4 writing:** undo send, scheduled send, snooze, inline images and
    emoji, plain text mode, contact groups as recipients, mailto handler.
-6. **P5 privacy:** image proxy and tracker protection, expiring messages,
-   password-protected mail to outside people.
+6. **P5 privacy:** image proxy and tracker protection, expiring messages
+   (password-protected mail to outside people dropped, 2026-10-12).
 7. **P6 search and notifications:** advanced search, body search in the
    browser, desktop notifications and web push.
 8. **P7 moving in and out:** import (IMAP, Gmail, Outlook), export,

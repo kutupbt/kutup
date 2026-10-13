@@ -190,7 +190,7 @@ async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey
 
 export const mailKey = ['mail'] as const
 // `group` is a shared mailbox's id; absent, the account's own mailbox.
-const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest', view.page ?? 0, view.pageSize ?? DEFAULT_PAGE_SIZE] as const
+const folderKey = (folder: PlaceKey, view: ListView) => ['mail', 'folder', folder, view.q ?? '', view.group ?? null, !!view.conversations, view.filter ?? null, view.sort ?? 'newest', JSON.stringify(view.criteria ?? {}), view.page ?? 0, view.pageSize ?? DEFAULT_PAGE_SIZE] as const
 /** Two list keys for one place and view, whatever their page. */
 const samePlace = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((part, i) => i === a.length - 2 || part === b[i])
 const countsKey = (group?: string, conversations = false) => ['mail', 'counts', group ?? null, conversations] as const
@@ -329,6 +329,8 @@ export type ListSort = 'newest' | 'oldest' | 'largest' | 'smallest'
 /** How a place is listed: searched, in a shared mailbox, by conversation, filtered, sorted. */
 export interface ListView {
   q?: string
+  /** Advanced search beyond the keyword (as `listCriteria` makes it). */
+  criteria?: { from?: string; to?: string; since?: string; until?: string; address?: string }
   group?: string
   /** One row per conversation (the account's View mode). */
   conversations?: boolean
@@ -346,7 +348,7 @@ export const DEFAULT_PAGE_SIZE = 50
 export const PAGE_SIZES = [50, 100, 200] as const
 
 export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true) {
-  const { q, group, conversations, filter, sort, page = 0, pageSize = DEFAULT_PAGE_SIZE } = view
+  const { q, criteria, group, conversations, filter, sort, page = 0, pageSize = DEFAULT_PAGE_SIZE } = view
   // One numbered page per key, kept in the infinite shape the cache
   // updates (patchMessages, patchLabels) work on.
   return useInfiniteQuery<Page, Error, InfiniteData<Page, number>, ReturnType<typeof folderKey>, number>({
@@ -361,6 +363,7 @@ export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true)
           params: {
             folder,
             ...(q ? { q } : {}),
+            ...criteria,
             page: pageParam,
             limit: pageSize,
             ...scoped(group),
@@ -688,6 +691,51 @@ export function useBatchMessages() {
   })
 }
 
+/** One remote image through the Kutup image proxy (Proton's `core/v4/images`). */
+export type ProxiedImage = { kind: 'image'; blob: Blob } | { kind: 'tracker' } | { kind: 'failed' } | { kind: 'busy' }
+
+export async function fetchMailImage(url: string): Promise<ProxiedImage> {
+  try {
+    // The address goes in the body, never in a URL a log would keep.
+    const response = await api.post<ArrayBuffer>('/mail/images', { url }, { responseType: 'arraybuffer' })
+    // 204: a known tracking pixel the server would not fetch.
+    if (response.status === 204) return { kind: 'tracker' }
+    const type = String(response.headers['content-type'] ?? '')
+    if (!type.startsWith('image/')) return { kind: 'failed' }
+    return { kind: 'image', blob: new Blob([response.data], { type }) }
+  } catch (error) {
+    // Limits a sender could force: never a reason to load the image directly.
+    const status = isAxiosError(error) ? error.response?.status : undefined
+    return status === 429 || status === 503 ? { kind: 'busy' } : { kind: 'failed' }
+  }
+}
+
+/** New mail to tell the reader about (Proton's new-email notifications). */
+export interface NewMail {
+  id: string
+  threadId: string
+  folder: string
+  customFolder: string | null
+  subject: string
+  fromAddress: string
+  fromName: string
+}
+
+/** New mail since `after` (the last answer's `now`); without it, only `now`. */
+export async function fetchNewMail(after: string | null): Promise<{ now: string; messages: NewMail[]; more: boolean }> {
+  return (await api.get<{ now: string; messages: NewMail[]; more: boolean }>('/mail/notifications', { params: after ? { after } : {} })).data
+}
+
+/** What advanced search's Address can be: your addresses and lists, or a shared mailbox's address. */
+export function useSearchAddresses(group?: string, enabled = true) {
+  return useQuery({
+    queryKey: ['mail', 'search-addresses', group ?? null],
+    enabled,
+    staleTime: 5 * 60_000,
+    queryFn: async () => (await api.get<string[]>('/mail/search-addresses', { params: scoped(group) })).data,
+  })
+}
+
 const imageSendersKey = ['mail', 'image-senders'] as const
 
 /** Senders whose remote images always load (chosen when loading them). */
@@ -777,6 +825,12 @@ export interface MailSettings {
   spamAction: 'ask' | 'just_spam' | 'spam_and_unsubscribe'
   /** Remote images: blocked until loaded, or always (Proton's "Auto show remote images"); never automatic in Spam. */
   remoteImages: 'ask' | 'always'
+  /** Remote images load through the Kutup server, known trackers never load, and links lose tracking parameters (Proton's "Protect against email tracking"). */
+  imageProxy: boolean
+  /** A message's own (embedded) images show at once (Proton's "Auto show embedded images"). */
+  embeddedImages: boolean
+  /** Where the insert-image question's "Remove metadata" starts (Proton's RemoveImageMetadata). */
+  removeImageMetadata: boolean
   /** Undo send: seconds a send waits before it goes (Proton's DelaySendSeconds: 0, 5, 10, 20). */
   delaySendSeconds: number
   /** Composer defaults (Proton's Composer mode, text direction, default font/size). */

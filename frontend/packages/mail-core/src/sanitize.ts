@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { cleanTrackingLink, type CleanedLink } from './trackingLinks'
 
 // Mail HTML is hostile until proven otherwise (docs/plans/mail.md), as in
 // Proton's `packages/sanitize`: no scripts, forms, frames, embeds or style
@@ -25,8 +26,19 @@ export interface FrameLook {
 export interface SanitizeOptions {
   /** Load remote images and CSS backgrounds. */
   allowRemote: boolean
+  /**
+   * With `allowRemote`, through the image proxy: what each remote address
+   * becomes (a `blob:` URL of the proxied image, or the address itself to
+   * load it directly); null leaves it out (a tracker, or not loaded yet).
+   * Without it, remote addresses load directly.
+   */
+  resolveRemote?: (url: string) => string | null
+  /** Take tracking parameters out of links (Proton's tracker protection). */
+  cleanLinks?: boolean
   /** Content-ID (without brackets) → blob: URL of that part. */
   inlineImages?: ReadonlyMap<string, string>
+  /** Hold the message's own (cid:) images back until the reader loads them. */
+  holdEmbedded?: boolean
   look?: FrameLook
 }
 
@@ -35,6 +47,12 @@ export interface SanitizedHtml {
   document: string
   /** Whether something remote was held back. */
   remoteBlocked: boolean
+  /** Whether the message's own (cid:) images were held back. */
+  embeddedBlocked: boolean
+  /** Every remote image address in the message (protocol-relative ones as https). */
+  remoteUrls: string[]
+  /** The links whose tracking parameters were taken out. */
+  cleanedLinks: CleanedLink[]
   /** Whether the body takes the dark theme's colours (else it is on white). */
   dark: boolean
   /** Whether the body takes the theme's colours at all. */
@@ -46,16 +64,25 @@ const URL_ATTRIBUTES = ['src', 'background', 'poster']
 const REMOTE = /^\s*(https?:)?\/\//i
 const CSS_URL = /url\(\s*(['"]?)(.*?)\1\s*\)/gi
 
-function rewriteStyle(style: string, options: SanitizeOptions, blocked: () => void): string {
+/** A remote address as it is fetched: protocol-relative ones over https. */
+function absolute(url: string): string {
+  const trimmed = url.trim()
+  return trimmed.startsWith('//') ? `https:${trimmed}` : trimmed
+}
+
+function rewriteStyle(style: string, options: SanitizeOptions, remote: (url: string) => string | null, embedded: (cid: string) => string | null): string {
   return style.replace(CSS_URL, (whole, _quote: string, url: string) => {
     const target = url.trim()
     if (target.toLowerCase().startsWith('cid:')) {
-      const blob = options.inlineImages?.get(target.slice(4).replace(/^<|>$/g, ''))
+      const blob = embedded(target)
       return blob ? `url("${blob}")` : 'none'
     }
     if (target.toLowerCase().startsWith('data:image/')) return whole
-    if (REMOTE.test(target) && options.allowRemote) return whole
-    if (REMOTE.test(target)) blocked()
+    if (REMOTE.test(target)) {
+      const loaded = remote(target)
+      if (loaded === target) return whole
+      return loaded ? `url('${loaded.replace(/['"\\]/g, '')}')` : 'none'
+    }
     return 'none'
   })
 }
@@ -64,19 +91,41 @@ function rewriteStyle(style: string, options: SanitizeOptions, blocked: () => vo
 export function sanitizeMailHtml(html: string, options: SanitizeOptions): SanitizedHtml {
   const purify = DOMPurify(window)
   let remoteBlocked = false
-  const blocked = () => {
-    remoteBlocked = true
+  let embeddedBlocked = false
+  // A message part's blob: URL for a cid: address; null when it has none or it is held back.
+  const embedded = (value: string): string | null => {
+    const blob = options.inlineImages?.get(value.trim().slice(4).replace(/^<|>$/g, ''))
+    if (blob && options.holdEmbedded) {
+      embeddedBlocked = true
+      return null
+    }
+    return blob ?? null
+  }
+  let direct = false
+  const remoteUrls = new Set<string>()
+  const cleanedLinks: CleanedLink[] = []
+  // What a remote address becomes in the frame; null leaves it out.
+  const remote = (raw: string): string | null => {
+    const url = absolute(raw)
+    remoteUrls.add(url)
+    if (!options.allowRemote) {
+      remoteBlocked = true
+      return null
+    }
+    const loaded = options.resolveRemote ? options.resolveRemote(url) : url
+    if (loaded && REMOTE.test(loaded)) direct = true
+    return loaded
   }
   purify.addHook('uponSanitizeAttribute', (node, data) => {
     const name = data.attrName.toLowerCase()
     if (name === 'style') {
-      data.attrValue = rewriteStyle(data.attrValue, options, blocked)
+      data.attrValue = rewriteStyle(data.attrValue, options, remote, embedded)
       return
     }
     if (!URL_ATTRIBUTES.includes(name)) return
     const value = data.attrValue.trim()
     if (value.toLowerCase().startsWith('cid:')) {
-      const blob = options.inlineImages?.get(value.slice(4).replace(/^<|>$/g, ''))
+      const blob = embedded(value)
       if (blob) {
         // Not forceKeepAttr: that keeps the original value, not this one.
         data.attrValue = blob
@@ -87,11 +136,13 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     }
     if (value.toLowerCase().startsWith('data:image/')) return
     if (REMOTE.test(value)) {
-      if (options.allowRemote) {
-        data.forceKeepAttr = true
+      const loaded = remote(value)
+      if (loaded) {
+        // A blob: URL passes the URI check; a direct address is kept as it is.
+        data.attrValue = loaded
+        if (loaded === value) data.forceKeepAttr = true
         return
       }
-      blocked()
     }
     data.keepAttr = false
     if (node.nodeName === 'IMG') (node as HTMLElement).setAttribute('data-kutup-blocked', '')
@@ -102,6 +153,11 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
       if (!/^(https?:|mailto:)/i.test(href.trim())) {
         node.removeAttribute('href')
       } else {
+        const cleaned = options.cleanLinks ? cleanTrackingLink(href) : null
+        if (cleaned) {
+          node.setAttribute('href', cleaned.cleaned)
+          cleanedLinks.push(cleaned)
+        }
         node.setAttribute('target', '_blank')
         node.setAttribute('rel', 'noopener noreferrer nofollow')
       }
@@ -119,11 +175,14 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     WHOLE_DOCUMENT: false,
   })
   purify.removeAllHooks()
-  const images = options.allowRemote ? 'data: blob: https: http:' : 'data: blob:'
+  const images = direct ? 'data: blob: https: http:' : 'data: blob:'
   const adapts = !!options.look && paintsNothing(body)
   return {
     document: frame(foldQuote(body, options.look?.quoteLabel), images, adapts ? options.look : undefined),
     remoteBlocked,
+    embeddedBlocked,
+    remoteUrls: [...remoteUrls],
+    cleanedLinks,
     dark: adapts && !!options.look?.dark,
     themed: adapts,
   }
@@ -212,19 +271,23 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 }
 
-function linkify(text: string): string {
-  return escapeHtml(text).replace(
-    /\b(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)])/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer nofollow">$1</a>',
-  )
+function linkify(text: string, cleaned?: CleanedLink[]): string {
+  return escapeHtml(text).replace(/\b(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)])/g, (shown: string) => {
+    // The link goes without its tracking parameters; its text stays as written.
+    const clean = cleaned ? cleanTrackingLink(shown.replace(/&amp;/g, '&')) : null
+    if (clean) cleaned?.push(clean)
+    const href = clean ? escapeHtml(clean.cleaned) : shown
+    return `<a href="${href}" target="_blank" rel="noopener noreferrer nofollow">${shown}</a>`
+  })
 }
 
 /**
  * Plain text as a document: escaped, line breaks kept, links clickable, in
  * the theme's colours; the quoted earlier message at the end (`>` lines and
- * the "… wrote:" line before them) folded.
+ * the "… wrote:" line before them) folded. With `cleaned`, links lose their
+ * tracking parameters and each cleaned link is added to it.
  */
-export function plainTextDocument(text: string, look?: FrameLook): string {
+export function plainTextDocument(text: string, look?: FrameLook, cleaned?: CleanedLink[]): string {
   const lines = text.replace(/\s+$/, '').split('\n')
   let start = lines.length
   while (start > 0 && (lines[start - 1].startsWith('>') || (lines[start - 1].trim() === '' && start < lines.length))) start -= 1
@@ -234,10 +297,10 @@ export function plainTextDocument(text: string, look?: FrameLook): string {
   const own = quoted ? lines.slice(0, start).join('\n') : text
   const fold =
     quoted && look?.quoteLabel && own.trim()
-      ? `<details class="kutup-quote"><summary title="${escapeHtml(look.quoteLabel)}" aria-label="${escapeHtml(look.quoteLabel)}">\u2026</summary>${linkify(lines.slice(start).join('\n'))}</details>`
+      ? `<details class="kutup-quote"><summary title="${escapeHtml(look.quoteLabel)}" aria-label="${escapeHtml(look.quoteLabel)}">\u2026</summary>${linkify(lines.slice(start).join('\n'), cleaned)}</details>`
       : ''
   const shown = fold ? `${own.trimEnd()}\n` : text
-  return frame(`<div style="white-space: pre-wrap; overflow-wrap: anywhere">${linkify(shown)}${fold}</div>`, 'data: blob:', look)
+  return frame(`<div style="white-space: pre-wrap; overflow-wrap: anywhere">${linkify(shown, cleaned)}${fold}</div>`, 'data: blob:', look)
 }
 
 function frame(body: string, images: string, look?: FrameLook): string {

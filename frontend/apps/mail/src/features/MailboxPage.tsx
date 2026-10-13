@@ -7,6 +7,7 @@ import { useContactLookup } from '@kutup/contacts-core/api'
 import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, useBatchMessages, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { oneTimeCode } from '@kutup/mail-core/oneTimeCode'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
+import { isSearching, listCriteria, searchFromParams } from '@kutup/mail-core/search'
 import { appUrl } from '@kutup/session/apps'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -115,6 +116,11 @@ export function MailboxPage() {
   const places = usePlaces()
   const [params, setParams] = useSearchParams()
   const q = params.get('q') ?? ''
+  // Proton's advanced search, in the address bar beside the keyword.
+  const searching = searchFromParams(params)
+  const criteriaKey = JSON.stringify(listCriteria(searching))
+  const criteria = useMemo(() => JSON.parse(criteriaKey) as ReturnType<typeof listCriteria>, [criteriaKey])
+  const advanced = isSearching({ ...searching, q: '' })
   // Proton's filter and sort, kept in the address bar.
   const filter = FILTERS.find((f) => f === params.get('filter')) ?? null
   const sort = SORTS.find((s) => s === params.get('sort')) ?? 'newest'
@@ -170,7 +176,7 @@ export function MailboxPage() {
   // Conversation grouping (Proton's View mode, on by default); the list waits for the setting.
   const conversations = (settings.data?.viewMode ?? 'conversation') === 'conversation'
   const pageSize = settings.data?.pageSize ?? DEFAULT_PAGE_SIZE
-  const list = useFolder(place, { q, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending)
+  const list = useFolder(place, { q, criteria, group, conversations, filter, sort, page: page - 1, pageSize }, !settings.isPending)
   const total = list.data?.pages[0]?.total ?? null
   const pages = pageCount(total ?? 0, pageSize)
   const own = account.data?.address.toLowerCase() ?? ''
@@ -205,7 +211,7 @@ export function MailboxPage() {
   }, [place, q, page])
   // Select all ends with the place, page, search, filter or sort, and once a row is unchecked.
   useEffect(() => setAllOfPlace(false), [place, q, page, filter, sort])
-  const showSelectAll = allOfPlace || (total !== null && total > 0 && canSelectAll({ checked: chosen.length, pageSize, folder, own: placeKind !== null, q, filtered: filter !== null }))
+  const showSelectAll = allOfPlace || (total !== null && total > 0 && canSelectAll({ checked: chosen.length, pageSize, folder, own: placeKind !== null, q, filtered: filter !== null || advanced }))
   useEffect(() => {
     if (allOfPlace && (chosen.length < messages.length || messages.length === 0)) setAllOfPlace(false)
   }, [allOfPlace, chosen.length, messages.length])
@@ -675,7 +681,7 @@ export function MailboxPage() {
         ) : (
           <>
             <h1 className="min-w-0 flex-1 truncate px-1 font-display text-base font-semibold">
-              {q ? t('list.searchResults', { q }) : title}
+              {q ? t('list.searchResults', { q }) : advanced ? t('list.advancedResults', { place: title }) : title}
             </h1>
             {unwanted && messages.length > 0 ? (
               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setEmptying(true)}>
@@ -739,8 +745,8 @@ export function MailboxPage() {
       ) : messages.length === 0 ? (
         <div className="p-3">
           <EmptyState
-            title={q ? t('list.noMatches') : filter ? t('listFilter.empty') : placeKind ? t(`empty.${placeKind}`) : t(`empty.${folder}`)}
-            description={q ? t('list.noMatchesHint') : filter ? '' : placeKind ? t(`emptyHint.${placeKind}`) : t(`emptyHint.${folder}`)}
+            title={q || advanced ? t('list.noMatches') : filter ? t('listFilter.empty') : placeKind ? t(`empty.${placeKind}`) : t(`empty.${folder}`)}
+            description={q || advanced ? t('list.noMatchesHint') : filter ? '' : placeKind ? t(`emptyHint.${placeKind}`) : t(`emptyHint.${folder}`)}
           />
         </div>
       ) : (
