@@ -111,8 +111,8 @@ pub struct LoginResponse {
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     color: String,
-    /// What the account's envelopes are bound to (its key binding); given
-    /// only with the session.
+    /// The account's key binding, what its envelopes carry; given only with
+    /// the session.
     #[serde(skip_serializing_if = "String::is_empty")]
     envelope_binding: String,
     #[serde(skip_serializing_if = "is_false")]

@@ -106,7 +106,7 @@ one (a vault file, a mail key, a folder), under the account's own keys.
   name resolves (by the name otherwise), so sign-in, reauth and the Pass PIN
   keep sharing one counter.
 
-### Recovery email (second slice)
+### Recovery email (slice 3, not in PR #167)
 
 - `user_recovery_emails(user_id, address, verified_at, …)`, one per account;
   Settings → Recovery: add, change, remove; confirmed by a six-digit code sent
@@ -154,7 +154,7 @@ one (a vault file, a mail key, a folder), under the account's own keys.
   the password, for creating, rotating and wiping alike; the break-glass
   administrator from `ADMIN_ACCOUNT` is derived the same way once, at first
   start.
-- **Recovery email:** codes hashed, short-lived, few attempts, rate limits per
+- **Recovery email (slice 3):** codes hashed, short-lived, few attempts, rate limits per
   account and per target address; an unconfirmed address receives nothing but
   its code; changing it notifies the old one.
 - **Client-drawn key binding:** random, UUID-shaped, checked for form and
@@ -190,9 +190,15 @@ empty hash costs as much; a recovery checks the proof before anything else,
 one 401 for every refusal; `ADMIN_ACCOUNT` is read in one place (a password
 may hold colons, a bad username is refused); more suite-2 vectors.
 
-Follow-ups: the sign-in lockout per account lets anyone lock a known
-username out (key it per account and address, or slow down instead); the
-server could also require the object id where a purpose has one.
+Follow-ups:
+- The sign-in lockout per account lets anyone lock a known username out
+  (key it per account and address, or slow down instead).
+- The web client takes the key binding from `/user/me` without checking it
+  against anything it holds; a bad server could hand out another one (the
+  seals would then fail to open, not leak). Pin it next to the keys.
+- Some refusals answer before the bcrypt check (a disabled account, a
+  malformed login key), so their timing differs from a wrong password.
+- The server could also require the object id where a purpose has one.
 
 ## Slices
 
