@@ -70,6 +70,7 @@
     "withPassword": "Unlock with my password",
     "wrongAccountPassword": "That is not your Kutup password.",
     "paused": "Too many wrong passwords: your account is locked for a while, as at sign-in. Use the vault's own key below.",
+    "slowDown": "Too many attempts from here. Wait a minute, then try again.",
     "checkUnreachable": "Kutup could not be reached to check your password. Enter the vault's key instead.",
     "pin": "PIN",
     "pinDescription": "The six-digit PIN of your Kutup account.",

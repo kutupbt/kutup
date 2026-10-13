@@ -70,6 +70,7 @@
     "withPassword": "Parolamla aç",
     "wrongAccountPassword": "Bu, Kutup parolanız değil.",
     "paused": "Çok fazla yanlış parola: hesabınız, oturum açmadaki gibi bir süre kilitlendi. Aşağıda kasanın kendi anahtarını kullanın.",
+    "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
     "checkUnreachable": "Parolanızı denetlemek için Kutup'a ulaşılamadı. Bunun yerine kasanın anahtarını girin.",
     "pin": "PIN",
     "pinDescription": "Kutup hesabınızın altı haneli PIN'i.",

@@ -54,7 +54,8 @@
       "totpFailed": "That code did not work. Enter the current code from your authenticator app.",
       "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
       "usernameTaken": "That username is taken. Go back and choose another.",
-      "generic": "Something went wrong. Try again."
+      "generic": "Something went wrong. Try again.",
+      "slowDown": "Too many attempts from here. Wait a minute, then try again."
     },
     "strength": {
       "label": "Strength: {{strength}}",

@@ -171,7 +171,11 @@ async fn limit(
         if let Some(scope) = telemetry_scope {
             crate::telemetry::rate_limit_rejection(scope);
         }
-        return AppError::too_many_requests("too many requests").into_response();
+        // `rateLimited`: this address asked too often (wait a minute), not the
+        // account's lockout (`accountLocked`).
+        return AppError::too_many_requests("too many requests")
+            .with_details(serde_json::json!({ "code": "rateLimited" }))
+            .into_response();
     }
     next.run(req).await
 }

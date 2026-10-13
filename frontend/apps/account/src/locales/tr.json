@@ -54,7 +54,8 @@
       "totpFailed": "Kod geçersiz. Doğrulayıcı uygulamanızdaki güncel kodu girin.",
       "keyGenerationFailed": "Anahtarlarınız bu cihazda oluşturulamadı. Yeniden deneyin.",
       "usernameTaken": "Bu kullanıcı adı alınmış. Geri dönüp başka bir ad seçin.",
-      "generic": "Bir şeyler ters gitti. Yeniden deneyin."
+      "generic": "Bir şeyler ters gitti. Yeniden deneyin.",
+      "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin."
     },
     "strength": {
       "label": "Güç: {{strength}}",

@@ -8,7 +8,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import api from '@kutup/session/client'
-import { accountLoginKey, ReauthLockedError } from '@kutup/session/reauth'
+import { accountLoginKey, lockedErrorFrom } from '@kutup/session/reauth'
 
 export const PIN_LENGTH = 6
 
@@ -76,7 +76,6 @@ export async function verifyPin(pin: string): Promise<PinCheck> {
     if (error.response?.status === 404 && body?.error === 'noPin') return { result: 'noPin' }
     if (error.response?.status === 403 && body?.error === 'signedOut') return { result: 'signedOut' }
     if (error.response?.status === 403 && body?.error === 'wrongPin') return { result: 'wrong', attemptsLeft: body.attemptsLeft ?? 0 }
-    if (error.response?.status === 429) throw new ReauthLockedError()
-    throw error
+    throw lockedErrorFrom(error) ?? error
   }
 }

@@ -150,7 +150,10 @@ pub(crate) fn guard(
         _ => false,
     };
     let ceiling = (!known).then(|| ratelimit::hash_token(&subject));
-    let too_many = || AppError::too_many_requests("too many failed attempts, try again later");
+    let too_many = || {
+        AppError::too_many_requests("too many failed attempts, try again later")
+            .with_details(serde_json::json!({ "code": "accountLocked" }))
+    };
     if !ratelimit::LOGIN_LOCKOUT.reserve(&lockout) {
         return Err(too_many());
     }
