@@ -1143,11 +1143,12 @@ pub fn spawn_retry_worker(state: AppState) {
     });
 }
 
-async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
-    // Only each destination's head: rows behind a waiting head (parked for
-    // an upgrade, or backing off) would only return early, and a long queue
-    // for one server must not fill the page and starve the others.
-    let ids: Vec<Uuid> = sqlx::query_scalar(
+/// The sealed sends due now: only each destination's head. Rows behind a
+/// waiting head (parked for an upgrade, or backing off) would only return
+/// early, and a long queue for one server must not fill the page and starve
+/// the others.
+async fn due_sealed_heads(pool: &sqlx::PgPool) -> AppResult<Vec<Uuid>> {
+    Ok(sqlx::query_scalar(
         "SELECT id FROM (
                  SELECT DISTINCT ON (destination) id, destination, next_attempt_at
                  FROM chat_sealed_federation_outbox
@@ -1158,8 +1159,12 @@ async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
              ORDER BY destination
              LIMIT 100",
     )
-    .fetch_all(&state.pool)
-    .await?;
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
+    let ids = due_sealed_heads(&state.pool).await?;
     for id in ids {
         if let Err(error) = attempt_sealed_outbox(state, id).await {
             tracing::warn!(%id, error = %error.message, "queued sealed federation send failed");
@@ -2201,6 +2206,82 @@ fn is_canonical_account(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A backlog for one server does not starve another, and a parked head
+    /// holds back only its own server. Needs the database:
+    /// `KUTUP_LIVE_DATABASE_URL` (the backup gate).
+    #[tokio::test]
+    async fn live_sealed_backlog_does_not_starve_other_destinations() {
+        let Ok(database_url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let tag = Uuid::new_v4().simple().to_string();
+        let (slow, other) = (
+            format!("slow{}.example", &tag[..8]),
+            format!("ok{}.example", &tag[..8]),
+        );
+        let insert = |destination: String, sequence: i64| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO chat_sealed_federation_outbox
+                         (destination, sequence, recipient, send_id, transaction)
+                     VALUES ($1, $2, 'bob', gen_random_uuid(), '{}'::jsonb) RETURNING id",
+                )
+                .bind(destination)
+                .bind(sequence)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let slow_head = insert(slow.clone(), 1).await;
+        for sequence in 2..=150 {
+            insert(slow.clone(), sequence).await;
+        }
+        let other_head = insert(other.clone(), 1).await;
+
+        let due = super::due_sealed_heads(&pool).await.unwrap();
+        assert!(due.contains(&slow_head) && due.contains(&other_head));
+        let ours = due
+            .iter()
+            .filter(|id| **id == slow_head || **id == other_head)
+            .count();
+        assert_eq!(ours, 2, "only each destination's head");
+
+        // The slow server's head waits an hour for its upgrade: nothing of
+        // it is due, and the other server still is.
+        sqlx::query(
+            "UPDATE chat_sealed_federation_outbox
+                SET next_attempt_at = now() + interval '1 hour', last_error_class = 'peer_unsupported'
+              WHERE id = $1",
+        )
+        .bind(slow_head)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let due = super::due_sealed_heads(&pool).await.unwrap();
+        assert!(due.contains(&other_head));
+        let slow_rows: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM chat_sealed_federation_outbox WHERE destination = $1",
+        )
+        .bind(&slow)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !due.iter().any(|id| slow_rows.contains(id)),
+            "a parked head holds its queue"
+        );
+
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = ANY($1)")
+            .bind(vec![slow, other])
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
     #[test]
     fn only_a_refusal_naming_the_sequence_is_final() {
         let named = br#"{"error":"bad","refused":{"sequence":7}}"#;

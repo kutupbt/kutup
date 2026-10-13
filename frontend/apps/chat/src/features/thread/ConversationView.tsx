@@ -59,6 +59,7 @@ import { ConversationBar } from './ConversationBar'
 import { MessageBubble } from './MessageBubble'
 import { MessageScroller, TIMELINE_ROW } from './MessageScroller'
 import { NotInContactsBanner } from '../contacts/NotInContactsBanner'
+import { PeerWaitingBanner } from './PeerWaitingBanner'
 import { useConversationActions } from './useConversationActions'
 import { useConversationModel } from './useConversationModel'
 
@@ -443,6 +444,7 @@ export function ConversationView({
           {t('chat.groupLink.bannerRequests', { count: joinRequests })}
         </button>
       ) : null}
+      {!embedded && model.address ? <PeerWaitingBanner address={model.address} /> : null}
       {/* Not for a request: it is accepted (or blocked) first, then saved. */}
       {!embedded && model.address && !model.note && !model.readOnly ? (
         <NotInContactsBanner address={model.address} name={model.profile?.displayName} />

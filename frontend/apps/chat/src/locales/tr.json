@@ -1069,7 +1069,8 @@
       "dismiss": "Kapat",
       "inContacts": "Kişileriniz arasında.",
       "view": "Kişiyi görüntüle"
-    }
+    },
+    "peerWaiting": "{{server}} henüz bu Chat sürümünü desteklemiyor. Mesajlarınız bekler ve desteklediği anda gönderilir."
   },
   "boot": {
     "opening": "İleti açılıyor…",

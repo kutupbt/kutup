@@ -115,8 +115,9 @@ so a `chat.v1` server is neither sent to nor accepted. A send to a server whose
 discovery lacks `chat.v2` is not retried every few seconds: it stays queued in
 order, is tried again hourly (an upgraded peer is picked up then), and the
 sending client gets `503` with `code: peerUnsupported` instead of a send that
-never ends. Showing that code in the apps is a follow-up (the chat engine
-keeps such a message queued and only logs it today).
+never ends. The chat app shows it above that conversation ("<server> does
+not support this Chat version yet"); the message stays queued. A final
+refusal (`peerRefused`) leaves the client's queue as a sealed refusal does.
 
 A sealed send is refused for good only when the receiver says so for that
 sequence: a signed `400` whose body names it (`refused.sequence`), recorded

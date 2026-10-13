@@ -73,6 +73,11 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
   cargo test -p kutup-server jobs::tests::live_fixed_cutoff_mailbox_retention \
   -- --exact --nocapture
 
+# Sealed federation: a backlog for one server does not starve another.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server chat_federation::tests::live_sealed_backlog_does_not_starve_other_destinations \
+  -- --exact --nocapture
+
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   KUTUP_LIVE_S3_ENDPOINT="http://127.0.0.1:$s3_port" \
   KUTUP_LIVE_S3_ACCESS_KEY="${S3_ACCESS_KEY:-kutup}" \

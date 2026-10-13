@@ -1069,7 +1069,8 @@
       "dismiss": "Dismiss",
       "inContacts": "In your contacts.",
       "view": "View contact"
-    }
+    },
+    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does."
   },
   "boot": {
     "opening": "Opening Chat…",
