@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The crypto is Rust's (kutup-crypto vectors); here, its decisions are stubbed:
 // a binding "verifies" when it names the authority it was made with, an
-// incarnation is the authority's name, and a sealed list is its JSON.
+// incarnation is the authority's name, and a sealed list is its JSON, which
+// opens only for the key binding and revision it was sealed with.
 vi.mock('@kutup/crypto/identityPins', () => ({
   verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string) =>
     Promise.resolve(binding === `bound-by-${authority}`),
@@ -15,12 +16,15 @@ vi.mock('@kutup/crypto/identityPins', () => ({
   safetyQrMatches: vi.fn((local: string, la: string, peer: string, pa: string, scanned: string) =>
     Promise.resolve(scanned === `qr:${local}:${la}:${peer}:${pa}`),
   ),
-  sealIdentityPins: vi.fn((_m: string, _o: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ revision, list }))),
-  openIdentityPins: vi.fn((_m: string, _o: string, revision: number, sealed: string) => {
-    const parsed = JSON.parse(sealed) as { revision: number; list: unknown }
-    return parsed.revision === revision ? Promise.resolve(parsed.list) : Promise.reject(new Error('relabelled'))
+  sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ binding, revision, list }))),
+  openIdentityPins: vi.fn((_m: string, binding: string, revision: number, sealed: string) => {
+    const parsed = JSON.parse(sealed) as { binding: string; revision: number; list: unknown }
+    return parsed.binding === binding && parsed.revision === revision ? Promise.resolve(parsed.list) : Promise.reject(new Error('relabelled'))
   }),
 }))
+
+/** The account's key binding: the list is sealed to it, never to the address. */
+const ME_BINDING = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
 
 const server = {
   people: new Map<string, Record<string, unknown>>(),
@@ -52,7 +56,7 @@ vi.mock('@kutup/session/client', () => {
           // Another app stored revision 1 with a pin of its own.
           server.pins = {
             revision: 1,
-            envelope: JSON.stringify({ revision: 1, list: { pins: [{ account: 'carol@kutup.dev', authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z' }] } }),
+            envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: 'carol@kutup.dev', authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z' }] } }),
           }
           return Promise.reject(conflict())
         }
@@ -70,6 +74,7 @@ import type { DriveIdentity } from './identity'
 const me: DriveIdentity = {
   userId: 'me-id',
   account: 'me@kutup.dev',
+  binding: ME_BINDING,
   incarnationId: 'inc-ME',
   masterKey: new Uint8Array(32),
   privateKey: new Uint8Array(32),
@@ -169,6 +174,16 @@ describe('checkIdentity', () => {
     server.pins = null
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
     expect(PinsRolledBack).toBeDefined()
+  })
+
+  it('seals the list to the key binding, not to the address', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    expect((JSON.parse(server.pins!.envelope) as { binding: string }).binding).toBe(ME_BINDING)
+    // Another account's list (another binding, the same address) does not open.
+    resetIdentityPinsForTesting()
+    localStorage.clear()
+    expect(await checkIdentity({ ...me, binding: '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d' }, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
   })
 
   it('looks up everyone a page asks about at once in one request', async () => {

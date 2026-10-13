@@ -9,6 +9,12 @@
 //!   authority, so a server cannot rewrite who a contact is.
 //! - The contact card: the full vCard 4.0 text, sealed with XChaCha20-Poly1305
 //!   under the account's contacts key and bound to the account and UID.
+//!
+//! Both bind the account by its key binding (docs/plans/account-identity.md),
+//! never by its address, which may change: summary signatures under the
+//! `kutup/contact-summary/v2` domain and cards of suite 2 (`KUTCC2`). The
+//! address-bound version 1 of both is not read: nothing from before carries
+//! over.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -21,14 +27,14 @@ use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
-use crate::named_share::canonical_account;
+use crate::key_binding;
 
 const CONTACTS_KEY_SALT: &[u8] = b"kutup/contacts/v1\0";
 const CONTACTS_KEY_INFO: &[u8] = b"kutup/contacts/card-key/v1\0";
-const SUMMARY_DOMAIN: &[u8] = b"kutup/contact-summary/v1\0";
-const CARD_MAGIC: &[u8; 8] = b"KUTCC1\0\0";
-const CARD_AAD_DOMAIN: &[u8] = b"kutup/contact-card/v1\0";
-const SUITE_V1: u16 = 1;
+const SUMMARY_DOMAIN: &[u8] = b"kutup/contact-summary/v2\0";
+const CARD_MAGIC: &[u8; 8] = b"KUTCC2\0\0";
+const CARD_AAD_DOMAIN: &[u8] = b"kutup/contact-card/v2\0";
+const SUITE: u16 = 2;
 const NONCE_LEN: usize = 24;
 
 /// The largest summary accepted, encoded.
@@ -204,15 +210,15 @@ pub fn decode_summary(bytes: &[u8]) -> Result<ContactSummaryV1> {
 }
 
 fn summary_signing_bytes(
-    account: &str,
+    binding: &str,
     authority_public: &[u8; 32],
     summary: &[u8],
 ) -> Result<Vec<u8>> {
-    let account = canonical_account(account).map_err(|_| invalid("account is not canonical"))?;
-    let mut out = Vec::with_capacity(SUMMARY_DOMAIN.len() + account.len() + 140 + summary.len());
+    let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
+    let mut out = Vec::with_capacity(SUMMARY_DOMAIN.len() + binding.len() + 140 + summary.len());
     out.extend_from_slice(SUMMARY_DOMAIN);
-    out.extend_from_slice(&(account.len() as u16).to_be_bytes());
-    out.extend_from_slice(account.as_bytes());
+    out.extend_from_slice(&(binding.len() as u16).to_be_bytes());
+    out.extend_from_slice(binding.as_bytes());
     out.extend_from_slice(
         &hex::decode(incarnation_id_from_authority_public(authority_public)).expect("hex"),
     );
@@ -224,24 +230,24 @@ fn summary_signing_bytes(
     Ok(out)
 }
 
-/// Encodes and signs a summary with the account authority. Returns the
-/// canonical bytes and the signature.
+/// Encodes and signs a summary with the authority of the account whose key
+/// binding is `binding`. Returns the canonical bytes and the signature.
 pub fn sign_summary(
     summary: &ContactSummaryV1,
-    account: &str,
+    binding: &str,
     authority: &SigningKey,
 ) -> Result<(Vec<u8>, [u8; 64])> {
     let bytes = encode_summary(summary)?;
-    let signing = summary_signing_bytes(account, &authority.verifying_key().to_bytes(), &bytes)?;
+    let signing = summary_signing_bytes(binding, &authority.verifying_key().to_bytes(), &bytes)?;
     Ok((bytes, authority.sign(&signing).to_bytes()))
 }
 
-/// Checks a stored summary's signature against the account authority and
-/// returns it.
+/// Checks a stored summary's signature against the authority of the account
+/// whose key binding is `binding`, and returns it.
 pub fn verify_summary(
     summary: &[u8],
     signature: &[u8],
-    account: &str,
+    binding: &str,
     authority_public: &[u8; 32],
 ) -> Result<ContactSummaryV1> {
     let parsed = decode_summary(summary)?;
@@ -251,7 +257,7 @@ pub fn verify_summary(
             expected: 64,
             got: signature.len(),
         })?;
-    let signing = summary_signing_bytes(account, authority_public, summary)?;
+    let signing = summary_signing_bytes(binding, authority_public, summary)?;
     VerifyingKey::from_bytes(authority_public)
         .map_err(|_| invalid("authority key is invalid"))?
         .verify_strict(&signing, &Signature::from_bytes(&signature))
@@ -268,41 +274,41 @@ pub fn derive_contacts_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>>
     Ok(key)
 }
 
-fn card_aad(account: &str, uid: &str) -> Result<Vec<u8>> {
-    let account = canonical_account(account).map_err(|_| invalid("account is not canonical"))?;
+fn card_aad(binding: &str, uid: &str) -> Result<Vec<u8>> {
+    let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
     if !plain_text(uid, MAX_UID_CHARS) {
         return Err(invalid("uid is invalid"));
     }
     let mut aad = Vec::with_capacity(
-        CARD_MAGIC.len() + 2 + CARD_AAD_DOMAIN.len() + account.len() + uid.len() + 4,
+        CARD_MAGIC.len() + 2 + CARD_AAD_DOMAIN.len() + binding.len() + uid.len() + 4,
     );
     aad.extend_from_slice(CARD_MAGIC);
-    aad.extend_from_slice(&SUITE_V1.to_be_bytes());
+    aad.extend_from_slice(&SUITE.to_be_bytes());
     aad.extend_from_slice(CARD_AAD_DOMAIN);
-    aad.extend_from_slice(&(account.len() as u16).to_be_bytes());
-    aad.extend_from_slice(account.as_bytes());
+    aad.extend_from_slice(&(binding.len() as u16).to_be_bytes());
+    aad.extend_from_slice(binding.as_bytes());
     aad.extend_from_slice(&(uid.len() as u16).to_be_bytes());
     aad.extend_from_slice(uid.as_bytes());
     Ok(aad)
 }
 
 /// Seals a contact's vCard text: `magic ‖ suite ‖ nonce ‖ ciphertext`, bound
-/// to the account and the contact's UID.
+/// to the account's key binding and the contact's UID.
 pub fn seal_card(
     contacts_key: &[u8; 32],
-    account: &str,
+    binding: &str,
     uid: &str,
     vcard: &[u8],
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     copy_randombytes(&mut nonce);
-    seal_card_with_nonce(contacts_key, account, uid, vcard, &nonce)
+    seal_card_with_nonce(contacts_key, binding, uid, vcard, &nonce)
 }
 
 /// [`seal_card`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_card_with_nonce(
     contacts_key: &[u8; 32],
-    account: &str,
+    binding: &str,
     uid: &str,
     vcard: &[u8],
     nonce: &[u8; NONCE_LEN],
@@ -310,7 +316,7 @@ pub fn seal_card_with_nonce(
     if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
         return Err(invalid("card size is invalid"));
     }
-    let aad = card_aad(account, uid)?;
+    let aad = card_aad(binding, uid)?;
     let ciphertext = XChaCha20Poly1305::new(contacts_key.into())
         .encrypt(
             XNonce::from_slice(nonce),
@@ -322,16 +328,16 @@ pub fn seal_card_with_nonce(
         .map_err(|_| CryptoError::Backend("contact card seal".into()))?;
     let mut out = Vec::with_capacity(CARD_MAGIC.len() + 2 + NONCE_LEN + ciphertext.len());
     out.extend_from_slice(CARD_MAGIC);
-    out.extend_from_slice(&SUITE_V1.to_be_bytes());
+    out.extend_from_slice(&SUITE.to_be_bytes());
     out.extend_from_slice(nonce);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Opens a sealed card for `account` and `uid`.
+/// Opens a sealed card of the account whose key binding is `binding`, for `uid`.
 pub fn open_card(
     contacts_key: &[u8; 32],
-    account: &str,
+    binding: &str,
     uid: &str,
     sealed: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
@@ -339,10 +345,10 @@ pub fn open_card(
     if sealed.len() <= header + 16 || sealed.len() > header + MAX_CARD_BYTES + 16 {
         return Err(CryptoError::TooShort);
     }
-    if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE_V1.to_be_bytes() {
+    if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
         return Err(invalid("not a contact card"));
     }
-    let aad = card_aad(account, uid)?;
+    let aad = card_aad(binding, uid)?;
     let nonce = &sealed[10..header];
     XChaCha20Poly1305::new(contacts_key.into())
         .decrypt(
@@ -362,7 +368,7 @@ pub fn inspect_card(sealed: &[u8]) -> Result<()> {
     if sealed.len() <= header + 16 || sealed.len() > header + MAX_CARD_BYTES + 16 {
         return Err(invalid("card size is invalid"));
     }
-    if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE_V1.to_be_bytes() {
+    if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
         return Err(invalid("not a contact card"));
     }
     Ok(())
@@ -373,7 +379,8 @@ mod tests {
     use super::*;
     use crate::identity::AccountIdentityKeysV1;
 
-    const ACCOUNT: &str = "alice@kutup.dev";
+    const ACCOUNT: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const OTHER: &str = "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d";
 
     fn summary() -> ContactSummaryV1 {
         ContactSummaryV1 {
@@ -410,7 +417,8 @@ mod tests {
             verify_summary(&bytes, &signature, ACCOUNT, &authority).unwrap(),
             summary()
         );
-        assert!(verify_summary(&bytes, &signature, "bob@kutup.dev", &authority).is_err());
+        assert!(verify_summary(&bytes, &signature, OTHER, &authority).is_err());
+        assert!(verify_summary(&bytes, &signature, "alice@kutup.dev", &authority).is_err());
         assert!(
             verify_summary(&bytes, &signature, ACCOUNT, &other.authority_public_key()).is_err()
         );
@@ -459,7 +467,12 @@ mod tests {
             vcard
         );
         assert!(open_card(&key, ACCOUNT, "uid-2", &sealed).is_err());
-        assert!(open_card(&key, "bob@kutup.dev", "uid-1", &sealed).is_err());
+        assert!(open_card(&key, OTHER, "uid-1", &sealed).is_err());
+        assert!(open_card(&key, "alice@kutup.dev", "uid-1", &sealed).is_err());
+        let mut old = sealed.clone();
+        old[..8].copy_from_slice(b"KUTCC1\0\0");
+        old[8..10].copy_from_slice(&1u16.to_be_bytes());
+        assert!(inspect_card(&old).is_err());
         let other = derive_contacts_key(&[6u8; 32]).unwrap();
         assert!(open_card(&other, ACCOUNT, "uid-1", &sealed).is_err());
     }

@@ -6,8 +6,8 @@ import { mailKey, useMailAccount } from './api'
 
 // The account's own folders and labels (docs/plans/mail-filters.md, F1), as
 // Proton's: folders nest three deep and hold mail in one place, labels are
-// tags. Names are sealed here, bound to the account and an id chosen here,
-// so the server keeps only ids, colours, order and the tree.
+// tags. Names are sealed here, bound to the account's key binding and an id
+// chosen here, so the server keeps only ids, colours, order and the tree.
 
 /** Folders nest at most this deep (the server enforces it too). */
 export const MAX_FOLDER_DEPTH = 3
@@ -74,7 +74,7 @@ export function usePlaces() {
       const masterKey = toBase64(session.masterKey)
       let unreadable = 0
       const open = (kind: 'folder' | 'label', id: string, sealed: string) =>
-        openMailName(masterKey, address!, kind, id, sealed).catch(() => {
+        openMailName(masterKey, session.envelopeBinding, kind, id, sealed).catch(() => {
           unreadable += 1
           return '…'
         })
@@ -146,7 +146,7 @@ function usePlaceMutation<T, R>(fn: (input: T, seal: (kind: 'folder' | 'label', 
       const address = account.data?.address
       if (!address) throw new Error('mail is not ready')
       const masterKey = toBase64(session.masterKey)
-      return fn(input, (kind, id, name) => sealMailName(masterKey, address, kind, id, name))
+      return fn(input, (kind, id, name) => sealMailName(masterKey, session.envelopeBinding, kind, id, name))
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: mailKey }),
   })

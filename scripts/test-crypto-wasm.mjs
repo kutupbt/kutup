@@ -636,12 +636,12 @@ const resigned = crypto.signMailKeyList(mailVectors.masterKey, {
 assert.equal(resigned.data, firstList.data)
 assert.equal(resigned.signature, firstList.signature)
 // A fresh key: sealed in WASM, never returned in clear.
-const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.loginEmail, 'carol@kutup.dev', 1_790_000_000)
+const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
-assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
-assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
+assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.
@@ -655,7 +655,7 @@ const b64bytes = (value) => new Uint8Array(Buffer.from(value, 'base64'))
 const joinPackets = (key, data) => new Uint8Array([...b64bytes(key), ...data])
 const aliceEnvelope = mailVectors.envelope
 const openAs = (message, sender) =>
-  crypto.openMailMessage(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, message, sender)
+  crypto.openMailMessage(mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, message, sender)
 const splitData = b64bytes(splitVectors.dataPacket)
 const alicesCopy = openAs(joinPackets(splitVectors.keyPackets[0], splitData), mailVectors.publicKey)
 assert.deepEqual(Buffer.from(alicesCopy.data), Buffer.from(splitVectors.plaintext, 'base64'))
@@ -667,10 +667,10 @@ assert.deepEqual(Buffer.from(arrived.data), Buffer.from(arrivalVectors.plaintext
 assert.equal(arrived.signed, false)
 assert.equal(arrived.verified, false)
 assert.throws(() =>
-  crypto.openMailMessage(mailVectors.masterKey, mailVectors.loginEmail, 'bob@kutup.dev', aliceEnvelope, mailVectors.fingerprint, b64bytes(arrivalVectors.ciphertext)),
+  crypto.openMailMessage(mailVectors.masterKey, mailVectors.binding, 'bob@kutup.dev', aliceEnvelope, mailVectors.fingerprint, b64bytes(arrivalVectors.ciphertext)),
 )
 const sealedMail = crypto.encryptMailMessage(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [mailVectors.publicKey, splitVectors.bobPublicKey], new TextEncoder().encode('hello bob'),
 )
 assert.equal(sealedMail.keyPackets.length, 2)
@@ -694,25 +694,25 @@ assert.equal(details.algorithm, 'ECC (Curve25519)')
 assert.equal(crypto.describeExternalMailKeyDetails(bobKey, 'eve@kutup.dev').state, 'otherAddress')
 // An address key leaves only locked with a passphrase, and comes back the same.
 const exportedKey = crypto.exportMailAddressKey(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'export passphrase',
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'export passphrase',
 )
 assert.match(exportedKey, /^-----BEGIN PGP PRIVATE KEY BLOCK-----/)
 assert.throws(() => crypto.exportMailAddressKey(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
 ))
 assert.throws(
-  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
+  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
   (error) => error === 'wrong passphrase',
 )
 const reimported = crypto.importMailAddressKey(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
 )
 assert.equal(reimported.fingerprint, mailVectors.fingerprint)
 // A shared mailbox's key: Alice gets a share, opens group mail with it,
 // shares it with Bob's key, and signs as the group.
 const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', 1_790_000_000, [mailVectors.publicKey])
 assert.equal(groupKey.shares.length, 1)
-const aliceArgs = [mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint]
+const aliceArgs = [mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint]
 const toGroup = crypto.encryptMailMessageAsGroup(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [groupKey.publicKey], new TextEncoder().encode('hr mail'))
 const groupMessage = new Uint8Array([...b64bytes(toGroup.keyPackets[0]), ...toGroup.dataPacket])
 const openedGroup = crypto.openMailGroupMessage(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, groupMessage, groupKey.publicKey)
@@ -723,7 +723,7 @@ assert.equal(bobShares.length, 1)
 assert.throws(() => crypto.openMailGroupMessage(...aliceArgs, bobShares[0], groupKey.fingerprint, groupMessage))
 assert.match(crypto.encryptMailPgpAsGroup(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [groupKey.publicKey], new TextEncoder().encode('x')), /^-----BEGIN PGP MESSAGE-----/)
 const armoredPgp = crypto.encryptMailPgp(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),
 )
 assert.match(armoredPgp, /^-----BEGIN PGP MESSAGE-----/)
@@ -740,54 +740,66 @@ const unsignedSplit = crypto.encryptMailMessageUnsigned([mailVectors.publicKey],
 assert.equal(unsignedSplit.keyPackets.length, 1)
 unsignedSplit.free()
 const signedPart = new TextEncoder().encode('Content-Type: text/plain\r\n\r\nsigned only\r\n')
-const detached = crypto.signMailDetached(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, signedPart)
+const detached = crypto.signMailDetached(mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, signedPart)
 assert.match(detached, /^-----BEGIN PGP SIGNATURE-----/)
 assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), signedPart, mailVectors.publicKey), true)
 assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), new TextEncoder().encode('changed'), mailVectors.publicKey), false)
 // Inline PGP, signed only: a cleartext signature that verifies.
-const cleartext = crypto.signMailCleartext(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'İmzalı metin.\n')
+const cleartext = crypto.signMailCleartext(mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'İmzalı metin.\n')
 assert.match(cleartext, /^-----BEGIN PGP SIGNED MESSAGE-----/)
 const checkedCleartext = crypto.verifyMailCleartext(cleartext, mailVectors.publicKey)
 assert.equal(checkedCleartext.verified, true)
 assert.equal(checkedCleartext.text.trim(), 'İmzalı metin.')
 assert.equal(crypto.verifyMailCleartext(cleartext.replace('metin', 'yazı'), mailVectors.publicKey).verified, false)
 
-// Contacts (docs/plans/contacts.md).
+// Contacts (docs/plans/contacts.md): bound to the account's key binding.
 const contactVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v1.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v2.json`, 'utf8'),
 )
 const contactIdentity = crypto.deriveAccountIdentityKeys(contactVectors.masterKey)
 // Signing a reordered summary gives the canonical bytes and the vector signature.
 const reordered = JSON.parse(contactVectors.summary)
 const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid })
-const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.account, shuffled)
+const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.binding, shuffled)
 assert.equal(signedContact.summary, contactVectors.summary)
 assert.equal(signedContact.signature, contactVectors.signature)
 assert.equal(
-  crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, contactVectors.account, contactIdentity.authorityPublicKey).name,
+  crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, contactVectors.binding, contactIdentity.authorityPublicKey).name,
   'Ayşe Yılmaz',
 )
-assert.throws(() => crypto.verifyContactSummary(contactVectors.summary.replace('ayse@example.com', 'evil@example.com'), contactVectors.signature, contactVectors.account, contactIdentity.authorityPublicKey))
-assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, 'bob@kutup.dev', contactIdentity.authorityPublicKey))
+assert.throws(() => crypto.verifyContactSummary(contactVectors.summary.replace('ayse@example.com', 'evil@example.com'), contactVectors.signature, contactVectors.binding, contactIdentity.authorityPublicKey))
+for (const refused of contactVectors.refusedSignatures) {
+  assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, refused.signature, refused.binding, contactIdentity.authorityPublicKey), undefined, refused.case)
+}
+assert.throws(() => crypto.signContactSummary(contactVectors.masterKey, 'alice@kutup.dev', shuffled))
 assert.equal(
-  crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, contactVectors.sealed),
+  crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, contactVectors.sealed),
   contactVectors.vcard,
 )
-const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, contactVectors.vcard)
-assert.equal(crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, resealedCard), contactVectors.vcard)
-assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.account, 'another-uid', resealedCard))
+for (const refused of contactVectors.refusedCards) {
+  assert.throws(() => crypto.openContactCard(contactVectors.masterKey, refused.binding, refused.uid, refused.sealed), undefined, refused.case)
+}
+const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, contactVectors.vcard)
+assert.equal(crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, resealedCard), contactVectors.vcard)
+assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, 'another-uid', resealedCard))
+assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, 'alice@kutup.dev', contactVectors.uid, contactVectors.vcard))
 
-// Sealed mail names (docs/plans/mail-filters.md).
-const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v1.json`, 'utf8'))
-assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, nameVectors.kind, nameVectors.id, nameVectors.sealed), nameVectors.name)
-const resealedName = crypto.sealMailName(nameVectors.masterKey, nameVectors.account, 'label', nameVectors.id, nameVectors.name)
-assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', nameVectors.id, resealedName), nameVectors.name)
-assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'folder', nameVectors.id, resealedName))
-assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
+// Sealed mail names (docs/plans/mail-filters.md): bound to the key binding.
+const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v2.json`, 'utf8'))
+assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.binding, nameVectors.kind, nameVectors.id, nameVectors.sealed), nameVectors.name)
+for (const refused of nameVectors.refused) {
+  assert.throws(() => crypto.openMailName(nameVectors.masterKey, refused.binding, refused.kind, refused.id, refused.sealed), undefined, refused.case)
+}
+const resealedName = crypto.sealMailName(nameVectors.masterKey, nameVectors.binding, 'label', nameVectors.id, nameVectors.name)
+assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'label', nameVectors.id, resealedName), nameVectors.name)
+assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'folder', nameVectors.id, resealedName))
+assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
+assert.throws(() => crypto.sealMailName(nameVectors.masterKey, 'alice@kutup.dev', 'label', nameVectors.id, nameVectors.name))
 
-// Drive identity (docs/plans/drive-identity-pins.md).
+// Drive identity (docs/plans/drive-identity-pins.md): the Drive key binding
+// names the address (a statement to others); the pin list binds the key binding.
 const identityVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v1.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v2.json`, 'utf8'),
 )
 const iv = identityVectors
 assert.equal(crypto.signDriveKeyBinding(iv.masterKey, iv.account), iv.driveKeyBinding)
@@ -797,24 +809,26 @@ assert.equal(crypto.verifyDriveKeyBinding('bob@kutup.dev', iv.authorityPublicKey
 assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
 assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
 assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
-assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, iv.revision, iv.sealed), iv.pins)
-assert.throws(() => crypto.openIdentityPins(iv.masterKey, iv.account, iv.revision + 1, iv.sealed))
-assert.throws(() => crypto.openIdentityPins(iv.masterKey, 'bob@kutup.dev', iv.revision, iv.sealed))
-const resealedPins = crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins)
-assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, 8, resealedPins), iv.pins)
-assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 0, iv.pins))
+assert.equal(crypto.openIdentityPins(iv.masterKey, iv.binding, iv.revision, iv.sealed), iv.pins)
+for (const refused of iv.refused) {
+  assert.throws(() => crypto.openIdentityPins(iv.masterKey, refused.binding, refused.revision, refused.sealed), undefined, refused.case)
+}
+const resealedPins = crypto.sealIdentityPins(iv.masterKey, iv.binding, 8, iv.pins)
+assert.equal(crypto.openIdentityPins(iv.masterKey, iv.binding, 8, resealedPins), iv.pins)
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 0, iv.pins))
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
 // Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
 const pv = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/pass-vault-secret-v1.json`, 'utf8'))
-assert.deepEqual(crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.loginEmail, pv.fileId), { password: pv.password, keyFile: pv.keyFile })
-const resealedVault = crypto.sealPassVaultSecret(pv.masterKey, pv.loginEmail, pv.fileId, pv.password, null)
-assert.deepEqual(crypto.openPassVaultSecret(resealedVault, pv.masterKey, pv.loginEmail, pv.fileId), { password: pv.password, keyFile: null })
-assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.loginEmail, '00000000-0000-4000-8000-000000000000'))
+assert.deepEqual(crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.binding, pv.fileId), { password: pv.password, keyFile: pv.keyFile })
+const resealedVault = crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, pv.password, null)
+assert.deepEqual(crypto.openPassVaultSecret(resealedVault, pv.masterKey, pv.binding, pv.fileId), { password: pv.password, keyFile: null })
+assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.binding, '00000000-0000-4000-8000-000000000000'))
 assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, 'bob@kutup.dev', pv.fileId))
-assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.loginEmail, pv.fileId, null, null))
+assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, null, null))
 // The generic account-envelope path cannot open one.
-assert.throws(() => crypto.openAccountEnvelope(pv.sealed, pv.masterKey, 6, pv.loginEmail))
+assert.throws(() => crypto.openAccountEnvelope(pv.sealed, pv.masterKey, 6, pv.binding))
 
 // The safety number every app shows (kutup-crypto safety_number, V1 vector).
 const one = Buffer.alloc(32, 1).toString('base64')

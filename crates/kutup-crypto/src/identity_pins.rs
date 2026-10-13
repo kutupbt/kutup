@@ -10,6 +10,11 @@
 //! by the server, which can neither read nor rewrite it. The revision is
 //! authenticated, so the server cannot relabel an old list as a new one;
 //! clients also remember the highest revision they have seen.
+//!
+//! Suite 2 (`KUTIP2`) binds the owner's key binding (docs/plans/account-identity.md),
+//! never its address, which may change; the pinned accounts inside the list
+//! stay addresses, because those are what the pins are about. Suite 1 (bound
+//! to the owner's address) is not read: nothing from before carries over.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -23,13 +28,14 @@ use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 use crate::identity::incarnation_id_from_authority_public;
+use crate::key_binding;
 use crate::named_share::canonical_account;
 
 const PINS_KEY_SALT: &[u8] = b"kutup/identity-pins/v1\0";
 const PINS_KEY_INFO: &[u8] = b"kutup/identity-pins/list-key/v1\0";
-const MAGIC: &[u8; 8] = b"KUTIP1\0\0";
-const AAD_DOMAIN: &[u8] = b"kutup/identity-pins/v1\0";
-const SUITE_V1: u16 = 1;
+const MAGIC: &[u8; 8] = b"KUTIP2\0\0";
+const AAD_DOMAIN: &[u8] = b"kutup/identity-pins/v2\0";
+const SUITE: u16 = 2;
 const NONCE_LEN: usize = 24;
 const HEADER_LEN: usize = 8 + 2 + NONCE_LEN;
 const TAG_LEN: usize = 16;
@@ -221,19 +227,20 @@ pub fn derive_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     Ok(key)
 }
 
-fn aad(account: &str, revision: u64) -> Result<Vec<u8>> {
-    let account = canonical_account(account).map_err(|_| invalid("owner is not canonical"))?;
-    let mut aad = Vec::with_capacity(MAGIC.len() + 2 + AAD_DOMAIN.len() + 2 + account.len() + 8);
+fn aad(binding: &str, revision: u64) -> Result<Vec<u8>> {
+    let binding = key_binding::check(binding).map_err(|_| invalid("owner binding is invalid"))?;
+    let mut aad = Vec::with_capacity(MAGIC.len() + 2 + AAD_DOMAIN.len() + 2 + binding.len() + 8);
     aad.extend_from_slice(MAGIC);
-    aad.extend_from_slice(&SUITE_V1.to_be_bytes());
+    aad.extend_from_slice(&SUITE.to_be_bytes());
     aad.extend_from_slice(AAD_DOMAIN);
-    aad.extend_from_slice(&(account.len() as u16).to_be_bytes());
-    aad.extend_from_slice(account.as_bytes());
+    aad.extend_from_slice(&(binding.len() as u16).to_be_bytes());
+    aad.extend_from_slice(binding.as_bytes());
     aad.extend_from_slice(&revision.to_be_bytes());
     Ok(aad)
 }
 
-/// Seals the list of `owner` at `revision`: `magic ‖ suite ‖ nonce ‖ ciphertext`.
+/// Seals the list of the account whose key binding is `owner` at
+/// `revision`: `magic ‖ suite ‖ nonce ‖ ciphertext`.
 pub fn seal(key: &[u8; 32], owner: &str, revision: u64, list: &IdentityPinsV1) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     copy_randombytes(&mut nonce);
@@ -263,13 +270,13 @@ pub fn seal_with_nonce(
         .map_err(|_| CryptoError::Backend("identity pins seal".into()))?;
     let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&SUITE_V1.to_be_bytes());
+    out.extend_from_slice(&SUITE.to_be_bytes());
     out.extend_from_slice(nonce);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Opens the list of `owner` stored at `revision`.
+/// Opens the list of the account whose key binding is `owner`, stored at `revision`.
 pub fn open(key: &[u8; 32], owner: &str, revision: u64, sealed: &[u8]) -> Result<IdentityPinsV1> {
     inspect(sealed)?;
     let plain = XChaCha20Poly1305::new(key.into())
@@ -291,7 +298,7 @@ pub fn inspect(sealed: &[u8]) -> Result<()> {
     {
         return Err(invalid("size is invalid"));
     }
-    if &sealed[..MAGIC.len()] != MAGIC || sealed[8..10] != SUITE_V1.to_be_bytes() {
+    if &sealed[..MAGIC.len()] != MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
         return Err(invalid("not an identity pin list"));
     }
     Ok(())
@@ -305,7 +312,8 @@ mod tests {
     use super::*;
     use crate::identity::AccountIdentityKeysV1;
 
-    const OWNER: &str = "owner@kutup.dev";
+    const OWNER: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const OTHER: &str = "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d";
 
     fn pin(account: &str, seed: u8) -> IdentityPinV1 {
         let identity = AccountIdentityKeysV1::derive(&[seed; 32]).unwrap();
@@ -338,9 +346,16 @@ mod tests {
             Err(CryptoError::AuthFailed)
         ));
         assert!(matches!(
-            open(&key, "else@kutup.dev", 3, &sealed),
+            open(&key, OTHER, 3, &sealed),
             Err(CryptoError::AuthFailed)
         ));
+        // A name is not a key binding: refused before anything is opened.
+        assert!(open(&key, "owner@kutup.dev", 3, &sealed).is_err());
+        assert!(seal(&key, "owner@kutup.dev", 3, &list()).is_err());
+        let mut old_suite = sealed.clone();
+        old_suite[..8].copy_from_slice(b"KUTIP1\0\0");
+        old_suite[8..10].copy_from_slice(&1u16.to_be_bytes());
+        assert!(inspect(&old_suite).is_err());
         assert!(open(&derive_key(&[8u8; 32]).unwrap(), OWNER, 3, &sealed).is_err());
         let mut tampered = sealed.clone();
         *tampered.last_mut().unwrap() ^= 1;

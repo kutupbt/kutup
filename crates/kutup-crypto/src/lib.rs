@@ -16,6 +16,7 @@
 //! - [`kdf`] — one-root Argon2id account protection and recovery proof.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
 //! - [`account_envelope`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
+//! - [`key_binding`] — the account's permanent random key binding, which its own seals bind.
 //! - [`chat_attachment_ledger`] — account-private attachment-index envelopes.
 //! - [`chat_media`] — immutable typed Chat-media secretstream objects.
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
@@ -54,6 +55,7 @@ pub mod file_metadata;
 pub mod identity;
 pub mod identity_pins;
 pub mod kdf;
+pub mod key_binding;
 pub mod live_location;
 pub mod local_state;
 #[cfg(feature = "mail")]

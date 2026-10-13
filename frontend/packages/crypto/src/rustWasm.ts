@@ -34,7 +34,7 @@ export interface CryptoWasmModule {
     iterations: number,
     parallelism: number,
   ): { keyEncryptionKey: string; loginKey: string }
-  deriveRecoveryAuthProof(recoveryEntropyBase64: string, loginEmail: string): string
+  deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
   deriveAccountIdentityKeys(masterKeyBase64: string): {
     authorityPublicKey: string
     authorityKeyId: string
@@ -65,22 +65,22 @@ export interface CryptoWasmModule {
     bindingBase64: string,
   ): boolean
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
-  sealIdentityPins(masterKeyBase64: string, owner: string, revision: number, pinsJson: string): string
-  openIdentityPins(masterKeyBase64: string, owner: string, revision: number, sealedBase64: string): string
-  signContactSummary(masterKeyBase64: string, account: string, summaryJson: string): { summary: string; signature: string }
+  sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pinsJson: string): string
+  openIdentityPins(masterKeyBase64: string, binding: string, revision: number, sealedBase64: string): string
+  signContactSummary(masterKeyBase64: string, binding: string, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
     signatureBase64: string,
-    account: string,
+    binding: string,
     authorityPublicKeyBase64: string,
   ): import('./contactCard').ContactSummary
-  sealContactCard(masterKeyBase64: string, account: string, uid: string, vcard: string): string
-  openContactCard(masterKeyBase64: string, account: string, uid: string, sealedBase64: string): string
-  sealMailName(masterKeyBase64: string, account: string, kind: string, id: string, name: string): string
-  openMailName(masterKeyBase64: string, account: string, kind: string, id: string, sealedBase64: string): string
+  sealContactCard(masterKeyBase64: string, binding: string, uid: string, vcard: string): string
+  openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): string
+  sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, name: string): string
+  openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): string
   sealPassVaultSecret(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     fileId: string,
     password: string | null | undefined,
     keyFileBase64: string | null | undefined,
@@ -88,7 +88,7 @@ export interface CryptoWasmModule {
   openPassVaultSecret(
     envelopeBase64: string,
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     fileId: string,
   ): import('./passVault').PassVaultSecret
   generateMailGroupKey(
@@ -98,7 +98,7 @@ export interface CryptoWasmModule {
   ): { publicKey: string; fingerprint: string; sha256Fingerprint: string; shares: string[] }
   reshareMailGroupKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -108,7 +108,7 @@ export interface CryptoWasmModule {
   ): string[]
   openMailGroupMessage(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -119,11 +119,11 @@ export interface CryptoWasmModule {
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   encryptMailMessageUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): string
-  signMailDetached(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
-  signMailCleartext(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
+  signMailDetached(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
+  signMailCleartext(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
   signMailCleartextAsGroup(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -133,7 +133,7 @@ export interface CryptoWasmModule {
   ): string
   signMailDetachedAsGroup(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -143,7 +143,7 @@ export interface CryptoWasmModule {
   ): string
   encryptMailMessageAsGroup(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -154,7 +154,7 @@ export interface CryptoWasmModule {
   ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpAsGroup(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -165,7 +165,7 @@ export interface CryptoWasmModule {
   ): string
   exportMailAddressKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -173,14 +173,14 @@ export interface CryptoWasmModule {
   ): string
   importMailAddressKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     file: Uint8Array,
     passphrase: string,
   ): { publicKey: string; envelope: string; fingerprint: string; sha256Fingerprint: string }
   generateMailAddressKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     createdAtSecs: number,
   ): import('./mailKey').GeneratedMailAddressKey
@@ -202,7 +202,7 @@ export interface CryptoWasmModule {
   ): import('./mailKey').SignedMailKeyList
   openMailMessage(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -211,7 +211,7 @@ export interface CryptoWasmModule {
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   encryptMailMessage(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -223,7 +223,7 @@ export interface CryptoWasmModule {
   describeExternalMailKeyDetails(publicKey: Uint8Array, address: string): import('./mailKey').ExternalMailKeyDetails
   encryptMailPgp(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -236,13 +236,13 @@ export interface CryptoWasmModule {
     plaintextBase64: string,
     keyBase64: string,
     purpose: number,
-    loginEmail: string,
+    binding: string,
   ): string
   openAccountEnvelope(
     envelopeBase64: string,
     keyBase64: string,
     expectedPurpose: number,
-    loginEmail: string,
+    binding: string,
   ): string
   createChatBackupSignerAuthorization(
     masterKeyBase64: string,

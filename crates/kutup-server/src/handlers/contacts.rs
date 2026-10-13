@@ -96,27 +96,23 @@ impl Checked {
     }
 }
 
-/// The caller's account (`username@server`) and authority key.
-async fn account_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
-    let (username, authority): (Option<String>, String) =
-        sqlx::query_as("SELECT username, account_authority_public_key FROM users WHERE id = $1")
+/// The caller's key binding (which contact summaries bind) and authority key.
+async fn binding_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
+    let (binding, authority): (Option<String>, String) =
+        sqlx::query_as("SELECT key_binding, account_authority_public_key FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
-    let username = username
-        .ok_or_else(|| AppError::bad_request("choose a username before adding contacts"))?;
+    let binding = binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))?;
     let authority = STANDARD
         .decode(&authority)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
-    Ok((
-        format!("{username}@{}", state.config.chat_server_name),
-        authority,
-    ))
+    Ok((binding, authority))
 }
 
-fn check(input: &ContactInput, account: &str, authority: &[u8; 32]) -> AppResult<Checked> {
+fn check(input: &ContactInput, binding: &str, authority: &[u8; 32]) -> AppResult<Checked> {
     let signature = STANDARD
         .decode(&input.signature)
         .map_err(|_| AppError::bad_request("signature must be base64"))?;
@@ -124,7 +120,7 @@ fn check(input: &ContactInput, account: &str, authority: &[u8; 32]) -> AppResult
         .decode(&input.card)
         .map_err(|_| AppError::bad_request("card must be base64"))?;
     let summary =
-        contact_card::verify_summary(input.summary.as_bytes(), &signature, account, authority)
+        contact_card::verify_summary(input.summary.as_bytes(), &signature, binding, authority)
             .map_err(|error| AppError::bad_request(format!("summary: {error}")))?;
     contact_card::inspect_card(&card).map_err(|error| AppError::bad_request(error.to_string()))?;
     Ok(Checked {
@@ -313,8 +309,8 @@ pub async fn create(
     Json(input): Json<ContactInput>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let (account, authority) = account_of(&state, user_id).await?;
-    let checked = check(&input, &account, &authority)?;
+    let (binding, authority) = binding_of(&state, user_id).await?;
+    let checked = check(&input, &binding, &authority)?;
     let mut tx = state.pool.begin().await?;
     charge(&mut tx, user_id, checked.charge()).await?;
     room_for(&mut tx, user_id, 1).await?;
@@ -356,14 +352,14 @@ pub async fn update(
 ) -> AppResult<Json<ContactRow>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let (account, authority) = account_of(&state, user_id).await?;
+    let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = check(
         &ContactInput {
             summary: input.summary,
             signature: input.signature,
             card: input.card,
         },
-        &account,
+        &binding,
         &authority,
     )?;
     let mut tx = state.pool.begin().await?;
@@ -507,11 +503,11 @@ pub async fn import(
     if input.contacts.is_empty() || input.contacts.len() > MAX_IMPORT {
         return Err(AppError::bad_request("import 1 to 500 contacts at once"));
     }
-    let (account, authority) = account_of(&state, user_id).await?;
+    let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = input
         .contacts
         .iter()
-        .map(|contact| check(contact, &account, &authority))
+        .map(|contact| check(contact, &binding, &authority))
         .collect::<AppResult<Vec<_>>>()?;
     let total: i64 = checked.iter().map(Checked::charge).sum();
     let mut tx = state.pool.begin().await?;

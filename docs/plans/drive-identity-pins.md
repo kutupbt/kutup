@@ -66,7 +66,7 @@ driveShareSigningPublicKey(32)
 derive from the master key, so a binding is made once per account lifetime
 (an administrative wipe starts a new one). Verification is strict Ed25519
 over these bytes, plus `incarnationId == hash(authority)`. Vectors in
-`tests/vectors/identity-pins-v1.json`, exported to WASM.
+`tests/vectors/identity-pins-v2.json`, exported to WASM.
 
 ### 2. Server
 
@@ -87,7 +87,12 @@ over these bytes, plus `incarnationId == hash(authority)`. Vectors in
 `IdentityPinsV1`: a canonical list of `{ account, incarnationId,
 authorityPublicKey, state: seen | verified, firstSeen, previous[] }`, sealed
 with XChaCha20-Poly1305 under a key derived from the master key
-(`kutup/identity-pins/v1`), bound to the owner's account and a revision.
+(`kutup/identity-pins/v1`), framed as `KUTIP2` suite 2 and bound
+(`kutup/identity-pins/v2`) to the owner's key binding
+(docs/plans/account-identity.md), never its address, and a revision. Suite 1
+(`KUTIP1`, bound to the owner's address) is not read. The vectors list the
+values that must be refused (another binding, the address, a changed header,
+another revision, the suite-1 value).
 Stored by the server, opaque, at `GET / PUT /api/user/identity-pins`
 with a compare-and-swap on the revision (two apps writing at once merge and
 retry). Each browser remembers the highest revision it has seen, so the

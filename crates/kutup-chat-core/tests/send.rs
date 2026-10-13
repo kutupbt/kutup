@@ -2029,7 +2029,7 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
 
     let mut alice = Engine::new_for_development(device("alice", 1, &mut rng), server.clone());
     alice.set_local_server("chat.example").unwrap();
-    let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32]).unwrap();
+    let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32], ALICE_BINDING).unwrap();
     assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
 
     let first = ChatContent::text_with_id(
@@ -2184,6 +2184,9 @@ fn local_timeline_notices_are_never_sent() {
     }
 }
 
+/// Alice's key binding, which her own seals (the synced pins) bind.
+const ALICE_BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
 /// The account's synced identity pins (docs/plans/drive-identity-pins.md),
 /// as Drive or another device left them for Alice.
 fn synced_pins(
@@ -2194,7 +2197,7 @@ fn synced_pins(
     let key = kutup_crypto::identity_pins::derive_key(owner_master).unwrap();
     let sealed = kutup_crypto::identity_pins::seal(
         &key,
-        "alice@example.test",
+        ALICE_BINDING,
         1,
         &kutup_crypto::identity_pins::IdentityPinsV1 { pins },
     )
@@ -2235,7 +2238,7 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
         *server.identity_pins.borrow_mut() = pins;
         let mut alice = Engine::new(device("alice", 1, &mut rng), server.clone());
         alice.set_local_server("example.test").unwrap();
-        alice.enable_identity_pins(&master).unwrap();
+        alice.enable_identity_pins(&master, ALICE_BINDING).unwrap();
         (alice, server)
     };
 

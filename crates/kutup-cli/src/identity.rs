@@ -80,6 +80,8 @@ pub struct Published {
 /// This account's address and keys.
 pub struct Me {
     pub account: String,
+    /// The account's key binding, which its own seals (the pin list) bind.
+    binding: String,
     pub identity: AccountIdentityKeysV1,
     master_key: [u8; 32],
     profile: String,
@@ -96,6 +98,7 @@ impl Me {
         let server = ctx.client.settings()?.chat.server_name;
         Ok(Me {
             account: format!("{}@{server}", ctx.session.username),
+            binding: ctx.session.binding().to_string(),
             identity: AccountIdentityKeysV1::derive(&master_key)?,
             master_key,
             profile: profile.to_string(),
@@ -194,7 +197,7 @@ pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
                 .context("identity pins are not base64")?;
             (
                 record.revision,
-                identity_pins::open(&key, &me.account, record.revision, &sealed)?,
+                identity_pins::open(&key, &me.binding, record.revision, &sealed)?,
             )
         }
     };
@@ -244,7 +247,7 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, state: PinState) -> R
         });
         list.pins.sort_by(|a, b| a.account.cmp(&b.account));
         let next = revision + 1;
-        let sealed = identity_pins::seal(&key, &me.account, next, &list)?;
+        let sealed = identity_pins::seal(&key, &me.binding, next, &list)?;
         if ctx.client.put_identity_pins(&IdentityPinsRecord {
             revision: next,
             envelope: STANDARD.encode(sealed),

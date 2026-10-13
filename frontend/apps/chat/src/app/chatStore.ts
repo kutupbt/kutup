@@ -42,6 +42,8 @@ export interface ChatSelf {
   account: AccountAddress
   /** Canonical `username@server`. */
   address: string
+  /** The account's id: what this browser keys the account's local state by, never a name. */
+  userId: string
 }
 
 export interface ChatSnapshot extends ChatData {
@@ -296,23 +298,40 @@ export function openChat(session: Session): void {
       setSealedStorage(null)
       service.dispose()
     }
-    // Drafts and read positions an older version kept in plaintext are
-    // taken over once: sealed for the account and the plaintext removed.
+    forgetPlaintextChatState(canonicalAccountAddress(account), session.userId)
     const sealed = service.sealedStorage
-    sealed.read('drafts', `kutup.chat.drafts.v1:${canonicalAccountAddress(account)}`)
-    sealed.read('read-marks', `kutup:chat:read:${session.userId}`)
     setSealedStorage(sealed)
     reopenAttempt = 0
     set({
       status: 'ready',
       service,
       capabilities,
-      self: { account, address: canonicalAccountAddress(account) },
+      self: { account, address: canonicalAccountAddress(account), userId: session.userId },
       mediaCache,
       connection: service.connectionStatus(),
     })
     await reload(service, mlsGroups)
   })()
+}
+
+/**
+ * Removes what older versions kept in this browser in plaintext, keyed by the
+ * address or the account id: drafts, read positions and owed timers. None of
+ * it is read any more (an account that later takes the same username must
+ * not inherit it); it is only cleared away.
+ */
+function forgetPlaintextChatState(address: string, userId: string): void {
+  for (const key of [
+    `kutup.chat.drafts.v1:${address}`,
+    `kutup:chat:read:${userId}`,
+    `kutup.chat.pending-default-timers.v1:${address}`,
+  ]) {
+    try {
+      window.localStorage.removeItem(key)
+    } catch {
+      // Storage blocked: nothing reads these keys anyway.
+    }
+  }
 }
 
 /**

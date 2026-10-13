@@ -175,7 +175,7 @@ async function fetchPins(me: DriveIdentity): Promise<PinStore> {
   }
   const revision = data?.revision ?? 0
   if (revision < highestSeen(me.userId)) throw new PinsRolledBack()
-  const list: IdentityPins = data ? await openIdentityPins(toBase64(me.masterKey), me.account, data.revision, data.envelope) : { pins: [] }
+  const list: IdentityPins = data ? await openIdentityPins(toBase64(me.masterKey), me.binding, data.revision, data.envelope) : { pins: [] }
   remember(me.userId, revision)
   return { revision, pins: new Map(list.pins.map((pin) => [pin.account, pin])) }
 }
@@ -204,7 +204,7 @@ function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) 
       if (!(await change(next))) return
       const revision = current.revision + 1
       const list: IdentityPins = { pins: [...next.values()].sort((a, b) => (a.account < b.account ? -1 : 1)) }
-      const envelope = await sealIdentityPins(toBase64(me.masterKey), me.account, revision, list)
+      const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
       try {
         await api.put('/user/identity-pins', { revision, envelope })
         remember(me.userId, revision)

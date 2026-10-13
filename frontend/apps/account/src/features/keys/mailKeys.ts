@@ -195,7 +195,7 @@ export class KeyAlreadyThere extends Error {
 /** An address key as an armored file locked with `passphrase`. */
 export async function exportKey(session: Session, address: string, key: MailKey, passphrase: string): Promise<string> {
   return exportMailAddressKey(
-    { masterKeyBase64: toBase64(session.masterKey), loginEmail: session.envelopeBinding, address, envelope: key.privateKeyEnvelope, fingerprint: key.fingerprint },
+    { masterKeyBase64: toBase64(session.masterKey), binding: session.envelopeBinding, address, envelope: key.privateKeyEnvelope, fingerprint: key.fingerprint },
     passphrase,
   )
 }

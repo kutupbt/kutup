@@ -1,6 +1,7 @@
 //! Checked-in vectors for contacts (docs/plans/contacts.md): the contacts key,
-//! a signed summary and a sealed card. Regenerate only for a deliberate format
-//! change: `KUTUP_WRITE_CONTACT_VECTORS=1 cargo test -p kutup-crypto --test contact_card_vectors -- --ignored`.
+//! a signed summary and a sealed card, both bound to the account's key binding
+//! (summary domain v2, card suite 2), with the values that must be refused.
+//! Regenerate only for a deliberate format change: `KUTUP_WRITE_CONTACT_VECTORS=1 cargo test -p kutup-crypto --test contact_card_vectors -- --ignored`.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -14,14 +15,15 @@ use kutup_crypto::identity::AccountIdentityKeysV1;
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/contact-card-v1.json"
+    "/tests/vectors/contact-card-v2.json"
 );
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     master_key: String,
-    account: String,
+    /// The account's key binding, which the summary and the card bind.
+    binding: String,
     contacts_key: String,
     summary: String,
     signature: String,
@@ -29,6 +31,93 @@ struct Vectors {
     vcard: String,
     nonce: String,
     sealed: String,
+    /// Summary signatures that must not verify, with the binding tried.
+    refused_signatures: Vec<RefusedSignature>,
+    /// Cards that must not open, with the binding and UID tried.
+    refused_cards: Vec<RefusedCard>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefusedSignature {
+    case: String,
+    binding: String,
+    signature: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefusedCard {
+    case: String,
+    binding: String,
+    uid: String,
+    sealed: String,
+}
+
+const BINDING: &str = "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d";
+const OTHER_BINDING: &str = "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0";
+const ADDRESS: &str = "alice@kutup.dev";
+/// The same summary as version 1 signed it (bound to `alice@kutup.dev`).
+const V1_SIGNATURE: &str =
+    "T1H0x4wwYXMIn8e9Iz2CATqRanGOp7D7Nh9hXHicOE8YI1Oj8URrUy6De91bJXswRdcKgBoC5q2L/G4+axpqCw==";
+/// The same card as suite 1 sealed it (bound to `alice@kutup.dev`).
+const V1_SEALED: &str = "S1VUQ0MxAAAAATMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM+72yETk29k8t6HE5YUoFiZGb64f4jyfZI+8nviq2sRQpm6ZIMra/7bOjjyQP5lPwJBAtETEqY5tAaG2CRN/qPKNzqVNNYJk0780W6vI7SJ4zOgfA2e1ue7QUyYNXqrwqLdDTnICgUw7E0Ywuxgy/3/PdAKwAUzXyRHyqCqePezkD3bq4rsNhl4RAquHim5gMqLt0II3nDrFmOXxKm6uvtUqCztoAuHWfPUcx3ZTYSIaJRfU2EEM1455mv/GiXEYeOoEjW85XeZ30JFu7rUWaWA8F7gGuFDSJLw=";
+
+fn refused_signatures(signature: &[u8; 64]) -> Vec<RefusedSignature> {
+    let case = |case: &str, binding: &str, signature: &[u8]| RefusedSignature {
+        case: case.into(),
+        binding: binding.into(),
+        signature: STANDARD.encode(signature),
+    };
+    let mut flipped = *signature;
+    flipped[0] ^= 1;
+    let old = STANDARD.decode(V1_SIGNATURE).unwrap();
+    vec![
+        case("another account's key binding", OTHER_BINDING, signature),
+        case(
+            "the account's address instead of its binding",
+            ADDRESS,
+            signature,
+        ),
+        case("signature changed", BINDING, &flipped),
+        case("version 1, bound to the address", BINDING, &old),
+        case("version 1, checked with the address", ADDRESS, &old),
+    ]
+}
+
+fn refused_cards(sealed: &[u8], uid: &str) -> Vec<RefusedCard> {
+    let case = |case: &str, binding: &str, uid: &str, sealed: &[u8]| RefusedCard {
+        case: case.into(),
+        binding: binding.into(),
+        uid: uid.into(),
+        sealed: STANDARD.encode(sealed),
+    };
+    let mut magic = sealed.to_vec();
+    magic[5] = b'1';
+    let mut suite = sealed.to_vec();
+    suite[9] = 1;
+    let mut nonce = sealed.to_vec();
+    nonce[10] ^= 1;
+    let mut tag = sealed.to_vec();
+    *tag.last_mut().unwrap() ^= 1;
+    let old = STANDARD.decode(V1_SEALED).unwrap();
+    let other_uid = "urn:uuid:00000000-0000-4000-8000-000000000000";
+    vec![
+        case("another account's key binding", OTHER_BINDING, uid, sealed),
+        case(
+            "the account's address instead of its binding",
+            ADDRESS,
+            uid,
+            sealed,
+        ),
+        case("another contact's UID", BINDING, other_uid, sealed),
+        case("magic changed", BINDING, uid, &magic),
+        case("suite changed", BINDING, uid, &suite),
+        case("nonce changed", BINDING, uid, &nonce),
+        case("ciphertext changed", BINDING, uid, &tag),
+        case("suite 1, bound to the address", BINDING, uid, &old),
+        case("suite 1, opened with the address", ADDRESS, uid, &old),
+    ]
 }
 
 fn summary() -> ContactSummaryV1 {
@@ -64,23 +153,24 @@ fn write_vectors() {
         return;
     }
     let master = [0x5au8; 32];
-    let account = "alice@kutup.dev";
     let identity = AccountIdentityKeysV1::derive(&master).unwrap();
     let (bytes, signature) =
-        sign_summary(&summary(), account, identity.authority_signing_key()).unwrap();
+        sign_summary(&summary(), BINDING, identity.authority_signing_key()).unwrap();
     let key = derive_contacts_key(&master).unwrap();
     let nonce = [0x33u8; 24];
     let sealed =
-        seal_card_with_nonce(&key, account, &summary().uid, VCARD.as_bytes(), &nonce).unwrap();
+        seal_card_with_nonce(&key, BINDING, &summary().uid, VCARD.as_bytes(), &nonce).unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
-        account: account.into(),
+        binding: BINDING.into(),
         contacts_key: STANDARD.encode(*key),
         summary: String::from_utf8(bytes).unwrap(),
         signature: STANDARD.encode(signature),
         uid: summary().uid,
         vcard: VCARD.into(),
         nonce: STANDARD.encode(nonce),
+        refused_signatures: refused_signatures(&signature),
+        refused_cards: refused_cards(&sealed, &summary().uid),
         sealed: STANDARD.encode(sealed),
     };
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
@@ -92,14 +182,14 @@ fn checked_in_vectors_hold() {
     let master: [u8; 32] = STANDARD.decode(&v.master_key).unwrap().try_into().unwrap();
     let identity = AccountIdentityKeysV1::derive(&master).unwrap();
     let (bytes, signature) =
-        sign_summary(&summary(), &v.account, identity.authority_signing_key()).unwrap();
+        sign_summary(&summary(), &v.binding, identity.authority_signing_key()).unwrap();
     assert_eq!(String::from_utf8(bytes).unwrap(), v.summary);
     assert_eq!(STANDARD.encode(signature), v.signature);
     assert_eq!(
         verify_summary(
             v.summary.as_bytes(),
             &STANDARD.decode(&v.signature).unwrap(),
-            &v.account,
+            &v.binding,
             &identity.authority_public_key()
         )
         .unwrap(),
@@ -109,10 +199,52 @@ fn checked_in_vectors_hold() {
     assert_eq!(STANDARD.encode(*key), v.contacts_key);
     let nonce: [u8; 24] = STANDARD.decode(&v.nonce).unwrap().try_into().unwrap();
     let sealed =
-        seal_card_with_nonce(&key, &v.account, &v.uid, v.vcard.as_bytes(), &nonce).unwrap();
+        seal_card_with_nonce(&key, &v.binding, &v.uid, v.vcard.as_bytes(), &nonce).unwrap();
     assert_eq!(STANDARD.encode(&sealed), v.sealed);
     assert_eq!(
-        &open_card(&key, &v.account, &v.uid, &sealed).unwrap()[..],
+        &open_card(&key, &v.binding, &v.uid, &sealed).unwrap()[..],
         v.vcard.as_bytes()
     );
+
+    let expected = refused_signatures(&signature);
+    assert_eq!(v.refused_signatures.len(), expected.len());
+    for (case, want) in v.refused_signatures.iter().zip(&expected) {
+        assert_eq!(
+            (&case.case, &case.binding, &case.signature),
+            (&want.case, &want.binding, &want.signature)
+        );
+        assert!(
+            verify_summary(
+                v.summary.as_bytes(),
+                &STANDARD.decode(&case.signature).unwrap(),
+                &case.binding,
+                &identity.authority_public_key()
+            )
+            .is_err(),
+            "{} verified",
+            case.case
+        );
+    }
+    let expected = refused_cards(&sealed, &v.uid);
+    assert_eq!(v.refused_cards.len(), expected.len());
+    for (case, want) in v.refused_cards.iter().zip(&expected) {
+        assert_eq!(
+            (&case.case, &case.binding, &case.uid, &case.sealed),
+            (&want.case, &want.binding, &want.uid, &want.sealed)
+        );
+        assert!(
+            open_card(
+                &key,
+                &case.binding,
+                &case.uid,
+                &STANDARD.decode(&case.sealed).unwrap()
+            )
+            .is_err(),
+            "{} opened",
+            case.case
+        );
+    }
+    // The address is not a key binding: nothing signs or seals to it.
+    assert!(sign_summary(&summary(), ADDRESS, identity.authority_signing_key()).is_err());
+    assert!(seal_card_with_nonce(&key, ADDRESS, &v.uid, v.vcard.as_bytes(), &nonce).is_err());
 }

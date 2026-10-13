@@ -1,0 +1,82 @@
+{
+  "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+  "namesKey": "S87ck8bG4jUA8+qtxzgZo36kS2iXtAsQayPdpNnrGaQ=",
+  "kind": "folder",
+  "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+  "name": "İş başvuruları",
+  "nonce": "RERERERERERERERERERERERERERERERE",
+  "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU=",
+  "refused": [
+    {
+      "case": "another account's key binding",
+      "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "the account's address instead of its binding",
+      "binding": "alice@kutup.dev",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "another kind",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "label",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "another id",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "00000000-0000-4000-8000-000000000000",
+      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "magic changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4xAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "suite changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAURERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "nonce changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAkVERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPU="
+    },
+    {
+      "case": "ciphertext changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4yAAAAAkRERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N89rpNWcrHYsXhvxSq9ixPQ="
+    },
+    {
+      "case": "suite 1, bound to the address",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4xAAAAAURERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N2US+HHd4Zhsmta6A6Z/LTk="
+    },
+    {
+      "case": "suite 1, opened with the address",
+      "binding": "alice@kutup.dev",
+      "kind": "folder",
+      "id": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "sealed": "S1VUTU4xAAAAAURERERERERERERERERERERERERERERERMNx1qiRWfpbQtuHZkYgZiI4N2US+HHd4Zhsmta6A6Z/LTk="
+    }
+  ]
+}

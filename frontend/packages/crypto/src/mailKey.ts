@@ -46,12 +46,12 @@ export interface SignedMailKeyList extends MailKeyListInput {
 
 export async function generateMailAddressKey(
   masterKeyBase64: string,
-  loginEmail: string,
+  binding: string,
   address: string,
   createdAt: Date = new Date(),
 ): Promise<GeneratedMailAddressKey> {
   const seconds = Math.floor(createdAt.getTime() / 1000)
-  return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, loginEmail, address, seconds)
+  return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, binding, address, seconds)
 }
 
 /** Shortest passphrase an exported key may be locked with (kutup-crypto `MIN_EXPORT_PASSPHRASE_CHARS`). */
@@ -59,7 +59,7 @@ export const MIN_MAIL_KEY_PASSPHRASE = 8
 
 /** An address key as an armored OpenPGP secret key file locked with `passphrase`. */
 export async function exportMailAddressKey(key: SealedMailKey, passphrase: string): Promise<string> {
-  return (await getCryptoWasm()).exportMailAddressKey(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, passphrase)
+  return (await getCryptoWasm()).exportMailAddressKey(key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint, passphrase)
 }
 
 /** The passphrase does not open the key file. */
@@ -75,13 +75,13 @@ export class WrongKeyPassphrase extends Error {
  */
 export async function importMailAddressKey(
   masterKeyBase64: string,
-  loginEmail: string,
+  binding: string,
   address: string,
   file: Uint8Array,
   passphrase: string,
 ): Promise<GeneratedMailAddressKey> {
   try {
-    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, loginEmail, address, file, passphrase)
+    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, binding, address, file, passphrase)
   } catch (error) {
     // WASM throws its messages as strings.
     if (error === 'wrong passphrase' || (error instanceof Error && error.message === 'wrong passphrase')) throw new WrongKeyPassphrase()
@@ -126,7 +126,7 @@ export async function verifyMailKeyList(
 /** An address key as its owner holds it: sealed, opened only inside WASM. */
 export interface SealedMailKey {
   masterKeyBase64: string
-  loginEmail: string
+  binding: string
   address: string
   envelope: string
   fingerprint: string
@@ -148,7 +148,7 @@ export interface OpenedMail {
 export async function openMailMessage(key: SealedMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
   const opened = (await getCryptoWasm()).openMailMessage(
     key.masterKeyBase64,
-    key.loginEmail,
+    key.binding,
     key.address,
     key.envelope,
     key.fingerprint,
@@ -176,7 +176,7 @@ export interface SealedMail {
 export async function encryptMailMessage(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<SealedMail> {
   const sealed = (await getCryptoWasm()).encryptMailMessage(
     key.masterKeyBase64,
-    key.loginEmail,
+    key.binding,
     key.address,
     key.envelope,
     key.fingerprint,
@@ -232,7 +232,7 @@ export async function describeExternalMailKeyDetails(publicKey: Uint8Array, addr
 export async function encryptMailPgp(key: SealedMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
   return (await getCryptoWasm()).encryptMailPgp(
     key.masterKeyBase64,
-    key.loginEmail,
+    key.binding,
     key.address,
     key.envelope,
     key.fingerprint,
@@ -279,7 +279,7 @@ export async function generateMailGroupKey(groupAddress: string, memberPublicKey
 /** Shares a group key the caller holds with more members, one share per public key. */
 export async function reshareMailGroupKey(key: GroupMailKey, memberPublicKeys: string[]): Promise<string[]> {
   const m = key.member
-  return (await getCryptoWasm()).reshareMailGroupKey(m.masterKeyBase64, m.loginEmail, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, memberPublicKeys)
+  return (await getCryptoWasm()).reshareMailGroupKey(m.masterKeyBase64, m.binding, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, memberPublicKeys)
 }
 
 /** Opens a shared mailbox's message with its group key; with `senderPublicKey`, checks the signature too. */
@@ -287,7 +287,7 @@ export async function openMailGroupMessage(key: GroupMailKey, message: Uint8Arra
   const m = key.member
   const opened = (await getCryptoWasm()).openMailGroupMessage(
     m.masterKeyBase64,
-    m.loginEmail,
+    m.binding,
     m.address,
     m.envelope,
     m.fingerprint,
@@ -308,7 +308,7 @@ export async function encryptMailMessageAsGroup(key: GroupMailKey, recipientPubl
   const m = key.member
   const sealed = (await getCryptoWasm()).encryptMailMessageAsGroup(
     m.masterKeyBase64,
-    m.loginEmail,
+    m.binding,
     m.address,
     m.envelope,
     m.fingerprint,
@@ -329,7 +329,7 @@ export async function encryptMailPgpAsGroup(key: GroupMailKey, recipientPublicKe
   const m = key.member
   return (await getCryptoWasm()).encryptMailPgpAsGroup(
     m.masterKeyBase64,
-    m.loginEmail,
+    m.binding,
     m.address,
     m.envelope,
     m.fingerprint,
@@ -359,22 +359,22 @@ export async function encryptMailPgpUnsigned(recipientPublicKeys: string[], plai
 
 /** A detached, armored signature over a MIME part, for `multipart/signed`. */
 export async function signMailDetached(key: SealedMailKey, content: Uint8Array): Promise<string> {
-  return (await getCryptoWasm()).signMailDetached(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, content)
+  return (await getCryptoWasm()).signMailDetached(key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint, content)
 }
 
 /** A cleartext signature of `text` (`-----BEGIN PGP SIGNED MESSAGE-----`): an Inline PGP body that is signed, not encrypted. */
 export async function signMailCleartext(key: SealedMailKey, text: string): Promise<string> {
-  return (await getCryptoWasm()).signMailCleartext(key.masterKeyBase64, key.loginEmail, key.address, key.envelope, key.fingerprint, text)
+  return (await getCryptoWasm()).signMailCleartext(key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint, text)
 }
 
 /** {@link signMailCleartext} with a shared mailbox's key. */
 export async function signMailCleartextAsGroup(key: GroupMailKey, text: string): Promise<string> {
   const m = key.member
-  return (await getCryptoWasm()).signMailCleartextAsGroup(m.masterKeyBase64, m.loginEmail, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, text)
+  return (await getCryptoWasm()).signMailCleartextAsGroup(m.masterKeyBase64, m.binding, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, text)
 }
 
 /** {@link signMailDetached} with a shared mailbox's key. */
 export async function signMailDetachedAsGroup(key: GroupMailKey, content: Uint8Array): Promise<string> {
   const m = key.member
-  return (await getCryptoWasm()).signMailDetachedAsGroup(m.masterKeyBase64, m.loginEmail, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, content)
+  return (await getCryptoWasm()).signMailDetachedAsGroup(m.masterKeyBase64, m.binding, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, content)
 }

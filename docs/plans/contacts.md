@@ -31,8 +31,8 @@ From WebClients (`packages/shared/lib/contacts/`, `interfaces/contacts/`,
 | Proton | Kutup |
 |---|---|
 | cards encrypted to and signed with the user's PGP key | Kutup-owned formats in `kutup-crypto` (`contact_card`): the private part sealed with XChaCha20-Poly1305 under a **contacts key** derived from the master key; the readable part signed with Ed25519 by the **account authority**. Kutup's rule is that Rust owns persistent formats, and contacts never leave the account, so there is no OpenPGP interoperability to keep. Import and export stay standard vCard |
-| type 2 signed vCard | **`ContactSummaryV1`**, canonical JSON: `uid`, `name`, `emails[]` (address, label), `groups[]`, pinned keys. Canonical JSON (like `file_metadata`) lets the server check exactly what it indexes instead of parsing vCard |
-| type 3 encrypted vCard | **`ContactCardV1`**: the full vCard 4.0 (RFC 6350) text, sealed and bound to the account and contact UID |
+| type 2 signed vCard | **`ContactSummaryV1`**, canonical JSON: `uid`, `name`, `emails[]` (address, label), `groups[]`, pinned keys. Canonical JSON (like `file_metadata`) lets the server check exactly what it indexes instead of parsing vCard. The signature (`kutup/contact-summary/v2`) binds the account's key binding (docs/plans/account-identity.md), never its address; the server checks it against `users.key_binding` |
+| type 3 encrypted vCard | **`ContactCardV1`**: the full vCard 4.0 (RFC 6350) text, sealed (`KUTCC2`, suite 2) and bound to the account's key binding and the contact UID. Vectors, with the values that must be refused: `contact-card-v2.json` |
 | ContactEmails | `contact_emails` rows the server writes from the verified summary |
 | labels as groups | `contact_groups` (name, colour) and memberships per contact |
 | widget inside Mail | its own app at `contacts.kutup.dev`, with Proton's screens; Mail later embeds the same list as a picker |

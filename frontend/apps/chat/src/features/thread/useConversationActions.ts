@@ -39,15 +39,15 @@ export function useConversationActions(
    */
   const timerFor = useCallback(async (): Promise<number | undefined> => {
     if (timerSeconds !== undefined) return timerSeconds
-    const account = self?.address ?? ''
+    const userId = self?.userId ?? ''
     const key = conversationKey(conversation)
-    const owed = pendingDefaultTimer(account, key)
+    const owed = pendingDefaultTimer(userId, key)
     if (owed !== undefined) return owed
     if (!fresh) return undefined
     const seconds = getDefaultTimerSeconds()
     if (!seconds) return undefined
     if (established) await service!.sendDisappearingTimer(conversation, seconds)
-    else owePendingDefaultTimer(account, key, seconds)
+    else owePendingDefaultTimer(userId, key, seconds)
     return seconds
   }, [fresh, established, timerSeconds, service, conversation, self])
 

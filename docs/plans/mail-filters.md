@@ -230,7 +230,9 @@ labels (F1), 113 filters and their runs (F2), 114 the sender lists (F3).
 ## Slices
 
 1. **F1 folders and labels:** migration 112 (folders, labels), the server,
-   sealed names (`kutup-crypto` `mail_names`), the sidebar, Move to and
+   sealed names (`kutup-crypto` `mail_names`; `KUTMN2`, bound to the
+   account's key binding, the kind and the id, vectors in
+   `mail-names-v2.json`), the sidebar, Move to and
    Label as (toolbar, right click, `M`, `L`, dropping), Settings → Folders
    and labels, counts. Built on `feat/mail-filters`.
 2. **F2 filters:** the matcher in `insert_message` (`mail/filters.rs`),

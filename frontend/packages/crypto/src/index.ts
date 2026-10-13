@@ -186,7 +186,7 @@ export interface RegistrationKeys {
 // This runs in the KDF web worker for the Argon2id calls.
 export async function generateRegistrationKeys(
   password: string,
-  loginEmail: string,
+  binding: string,
 ): Promise<RegistrationKeys> {
   const sodium = await getSodium()
 
@@ -210,7 +210,7 @@ export async function generateRegistrationKeys(
   )
   const recoveryProof = await deriveRecoveryAuthProof(
     toBase64(recoveryKeyEntropy),
-    loginEmail,
+    binding,
   )
 
   // 5. Derive the purpose-separated account identity. Account keys and their
@@ -224,19 +224,19 @@ export async function generateRegistrationKeys(
     masterKey,
     keyEncryptionKey,
     ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
-    loginEmail,
+    binding,
   )
   const recoveryKeyEnvelope = await sealAccountEnvelope(
     masterKey,
     recoveryKeyEntropy,
     ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
-    loginEmail,
+    binding,
   )
   const drivePrivateKeyEnvelope = await sealAccountEnvelope(
     driveHpkePrivateKey,
     masterKey,
     ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    loginEmail,
+    binding,
   )
 
   return {
@@ -270,25 +270,25 @@ export interface LoginResult {
 export async function decryptMasterKey(
   masterKeyEnvelope: string,
   keyEncryptionKey: Uint8Array,
-  loginEmail: string,
+  binding: string,
 ): Promise<Uint8Array> {
   return openAccountEnvelope(
     masterKeyEnvelope,
     keyEncryptionKey,
     ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
-    loginEmail,
+    binding,
   )
 }
 
 export async function decryptPrivateKey(
   drivePrivateKeyEnvelope: string,
   masterKey: Uint8Array,
-  loginEmail: string,
+  binding: string,
 ): Promise<Uint8Array> {
   return openAccountEnvelope(
     drivePrivateKeyEnvelope,
     masterKey,
     ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    loginEmail,
+    binding,
   )
 }

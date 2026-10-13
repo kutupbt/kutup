@@ -824,7 +824,9 @@ struct ConversationPageView {
 #[wasm_bindgen]
 impl WasmChatClient {
     /// Open or restart-safely register the local device, then publish its
-    /// account-signed manifest. The database name must be account scoped.
+    /// account-signed manifest. The database name must be account scoped;
+    /// `binding` is the account's key binding (`session.envelopeBinding`),
+    /// which its own seals bind.
     #[wasm_bindgen(js_name = open)]
     pub async fn open(
         database_name: String,
@@ -832,6 +834,7 @@ impl WasmChatClient {
         server_name: String,
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
+        binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let master_key: [u8; 32] = master_key
@@ -839,7 +842,7 @@ impl WasmChatClient {
             .map_err(|_| js_error("chat account authority requires a 32-byte master key"))?;
         let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
         let profile_wrapping_key =
-            crate::profile::derive_wrapping_key(&master_key).map_err(chat_error)?;
+            crate::profile::derive_wrapping_key(&master_key, &binding).map_err(chat_error)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name, &master_key)
                 .await
@@ -853,7 +856,7 @@ impl WasmChatClient {
         engine.set_local_server(&server_name).map_err(chat_error)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
-            .enable_identity_pins(&master_key)
+            .enable_identity_pins(&master_key, &binding)
             .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
@@ -4586,11 +4589,12 @@ pub fn account_profile_open(
     master_key: Vec<u8>,
     current: JsValue,
     account: String,
+    binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = master_key_input(master_key)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
-    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
+    let profile = crate::profile::open_account_profile(&master_key, &current, &account, &binding)
         .map_err(chat_error)?;
     to_output(&AccountProfileView {
         display_name: profile.display_name,
@@ -4626,11 +4630,12 @@ pub fn account_profile_key(
     master_key: Vec<u8>,
     current: JsValue,
     account: String,
+    binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = master_key_input(master_key)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
-    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
+    let profile = crate::profile::open_account_profile(&master_key, &current, &account, &binding)
         .map_err(chat_error)?;
     to_output(&profile_lookup_of(&profile.key)?)
 }
@@ -4672,6 +4677,7 @@ pub fn account_profile_seal(
     current: JsValue,
     update: JsValue,
     account: String,
+    binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = master_key_input(master_key)?;
     let current: Option<kutup_chat_proto::PutChatProfileRequest> =
@@ -4697,6 +4703,7 @@ pub fn account_profile_seal(
             about: update.about,
         },
         &account,
+        &binding,
         &mut rng,
     )
     .map_err(chat_error)?;

@@ -42,10 +42,10 @@ export async function deriveAccountProtectionKeys(
 
 export async function deriveRecoveryAuthProof(
   recoveryEntropyBase64: string,
-  loginEmail: string,
+  binding: string,
 ): Promise<string> {
   const module = await getCryptoWasm()
-  return module.deriveRecoveryAuthProof(recoveryEntropyBase64, loginEmail)
+  return module.deriveRecoveryAuthProof(recoveryEntropyBase64, binding)
 }
 
 export function generateAccountProtectionSalt(): Uint8Array {

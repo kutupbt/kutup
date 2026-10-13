@@ -14,6 +14,9 @@
 //!
 //! The list never lifts a Chat quarantine: only an in-person comparison does,
 //! and that one (verified in Chat or in Drive) arrives as `verified`.
+//!
+//! The list is sealed to the account's key binding, never to its address
+//! (docs/plans/account-identity.md).
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -41,15 +44,18 @@ pub(crate) enum Reconcile {
 
 /// The account's key to the list, and the list as last read.
 pub(crate) struct IdentityPinsSync {
-    owner: String,
+    /// The account's key binding, which the list is sealed to.
+    binding: String,
     key: Zeroizing<[u8; 32]>,
     cache: Option<(u64, IdentityPinsV1)>,
 }
 
 impl IdentityPinsSync {
-    pub(crate) fn new(owner: String, master_key: &[u8; 32]) -> Result<Self> {
+    pub(crate) fn new(binding: &str, master_key: &[u8; 32]) -> Result<Self> {
         Ok(Self {
-            owner,
+            binding: kutup_crypto::key_binding::check(binding)
+                .map_err(crypto)?
+                .to_string(),
             key: identity_pins::derive_key(master_key).map_err(crypto)?,
             cache: None,
         })
@@ -65,7 +71,7 @@ impl IdentityPinsSync {
                 let sealed = STANDARD
                     .decode(&record.envelope)
                     .map_err(|_| ChatError::Invalid("identity pins are not base64".into()))?;
-                let list = identity_pins::open(&self.key, &self.owner, record.revision, &sealed)
+                let list = identity_pins::open(&self.key, &self.binding, record.revision, &sealed)
                     .map_err(crypto)?;
                 (record.revision, list)
             }
@@ -156,7 +162,7 @@ impl IdentityPinsSync {
             list.pins.sort_by(|a, b| a.account.cmp(&b.account));
             let next = revision + 1;
             let sealed =
-                identity_pins::seal(&self.key, &self.owner, next, &list).map_err(crypto)?;
+                identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
             let record = IdentityPinsRecord {
                 revision: next,
                 envelope: STANDARD.encode(sealed),
@@ -226,7 +232,7 @@ mod tests {
         }
     }
 
-    const OWNER: &str = "me@kutup.dev";
+    const OWNER: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
     const MASTER: [u8; 32] = [4u8; 32];
 
     fn authority(seed: u8) -> String {
@@ -269,7 +275,7 @@ mod tests {
     }
 
     fn sync() -> IdentityPinsSync {
-        IdentityPinsSync::new(OWNER.into(), &MASTER).unwrap()
+        IdentityPinsSync::new(OWNER, &MASTER).unwrap()
     }
 
     #[test]

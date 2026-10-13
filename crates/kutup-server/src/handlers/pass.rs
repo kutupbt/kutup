@@ -182,7 +182,7 @@ fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<Vec<u8
             "envelope is not this account's vault secret",
         ));
     }
-    if Some(header.canonical_login_email) != account_envelope::canonical_login_email(binding).ok() {
+    if Some(header.canonical_binding) != account_envelope::canonical_binding(binding).ok() {
         return Err(AppError::bad_request(
             "envelope is not this account's vault secret",
         ));

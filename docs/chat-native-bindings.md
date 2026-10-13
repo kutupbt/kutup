@@ -70,9 +70,14 @@ openNativeChatClient(
   username,
   serverName,
   accountMasterKey,
+  keyBinding,
   authenticatedHttpClient
 )
 ```
+
+`keyBinding` is the account's key binding (the session's `envelopeBinding`,
+a UUID v4): the account's own seals, such as its synced identity pin list,
+bind it, never the username or address.
 
 The FFI crate has only a SQLCipher feature and fails if SQLCipher is absent or
 the key cannot unlock an existing database. Input vectors are zeroized in Rust
