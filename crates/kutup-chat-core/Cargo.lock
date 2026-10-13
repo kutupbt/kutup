@@ -1208,6 +1208,7 @@ dependencies = [
  "kutup-chat-proto",
  "kutup-crypto",
  "kutup-federation-proto",
+ "kutup-search",
  "libsignal-protocol",
  "openmls",
  "openmls_basic_credential",
@@ -1224,7 +1225,6 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "tls_codec",
- "unicode-normalization",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1282,6 +1282,16 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "url",
+]
+
+[[package]]
+name = "kutup-search"
+version = "0.1.0"
+dependencies = [
+ "ciborium",
+ "serde",
+ "thiserror 2.0.18",
+ "unicode-normalization",
 ]
 
 [[package]]

@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
 import { useCounts, type FolderId } from '@kutup/mail-core/api'
+import { useContentSearch } from '@kutup/mail-core/contentSearch'
 import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { appUrl } from '@kutup/session/apps'
 import { signOut } from '@kutup/session/signOut'
@@ -169,6 +170,15 @@ export function MailShell() {
   useAccountUiPreferences()
   const counts = useCounts()
   useNewMailNotifications()
+  // Body search: building goes on, and new mail is indexed on Mail's poll.
+  const contentSearch = useContentSearch()
+  useEffect(() => {
+    if (!contentSearch) return
+    const catchUp = () => void contentSearch.catchUp().catch(() => undefined)
+    catchUp()
+    const timer = window.setInterval(catchUp, 30_000)
+    return () => window.clearInterval(timer)
+  }, [contentSearch])
   const actions = useMailActions()
   const groups = useMyGroups()
   const shared = (groups.data ?? []).filter((group) => group.kind === 'shared')

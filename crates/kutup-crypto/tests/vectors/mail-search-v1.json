@@ -1,0 +1,84 @@
+{
+  "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "storeName": "e93068a1a0ee71e59e1881d19e7a2299",
+  "storeKey": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
+  "wrapNonce": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi",
+  "wrappedStoreKey": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3w==",
+  "name": "shard/680/fat",
+  "recordId": "91c3fa1579a1c4a7c85d8bde62b330ef0ba4f50ddf18e59b36e12d29872ab12d",
+  "value": "ZmF0dXJhIOKGkiDEsMWf",
+  "nonce": "RERERERERERERERERERERERERERERERE",
+  "sealed": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI=",
+  "refusals": [
+    {
+      "why": "another record name",
+      "kind": "record",
+      "name": "shard/680/fau",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+    },
+    {
+      "why": "a flipped magic byte",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "SlVUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+    },
+    {
+      "why": "a flipped suite byte",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAEREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+    },
+    {
+      "why": "a flipped nonce byte",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAURERUREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsI="
+    },
+    {
+      "why": "a flipped tag byte",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7vUH/TT8bG+fx5YZYZtgfsM="
+    },
+    {
+      "why": "cut short",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAUREREREREREREQ="
+    },
+    {
+      "why": "sealed under another store key of the same master key",
+      "kind": "record",
+      "name": "shard/680/fat",
+      "masterKey": null,
+      "bytes": "S1VUTVMxAAAAAURERERERERERERERERERERERERERERERCXYDtkPBnTzCOx6S7Ju3V9xAfXseA8QA7qP0yYw3nE="
+    },
+    {
+      "why": "another master key",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1s=",
+      "bytes": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3w=="
+    },
+    {
+      "why": "a flipped wrapped byte",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "bytes": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3g=="
+    },
+    {
+      "why": "a flipped suite byte",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "bytes": "S1VUTVNXMQAAACIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHDw6SnNBe0fMuHwAck+Esg3w=="
+    }
+  ]
+}

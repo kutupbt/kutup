@@ -83,7 +83,7 @@ reference only where Proton has nothing.
 | Sieve editor | `AdvancedFilterModal.tsx` | 🔶 F4 |
 | Search on subject and addresses | | ✅ |
 | Advanced search (from, to, dates, folder, attachments) | `AdvancedSearch.tsx` | ✅ the search box's options: keyword, location (any folder, label or All mail), start and end date (the end day included, the reader's time zone), sender, recipient (To, Cc, Bcc), address (your own and the distribution lists you are in, Kutup's own: Proton lists your addresses only; a shared mailbox's own), has attachments; kept in the address bar (`q`, `from`, `to`, `since`, `until`, `address`, `filter`); Reset; over the readable fields, no body search yet (spec 111) |
-| Body search in the browser (encrypted local index) | `contentSearch/` | ❌ (C2f; [`browser-storage`](../research/16-browser-storage-architecture.md)) |
+| Body search in the browser (encrypted local index) | `contentSearch/` | ✅ Advanced search → Search message content (Enable asks first; progress, Pause, Resume; one tab builds at a time; out of room: "For messages newer than …"): subjects and text, quotes left out, indexed in this browser by a Rust/WASM word index (Chat's layout, Turkish folding, word starts) over records sealed per account; hits checked by the server against the place and the other criteria; "Results include message text, searched in this browser."; Settings → General: Delete local search data ([plan](mail-body-search.md); spec 113) |
 | Category tabs (Primary, Promotions, …) | `categoriesTabs` | ❌ |
 | Newsletter subscriptions view | `NewsletterSubscriptionView.tsx` | ❌ |
 

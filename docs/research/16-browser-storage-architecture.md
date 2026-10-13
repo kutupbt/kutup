@@ -168,6 +168,15 @@ engine lock Kutup already has.
    period, and each hit now needs its document chunk: slower than before
    on a cold cache, 2.7 ms once cached (as while typing). Larger chunks
    (1,024) made it slower still, decoding outweighing the reads saved.
+   **Mail's body search** (docs/plans/mail-body-search.md, October 2026)
+   uses the same layout through the shared `kutup-search` crate, with its
+   own database per account: named by an HMAC under a master-derived key,
+   holding a random store key wrapped under a second master-derived key
+   (deleting the database destroys it), records under HMAC names. Each
+   document keeps its message's list row, which the server's change feed
+   (`/api/mail/search-index/changes`, transaction-ordered, with tombstones)
+   keeps current, so hits are filtered and paged in the browser. Every
+   change holds one exclusive Web Lock and reloads the directory inside it.
 6. **Tabs.** The existing engine lock (one holder, take-over after 30 s of
    silence) and the writer generation checked in every write.
 7. **Sign-out keeps the encrypted store**, so the same browser stays the same
@@ -180,4 +189,4 @@ engine lock Kutup already has.
 | 1 | Encrypted chat store (keys, records, conversion of existing stores); the backup mirror's records, drafts and read positions sealed (`SealedStorage`, `sealLocalData`). Not sealed, on purpose: the meeting hand-off list (written by a page with no account key, moved into the account's encrypted list and deleted) and live shares in `sessionStorage` |
 | 2 | Chunked messages, conversation headers, paging, windowed rendering |
 | 3 | Search engine with Turkish folding, replacing the linear scan |
-| 4 | Office and Drive catalog and name search in their own origins (needs a server change feed, see document 15) |
+| 4 | Office and Drive catalog and name search in their own origins (needs a server change feed, see document 15; Mail's search-index feed is one model) |

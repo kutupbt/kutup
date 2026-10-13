@@ -1025,5 +1025,24 @@
     "test": "Deneme bildirimi gönder",
     "testTitle": "Yeni bir e-postanız var",
     "testBody": "Yeni postalar böyle görünecek."
+  },
+  "contentSearch": {
+    "title": "İleti içeriğinde ara",
+    "hint": "Yalnızca konu ve adreslerde değil, iletilerinizin metninde de arayın. Bu tarayıcıda şifreli tutulur.",
+    "enable": "Aç",
+    "enableTitle": "İleti içeriğinde aransın mı?",
+    "enableBody": "Posta, metinlerinde aramak için iletilerinizin bir kopyasını bu tarayıcıya şifreli olarak indirir. Büyük bir posta kutusunda zaman alır ve Posta’yı bir sonraki açışınızda kaldığı yerden sürer.",
+    "progressLabel": "İleti indirme durumu",
+    "progress": "İleti indirme durumu: {{indexed}} / {{total}}",
+    "paused": "İndirme duraklatıldı",
+    "pause": "Duraklat",
+    "resume": "Sürdür",
+    "limited": "{{date}} tarihinden yeni iletiler için (bu tarayıcıda yer kalmadı).",
+    "results": "Sonuçlar, bu tarayıcıda aranan ileti metinlerini de içerir.",
+    "settingsTitle": "İleti içeriğinde arama",
+    "settingsOn": "{{count}} iletinin metni arama için bu tarayıcıda şifreli tutuluyor.",
+    "settingsOff": "Bu tarayıcıda tutulmuyor.",
+    "delete": "Yerel arama verisini sil",
+    "deleted": "Yerel arama verisi silindi."
   }
 }

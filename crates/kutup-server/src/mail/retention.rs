@@ -24,6 +24,9 @@ pub fn spawn(state: AppState) {
             if let Err(error) = super::auto_reply::forget_old(&state.pool).await {
                 tracing::warn!(error = %error, "mail: forgetting auto-reply senders failed");
             }
+            if let Err(error) = crate::handlers::mail::forget_old_tombstones(&state.pool).await {
+                tracing::warn!(error = %error, "mail: forgetting body search tombstones failed");
+            }
         }
     });
 }
