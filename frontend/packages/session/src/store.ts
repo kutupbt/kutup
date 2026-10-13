@@ -16,8 +16,7 @@ export interface Session {
   address: string
   /**
    * What the account's sealed keys are bound to (docs/plans/account-identity.md):
-   * its key binding, or its old sign-in email until they are re-sealed. Every
-   * seal and open uses it; it names no one.
+   * its key binding. Every seal and open uses it; it names no one.
    */
   envelopeBinding: string
   username: string | null

@@ -19,8 +19,7 @@ import { setPendingSetup } from './pendingSetup'
 /**
  * Sign-in: username (or Kutup address) + password, then a TOTP code when the
  * account has 2FA. The server answers a missing account and a wrong password
- * identically; the form does not try to tell them apart. An account whose
- * keys are still bound to its old sign-in email goes on to re-seal them.
+ * identically; the form does not try to tell them apart.
  */
 export function LoginPage() {
   const { t } = useTranslation()
