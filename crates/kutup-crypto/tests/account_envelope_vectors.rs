@@ -125,6 +125,13 @@ fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused>
             "inspect",
             unchecked(&padded(purpose), BINDING, &object, None),
         );
+        // The revision changed in the header: well formed, but the AEAD
+        // covers it, so an older secret cannot pass as newer.
+        let header = account_envelope::inspect(envelope).unwrap();
+        let last_revision_byte = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 1;
+        let mut relabelled = envelope.to_vec();
+        relabelled[last_revision_byte] ^= 2;
+        add("revision relabelled", "open", relabelled);
     } else {
         add(
             "a revision where the purpose has none",

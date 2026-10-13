@@ -307,8 +307,14 @@ pub async fn update(
     .execute(&state.pool)
     .await?;
     if updated.rows_affected() == 0 {
-        return Err(AppError::conflict("this filter was changed elsewhere")
-            .with_details(serde_json::json!({ "code": "revision_conflict" })));
+        let now: Option<String> = sqlx::query_scalar(
+            "SELECT name_sealed FROM mail_filters WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+        return Err(crate::revisions::rename_lost(now, "no such filter"));
     }
     Ok(StatusCode::NO_CONTENT)
 }

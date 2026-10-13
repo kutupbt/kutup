@@ -442,7 +442,7 @@ pub fn seal_suite(
 /// An envelope built without the purpose's checks or padding (the plaintext
 /// is sealed as given): for negative vectors only, which need well-encrypted
 /// envelopes of the wrong shape.
-#[doc(hidden)]
+#[cfg(any(test, feature = "test-vectors"))]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_unchecked_for_vectors(
     plaintext: &[u8],

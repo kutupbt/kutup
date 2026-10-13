@@ -158,7 +158,7 @@ async function fetchPins(me: DriveIdentity): Promise<PinStore> {
   } catch (error) {
     if (!(isAxiosError(error) && error.response?.status === 404)) throw error
   }
-  const guard = revisionGuard(me.userId)
+  const guard = revisionGuard(me)
   if (!data) {
     // None stored, though this browser has seen one: held back by the server.
     if ((await guard.seen(PINS_SCOPE, PINS_ID)) > 0) throw new PinsRolledBack()
@@ -198,7 +198,7 @@ function updatePins(me: DriveIdentity, change: (pins: Map<string, IdentityPin>) 
       const current = await pinStore(me)
       const next = new Map(current.pins)
       if (!(await change(next))) return
-      const guard = revisionGuard(me.userId)
+      const guard = revisionGuard(me)
       const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
       const list: IdentityPins = { pins: [...next.values()].sort((a, b) => (a.account < b.account ? -1 : 1)) }
       const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)

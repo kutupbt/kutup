@@ -26,8 +26,12 @@ these values therefore carries a revision.
   contact imported again keeps its vCard UID, and Mail chooses folder ids
   itself. A tombstone kept by the server would not do here, because the
   server could drop it.
-- **Padding:** cards and names are padded to a multiple of 256 bytes (`0x80`
-  then zeros), so a name's length no longer shows.
+- **Padding:** cards, names and pin lists are padded to a multiple of 256
+  bytes (`0x80` then zeros), so a name's length no longer shows, and a pin
+  list's shows only roughly how many accounts it holds.
+- **Range:** 1 to 2^53 − 1, the largest integer JavaScript holds exactly. The
+  server refuses anything higher, so nobody holding a session can write a
+  revision so high that it stops every later write.
 
 ## The server: compare-and-swap
 
@@ -48,15 +52,21 @@ laid over another device's change.
 ## The client: highest seen
 
 Every client remembers the highest revision it has seen of each value and
-refuses an older one:
+refuses an older one. It also refuses no value at all once it has seen one:
+a server that drops the pin list cannot have it rewritten from nothing.
 
-- on the web, `RevisionGuard` in `@kutup/crypto`, kept per account in
-  IndexedDB;
-- in the CLI, a file per profile;
-- in the Chat core, in memory.
+- On the web, `RevisionGuard` in `@kutup/crypto` keeps them in IndexedDB.
+  Anyone with the disk could read and write that store, so it is protected
+  with keys derived from the master key (Rust `revision_guard`):
+  - each entry is named by an HMAC of what it is about (a contact's UID can
+    be an email address);
+  - its revision is sealed with XChaCha20-Poly1305 to that name.
 
-Revisions are not secret (the server stores them in clear), so the web store
-keeps them unencrypted.
+  A disk attacker can delete an entry, which makes the device a fresh one for
+  that value, or put back an older copy of one. It can neither read the
+  entries nor set one to a revision of its choosing.
+- In the CLI, a file per profile.
+- In the Chat core, in memory.
 
 ## Limits
 
@@ -64,7 +74,7 @@ These are the same limits identity pins always had:
 
 - **A device with no history** trusts the first revision it reads: a new
   browser, site data cleared, or a private window that refuses IndexedDB. It
-  protects from then on.
+  protects from then on. Deleting the store's entries on disk does the same.
 - **A clock that runs behind** cannot overwrite a value another device wrote
   with a later time until it has read that value; then it writes above it.
   A write that started from an older read gets the `409` and reads again.

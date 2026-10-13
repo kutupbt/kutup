@@ -60,15 +60,7 @@ export function useFilters() {
   return useQuery({
     queryKey: [...filtersKey, address],
     enabled: !!address,
-    queryFn: async (): Promise<MailFilter[]> => {
-      const { data } = await api.get<Omit<MailFilter, 'nameRevision'>[]>('/mail/filters')
-      return Promise.all(
-        data.map(async (filter) => {
-          const opened = await openGuardedName(session, 'filter', filter.id, filter.name)
-          return { ...filter, name: opened?.name ?? '…', nameRevision: opened?.revision ?? 0 }
-        }),
-      )
-    },
+    queryFn: () => loadFilters(session),
   })
 }
 
@@ -76,6 +68,17 @@ interface FilterTools {
   seal: (id: string, name: string) => Promise<string>
   /** Renames on top of the name it started from; once more over a newer one if another device renamed first. */
   rename: (id: string, name: string, patch: (body: { name: string; baseNameRevision: number }) => Promise<unknown>) => Promise<void>
+}
+
+/** The account's filters, read now, with their names opened. */
+async function loadFilters(session: { masterKey: Uint8Array; envelopeBinding: string; userId: string }): Promise<MailFilter[]> {
+  const { data } = await api.get<Omit<MailFilter, 'nameRevision'>[]>('/mail/filters')
+  return Promise.all(
+    data.map(async (filter) => {
+      const opened = await openGuardedName(session, 'filter', filter.id, filter.name)
+      return { ...filter, name: opened?.name ?? '…', nameRevision: opened?.revision ?? 0 }
+    }),
+  )
 }
 
 function useFilterMutation<T, R>(fn: (input: T, tools: FilterTools) => Promise<R>) {
@@ -87,7 +90,8 @@ function useFilterMutation<T, R>(fn: (input: T, tools: FilterTools) => Promise<R
       const address = account.data?.address
       if (!address) throw new Error('mail is not ready')
       const key = [...filtersKey, address]
-      const baseOf = (id: string) => queryClient.getQueryData<MailFilter[]>(key)?.find((f) => f.id === id)?.nameRevision ?? 0
+      let filters = queryClient.getQueryData<MailFilter[]>(key)
+      const baseOf = (id: string) => filters?.find((f) => f.id === id)?.nameRevision ?? 0
       return fn(input, {
         seal: async (id, name) => (await sealGuardedName(session, 'filter', id, name)).sealed,
         rename: async (id, name, patch) => {
@@ -96,11 +100,12 @@ function useFilterMutation<T, R>(fn: (input: T, tools: FilterTools) => Promise<R
             const { sealed, revision } = await sealGuardedName(session, 'filter', id, name, base)
             try {
               await patch({ name: sealed, baseNameRevision: base })
-              await revisionGuard(session.userId).accept(MAIL_NAME_SCOPE, `filter:${id}`, revision)
+              await revisionGuard(session).accept(MAIL_NAME_SCOPE, `filter:${id}`, revision)
               return
             } catch (error) {
               if (attempt > 0 || !isRevisionConflict(error)) throw error
-              await queryClient.invalidateQueries({ queryKey: key })
+              // Read again now, also when no page shows the filters.
+              filters = await queryClient.fetchQuery({ queryKey: key, queryFn: () => loadFilters(session), staleTime: 0 })
             }
           }
         },

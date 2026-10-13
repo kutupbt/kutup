@@ -64,7 +64,7 @@ async function openRow(session: Session, row: ContactRow, masterKey: string, aut
     const summary = await verifyContactSummary(row.summary, row.signature, binding, row.revision, authority)
     const { value: vcard, revision } = await openContactCard(masterKey, binding, summary.uid, row.card)
     if (revision !== row.revision) throw new Error('the card is not the revision its summary was signed for')
-    await revisionGuard(session.userId).accept(CONTACT_SCOPE, summary.uid, revision)
+    await revisionGuard(session).accept(CONTACT_SCOPE, summary.uid, revision)
     const [card] = parseVCards(vcard)
     if (!card) return null
     // The signed summary is authoritative for what it holds: a trusted key
@@ -156,10 +156,10 @@ async function prepare(session: Session, uid: string, input: ContactDraft, base 
     .slice(0, MAX_PINNED_KEYS)
   const draft = { ...input, keys }
   const summary = summaryOf(uid, draft)
-  const revision = await revisionGuard(session.userId).next(CONTACT_SCOPE, uid, base)
+  const revision = await revisionGuard(session).next(CONTACT_SCOPE, uid, base)
   const signed = await signContactSummary(masterKey, session.envelopeBinding, revision, summary)
   const card = await sealContactCard(masterKey, session.envelopeBinding, uid, revision, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
-  return { summary: signed.summary, signature: signed.signature, card }
+  return { body: { summary: signed.summary, signature: signed.signature, card }, revision }
 }
 
 /** Another device saved the contact first (the server's `revision_conflict`). */
@@ -169,9 +169,10 @@ export function isRevisionConflict(error: unknown): boolean {
 
 /** Saves an edit of `existing` made from its revision. */
 async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision'>, draft: ContactDraft): Promise<ContactRow> {
-  const body = await prepare(session, existing.uid, draft, existing.revision)
+  const { body, revision } = await prepare(session, existing.uid, draft, existing.revision)
   const { data } = await api.put<ContactRow>(`/contacts/${existing.id}`, { ...body, baseRevision: existing.revision })
-  await revisionGuard(session.userId).accept(CONTACT_SCOPE, existing.uid, data.revision)
+  // The revision sealed here, not the server's word for it.
+  await revisionGuard(session).accept(CONTACT_SCOPE, existing.uid, revision)
   return data
 }
 
@@ -226,8 +227,9 @@ export function useSaveContact() {
       // the person's form is not laid over another device's change.
       if (input.existing) return (await putContact(session, input.existing, input.draft)).id
       const uid = newUid()
-      const { data } = await api.post<ContactRow>('/contacts', await prepare(session, uid, input.draft))
-      await revisionGuard(session.userId).accept(CONTACT_SCOPE, uid, data.revision)
+      const { body, revision } = await prepare(session, uid, input.draft)
+      const { data } = await api.post<ContactRow>('/contacts', body)
+      await revisionGuard(session).accept(CONTACT_SCOPE, uid, revision)
       return data.id
     },
   )
@@ -255,7 +257,7 @@ export function useImportContacts() {
           batch.map(({ uid, draft }) => {
             const ownUid = uid && !input.takenUids.has(uid) && uid.length <= 200 ? uid : newUid()
             input.takenUids.add(ownUid)
-            return prepare(session, ownUid, draft)
+            return prepare(session, ownUid, draft).then((prepared) => prepared.body)
           }),
         )
         await api.post('/contacts/import', { contacts })
@@ -318,7 +320,7 @@ export function usePinKey() {
       )
       if (existing) return
       const draft: ContactDraft = { ...emptyDraft(), name: input.name?.trim() ?? '', emails: [{ address }], keys: [key] }
-      await api.post('/contacts', await prepare(session, newUid(), draft))
+      await api.post('/contacts', (await prepare(session, newUid(), draft)).body)
     },
   )
 }

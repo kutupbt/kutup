@@ -25,7 +25,7 @@ export async function openGuardedName(
 ): Promise<{ name: string; revision: number } | null> {
   try {
     const opened = await openMailName(toBase64(session.masterKey), session.envelopeBinding, kind, id, sealed)
-    await revisionGuard(session.userId).accept(MAIL_NAME_SCOPE, `${kind}:${id}`, opened.revision)
+    await revisionGuard(session).accept(MAIL_NAME_SCOPE, `${kind}:${id}`, opened.revision)
     return { name: opened.value, revision: opened.revision }
   } catch {
     return null
@@ -40,7 +40,7 @@ export async function sealGuardedName(
   name: string,
   base = 0,
 ): Promise<{ sealed: string; revision: number }> {
-  const revision = await revisionGuard(session.userId).next(MAIL_NAME_SCOPE, `${kind}:${id}`, base)
+  const revision = await revisionGuard(session).next(MAIL_NAME_SCOPE, `${kind}:${id}`, base)
   return { sealed: await sealMailName(toBase64(session.masterKey), session.envelopeBinding, kind, id, revision, name), revision }
 }
 
@@ -113,38 +113,43 @@ export function usePlaces() {
     queryKey: [...placesKey, address],
     enabled: !!address,
     staleTime: 60_000,
-    queryFn: async (): Promise<MailPlaces> => {
-      const { data } = await api.get<PlacesRow>('/mail/places')
-      let unreadable = 0
-      const open = async (kind: 'folder' | 'label', id: string, sealed: string) => {
-        const opened = await openGuardedName(session, kind, id, sealed)
-        if (!opened) unreadable += 1
-        return { name: opened?.name ?? '…', nameRevision: opened?.revision ?? 0 }
-      }
-      const folders = new Map<string, MailFolder>()
-      await Promise.all(
-        data.folders.map(async (row) => {
-          folders.set(row.id, { ...row, ...(await open('folder', row.id, row.name)), depth: 1, children: [] })
-        }),
-      )
-      const tree: MailFolder[] = []
-      for (const folder of folders.values()) {
-        const parent = folder.parentId ? folders.get(folder.parentId) : undefined
-        if (parent) parent.children.push(folder)
-        else tree.push(folder)
-      }
-      const place = (list: MailFolder[], depth: number) => {
-        list.sort(byPosition)
-        for (const folder of list) {
-          folder.depth = depth
-          place(folder.children, depth + 1)
-        }
-      }
-      place(tree, 1)
-      const labels = (await Promise.all(data.labels.map(async (row) => ({ ...row, ...(await open('label', row.id, row.name)) })))).sort(byPosition)
-      return { tree, folders, labels, labelsById: new Map(labels.map((l) => [l.id, l])), unreadable }
-    },
+    queryFn: () => loadPlaces(session),
   })
+}
+
+type NameSession = { masterKey: Uint8Array; envelopeBinding: string; userId: string }
+
+/** The account's folders and labels, read now, with their names opened. */
+async function loadPlaces(session: NameSession): Promise<MailPlaces> {
+  const { data } = await api.get<PlacesRow>('/mail/places')
+  let unreadable = 0
+  const open = async (kind: 'folder' | 'label', id: string, sealed: string) => {
+    const opened = await openGuardedName(session, kind, id, sealed)
+    if (!opened) unreadable += 1
+    return { name: opened?.name ?? '…', nameRevision: opened?.revision ?? 0 }
+  }
+  const folders = new Map<string, MailFolder>()
+  await Promise.all(
+    data.folders.map(async (row) => {
+      folders.set(row.id, { ...row, ...(await open('folder', row.id, row.name)), depth: 1, children: [] })
+    }),
+  )
+  const tree: MailFolder[] = []
+  for (const folder of folders.values()) {
+    const parent = folder.parentId ? folders.get(folder.parentId) : undefined
+    if (parent) parent.children.push(folder)
+    else tree.push(folder)
+  }
+  const place = (list: MailFolder[], depth: number) => {
+    list.sort(byPosition)
+    for (const folder of list) {
+      folder.depth = depth
+      place(folder.children, depth + 1)
+    }
+  }
+  place(tree, 1)
+  const labels = (await Promise.all(data.labels.map(async (row) => ({ ...row, ...(await open('label', row.id, row.name)) })))).sort(byPosition)
+  return { tree, folders, labels, labelsById: new Map(labels.map((l) => [l.id, l])), unreadable }
 }
 
 /** Every folder in tree order, for pickers: each with its depth. */
@@ -191,9 +196,9 @@ interface PlaceTools {
   rename: (kind: 'folder' | 'label', id: string, name: string, patch: (body: { name: string; baseNameRevision: number }) => Promise<unknown>) => Promise<void>
 }
 
-async function freshPlaces(queryClient: QueryClient, address: string): Promise<MailPlaces | undefined> {
-  await queryClient.invalidateQueries({ queryKey: [...placesKey, address] })
-  return queryClient.getQueryData<MailPlaces>([...placesKey, address]) ?? undefined
+/** The places as the server has them now (also when no page shows them). */
+function freshPlaces(queryClient: QueryClient, address: string, session: NameSession): Promise<MailPlaces> {
+  return queryClient.fetchQuery({ queryKey: [...placesKey, address], queryFn: () => loadPlaces(session), staleTime: 0 })
 }
 
 function nameRevisionIn(places: MailPlaces | undefined, kind: 'folder' | 'label', id: string): number {
@@ -218,11 +223,11 @@ function usePlaceMutation<T, R>(fn: (input: T, tools: PlaceTools) => Promise<R>)
             const { sealed, revision } = await sealGuardedName(session, kind, id, name, base)
             try {
               await patch({ name: sealed, baseNameRevision: base })
-              await revisionGuard(session.userId).accept(MAIL_NAME_SCOPE, `${kind}:${id}`, revision)
+              await revisionGuard(session).accept(MAIL_NAME_SCOPE, `${kind}:${id}`, revision)
               return
             } catch (error) {
               if (attempt > 0 || !isRevisionConflict(error)) throw error
-              places = await freshPlaces(queryClient, address)
+              places = await freshPlaces(queryClient, address, session)
             }
           }
         },
