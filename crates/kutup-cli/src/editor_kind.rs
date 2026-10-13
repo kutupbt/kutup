@@ -74,10 +74,15 @@ fn extension_of(name: &str) -> String {
     }
 }
 
+/// Whether `name` is a place list, as `isListName` in `map/src/list.ts`
+/// reads it: ending in `.kutupmap` (a name that is only "kutupmap" is not).
+fn is_place_list(name: &str) -> bool {
+    name.to_lowercase().ends_with(&format!(".{PLACE_LIST_EXT}"))
+}
+
 /// Whether `name`'s content lives as Yjs state, never as `file` versions.
 pub(crate) fn edits_as_yjs(name: &str) -> bool {
-    let ext = extension_of(name);
-    ext == PLACE_LIST_EXT || TEXT_EXT.contains(&ext.as_str())
+    is_place_list(name) || TEXT_EXT.contains(&extension_of(name).as_str())
 }
 
 #[cfg(test)]
@@ -103,6 +108,8 @@ mod tests {
             "board.excalidraw",
             "report.docx",
             "x.svg",
+            // Not a list without its dot (`isListName`), nor a text kind.
+            "kutupmap",
         ] {
             assert!(!edits_as_yjs(name), "{name}");
         }
