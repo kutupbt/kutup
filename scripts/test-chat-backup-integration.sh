@@ -10,8 +10,12 @@ test_admin_username="backupadmin"
 test_admin_password="BackupIntegrationAdmin123!"
 # username:password (the password may hold colons).
 export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
-# The live tests sign in many times a minute (as the mail gate does).
-export RATE_LIMITS_RELAXED=true
+# The live tests sign in many times a minute. This stack runs as production
+# (where RATE_LIMITS_RELAXED is refused), so the limits it meets are raised
+# one by one.
+export RATE_LIMIT_LOGIN_PER_MIN=1000
+export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
+export RATE_LIMIT_REGISTER_PER_HOUR=1000
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
@@ -34,6 +38,7 @@ cleanup() {
   set +e
   if (( status != 0 )); then
     compose ps >&2
+    compose logs --no-color --tail 80 backend >&2
   fi
   compose down --volumes --remove-orphans
   exit "$status"
