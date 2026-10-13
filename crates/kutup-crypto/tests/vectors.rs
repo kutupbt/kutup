@@ -1103,3 +1103,113 @@ fn print_drive_envelope_negatives() {
         serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
     );
 }
+
+/// Collaboration devices (kutup-crypto/src/device_registration.rs): the
+/// account authority's statement for a device key, over a server challenge.
+#[test]
+fn device_registration_vector() {
+    use kutup_crypto::device_registration;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["deviceRegistration"];
+    let master: [u8; 32] = b64(v["masterKey"].as_str().unwrap()).try_into().unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+    let authority = identity.authority_public_key();
+    let user = v["userId"].as_str().unwrap();
+    let device: [u8; 32] = b64(v["devicePublicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    let challenge: [u8; 32] = b64(v["challenge"].as_str().unwrap()).try_into().unwrap();
+    let signature = device_registration::sign(
+        &identity,
+        v["server"].as_str().unwrap(),
+        user,
+        &device,
+        1,
+        &challenge,
+    )
+    .unwrap();
+    assert_eq!(signature, v["signature"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(
+            device_registration::signing_bytes(
+                &identity.incarnation_id(),
+                v["server"].as_str().unwrap(),
+                user,
+                &device,
+                1,
+                &challenge
+            )
+            .unwrap()
+        ),
+        v["signingBytes"].as_str().unwrap()
+    );
+    device_registration::verify(
+        &authority,
+        v["server"].as_str().unwrap(),
+        user,
+        &device,
+        1,
+        &challenge,
+        &signature,
+    )
+    .unwrap();
+    let other: [u8; 32] = b64(v["otherAuthorityPublicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    assert!(device_registration::verify(
+        &other,
+        v["server"].as_str().unwrap(),
+        user,
+        &device,
+        1,
+        &challenge,
+        &signature
+    )
+    .is_err());
+    assert!(device_registration::verify(
+        &authority,
+        v["server"].as_str().unwrap(),
+        user,
+        &device,
+        1,
+        &[0u8; 32],
+        &signature
+    )
+    .is_err());
+    assert!(device_registration::verify(
+        &authority,
+        v["server"].as_str().unwrap(),
+        user,
+        &device,
+        2,
+        &challenge,
+        &signature
+    )
+    .is_err());
+}
+
+#[test]
+#[ignore]
+fn print_device_registration_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::device_registration;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x44; 32]).unwrap();
+    let user = "11111111-1111-4111-8111-111111111111";
+    let (device, challenge) = ([0x55u8; 32], [0x66u8; 32]);
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "A collaboration device signed by its account (kutup-crypto/src/device_registration.rs): the authority's Ed25519 signature over the incarnation, the account, the device key, its purpose (1: collaboration frames) and the server's one-time challenge.",
+            "masterKey": e(&[0x33; 32]),
+            "otherAuthorityPublicKey": e(&other.authority_public_key()),
+            "server": "kutup.dev",
+            "userId": user,
+            "devicePublicKey": e(&device),
+            "challenge": e(&challenge),
+            "signingBytes": hex::encode(device_registration::signing_bytes(&identity.incarnation_id(), "kutup.dev", user, &device, 1, &challenge).unwrap()),
+            "signature": device_registration::sign(&identity, "kutup.dev", user, &device, 1, &challenge).unwrap(),
+        })
+    );
+}

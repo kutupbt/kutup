@@ -197,6 +197,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::drive_profile_keys::receive_profile_key,
         // --- devices ---
         crate::handlers::devices::register,
+        crate::handlers::devices::challenge,
         crate::handlers::devices::list,
         crate::handlers::devices::revoke,
         // --- tus resumable uploads ---
@@ -390,6 +391,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::chat_federation::deliver_messages,
     ),
     components(schemas(
+        crate::handlers::devices::DeviceChallenge,
         crate::handlers::collab::FramesPage,
         crate::handlers::collab::LoggedFrame,
         crate::handlers::collab::FrameKept,

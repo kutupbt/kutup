@@ -3611,3 +3611,31 @@ impl AccountHeadKeys {
         }
     }
 }
+
+/// The account's statement for a collaboration device key
+/// (docs/plans/device-registration.md): the authority (from the master key)
+/// signs the incarnation, the account, the device key, its purpose and the
+/// server's one-time challenge. Returns the canonical base64 signature.
+#[wasm_bindgen(js_name = signDeviceRegistration)]
+pub fn sign_device_registration(
+    master_key_base64: &str,
+    server: &str,
+    user_id: &str,
+    device_public_base64: &str,
+    challenge_base64: &str,
+) -> Result<String, JsValue> {
+    let master = master_key_32(master_key_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let device = public_key_32(device_public_base64, "device key")?;
+    let challenge = public_key_32(challenge_base64, "challenge")?;
+    kutup_crypto::device_registration::sign(
+        &identity,
+        server,
+        user_id,
+        &device,
+        kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+        &challenge,
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}

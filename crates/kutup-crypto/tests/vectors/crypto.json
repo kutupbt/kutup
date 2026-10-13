@@ -271,5 +271,16 @@
       "sha256": "XQfapCZwe60o9JKABSPv4Ek/O3wVGT2/ITGKpzhdL80=",
       "hash": "5d7b229f40c6325c0f25afbd8fbd0644b53f80bd1b44c1805d59e9bf6bcc9a20"
     }
+  },
+  "deviceRegistration": {
+    "description": "A collaboration device signed by its account (kutup-crypto/src/device_registration.rs): the authority's Ed25519 signature over the incarnation, the account, the device key, its purpose (1: collaboration frames) and the server's one-time challenge.",
+    "masterKey": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
+    "otherAuthorityPublicKey": "Fli0afYTJUaLG4K31oJNPvMvl8lg4Mr8uE43rQWCn6s=",
+    "server": "kutup.dev",
+    "userId": "11111111-1111-4111-8111-111111111111",
+    "devicePublicKey": "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=",
+    "challenge": "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=",
+    "signingBytes": "6b757475702f6465766963652d726567697374726174696f6e2f763100589e7761f046389c3f42fc2da2bb2c30649da74cb7e646ab84e8c908289b42d800096b757475702e646576111111111111411181111111111111115555555555555555555555555555555555555555555555555555555555555555016666666666666666666666666666666666666666666666666666666666666666",
+    "signature": "mUauRsE3s9lKX+4omWI4Clr1FG/4J68A8qNa70+8mMbzibeEi35m9WDjW50tU+pdZ/KoBsRfDLGMjN4YJLkdCA=="
   }
 }

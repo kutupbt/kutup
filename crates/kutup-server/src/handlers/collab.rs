@@ -150,15 +150,27 @@ pub(crate) async fn authenticate_socket(
         Some(d) if d != 0 => d,
         _ => return Err(AppError::unauthorized("missing or invalid deviceId")),
     };
-    let dev: Option<(Vec<u8>, bool, String)> = sqlx::query_as(
-        "SELECT public_signing, is_active, user_id::text FROM user_devices WHERE id = $1",
+    // An active device of this account, registered under its current
+    // incarnation: a device vouched for by an authority the account no
+    // longer has (an account reset) is not trusted.
+    let dev: Option<(Vec<u8>, bool, String, bool)> = sqlx::query_as(
+        "SELECT d.public_signing, d.is_active, d.user_id::text,
+                d.incarnation_id = u.account_incarnation_id
+         FROM user_devices d JOIN users u ON u.id = d.user_id WHERE d.id = $1",
     )
     .bind(device_id)
     .fetch_optional(&state.pool)
     .await?;
     match dev {
-        Some((pk, true, owner)) if owner == user_id => Ok((user_id, session_id, device_id, pk)),
-        _ => Err(AppError::unauthorized("device not registered or revoked")),
+        Some((pk, true, owner, true)) if owner == user_id => {
+            Ok((user_id, session_id, device_id, pk))
+        }
+        // Not the session's fault: the client registers a device again
+        // (docs/plans/device-registration.md), it does not sign out.
+        _ => Err(AppError::forbidden(
+            "device not registered, revoked or from an earlier incarnation",
+        )
+        .with_details(serde_json::json!({ "code": "deviceNotAuthorized" }))),
     }
 }
 
