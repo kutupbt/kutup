@@ -97,6 +97,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test devices_live -- --nocapture
 
+# Remote collaboration devices: only the share recipient's own announced,
+# fresh, unrevoked devices; revocations page past one announce.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server remote_devices::tests -- --nocapture
+
 # Kutup Pass on the server: vault secrets, reauth under the sign-in check,
 # the PIN's three tries per sign-in.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

@@ -42,6 +42,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120),
     ("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN", 600),
     ("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20),
+    ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
     ("LOGIN_ACCOUNT_CEILING", 20),
@@ -497,6 +498,14 @@ pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> = LazyLock::new(|| {
     )
 });
 
+/// Device announces from another server: 60 a minute per (server, share).
+pub static COLLAB_DEVICE_ANNOUNCES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
+
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
 const MAX_TOTP_ATTEMPTS: u32 = 5;
@@ -591,6 +600,7 @@ pub fn spawn_cleanup() {
             AVAILABLE_HASHES.cleanup();
             COLLAB_FRAME_POSTS.cleanup();
             DEVICE_CHALLENGES.cleanup();
+            COLLAB_DEVICE_ANNOUNCES.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();

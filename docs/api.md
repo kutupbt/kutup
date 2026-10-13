@@ -3316,10 +3316,26 @@ base64 sealed collab frames.
 - **`POST push`** (home → bridge) `{ subscriptionId, fileId, frames: [{ seq,
   frame }], ephemeral: [frame], throughSeq, floor, close }`: frames in log
   order, never the bridge's own. `404` for an unknown subscription.
-- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions }`
-  (null for relayed-only or refused frames). Checked as local frames are,
-  against the file's current keys and the share's edit permission; the
-  sender is kept as `(domain, device)`.
+- **`POST devices`** `{ fileId, devices: [{ deviceId, userId,
+  authorityPublicKey, publicSigning, challenge, issuedAtMs, signature }],
+  revocations: [{ authorityPublicKey, publicSigning, revokedAtMs, signature
+  }] }` → `{ accepted: [deviceId], refused: [{ deviceId, code }],
+  revocationsThrough }`. The bridge announces the editing account's
+  collaboration devices (docs/plans/device-registration.md) and forwards its
+  signed revocations, at most 50 entries in all. A device is kept only when
+  its `DeviceRegistrationV1` names the bridge and verifies under the share
+  recipient's authority. Refusal codes are `doesNotVerify`, `notRecipient`,
+  `expired` (older than the 30-day lease, or dated ahead), `revoked`,
+  `keyInUse` and `tooManyDevices` (20 per account). Rate limit:
+  `RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN` per (domain, capability).
+- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions,
+  unknownDevices, expiredDevices }` (positions are null for relayed-only or
+  refused frames). Checked as local frames are, against the file's current
+  keys and the share's edit permission, and also signed by an announced,
+  unrevoked, unexpired device of the share's recipient; the sender is kept
+  as `(domain, device)`. Frames from devices listed in `unknownDevices` or
+  `expiredDevices` are not kept: the bridge announces the unknown ones and
+  sends again, and asks its clients to renew the expired ones.
 - **`POST log`** `{ fileId, since }` → `{ frames, throughSeq, floor }`:
   catching up.
 - **`POST versions/list`** `{ fileId }`; **`GET files/:fileId/versions/:vid`**

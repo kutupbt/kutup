@@ -40,6 +40,7 @@ mod photos;
 mod public_fetch;
 mod ratelimit;
 mod registration;
+mod remote_devices;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
@@ -1772,6 +1773,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/devices",
+            post(collab_federation::devices)
+                .route_layer(DefaultBodyLimit::max(256 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

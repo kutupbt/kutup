@@ -77,7 +77,7 @@ shared module (`crates/kutup-server/src/drive_writes.rs`).
 | A client-chosen id overwrites stored bytes | A new file id is claimed under a lock and refused (`409`) if a stored file or open upload holds it, before anything is written; a failed attempt deletes only its own object. Content-addressed assets are immutable once stored. Chat backup media attempts use keys of their own. |
 | A federated peer deletes or fills the owner's Drive | A peer deletes only files its share uploaded, into the owner's trash; its uploads must fit the owner's quota and the share's limit, measured from the files it made. |
 | Deleting an account deletes others' data or leaks bytes | Account deletion purges the account's own Drive (objects included, open uploads aborted) and hands what it added to other people's folders to each folder's owner, charges included. |
-| A federated peer writes to a file it may only read | Home checks every relayed frame and version against the share: `can_edit` for a file share, `can_upload` for a folder share, and the file's current key and document key. A removed or narrowed share gets `403`/`404` and the peer's room closes. Device keys are per server, so home cannot check a remote device's signature: the peer's server vouches for its own devices (it checks their signatures) and is named in the log. It holds no file key, so it can neither read frames nor make ones that other editors will accept. |
+| A federated peer writes to a file it may only read | Home checks every relayed frame and version against the share: `can_edit` for a file share, `can_upload` for a folder share, and the file's current key and document key. A removed or narrowed share gets `403`/`404` and the peer's room closes. Home also keeps a relayed frame only when a device of the share's recipient signed it: one the recipient's account authority registered for that server, announced, unrevoked and within its lease (see *Collaboration devices*). The peer's server holds no file key, so it can neither read frames nor make ones that other editors will accept. |
 | Resource exhaustion | Request bodies are capped per route (4 MiB default); collab messages at one frame, with a per-connection rate; office edit frames kept a day; user lookup by email rate-limited. |
 
 ## Revocation
@@ -99,6 +99,25 @@ member close within 15 s.
 
 Not covered: forward secrecy for content a removed party could already read,
 and re-encryption of old content (lazy rotation, as in KBFS).
+
+## Collaboration devices
+
+A collaboration device is the key a tab or the CLI signs frames with
+(docs/plans/device-registration.md). The account authority signs each
+device's registration and each revocation. A session token alone can neither
+add a device nor revoke one.
+
+| Attacker | Result |
+| --- | --- |
+| A stolen session token, no master key | Cannot register a device (no authority signature) and cannot revoke one. |
+| A hostile bridge server | Cannot announce a device for an account without that account's authority key. Cannot bring back a revoked key: home keeps every revoked key for good. Cannot keep a device past an account reset: only the recipient's current incarnation counts. |
+| A bridge that withholds a revocation | Frames from that device, which it could only produce while holding the device's private key, are still kept at home until the device's 30-day lease ends. Clients renew devices after 15 days, so a device revoked and not renewed drops out within 30 days at most. Re-sharing to a new incarnation or rotating the folder key ends it sooner. |
+| A lost or stolen device | Revoked from any other device of the account, or after recovery (the recovery phrase restores the master key, so the authority too). The revocation reaches other servers with the bridge's next announce. |
+| An attacker holding the authority key | Has the account: it can register devices and sign revocations as the owner. Only an account reset helps (a new authority and incarnation, which ends every device of the old one). |
+
+Content is unaffected throughout: clients check every frame by AEAD under the
+file key, so a device without the key can fill a log but not change a
+document.
 
 ## Shared albums
 
