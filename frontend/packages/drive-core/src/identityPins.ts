@@ -375,7 +375,7 @@ export class IdentityUnproven extends Error {
  */
 export async function personSafetyNumber(me: DriveIdentity, account: string): Promise<{ fingerprint: string; qrPayload: string }> {
   const person = await boundIdentity(me, account)
-  return deriveSafetyNumber(me.account, me.authorityPublicKey, account, person.accountAuthorityPublicKey)
+  return deriveSafetyNumber(me.authorityPublicKey, person.accountAuthorityPublicKey)
 }
 
 /** The scanned safety QR did not come from `account`'s current identity. */
@@ -392,7 +392,7 @@ export class SafetyNumberMismatch extends Error {
  */
 export async function verifyPerson(me: DriveIdentity, account: string, scanned: string): Promise<void> {
   const person = await boundIdentity(me, account)
-  const matches = await safetyQrMatches(me.account, me.authorityPublicKey, account, person.accountAuthorityPublicKey, scanned)
+  const matches = await safetyQrMatches(me.authorityPublicKey, person.accountAuthorityPublicKey, scanned)
   if (!matches) throw new SafetyNumberMismatch()
   await updatePins(me, async (next) => {
     const previous = next.get(account)

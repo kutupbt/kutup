@@ -10,11 +10,11 @@ vi.mock('@kutup/crypto/identityPins', () => ({
   ),
   incarnationIdOfAuthority: vi.fn((authority: string) => Promise.resolve(`inc-${authority}`)),
   // The pair's number names both authorities; a scan matches only the current pair.
-  deriveSafetyNumber: vi.fn((local: string, la: string, peer: string, pa: string) =>
-    Promise.resolve({ fingerprint: `${la}-${pa}`, qrPayload: `qr:${local}:${la}:${peer}:${pa}` }),
+  deriveSafetyNumber: vi.fn((la: string, pa: string) =>
+    Promise.resolve({ fingerprint: `${la}-${pa}`, qrPayload: `qr:${la}:${pa}` }),
   ),
-  safetyQrMatches: vi.fn((local: string, la: string, peer: string, pa: string, scanned: string) =>
-    Promise.resolve(scanned === `qr:${local}:${la}:${peer}:${pa}`),
+  safetyQrMatches: vi.fn((la: string, pa: string, scanned: string) =>
+    Promise.resolve(scanned === `qr:${la}:${pa}`),
   ),
   sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ binding, revision, list }))),
   openIdentityPins: vi.fn((_m: string, binding: string, sealed: string) => {

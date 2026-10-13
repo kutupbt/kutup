@@ -318,17 +318,14 @@ pub fn safety(
     ctx: &Ctx,
     me: &Me,
     account: &str,
-) -> Result<(safety_number::SafetyNumberV1, Published)> {
+) -> Result<(safety_number::SafetyNumberV2, Published)> {
     let person = published(ctx, me, account)?;
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet: nothing to compare");
     }
     let authority =
         key32(&person.authority).ok_or_else(|| anyhow!("{account}'s authority key is invalid"))?;
-    Ok((
-        safety_number::derive(&me.account, &me.authority(), account, &authority)?,
-        person,
-    ))
+    Ok((safety_number::derive(&me.authority(), &authority)?, person))
 }
 
 /// Mark `account` verified (the user compared the safety number with them);

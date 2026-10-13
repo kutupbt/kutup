@@ -271,5 +271,14 @@
       "sha256": "XQfapCZwe60o9JKABSPv4Ek/O3wVGT2/ITGKpzhdL80=",
       "hash": "5d7b229f40c6325c0f25afbd8fbd0644b53f80bd1b44c1805d59e9bf6bcc9a20"
     }
+  },
+  "safetyNumber": {
+    "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V2): the two account authorities only, sorted; no address, so a rename keeps the number and a new incarnation changes it.",
+    "localAuthority": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+    "peerAuthority": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+    "fingerprint": "43100 60160 13086 23180 20270 59288 35528 49059 03664 39188 29452 02985 02153 55835 41468 60697",
+    "qrPayload": "kutup://verify/v2/a3V0dXAvc2FmZXR5LW51bWJlci92MgABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
+    "newIncarnationAuthority": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+    "newIncarnationFingerprint": "60342 36479 01365 56605 13534 07493 09178 05266 64749 53932 27342 28063 17039 28405 00055 43270"
   }
 }

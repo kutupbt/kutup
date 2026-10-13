@@ -877,13 +877,17 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 
 // Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
 
-// The safety number every app shows (kutup-crypto safety_number, V1 vector).
-const one = Buffer.alloc(32, 1).toString('base64')
-const two = Buffer.alloc(32, 2).toString('base64')
-const safety = crypto.deriveSafetyNumber('alice@kutup.dev', one, 'bob@example.org', two)
-assert.equal(safety.fingerprint, '43287 64308 39064 62898 28602 34220 14368 04694 33524 24006 58545 00869 00480 18981 08556 55505')
-assert.deepEqual(crypto.deriveSafetyNumber('bob@example.org', two, 'alice@kutup.dev', one), safety)
-assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', one, safety.qrPayload), true)
-assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', two, safety.qrPayload), false)
+// The safety number every app shows (kutup-crypto safety_number, V2): the
+// two authorities only, so a rename keeps it and a new incarnation changes it.
+{
+  const v = vectors.safetyNumber
+  const safety = crypto.deriveSafetyNumber(v.localAuthority, v.peerAuthority)
+  assert.equal(safety.fingerprint, v.fingerprint)
+  assert.equal(safety.qrPayload, v.qrPayload)
+  assert.deepEqual(crypto.deriveSafetyNumber(v.peerAuthority, v.localAuthority), safety)
+  assert.equal(crypto.safetyQrMatches(v.peerAuthority, v.localAuthority, safety.qrPayload), true)
+  assert.equal(crypto.deriveSafetyNumber(v.localAuthority, v.newIncarnationAuthority).fingerprint, v.newIncarnationFingerprint)
+  assert.equal(crypto.safetyQrMatches(v.localAuthority, v.newIncarnationAuthority, safety.qrPayload), false)
+}
 
 console.log('crypto WASM canonical vectors passed')

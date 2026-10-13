@@ -126,8 +126,9 @@ wipe).
 Built after the first slices, on the same list:
 
 - **One safety number.** The number two people compare in person moved from
-  Chat's core to `kutup-crypto::safety_number`, byte for byte (a V1 vector pins
-  it). Drive, Chat and the CLI derive the same digits and QR.
+  Chat's core to `kutup-crypto::safety_number` (V2: the two authority keys,
+  no address, so a rename keeps it; a vector pins it). Drive, Chat and the
+  CLI derive the same digits and QR.
 - **Verify in Drive.** Chat's verification dialog moved to `@kutup/ui`. Drive
   opens it beside who shared a file, on each person in the share dialogs and
   from the identity banner; scanning (or pasting) the other person's QR marks

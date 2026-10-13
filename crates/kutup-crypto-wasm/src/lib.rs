@@ -2778,18 +2778,15 @@ struct SafetyNumberView {
     qr_payload: String,
 }
 
-/// The safety number of two accounts (the same one Chat shows).
+/// The safety number of two accounts, given their authority keys (the same
+/// one Chat shows; no address, so a rename keeps it).
 #[wasm_bindgen(js_name = deriveSafetyNumber)]
 pub fn derive_safety_number(
-    local_account: &str,
     local_authority_base64: &str,
-    peer_account: &str,
     peer_authority_base64: &str,
 ) -> Result<JsValue, JsValue> {
     let number = kutup_crypto::safety_number::derive(
-        local_account,
         &public_key_32(local_authority_base64, "local authority key")?,
-        peer_account,
         &public_key_32(peer_authority_base64, "peer authority key")?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -2800,12 +2797,10 @@ pub fn derive_safety_number(
     .map_err(|error| js_error(&format!("encode safety number: {error}")))
 }
 
-/// Whether a scanned safety QR is exactly the one for these two accounts.
+/// Whether a scanned safety QR is exactly the one for these two authorities.
 #[wasm_bindgen(js_name = safetyQrMatches)]
 pub fn safety_qr_matches(
-    local_account: &str,
     local_authority_base64: &str,
-    peer_account: &str,
     peer_authority_base64: &str,
     scanned: &str,
 ) -> bool {
@@ -2815,7 +2810,7 @@ pub fn safety_qr_matches(
     ) else {
         return false;
     };
-    kutup_crypto::safety_number::derive(local_account, &local, peer_account, &peer)
+    kutup_crypto::safety_number::derive(&local, &peer)
         .is_ok_and(|number| kutup_crypto::safety_number::matches_qr_payload(&number, scanned))
 }
 

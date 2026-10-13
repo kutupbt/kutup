@@ -44,19 +44,8 @@ export interface CryptoWasmModule {
     driveSigningPublicKey: string
   }
   signDriveKeyBinding(masterKeyBase64: string, account: string): string
-  deriveSafetyNumber(
-    localAccount: string,
-    localAuthorityBase64: string,
-    peerAccount: string,
-    peerAuthorityBase64: string,
-  ): { fingerprint: string; qrPayload: string }
-  safetyQrMatches(
-    localAccount: string,
-    localAuthorityBase64: string,
-    peerAccount: string,
-    peerAuthorityBase64: string,
-    scanned: string,
-  ): boolean
+  deriveSafetyNumber(localAuthorityBase64: string, peerAuthorityBase64: string): { fingerprint: string; qrPayload: string }
+  safetyQrMatches(localAuthorityBase64: string, peerAuthorityBase64: string, scanned: string): boolean
   verifyDriveKeyBinding(
     account: string,
     authorityPublicKeyBase64: string,

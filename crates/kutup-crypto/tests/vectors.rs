@@ -1099,3 +1099,65 @@ fn print_drive_envelope_negatives() {
         serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
     );
 }
+
+#[derive(Deserialize)]
+struct SafetyNumberVec {
+    #[serde(rename = "localAuthority")]
+    local_authority: String,
+    #[serde(rename = "peerAuthority")]
+    peer_authority: String,
+    fingerprint: String,
+    #[serde(rename = "qrPayload")]
+    qr_payload: String,
+    /// A new incarnation under the same name: another authority, another number.
+    #[serde(rename = "newIncarnationAuthority")]
+    new_incarnation_authority: String,
+    #[serde(rename = "newIncarnationFingerprint")]
+    new_incarnation_fingerprint: String,
+}
+
+/// The safety number binds the two authorities and nothing else: no address,
+/// so a rename keeps it; a new incarnation (a new holder of a released name)
+/// has another authority and another number.
+#[test]
+fn safety_number_vector() {
+    use kutup_crypto::safety_number;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v: SafetyNumberVec = serde_json::from_value(all["safetyNumber"].clone()).unwrap();
+    let key = |s: &str| -> [u8; 32] { b64(s).try_into().unwrap() };
+    let number = safety_number::derive(&key(&v.local_authority), &key(&v.peer_authority)).unwrap();
+    assert_eq!(number.fingerprint, v.fingerprint);
+    assert_eq!(number.qr_payload, v.qr_payload);
+    assert_eq!(
+        safety_number::derive(&key(&v.peer_authority), &key(&v.local_authority)).unwrap(),
+        number
+    );
+    let other = safety_number::derive(&key(&v.local_authority), &key(&v.new_incarnation_authority))
+        .unwrap();
+    assert_eq!(other.fingerprint, v.new_incarnation_fingerprint);
+    assert_ne!(other.fingerprint, number.fingerprint);
+    assert!(!safety_number::matches_qr_payload(
+        &number,
+        &other.qr_payload
+    ));
+}
+
+#[test]
+#[ignore]
+fn print_safety_number_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::safety_number;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let (a, b, c) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+    let n = safety_number::derive(&a, &b).unwrap();
+    let o = safety_number::derive(&a, &c).unwrap();
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V2): the two account authorities only, sorted; no address, so a rename keeps the number and a new incarnation changes it.",
+            "localAuthority": e(&a), "peerAuthority": e(&b),
+            "fingerprint": n.fingerprint, "qrPayload": n.qr_payload,
+            "newIncarnationAuthority": e(&c), "newIncarnationFingerprint": o.fingerprint,
+        })
+    );
+}

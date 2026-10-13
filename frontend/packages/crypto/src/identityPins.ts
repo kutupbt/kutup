@@ -59,23 +59,18 @@ export async function openIdentityPins(masterKeyBase64: string, binding: string,
   return { list: JSON.parse(opened.value) as IdentityPins, revision: opened.revision }
 }
 
-/** The safety number two accounts compare in person: the same in Chat, Drive and the CLI. */
+/**
+ * The safety number two accounts compare in person: the same in Chat, Drive
+ * and the CLI. It binds their authority keys only, so a rename keeps it.
+ */
 export async function deriveSafetyNumber(
-  localAccount: string,
   localAuthority: string,
-  peerAccount: string,
   peerAuthority: string,
 ): Promise<{ fingerprint: string; qrPayload: string }> {
-  return (await getCryptoWasm()).deriveSafetyNumber(localAccount, localAuthority, peerAccount, peerAuthority)
+  return (await getCryptoWasm()).deriveSafetyNumber(localAuthority, peerAuthority)
 }
 
-/** Whether a scanned safety QR is exactly the one for these two accounts (compared in Rust). */
-export async function safetyQrMatches(
-  localAccount: string,
-  localAuthority: string,
-  peerAccount: string,
-  peerAuthority: string,
-  scanned: string,
-): Promise<boolean> {
-  return (await getCryptoWasm()).safetyQrMatches(localAccount, localAuthority, peerAccount, peerAuthority, scanned)
+/** Whether a scanned safety QR is exactly the one for these two authorities (compared in Rust). */
+export async function safetyQrMatches(localAuthority: string, peerAuthority: string, scanned: string): Promise<boolean> {
+  return (await getCryptoWasm()).safetyQrMatches(localAuthority, peerAuthority, scanned)
 }

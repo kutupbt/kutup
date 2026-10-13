@@ -99,11 +99,11 @@ one (a vault file, a mail key, a folder), under the account's own keys.
 
   **Cross-party statements keep the address**, because the address is what
   they mean, and peers on other servers resolve people by it: the Drive key
-  binding ("this address owns these keys"), safety numbers, named shares and
-  profile key shares, the mail address key's own address, Chat profiles as
-  peers check them, MLS credentials. If usernames become changeable later,
-  renaming re-issues these (as a new OpenPGP user id would), a step of its
-  own.
+  binding ("this address owns these keys"), named shares and profile key
+  shares, the mail address key's own address, Chat profiles as peers check
+  them, MLS credentials. A rename re-issues these, backed by a signed rename
+  chain (docs/plans/username-renames.md). Safety numbers name no address
+  (only the two authority keys), so a rename keeps them.
 
 ### Sign-in
 
