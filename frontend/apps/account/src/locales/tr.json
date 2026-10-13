@@ -55,7 +55,8 @@
       "keyGenerationFailed": "Anahtarlarınız bu cihazda oluşturulamadı. Yeniden deneyin.",
       "usernameTaken": "Bu kullanıcı adı alınmış. Geri dönüp başka bir ad seçin.",
       "generic": "Bir şeyler ters gitti. Yeniden deneyin.",
-      "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin."
+      "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
+      "keysChanged": "Bu hesabın anahtarları sunucunun söyledikleriyle eşleşmedi. Yeniden oturum açın; tekrar ederse sunucu yöneticisine bildirin."
     },
     "strength": {
       "label": "Güç: {{strength}}",

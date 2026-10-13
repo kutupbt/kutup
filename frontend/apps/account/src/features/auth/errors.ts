@@ -1,5 +1,6 @@
 import type { useTranslation } from 'react-i18next'
 import { isAxiosError } from 'axios'
+import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
 
 type TFunction = ReturnType<typeof useTranslation>['t']
@@ -11,6 +12,7 @@ type TFunction = ReturnType<typeof useTranslation>['t']
  * registration conflict on the username says so.
  */
 export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: string): string {
+  if (error instanceof KeyBindingMismatchError) return t('auth.errors.keysChanged')
   const code = apiErrorCode(error)
   if (code === 'too_many_requests') {
     // The address's limiter (a minute) or the account's lockout (a while).

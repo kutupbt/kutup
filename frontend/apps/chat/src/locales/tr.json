@@ -1074,6 +1074,7 @@
   "boot": {
     "opening": "İleti açılıyor…",
     "failedTitle": "İleti açılamadı",
-    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınla oturum açma tamamlanmadı. Bağlantını kontrol edip yeniden dene."
+    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınla oturum açma tamamlanmadı. Bağlantını kontrol edip yeniden dene.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   }
 }

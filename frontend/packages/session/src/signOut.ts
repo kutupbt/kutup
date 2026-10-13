@@ -21,5 +21,26 @@ export async function signOut(): Promise<boolean> {
   broadcastLogout()
   clearPersisted()
   clearSession()
+  clearAccountLists()
   return confirmed
+}
+
+/**
+ * Lists this origin keeps per account in localStorage (the Chat and Mail
+ * "not in contacts" dismissals): gone with the sign-in, and the old
+ * unkeyed copies with them.
+ */
+const ACCOUNT_LISTS = /^kutup\.(chat|mail)\.notInContactsDismissed(:|$)/
+
+export function clearAccountLists(): void {
+  try {
+    const doomed: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && ACCOUNT_LISTS.test(key)) doomed.push(key)
+    }
+    for (const key of doomed) localStorage.removeItem(key)
+  } catch {
+    // Storage blocked: nothing kept to clear.
+  }
 }

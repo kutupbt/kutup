@@ -10,7 +10,8 @@ vi.mock('./client', () => ({
 }))
 const activateSession = vi.fn()
 const fetchProfile = vi.fn()
-vi.mock('./profile', () => ({
+vi.mock('./profile', async (importOriginal) => ({
+  KeyBindingMismatchError: (await importOriginal<typeof import('./profile')>()).KeyBindingMismatchError,
   activateSession: (...a: unknown[]) => activateSession(...a),
   fetchProfile: (...a: unknown[]) => fetchProfile(...a),
 }))
@@ -33,7 +34,13 @@ function httpError(status: number) {
   })
 }
 const networkError = new AxiosError('Network Error', 'ERR_NETWORK')
-const keys = { userId: 'u1', masterKey: new Uint8Array(32), privateKey: new Uint8Array(32), publicKey: 'p' }
+const keys = {
+  userId: 'u1',
+  masterKey: new Uint8Array(32),
+  privateKey: new Uint8Array(32),
+  publicKey: 'p',
+  keyBinding: '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',
+}
 
 beforeEach(() => {
   localStorage.clear()
@@ -53,6 +60,13 @@ describe('restoreSession', () => {
     // The profile came alongside the key, under the fresh token.
     expect(fetchProfile).toHaveBeenCalledWith('AT')
     expect(activateSession).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), 'AT', 'S1', { id: 'u1' })
+  })
+
+  it('ends the sign-in when the server names another key binding', async () => {
+    const { KeyBindingMismatchError } = await import('./profile')
+    activateSession.mockRejectedValue(new KeyBindingMismatchError())
+    expect(await restoreSession()).toBe('none')
+    expect(readPersisted()).toBeNull()
   })
 
   it('reports none without a blob, touching nothing', async () => {

@@ -55,7 +55,8 @@
       "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
       "usernameTaken": "That username is taken. Go back and choose another.",
       "generic": "Something went wrong. Try again.",
-      "slowDown": "Too many attempts from here. Wait a minute, then try again."
+      "slowDown": "Too many attempts from here. Wait a minute, then try again.",
+      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator."
     },
     "strength": {
       "label": "Strength: {{strength}}",

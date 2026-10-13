@@ -2007,14 +2007,16 @@ mod tests {
 
     #[test]
     fn fake_recovery_envelope_is_stable_and_structurally_valid() {
-        let first = deterministic_fake_account_envelope(&[7u8; 32], "User@Example.com");
-        let second = deterministic_fake_account_envelope(&[7u8; 32], "User@Example.com");
+        // Faked under the name's fake binding, as preflight answers it.
+        let binding = fake_binding(&[7u8; 32], "user");
+        let first = deterministic_fake_account_envelope(&[7u8; 32], &binding);
+        let second = deterministic_fake_account_envelope(&[7u8; 32], &binding);
         assert_eq!(first, second);
         let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
         kutup_crypto::account_envelope::validate(
             &decoded,
             kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
-            "user@example.com",
+            &binding,
             32,
         )
         .unwrap();

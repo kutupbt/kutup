@@ -105,7 +105,7 @@ fn write_vectors() {
     let nonce = [0x24u8; 24];
     let envelope = seal_address_key_with_nonce(
         &master,
-        "Alice@Example.com",
+        "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
         address,
         &key.secret_key,
         &nonce,
@@ -130,7 +130,7 @@ fn write_vectors() {
     );
     let vectors = Vectors {
         address: address.into(),
-        binding: "Alice@Example.com".into(),
+        binding: "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90".into(),
         master_key: STANDARD.encode(master),
         created_at: 1_790_000_000,
         secret_key: STANDARD.encode(&*key.secret_key),
