@@ -101,9 +101,10 @@ async fn check(
 
 /// `POST /api/uploads` with `versionOf`: opens a version upload. `201` as a
 /// new file's; `409` with code `versionUploading` while another upload of a
-/// new version of this file is open (with its `uploadId` when it is the
-/// caller's, to go on with or cancel, and `idleSeconds` since its last part:
-/// one idle a while was left by a crash, one active belongs to another device).
+/// new version of this file is open, with `idleSeconds` since its last part
+/// (one idle a while was left by a crash, one active is still running), and
+/// its `uploadId` when the caller uploads it (`yours: true`: go on with it or
+/// cancel it) or owns the folder (`yours: false`: may cancel it).
 pub(super) async fn create(
     state: &AppState,
     user_id: Uuid,
@@ -168,13 +169,22 @@ async fn open(
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some((upload_id, owner, idle_seconds)) = open {
+    let owns_folder: bool =
+        sqlx::query_scalar("SELECT owner_user_id = $2 FROM collections WHERE id = $1")
+            .bind(collection_id)
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if let Some((upload_id, uploader, idle_seconds)) = open {
         // How long since its last part tells a crashed upload (cancel it)
         // from one still running on another device (wait for it).
         let mut details =
             serde_json::json!({ "code": "versionUploading", "idleSeconds": idle_seconds.max(0) });
-        if owner == user_id {
+        // Its uploader may go on with it or cancel it; the folder's owner may
+        // cancel it (tus DELETE), so nobody can hold their file's slot.
+        if uploader == user_id || owns_folder {
             details["uploadId"] = upload_id.to_string().into();
+            details["yours"] = (uploader == user_id).into();
         }
         return Err(
             AppError::conflict("a new version of this file is being uploaded")

@@ -986,6 +986,15 @@ pub async fn purge_file_root(
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
+    // An open upload of a new version of it goes with it (its reservation
+    // and the file's one upload slot); its parts are aborted after commit.
+    let open_versions: Vec<(String, String)> = sqlx::query_as(
+        "DELETE FROM uploads WHERE file_id = $1 AND kind = 'version'
+         RETURNING storage_path, s3_upload_id",
+    )
+    .bind(file_id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM files WHERE id = $1")
         .bind(file_id)
         .execute(&mut *tx)
@@ -1001,6 +1010,9 @@ pub async fn purge_file_root(
 
     // Best-effort S3 GC (post-commit): everything the file has lives under
     // files/{id}/ — the original, versions, assets and thumbnails.
+    for (path, upload) in &open_versions {
+        let _ = storage.abort_multipart(path, upload).await;
+    }
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
     Ok(())
 }
