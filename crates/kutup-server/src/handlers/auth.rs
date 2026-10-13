@@ -627,7 +627,8 @@ pub async fn register(
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
-    let res = sqlx::query(
+    let mut tx = state.pool.begin().await?;
+    let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
             username, master_key_envelope, recovery_key_envelope,
             drive_private_key_envelope,
@@ -637,7 +638,8 @@ pub async fn register(
             argon_memory_kib, argon_iterations, argon_parallelism,
             login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)"#,
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)
+        RETURNING id"#,
     )
     .bind(&req.key_binding)
     .bind(&req.username)
@@ -658,12 +660,25 @@ pub async fn register(
     .bind(&recovery_verifier)
     .bind(storage_quota_bytes)
     .bind(&drive_key_binding)
-    .execute(&state.pool)
+    .fetch_one(&mut *tx)
     .await;
 
-    if let Err(err) = res {
-        return Err(map_insert_conflict(err));
+    let user_id = match res {
+        Ok(id) => id,
+        Err(err) => return Err(map_insert_conflict(err)),
+    };
+    // The account's mail address comes with it (a GET never makes one).
+    if !crate::handlers::mail_keys::create_own_address(
+        &mut tx,
+        &state.config.chat_server_name,
+        user_id,
+        &req.username,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("username already taken"));
     }
+    tx.commit().await?;
     Ok((
         axum::http::StatusCode::CREATED,
         Json(MessageResponse {

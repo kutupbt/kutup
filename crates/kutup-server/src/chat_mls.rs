@@ -60,6 +60,7 @@ pub(crate) use identified_packages::{
 pub(crate) use invitation_feedback::{
     federated_record_invitation_feedback, list_invitation_feedback,
 };
+pub(crate) use invitation_routes::spawn_invitation_expiry;
 pub(crate) use invitation_routes::{list_invitations, respond_invitation};
 pub(crate) use invite_links::{
     call as call_invite_link, federated_call as federated_call_invite_link,

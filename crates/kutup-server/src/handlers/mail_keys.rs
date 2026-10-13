@@ -82,26 +82,26 @@ async fn account_and_address(
     Ok(Some((account, address)))
 }
 
-/// Creates the caller's address row on first use.
-async fn ensure_address(state: &AppState, user_id: Uuid, address: &str) -> AppResult<Uuid> {
-    sqlx::query("INSERT INTO mail_addresses (user_id, address) VALUES ($1, $2) ON CONFLICT (address) DO NOTHING")
-        .bind(user_id)
-        .bind(address)
-        .execute(&state.pool)
-        .await?;
-    let (id, owner): (Uuid, Option<Uuid>) =
-        sqlx::query_as("SELECT id, user_id FROM mail_addresses WHERE address = $1")
-            .bind(address)
-            .fetch_one(&state.pool)
-            .await?;
-    if owner != Some(user_id) {
-        // A recreated account under a reused username must not inherit keys,
-        // and a group's address is not an account's.
-        return Err(AppError::conflict(
-            "this address belongs to another account",
-        ));
-    }
-    Ok(id)
+/// Gives a new account its address row, in the transaction that creates the
+/// account (a GET never creates one). `false` when the address is taken (a
+/// group's, or another account's): the caller refuses the username.
+pub(crate) async fn create_own_address(
+    conn: &mut sqlx::PgConnection,
+    server_name: &str,
+    user_id: Uuid,
+    username: &str,
+) -> AppResult<bool> {
+    let address = mail_key::canonical_address(&format!("{username}@{server_name}"))
+        .map_err(|_| AppError::bad_request("the username is not a valid mail address"))?;
+    let created: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO mail_addresses (user_id, address) VALUES ($1, $2)
+         ON CONFLICT (address) DO NOTHING RETURNING id",
+    )
+    .bind(user_id)
+    .bind(&address)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(created.is_some())
 }
 
 type KeyRow = (
@@ -177,7 +177,16 @@ pub async fn list_addresses(
     let Some((_, address)) = account_and_address(&state, user_id).await? else {
         return Ok(Json(Vec::new()));
     };
-    let id = ensure_address(&state, user_id, &address).await?;
+    // Read only: the row comes with the account.
+    let id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM mail_addresses WHERE address = $1 AND user_id = $2")
+            .bind(&address)
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(id) = id else {
+        return Ok(Json(Vec::new()));
+    };
     Ok(Json(vec![own_address(&state, id, address).await?]))
 }
 
