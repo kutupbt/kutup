@@ -206,8 +206,8 @@ export class ChatService {
   private reconcileAgain = false
   private readonly reportedSendFailures = new Set<string>()
   /** Peers whose server does not speak this Chat wire yet: messages to them wait. */
-  private readonly waitingPeers = new Set<string>()
-  private readonly waitingPeerListeners = new Set<() => void>()
+  private waitingPeers?: Set<string>
+  private waitingPeerListeners?: Set<() => void>
   private readonly mls: MlsConversationService | null
   private readonly invites: InviteLinkService | null
   private inviteTimer: ReturnType<typeof setInterval> | null = null
@@ -448,20 +448,21 @@ export class ChatService {
    * this Chat version yet (they go once it does).
    */
   isPeerWaiting(peer: string): boolean {
-    return this.waitingPeers.has(canonicalPeer(peer))
+    return this.waitingPeers?.has(canonicalPeer(peer)) ?? false
   }
 
   subscribeWaitingPeers(listener: () => void): () => void {
-    this.waitingPeerListeners.add(listener)
-    return () => this.waitingPeerListeners.delete(listener)
+    const listeners = (this.waitingPeerListeners ??= new Set())
+    listeners.add(listener)
+    return () => listeners.delete(listener)
   }
 
   private setWaitingPeers(next: Set<string>): void {
-    const same = next.size === this.waitingPeers.size && [...next].every((peer) => this.waitingPeers.has(peer))
+    const current = this.waitingPeers ?? new Set<string>()
+    const same = next.size === current.size && [...next].every((peer) => current.has(peer))
     if (same) return
-    this.waitingPeers.clear()
-    for (const peer of next) this.waitingPeers.add(peer)
-    for (const listener of this.waitingPeerListeners) listener()
+    this.waitingPeers = next
+    for (const listener of this.waitingPeerListeners ?? []) listener()
   }
 
   subscribeTyping(listener: TypingListener): () => void {
