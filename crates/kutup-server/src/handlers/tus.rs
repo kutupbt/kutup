@@ -715,6 +715,7 @@ pub async fn patch(
                 user_id,
                 upload_id,
                 file_id,
+                collection_id: coll_id,
                 total_bytes,
                 metadata_envelope,
                 metadata_revision,
@@ -822,7 +823,8 @@ pub async fn patch(
     .await
     .is_err()
     {
-        let _ = state.storage.delete(&storage_path).await;
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db insert file");
     }
     if sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id=$2")
@@ -832,7 +834,8 @@ pub async fn patch(
         .await
         .is_err()
     {
-        let _ = state.storage.delete(&storage_path).await;
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db quota update");
     }
     if sqlx::query("DELETE FROM uploads WHERE id=$1")
@@ -841,11 +844,12 @@ pub async fn patch(
         .await
         .is_err()
     {
-        let _ = state.storage.delete(&storage_path).await;
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db delete upload");
     }
     if tx.commit().await.is_err() {
-        let _ = state.storage.delete(&storage_path).await;
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db commit");
     }
 
@@ -858,6 +862,18 @@ pub async fn patch(
         ],
     )
         .into_response()
+}
+
+/// After the parts were stitched, storing the file failed: the upload cannot
+/// go on, so its object and its row go (the row would otherwise hold the file
+/// id and the reserved room until the sweep, which could not abort it).
+/// Call it with the transaction dropped: it holds the row's lock.
+async fn drop_landed(state: &AppState, storage_path: &str, upload_id: Uuid) {
+    let _ = state.storage.delete(storage_path).await;
+    let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+        .bind(upload_id)
+        .execute(&state.pool)
+        .await;
 }
 
 /// The finaliser's re-checks (see `patch`): the refusal, if one applies.
