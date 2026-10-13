@@ -87,6 +87,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test registration_codes_live -- --nocapture
 
+# The collaboration log over HTTP (the CLI's way in): kept like a socket's
+# frame, and every bad frame refused alike on both paths.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test collab_frames_live -- --nocapture
+
 # Kutup Pass on the server: vault secrets, reauth under the sign-in check,
 # the PIN's three tries per sign-in.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

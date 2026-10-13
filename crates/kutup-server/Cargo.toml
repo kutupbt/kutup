@@ -64,5 +64,8 @@ rand09 = { package = "rand", version = "0.9" }
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
 
 [dev-dependencies]
+# The collaboration socket in live tests (tests/collab_frames_live.rs); the
+# version axum's own WebSocket support already brings.
+tokio-tungstenite = "0.24.0"
 # Live tests build vault secrets (tests/pass_live.rs).
 zeroize.workspace = true
