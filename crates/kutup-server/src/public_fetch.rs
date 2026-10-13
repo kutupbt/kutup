@@ -3,7 +3,8 @@
 //! proxy, outside mail keys (WKD and keyservers) and one-click unsubscribe.
 //! Nothing else in the server makes outbound requests to addresses a user
 //! gave, except federation, whose transport checks peers with the same
-//! address list (`ssrf::is_public`).
+//! address list (`ssrf::is_public`), and Web Push, which reaches only the
+//! push services on the operator's host allow-list.
 //!
 //! It runs inside the server's network, so it fetches only https on port
 //! 443 (and, when a caller asks, http on port 80: mail images), every
@@ -23,6 +24,8 @@ use crate::error::{AppError, AppResult};
 
 const MAX_REDIRECTS: usize = 3;
 const MAX_URL_BYTES: usize = 2048;
+/// One-click unsubscribe addresses carry long signed tokens.
+pub const MAX_LONG_URL_BYTES: usize = 8192;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// What to fetch and how much of it.
@@ -30,7 +33,8 @@ pub struct Request<'a> {
     pub accept: &'a str,
     pub user_agent: &'a str,
     pub timeout: Duration,
-    /// The most bytes read.
+    /// The most bytes read; 0: the status only, the body is not read (one
+    /// whose content does not matter cannot then hold the answer back).
     pub limit: usize,
     /// Over the limit: cut the body there (a page, whose head comes first)
     /// rather than refuse it (an image).
@@ -121,6 +125,10 @@ pub(crate) async fn fetch(
     options: &Options<'_>,
     checks: &Checks,
 ) -> AppResult<Fetched> {
+    // A POST is not sent again to wherever a redirect points.
+    if request.body.is_some() && options.redirects == Redirects::Follow {
+        return Err(AppError::internal("a POST does not follow redirects"));
+    }
     for _ in 0..=MAX_REDIRECTS {
         let address = resolve_public(&url, checks.public).await?;
         let host = url.host_str().expect("checked host").to_owned();
@@ -165,7 +173,7 @@ pub(crate) async fn fetch(
             let next = url
                 .join(location)
                 .map_err(|_| unusable("the site redirected to an invalid address"))?;
-            url = parse_checked(next.as_str(), options.allow_http, checks)?;
+            url = parse_checked(next.as_str(), options.allow_http, checks, MAX_URL_BYTES)?;
             if !(options.follow)(&url) {
                 return Err(unusable("the site redirected somewhere refused"));
             }
@@ -187,7 +195,11 @@ pub(crate) async fn fetch(
         if !(request.wanted)(&content_type) {
             return Err(unusable("the site returned something else"));
         }
-        let body = read_limited(response, request.limit, request.truncate).await?;
+        let body = if request.limit == 0 {
+            Vec::new()
+        } else {
+            read_limited(response, request.limit, request.truncate).await?
+        };
         return Ok(Fetched {
             status,
             final_url: url,
@@ -224,16 +236,26 @@ async fn read_limited(
 /// An https URL on port 443 with a host name or a public IP and no
 /// credentials.
 pub fn parse_public_https(value: &str) -> AppResult<Url> {
-    parse_checked(value, false, &Checks::PUBLIC)
+    parse_checked(value, false, &Checks::PUBLIC, MAX_URL_BYTES)
+}
+
+/// [`parse_public_https`] for an address up to [`MAX_LONG_URL_BYTES`].
+pub fn parse_long_public_https(value: &str) -> AppResult<Url> {
+    parse_checked(value, false, &Checks::PUBLIC, MAX_LONG_URL_BYTES)
 }
 
 /// [`parse_public_https`], or http on port 80 as well.
 pub fn parse_public(value: &str, allow_http: bool) -> AppResult<Url> {
-    parse_checked(value, allow_http, &Checks::PUBLIC)
+    parse_checked(value, allow_http, &Checks::PUBLIC, MAX_URL_BYTES)
 }
 
-fn parse_checked(value: &str, allow_http: bool, checks: &Checks) -> AppResult<Url> {
-    if value.len() > MAX_URL_BYTES {
+fn parse_checked(
+    value: &str,
+    allow_http: bool,
+    checks: &Checks,
+    max_bytes: usize,
+) -> AppResult<Url> {
+    if value.len() > max_bytes {
         return Err(AppError::bad_request("the address is too long"));
     }
     let url = Url::parse(value).map_err(|_| AppError::bad_request("not a URL"))?;
@@ -317,6 +339,16 @@ mod tests {
         ] {
             assert!(parse_public_https(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn only_unsubscribe_addresses_may_be_long() {
+        let long = format!("https://example.org/u?t={}", "a".repeat(4000));
+        assert!(parse_public_https(&long).is_err());
+        assert!(parse_long_public_https(&long).is_ok());
+        let too_long = format!("https://example.org/u?t={}", "a".repeat(MAX_LONG_URL_BYTES));
+        assert!(parse_long_public_https(&too_long).is_err());
+        assert!(parse_long_public_https("https://127.0.0.1/u").is_err());
     }
 
     #[test]
@@ -449,6 +481,43 @@ mod tests {
             assert_eq!(answer.body, b"arrived");
             assert!(requests.recv().await.unwrap().starts_with("GET /here "));
             assert!(requests.recv().await.unwrap().starts_with("GET /there "));
+        }
+
+        #[tokio::test]
+        async fn a_post_never_follows_redirects() {
+            let url = Url::parse("http://127.0.0.1:9/unsubscribe").unwrap();
+            let refused = fetch(
+                url,
+                &request(Some(("text/plain", b"x"))),
+                &local(Redirects::Follow),
+                &LOCAL,
+            )
+            .await;
+            assert!(refused.is_err());
+        }
+
+        #[tokio::test]
+        async fn the_status_alone_does_not_read_the_body() {
+            // Promises far more than it sends: reading the body would fail.
+            let (address, _requests) = serve(vec![
+                "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\npartial"
+                    .to_owned(),
+            ])
+            .await;
+            let url = Url::parse(&format!("http://{address}/u")).unwrap();
+            let answer = fetch(
+                url,
+                &Request {
+                    limit: 0,
+                    ..request(Some(("text/plain", b"x")))
+                },
+                &local(Redirects::Stop),
+                &LOCAL,
+            )
+            .await
+            .unwrap();
+            assert_eq!(answer.status, StatusCode::OK);
+            assert!(answer.body.is_empty());
         }
 
         #[tokio::test]

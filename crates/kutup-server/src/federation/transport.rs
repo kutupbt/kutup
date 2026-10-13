@@ -1003,7 +1003,9 @@ async fn bound_client(
     }
     // The same address list as every other outbound connection; only a test
     // stack (FEDERATION_TEST_ALLOW_PRIVATE, refused unless APP_ENV=test)
-    // reaches peers on private networks.
+    // reaches peers on private networks, and over http for peers and
+    // discovery too. NAT64, 6to4 and Teredo addresses are refused as well,
+    // so an IPv6-only server behind DNS64 cannot reach IPv4-only peers.
     if !allow_private_test_network
         && addresses
             .iter()

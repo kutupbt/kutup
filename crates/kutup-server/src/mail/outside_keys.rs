@@ -4,9 +4,10 @@
 //! Proton's key server for Proton's own domains, keys.openpgp.org (verified
 //! addresses only). Each answer is checked (`inspect_external_public_keys`)
 //! before it is used; answers are cached for an hour (misses for 15
-//! minutes). The fetcher is as narrow as Chat's link previews: https only,
-//! every address public, the connection pinned to the checked address,
-//! redirects followed by hand and checked again, small size and time limits.
+//! minutes). Lookups go through the server's one fetcher (`public_fetch`),
+//! the same as Chat's link previews: https only, every address public, the
+//! connection pinned to the checked address, redirects checked again, small
+//! size and time limits.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};

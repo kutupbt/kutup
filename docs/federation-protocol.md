@@ -102,7 +102,10 @@ is canonical HTTPS without credentials, query, fragment, a default `:443`, or
 a trailing slash. Delegation to a different DNS host is allowed because the
 server identity signs that endpoint. Plain HTTP and private addresses exist
 only behind an explicit `APP_ENV=test` harness guard and are not accepted by
-the production profile.
+the production profile. Peers are checked with the same public-address list as
+every other outbound request (`ssrf::is_public`), which also refuses NAT64,
+6to4 and Teredo addresses: an IPv6-only server behind DNS64 cannot reach
+IPv4-only peers (a known limit; run federation dual-stack).
 
 The identity's current key signs these deterministic bytes:
 

@@ -51,16 +51,17 @@ pub async fn one_click(state: &AppState, url: &str) -> Result<(), Unusable> {
             Err(Unusable)
         };
     }
-    let target = crate::public_fetch::parse_public_https(url).map_err(|_| Unusable)?;
+    let target = crate::public_fetch::parse_long_public_https(url).map_err(|_| Unusable)?;
     crate::public_fetch::get_with(
         target,
         &crate::public_fetch::Request {
             accept: "*/*",
             user_agent: USER_AGENT,
             timeout: TOTAL_TIMEOUT,
-            limit: 64 * 1024,
-            // The answer's body does not matter: a 2xx or a redirect is taken.
-            truncate: true,
+            // The answer's body does not matter (a 2xx or a redirect is
+            // taken), so it is not read.
+            limit: 0,
+            truncate: false,
             wanted: &|_| true,
             body: Some(("application/x-www-form-urlencoded", BODY.as_bytes())),
         },
