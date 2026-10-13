@@ -188,8 +188,9 @@ pub async fn upload(
         }
         return Err(AppError::internal("commit"));
     }
-    // The superseded object, exactly (the bucket is versioned: overwriting
-    // alone would keep it until the lifecycle expired it).
+    // The superseded object, exactly, where the bucket is versioned
+    // (overwriting alone would keep it there until the lifecycle expired it);
+    // on an unversioned bucket the overwrite replaced it already.
     if let Some((_, _, old)) = previous.filter(|(_, _, old)| !old.is_empty() && *old != version_id)
     {
         let _ = state.storage.delete_object_version(&path, &old).await;

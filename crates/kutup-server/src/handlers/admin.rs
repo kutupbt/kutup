@@ -99,7 +99,17 @@ struct UserRow {
     responses((status = 200, description = "All user accounts", body = Vec<UserRow>))
 )]
 pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    type Row = (Uuid, String, i64, i64, bool, bool, bool, bool, OffsetDateTime);
+    type Row = (
+        Uuid,
+        String,
+        i64,
+        i64,
+        bool,
+        bool,
+        bool,
+        bool,
+        OffsetDateTime,
+    );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, totp_enabled, is_first_login, created_at
@@ -2139,16 +2149,7 @@ async fn load_activity_entries(
     Ok(rows
         .into_iter()
         .map(
-            |(
-                id,
-                action,
-                admin_id,
-                a_username,
-                target_id,
-                t_username,
-                payload,
-                at,
-            )| {
+            |(id, action, admin_id, a_username, target_id, t_username, payload, at)| {
                 ActivityEntry {
                     id,
                     action,

@@ -32,5 +32,4 @@ impl Client {
         super::check_ok(resp)?;
         Ok(true)
     }
-
 }

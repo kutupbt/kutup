@@ -28,6 +28,12 @@ use crate::middleware::AuthUser;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
+/// Where a file's original upload is stored: under the file's own prefix,
+/// beside its versions, assets and thumbnails (`files/{id}/…`), whoever
+/// uploaded it and from wherever (a peer's upload too).
+pub(crate) fn original_storage_path(file_id: Uuid) -> String {
+    format!("files/{file_id}/original")
+}
 /// The largest non-file form field: ids and sealed metadata / key envelopes.
 pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 
@@ -297,7 +303,7 @@ pub async fn upload(
     let blob_context = DriveFileBlobContextV1::new(&file_id_str, 1)
         .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
     validate_file_blob_file(&tmp_file, blob_context)?;
-    let storage_path = format!("{}/{}/{}", user_id, coll_id, file_id);
+    let storage_path = original_storage_path(file_id);
 
     // Claim the id, then check room — both held until commit, so neither a
     // retry with the same id nor a concurrent write can slip past.

@@ -932,9 +932,9 @@ pub(crate) async fn remove_participant(
     // The door first: once it is shut (the waiting room on, so only the host
     // lets anyone in), disconnecting them is final.
     sqlx::query("UPDATE chat_call_links SET waiting_room = TRUE WHERE room_id = $1")
-    .bind(room_id)
-    .execute(&mut *tx)
-    .await?;
+        .bind(room_id)
+        .execute(&mut *tx)
+        .await?;
     // Their seat mints no more tokens, and the SFU token they hold is
     // answered by removing them again if they come back (`tend`).
     sqlx::query(

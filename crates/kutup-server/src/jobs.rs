@@ -246,23 +246,14 @@ pub async fn sweep_chat_mailboxes_before(
 /// objects for good and releases their bytes. Returns what was removed.
 pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> usize {
     let now = OffsetDateTime::now_utc();
-    type Row = (
-        Uuid,
-        Uuid,
-        OffsetDateTime,
-        bool,
-        String,
-        Uuid,
-        i64,
-        i32,
-    );
+    type Row = (Uuid, Uuid, OffsetDateTime, bool, String, Uuid, i64, i32);
     let mut removed = 0;
     // Every file with thinnable versions, a page at a time (keyed on the
     // file id, so a file whose versions all stay never hides the rest).
     let mut after = Uuid::nil();
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
-        r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
+            r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
                   v.author_user_id, v.size_bytes, u.version_retention_days
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
@@ -274,17 +265,17 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
              ORDER BY file_id
              LIMIT 500)
            ORDER BY v.file_id, v.created_at DESC"#,
-    )
-    .bind(after)
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("version retention: query failed: {e}");
-            return removed;
-        }
-    };
+        )
+        .bind(after)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("version retention: query failed: {e}");
+                return removed;
+            }
+        };
         let Some(last) = rows.last() else {
             break;
         };
@@ -934,16 +925,16 @@ pub async fn purge_file_root(
     guard: PurgeGuard,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
-    let row: Option<(String, i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
+    let row: Option<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
         // A pruned original was released already.
-        "SELECT storage_path, (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
+        "SELECT (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
                 uploader_user_id, collection_id, trash_root_id
          FROM files WHERE id = $1 FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((storage_path, file_size, uploader_id, collection_id, trash_root)) = row else {
+    let Some((file_size, uploader_id, collection_id, trash_root)) = row else {
         return Ok(());
     };
     let qualifies = match guard {
@@ -1008,8 +999,8 @@ pub async fn purge_file_root(
     .await?;
     tx.commit().await?;
 
-    // Best-effort S3 GC (post-commit): the legacy main blob + the whole files/{id}/ prefix.
-    let _ = storage.delete(&storage_path).await;
+    // Best-effort S3 GC (post-commit): everything the file has lives under
+    // files/{id}/ — the original, versions, assets and thumbnails.
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
     Ok(())
 }
@@ -1130,24 +1121,14 @@ fn canonical_uuid(seg: &str) -> Option<Uuid> {
     }
 }
 
-/// The file a Drive object belongs to, for every key shape Drive writes:
-/// `{user}/{folder}/{file}` (an upload), `fed/{share}/{folder}/{file}` (a
-/// federated upload) and `files/{file}/…` (versions, assets, thumbnails).
-/// Anything else (Chat's keys, foreign objects) is not the sweep's business.
+/// The file a Drive object belongs to: Drive keeps everything of a file
+/// under `files/{file}/…` (its original, versions, assets, thumbnails).
+/// Anything else (Chat's keys, Mail's, foreign objects) is not the sweep's
+/// business.
 fn drive_file_of_key(key: &str) -> Option<Uuid> {
     let segs: Vec<&str> = key.split('/').collect();
     match segs.as_slice() {
         ["files", file, rest @ ..] if !rest.is_empty() && rest.iter().all(|s| !s.is_empty()) => {
-            canonical_uuid(file)
-        }
-        ["fed", share, folder, file] => {
-            canonical_uuid(share)?;
-            canonical_uuid(folder)?;
-            canonical_uuid(file)
-        }
-        [user, folder, file] => {
-            canonical_uuid(user)?;
-            canonical_uuid(folder)?;
             canonical_uuid(file)
         }
         _ => None,
@@ -1158,7 +1139,7 @@ fn drive_file_of_key(key: &str) -> Option<Uuid> {
 /// objects that no row references any more and that are older than `age_floor`: a
 /// crash between storing and committing, a purge whose object delete failed, a
 /// pruned original or retired version left behind. Every stored version of an
-/// orphan goes (the bucket is versioned).
+/// orphan goes (on a versioned bucket too).
 pub async fn run_orphan_sweep(
     pool: &PgPool,
     storage: &StorageService,
@@ -1257,20 +1238,21 @@ mod tests {
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
         let other = "11111111-2222-4333-8444-555555555555";
         let file = Some(uuid::Uuid::parse_str(uuid).unwrap());
-        // Derived objects under files/{id}/…
+        // Everything of a file is under files/{id}/…
+        assert_eq!(drive_file_of_key(&format!("files/{uuid}/original")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/snapshot")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/assets/x")), file);
         assert_eq!(
             drive_file_of_key(&format!("files/{uuid}/versions/{other}")),
             file
         );
-        // Uploads and federated uploads: the file is the last segment.
-        assert_eq!(drive_file_of_key(&format!("{other}/{other}/{uuid}")), file);
+        // Not Drive's: the retired upload shapes, no trailing part, Chat
+        // keys, uppercase hex, junk.
+        assert_eq!(drive_file_of_key(&format!("{other}/{other}/{uuid}")), None);
         assert_eq!(
             drive_file_of_key(&format!("fed/{other}/{other}/{uuid}")),
-            file
+            None
         );
-        // Not Drive's: no trailing part, Chat keys, uppercase hex, junk.
         assert_eq!(drive_file_of_key(&format!("files/{uuid}")), None);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/")), None);
         assert_eq!(

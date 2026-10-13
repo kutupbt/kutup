@@ -235,7 +235,9 @@ fn share_folder(
         .context("share")?;
 
     if json {
-        crate::output::print_json(&serde_json::json!({ "shared": collection_id, "with": address }))?;
+        crate::output::print_json(
+            &serde_json::json!({ "shared": collection_id, "with": address }),
+        )?;
     } else {
         println!("Shared folder with {address}");
     }

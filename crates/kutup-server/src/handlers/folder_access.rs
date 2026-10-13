@@ -237,13 +237,7 @@ pub async fn access(
     .bind(collection_id)
     .fetch_all(&state.pool)
     .await?;
-    type LinkRow = (
-        Uuid,
-        String,
-        String,
-        Option<OffsetDateTime>,
-        OffsetDateTime,
-    );
+    type LinkRow = (Uuid, String, String, Option<OffsetDateTime>, OffsetDateTime);
     let links: Vec<LinkRow> = sqlx::query_as(
         "SELECT id, token, owner_link_key_envelope, expires_at, created_at
              FROM public_shares WHERE target_id = $1 AND share_type = 'collection' ORDER BY created_at",

@@ -320,10 +320,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 
     // Allocate the upload-session id; the client allocated the file id before
     // constructing its object-bound envelopes. Open the S3 multipart directly at
-    // the canonical {userId}/{collectionId}/{fileId} key (no temp→final copy — S3 hides
+    // the canonical files/{fileId}/original key (no temp→final copy — S3 hides
     // incomplete multiparts from GetObject until Complete runs).
     let upload_id = Uuid::new_v4();
-    let storage_path = format!("{}/{}/{}", user.user_id, coll_id, file_id);
+    let storage_path = crate::handlers::files::original_storage_path(file_id);
     let s3_upload_id = match state.storage.create_multipart(&storage_path).await {
         Ok(id) => id,
         Err(_) => {

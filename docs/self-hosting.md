@@ -1178,17 +1178,20 @@ PostgreSQL backup is still yours to take.
 
 ## SeaweedFS bucket versioning and lifecycle
 
-Kutup does not depend on S3 object versioning: every file version is an
-object of its own (`files/{id}/versions/{versionId}`), and version retention
+Kutup does not depend on S3 object versioning: every object of a file lives
+under `files/{id}/` (`original`, `versions/{versionId}`, `assets/…`,
+`thumbnails/…`), every file version is an object of its own, and version retention
 is Kutup's job (`docs/plans/drive-versions-v2.md` — the last day whole, then
 hourly for a week, then daily up to each account's setting, 7 days to 10
 years). Deletes remove every stored version of an object, so they are final
 whether or not the bucket is versioned.
 
-The `seaweedfs-init` Compose service still creates the bucket and applies
-`lifecycle.json`, now only a safety net: anything overwritten or deleted
-outside Kutup's own deletes (noncurrent versions, expired delete markers)
-goes after a day. Re-run it after upgrading:
+The `seaweedfs-init` Compose service creates the bucket (without versioning)
+and applies `lifecycle.json`, only a safety net for a bucket that has
+versioning from an earlier setup: anything overwritten or deleted outside
+Kutup's own deletes (noncurrent versions, expired delete markers) goes after
+a day. A bucket that already has versioning keeps it (S3 can only suspend
+it); that is harmless. Re-run it after upgrading:
 ```sh
 docker compose run --rm seaweedfs-init
 ```

@@ -13,11 +13,14 @@ mod common;
 use common::*;
 
 fn lookup(c: &Client, base: &str, token: &str, account: &str) -> Value {
-    bearer(c.get(format!("{base}/api/users/by-address/{account}")), token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap()
+    bearer(
+        c.get(format!("{base}/api/users/by-address/{account}")),
+        token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap()
 }
 
 #[test]

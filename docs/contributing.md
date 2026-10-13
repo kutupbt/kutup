@@ -321,7 +321,7 @@ kutup/
 
 ### Orphan-blob sweep
 
-Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. It recognises every key shape Drive writes — `{user}/{folder}/{file}` (uploads), `fed/{share}/{folder}/{file}` (federated uploads) and `files/{file}/…` (versions, assets, thumbnails) — and never touches anything else (Chat's keys included).
+Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. Drive keeps everything of a file under `files/{file}/…` — `original` (the upload, a peer's too), `versions/…`, `assets/…`, `thumbnails/…` — and the sweep looks only at that shape, never at anything else (Chat's and Mail's keys included).
 
 Subcommand on the existing `kutup-server` binary — same Docker image, same env vars, same DB pool.
 

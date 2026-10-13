@@ -1761,7 +1761,7 @@ pub async fn upload_file(
         }
 
         let file_id = parsed.file_id;
-        let storage_path = format!("fed/{}/{}/{}", share.id, share.collection_id, file_id);
+        let storage_path = crate::handlers::files::original_storage_path(file_id);
         let object = ByteStream::from_path(parsed.file.path())
             .await
             .map_err(|error| AppError::internal(format!("read upload: {error}")))?;
