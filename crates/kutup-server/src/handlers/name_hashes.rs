@@ -1,8 +1,6 @@
-//! Filling in name and content hashes (docs/plans/drive-unique-names.md):
-//! a file's content hash once its upload has read it all, and the name
-//! hashes of items written without one (a replacing upload, a rename by
-//! someone without the folder's key, a peer's upload, a restore from the
-//! trash into a taken name or another place).
+//! Name and content hashes beside the writes that carry them
+//! (docs/plans/drive-unique-names.md): a file's content hash once its upload
+//! has read it all, and which names are free in a folder.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -70,165 +68,94 @@ pub async fn set_content_hash(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct NamedItem {
-    pub id: String,
-    pub name_hash: String,
-}
+/// Most hashes one `available-hashes` request asks about, as Proton's
+/// `checkAvailableHashes` batches (`HASH_CHECK_AMOUNT`).
+pub const MAX_ASKED: usize = 10;
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FillNameHashesRequest {
-    #[serde(default)]
-    pub files: Vec<NamedItem>,
-    #[serde(default)]
-    pub folders: Vec<NamedItem>,
+pub struct AvailableHashesRequest {
+    /// Up to ten name hashes under the folder's hash key.
+    pub hashes: Vec<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct NameClash {
-    /// The item whose hash was not stored.
-    pub id: String,
-    /// `file` or `folder`: what already holds the name.
-    pub holder_kind: String,
-    pub holder_id: String,
+pub struct AvailableHashes {
+    /// The asked hashes no live file or folder there holds, in the order asked.
+    pub available: Vec<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FillNameHashesResult {
-    /// Items whose name another already holds: rename one, then send again.
-    pub clashes: Vec<NameClash>,
-}
-
-/// The most items one request fills in.
-const MAX_ITEMS: usize = 1000;
-
-/// `POST /api/collections/{id}/name-hashes` — the name hashes of a folder's
-/// files and subfolders that have none (see the module docs). Only items
-/// without one are filled in; one whose name another already holds is
-/// left out and reported. Whoever can write the folder.
+/// `POST /api/collections/{id}/available-hashes` — which of these names are
+/// free in the folder (Proton Drive's `checkAvailableHashes`): "Keep both"
+/// and a restore into a taken name pick `name (n)` against the server, not a
+/// listing that may be stale. Whoever can write the folder, ten at a time,
+/// rate-limited per account; it tells no more than listing the folder does.
 #[utoipa::path(
     post,
-    path = "/api/collections/{id}/name-hashes",
+    path = "/api/collections/{id}/available-hashes",
     tag = "collections",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
-    request_body = FillNameHashesRequest,
-    responses((status = 200, description = "Filled in, with the clashes", body = FillNameHashesResult))
+    request_body = AvailableHashesRequest,
+    responses((status = 200, description = "The free ones", body = AvailableHashes))
 )]
-pub async fn fill_name_hashes(
+pub async fn available_hashes(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(req): Json<FillNameHashesRequest>,
+    Json(req): Json<AvailableHashesRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let folder = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let mut tx = state.pool.begin().await?;
     writable_folder(&mut tx, user_id, folder).await?;
-    let place = Place::Folder(folder);
-    let clashes = fill(&mut tx, place, &req, Some(folder)).await?;
+    let available = free_of(&mut tx, Place::Folder(folder), user_id, &req).await?;
     tx.commit().await?;
-    Ok(Json(FillNameHashesResult { clashes }).into_response())
+    Ok(Json(AvailableHashes { available }).into_response())
 }
 
-/// `POST /api/drive/top-level-name-hashes` — the same for the account's
-/// top-level folders (no files live there).
+/// `POST /api/drive/top-level-available-hashes` — the same among the
+/// account's top-level folders.
 #[utoipa::path(
     post,
-    path = "/api/drive/top-level-name-hashes",
+    path = "/api/drive/top-level-available-hashes",
     tag = "collections",
     security(("BearerAuth" = [])),
-    request_body = FillNameHashesRequest,
-    responses((status = 200, description = "Filled in, with the clashes", body = FillNameHashesResult))
+    request_body = AvailableHashesRequest,
+    responses((status = 200, description = "The free ones", body = AvailableHashes))
 )]
-pub async fn fill_top_level_name_hashes(
+pub async fn top_level_available_hashes(
     State(state): State<AppState>,
     user: AuthUser,
-    Json(req): Json<FillNameHashesRequest>,
+    Json(req): Json<AvailableHashesRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    if !req.files.is_empty() {
-        return Err(AppError::bad_request("no files live at the top level"));
-    }
     let mut tx = state.pool.begin().await?;
-    let clashes = fill(&mut tx, Place::TopLevel(user_id), &req, None).await?;
+    let available = free_of(&mut tx, Place::TopLevel(user_id), user_id, &req).await?;
     tx.commit().await?;
-    Ok(Json(FillNameHashesResult { clashes }).into_response())
+    Ok(Json(AvailableHashes { available }).into_response())
 }
 
-async fn fill(
+async fn free_of(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     place: Place,
-    req: &FillNameHashesRequest,
-    folder: Option<Uuid>,
-) -> AppResult<Vec<NameClash>> {
-    if req.files.len() + req.folders.len() > MAX_ITEMS {
-        return Err(AppError::bad_request("too many items"));
+    user_id: Uuid,
+    req: &AvailableHashesRequest,
+) -> AppResult<Vec<String>> {
+    if req.hashes.is_empty() || req.hashes.len() > MAX_ASKED {
+        return Err(AppError::bad_request("ask about one to ten hashes"));
     }
-    drive_names::lock_place(tx, place).await?;
-    let mut clashes = Vec::new();
-    for (items, is_file) in [(&req.files, true), (&req.folders, false)] {
-        for item in items {
-            let id =
-                Uuid::parse_str(&item.id).map_err(|_| AppError::bad_request("invalid item id"))?;
-            let hash = drive_names::parse_name_hash(Some(&item.name_hash))?
-                .ok_or_else(|| AppError::bad_request("invalid name hash"))?;
-            // Only an item of this place, still without a hash.
-            let pending: bool = if is_file {
-                sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM files
-                                    WHERE id = $1 AND collection_id = $2 AND deleted_at IS NULL AND name_hash IS NULL)",
-                )
-                .bind(id)
-                .bind(folder)
-                .fetch_one(&mut **tx)
-                .await?
-            } else {
-                let (parent, owner) = match place {
-                    Place::Folder(folder) => (Some(folder), None),
-                    Place::TopLevel(owner) => (None, Some(owner)),
-                };
-                sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM collections
-                                    WHERE id = $1 AND kind = 'folder' AND deleted_at IS NULL AND name_hash IS NULL
-                                      AND parent_collection_id IS NOT DISTINCT FROM $2
-                                      AND ($3::uuid IS NULL OR owner_user_id = $3))",
-                )
-                .bind(id)
-                .bind(parent)
-                .bind(owner)
-                .fetch_one(&mut **tx)
-                .await?
-            };
-            if !pending {
-                continue;
-            }
-            if let Err(error) = drive_names::ensure_name_free(tx, place, &hash, Some(id)).await {
-                let holder = error
-                    .details
-                    .as_ref()
-                    .and_then(|details| details.get("holder"))
-                    .cloned()
-                    .unwrap_or_default();
-                clashes.push(NameClash {
-                    id: id.to_string(),
-                    holder_kind: holder["kind"].as_str().unwrap_or_default().to_owned(),
-                    holder_id: holder["id"].as_str().unwrap_or_default().to_owned(),
-                });
-                continue;
-            }
-            let table = if is_file { "files" } else { "collections" };
-            sqlx::query(&format!("UPDATE {table} SET name_hash = $2 WHERE id = $1"))
-                .bind(id)
-                .bind(&hash)
-                .execute(&mut **tx)
-                .await
-                .map_err(drive_names::map_unique_violation)?;
+    if !crate::ratelimit::AVAILABLE_HASHES.allow(&user_id.to_string()) {
+        return Err(AppError::too_many_requests("too many name checks")
+            .with_details(serde_json::json!({ "code": "rateLimited" })));
+    }
+    let mut available = Vec::new();
+    for hash in &req.hashes {
+        let hash = drive_names::require_name_hash(Some(hash))?;
+        if drive_names::ensure_name_free(tx, place, &hash, None).await.is_ok() {
+            available.push(hash);
         }
     }
-    Ok(clashes)
+    Ok(available)
 }

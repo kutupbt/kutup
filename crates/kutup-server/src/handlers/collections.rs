@@ -583,7 +583,6 @@ pub async fn update_collection(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
     let mut tx = state.pool.begin().await?;
     let current: Option<(i32, i64, Option<Uuid>, String)> = sqlx::query_as(
         "SELECT key_epoch, name_revision, parent_collection_id, kind FROM collections
@@ -596,14 +595,17 @@ pub async fn update_collection(
     let Some((epoch, current_revision, parent, kind)) = current else {
         return Err(AppError::not_found("not found"));
     };
-    // A new name without its hash (the parent's key was not at hand) leaves
-    // the old hash wrong: it is cleared, and the owner's client fills it in.
-    let name_hash = if kind == "folder" { name_hash } else { None };
-    if let Some(hash) = &name_hash {
+    // A folder's new name comes with its hash (the owner holds the parent's
+    // key); an album has none.
+    let name_hash = if kind == "folder" {
+        let hash = crate::drive_names::require_name_hash(req.name_hash.as_deref())?;
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
-        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(coll_id)).await?;
-    }
+        crate::drive_names::ensure_name_free(&mut tx, place, &hash, Some(coll_id)).await?;
+        Some(hash)
+    } else {
+        None
+    };
     if req.name_revision != current_revision.saturating_add(1) {
         return Err(AppError::conflict(
             "collection name revision must advance by exactly one",

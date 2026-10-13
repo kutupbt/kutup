@@ -197,14 +197,18 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     let coll_id = meta.get("collectionId").unwrap_or(&empty);
     let metadata_envelope = meta.get("metadataEnvelope").unwrap_or(&empty);
     let file_key_envelope = meta.get("fileKeyEnvelope").unwrap_or(&empty);
-    // The name's hash (docs/plans/drive-unique-names.md); none for an upload
-    // that replaces a file and takes its name afterwards.
+    // The name's hash (docs/plans/drive-unique-names.md): every upload has one.
     let name_hash =
-        match crate::drive_names::parse_name_hash(meta.get("nameHash").map(String::as_str)) {
+        match crate::drive_names::require_name_hash(meta.get("nameHash").map(String::as_str)) {
             Ok(hash) => hash,
-            Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid name hash"),
+            Err(_) => {
+                return tus_text(
+                    StatusCode::BAD_REQUEST,
+                    "nameHash is required: 64 lowercase hex digits",
+                )
+            }
         };
-    if meta.len() != 4 + usize::from(name_hash.is_some())
+    if meta.len() != 5
         || file_id_text.is_empty()
         || coll_id.is_empty()
         || metadata_envelope.is_empty()
@@ -318,12 +322,14 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     }
 
     // A name already here refuses the upload before anything is sent.
-    if let Some(hash) = &name_hash {
+    {
         let place = crate::drive_names::Place::Folder(coll_uuid);
         if let Err(error) = crate::drive_names::lock_place(&mut tx, place).await {
             return tus_error(error);
         }
-        if let Err(error) = crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await {
+        if let Err(error) =
+            crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, None).await
+        {
             return tus_error(error);
         }
     }
