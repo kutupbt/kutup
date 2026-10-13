@@ -36,6 +36,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The migrations check compares with the base branch (or, on master,
+          # the commit before), so it needs history.
+          fetch-depth: 0
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Set up Rust
@@ -46,6 +50,8 @@ jobs:
         with:
           shared-key: security-static
       - name: Static checks
+        env:
+          KUTUP_MIGRATION_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'origin/master' }}
         run: scripts/gate.sh static
 
   rust-workspace:

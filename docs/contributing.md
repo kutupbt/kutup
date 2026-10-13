@@ -125,6 +125,14 @@ The rules:
 - A development database from before the baseline cannot be upgraded: drop
   it and start empty.
 
+`scripts/check-migrations.sh [base]` enforces the first two rules against a
+base revision (default `origin/master`; CI uses the pull request's base, and on
+master the commit before): every migration on the base is byte-for-byte
+unchanged, and every new one is a timestamped `.up.sql`/`.down.sql` pair newer
+than the base's newest. A squash, where every base migration is replaced by one
+newer `_baseline` pair, is the one exception it recognizes. `scripts/gate.sh
+static` runs it.
+
 ```sh
 cargo install sqlx-cli --no-default-features --features postgres   # one-time
 sqlx migrate add -r <migration_name> --source crates/kutup-server/migrations
