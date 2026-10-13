@@ -84,7 +84,7 @@ async fn retry_recovery_outbox_once(state: &AppState) -> AppResult<()> {
             .send(
                 &destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/control/recoveries".into(),
                     query: None,
@@ -207,7 +207,7 @@ async fn retry_federation_outbox_once(state: &AppState) -> AppResult<()> {
             .send(
                 &destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/anonymous/messages".into(),
                     query: None,
@@ -313,7 +313,7 @@ async fn retry_control_outbox_once(state: &AppState) -> AppResult<()> {
             .send(
                 &destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/control/blocks".into(),
                     query: None,

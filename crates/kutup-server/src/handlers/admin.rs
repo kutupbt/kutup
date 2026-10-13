@@ -1241,7 +1241,7 @@ pub async fn get_federation_control_plane(
                 continue;
             }
             match feature.feature.as_str() {
-                "chat" => capabilities.push("chat.v1".to_owned()),
+                "chat" => capabilities.push("chat.v2".to_owned()),
                 "drive" => capabilities.push("drive.v1".to_owned()),
                 _ => {}
             }
@@ -1641,7 +1641,7 @@ async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), Str
     federation.evict_peer_cache(domain).await;
     let mut errors = Vec::new();
     for feature in [
-        kutup_federation_proto::FederationFeature::ChatV1,
+        kutup_federation_proto::FederationFeature::ChatV2,
         kutup_federation_proto::FederationFeature::DriveV1,
     ] {
         match federation

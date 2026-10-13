@@ -58,7 +58,7 @@ pub async fn fetch_remote_bundles(
         .send(
             destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path,
                 query: None,
@@ -110,7 +110,7 @@ pub async fn fetch_remote_sealed_bundles(
         .send(
             destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::POST,
                 path,
                 query: None,
@@ -146,7 +146,7 @@ pub async fn fetch_remote_manifest_history(
         .send(
             destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!("/api/fed/chat/users/{}/manifest-history", address.username),
                 query: Some(query_string),
@@ -197,7 +197,7 @@ pub async fn fetch_remote_manifest(
         .send(
             destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path,
                 query: None,
@@ -262,7 +262,7 @@ pub async fn fetch_remote_profile(
         .send(
             destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!("/api/fed/chat/users/{}/profile/{version}", address.username),
                 query: None,
@@ -314,16 +314,39 @@ fn federation_gateway_error(error: anyhow::Error) -> AppError {
 
 #[derive(Debug)]
 pub enum FederatedSendOutcome {
-    Delivered { deduplicated: bool },
+    Delivered {
+        deduplicated: bool,
+    },
     Mismatch(DeviceListMismatch),
     Rejected(FederationDeliveryRejection),
     Pending,
+    /// Queued, but the recipient's server does not speak this Chat wire
+    /// (`chat.v2`): it goes once that server upgrades.
+    PeerUnsupported,
 }
 
 pub enum FederatedSealedOutcome {
     Delivered(SealedDeliveryResponseV1),
     Mismatch(DeviceListMismatch),
     Pending,
+    /// As [`FederatedSendOutcome::PeerUnsupported`].
+    PeerUnsupported,
+}
+
+/// How long a send to a server without `chat.v2` waits before it is tried
+/// again: long enough not to keep asking, short enough that an upgrade is
+/// noticed within the hour. Order per destination is kept meanwhile.
+const PEER_UNSUPPORTED_RETRY_SECONDS: i64 = 3600;
+
+/// The answer to a send whose recipient's server does not speak this Chat
+/// wire: 503 with `code: peerUnsupported`, so apps can say so instead of
+/// showing a send that never ends.
+pub fn peer_unsupported_error() -> AppError {
+    AppError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "the recipient's server does not support this Chat version; the message is queued until it does",
+    )
+    .with_details(serde_json::json!({ "code": "peerUnsupported" }))
 }
 
 #[derive(sqlx::FromRow)]
@@ -495,7 +518,7 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
         .send(
             &row.destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::POST,
                 path: "/api/fed/chat/sealed/messages".into(),
                 query: None,
@@ -509,6 +532,11 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
         .await
     {
         Ok(response) => response,
+        Err(error) if crate::federation::lacks_capability(&error) => {
+            park_sealed_for_upgrade(state, &row).await?;
+            tracing::warn!(destination = %row.destination, "sealed federation send waits for the peer to support chat.v2");
+            return Ok(FederatedSealedOutcome::PeerUnsupported);
+        }
         Err(error) => {
             mark_sealed_retry(state, &row, "transport").await?;
             tracing::warn!(destination = %row.destination, error = %error, "sealed federation retry deferred");
@@ -571,6 +599,24 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
             Ok(FederatedSealedOutcome::Pending)
         }
     }
+}
+
+async fn park_sealed_for_upgrade(
+    state: &AppState,
+    row: &SealedFederationOutboxRow,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE chat_sealed_federation_outbox
+         SET attempts = attempts + 1,
+             next_attempt_at = now() + ($2 * interval '1 second'),
+             last_error_class = 'peer_unsupported', updated_at = now()
+         WHERE id = $1 AND state = 'pending'",
+    )
+    .bind(row.id)
+    .bind(PEER_UNSUPPORTED_RETRY_SECONDS)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
 }
 
 async fn mark_sealed_retry(
@@ -801,7 +847,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         .send(
             &row.destination,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::POST,
                 path: "/api/fed/chat/messages".into(),
                 query: None,
@@ -820,6 +866,10 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         .await
     {
         Ok(response) => response,
+        Err(error) if crate::federation::lacks_capability(&error) => {
+            park_for_upgrade(state, &row, &error.to_string()).await?;
+            return Ok(FederatedSendOutcome::PeerUnsupported);
+        }
         Err(error) => {
             mark_retry(state, &row, &error.to_string()).await?;
             return Ok(FederatedSendOutcome::Pending);
@@ -987,6 +1037,26 @@ fn delivered_outcome(
     }
 }
 
+async fn park_for_upgrade(
+    state: &AppState,
+    row: &FederationOutboxRow,
+    error: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE chat_federation_outbox
+         SET attempts = attempts + 1,
+             next_attempt_at = now() + ($2 * interval '1 second'),
+             last_error = $3, updated_at = now()
+         WHERE id = $1 AND state = 'pending'",
+    )
+    .bind(row.id)
+    .bind(PEER_UNSUPPORTED_RETRY_SECONDS)
+    .bind(error)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
 async fn mark_retry(state: &AppState, row: &FederationOutboxRow, error: &str) -> AppResult<()> {
     let attempt = row.attempts.saturating_add(1).clamp(1, 30);
     let exponential_seconds = 1_i64 << attempt.min(8);
@@ -1073,7 +1143,7 @@ pub async fn get_user_bundles(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let path = format!("/api/fed/chat/users/{}/keys", account.username);
     let authenticated = federation
-        .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV1)
+        .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
     let response_username = format!("{}@{}", account.username, federation.server_name());
     let bundles = match crate::handlers::chat::load_user_bundles(
@@ -1112,7 +1182,7 @@ pub async fn get_sealed_user_bundles(
             &path,
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let request: AnonymousPreKeyRequestV1 = match serde_json::from_slice(&body) {
@@ -1177,7 +1247,7 @@ pub async fn deliver_sealed_messages(
             "/api/fed/chat/sealed/messages",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let transaction: FederatedSealedTransactionV1 = match serde_json::from_slice(&body) {
@@ -1354,7 +1424,7 @@ pub async fn get_manifest_history(
             &path,
             Some(&query_string),
             &[],
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let target_id: Option<Uuid> =
@@ -1461,7 +1531,7 @@ pub async fn get_manifest(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let path = format!("/api/fed/chat/users/{}/manifest", account.username);
     let authenticated = federation
-        .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV1)
+        .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
     let target_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
@@ -1522,7 +1592,7 @@ pub async fn get_user_profile(
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let uri = format!("/api/fed/chat/users/{}/profile/{version}", account.username);
     let authenticated = federation
-        .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV1)
+        .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV2)
         .await?;
     if !crate::handlers::chat::canonical_profile_version(&version) {
         return signed_json(
@@ -1605,7 +1675,7 @@ pub async fn deliver_messages(
             "/api/fed/chat/messages",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let transaction: FederatedChatTransaction = match serde_json::from_slice(&body) {

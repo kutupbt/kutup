@@ -30,7 +30,7 @@ fn main() {
         vec![
             FederationCapabilityId::identity_v1(),
             FederationCapabilityId::drive_v1(),
-            FederationCapabilityId::chat_v1(),
+            FederationCapabilityId::chat_v2(),
         ],
         rotation.clone(),
         1_700_000_200,
@@ -47,7 +47,7 @@ fn main() {
         content_type: "application/json".into(),
         body: br#"{"transactionId":"01HXYZ"}"#.to_vec(),
         federation_version: FederationProtocolVersion::V2,
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         origin: "alpha.example".into(),
         destination: "beta.example".into(),
     };
@@ -71,7 +71,7 @@ fn main() {
         content_type: "application/json".into(),
         body: br#"{"accepted":true}"#.to_vec(),
         federation_version: FederationProtocolVersion::V2,
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         origin: "beta.example".into(),
         destination: "alpha.example".into(),
     };

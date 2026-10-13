@@ -68,7 +68,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
             vec![
                 FederationCapabilityId::identity_v1(),
                 FederationCapabilityId::drive_v1(),
-                FederationCapabilityId::chat_v1(),
+                FederationCapabilityId::chat_v2(),
             ],
             rotation,
             1_700_000_200,
@@ -89,7 +89,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         content_type: request_value["contentType"].as_str().unwrap().into(),
         body: body(request_value),
         federation_version: FederationProtocolVersion::V2,
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         origin: request_value["origin"].as_str().unwrap().into(),
         destination: request_value["destination"].as_str().unwrap().into(),
     };
@@ -122,7 +122,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         content_type: response_value["contentType"].as_str().unwrap().into(),
         body: body(response_value),
         federation_version: FederationProtocolVersion::V2,
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         origin: response_value["origin"].as_str().unwrap().into(),
         destination: response_value["destination"].as_str().unwrap().into(),
     };

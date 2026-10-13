@@ -21,8 +21,8 @@ const REPLAY_HASH_DOMAIN: &[u8] = b"kutup-federation-request-replay-hash-v1\0";
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum FederationFeature {
-    #[serde(rename = "chat.v1")]
-    ChatV1,
+    #[serde(rename = "chat.v2")]
+    ChatV2,
     #[serde(rename = "drive.v1")]
     DriveV1,
 }
@@ -30,7 +30,7 @@ pub enum FederationFeature {
 impl FederationFeature {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ChatV1 => "chat.v1",
+            Self::ChatV2 => "chat.v2",
             Self::DriveV1 => "drive.v1",
         }
     }
@@ -47,7 +47,7 @@ impl FromStr for FederationFeature {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "chat.v1" => Ok(Self::ChatV1),
+            "chat.v2" => Ok(Self::ChatV2),
             "drive.v1" => Ok(Self::DriveV1),
             _ => Err(crate::error::invalid_field(
                 "kutup-federation-feature",
@@ -887,6 +887,18 @@ fn verify_signature_header(
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_retired_chat_v1_feature_is_refused() {
+        // The clean-slate Chat wire (qualified accounts, required messageId,
+        // canonical group policy) is chat.v2; a chat.v1 peer is not spoken to.
+        assert!("chat.v1".parse::<FederationFeature>().is_err());
+        assert!(serde_json::from_str::<FederationFeature>("\"chat.v1\"").is_err());
+        assert_eq!(
+            "chat.v2".parse::<FederationFeature>().unwrap(),
+            FederationFeature::ChatV2
+        );
+    }
+
     fn key(byte: u8) -> SigningKey {
         SigningKey::from_bytes(&[byte; 32])
     }
@@ -923,7 +935,7 @@ mod tests {
         let client = key(1);
         let server = key(2);
         let signed = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "request-123",
             1_700_000_000,
             1_700_000_300,
@@ -937,7 +949,7 @@ mod tests {
             1_700_000_100,
         )
         .unwrap();
-        let response = response(FederationFeature::ChatV1);
+        let response = response(FederationFeature::ChatV2);
         let headers = verified
             .sign_response(&response, 1_700_000_101, 1_700_000_201, &server)
             .unwrap();
@@ -1091,7 +1103,7 @@ mod tests {
     fn replay_metadata_is_authenticated_stable_and_content_sensitive() {
         let signing_key = key(1);
         let first = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "stable-request-id",
             100,
             200,
@@ -1113,7 +1125,7 @@ mod tests {
         assert_eq!(first.store_until(), 261);
 
         let resigned = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "stable-request-id",
             110,
             210,
@@ -1131,7 +1143,7 @@ mod tests {
         .unwrap();
         assert_eq!(first.request_hash(), resigned.request_hash());
 
-        let mut changed_request = request(FederationFeature::ChatV1);
+        let mut changed_request = request(FederationFeature::ChatV2);
         changed_request.body.push(b' ');
         let changed = FederationSignedRequest::sign(
             changed_request,
@@ -1157,7 +1169,7 @@ mod tests {
     fn exact_component_profile_rejects_missing_reordered_extra_and_v1() {
         let signing_key = key(1);
         let signed = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "nonce",
             100,
             200,
@@ -1192,7 +1204,7 @@ mod tests {
             "contentType": "application/json",
             "body": [],
             "federationVersion": 1,
-            "feature": "chat.v1",
+            "feature": "chat.v2",
             "origin": "alpha.example",
             "destination": "beta.example"
         });
@@ -1206,7 +1218,7 @@ mod tests {
     fn body_digest_signature_and_pinned_key_tampering_fail() {
         let signing_key = key(1);
         let signed = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "nonce",
             100,
             200,
@@ -1252,7 +1264,7 @@ mod tests {
     fn expiry_tag_algorithm_keyid_and_nonce_are_strict() {
         let signing_key = key(1);
         let signed = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "nonce",
             100,
             200,
@@ -1292,7 +1304,7 @@ mod tests {
         let client = key(1);
         let server = key(2);
         let signed = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "bound-nonce",
             100,
             200,
@@ -1306,7 +1318,7 @@ mod tests {
             150,
         )
         .unwrap();
-        let valid_response = response(FederationFeature::ChatV1);
+        let valid_response = response(FederationFeature::ChatV2);
         let headers = verified
             .sign_response(&valid_response, 151, 220, &server)
             .unwrap();
@@ -1325,7 +1337,7 @@ mod tests {
         let other_request = FederationSignedRequest::sign(
             FederationHttpRequest {
                 path: "/api/fed/chat/v1/other".into(),
-                ..request(FederationFeature::ChatV1)
+                ..request(FederationFeature::ChatV2)
             },
             "bound-nonce",
             100,
@@ -1348,7 +1360,7 @@ mod tests {
         let client = key(1);
         let server = key(2);
         let signed = FederationSignedRequest::sign(
-            request(FederationFeature::ChatV1),
+            request(FederationFeature::ChatV2),
             "bound-nonce",
             100,
             200,
@@ -1362,7 +1374,7 @@ mod tests {
             150,
         )
         .unwrap();
-        let response = response(FederationFeature::ChatV1);
+        let response = response(FederationFeature::ChatV2);
         let valid_headers = verified
             .sign_response(&response, 151, 220, &server)
             .unwrap();
@@ -1410,13 +1422,13 @@ mod tests {
             "127.0.0.1",
             "user@beta.example",
         ] {
-            let mut value = request(FederationFeature::ChatV1);
+            let mut value = request(FederationFeature::ChatV2);
             value.authority = authority.into();
             assert!(FederationSignedRequest::sign(value, "nonce", 100, 200, &key(1)).is_err());
         }
         for nonce in ["", "has space", "has\"quote"] {
             assert!(FederationSignedRequest::sign(
-                request(FederationFeature::ChatV1),
+                request(FederationFeature::ChatV2),
                 nonce,
                 100,
                 200,
@@ -1433,7 +1445,7 @@ mod tests {
             ("origin", "Alpha.example"),
             ("destination", "alpha.example"),
         ] {
-            let mut value = request(FederationFeature::ChatV1);
+            let mut value = request(FederationFeature::ChatV2);
             match field {
                 "method" => value.method = invalid.into(),
                 "path" => value.path = invalid.into(),
@@ -1447,7 +1459,7 @@ mod tests {
         }
         for (created, expires) in [(100, 100), (100, 401), (-1, 100)] {
             assert!(FederationSignedRequest::sign(
-                request(FederationFeature::ChatV1),
+                request(FederationFeature::ChatV2),
                 "nonce",
                 created,
                 expires,
@@ -1459,6 +1471,6 @@ mod tests {
             "drive.v1".parse::<FederationFeature>().unwrap(),
             FederationFeature::DriveV1
         );
-        assert!("chat.v2".parse::<FederationFeature>().is_err());
+        assert!("chat.v3".parse::<FederationFeature>().is_err());
     }
 }

@@ -268,7 +268,7 @@ pub(crate) async fn federated_record_invitation_feedback(
             "/api/fed/chat/mls/invitation-feedback",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     if let Err(error) = active_policy(&state).await {
@@ -486,7 +486,7 @@ pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResul
             .send(
                 &destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/invitation-feedback".into(),
                     query: None,

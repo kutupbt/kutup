@@ -88,7 +88,7 @@ FederationDiscoveryV2 {
   fedVersion: 2,
   server,
   apiBase,
-  capabilities: ["chat.v1", "drive.v1", "identity.v1"],
+  capabilities: ["chat.v2", "drive.v1", "identity.v1"],
   identity,
   identityDocumentHash,
   signedAt,
@@ -103,6 +103,17 @@ a trailing slash. Delegation to a different DNS host is allowed because the
 server identity signs that endpoint. Plain HTTP and private addresses exist
 only behind an explicit `APP_ENV=test` harness guard and are not accepted by
 the production profile.
+
+`chat.v2` is the Chat wire of the clean-slate release: every account is
+`username@server`, every message carries its `messageId`, and the MLS group
+policy always spells out `groupInfoEditors`. It replaced `chat.v1` outright;
+the feature name is also signed into every request (`kutup-federation-feature`),
+so a `chat.v1` server is neither sent to nor accepted. A send to a server whose
+discovery lacks `chat.v2` is not retried every few seconds: it stays queued in
+order, is tried again hourly (an upgraded peer is picked up then), and the
+sending client gets `503` with `code: peerUnsupported` instead of a send that
+never ends. Showing that code in the apps is a follow-up (the chat engine
+keeps such a message queued and only logs it today).
 
 The identity's current key signs these deterministic bytes:
 
