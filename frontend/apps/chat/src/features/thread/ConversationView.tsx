@@ -119,7 +119,7 @@ export function ConversationView({
       .finally(() => {
         settlingTimer.current = false
       })
-  }, [owedTimer, established, model.timerSeconds, model.key, self.address, setTimerAction])
+  }, [owedTimer, established, model.timerSeconds, model.key, self.userId, setTimerAction])
   const [params, setParams] = useSearchParams()
   const focus = params.get('focus')
   const [highlight, setHighlight] = useState<string | null>(focus)
