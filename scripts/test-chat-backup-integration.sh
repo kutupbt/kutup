@@ -64,11 +64,6 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
 
-# Kutup Pass on the server: vault secrets, reauth under the sign-in check,
-# the PIN's three tries per sign-in.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  cargo test -p kutup-server --test pass_live -- --nocapture
-
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server jobs::tests::live_fixed_cutoff_mailbox_retention \
   -- --exact --nocapture
@@ -128,3 +123,9 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test version_uploads_live -- --nocapture
+
+# Kutup Pass on the server: vault secrets, reauth under the sign-in check,
+# the PIN's three tries per sign-in. After the purge checks: it keeps its
+# vaults.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  cargo test -p kutup-server --test pass_live -- --nocapture
