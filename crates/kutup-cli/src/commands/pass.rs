@@ -165,7 +165,7 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
                 .ok()
                 .zip(uuid::Uuid::parse_str(file_id).ok())
                 .and_then(|(envelope, id)| {
-                    kutup_crypto::pass_vault::open_vault_secret(
+                    kutup_pass::kept::open(
                         &envelope,
                         &ctx.session.master_key_bytes().ok()?,
                         ctx.session.binding(),
@@ -173,7 +173,7 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
                     )
                     .ok()
                 })
-                .is_none_or(|secret| secret.generated_password.is_some());
+                .is_none_or(|kept| kept.generated_password.is_some());
             if generated {
                 anyhow::bail!(
                     "Kutup Pass made this vault's key, and your account may be the only place it is kept: \
@@ -204,14 +204,14 @@ fn show_key(profile: &str, json: bool, file_id: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("your account keeps no key for vault {file_id}"))?;
     let envelope = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)?;
     let id = uuid::Uuid::parse_str(file_id).context("a vault's file id is a UUID")?;
-    let secret = kutup_crypto::pass_vault::open_vault_secret(
+    let kept = kutup_pass::kept::open(
         &envelope,
         &ctx.session.master_key_bytes()?,
         ctx.session.binding(),
         id.as_bytes(),
     )
     .context("the kept key does not open")?;
-    let Some(password) = secret.generated_password else {
+    let Some(password) = kept.generated_password else {
         anyhow::bail!(
             "Kutup Pass did not make this vault's key: it opens with the password chosen for it"
         );

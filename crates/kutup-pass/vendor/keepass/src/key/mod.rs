@@ -128,6 +128,13 @@ fn parse_keyfile(buffer: &[u8]) -> Result<KeyElement, DatabaseKeyError> {
     Ok(calculate_sha256(&[buffer]).as_slice().to_vec())
 }
 
+/// Kutup's copy (vendor/keepass/KUTUP.md): the key element KeePass derives
+/// from a key file's contents (what the composite key uses), so a key file
+/// can be kept as that element.
+pub fn key_file_element(contents: &[u8]) -> Option<Vec<u8>> {
+    parse_keyfile(contents).ok()
+}
+
 /// A KeePass key, which might consist of a password and/or a keyfile
 #[derive(Debug, Clone, Default, PartialEq, Zeroize, ZeroizeOnDrop)]
 pub struct DatabaseKey {

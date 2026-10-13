@@ -78,20 +78,6 @@ export interface CryptoWasmModule {
   openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): string
   sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, name: string): string
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): string
-  sealPassVaultSecret(
-    masterKeyBase64: string,
-    binding: string,
-    fileId: string,
-    password: string | null | undefined,
-    keyFileBase64: string | null | undefined,
-    generated: boolean,
-  ): string
-  openPassVaultSecret(
-    envelopeBase64: string,
-    masterKeyBase64: string,
-    binding: string,
-    fileId: string,
-  ): import('./passVault').PassVaultSecret
   generateMailGroupKey(
     groupAddress: string,
     createdAtSecs: number,

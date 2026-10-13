@@ -21,7 +21,8 @@ type Calls =
     }
   | { call: 'changeKey'; handle: number; password: string | null; keyFile: Uint8Array | null; now: number }
   | { call: 'close'; handle: number }
-  | { call: 'keyFileSecret'; contents: Uint8Array }
+  | { call: 'keepKey'; handle: number; masterKey: Uint8Array; binding: string; fileId: string; generated: boolean }
+  | { call: 'openKept'; envelope: string; masterKey: Uint8Array; binding: string; fileId: string }
   | { call: 'importPreview'; contents: Uint8Array; provider: string | null }
   | { call: 'importFormats' }
 

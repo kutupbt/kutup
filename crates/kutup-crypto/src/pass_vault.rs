@@ -29,8 +29,8 @@ const HAS_GENERATED_PASSWORD: u8 = 4;
 
 /// The longest vault password, in bytes (UTF-8).
 pub const MAX_PASSWORD_BYTES: usize = 1024;
-/// The largest key file kept, in bytes. KeePass reduces any other file to
-/// its SHA-256, which works as the same key (`kutup_pass::key_file_secret`).
+/// The largest key file kept, in bytes. Key files are normally kept as
+/// their 32-byte key element (`kutup_pass::key_file_secret`).
 pub const MAX_KEY_FILE_BYTES: usize = 2048;
 /// Every payload's length: the largest one (a key file and a generated
 /// password at their limits), the rest padded with zeros to it.

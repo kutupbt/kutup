@@ -24,6 +24,7 @@ interface WasmVault {
   save(): Uint8Array
   mergeWith(base: Uint8Array | null | undefined, theirs: Uint8Array, password?: string | null, keyFile?: Uint8Array | null): unknown
   changeKey(password: string | null | undefined, keyFile: Uint8Array | null | undefined, nowMs: number): void
+  keepKey(masterKey: Uint8Array, binding: string, fileId: string, generated: boolean): string
   free(): void
 }
 
@@ -33,7 +34,7 @@ interface PassWasm {
     create(name: string, password: string | null | undefined, keyFile: Uint8Array | null | undefined, nowMs: number): WasmVault
     open(contents: Uint8Array, password: string | null | undefined, passwordHash: Uint8Array | null | undefined, keyFile: Uint8Array | null | undefined): WasmVault
   }
-  keyFileSecret(contents: Uint8Array): Uint8Array
+  openKept(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): unknown
   importPreview(contents: Uint8Array, provider: string | null | undefined): unknown
   importFormats(): unknown
 }
@@ -97,8 +98,10 @@ async function run(request: Request): Promise<unknown> {
       vaults.delete(request.handle)
       return null
     }
-    case 'keyFileSecret':
-      return module.keyFileSecret(request.contents)
+    case 'keepKey':
+      return vault(request.handle).keepKey(request.masterKey, request.binding, request.fileId, request.generated)
+    case 'openKept':
+      return module.openKept(request.envelope, request.masterKey, request.binding, request.fileId)
     case 'importPreview':
       return module.importPreview(request.contents, request.provider)
     case 'importFormats':

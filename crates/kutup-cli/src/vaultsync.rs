@@ -14,7 +14,6 @@ use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use kutup_crypto::account_envelope;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
-use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecret};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
 use uuid::Uuid;
@@ -212,18 +211,10 @@ impl VaultKeys {
     /// The key in the account's vault secret for `file_id`, if one is kept:
     /// the password as its SHA-256, as the account keeps it.
     fn stored_key(&mut self, client: &Client, file_id: &str) -> Option<VaultKey> {
-        let secret = self.open_stored(client, file_id)?;
-        let mut key = VaultKey::new();
-        if let Some(hash) = secret.password_element() {
-            key = key.with_password_hash(&hash);
-        }
-        if let Some(file) = &secret.key_file {
-            key = key.with_key_file(file);
-        }
-        Some(key)
+        Some(self.open_stored(client, file_id)?.key)
     }
 
-    fn open_stored(&mut self, client: &Client, file_id: &str) -> Option<VaultSecret> {
+    fn open_stored(&mut self, client: &Client, file_id: &str) -> Option<kutup_pass::kept::Kept> {
         let account = self.account.as_ref()?;
         let stored = self.stored.get_or_insert_with(|| {
             client
@@ -233,7 +224,7 @@ impl VaultKeys {
         });
         let envelope = account_envelope::decode_canonical_b64(stored.get(file_id)?).ok()?;
         let id = Uuid::parse_str(file_id).ok()?;
-        open_vault_secret(
+        kutup_pass::kept::open(
             &envelope,
             &account.master_key,
             &account.binding,
@@ -292,18 +283,16 @@ pub(crate) fn keep_secret(
     password: Option<&str>,
     key_file: Option<&[u8]>,
 ) -> Result<String> {
-    let key_file = key_file.map(kutup_pass::key_file_secret);
     let mut key = VaultKey::new();
     if let Some(password) = password {
         key = key.with_password(password);
     }
-    if let Some(file) = &key_file {
+    if let Some(file) = key_file {
         key = key.with_key_file(file);
     }
     kutup_pass::open(contents, &key).map_err(|_| anyhow!("this key does not open the vault"))?;
     let id = Uuid::parse_str(file_id)?;
-    let secret = VaultSecret::chosen(password, key_file.as_deref());
-    let sealed = seal_vault_secret(master_key, binding, id.as_bytes(), &secret)?;
+    let sealed = kutup_pass::kept::seal(master_key, binding, id.as_bytes(), &key, false)?;
     let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
     client.put_vault_secret(file_id, &envelope)?;
     Ok(envelope)

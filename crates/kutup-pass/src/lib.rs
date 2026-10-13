@@ -13,6 +13,7 @@
 pub mod edit;
 pub mod import;
 pub mod kdbx;
+pub mod kept;
 pub mod merge;
 mod refs;
 pub mod ssh;

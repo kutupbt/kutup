@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -12,7 +13,7 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { useKeepVaultKey } from '../drive/secrets'
+import { putKeptKey, secretsKey } from '../drive/secrets'
 import { useCreateVaultFile, useVaultFiles } from '../drive/vaults'
 import { randomVaultKey, strengthOf } from '../lib/generator'
 import { freshKeys } from '../sync/openVaults'
@@ -41,12 +42,12 @@ export function CreateVaultDialog({
   const session = useRequiredSession()
   const { folders, root } = useVaultFiles()
   const createFile = useCreateVaultFile()
-  const keepKey = useKeepVaultKey()
+  const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [folderId, setFolderId] = useState('')
   const [mode, setMode] = useState<'random' | 'chosen'>('random')
   /** A generated key that could not be kept, and its vault: shown until kept or saved. */
-  const [unkept, setUnkept] = useState<{ key: string; fileId: string } | null>(null)
+  const [unkept, setUnkept] = useState<{ key: string; fileId: string; envelope: string | null } | null>(null)
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [keyFile, setKeyFile] = useState<{ name: string; contents: Uint8Array } | null>(null)
@@ -90,22 +91,36 @@ export function CreateVaultDialog({
     const key = generated ? { password: generated, keyFile: null } : { password: password || null, keyFile: keyFile?.contents ?? null }
     try {
       const vault = await VaultHandle.create(name.trim(), key)
-      const contents = await vault.save()
-      await vault.close()
-      const fileId = await createFile(folder, name.trim(), contents)
-      freshKeys.set(fileId, key)
-      if (generated || remember) {
-        try {
-          await keepKey(session, fileId, key, Boolean(generated))
-        } catch {
-          if (generated) {
-            // Kept nowhere else: shown now, or the vault is lost.
-            setUnkept({ key: generated, fileId })
-            toast.error(t('vaultKey.notKept'))
-            return
+      let fileId: string
+      let envelope: string | null = null
+      let kept = !(generated || remember)
+      try {
+        const contents = await vault.save()
+        fileId = await createFile(folder, name.trim(), contents)
+        // The vault is in Drive from here on: nothing below may lose its key.
+        if (!kept) {
+          try {
+            // Sealed in the worker from the key this vault was made with.
+            envelope = await vault.keepKey(session.masterKey, session.envelopeBinding, fileId, Boolean(generated))
+            await putKeptKey(fileId, envelope)
+            await queryClient.invalidateQueries({ queryKey: secretsKey })
+            kept = true
+          } catch {
+            // Shown below, or kept again from `envelope`.
           }
-          toast.error(t('unlock.keepFailed'))
         }
+      } finally {
+        await vault.close().catch(() => undefined)
+      }
+      freshKeys.set(fileId, key)
+      if (!kept) {
+        if (generated) {
+          // Kept nowhere else: shown now, or the vault is lost.
+          setUnkept({ key: generated, fileId, envelope })
+          toast.error(t('vaultKey.notKept'))
+          return
+        }
+        toast.error(t('unlock.keepFailed'))
       }
       toast.success(t('vaults.created'))
       onOpenChange(false)
@@ -125,10 +140,11 @@ export function CreateVaultDialog({
   }
 
   const keepAgain = async () => {
-    if (!unkept) return
+    if (!unkept?.envelope) return
     setPending(true)
     try {
-      await keepKey(session, unkept.fileId, { password: unkept.key, keyFile: null }, true)
+      await putKeptKey(unkept.fileId, unkept.envelope)
+      await queryClient.invalidateQueries({ queryKey: secretsKey })
       finish(unkept.fileId)
     } catch {
       toast.error(t('vaultKey.notKept'))
@@ -215,9 +231,11 @@ export function CreateVaultDialog({
               <Button type="button" variant="outline" onClick={() => finish(unkept.fileId)} disabled={pending}>
                 {t('vaultKey.saved')}
               </Button>
-              <Button type="button" loading={pending} onClick={() => void keepAgain()}>
-                {t('vaultKey.keepAgain')}
-              </Button>
+              {unkept.envelope ? (
+                <Button type="button" loading={pending} onClick={() => void keepAgain()}>
+                  {t('vaultKey.keepAgain')}
+                </Button>
+              ) : null}
             </DialogFooter>
           ) : (
             <DialogFooter>

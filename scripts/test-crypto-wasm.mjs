@@ -822,21 +822,6 @@ assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
 // Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
-const pv = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/pass-vault-secret-v2.json`, 'utf8'))
-// A chosen password is kept only as its SHA-256; a generated one as it is.
-assert.deepEqual(crypto.openPassVaultSecret(pv.sealedChosen, pv.masterKey, pv.binding, pv.fileId), { passwordHash: pv.chosenPasswordHash, generatedPassword: null, keyFile: pv.keyFile })
-const generatedOpened = crypto.openPassVaultSecret(pv.sealedGenerated, pv.masterKey, pv.binding, pv.fileId)
-assert.equal(generatedOpened.generatedPassword, pv.generatedPassword)
-assert.equal(generatedOpened.keyFile, null)
-assert.equal(typeof generatedOpened.passwordHash, 'string')
-const resealedVault = crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, pv.chosenPassword, null, false)
-assert.deepEqual(crypto.openPassVaultSecret(resealedVault, pv.masterKey, pv.binding, pv.fileId), { passwordHash: pv.chosenPasswordHash, generatedPassword: null, keyFile: null })
-assert.throws(() => crypto.openPassVaultSecret(pv.sealedChosen, pv.masterKey, pv.binding, '00000000-0000-4000-8000-000000000000'))
-assert.throws(() => crypto.openPassVaultSecret(pv.sealedChosen, pv.masterKey, '00000000-0000-4000-8000-000000000001', pv.fileId))
-assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, null, null, false))
-assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.binding, pv.fileId, null, null, true))
-// The generic account-envelope path cannot open one.
-assert.throws(() => crypto.openAccountEnvelope(pv.sealedChosen, pv.masterKey, 6, pv.binding))
 
 // The safety number every app shows (kutup-crypto safety_number, V1 vector).
 const one = Buffer.alloc(32, 1).toString('base64')

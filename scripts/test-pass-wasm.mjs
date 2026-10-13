@@ -61,9 +61,31 @@ assert.equal(ours.otp(bank, 59_000), null)
 
 // A key changed: the new one opens the saved vault, the old one does not.
 ours.changeKey('yeni', null, minute(8))
+// Not kept before it is saved: Drive's copy still opens with the old key.
+assert.throws(() => ours.keepKey(new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', false))
 const rekeyed = ours.save()
 assert.ok(pass.Vault.open(rekeyed, 'yeni', null, null))
 assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null, null))
 
-assert.equal(pass.keyFileSecret(new Uint8Array(10_000)).length, 32)
+// Kept vault keys (kutup_pass::kept): the checked-in vectors open, and a key
+// kept from an open vault opens it again, for this account and vault only.
+const vectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/pass-vault-secret-v2.json`, 'utf8'))
+const masterKey = Buffer.from(vectors.masterKey, 'base64')
+assert.deepEqual(pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, vectors.fileId), {
+  passwordHash: vectors.chosenPasswordHash,
+  keyFile: vectors.keyFile,
+  generatedPassword: null,
+})
+const shown = pass.openKept(vectors.sealedGenerated, masterKey, vectors.binding, vectors.fileId)
+assert.equal(shown.generatedPassword, vectors.generatedPassword)
+assert.equal(shown.keyFile, null)
+assert.throws(() => pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, '00000000-0000-4000-8000-000000000000'))
+assert.throws(() => pass.openKept(vectors.sealedChosen, masterKey, 'another-binding', vectors.fileId))
+assert.throws(() => pass.openKept(vectors.sealedChosen, new Uint8Array(32), vectors.binding, vectors.fileId))
+const kept = pass.Vault.open(rekeyed, 'yeni', null, null).keepKey(masterKey, vectors.binding, vectors.fileId, true)
+const keptKey = pass.openKept(kept, masterKey, vectors.binding, vectors.fileId)
+assert.equal(keptKey.generatedPassword, 'yeni')
+assert.ok(pass.Vault.open(rekeyed, null, Buffer.from(keptKey.passwordHash, 'base64'), null))
+// Opened with a kept key, only the password's hash is known: nothing to keep.
+assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, false))
 console.log('pass WASM checks passed')
