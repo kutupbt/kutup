@@ -77,6 +77,25 @@ for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E9
   assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
 }
 
+// The shared envelope vectors: every purpose's envelope is well formed, and
+// every refused one is refused here as in Rust (malformed ones by inspect;
+// the rest, for the purposes the generic API opens, by open).
+const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-envelope-v2.json`, 'utf8'))
+const genericPurposes = new Set([1, 2, 3, 4])
+for (const p of envelopeVectors.purposes) {
+  assert.equal(crypto.inspectAccountEnvelope(p.envelope), p.purpose)
+  if (genericPurposes.has(p.purpose)) {
+    assert.equal(crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
+  }
+  for (const refused of p.refused) {
+    if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountEnvelope(refused.envelope), refused.why)
+    if (refused.step === 'open') assert.equal(crypto.inspectAccountEnvelope(refused.envelope), p.purpose, refused.why)
+    if (genericPurposes.has(p.purpose)) {
+      assert.throws(() => crypto.openAccountEnvelope(refused.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), refused.why)
+    }
+  }
+}
+
 const driveEnvelope = crypto.sealDriveEnvelope(
   Buffer.from('projects').toString('base64'),
   Buffer.alloc(32, 0x33).toString('base64'),

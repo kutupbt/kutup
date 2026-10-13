@@ -146,7 +146,7 @@ fn vault_secrets() {
         StatusCode::BAD_REQUEST
     );
     let other_purpose = account_envelope::seal_b64(
-        b"x",
+        &[1u8; 32],
         &owner.master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
         &owner.binding,

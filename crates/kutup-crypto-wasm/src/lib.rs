@@ -622,6 +622,18 @@ pub fn open_account_envelope(
     Ok(STANDARD.encode(plaintext))
 }
 
+/// Checks an account envelope's shape (suite, purpose, object, revision and
+/// padded length) without a key, as the server does before storing one;
+/// throws when it is malformed. Returns the purpose.
+#[wasm_bindgen(js_name = inspectAccountEnvelope)]
+pub fn inspect_account_envelope(envelope_base64: &str) -> Result<u8, JsValue> {
+    let envelope = account_envelope::decode_canonical_b64(envelope_base64)
+        .map_err(|error| js_error(&error.to_string()))?;
+    account_envelope::inspect(&envelope)
+        .map(|header| header.purpose.as_u8())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 /// Mail address keys have typed exports (`generateMailAddressKey`), so the
 /// generic account-envelope path cannot hand their secret key to JavaScript.
 fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue> {

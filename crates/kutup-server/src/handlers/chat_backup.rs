@@ -123,13 +123,8 @@ pub async fn provision(
     )?;
     let envelope = account_envelope::decode_canonical_b64(&request.root_envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
-    let envelope_header = account_envelope::inspect(&envelope)
+    account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
-    if envelope_header.purpose != AccountEnvelopePurpose::ChatBackupRoot {
-        return Err(AppError::bad_request(
-            "Chat backup root envelope has the wrong purpose",
-        ));
-    }
     let digest = request_digest(&request)?;
     let authorization_digest = request
         .signer_authorization
@@ -145,9 +140,18 @@ pub async fn provision(
     .fetch_one(&mut *transaction)
     .await?;
     let (binding, account_incarnation_id, authority_public_key, authority_key_id) = user_row;
-    if envelope_header.canonical_binding != binding {
+    // The one check every stored account envelope passes: its purpose, this
+    // account's key binding, no object.
+    if account_envelope::validate_for(
+        &envelope,
+        AccountEnvelopePurpose::ChatBackupRoot,
+        &binding,
+        &[],
+    )
+    .is_err()
+    {
         return Err(AppError::bad_request(
-            "Chat backup root envelope account binding mismatch",
+            "Chat backup root envelope is not this account's backup root",
         ));
     }
     if request.signer_authorization.account_incarnation_id != account_incarnation_id

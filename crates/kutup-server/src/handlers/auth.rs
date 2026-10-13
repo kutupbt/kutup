@@ -399,7 +399,8 @@ pub(crate) fn validate_account_envelope(
 ) -> AppResult<()> {
     let envelope = kutup_crypto::account_envelope::decode_canonical_b64(value)
         .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
-    kutup_crypto::account_envelope::validate(&envelope, purpose, binding, 32)
+    kutup_crypto::account_envelope::validate_for(&envelope, purpose, binding, &[])
+        .map(drop)
         .map_err(|_| AppError::bad_request(format!("invalid {field} binding")))
 }
 
@@ -2052,11 +2053,11 @@ mod tests {
         let second = deterministic_fake_account_envelope(&[7u8; 32], &binding);
         assert_eq!(first, second);
         let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
-        kutup_crypto::account_envelope::validate(
+        kutup_crypto::account_envelope::validate_for(
             &decoded,
             kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
             &binding,
-            32,
+            &[],
         )
         .unwrap();
     }
