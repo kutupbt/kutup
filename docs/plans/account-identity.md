@@ -206,6 +206,32 @@ Before v1, each separate: password change, raisable Argon2id parameters,
 OPAQUE/SRP, key transparency. Master key rotation (authority succession, old
 keys kept to decrypt only) has a plan of its own.
 
+### Security review of PR #167 (2026-10-13)
+
+Fixed in the PR: a retried re-seal kept the password's key (it had been
+wiped after a failed attempt, so a retry sealed under zeros) and refuses an
+all-zero key; recovery preflight shows an account not yet re-sealed only to
+someone naming it by its old email; fake answers and the sign-in lockout
+take `ada` and `ada@<this server>` as one name, under the server's own
+stored key (not `JWT_SECRET`); the timing dummy is a real bcrypt hash and an
+empty hash costs as much; a recovery checks the proof before anything else;
+migration 162 reads each binding from the password envelope's header;
+unreadable kept vault keys are forgotten only when the person agrees;
+`ADMIN_ACCOUNT` is read in one place (a password may hold colons, a bad
+username is refused); the Chat backup root is replaced only if unchanged.
+
+**Rollback:** once any account has re-sealed, rolling back to older code is
+not supported (it reads envelopes by the sign-in email, cannot decode an
+account without one, and cannot restore a voided temporary password).
+
+Open: H2 (a password holder may replace the recovery phrase through the
+re-seal; the user decides how). Follow-ups: the sign-in lockout per account
+lets anyone lock a known username out (key it per account and address, or
+slow down instead); suite 1 is still accepted on writes other than the
+re-seal (refuse it, and require the object id where one is due); a
+sign-in by an old email that differs only in case resolves to one of them;
+the login key stays in the page's memory while a re-seal waits.
+
 ## Slices
 
 1. **Identity:** binding by id, sign-in by name, preflight with binding,

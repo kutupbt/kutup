@@ -3,9 +3,10 @@
 // "Vault secrets"), vaults in the trash included, opened with the old binding
 // and sealed again with the new one, for `POST /api/user/rebind`'s
 // `passVaultSecrets`. The server applies it only whole, with every record
-// named. A record that does not open with the old binding opened nothing
-// already (Kutup Pass treats it as absent); it is dropped (`envelope: null`)
-// rather than holding up the rebind.
+// named. A record that does not open with the old binding (sealed under a
+// master key a recovery replaced, or damaged) stops the re-seal unless the
+// person agreed to forget it (`forgetUnreadable`): then it is dropped
+// (`envelope: null`), and the vault asks for its password again.
 
 import { toBase64 } from '@kutup/crypto/base64'
 import { openPassVaultSecret, sealPassVaultSecret } from '@kutup/crypto/passVault'
@@ -22,7 +23,20 @@ interface SecretRow {
   envelope: string
 }
 
-export async function rebindPassVaultSecrets(masterKey: Uint8Array, fromBinding: string, toBinding: string): Promise<PassVaultSecretRebind[]> {
+/** Kept vault keys that do not open: forgotten only if the person agrees. */
+export class UnreadableVaultKeys extends Error {
+  constructor(readonly count: number) {
+    super(`${count} kept vault keys do not open`)
+    this.name = 'UnreadableVaultKeys'
+  }
+}
+
+export async function rebindPassVaultSecrets(
+  masterKey: Uint8Array,
+  fromBinding: string,
+  toBinding: string,
+  forgetUnreadable = false,
+): Promise<PassVaultSecretRebind[]> {
   const { data } = await api.get<SecretRow[]>('/pass/vault-secrets', { params: { all: true } })
   const key = toBase64(masterKey)
   const out: PassVaultSecretRebind[] = []
@@ -40,5 +54,7 @@ export async function rebindPassVaultSecrets(masterKey: Uint8Array, fromBinding:
     if (!again || JSON.stringify(again) !== JSON.stringify(secret)) throw new Error('a re-sealed vault key does not open')
     out.push({ fileId: row.fileId, envelope })
   }
+  const unreadable = out.filter((row) => row.envelope === null).length
+  if (unreadable && !forgetUnreadable) throw new UnreadableVaultKeys(unreadable)
   return out
 }

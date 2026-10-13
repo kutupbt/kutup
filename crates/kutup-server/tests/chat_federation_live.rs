@@ -584,22 +584,30 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
             .unwrap(),
         "bootstrap admin preflight",
     );
-    if preflight["accountProtectionSalt"]
-        .as_str()
-        .is_some_and(|salt| !salt.is_empty())
-    {
+    // The bootstrap's temporary password is derived as any password, under
+    // the salt preflight answers; once set up, the account's own signs in.
+    let temporary = kutup_crypto::kdf::derive_account_protection_keys_b64(
+        ADMIN_TEMP_PASSWORD,
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+        kutup_crypto::kdf::AccountProtectionParameters {
+            memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
+            iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
+            parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
+        },
+    )
+    .unwrap();
+    let first = c
+        .post(format!("{base}/api/auth/login"))
+        .json(&json!({
+            "name": username,
+            "loginKey": b64(temporary.login_key.as_slice()),
+        }))
+        .send()
+        .unwrap();
+    if !first.status().is_success() {
         return login(c, base, username);
     }
-    let login = json_response(
-        c.post(format!("{base}/api/auth/login"))
-            .json(&json!({
-                "name": username,
-                "loginKey": b64(ADMIN_TEMP_PASSWORD.as_bytes()),
-            }))
-            .send()
-            .unwrap(),
-        "bootstrap admin login",
-    );
+    let login: Value = first.json().unwrap();
     assert_eq!(login["requiresSetup"], true);
     let setup_token = login["setupToken"].as_str().unwrap();
     let setup_payload = registration_payload(email, username);

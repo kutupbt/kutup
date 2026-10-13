@@ -14,6 +14,10 @@ pub(crate) enum GeneratedKey {
     MlsControl,
     /// Signs shared mailboxes' key lists (docs/plans/mail-groups.md).
     MailGroupAuthority,
+    /// The HMAC key of the answers for names that are no account
+    /// (docs/plans/account-identity.md): its own, so rotating any other
+    /// secret changes none of them.
+    FakeAccounts,
 }
 
 impl GeneratedKey {
@@ -22,6 +26,7 @@ impl GeneratedKey {
             Self::FederationIdentity => "federation-identity",
             Self::MlsControl => "mls-control",
             Self::MailGroupAuthority => "mail-group-authority",
+            Self::FakeAccounts => "fake-accounts",
         }
     }
 }

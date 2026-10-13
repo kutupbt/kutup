@@ -10,6 +10,7 @@ import { toast } from 'sonner'
 import { AuthLayout } from './AuthLayout'
 import { newRecoveryPhrase, rebindAccount, WrongRecoveryPhrase, type RecoveryChoice } from './flows'
 import { getPendingRebind, setPendingRebind } from './pendingRebind'
+import { UnreadableVaultKeys } from '@kutup/session/passRebind'
 import { ConfirmRecoveryPhrase, ShowRecoveryPhrase } from './RecoveryPhrase'
 
 type Step = { kind: 'phrase' } | { kind: 'newShow'; mnemonic: string } | { kind: 'newConfirm'; mnemonic: string }
@@ -31,6 +32,8 @@ export function AccountUpdatePage() {
   const [phrase, setPhrase] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Kept Pass vault keys that no longer open: the re-seal asks before forgetting them.
+  const [unreadable, setUnreadable] = useState<{ count: number; choice: RecoveryChoice } | null>(null)
   if (!pendingRebind) return <Navigate to={next} replace />
 
   const finish = async (choice: RecoveryChoice) => {
@@ -42,7 +45,8 @@ export function AccountUpdatePage() {
       toast.success(t('rebind.done'))
       void navigate(next, { replace: true })
     } catch (err) {
-      setError(err instanceof WrongRecoveryPhrase ? t('rebind.wrongPhrase') : t('rebind.failed'))
+      if (err instanceof UnreadableVaultKeys) setUnreadable({ count: err.count, choice })
+      else setError(err instanceof WrongRecoveryPhrase ? t('rebind.wrongPhrase') : t('rebind.failed'))
     } finally {
       setBusy(false)
     }
@@ -50,6 +54,30 @@ export function AccountUpdatePage() {
   const later = () => {
     setPendingRebind(null)
     void navigate(next, { replace: true })
+  }
+
+  if (unreadable) {
+    return (
+      <AuthLayout title={t('rebind.unreadableTitle')} description={t('rebind.unreadableDescription', { count: unreadable.count })} width="md">
+        <div className="space-y-3">
+          {error ? <Alert variant="error">{error}</Alert> : null}
+          <Button
+            className="w-full"
+            loading={busy}
+            onClick={() => {
+              const choice = { ...unreadable.choice, forgetUnreadableVaultKeys: true }
+              setUnreadable(null)
+              void finish(choice)
+            }}
+          >
+            {t('rebind.unreadableForget')}
+          </Button>
+          <Button variant="ghost" className="w-full" disabled={busy} onClick={later}>
+            {t('rebind.later')}
+          </Button>
+        </div>
+      </AuthLayout>
+    )
   }
 
   if (step.kind === 'newShow') {

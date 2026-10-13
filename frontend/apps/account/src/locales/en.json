@@ -119,6 +119,7 @@
     "description": "An administrator created the account {{name}} for you. Choose your own password to create your encryption keys."
   },
   "recover": {
+    "nameHint": "Your username. If you have not signed in since usernames came, the email you signed up with.",
     "title": "Recover your account",
     "description": "Use your 24-word recovery phrase to choose a new password.",
     "phrase": "Recovery phrase",
@@ -898,6 +899,10 @@
     }
   },
   "rebind": {
+    "unreadableTitle": "Some saved vault passwords no longer open",
+    "unreadableDescription_one": "The password saved for {{count}} Kutup Pass vault no longer opens (it was saved before your keys changed). To finish the update it is forgotten: Kutup Pass asks for that vault's password the next time you open it.",
+    "unreadableDescription_other": "The passwords saved for {{count}} Kutup Pass vaults no longer open (they were saved before your keys changed). To finish the update they are forgotten: Kutup Pass asks for those vaults' passwords the next time you open them.",
+    "unreadableForget": "Forget them and continue",
     "title": "One more step for your account",
     "description": "Kutup now signs you in with your username ({{name}}), not an email. Your encryption keys move with it once, here in your browser: confirm your recovery phrase so it keeps working.",
     "phrase": "Recovery phrase",

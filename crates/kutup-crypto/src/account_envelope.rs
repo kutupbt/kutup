@@ -195,6 +195,25 @@ fn aead_key(
     Ok(out)
 }
 
+/// A suite-2 envelope's AEAD key, as derived for it: for checked-in vectors
+/// only (they pin this intermediate step).
+pub fn v2_aead_key_for_vectors(
+    key: &[u8],
+    purpose: AccountEnvelopePurpose,
+    binding: &str,
+    object_id: &[u8],
+) -> Result<[u8; 32]> {
+    check_key(key)?;
+    let binding = canonical_login_email(binding)?;
+    Ok(*aead_key(
+        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+        key,
+        purpose,
+        &binding,
+        object_id,
+    )?)
+}
+
 fn check_key(key: &[u8]) -> Result<()> {
     if key.len() != 32 {
         return Err(CryptoError::InvalidLength {

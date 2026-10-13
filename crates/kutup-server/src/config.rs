@@ -404,11 +404,31 @@ impl Config {
 /// Extracts the break-glass admin's email (the first field of `email:username:password`) —
 /// mirrors `breakGlassEmail`. Empty when the account is unset or malformed.
 fn break_glass_username(admin_account: &str) -> String {
-    let parts: Vec<&str> = admin_account.trim().splitn(3, ':').collect();
-    match parts.as_slice() {
-        [username, _password] | [_, username, _password] => username.trim().to_string(),
-        _ => String::new(),
-    }
+    parse_admin_account(admin_account)
+        .map(|(username, _)| username)
+        .unwrap_or_default()
+}
+
+/// `ADMIN_ACCOUNT` as `(username, password)`: `username:password` (the
+/// password may hold colons), or the older `email:username:password`, told
+/// by the `@` of its first part. A username that is not one an account may
+/// have (lowercase letters, digits, `_` and `-`, 3 to 32) is refused, since
+/// it could never sign in.
+pub(crate) fn parse_admin_account(admin_account: &str) -> Option<(String, String)> {
+    let value = admin_account.trim();
+    let (first, rest) = value.split_once(':')?;
+    let (username, password) = if first.contains('@') {
+        rest.split_once(':')?
+    } else {
+        (first, rest)
+    };
+    let username = username.trim();
+    let valid = (3..=32).contains(&username.len())
+        && username
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    (valid && !password.trim().is_empty())
+        .then(|| (username.to_string(), password.trim().to_string()))
 }
 
 fn must_env(key: &str) -> String {
@@ -462,6 +482,28 @@ fn get_env_bool(key: &str, fallback: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_account_is_read_as_its_owner_meant() {
+        let read = |v: &str| parse_admin_account(v);
+        assert_eq!(
+            read("admin:secret"),
+            Some(("admin".into(), "secret".into()))
+        );
+        // A password with colons stays whole.
+        assert_eq!(read("admin:pa:ss"), Some(("admin".into(), "pa:ss".into())));
+        // The older form, told by the email's @.
+        assert_eq!(
+            read("a@b.c:admin:pa:ss"),
+            Some(("admin".into(), "pa:ss".into()))
+        );
+        // A username no account may have, or no password: refused.
+        assert_eq!(read("Admin:secret"), None);
+        assert_eq!(read("ad:secret"), None);
+        assert_eq!(read("admin:"), None);
+        assert_eq!(read("admin"), None);
+        assert_eq!(break_glass_username("a@b.c:admin:x"), "admin");
+    }
     use std::collections::HashMap;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {

@@ -79,7 +79,7 @@ export function RecoverPage() {
   return (
     <AuthLayout title={t('recover.title')} description={t('recover.description')} width="md">
       <form className="space-y-4" onSubmit={(e) => void onSubmit(e)} noValidate>
-        <Field label={t('auth.fields.username')} error={errors.name?.message} required>
+        <Field label={t('auth.fields.username')} error={errors.name?.message} description={t('recover.nameHint')} required>
           {(field) => <Input {...field} {...register('name')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />}
         </Field>
         <Field

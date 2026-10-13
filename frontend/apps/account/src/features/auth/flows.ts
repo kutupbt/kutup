@@ -338,7 +338,10 @@ export async function recoverAccount(
  * (checked against the account), or a new one they were shown and confirmed
  * first (it replaces the old phrase).
  */
-export type RecoveryChoice = { kind: 'phrase'; mnemonic: string } | { kind: 'new'; mnemonic: string }
+export type RecoveryChoice = ({ kind: 'phrase'; mnemonic: string } | { kind: 'new'; mnemonic: string }) & {
+  /** Kept Pass vault keys that no longer open are forgotten (the person agreed). */
+  forgetUnreadableVaultKeys?: boolean
+}
 
 /** A new recovery phrase, to show and confirm before a re-seal uses it. */
 export async function newRecoveryPhrase(): Promise<string> {
@@ -393,8 +396,11 @@ export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoi
     }
   }
   try {
-    const seal = (plain: Uint8Array, key: Uint8Array, purpose: (typeof ACCOUNT_ENVELOPE_PURPOSE)[keyof typeof ACCOUNT_ENVELOPE_PURPOSE]) =>
-      sealAccountEnvelope(plain, key, purpose, keyBinding)
+    const seal = (plain: Uint8Array, key: Uint8Array, purpose: (typeof ACCOUNT_ENVELOPE_PURPOSE)[keyof typeof ACCOUNT_ENVELOPE_PURPOSE]) => {
+      // A wiped key (all zeros) would seal what anyone can open.
+      if (key.every((b) => b === 0)) throw new Error('refusing to seal under a wiped key')
+      return sealAccountEnvelope(plain, key, purpose, keyBinding)
+    }
     const backup = await api
       .get<{ provisioned?: boolean; rootEnvelope?: string | null }>('/chat/backup')
       .then((r) => r.data)
@@ -427,6 +433,7 @@ export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoi
       recoveryProof: await deriveRecoveryAuthProof(toBase64(recoveryKey), keyBinding),
       drivePrivateKeyEnvelope: await seal(privateKey, masterKey, ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey),
       chatBackupRootEnvelope: backup?.provisioned && backup.rootEnvelope ? await resealed(backup.rootEnvelope, ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot) : null,
+      chatBackupRootFrom: backup?.provisioned && backup.rootEnvelope ? backup.rootEnvelope : null,
       mailKeys: await Promise.all(
         addresses.flatMap((address) =>
           address.keys.map(async (key) => ({
@@ -435,7 +442,7 @@ export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoi
           })),
         ),
       ),
-      passVaultSecrets: await rebindPassVaultSecrets(masterKey, from, keyBinding),
+      passVaultSecrets: await rebindPassVaultSecrets(masterKey, from, keyBinding, choice.forgetUnreadableVaultKeys),
     }
     await mustOpen(body.masterKeyEnvelope, pending.keyEncryptionKey, ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey, masterKey)
     await mustOpen(body.recoveryKeyEnvelope, recoveryKey, ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey, masterKey)
@@ -443,8 +450,9 @@ export async function rebindAccount(pending: PendingRebind, choice: RecoveryChoi
     await api.post('/user/rebind', body)
     updateSession({ envelopeBinding: keyBinding })
   } finally {
+    // The password's key stays until the re-seal is done or dropped
+    // (setPendingRebind, dropPendingRebind): a retry seals with it again.
     recoveryKey.fill(0)
-    pending.keyEncryptionKey.fill(0)
   }
 }
 

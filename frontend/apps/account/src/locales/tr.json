@@ -119,6 +119,7 @@
     "description": "Bir yönetici sizin için {{name}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
   },
   "recover": {
+    "nameHint": "Kullanıcı adınız. Kullanıcı adları geldiğinden beri giriş yapmadıysanız, kaydolduğunuz e-posta.",
     "title": "Hesabınızı kurtarın",
     "description": "Yeni bir parola seçmek için 24 sözcüklük kurtarma ifadenizi kullanın.",
     "phrase": "Kurtarma ifadesi",
@@ -898,6 +899,10 @@
     }
   },
   "rebind": {
+    "unreadableTitle": "Kaydedilmiş bazı kasa parolaları artık açılmıyor",
+    "unreadableDescription_one": "{{count}} Kutup Pass kasası için kaydedilen parola artık açılmıyor (anahtarlarınız değişmeden önce kaydedilmiş). Güncellemeyi bitirmek için unutulur: Kutup Pass o kasayı bir sonraki açışınızda parolasını sorar.",
+    "unreadableDescription_other": "{{count}} Kutup Pass kasası için kaydedilen parolalar artık açılmıyor (anahtarlarınız değişmeden önce kaydedilmiş). Güncellemeyi bitirmek için unutulur: Kutup Pass bu kasaları bir sonraki açışınızda parolalarını sorar.",
+    "unreadableForget": "Unut ve devam et",
     "title": "Hesabınız için bir adım daha",
     "description": "Kutup artık sizi e-posta ile değil kullanıcı adınızla ({{name}}) oturum açtırıyor. Şifreleme anahtarlarınız bir kez, burada tarayıcınızda taşınır: çalışmaya devam etmesi için kurtarma ifadenizi onaylayın.",
     "phrase": "Kurtarma ifadesi",

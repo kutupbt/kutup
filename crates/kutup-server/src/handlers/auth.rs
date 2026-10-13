@@ -28,9 +28,25 @@ use crate::{jwt, ratelimit, totp, AppState};
 
 /// bcrypt cost — matches Go's `bcrypt.DefaultCost` (10).
 const BCRYPT_COST: u32 = 10;
-/// Fixed dummy hash used to keep timing constant on the no-such-user paths — mirrors the
-/// Go `bcrypt.CompareHashAndPassword([]byte("$2a$10$fakehash..."), ...)` calls.
-const FAKE_BCRYPT_HASH: &str = "$2a$10$fakehashfortimingprotectiononly";
+
+/// A real hash at the cost every stored one has, verified when there is
+/// nothing real to check against (an unknown name, an account without a
+/// hash), so the answer takes as long as a real one.
+static FAKE_BCRYPT_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    bcrypt::hash("kutup-timing-only", BCRYPT_COST).expect("bcrypt of a constant")
+});
+
+/// Verifies `secret` against `hash`, at full cost even when `hash` is empty
+/// or not a hash (a voided temporary password).
+fn verify_hash(secret: impl AsRef<[u8]>, hash: &str) -> bool {
+    match bcrypt::verify(secret.as_ref(), hash) {
+        Ok(ok) => ok,
+        Err(_) => {
+            let _ = bcrypt::verify("kutup-timing-only-not", &FAKE_BCRYPT_HASH);
+            false
+        }
+    }
+}
 
 // --- request / response bodies local to auth.go ---
 //
@@ -226,9 +242,39 @@ fn lockout_key(account: Option<Uuid>, name: &str) -> String {
     }
 }
 
+/// A name as one account would answer to it: trimmed, lowercased, and an
+/// address on this server reduced to its username, so `ada` and
+/// `ada@<this server>` get the same fake answers and lockout as a real
+/// account's do.
+fn canonical_name(state: &AppState, name: &str) -> String {
+    let name = name.trim().to_ascii_lowercase();
+    let server = state.config.chat_server_name.to_ascii_lowercase();
+    match name.rsplit_once('@') {
+        Some((local, domain)) if domain == server && !local.is_empty() => local.to_owned(),
+        _ => name,
+    }
+}
+
+static FAKE_ACCOUNTS_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
+
+/// The server's own key for fake answers (stored once, as its other keys).
+async fn fake_accounts_key(state: &AppState) -> AppResult<[u8; 32]> {
+    FAKE_ACCOUNTS_KEY
+        .get_or_try_init(|| async {
+            crate::server_keys::load_or_create(
+                &state.pool,
+                crate::server_keys::GeneratedKey::FakeAccounts,
+            )
+            .await
+        })
+        .await
+        .copied()
+        .map_err(|_| AppError::internal("fake account key"))
+}
+
 /// A fake binding for a name that is not an account, the same each time,
 /// shaped as a real one (a key binding), so preflight tells nothing.
-fn fake_binding(secret: &str, name: &str) -> String {
+fn fake_binding(secret: &[u8], name: &str) -> String {
     let bytes = STANDARD
         .decode(deterministic_fake_bytes(
             secret,
@@ -711,7 +757,12 @@ pub async fn get_login_preflight(
         Some(row) => row,
         None => (
             kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
-            deterministic_fake_bytes(&state.config.jwt_secret, &name, "account-protection", 16),
+            deterministic_fake_bytes(
+                &fake_accounts_key(&state).await?,
+                &canonical_name(&state, &name),
+                "account-protection",
+                16,
+            ),
             kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
@@ -788,7 +839,7 @@ pub async fn verify_account_login_key(
     let login_key = STANDARD
         .decode(login_key)
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    if !bcrypt::verify(&login_key, &login_key_hash).unwrap_or(false) {
+    if !verify_hash(&login_key, &login_key_hash) {
         ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         tracing::warn!(user_id = %user_id, "account password re-check failed");
         return Err(AppError::unauthorized("invalid credentials"));
@@ -818,7 +869,7 @@ pub async fn login(
     // so the 429 is not an account-existence oracle.
     let name = req.name.trim().to_ascii_lowercase();
     let account = account_by_name(&state, &name).await?;
-    let lockout = lockout_key(account, &name);
+    let lockout = lockout_key(account, &canonical_name(&state, &name));
     if ratelimit::LOGIN_LOCKOUT.is_locked(&lockout) {
         return Err(AppError::too_many_requests(
             "too many failed attempts, try again later",
@@ -871,7 +922,7 @@ pub async fn login(
     )) = row
     else {
         // Run bcrypt anyway to keep timing constant.
-        let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
+        let _ = bcrypt::verify("dummy", &FAKE_BCRYPT_HASH);
         ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         return Err(AppError::unauthorized("invalid credentials"));
     };
@@ -884,7 +935,7 @@ pub async fn login(
         .decode(&req.login_key)
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
 
-    if !bcrypt::verify(&login_key_bytes, &login_key_hash).unwrap_or(false) {
+    if !verify_hash(&login_key_bytes, &login_key_hash) {
         ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         return Err(AppError::unauthorized("invalid credentials"));
     }
@@ -1050,10 +1101,12 @@ pub async fn get_recovery_preflight(
     Query(q): Query<NameQuery>,
 ) -> AppResult<Response> {
     let name = q.name()?;
-    let row: Option<(String, String)> = match account_by_name(&state, &name).await? {
+    let row: Option<(String, String, bool, String)> = match account_by_name(&state, &name).await? {
         Some(id) => {
             sqlx::query_as(
-                "SELECT recovery_key_envelope, envelope_binding FROM users WHERE id = $1",
+                "SELECT recovery_key_envelope, envelope_binding, key_binding IS NULL,
+                        COALESCE(lower(btrim(email)), '')
+                   FROM users WHERE id = $1",
             )
             .bind(id)
             .fetch_optional(&state.pool)
@@ -1061,17 +1114,21 @@ pub async fn get_recovery_preflight(
         }
         None => None,
     };
+    // An account not re-sealed yet carries its sign-in email in its binding
+    // and its recovery envelope's header: shown only to someone who names it
+    // by that email already (usernames are public; emails are not).
+    let row = row.filter(|(_, _, old, email)| !old || name == *email);
 
     let resp = match row {
-        Some((recovery_key_envelope, envelope_binding)) => PreflightRecoverResponse {
+        Some((recovery_key_envelope, envelope_binding, _, _)) => PreflightRecoverResponse {
             recovery_key_envelope,
             envelope_binding,
         },
         None => {
-            let secret = &state.config.jwt_secret;
-            let binding = fake_binding(secret, &name);
+            let secret = fake_accounts_key(&state).await?;
+            let binding = fake_binding(&secret, &canonical_name(&state, &name));
             PreflightRecoverResponse {
-                recovery_key_envelope: deterministic_fake_account_envelope(secret, &binding),
+                recovery_key_envelope: deterministic_fake_account_envelope(&secret, &binding),
                 envelope_binding: binding,
             }
         }
@@ -1115,27 +1172,23 @@ pub async fn recover(
         }
         None => None,
     };
-    // An unknown name is refused as a wrong phrase is: nothing tells it apart.
+    // The proof is checked first, at full cost: an unknown name, an account
+    // without a verifier and a wrong phrase are all the same 401, and nothing
+    // about the account (its binding) is checked before it.
+    let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let (Some(user_id), Some((stored_verifier, binding))) = (account, stored) else {
-        let _ = bcrypt::verify("dummy", FAKE_BCRYPT_HASH);
+        let _ = bcrypt::verify(&proof, &FAKE_BCRYPT_HASH);
         return Err(AppError::unauthorized("invalid recovery proof"));
     };
+    if !verify_hash(&proof, &stored_verifier) {
+        return Err(AppError::unauthorized("invalid recovery proof"));
+    }
     validate_account_envelope(
         &req.new_master_key_envelope,
         kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
         &binding,
         "newMasterKeyEnvelope",
     )?;
-
-    if stored_verifier.is_empty() {
-        return Err(AppError::unauthorized(
-            "account has no recovery authorization verifier",
-        ));
-    }
-    let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
-    if !bcrypt::verify(&proof, &stored_verifier).unwrap_or(false) {
-        return Err(AppError::unauthorized("invalid recovery proof"));
-    }
 
     let login_key_bytes = decode_canonical_base64_exact(&req.new_login_key, 32, "newLoginKey")?;
     let hash =
@@ -1875,12 +1928,11 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
 /// Derives a stable base64 salt from email+purpose — mirrors `deterministicFakeSalt`.
 /// Bytes that stand in for a real account's, for a name that is not one:
 /// the same each time, and told from real ones by no one without the
-/// server's secret (an HMAC under a key derived from it).
-fn deterministic_fake_bytes(secret: &str, name: &str, purpose: &str, len: usize) -> String {
+/// server's own key for them (an HMAC under a key derived from it).
+fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize) -> String {
     use hmac::{Hmac, Mac};
     let key = {
-        let mut mac =
-            <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret.as_bytes()).expect("any key length");
+        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret).expect("any key length");
         mac.update(b"kutup/fake-account/v1\0");
         mac.finalize().into_bytes()
     };
@@ -1900,7 +1952,7 @@ fn deterministic_fake_bytes(secret: &str, name: &str, purpose: &str, len: usize)
     STANDARD.encode(out)
 }
 
-fn deterministic_fake_account_envelope(secret: &str, binding: &str) -> String {
+fn deterministic_fake_account_envelope(secret: &[u8], binding: &str) -> String {
     let key = STANDARD
         .decode(deterministic_fake_bytes(
             secret,
@@ -1931,6 +1983,26 @@ fn deterministic_fake_account_envelope(secret: &str, binding: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checks_against_nothing_cost_as_much_as_real_ones() {
+        // A real hash at the stored cost, so verify does the whole work.
+        assert!(FAKE_BCRYPT_HASH.starts_with(&format!("$2b${BCRYPT_COST}$")));
+        assert_eq!(bcrypt::verify("other", &FAKE_BCRYPT_HASH).ok(), Some(false));
+        let real = bcrypt::hash("secret", BCRYPT_COST).unwrap();
+        let time = |f: &dyn Fn() -> bool| {
+            let started = std::time::Instant::now();
+            assert!(!f());
+            started.elapsed()
+        };
+        let checked = time(&|| verify_hash("wrong", &real));
+        // An empty (voided) hash takes about as long, not a moment.
+        let voided = time(&|| verify_hash("wrong", ""));
+        assert!(
+            voided * 3 > checked,
+            "voided {voided:?} vs checked {checked:?}"
+        );
+    }
 
     #[test]
     fn an_account_address_of_this_server_is_told_from_an_email() {
@@ -1971,11 +2043,11 @@ mod tests {
 
     #[test]
     fn fake_salt_is_deterministic_and_purpose_scoped() {
-        let secret = "a-server-secret-of-at-least-32-bytes";
+        let secret = b"a-server-secret-of-at-least-32-bytes";
         let a = deterministic_fake_bytes(secret, "ada", "kdf", 16);
         let b = deterministic_fake_bytes(secret, " ADA ", "kdf", 16);
         let c = deterministic_fake_bytes(secret, "ada", "login", 16);
-        let d = deterministic_fake_bytes("another-server-secret-of-32-bytes!!", "ada", "kdf", 16);
+        let d = deterministic_fake_bytes(b"another-server-secret-of-32-bytes!!", "ada", "kdf", 16);
         assert_eq!(a, b);
         assert_ne!(a, c);
         // Without the secret nothing is told: another server answers otherwise.
@@ -1994,10 +2066,8 @@ mod tests {
 
     #[test]
     fn fake_recovery_envelope_is_stable_and_structurally_valid() {
-        let first =
-            deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
-        let second =
-            deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
+        let first = deterministic_fake_account_envelope(&[7u8; 32], "User@Example.com");
+        let second = deterministic_fake_account_envelope(&[7u8; 32], "User@Example.com");
         assert_eq!(first, second);
         let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
         kutup_crypto::account_envelope::validate(

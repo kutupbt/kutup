@@ -181,6 +181,9 @@ struct AccountEnvelopeVec {
     /// Suite 2 only.
     #[serde(rename = "objectId", default)]
     object_id: String,
+    /// Suite 2 only: the AEAD key derived for this envelope.
+    #[serde(rename = "aeadKey", default)]
+    aead_key: String,
     nonce: String,
     envelope: String,
 }
@@ -411,14 +414,48 @@ fn account_envelope_vector() {
         .unwrap(),
         b64(&vector.plaintext)
     );
-    assert!(account_envelope::open_object(
+    // The per-envelope key, pinned.
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(
+            account_envelope::v2_aead_key_for_vectors(
+                &b64(&vector.key),
+                purpose,
+                &vector.login_email,
+                &object
+            )
+            .unwrap()
+        ),
+        vector.aead_key
+    );
+    // Refused: another object, binding or purpose; the suite byte turned back
+    // to 1; the object id in the header changed.
+    let key = b64(&vector.key);
+    let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
+        account_envelope::open_object(envelope, &key, purpose, binding, object).is_err()
+    };
+    assert!(refused(&envelope, purpose, &vector.login_email, &[0; 16]));
+    assert!(refused(
         &envelope,
-        &b64(&vector.key),
         purpose,
+        "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+        &object
+    ));
+    assert!(refused(
+        &envelope,
+        AccountEnvelopePurpose::PasswordMasterKey,
         &vector.login_email,
-        &[0; 16]
-    )
-    .is_err());
+        &object
+    ));
+    let mut downgraded = envelope.clone();
+    downgraded[9] = 1;
+    assert!(refused(&downgraded, purpose, &vector.login_email, &object));
+    assert!(refused(&downgraded, purpose, &vector.login_email, &[]));
+    let object_at = 14 + vector.login_email.len() + 1;
+    let mut moved = envelope.clone();
+    moved[object_at] ^= 0x01;
+    let mut moved_object = object.clone();
+    moved_object[0] ^= 0x01;
+    assert!(refused(&moved, purpose, &vector.login_email, &moved_object));
 }
 
 #[test]

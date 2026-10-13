@@ -55,6 +55,9 @@ pub struct RebindRequest {
     pub drive_private_key_envelope: String,
     /// The Chat backup root, when the account has a backup.
     pub chat_backup_root_envelope: Option<String>,
+    /// The root envelope it was re-sealed from, as the account's backup held
+    /// it: replaced only if still so (a backup reset meanwhile is kept).
+    pub chat_backup_root_from: Option<String>,
     #[serde(default)]
     pub mail_keys: Vec<RebindMailKey>,
     #[serde(default)]
@@ -203,11 +206,23 @@ pub async fn rebind(
     match (&chat, backups) {
         (None, 0) => {}
         (Some(root), n) if n > 0 => {
-            sqlx::query("UPDATE chat_backups SET root_envelope = $2 WHERE user_id = $1")
-                .bind(user_id)
-                .bind(STANDARD.encode(root))
-                .execute(&mut *tx)
-                .await?;
+            let from = request.chat_backup_root_from.as_deref().ok_or_else(|| {
+                AppError::bad_request("chatBackupRootFrom is required with chatBackupRootEnvelope")
+            })?;
+            let replaced = sqlx::query(
+                "UPDATE chat_backups SET root_envelope = $2 WHERE user_id = $1 AND root_envelope = $3",
+            )
+            .bind(user_id)
+            .bind(STANDARD.encode(root))
+            .bind(from)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if replaced == 0 {
+                return Err(AppError::conflict(
+                    "the Chat backup changed meanwhile; sign in again to finish",
+                ));
+            }
         }
         _ => {
             return Err(AppError::conflict(

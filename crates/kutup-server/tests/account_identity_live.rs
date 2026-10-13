@@ -118,6 +118,23 @@ fn an_old_account_is_re_sealed_to_its_key_binding() {
     assert_eq!(sign_in(&c, &base, &user, &old_email), 200);
     let me = common::me(&c, &base, &user.token);
     assert_eq!(me["envelopeBinding"], old_email.as_str());
+    // Its recovery preflight tells the old email only to someone who names
+    // the account by it: by its (public) username, a fake answer.
+    let recover_preflight = |name: &str| -> Value {
+        c.get(format!("{base}/api/auth/recover/preflight"))
+            .query(&[("name", name)])
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    assert_eq!(
+        recover_preflight(&old_email)["envelopeBinding"],
+        old_email.as_str()
+    );
+    let by_username = recover_preflight(&user.username);
+    assert_ne!(by_username["envelopeBinding"], old_email.as_str());
+    assert!(uuid::Uuid::parse_str(by_username["envelopeBinding"].as_str().unwrap()).is_ok());
 
     let rebind = |body: &Value| {
         bearer(c.post(format!("{base}/api/user/rebind")), &user.token)
@@ -231,6 +248,16 @@ fn unknown_names_look_like_accounts() {
         k
     };
     assert_eq!(keys(&first), keys(&real));
+    // The same name at this server's address gets the same answers, as a
+    // real account's username and address do.
+    let account = register(&c, &base);
+    let domain = account.account.split_once('@').unwrap().1.to_string();
+    let at_domain = format!("{name}@{domain}");
+    assert_eq!(preflight(&at_domain, "login"), first);
+    assert_eq!(
+        preflight(&at_domain, "recover"),
+        preflight(&name, "recover")
+    );
     // A recovery's: a key binding's shape and an envelope, the same each time.
     let recovery = preflight(&name, "recover");
     assert_eq!(recovery, preflight(&name, "recover"));

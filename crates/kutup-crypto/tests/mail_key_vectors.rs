@@ -137,7 +137,13 @@ fn write_vectors() {
     let envelope_v1 = std::fs::read_to_string(PATH)
         .ok()
         .and_then(|json| serde_json::from_str::<Vectors>(&json).ok())
-        .map(|b| if b.envelope_v1.is_empty() { b.envelope } else { b.envelope_v1 })
+        .map(|b| {
+            if b.envelope_v1.is_empty() {
+                b.envelope
+            } else {
+                b.envelope_v1
+            }
+        })
         .unwrap_or_default();
     let vectors = Vectors {
         envelope_v1,
@@ -203,7 +209,8 @@ fn checked_in_vectors_hold() {
         kutup_crypto::account_envelope::inspect(&v1).unwrap().suite,
         kutup_crypto::account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305V1
     );
-    let opened_v1 = open_address_key(&v1, &master, &v.login_email, &v.address, &fingerprint).unwrap();
+    let opened_v1 =
+        open_address_key(&v1, &master, &v.login_email, &v.address, &fingerprint).unwrap();
     assert_eq!(STANDARD.encode(&*opened_v1), v.secret_key);
     assert!(open_address_key(
         &b64(&v.envelope),

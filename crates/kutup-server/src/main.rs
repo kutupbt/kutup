@@ -443,21 +443,13 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     if account_env.is_empty() {
         return;
     }
-    // `username:password`; the older `email:username:password` still reads
-    // (its email is not kept: accounts sign in with their username).
-    let parts: Vec<&str> = account_env.trim().splitn(3, ':').collect();
-    let (username, password) = match parts.as_slice() {
-        [username, password] => (username.trim(), password.trim()),
-        [_email, username, password] => (username.trim(), password.trim()),
-        _ => {
-            tracing::warn!("bootstrapAdmin: malformed ADMIN_ACCOUNT (expected username:password)");
-            return;
-        }
-    };
-    if username.is_empty() || password.is_empty() {
-        tracing::warn!("bootstrapAdmin: ADMIN_ACCOUNT has an empty field — skipping");
+    let Some((username, password)) = crate::config::parse_admin_account(account_env) else {
+        tracing::warn!(
+            "bootstrapAdmin: ADMIN_ACCOUNT is not username:password (a username of 3 to 32 lowercase letters, digits, _ or -) — skipping"
+        );
         return;
-    }
+    };
+    let (username, password) = (username.as_str(), password.as_str());
 
     let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE username = $1")
         .bind(username)
