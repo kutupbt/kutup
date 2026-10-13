@@ -1,4 +1,5 @@
 import type { useTranslation } from 'react-i18next'
+import { isAxiosError } from 'axios'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
 
 type TFunction = ReturnType<typeof useTranslation>['t']
@@ -11,7 +12,10 @@ type TFunction = ReturnType<typeof useTranslation>['t']
  */
 export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: string): string {
   const code = apiErrorCode(error)
-  if (code === 'too_many_requests') return t('auth.errors.locked')
+  if (code === 'too_many_requests') {
+    // The address's limiter (a minute) or the account's lockout (a while).
+    return t(bodyCode(error) === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked')
+  }
   if (code === 'network') return t('auth.errors.network')
   if (code === 'unauthenticated') return t(fallbackKey)
   if (code === 'conflict') {
@@ -20,4 +24,8 @@ export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: stri
     return t(fallbackKey)
   }
   return apiErrorMessage(error, t(fallbackKey))
+}
+
+function bodyCode(error: unknown): string | undefined {
+  return isAxiosError(error) ? (error.response?.data as { code?: string } | undefined)?.code : undefined
 }

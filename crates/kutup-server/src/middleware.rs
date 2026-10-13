@@ -102,26 +102,62 @@ fn bearer_token(parts: &Parts) -> Option<String> {
 /// Trust note: these headers are only meaningful because the backend is not directly
 /// reachable; nginx overwrites them on every request (see `nginx/nginx.conf`).
 fn client_ip(addr: SocketAddr, req: &Request) -> String {
-    if let Some(ip) = req
-        .headers()
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
+    client_key(client_ip_from_headers(req.headers()), addr)
+}
+
+/// The rate-limit key for a client: its IP from the proxy's headers (or the
+/// socket's), an IPv6 address reduced to its /64, the block one subscriber
+/// gets, so one network cannot spread over 2^64 keys.
+pub(crate) fn client_key(from_headers: Option<String>, peer: SocketAddr) -> String {
+    match from_headers {
+        Some(ip) => limit_key(&ip),
+        None => limit_key(&peer.ip().to_string()),
+    }
+}
+
+fn limit_key(ip: &str) -> String {
+    match ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => {
+                let s = v6.segments();
+                let net = std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0);
+                format!("{net}/64")
+            }
+        },
+        Ok(std::net::IpAddr::V4(v4)) => v4.to_string(),
+        Err(_) => ip.to_owned(),
+    }
+}
+
+/// The client IP from the proxy's headers (`X-Real-IP`, then the first
+/// `X-Forwarded-For` hop), as sent.
+pub(crate) fn client_ip_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    header("x-real-ip")
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        return ip.to_string();
+        .or_else(|| {
+            header("x-forwarded-for")
+                .and_then(|v| v.split(',').next())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod client_key_tests {
+    use super::limit_key;
+
+    #[test]
+    fn ipv6_clients_are_keyed_by_their_64() {
+        assert_eq!(limit_key("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64");
+        assert_eq!(limit_key("2001:db8:1:2:ffff:1:2:3"), "2001:db8:1:2::/64");
+        assert_ne!(limit_key("2001:db8:1:3::1"), limit_key("2001:db8:1:2::1"));
+        assert_eq!(limit_key("198.51.100.7"), "198.51.100.7");
+        assert_eq!(limit_key("::ffff:198.51.100.7"), "198.51.100.7");
     }
-    if let Some(ip) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return ip.to_string();
-    }
-    addr.ip().to_string()
 }
 
 async fn limit(
@@ -135,7 +171,11 @@ async fn limit(
         if let Some(scope) = telemetry_scope {
             crate::telemetry::rate_limit_rejection(scope);
         }
-        return AppError::too_many_requests("too many requests").into_response();
+        // `rateLimited`: this address asked too often (wait a minute), not the
+        // account's lockout (`accountLocked`).
+        return AppError::too_many_requests("too many requests")
+            .with_details(serde_json::json!({ "code": "rateLimited" }))
+            .into_response();
     }
     next.run(req).await
 }

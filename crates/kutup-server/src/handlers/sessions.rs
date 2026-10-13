@@ -5,7 +5,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::header::{ORIGIN, SET_COOKIE};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
+use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -38,7 +38,17 @@ pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<
     sessions::sign_out(&state.pool, user.session.session_id).await?;
     let body = Json(OkResponse { ok: true });
     if user.session.client.uses_cookie() {
-        Ok(([(SET_COOKIE, clear_refresh_cookie(&state))], body).into_response())
+        Ok((
+            AppendHeaders([
+                (SET_COOKIE, clear_refresh_cookie(&state)),
+                (
+                    SET_COOKIE,
+                    crate::auth_check::clear_known_client_cookie(&state),
+                ),
+            ]),
+            body,
+        )
+            .into_response())
     } else {
         Ok(body.into_response())
     }
@@ -254,11 +264,20 @@ pub async fn consume_fork(
         user_id: consumed.user_id.to_string(),
         payload: STANDARD.encode(&consumed.payload),
     };
+    // Each app's origin gets its own known-client mark (`auth_check`), so
+    // reauth and the Pass PIN from it are not held by the unknown-client
+    // ceiling.
     Ok((
-        [(
-            SET_COOKIE,
-            refresh_cookie(&state, &consumed.issued.refresh_token),
-        )],
+        AppendHeaders([
+            (
+                SET_COOKIE,
+                refresh_cookie(&state, &consumed.issued.refresh_token),
+            ),
+            (
+                SET_COOKIE,
+                crate::auth_check::known_client_cookie(&state, consumed.user_id).await?,
+            ),
+        ]),
         Json(body),
     )
         .into_response())

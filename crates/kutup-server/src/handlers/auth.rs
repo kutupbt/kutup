@@ -6,10 +6,12 @@
 //! is set as the same HttpOnly cookie scoped to `/api/auth/refresh`.
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query, State};
+use std::net::SocketAddr;
+
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::header::{AUTHORIZATION, COOKIE, SET_COOKIE, USER_AGENT};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
+use axum::response::{AppendHeaders, IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -27,26 +29,7 @@ use crate::sessions::{self, ClientType};
 use crate::{jwt, ratelimit, totp, AppState};
 
 /// bcrypt cost — matches Go's `bcrypt.DefaultCost` (10).
-const BCRYPT_COST: u32 = 10;
-
-/// A real hash at the cost every stored one has, verified when there is
-/// nothing real to check against (an unknown name, an account without a
-/// hash), so the answer takes as long as a real one.
-static FAKE_BCRYPT_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    bcrypt::hash("kutup-timing-only", BCRYPT_COST).expect("bcrypt of a constant")
-});
-
-/// Verifies `secret` against `hash`, at full cost even when `hash` is empty
-/// or not a hash (a voided temporary password).
-fn verify_hash(secret: impl AsRef<[u8]>, hash: &str) -> bool {
-    match bcrypt::verify(secret.as_ref(), hash) {
-        Ok(ok) => ok,
-        Err(_) => {
-            let _ = bcrypt::verify("kutup-timing-only-not", &FAKE_BCRYPT_HASH);
-            false
-        }
-    }
-}
+use crate::auth_check::{self, BCRYPT_COST, FAKE_BCRYPT_HASH};
 
 // --- request / response bodies local to auth.go ---
 //
@@ -207,15 +190,6 @@ pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<O
     )
 }
 
-/// The sign-in lockout's key: the account once the name resolves (sign-in,
-/// reauth and the Pass PIN share it), the name otherwise.
-fn lockout_key(account: Option<Uuid>, name: &str) -> String {
-    match account {
-        Some(id) => format!("account:{id}"),
-        None => format!("name:{name}"),
-    }
-}
-
 /// A name as one account would answer to it: trimmed, lowercased, and an
 /// address on this server reduced to its username, so `ada` and
 /// `ada@<this server>` get the same fake answers and lockout as a real
@@ -232,7 +206,7 @@ fn canonical_name(state: &AppState, name: &str) -> String {
 static FAKE_ACCOUNTS_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
 
 /// The server's own key for fake answers (stored once, as its other keys).
-async fn fake_accounts_key(state: &AppState) -> AppResult<[u8; 32]> {
+pub(crate) async fn fake_accounts_key(state: &AppState) -> AppResult<[u8; 32]> {
     FAKE_ACCOUNTS_KEY
         .get_or_try_init(|| async {
             crate::server_keys::load_or_create(
@@ -780,45 +754,47 @@ pub struct ReauthRequest {
 )]
 pub async fn reauth(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<ReauthRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    verify_account_login_key(&state, &user, &req.login_key).await?;
+    verify_account_login_key(&state, peer, &headers, &user, &req.login_key).await?;
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
 /// Checks a signed-in account's password (as the login key the client
-/// derived from it) the way sign-in does: against `login_key_hash`, under
-/// the per-account sign-in lockout, misses here and at sign-in counting
-/// together. `Err` is 401 for a wrong password, 429 during the lockout.
+/// derived from it) the way sign-in does (`auth_check`): against
+/// `login_key_hash`, under the same lockout and ceiling, misses here and at
+/// sign-in counting together. The caller is signed in to the account, so it
+/// is never held by the unknown-client ceiling. `Err` is 401 for a wrong
+/// password, 429 while held.
 pub async fn verify_account_login_key(
     state: &AppState,
+    peer: SocketAddr,
+    headers: &HeaderMap,
     user: &AuthUser,
     login_key: &str,
 ) -> AppResult<()> {
     let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
-    let login_key_hash: String =
-        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1 AND is_active")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or_else(|| AppError::unauthorized("invalid credentials"))?;
-    let lockout = lockout_key(Some(user_id), "");
-    if ratelimit::LOGIN_LOCKOUT.is_locked(&lockout) {
-        return Err(AppError::too_many_requests(
-            "too many failed attempts, try again later",
-        ));
-    }
     let login_key = STANDARD
         .decode(login_key)
         .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    if !verify_hash(&login_key, &login_key_hash) {
-        ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
+    let login_key_hash: Option<String> =
+        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1 AND is_active")
+            .bind(user_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let client = auth_check::Client::from_headers(state, headers, peer)
+        .await?
+        .signed_in_as(user_id);
+    let epoch = login_key_hash.as_deref().map(auth_check::credential_epoch);
+    let guard = auth_check::guard(&client, Some(user_id), "", epoch.as_ref().map(|e| &e[..]))?;
+    if !guard.verify(Some(&login_key), login_key_hash.as_deref()) {
         tracing::warn!(user_id = %user_id, "account password re-check failed");
         return Err(AppError::unauthorized("invalid credentials"));
     }
-    ratelimit::LOGIN_LOCKOUT.record(&lockout, true);
     Ok(())
 }
 
@@ -832,23 +808,21 @@ pub async fn verify_account_login_key(
 )]
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: Result<Json<LoginRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let client = direct_sign_in_client(&headers)?;
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
-    // Per-account lockout (on top of the per-IP route limiter): N failed password
-    // attempts lock the account out for a cooldown. Checked for unknown names too,
-    // so the 429 is not an account-existence oracle.
+    // The order of `auth_check`: the secret is read before the name is looked
+    // up, the hash checked (at full cost for a name that is no account) before
+    // anything about the account is said, and every miss is the same 401.
+    let login_key_bytes = STANDARD
+        .decode(&req.login_key)
+        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
     let name = req.name.trim().to_ascii_lowercase();
     let account = account_by_name(&state, &name).await?;
-    let lockout = lockout_key(account, &canonical_name(&state, &name));
-    if ratelimit::LOGIN_LOCKOUT.is_locked(&lockout) {
-        return Err(AppError::too_many_requests(
-            "too many failed attempts, try again later",
-        ));
-    }
 
     type Row = (
         Uuid,
@@ -878,9 +852,21 @@ pub async fn login(
     .fetch_optional(&state.pool)
     .await?;
 
+    let hash = row.as_ref().map(|row| row.1.as_str());
+    let asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
+    let epoch = hash.map(auth_check::credential_epoch);
+    let guard = auth_check::guard(
+        &asker,
+        account,
+        &canonical_name(&state, &name),
+        epoch.as_ref().map(|e| &e[..]),
+    )?;
+    if !guard.verify(Some(&login_key_bytes), hash) {
+        return Err(AppError::unauthorized("invalid credentials"));
+    }
     let Some((
         id,
-        login_key_hash,
+        _,
         master_key_envelope,
         drive_private_key_envelope,
         pub_key,
@@ -895,25 +881,12 @@ pub async fn login(
         envelope_binding,
     )) = row
     else {
-        // Run bcrypt anyway to keep timing constant.
-        let _ = bcrypt::verify("dummy", &FAKE_BCRYPT_HASH);
-        ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
         return Err(AppError::unauthorized("invalid credentials"));
     };
-
+    // Said only to someone who knows the password.
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
-
-    let login_key_bytes = STANDARD
-        .decode(&req.login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-
-    if !verify_hash(&login_key_bytes, &login_key_hash) {
-        ratelimit::LOGIN_LOCKOUT.record(&lockout, false);
-        return Err(AppError::unauthorized("invalid credentials"));
-    }
-    ratelimit::LOGIN_LOCKOUT.record(&lockout, true);
 
     let user_id = id.to_string();
 
@@ -1131,6 +1104,11 @@ pub async fn recover(
         req.new_argon_iterations,
         req.new_argon_parallelism,
     )?;
+    // The proof is read before the name is looked up, and checked first, at
+    // full cost: an unknown name, an account without a verifier and a wrong
+    // phrase are all the same 401, and nothing about the account (its
+    // binding) is checked before it.
+    let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let account = account_by_name(&state, &req.name).await?;
     let stored: Option<(String, String)> =
         match account {
@@ -1142,15 +1120,11 @@ pub async fn recover(
             .await?,
             None => None,
         };
-    // The proof is checked first, at full cost: an unknown name, an account
-    // without a verifier and a wrong phrase are all the same 401, and nothing
-    // about the account (its binding) is checked before it.
-    let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let (Some(user_id), Some((stored_verifier, binding))) = (account, stored) else {
         let _ = bcrypt::verify(&proof, &FAKE_BCRYPT_HASH);
         return Err(AppError::unauthorized("invalid recovery proof"));
     };
-    if !verify_hash(&proof, &stored_verifier) {
+    if !auth_check::verify_hash(&proof, &stored_verifier) {
         return Err(AppError::unauthorized("invalid recovery proof"));
     }
     validate_account_envelope(
@@ -1808,7 +1782,13 @@ async fn issue_tokens_and_respond(
     };
     if client.uses_cookie() {
         Ok((
-            [(SET_COOKIE, refresh_cookie(state, &issued.refresh_token))],
+            AppendHeaders([
+                (SET_COOKIE, refresh_cookie(state, &issued.refresh_token)),
+                (
+                    SET_COOKIE,
+                    auth_check::known_client_cookie(state, uid).await?,
+                ),
+            ]),
             Json(body),
         )
             .into_response())
@@ -1956,9 +1936,9 @@ mod tests {
             assert!(!f());
             started.elapsed()
         };
-        let checked = time(&|| verify_hash("wrong", &real));
+        let checked = time(&|| auth_check::verify_hash("wrong", &real));
         // An empty (voided) hash takes about as long, not a moment.
-        let voided = time(&|| verify_hash("wrong", ""));
+        let voided = time(&|| auth_check::verify_hash("wrong", ""));
         assert!(
             voided * 3 > checked,
             "voided {voided:?} vs checked {checked:?}"

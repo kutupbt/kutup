@@ -9,8 +9,8 @@
 //! its owner forgets it. It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{ConnectInfo, Path, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
@@ -307,6 +307,8 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
 )]
 pub async fn set_pin(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<SetPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
@@ -314,7 +316,8 @@ pub async fn set_pin(
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    crate::handlers::auth::verify_account_login_key(&state, &user, &req.login_key).await?;
+    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
+        .await?;
     let user_id = trusted_uuid(&user.user_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
@@ -351,11 +354,14 @@ pub async fn set_pin(
 )]
 pub async fn remove_pin(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    crate::handlers::auth::verify_account_login_key(&state, &user, &req.login_key).await?;
+    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
+        .await?;
     let user_id = trusted_uuid(&user.user_id)?;
     sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")
         .bind(user_id)
@@ -419,7 +425,9 @@ pub async fn verify_pin(
         crate::sessions::sign_out(&state.pool, user.session.session_id).await?;
         return Ok(refusal(StatusCode::FORBIDDEN, "signedOut", Some(0)));
     };
-    if valid_pin(&req.pin) && bcrypt::verify(&req.pin, &hash).unwrap_or(false) {
+    // Checked at full cost even when the PIN is malformed.
+    let right = crate::auth_check::verify_hash(&req.pin, &hash) && valid_pin(&req.pin);
+    if right {
         sqlx::query("DELETE FROM pass_pin_failures WHERE sign_in_id = $1")
             .bind(sign_in)
             .execute(&state.pool)

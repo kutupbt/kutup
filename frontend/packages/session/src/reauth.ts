@@ -18,12 +18,23 @@ interface Preflight {
   argonParallelism: number
 }
 
-/** Too many wrong passwords: the account's sign-in lockout is on. */
+/**
+ * The server holds the check back: `accountLocked` after too many wrong
+ * passwords for the account (as at sign-in, for a while), `rateLimited`
+ * when this address asked too often (a minute).
+ */
 export class ReauthLockedError extends Error {
-  constructor() {
+  constructor(readonly reason: 'accountLocked' | 'rateLimited' = 'accountLocked') {
     super('too many failed attempts')
     this.name = 'ReauthLockedError'
   }
+}
+
+/** The {@link ReauthLockedError} a 429 stands for, or null for anything else. */
+export function lockedErrorFrom(error: unknown): ReauthLockedError | null {
+  if (!isAxiosError(error) || error.response?.status !== 429) return null
+  const code = (error.response.data as { code?: string } | undefined)?.code
+  return new ReauthLockedError(code === 'rateLimited' ? 'rateLimited' : 'accountLocked')
 }
 
 /**
@@ -63,7 +74,6 @@ export async function verifyAccountPassword(password: string): Promise<boolean> 
     return true
   } catch (error) {
     if (isAxiosError(error) && error.response?.status === 401) return false
-    if (isAxiosError(error) && error.response?.status === 429) throw new ReauthLockedError()
-    throw error
+    throw lockedErrorFrom(error) ?? error
   }
 }

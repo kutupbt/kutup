@@ -7,6 +7,7 @@
 //! handler slice lands.
 
 mod albums;
+mod auth_check;
 mod calls;
 mod chat_federation;
 mod chat_hub;

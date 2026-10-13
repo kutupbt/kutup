@@ -220,7 +220,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
               } catch (failure) {
                 setError(
                   failure instanceof ReauthLockedError
-                    ? t('unlock.paused')
+                    ? t(failure.reason === 'rateLimited' ? 'unlock.slowDown' : 'unlock.paused')
                     : failure instanceof VaultError
                       ? t('unlock.keptStale')
                       : t('unlock.checkUnreachable'),
