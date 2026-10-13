@@ -9,6 +9,8 @@ export const SESSION_VERSION_HEADER = 'x-kutup-session-version'
 
 let seen: string | null = null
 let checking: Promise<void> | null = null
+// A change seen while a check runs: one more check when it ends.
+let dirty = false
 let onChange: (() => Promise<void>) | null = null
 
 /** What to do when the version changes (set once by the session package). */
@@ -25,15 +27,26 @@ export function noteSessionVersion(version: unknown): void {
   }
   if (version === seen) return
   seen = version
-  if (!onChange || checking) return
-  checking = onChange()
+  if (!onChange) return
+  if (checking) {
+    dirty = true
+    return
+  }
+  run(onChange)
+}
+
+function run(handler: () => Promise<void>): void {
+  dirty = false
+  checking = handler()
     .catch(() => undefined)
     .finally(() => {
       checking = null
+      if (dirty && onChange) run(onChange)
     })
 }
 
 /** A new sign-in starts from whatever the server says next. */
 export function resetSessionVersion(): void {
   seen = null
+  dirty = false
 }

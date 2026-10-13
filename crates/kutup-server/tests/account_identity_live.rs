@@ -336,3 +336,59 @@ fn answers_carry_the_session_version_and_errors_a_code() {
         .unwrap();
     assert_eq!(refused["code"], "unauthorized");
 }
+
+#[test]
+fn the_session_version_changes_when_the_account_does() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let (admin_name, admin_password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is username:password");
+    let admin_token = common::admin_token(&c, &base, "", admin_password, admin_name);
+    let user = register(&c, &base);
+    let version = || {
+        bearer(c.get(format!("{base}/api/user/me")), &user.token)
+            .send()
+            .unwrap()
+            .headers()
+            .get("x-kutup-session-version")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .expect("session version header")
+    };
+    let before = version();
+    // Made an administrator elsewhere: every app of the account sees a new
+    // version on its next answer.
+    let promoted = bearer(
+        c.put(format!("{base}/api/admin/users/{}", user.id)),
+        &admin_token,
+    )
+    .json(&json!({ "isAdmin": true }))
+    .send()
+    .unwrap();
+    assert!(
+        promoted.status().is_success(),
+        "promote: {}",
+        promoted.status()
+    );
+    let after = version();
+    assert_ne!(before, after);
+    assert_eq!(version(), after, "stable again");
+    // The value names nothing: it is not a digest anyone could recompute.
+    assert!(after.chars().all(|ch| ch.is_ascii_hexdigit()) && after.len() == 16);
+    let demoted = bearer(
+        c.put(format!("{base}/api/admin/users/{}", user.id)),
+        &admin_token,
+    )
+    .json(&json!({ "isAdmin": false }))
+    .send()
+    .unwrap();
+    assert!(demoted.status().is_success());
+}

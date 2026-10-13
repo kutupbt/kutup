@@ -184,9 +184,12 @@ pub struct LiveSession {
 pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<LiveSession> {
     let row: Option<(String, bool, String)> = sqlx::query_as(
         "SELECT s.client_type, u.is_admin,
-                encode(sha256(convert_to(concat_ws('|',
-                    u.login_key_hash, u.totp_enabled::text, u.is_admin::text,
-                    COALESCE(u.username, ''), COALESCE(u.key_binding, '')), 'UTF8')), 'hex')
+                encode(sha256(convert_to(
+                    length(u.login_key_hash) || ':' || u.login_key_hash ||
+                    u.totp_enabled::text || ',' || u.is_admin::text || ',' ||
+                    length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
+                    length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
+                    'UTF8')), 'hex')
          FROM auth_sessions s JOIN users u ON u.id = s.user_id
          WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
            AND s.expires_at > now() AND u.is_active",

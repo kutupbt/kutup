@@ -808,7 +808,7 @@ pub async fn verify_account_login_key(
     let guard = auth_check::guard(&client, Some(user_id), "", epoch.as_ref().map(|e| &e[..]))?;
     if !guard.verify(Some(&login_key), login_key_hash.as_deref()) {
         tracing::warn!(user_id = %user_id, "account password re-check failed");
-        return Err(AppError::unauthorized("invalid credentials"));
+        return Err(AppError::invalid_credentials());
     }
     Ok(())
 }
@@ -877,7 +877,7 @@ pub async fn login(
         epoch.as_ref().map(|e| &e[..]),
     )?;
     if !guard.verify(Some(&login_key_bytes), hash) {
-        return Err(AppError::unauthorized("invalid credentials"));
+        return Err(AppError::invalid_credentials());
     }
     let Some((
         id,
@@ -896,7 +896,7 @@ pub async fn login(
         envelope_binding,
     )) = row
     else {
-        return Err(AppError::unauthorized("invalid credentials"));
+        return Err(AppError::invalid_credentials());
     };
     // Said only to someone who knows the password.
     if !is_active {

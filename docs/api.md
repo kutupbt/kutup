@@ -30,12 +30,15 @@ Without a specific code, a client error carries its status's default:
 | 409 | `conflict` |
 | 413 | `tooLarge` |
 | 429 | `tooManyRequests` |
+| any other 4xx | `error` |
 
 Specific codes, where an app does something particular (a test in
 `kutup-server` fails when the source uses a code this list lacks):
 
 | Code | Status | Meaning |
 |---|---|---|
+| `invalidCredentials` | 401 | A wrong password or login key (not an expired session) |
+| `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `rateLimited` | 429 | This address asked too often (a minute); nginx's own 429 too |
 | `peerUnsupported` | 503 | The recipient's server lacks this Chat wire; the message waits |
@@ -55,6 +58,10 @@ Specific codes, where an app does something particular (a test in
 | `sendLimit`, `scheduledLimit` | 429 | A sending or scheduling limit was reached |
 | `spam`, `refused` | 403 | The message was refused |
 | `expiringOutside` | 400 | Expiring messages cannot go outside Kutup |
+
+Not covered: server-to-server federation answers (signed, their own shapes)
+and the framework's own refusals of a request it cannot read (a body that is
+not JSON, a missing path segment), which answer plain text without a code.
 
 ## Session version
 

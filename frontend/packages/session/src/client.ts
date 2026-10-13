@@ -152,7 +152,7 @@ api.interceptors.response.use(
     // sign-in lockout.
     const wrongPassword =
       Boolean(originalRequest.url?.match(/\/user\/reauth|\/pass\/pin/)) &&
-      (error.response?.data as { error?: unknown } | undefined)?.error === 'invalid credentials'
+      (error.response?.data as { code?: unknown } | undefined)?.code === 'invalidCredentials'
     const skipRefresh =
       wrongPassword || originalRequest.url?.match(/\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)/)
     if (status === 401 && !originalRequest._retry && !skipRefresh) {

@@ -18,4 +18,17 @@ describe('session version', () => {
     noteSessionVersion('')
     expect(handler).toHaveBeenCalledTimes(1)
   })
+
+  it('checks once more when the version changes during a check', async () => {
+    let finish: () => void = () => {}
+    const handler = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    setSessionVersionHandler(handler)
+    noteSessionVersion('a1')
+    noteSessionVersion('b2')
+    noteSessionVersion('c3')
+    expect(handler).toHaveBeenCalledTimes(1)
+    finish()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(handler).toHaveBeenCalledTimes(2)
+  })
 })

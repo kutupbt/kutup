@@ -147,8 +147,8 @@ describe('api/client — 401 refresh chain', () => {
 
   it('does not retry a wrong password at the re-checks (it would count twice)', async () => {
     seedAuth('any-token')
-    responses[route('POST /user/reauth')] = [{ status: 401, data: { error: 'invalid credentials' } }]
-    responses[route('PUT /pass/pin')] = [{ status: 401, data: { error: 'invalid credentials' } }]
+    responses[route('POST /user/reauth')] = [{ status: 401, data: { error: 'invalid credentials', code: 'invalidCredentials' } }]
+    responses[route('PUT /pass/pin')] = [{ status: 401, data: { error: 'invalid credentials', code: 'invalidCredentials' } }]
     await expect(api.post('/user/reauth', {})).rejects.toBeTruthy()
     await expect(api.put('/pass/pin', {})).rejects.toBeTruthy()
     expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
