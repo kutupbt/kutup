@@ -100,8 +100,12 @@ pub struct Config {
     pub federation_signing_key: String,
     /// Rotation candidate consumed only by the explicit maintenance command.
     pub federation_next_signing_key: String,
-    /// Test-only HTTP/private-network escape hatch for the v2 stack.
+    /// Test-only HTTP/private-network escape hatch for the v2 stack
+    /// (`FEDERATION_TEST_ALLOW_PRIVATE`; APP_ENV=test only).
     pub federation_test_allow_private: bool,
+    /// Test stacks: every rate limit's default raised (`RATE_LIMITS_RELAXED`;
+    /// APP_ENV=test only).
+    pub rate_limits_relaxed: bool,
     /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
     /// the server reports no groups, refuses the group routes, and the apps
     /// show direct chats only; groups made earlier stay stored, unreachable.
@@ -181,6 +185,23 @@ pub struct AppOrigins {
 }
 
 impl AppOrigins {
+    /// Placeholders while a configuration error is reported.
+    fn unset() -> Self {
+        let none = String::new;
+        AppOrigins {
+            account: none(),
+            drive: none(),
+            chat: none(),
+            office: none(),
+            editor: none(),
+            maps: none(),
+            photos: none(),
+            contacts: none(),
+            mail: none(),
+            pass: none(),
+        }
+    }
+
     /// The origin a forked child session must be consumed from.
     pub fn for_client(&self, client: crate::sessions::ClientType) -> Option<&str> {
         use crate::sessions::ClientType;
@@ -269,10 +290,43 @@ impl Config {
     /// Loads config from the environment, panicking on missing required vars or
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
-        let app_env = get_env("APP_ENV", "development");
+        let env = Env::process();
+        let cfg = Self::from_env(&env);
+        if let Err(errors) = env.finish() {
+            eprintln!("kutup-server: the configuration is not valid:");
+            for error in errors {
+                eprintln!("  {error}");
+            }
+            std::process::exit(2);
+        }
+        cfg
+    }
+
+    /// Reads every setting through `env`, which records each value it cannot
+    /// read (a number that is not one, an unknown choice) instead of falling
+    /// back to a default: a typo must stop the server, not change what it does.
+    fn from_env(env: &Env) -> Config {
+        let get_env = |key: &str, fallback: &str| env.string(key, fallback);
+        let get_env_i64 = |key: &str, fallback: i64| env.int(key, fallback);
+        let get_env_bool = |key: &str, fallback: bool| env.bool(key, fallback);
+        let must_env = |key: &str| env.required(key);
+        let app_env = env.choice(
+            "APP_ENV",
+            "development",
+            &["development", "test", "production"],
+        );
+        let rate_limits_relaxed = env.bool("RATE_LIMITS_RELAXED", false);
+        if rate_limits_relaxed && app_env != "test" {
+            env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
+        }
+        crate::ratelimit::configure(env, rate_limits_relaxed);
+        let federation_test_allow_private = env.bool("FEDERATION_TEST_ALLOW_PRIVATE", false);
+        if federation_test_allow_private && app_env != "test" {
+            env.error("FEDERATION_TEST_ALLOW_PRIVATE may only be enabled with APP_ENV=test");
+        }
         let chat_max_active_devices = get_env_i64("CHAT_MAX_ACTIVE_DEVICES", 10);
         if !(1..=10).contains(&chat_max_active_devices) {
-            panic!("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
+            env.error("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
         }
         let chat_media_max_plaintext_bytes = get_env_i64(
             "CHAT_MEDIA_MAX_PLAINTEXT_BYTES",
@@ -281,17 +335,21 @@ impl Config {
         if !(1..=kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64)
             .contains(&chat_media_max_plaintext_bytes)
         {
-            panic!("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
+            env.error("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
         }
         let chat_mailbox_retention_days = get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30);
-        crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
-            .unwrap_or_else(|error| panic!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
+        if let Err(error) =
+            crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
+        {
+            env.error(format!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
+        }
         let chat_media_delivery_retention_days =
             get_env_i64("CHAT_MEDIA_DELIVERY_RETENTION_DAYS", 45);
-        crate::site_settings::validate_chat_delivery_retention_days(
+        if let Err(error) = crate::site_settings::validate_chat_delivery_retention_days(
             chat_media_delivery_retention_days,
-        )
-        .unwrap_or_else(|error| panic!("CHAT_MEDIA_DELIVERY_RETENTION_DAYS: {error}"));
+        ) {
+            env.error(format!("CHAT_MEDIA_DELIVERY_RETENTION_DAYS: {error}"));
+        }
         let federation_server_name = get_env("FEDERATION_SERVER_NAME", "");
         let chat_server_name = get_env(
             "CHAT_SERVER_NAME",
@@ -301,12 +359,14 @@ impl Config {
                 &federation_server_name
             },
         );
-        kutup_federation_proto::validate_server_name(&chat_server_name).unwrap_or_else(|error| {
-            panic!("CHAT_SERVER_NAME must be a canonical DNS name: {error}")
-        });
+        if let Err(error) = kutup_federation_proto::validate_server_name(&chat_server_name) {
+            env.error(format!(
+                "CHAT_SERVER_NAME must be a canonical DNS name: {error}"
+            ));
+        }
         if !federation_server_name.is_empty() && chat_server_name != federation_server_name {
-            panic!(
-                "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured"
+            env.error(
+                "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured",
             );
         }
         let app_env_for_apps = app_env.clone();
@@ -325,8 +385,9 @@ impl Config {
             allowed_origins: get_env("ALLOWED_ORIGINS", "https://localhost:38443"),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             // Set but blank turns the probe off (a store other than SeaweedFS).
-            seaweedfs_master_url: std::env::var("SEAWEEDFS_MASTER_URL")
-                .unwrap_or_else(|_| "http://seaweedfs-master:9333".to_string()),
+            seaweedfs_master_url: env
+                .raw("SEAWEEDFS_MASTER_URL")
+                .unwrap_or_else(|| "http://seaweedfs-master:9333".to_string()),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
             chat_mailbox_retention_days,
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
@@ -341,14 +402,27 @@ impl Config {
             mail_send_per_hour: get_env_i64("MAIL_SEND_RECIPIENTS_PER_HOUR", 100),
             mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
             mail_test_key_origin: get_env("MAIL_TEST_KEY_ORIGIN", ""),
-            mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
-            mail_batch_chunk: get_env_i64("MAIL_BATCH_CHUNK", 5_000).max(1) as usize,
+            mail_outside_sending: OutsideSending::parse(&env.choice(
+                "MAIL_OUTSIDE_SENDING",
+                "off",
+                &["off", "admins", "on"],
+            )),
+            mail_batch_chunk: match get_env_i64("MAIL_BATCH_CHUNK", 5_000) {
+                0 => {
+                    env.error("MAIL_BATCH_CHUNK must be at least 1");
+                    1
+                }
+                chunk => chunk as usize,
+            },
             mail_default_delay_send_seconds: match get_env_i64(
                 "MAIL_DEFAULT_DELAY_SEND_SECONDS",
                 10,
             ) {
                 seconds @ (0 | 5 | 10 | 20) => seconds as i32,
-                _ => 10,
+                _ => {
+                    env.error("MAIL_DEFAULT_DELAY_SEND_SECONDS must be 0, 5, 10 or 20");
+                    10
+                }
             },
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
@@ -360,11 +434,16 @@ impl Config {
             feedback_github_repository: github_repository(&get_env(
                 "FEEDBACK_GITHUB_REPOSITORY",
                 "kutupbt/kutup",
-            )),
+            ))
+            .unwrap_or_else(|error| {
+                env.error(error);
+                None
+            }),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
-            federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
+            federation_test_allow_private,
+            rate_limits_relaxed,
             chat_groups: get_env_bool("CHAT_GROUPS", true),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
@@ -388,19 +467,35 @@ impl Config {
             ),
             chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
             chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
-            apps: resolve_app_origins(|k| std::env::var(k).ok(), &app_env_for_apps)
-                .unwrap_or_else(|error| panic!("app origins: {error}")),
+            apps: resolve_app_origins(|k| env.raw(k), &app_env_for_apps).unwrap_or_else(|error| {
+                env.error(format!("app origins: {error}"));
+                AppOrigins::unset()
+            }),
         };
+        for origin in cfg.allowed_origins.split(',').map(str::trim) {
+            if origin == "*" {
+                if cfg.app_env == "production" {
+                    env.error("ALLOWED_ORIGINS may not be * when APP_ENV=production");
+                }
+            } else if canonical_origin("ALLOWED_ORIGINS", origin).is_err() {
+                env.error(format!(
+                    "ALLOWED_ORIGINS: {origin:?} is not an http(s) origin"
+                ));
+            }
+        }
+        if url::Url::parse(&cfg.server_url).is_err() {
+            env.error("SERVER_URL must be a URL");
+        }
         if cfg.jwt_secret.len() < 32 {
-            panic!("JWT_SECRET must be at least 32 characters long");
+            env.error("JWT_SECRET must be at least 32 characters long");
         }
         if !cfg.mail_inbound_token.is_empty() && cfg.mail_inbound_token.len() < 32 {
-            panic!("MAIL_INBOUND_TOKEN must be at least 32 characters long");
+            env.error("MAIL_INBOUND_TOKEN must be at least 32 characters long");
         }
         if !cfg.admin_account.trim().is_empty() && parse_admin_account(&cfg.admin_account).is_none()
         {
-            panic!(
-                "ADMIN_ACCOUNT must be username:password (a username of 3 to 32 lowercase letters, digits, _ or -)"
+            env.error(
+                "ADMIN_ACCOUNT must be username:password (a username of 3 to 32 lowercase letters, digits, _ or -)",
             );
         }
         cfg
@@ -430,16 +525,12 @@ pub(crate) fn parse_admin_account(admin_account: &str) -> Option<(String, String
         .then(|| (username.to_string(), password.trim().to_string()))
 }
 
-fn must_env(key: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| panic!("required environment variable not set: {key}"))
-}
-
 /// `owner/repo` on GitHub, or `off`. Anything else stops the server: a
 /// mistyped repository would send people somewhere unexpected.
-fn github_repository(value: &str) -> Option<String> {
+fn github_repository(value: &str) -> Result<Option<String>, String> {
     let value = value.trim();
     if value.eq_ignore_ascii_case("off") {
-        return None;
+        return Ok(None);
     }
     let part = |p: &str| {
         !p.is_empty()
@@ -448,33 +539,164 @@ fn github_repository(value: &str) -> Option<String> {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     match value.split_once('/') {
-        Some((owner, repo)) if part(owner) && part(repo) => Some(value.to_string()),
-        _ => panic!("FEEDBACK_GITHUB_REPOSITORY must be owner/repo or off, not {value:?}"),
+        Some((owner, repo)) if part(owner) && part(repo) => Ok(Some(value.to_string())),
+        _ => Err(format!(
+            "FEEDBACK_GITHUB_REPOSITORY must be owner/repo or off, not {value:?}"
+        )),
     }
 }
 
-fn get_env(key: &str, fallback: &str) -> String {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => v,
-        _ => fallback.to_string(),
-    }
+/// The environment as the server reads it: each value checked as it is read,
+/// every problem recorded, all of them reported at once by `finish`.
+type Lookup = Box<dyn Fn(&str) -> Option<String>>;
+
+pub(crate) struct Env {
+    lookup: Lookup,
+    names: Box<dyn Fn() -> Vec<String>>,
+    errors: std::cell::RefCell<Vec<String>>,
 }
 
-fn get_env_i64(key: &str, fallback: i64) -> i64 {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => v.parse().ok().filter(|&n| n >= 0).unwrap_or(fallback),
-        _ => fallback,
+impl Env {
+    /// The process environment.
+    pub(crate) fn process() -> Self {
+        Self {
+            lookup: Box::new(|key| std::env::var(key).ok()),
+            names: Box::new(|| {
+                std::env::vars_os()
+                    .filter_map(|(k, _)| k.into_string().ok())
+                    .collect()
+            }),
+            errors: std::cell::RefCell::new(Vec::new()),
+        }
     }
-}
 
-fn get_env_bool(key: &str, fallback: bool) -> bool {
-    match std::env::var(key) {
-        Ok(value) if !value.is_empty() => match value.to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" => true,
-            "0" | "false" | "no" => false,
-            _ => fallback,
-        },
-        _ => fallback,
+    /// A fixed set of variables (tests).
+    #[cfg(test)]
+    pub(crate) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+        let map: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let names: Vec<String> = map.keys().cloned().collect();
+        Self {
+            lookup: Box::new(move |key| map.get(key).cloned()),
+            names: Box::new(move || names.clone()),
+            errors: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    pub(crate) fn error(&self, message: impl Into<String>) {
+        self.errors.borrow_mut().push(message.into());
+    }
+
+    /// The value as set, even when blank.
+    pub(crate) fn raw(&self, key: &str) -> Option<String> {
+        (self.lookup)(key)
+    }
+
+    /// The value, or `None` when unset or blank.
+    fn set(&self, key: &str) -> Option<String> {
+        self.raw(key).filter(|value| !value.trim().is_empty())
+    }
+
+    pub(crate) fn string(&self, key: &str, fallback: &str) -> String {
+        self.set(key).unwrap_or_else(|| fallback.to_string())
+    }
+
+    pub(crate) fn required(&self, key: &str) -> String {
+        self.set(key).unwrap_or_else(|| {
+            self.error(format!("{key} is required"));
+            String::new()
+        })
+    }
+
+    /// A whole number of zero or more.
+    pub(crate) fn int(&self, key: &str, fallback: i64) -> i64 {
+        match self.set(key) {
+            None => fallback,
+            Some(value) => match value.trim().parse::<i64>() {
+                Ok(n) if n >= 0 => n,
+                _ => {
+                    self.error(format!(
+                        "{key} must be a whole number of 0 or more, not {value:?}"
+                    ));
+                    fallback
+                }
+            },
+        }
+    }
+
+    /// A whole number of one or more.
+    pub(crate) fn positive(&self, key: &str, fallback: u64) -> u64 {
+        match self.set(key) {
+            None => fallback,
+            Some(value) => match value.trim().parse::<u64>() {
+                Ok(n) if n > 0 => n,
+                _ => {
+                    self.error(format!(
+                        "{key} must be a whole number of 1 or more, not {value:?}"
+                    ));
+                    fallback
+                }
+            },
+        }
+    }
+
+    pub(crate) fn bool(&self, key: &str, fallback: bool) -> bool {
+        match self.set(key) {
+            None => fallback,
+            Some(value) => match value.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" => true,
+                "0" | "false" | "no" => false,
+                _ => {
+                    self.error(format!("{key} must be true or false, not {value:?}"));
+                    fallback
+                }
+            },
+        }
+    }
+
+    /// One of `choices` (compared without case), lowercased.
+    pub(crate) fn choice(&self, key: &str, fallback: &str, choices: &[&str]) -> String {
+        match self.set(key) {
+            None => fallback.to_string(),
+            Some(value) => {
+                let value = value.trim().to_ascii_lowercase();
+                if choices.contains(&value.as_str()) {
+                    value
+                } else {
+                    self.error(format!(
+                        "{key} must be one of {}, not {value:?}",
+                        choices.join(", ")
+                    ));
+                    fallback.to_string()
+                }
+            }
+        }
+    }
+
+    /// The set names starting with `prefix` that `known` does not list.
+    pub(crate) fn unknown_with_prefix(
+        &self,
+        prefix: &str,
+        known: &[(&str, u64)],
+    ) -> Option<Vec<String>> {
+        let names = (self.names)();
+        let unknown: Vec<String> = names
+            .into_iter()
+            .filter(|name| name.starts_with(prefix) && !known.iter().any(|(k, _)| k == name))
+            .collect();
+        (!unknown.is_empty()).then_some(unknown)
+    }
+
+    /// Every problem found, or `Ok` when there was none.
+    pub(crate) fn finish(&self) -> Result<(), Vec<String>> {
+        let errors = self.errors.take();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -667,6 +889,106 @@ mod outside_sending_tests {
 }
 
 #[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    const REQUIRED: &[(&str, &str)] = &[
+        ("DATABASE_URL", "postgres://x"),
+        ("JWT_SECRET", "0123456789abcdef0123456789abcdef"),
+        ("S3_ENDPOINT", "http://s3"),
+        ("S3_ACCESS_KEY", "a"),
+        ("S3_SECRET_KEY", "b"),
+    ];
+
+    fn errors(extra: &[(&str, &str)]) -> Vec<String> {
+        let pairs: Vec<(&str, &str)> = REQUIRED.iter().chain(extra).copied().collect();
+        let env = Env::from_pairs(&pairs);
+        Config::from_env(&env);
+        env.finish().err().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_valid_environment_has_no_errors() {
+        assert_eq!(errors(&[]), Vec::<String>::new());
+        assert_eq!(
+            errors(&[("APP_ENV", "test"), ("RATE_LIMITS_RELAXED", "true")]),
+            Vec::<String>::new()
+        );
+        // Test stacks only: not development (the default) either.
+        assert!(errors(&[("RATE_LIMITS_RELAXED", "true")])
+            .iter()
+            .any(|e| e.starts_with("RATE_LIMITS_RELAXED")));
+    }
+
+    #[test]
+    fn every_bad_value_is_reported_not_defaulted() {
+        let found = errors(&[
+            ("APP_ENV", "prod"),
+            ("TRASH_RETENTION_DAYS", "thirty"),
+            ("CHAT_GROUPS", "maybe"),
+            ("MAIL_OUTSIDE_SENDING", "yes"),
+            ("MAIL_DEFAULT_DELAY_SEND_SECONDS", "7"),
+            ("RATE_LIMIT_LOGIN_PER_MIN", "0"),
+            ("RATE_LIMIT_LOGN_PER_MIN", "50"),
+            ("ADMIN_ACCOUNT", "a@b.c:admin:pw"),
+        ]);
+        for name in [
+            "APP_ENV",
+            "TRASH_RETENTION_DAYS",
+            "CHAT_GROUPS",
+            "MAIL_OUTSIDE_SENDING",
+            "MAIL_DEFAULT_DELAY_SEND_SECONDS",
+            "RATE_LIMIT_LOGIN_PER_MIN",
+            "RATE_LIMIT_LOGN_PER_MIN",
+            "ADMIN_ACCOUNT",
+        ] {
+            assert!(
+                found.iter().any(|e| e.starts_with(name)),
+                "{name} not reported: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_required_values_are_all_reported() {
+        let env = Env::from_pairs(&[]);
+        Config::from_env(&env);
+        let found = env.finish().unwrap_err();
+        for (name, _) in REQUIRED {
+            assert!(
+                found.iter().any(|e| e.starts_with(name)),
+                "{name}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_switches_are_refused_in_production() {
+        let found = errors(&[
+            ("APP_ENV", "production"),
+            ("KUTUP_BASE_DOMAIN", "example.org"),
+            ("RATE_LIMITS_RELAXED", "true"),
+            ("FEDERATION_TEST_ALLOW_PRIVATE", "true"),
+            ("ALLOWED_ORIGINS", "*"),
+        ]);
+        for name in [
+            "RATE_LIMITS_RELAXED",
+            "FEDERATION_TEST_ALLOW_PRIVATE",
+            "ALLOWED_ORIGINS",
+        ] {
+            assert!(
+                found.iter().any(|e| e.starts_with(name)),
+                "{name}: {found:?}"
+            );
+        }
+        // The private-peer switch is for APP_ENV=test only.
+        assert!(errors(&[("FEDERATION_TEST_ALLOW_PRIVATE", "true")])
+            .iter()
+            .any(|e| e.starts_with("FEDERATION_TEST_ALLOW_PRIVATE")));
+    }
+}
+
+#[cfg(test)]
 mod feedback_repository_tests {
     use super::github_repository;
 
@@ -674,25 +996,22 @@ mod feedback_repository_tests {
     fn owner_slash_repo_or_off() {
         assert_eq!(
             github_repository("kutupbt/kutup"),
-            Some("kutupbt/kutup".into())
+            Ok(Some("kutupbt/kutup".into()))
         );
         assert_eq!(
             github_repository(" my-org/my.repo_2 "),
-            Some("my-org/my.repo_2".into())
+            Ok(Some("my-org/my.repo_2".into()))
         );
-        assert_eq!(github_repository("off"), None);
-        assert_eq!(github_repository("OFF"), None);
+        assert_eq!(github_repository("off"), Ok(None));
+        assert_eq!(github_repository("OFF"), Ok(None));
     }
 
     #[test]
-    #[should_panic(expected = "FEEDBACK_GITHUB_REPOSITORY")]
-    fn a_url_is_refused() {
-        github_repository("https://github.com/kutupbt/kutup");
-    }
-
-    #[test]
-    #[should_panic(expected = "FEEDBACK_GITHUB_REPOSITORY")]
-    fn a_bare_name_is_refused() {
-        github_repository("kutup");
+    fn a_url_or_a_bare_name_is_refused() {
+        for value in ["https://github.com/kutupbt/kutup", "kutup"] {
+            assert!(github_repository(value)
+                .unwrap_err()
+                .contains("FEEDBACK_GITHUB_REPOSITORY"));
+        }
     }
 }

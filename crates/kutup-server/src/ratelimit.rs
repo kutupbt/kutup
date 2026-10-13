@@ -2,8 +2,8 @@
 //!
 //! Three layers of protection, all process-local state:
 //!  - **Per-IP sliding-window limiters** — login, login preflight, register, recovery,
-//!    federation user-lookup, and the admin API. Defaults are env-overridable (see the
-//!    `RATE_LIMIT_*` statics below).
+//!    federation user-lookup, and the admin API. Defaults are env-overridable (`LIMITS`
+//!    below, read and checked at boot); `RATE_LIMITS_RELAXED` raises them on test stacks.
 //!  - **Per-account login lockout** — N failed password attempts for an email lock that
 //!    email out for a cooldown (defaults 5 / 15 min; `LOGIN_LOCKOUT_THRESHOLD`,
 //!    `LOGIN_LOCKOUT_MINUTES`). Keyed by a hash of the lowercased email and applied to
@@ -13,18 +13,70 @@
 //! `spawn_cleanup` runs the periodic pruning for all of the above.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-/// Reads a positive integer limit from the environment, falling back to `default`.
-/// Read once at first use (the limiter statics), i.e. at process start in practice.
+/// Every limit the environment may set, with its default. A `RATE_LIMIT_*`
+/// name not listed here stops the server (a typo would silently keep the
+/// default).
+const LIMITS: &[(&str, u64)] = &[
+    ("RATE_LIMIT_RECOVERY_PER_HOUR", 5),
+    ("RATE_LIMIT_FED_USERS_PER_MIN", 60),
+    ("RATE_LIMIT_LOGIN_PER_MIN", 10),
+    ("RATE_LIMIT_FORK_PER_MIN", 120),
+    ("RATE_LIMIT_CALL_LINK_PER_MIN", 60),
+    ("RATE_LIMIT_CALL_LINK_POLL_PER_MIN", 600),
+    ("RATE_LIMIT_PREFLIGHT_PER_MIN", 20),
+    ("RATE_LIMIT_USER_LOOKUP_PER_MIN", 30),
+    ("RATE_LIMIT_REGISTER_PER_HOUR", 10),
+    ("RATE_LIMIT_REPORT_PER_HOUR", 20),
+    ("RATE_LIMIT_FEEDBACK_PER_HOUR", 10),
+    ("RATE_LIMIT_ADMIN_PER_MIN", 120),
+    ("RATE_LIMIT_CHAT_KEYS_PER_MIN", 30),
+    ("RATE_LIMIT_CHAT_KEYS_IP_PER_MIN", 120),
+    ("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60),
+    ("LOGIN_LOCKOUT_THRESHOLD", 5),
+    ("LOGIN_LOCKOUT_MINUTES", 15),
+];
+
+/// What a rate limit's default becomes on a test stack (`RATE_LIMITS_RELAXED`):
+/// high enough that a test suite signing in hundreds of times never meets
+/// it. The per-account lockout keeps its defaults: tests rarely miss a
+/// password, and some check that the lockout comes.
+const RELAXED: u64 = 100_000;
+
+static CONFIGURED: OnceLock<HashMap<&'static str, u64>> = OnceLock::new();
+
+/// Reads every limit through the boot-time configuration pass (`Env`
+/// records a bad value), before any limiter is first used.
+pub(crate) fn configure(env: &crate::config::Env, relaxed: bool) {
+    if let Some(unknown) = env.unknown_with_prefix("RATE_LIMIT_", LIMITS) {
+        for name in unknown {
+            env.error(format!("{name} is not a rate limit this server has"));
+        }
+    }
+    let limits = LIMITS
+        .iter()
+        .map(|&(name, default)| {
+            let default = if relaxed && name.starts_with("RATE_LIMIT_") {
+                RELAXED
+            } else {
+                default
+            };
+            (name, env.positive(name, default))
+        })
+        .collect();
+    let _ = CONFIGURED.set(limits);
+}
+
+/// A limit as configured at boot; its default where nothing configured it
+/// (unit tests).
 fn env_limit(var: &str, default: u64) -> u64 {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|v| *v > 0)
+    CONFIGURED
+        .get()
+        .and_then(|limits| limits.get(var).copied())
         .unwrap_or(default)
 }
 
