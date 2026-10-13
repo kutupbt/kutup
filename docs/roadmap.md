@@ -713,7 +713,7 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   Proton's model: IndexedDB holding encrypted records under a key wrapped by
   the account master key; no SQLite in the browser. Native keeps SQLCipher.
   - Done (Phase 1): the chat store encrypted at rest (record keys hashed,
-    values sealed, existing stores converted on first open); the backup
+    values sealed; a database without the wrapped key starts empty); the backup
     mirror's records, drafts and read positions sealed too. Left as they
     are, on purpose: the hand-off list a meeting page leaves for the
     signed-in app (the page has no account key; the app moves each stay into

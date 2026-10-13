@@ -223,7 +223,7 @@ mod tests {
         let timed = content.with_disappearing_after(3600).unwrap();
         assert_eq!(timed.disappearing_after_seconds(), Ok(Some(3600)));
         assert_eq!(
-            ChatContent::text(AT, 1, "hi").location_content_is_valid(),
+            ChatContent::text_with_id(ID, AT, 1, "hi").location_content_is_valid(),
             None
         );
     }

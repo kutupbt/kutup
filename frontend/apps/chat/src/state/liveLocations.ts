@@ -31,7 +31,7 @@ export function foldLiveLocations(
   for (const message of history) {
     const live = message.content.liveLocation
     const author = actorOf(message)
-    if (!live || live.generation !== 1 || !message.content.messageId || !author) continue
+    if (!live || live.generation !== 1 || !author) continue
     const key = `${conversationKey(message.conversation)}\u0000${author}\u0000${live.shareId}`
     if (starts.has(key)) continue
     starts.set(key, {

@@ -40,15 +40,13 @@ use std::rc::Rc;
 use kutup_chat_proto::ChatContent;
 use serde::{Deserialize, Serialize};
 
-use crate::db::{
-    ChatDb, ImportedHistoryRecordV1, InboxMessage, MlsHistoryMessage, Pending, SentMessage,
-};
+use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
 use crate::timeline::{self, EntryRef, Indexed, Source, ROUTED};
 
 /// Raised whenever what is indexed or how changes; a store with an older
 /// directory is indexed again from its records.
-pub(crate) const SEARCH_VERSION: u32 = 2;
+pub(crate) const SEARCH_VERSION: u32 = 3;
 /// Characters of a word that name its shard.
 pub(crate) const SHARD_CHARS: usize = 3;
 /// The period a shard covers (30 days).
@@ -270,9 +268,7 @@ fn document(placed: Vec<Indexed>, content: &[u8]) -> Option<Document> {
         .as_message_mutation()
         .map(|mutation| mutation.target_message_id);
     let mut terms = words(&searchable(&content));
-    if let Some(message) = &content.message_id {
-        terms.push(format!("{MESSAGE_TERM}{message}"));
-    }
+    terms.push(format!("{MESSAGE_TERM}{}", content.message_id));
     if let Some(target) = &target {
         terms.push(format!("{TARGET_TERM}{target}"));
     }
@@ -285,7 +281,7 @@ fn document(placed: Vec<Indexed>, content: &[u8]) -> Option<Document> {
             source: own.entry.source,
             id: own.entry.id,
             ts: own.entry.ts,
-            message: content.message_id,
+            message: Some(content.message_id),
             target,
         },
         terms,
@@ -302,10 +298,6 @@ fn sent_document(message: &SentMessage) -> Result<Option<Document>> {
 
 fn mls_document(message: &MlsHistoryMessage) -> Option<Document> {
     document(timeline::place_mls(message), &message.content)
-}
-
-fn imported_document(message: &ImportedHistoryRecordV1) -> Option<Document> {
-    document(timeline::place_imported(message), &message.content)
 }
 
 /// Shards and document chunks read and changed for one commit.
@@ -548,14 +540,10 @@ pub(crate) async fn changes(
     for message in pending.mls_messages.values() {
         added.extend(mls_document(message));
     }
-    for message in pending.imported_history.values() {
-        added.extend(imported_document(message));
-    }
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
         && pending.delete_sent_message_ids.is_empty()
-        && pending.delete_mls_message_ids.is_empty()
-        && pending.delete_imported_history_ids.is_empty();
+        && pending.delete_mls_message_ids.is_empty();
     if added.is_empty() && nothing_removed {
         return Ok(HashMap::new());
     }
@@ -588,14 +576,6 @@ pub(crate) async fn changes(
     for id in &pending.delete_mls_message_ids {
         if let Some(message) = db.load_mls_message(id).await? {
             removed.extend(mls_document(&message));
-        }
-    }
-    for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
-        if let Some(message) = db
-            .load_imported_history(transfer_id, source_record_id)
-            .await?
-        {
-            removed.extend(imported_document(&message));
         }
     }
     let mut writer = Writer::new(db, directory);
@@ -633,9 +613,6 @@ pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
     }
     for message in db.list_mls_messages().await? {
         documents.extend(mls_document(&message));
-    }
-    for message in db.list_imported_history().await? {
-        documents.extend(imported_document(&message));
     }
     documents.sort_by(|left, right| {
         (left.posting.ts, left.posting.source, &left.posting.id).cmp(&(

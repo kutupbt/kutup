@@ -1,8 +1,9 @@
 //! Stable account and conversation identifiers shared by every chat client.
 //!
-//! A Kutup account has exactly one routing identity: a server-local `username`
-//! today and `username@server` once federation is enabled. Display names and
-//! avatars are profile data; they never participate in routing or trust.
+//! A Kutup account has exactly one routing identity, `username@server`, on the
+//! wire, in server mailboxes and in client stores alike: there is no bare
+//! username form. Display names and avatars are profile data; they never
+//! participate in routing or trust.
 
 use std::fmt;
 use std::net::IpAddr;
@@ -16,21 +17,11 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct AccountAddress {
     pub username: String,
-    /// `None` only for the pre-federation/local compatibility form.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server: Option<String>,
+    /// The account's home server, a canonical lowercase DNS name. Required.
+    pub server: String,
 }
 
 impl AccountAddress {
-    pub fn local(username: impl Into<String>) -> Result<Self, AddressError> {
-        let username = username.into();
-        validate_username(&username)?;
-        Ok(Self {
-            username,
-            server: None,
-        })
-    }
-
     pub fn federated(
         username: impl Into<String>,
         server: impl Into<String>,
@@ -39,19 +30,13 @@ impl AccountAddress {
         let server = server.into().to_ascii_lowercase();
         validate_username(&username)?;
         validate_server(&server)?;
-        Ok(Self {
-            username,
-            server: Some(server),
-        })
+        Ok(Self { username, server })
     }
 
     /// The canonical routing form used as the libsignal account name and UI
     /// contact address.
     pub fn canonical(&self) -> String {
-        match &self.server {
-            Some(server) => format!("{}@{server}", self.username),
-            None => self.username.clone(),
-        }
+        format!("{}@{}", self.username, self.server)
     }
 }
 
@@ -66,7 +51,9 @@ impl FromStr for AccountAddress {
         }
         match value.split_once('@') {
             Some((username, server)) => Self::federated(username, server),
-            None => Self::local(value),
+            None => Err(AddressError(
+                "account address must be username@server".into(),
+            )),
         }
     }
 }
@@ -158,10 +145,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_local_and_federated_accounts_canonically() {
-        let local: AccountAddress = "alice_42".parse().unwrap();
-        assert_eq!(local.canonical(), "alice_42");
-        assert_eq!(local.server, None);
+    fn parses_accounts_canonically_and_refuses_bare_usernames() {
+        assert!("alice_42".parse::<AccountAddress>().is_err());
+        assert!(serde_json::from_value::<AccountAddress>(
+            serde_json::json!({ "username": "alice_42" })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<AccountAddress>(
+            serde_json::json!({ "username": "alice_42", "server": null })
+        )
+        .is_err());
+        assert!(serde_json::from_value::<ConversationId>(
+            serde_json::json!({ "kind": "direct", "address": { "username": "alice_42" } })
+        )
+        .is_err());
 
         let remote: AccountAddress = "alice_42@Chat.Example".parse().unwrap();
         assert_eq!(remote.canonical(), "alice_42@chat.example");

@@ -566,13 +566,7 @@ pub(super) fn validate_private_roster_action(
 pub(super) fn participant_domains(roster: &[MlsConversationMemberV1]) -> Result<Vec<String>> {
     roster
         .iter()
-        .map(|member| {
-            member
-                .address
-                .server
-                .clone()
-                .ok_or_else(|| ChatError::Invalid("MLS member has no federation domain".into()))
-        })
+        .map(|member| Ok(member.address.server.clone()))
         .collect::<Result<BTreeSet<_>>>()
         .map(|domains| domains.into_iter().collect())
 }
@@ -584,11 +578,6 @@ pub(super) fn parse_device_credential_identity(identity: &str) -> Result<(String
     let address: AccountAddress = account
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if address.server.is_none() {
-        return Err(ChatError::Trust(
-            "MLS credential identity requires a federation domain".into(),
-        ));
-    }
     let device_id: u32 = device_id
         .parse()
         .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;

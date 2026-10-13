@@ -71,7 +71,7 @@ impl MlsClient {
         recipient: &AccountAddress,
     ) -> Result<DerivedMlsDeliveryCapability> {
         validate_group_id(mls_group_id)?;
-        if conversation_id.is_nil() || incarnation == 0 || recipient.server.is_none() {
+        if conversation_id.is_nil() || incarnation == 0 {
             return Err(ChatError::Invalid(
                 "MLS delivery capability identifiers are invalid".into(),
             ));
@@ -121,11 +121,7 @@ impl MlsClient {
         devices: &[AnonymousMlsRecipientDevice],
         mls_ciphertext: &[u8],
     ) -> Result<AnonymousMlsSubmissionV1> {
-        if recipient.server.is_none()
-            || send_id.is_nil()
-            || devices.is_empty()
-            || devices.len() > 32
-            || mls_ciphertext.is_empty()
+        if send_id.is_nil() || devices.is_empty() || devices.len() > 32 || mls_ciphertext.is_empty()
         {
             return Err(ChatError::Invalid(
                 "anonymous MLS delivery identifiers are invalid".into(),
@@ -193,7 +189,7 @@ impl MlsClient {
         send_id: Uuid,
         envelope: &AnonymousMlsDeviceEnvelopeV1,
     ) -> Result<Vec<u8>> {
-        if recipient.server.is_none() || send_id.is_nil() || envelope.device_id == 0 {
+        if send_id.is_nil() || envelope.device_id == 0 {
             return Err(ChatError::Invalid(
                 "anonymous MLS envelope identifiers are invalid".into(),
             ));

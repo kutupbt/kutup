@@ -21,7 +21,6 @@ mod calls;
 pub mod content;
 mod extras;
 pub mod federation;
-mod history_transfer;
 mod identity;
 mod invite_link;
 mod locations;
@@ -68,15 +67,6 @@ pub use extras::{
 pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
-};
-pub use history_transfer::{
-    chat_history_transfer_transcript_hash, ChatHistoryArchiveFinalV1,
-    ChatHistoryArchiveFramePlaintextV1, ChatHistoryArchiveHeaderV1, ChatHistoryArchiveRecordV1,
-    ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferCompletionV1,
-    ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_TTL_SECONDS,
-    CHAT_HISTORY_TRANSFER_VERSION, MAX_CHAT_HISTORY_TRANSFER_FRAMES,
-    MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT, MAX_CHAT_HISTORY_TRANSFER_PLAINTEXT,
-    MAX_CHAT_HISTORY_TRANSFER_RECORDS,
 };
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use invite_link::{
@@ -838,10 +828,6 @@ pub enum ChatWsServerMessage {
     /// Sent after connect once the pre-existing mailbox backlog should be drained via
     /// REST (avoids replaying a large backlog through the socket).
     DrainMailbox,
-    /// An account-local history-transfer request or state change is available.
-    /// The socket carries no archive metadata; clients fetch authenticated
-    /// opaque relay state over REST.
-    HistoryTransferAvailable { transfer_id: String },
     /// This account's device list changed: a device was registered or
     /// removed, or a new signed manifest was published. It says nothing
     /// more; each device fetches and verifies the list itself.

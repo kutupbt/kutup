@@ -52,10 +52,7 @@ pub async fn fetch_remote_bundles(
     address: &AccountAddress,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
-    let destination = address
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
+    let destination = address.server.as_str();
     let path = format!("/api/fed/chat/users/{}/keys", address.username);
     let response = federation
         .send(
@@ -105,10 +102,7 @@ pub async fn fetch_remote_sealed_bundles(
     request: &AnonymousPreKeyRequestV1,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
-    let destination = address
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    let destination = address.server.as_str();
     let path = format!("/api/fed/chat/sealed/users/{}/keys", address.username);
     let body = serde_json::to_vec(request)
         .map_err(|error| AppError::internal(format!("encode sealed bundle request: {error}")))?;
@@ -146,10 +140,7 @@ pub async fn fetch_remote_manifest_history(
     query: &crate::handlers::chat::ManifestHistoryQuery,
 ) -> AppResult<AccountManifestHistoryPageV1> {
     let federation = configured_stack(state)?;
-    let destination = address
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
+    let destination = address.server.as_str();
     let query_string = manifest_history_query_string(query);
     let response = federation
         .send(
@@ -200,10 +191,7 @@ pub async fn fetch_remote_manifest(
     address: &AccountAddress,
 ) -> AppResult<AccountManifestV1> {
     let federation = configured_stack(state)?;
-    let destination = address
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
+    let destination = address.server.as_str();
     let path = format!("/api/fed/chat/users/{}/manifest", address.username);
     let response = federation
         .send(
@@ -266,10 +254,7 @@ pub async fn fetch_remote_profile(
     access_key: &[u8],
 ) -> AppResult<ChatProfileResponse> {
     let federation = configured_stack(state)?;
-    let destination = address
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::bad_request("remote account requires a server"))?;
+    let destination = address.server.as_str();
     let profile_header = HeaderName::from_static(crate::handlers::chat::PROFILE_ACCESS_KEY_HEADER);
     let profile_value = HeaderValue::from_str(&STANDARD.encode(access_key))
         .map_err(|_| AppError::bad_request("invalid chat profile access key"))?;
@@ -359,10 +344,7 @@ pub async fn enqueue_sealed_send(
 ) -> AppResult<FederatedSealedOutcome> {
     request.validate().map_err(AppError::bad_request)?;
     let federation = configured_stack(state)?;
-    let destination = recipient
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    let destination = recipient.server.as_str();
     if destination == federation.server_name() {
         return Err(AppError::bad_request(
             "local sealed recipients use local mailbox delivery",
@@ -439,7 +421,7 @@ pub async fn enqueue_sealed_send(
     let transaction = FederatedSealedTransactionV1 {
         version: 1,
         origin: federation.server_name().to_string(),
-        recipient: recipient.username.clone(),
+        recipient: recipient.canonical(),
         sequence: u64::try_from(sequence)
             .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?,
         send_id: request.send_id,
@@ -502,7 +484,7 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
         .map_err(|error| {
             AppError::internal(format!("stored sealed transaction is invalid: {error}"))
         })?;
-    if transaction.recipient != row.recipient {
+    if transaction.recipient != format!("{}@{}", row.recipient, row.destination) {
         return Err(AppError::internal(
             "sealed outbox recipient does not match its transaction",
         ));
@@ -637,10 +619,7 @@ pub async fn enqueue_send(
 ) -> AppResult<FederatedSendOutcome> {
     let federation = configured_stack(state)?;
     crate::handlers::chat::validate_send_request(&request, false, None)?;
-    let destination = recipient
-        .server
-        .as_deref()
-        .ok_or_else(|| AppError::bad_request("federated recipient requires a server"))?;
+    let destination = recipient.server.as_str();
     if destination == federation.server_name() {
         return Err(AppError::bad_request(
             "local recipients must use local mailbox delivery",
@@ -1090,7 +1069,7 @@ pub async fn get_user_bundles(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::local(&username)
+    let account = AccountAddress::federated(&username, federation.server_name())
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let path = format!("/api/fed/chat/users/{}/keys", account.username);
     let authenticated = federation
@@ -1123,7 +1102,7 @@ pub async fn get_sealed_user_bundles(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::local(&username)
+    let account = AccountAddress::federated(&username, federation.server_name())
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
     let path = format!("/api/fed/chat/sealed/users/{}/keys", account.username);
     let authenticated = federation
@@ -1275,9 +1254,15 @@ pub async fn deliver_sealed_messages(
         capability: transaction.capability.clone(),
         envelopes: transaction.envelopes.clone(),
     };
+    let recipient = match transaction.recipient_account() {
+        Ok(recipient) => recipient,
+        Err(error) => {
+            return signed_app_error(federation, &authenticated, AppError::bad_request(error))
+        }
+    };
     let outcome = match crate::handlers::chat::store_sealed_messages(
         &mut tx,
-        &transaction.recipient,
+        &recipient.username,
         &request,
         Some(&transaction.origin),
     )
@@ -1358,7 +1343,7 @@ pub async fn get_manifest_history(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::local(&username)
+    let account = AccountAddress::federated(&username, federation.server_name())
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let path = format!("/api/fed/chat/users/{}/manifest-history", account.username);
     let query_string = manifest_history_query_string(&query);
@@ -1472,7 +1457,7 @@ pub async fn get_manifest(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::local(&username)
+    let account = AccountAddress::federated(&username, federation.server_name())
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let path = format!("/api/fed/chat/users/{}/manifest", account.username);
     let authenticated = federation
@@ -1533,7 +1518,7 @@ pub async fn get_user_profile(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::local(&username)
+    let account = AccountAddress::federated(&username, federation.server_name())
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let uri = format!("/api/fed/chat/users/{}/profile/{version}", account.username);
     let authenticated = federation
@@ -1928,7 +1913,7 @@ fn validate_transaction(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if sender.server.as_deref() != Some(transaction.origin.as_str()) {
+    if sender.server != transaction.origin.as_str() {
         return Err(AppError::unauthorized(
             "federated sender does not belong to the origin server",
         ));
@@ -1940,7 +1925,7 @@ fn validate_transaction(
             .map_err(|error: kutup_chat_proto::AddressError| {
                 AppError::bad_request(error.to_string())
             })?;
-    if recipient.server.as_deref() != Some(transaction.destination.as_str()) {
+    if recipient.server != transaction.destination.as_str() {
         return Err(AppError::bad_request(
             "federated recipient does not belong to this server",
         ));

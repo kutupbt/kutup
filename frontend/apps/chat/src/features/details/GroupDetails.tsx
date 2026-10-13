@@ -2,7 +2,7 @@ import { Crown, DoorOpen, Loader2, RefreshCw, Shield, Trash2, UserMinus, UserPlu
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { canonicalAccountAddress, parseAccountAddress, withHomeServer } from '@kutup/chat-core/identity'
+import { canonicalAccountAddress, parseAccountAddress, parseAccountInput } from '@kutup/chat-core/identity'
 import type {
   LocalMlsConversationRecord,
   MlsAuthorityPolicyInspection,
@@ -186,7 +186,7 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
         <p className="mb-2 mt-4 text-sm">{t('chat.group.whoEdits')}</p>
         <div className="flex gap-2">
           {(['members', 'administrators'] as const).map((who) => {
-            const active = (group.currentAuthorizationPolicy.groupInfoEditors ?? 2) === (who === 'members' ? 1 : 2)
+            const active = group.currentAuthorizationPolicy.groupInfoEditors === (who === 'members' ? 1 : 2)
             return (
               <Button
                 key={who}
@@ -505,12 +505,12 @@ function AddMemberDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   busy: boolean
-  onAdd: (address: { username: string; server?: string }) => Promise<void>
+  onAdd: (address: { username: string; server: string }) => Promise<void>
   homeServer?: string
 }) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
-  const parsed = parseAccountAddress(value)
+  const parsed = homeServer ? parseAccountInput(value, homeServer) : parseAccountAddress(value)
   return (
     <Dialog open={open} onOpenChange={(next) => { onOpenChange(next); if (!next) setValue('') }}>
       <DialogContent className="sm:max-w-md">
@@ -518,7 +518,7 @@ function AddMemberDialog({
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault()
-            if (parsed) void onAdd(withHomeServer(parsed, homeServer)).then(() => setValue(''))
+            if (parsed) void onAdd(parsed).then(() => setValue(''))
           }}
         >
           <DialogHeader>

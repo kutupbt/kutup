@@ -20,10 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::PutChatProfileRequest;
-use kutup_chat_proto::{
-    AccountManifestV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferFrameV1,
-    ChatHistoryTransferRequestV1, ContactState, ConversationId,
-};
+use kutup_chat_proto::{AccountManifestV1, ContactState};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -223,78 +220,6 @@ pub struct SentMessage {
     pub delivered_at: Option<i64>,
     pub delivered: bool,
     pub deduplicated: bool,
-}
-
-/// Immutable display-history copied from another authorized installation.
-/// These rows are deliberately separate from live Signal/MLS state: importing
-/// one cannot advance a ratchet, mailbox cursor, receipt, or group epoch.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ImportedHistoryRecordV1 {
-    /// One-time transfer UUID that established this row's provenance.
-    pub transfer_id: String,
-    /// Stable source-local id, unique within `transfer_id`.
-    pub source_record_id: String,
-    pub source_device_id: u32,
-    pub conversation: ConversationId,
-    pub sender: String,
-    pub sender_device_id: u32,
-    pub outgoing: bool,
-    /// Canonical serialized [`kutup_chat_proto::ChatContent`].
-    pub content: Vec<u8>,
-    pub timestamp_ms: i64,
-    pub delivered: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HistoryTransferRoleV1 {
-    Requester,
-    Responder,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HistoryTransferJournalStateV1 {
-    Requested,
-    Accepted,
-    FramesReady,
-    ImportReady,
-    Completed,
-    Cancelled,
-}
-
-/// Account-private restart journal for one short-lived history transfer. The
-/// ephemeral secret is as sensitive as the device identity and never leaves
-/// the encrypted/native or origin-private/browser client database.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HistoryTransferJournalV1 {
-    pub transfer_id: String,
-    pub role: HistoryTransferRoleV1,
-    pub state: HistoryTransferJournalStateV1,
-    pub request: ChatHistoryTransferRequestV1,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub acceptance: Option<ChatHistoryTransferAcceptanceV1>,
-    pub ephemeral_secret: [u8; 32],
-    pub next_frame_index: u32,
-    pub updated_at_unix: i64,
-}
-
-impl std::fmt::Debug for HistoryTransferJournalV1 {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("HistoryTransferJournalV1")
-            .field("transfer_id", &self.transfer_id)
-            .field("role", &self.role)
-            .field("state", &self.state)
-            .field("request", &self.request)
-            .field("acceptance", &self.acceptance)
-            .field("ephemeral_secret", &"[REDACTED]")
-            .field("next_frame_index", &self.next_frame_index)
-            .field("updated_at_unix", &self.updated_at_unix)
-            .finish()
-    }
 }
 
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
@@ -610,12 +535,6 @@ pub struct Pending {
     pub(crate) messages: Vec<InboxMessage>,
     /// Outbound history upserts, keyed by `sendId`.
     pub(crate) sent_messages: HashMap<String, SentMessage>,
-    /// Immutable imported display rows keyed by `(transferId, sourceRecordId)`.
-    pub(crate) imported_history: HashMap<(String, String), ImportedHistoryRecordV1>,
-    /// Transfer id → restart journal update/removal.
-    pub(crate) history_transfer_journals: HashMap<String, Option<HistoryTransferJournalV1>>,
-    /// Exact opaque frame update/removal, retained byte-for-byte across retry.
-    pub(crate) history_transfer_frames: HashMap<(String, u32), Option<ChatHistoryTransferFrameV1>>,
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
@@ -636,7 +555,6 @@ pub struct Pending {
     pub(crate) delete_message_ids: HashSet<String>,
     pub(crate) delete_sent_message_ids: HashSet<String>,
     pub(crate) delete_mls_message_ids: HashSet<String>,
-    pub(crate) delete_imported_history_ids: HashSet<(String, String)>,
     /// Serialized `ReplenishKeysRequest` whose private keys are already durable
     /// but whose server response has not yet been confirmed.
     pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
@@ -686,9 +604,6 @@ impl Pending {
             && self.mls_state.is_none()
             && self.messages.is_empty()
             && self.sent_messages.is_empty()
-            && self.imported_history.is_empty()
-            && self.history_transfer_journals.is_empty()
-            && self.history_transfer_frames.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
             && self.manifest_history.is_empty()
@@ -699,7 +614,6 @@ impl Pending {
             && self.delete_message_ids.is_empty()
             && self.delete_sent_message_ids.is_empty()
             && self.delete_mls_message_ids.is_empty()
-            && self.delete_imported_history_ids.is_empty()
             && self.prekey_upload.is_none()
             && self.prekey_rotation.is_none()
             && self.repair_limits.is_none()
@@ -798,37 +712,6 @@ pub trait ChatDb {
     async fn load_sent_message(&self, send_id: &str) -> Result<Option<SentMessage>>;
     /// All outbound history, oldest first.
     async fn list_sent_messages(&self) -> Result<Vec<SentMessage>>;
-
-    /// One immutable imported display-history row.
-    async fn load_imported_history(
-        &self,
-        transfer_id: &str,
-        source_record_id: &str,
-    ) -> Result<Option<ImportedHistoryRecordV1>> {
-        let _ = (transfer_id, source_record_id);
-        Ok(None)
-    }
-
-    /// All imported display-history rows ordered for presentation.
-    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
-        Ok(Vec::new())
-    }
-
-    async fn load_history_transfer_journal(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Option<HistoryTransferJournalV1>> {
-        let _ = transfer_id;
-        Ok(None)
-    }
-
-    async fn list_history_transfer_frames(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Vec<ChatHistoryTransferFrameV1>> {
-        let _ = transfer_id;
-        Ok(Vec::new())
-    }
 
     /// Every raw inbound entry, ordered by cursor, including ack retries and
     /// visible dead letters.

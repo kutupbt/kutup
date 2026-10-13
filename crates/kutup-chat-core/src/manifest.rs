@@ -102,11 +102,6 @@ fn canonical_federated_account(value: &str) -> Result<String> {
     let address: AccountAddress = value
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
-    if address.server.is_none() {
-        return Err(ChatError::Invalid(
-            "safety numbers require a canonical account@server address".into(),
-        ));
-    }
     Ok(address.canonical())
 }
 
@@ -454,12 +449,7 @@ fn match_expected_account(expected_peer: &str, authenticated_account: &str) -> R
     let authenticated: AccountAddress = authenticated_account
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if expected.username != authenticated.username
-        || expected
-            .server
-            .as_ref()
-            .is_some_and(|server| authenticated.server.as_ref() != Some(server))
-    {
+    if expected != authenticated {
         return Err(ChatError::Trust(
             "account manifest belongs to another account".into(),
         ));

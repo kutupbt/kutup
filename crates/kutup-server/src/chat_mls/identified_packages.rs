@@ -78,7 +78,7 @@ pub(crate) async fn get_identified_key_packages(
     // other device in the group; chat_mls/membership.rs), so it may claim
     // packages for an account that is already an active member here.
     let fellow_member_device_sync = may_claim_membership_packages.is_some()
-        && request.recipient.server.as_deref() == Some(federation.server_name())
+        && request.recipient.server == federation.server_name()
         && sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS(
                 SELECT 1
@@ -104,18 +104,14 @@ pub(crate) async fn get_identified_key_packages(
         ));
     }
 
-    if request.recipient.server.as_deref() == Some(federation.server_name()) {
+    if request.recipient.server == federation.server_name() {
         let bundle =
             claim_local_identified_key_packages(&state, &requester, &request, &policy.abuse_limits)
                 .await?;
         return Ok(Json(bundle).into_response());
     }
 
-    let destination = request
-        .recipient
-        .server
-        .as_deref()
-        .ok_or_else(unavailable)?;
+    let destination = request.recipient.server.as_str();
     authenticated_remote_policy(&state, destination).await?;
     let transaction = FederatedIdentifiedMlsKeyPackageRequestV1 {
         origin_domain: federation.server_name().to_owned(),
@@ -216,8 +212,8 @@ pub(crate) async fn federated_get_identified_key_packages(
     }
     if authenticated.origin() != transaction.origin_domain
         || authenticated.destination() != federation.server_name()
-        || transaction.requester.server.as_deref() != Some(authenticated.origin())
-        || transaction.request.recipient.server.as_deref() != Some(federation.server_name())
+        || transaction.requester.server != authenticated.origin()
+        || transaction.request.recipient.server != federation.server_name()
     {
         return signed_federation_error(
             federation,

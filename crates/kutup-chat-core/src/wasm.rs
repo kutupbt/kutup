@@ -77,7 +77,7 @@ export interface KutupChatContentView {
   kind: string;
   sentAt: string;
   seq: string;
-  messageId?: string;
+  messageId: string;
   replyTo?: string;
   body: unknown;
   text?: string;
@@ -111,7 +111,7 @@ export interface KutupChatContentView {
 
 export interface KutupChatAccountAddress {
   username: string;
-  server?: string;
+  server: string;
 }
 
 export type KutupChatConversationId =
@@ -121,7 +121,7 @@ export type KutupChatConversationId =
 export interface KutupChatHistoryEntry {
   id: string;
   conversation: KutupChatConversationId;
-  /** @deprecated Use conversation. Retained while existing web/native callers migrate. */
+  /** Direct: the other account. Group: the sender's account for an incoming entry, the group id for an outgoing one. */
   peer: string;
   direction: "incoming" | "outgoing";
   senderDeviceId?: number;
@@ -694,21 +694,14 @@ impl WasmChatClient {
         use crate::timeline::{Source, EXPIRY_START};
         let db = self.engine.session().db().as_ref();
         let mut start_sent = Vec::new();
-        let mut start_imported = Vec::new();
         for start in crate::timeline::flagged(db, directory, key, EXPIRY_START).await? {
             match start.source {
                 Source::Sent => start_sent.extend(db.load_sent_message(&start.id).await?),
-                Source::Imported => {
-                    if let Some((transfer, record)) = start.id.split_once('\u{0}') {
-                        start_imported.extend(db.load_imported_history(transfer, record).await?);
-                    }
-                }
                 Source::Inbox | Source::Mls => {}
             }
         }
         crate::session::collect_disappearing_expiry_starts(
             &start_sent,
-            &start_imported,
             self.engine.session().user(),
         )
     }
@@ -736,14 +729,6 @@ impl WasmChatClient {
             },
             Source::Mls => match db.load_mls_message(&entry.id).await? {
                 Some(message) => Some(HistoryEntry::mls(message)?),
-                None => None,
-            },
-            Source::Imported => match entry.id.split_once('\u{0}') {
-                Some((transfer, record)) => match db.load_imported_history(transfer, record).await?
-                {
-                    Some(message) => Some(HistoryEntry::imported(message)?),
-                    None => None,
-                },
                 None => None,
             },
         };
@@ -850,10 +835,13 @@ impl WasmChatClient {
         );
         let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
         let mut rng = OsRng.unwrap_err();
-        let mut engine = Engine::register(db, transport, user.clone(), 50, &mut rng)
+        // The device's account is its full `username@server` address.
+        let account = kutup_chat_proto::AccountAddress::federated(&user, &server_name)
+            .map_err(|error| js_error(&error.to_string()))?
+            .canonical();
+        let mut engine = Engine::register(db, transport, account, 50, &mut rng)
             .await
             .map_err(chat_error)?;
-        engine.set_local_server(&server_name).map_err(chat_error)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
             .enable_identity_pins(&master_key, &binding)
@@ -3149,20 +3137,13 @@ impl WasmChatClient {
             .mls_application_history()
             .await
             .map_err(chat_error)?;
-        let imported = self
-            .engine
-            .session()
-            .imported_history()
-            .await
-            .map_err(chat_error)?;
         let expiry_starts = self
             .engine
             .session()
             .disappearing_expiry_starts()
             .await
             .map_err(chat_error)?;
-        let mut history =
-            Vec::with_capacity(incoming.len() + outgoing.len() + mls.len() + imported.len());
+        let mut history = Vec::with_capacity(incoming.len() + outgoing.len() + mls.len());
         for message in incoming {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
@@ -3206,14 +3187,6 @@ impl WasmChatClient {
             let mut pending = HistoryEntry::mls_pending(entry).map_err(chat_error)?;
             pending.apply_disappearing_deadline(&expiry_starts);
             history.push(pending);
-        }
-        for message in imported {
-            if is_invisible_control(&message.content).map_err(chat_error)? {
-                continue;
-            }
-            let mut entry = HistoryEntry::imported(message).map_err(chat_error)?;
-            entry.apply_disappearing_deadline(&expiry_starts);
-            history.push(entry);
         }
         history.sort_by(|left, right| {
             left.timestamp_ms
@@ -3846,8 +3819,7 @@ struct ContentView {
     kind: String,
     sent_at: String,
     seq: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message_id: Option<String>,
+    message_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_to: Option<String>,
     body: serde_json::Value,
@@ -4012,7 +3984,9 @@ fn parse_receipt_state(
 struct HistoryEntry {
     id: String,
     conversation: ConversationId,
-    /// Compatibility field for the current direct-only web UI release.
+    /// Direct: the other account. Group: the sender's account for an
+    /// incoming entry, the group id for an outgoing one (the author the UI
+    /// shows; `conversation` alone does not name a group message's sender).
     peer: String,
     direction: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4033,11 +4007,9 @@ impl HistoryEntry {
         let base_ms = if self.direction == "outgoing" {
             Some(self.timestamp_ms)
         } else {
-            self.content.message_id.as_ref().and_then(|message_id| {
-                starts
-                    .get(&(self.conversation.key(), message_id.clone()))
-                    .copied()
-            })
+            starts
+                .get(&(self.conversation.key(), self.content.message_id.clone()))
+                .copied()
         };
         self.content.expires_at_ms =
             base_ms.map(|base_ms| base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000)));
@@ -4046,10 +4018,7 @@ impl HistoryEntry {
     fn incoming(message: crate::InboxMessage) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&message.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
-        let id = content
-            .message_id
-            .clone()
-            .unwrap_or_else(|| message.id.clone());
+        let id = content.message_id.clone();
         let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
             id,
@@ -4128,35 +4097,6 @@ impl HistoryEntry {
             timestamp_ms: message.timestamp_ms,
             delivered: message.delivered,
             deduplicated: message.deduplicated,
-            content: content.into(),
-        })
-    }
-
-    fn imported(message: crate::ImportedHistoryRecordV1) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        let peer = match &message.conversation {
-            ConversationId::Direct { address } => address.canonical(),
-            ConversationId::Group { group_id } if message.outgoing => group_id.clone(),
-            ConversationId::Group { .. } => message.sender.clone(),
-        };
-        Ok(Self {
-            id: format!(
-                "imported:{}:{}",
-                message.transfer_id, message.source_record_id
-            ),
-            conversation: message.conversation,
-            peer,
-            direction: if message.outgoing {
-                "outgoing"
-            } else {
-                "incoming"
-            },
-            sender_device_id: (!message.outgoing).then_some(message.sender_device_id),
-            cursor: None,
-            timestamp_ms: message.timestamp_ms,
-            delivered: message.delivered,
-            deduplicated: false,
             content: content.into(),
         })
     }

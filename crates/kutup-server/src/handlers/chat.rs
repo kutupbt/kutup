@@ -131,13 +131,10 @@ type OwnProfileRow = (
     Vec<u8>,
 );
 
-/// A qualified account on this Chat server is still local. Federation is only
-/// involved when the canonical suffix names a different server.
+/// An account on this Chat server is local. Federation is only involved when
+/// the address names a different server.
 fn is_remote_chat_address(local_server_name: &str, address: &AccountAddress) -> bool {
-    address
-        .server
-        .as_deref()
-        .is_some_and(|server| server != local_server_name)
+    address.server != local_server_name
 }
 
 fn local_chat_account(local_server_name: &str, username: &str) -> String {
@@ -2253,18 +2250,27 @@ async fn deliver_messages(
         .await?;
 
     // The sender must address from one of their own registered chat devices.
-    let sender_username: Option<String> = sqlx::query_scalar(
+    let sender_username: Option<Option<String>> = sqlx::query_scalar(
         "UPDATE chat_devices d SET last_seen_at = now()
          FROM users u
          WHERE d.user_id = $1 AND d.device_id = $2 AND u.id = d.user_id
-         RETURNING COALESCE(u.username, '')",
+         RETURNING u.username",
     )
     .bind(sender_id)
     .bind(req.sender_device_id as i32)
     .fetch_optional(&mut *tx)
     .await?;
-    let sender_username =
-        sender_username.ok_or_else(|| AppError::not_found("no such chat device"))?;
+    let sender_username = sender_username
+        .ok_or_else(|| AppError::not_found("no such chat device"))?
+        .ok_or_else(|| AppError::forbidden("a chat sender needs a username"))?;
+    // Mailbox rows and delivered envelopes name the sender by its full
+    // `username@server` address, never a bare local username.
+    let sender_address = kutup_chat_proto::AccountAddress::federated(
+        &sender_username,
+        &state.config.chat_server_name,
+    )
+    .map_err(|error| AppError::internal(format!("local chat sender address: {error}")))?
+    .canonical();
 
     // Claim before validating the *current* recipient device set. A retry of a
     // send that was already accepted must return the same success even if a
@@ -2328,7 +2334,7 @@ async fn deliver_messages(
         )
         .bind(recipient_id)
         .bind(e.device_id as i32)
-        .bind(&sender_username)
+        .bind(&sender_address)
         .bind(req.sender_device_id as i32)
         .bind(envelope_type_code(e.envelope_type))
         .bind(e.suite.as_u16() as i16)
@@ -2342,7 +2348,7 @@ async fn deliver_messages(
             DeliveredEnvelope {
                 id: id.to_string(),
                 cursor: cursor as u64,
-                sender: Some(sender_username.clone()),
+                sender: Some(sender_address.clone()),
                 sealed_sender: false,
                 sender_device_id: req.sender_device_id,
                 envelope_type: e.envelope_type,
@@ -2817,11 +2823,10 @@ mod tests {
 
     #[test]
     fn canonical_local_accounts_do_not_require_federation() {
-        let unqualified: AccountAddress = "alice".parse().unwrap();
+        assert!("alice".parse::<AccountAddress>().is_err());
         let local: AccountAddress = "alice@kutup.local".parse().unwrap();
         let remote: AccountAddress = "alice@remote.test".parse().unwrap();
 
-        assert!(!is_remote_chat_address("kutup.local", &unqualified));
         assert!(!is_remote_chat_address("kutup.local", &local));
         assert!(is_remote_chat_address("kutup.local", &remote));
         assert_eq!(

@@ -158,7 +158,7 @@ fn validate_mentions(mentions: &[MentionV1], text: &str) -> Result<(), String> {
             .member
             .parse()
             .map_err(|_| "Chat mention names an invalid account".to_string())?;
-        if address.server.is_none() || address.canonical() != mention.member {
+        if address.canonical() != mention.member {
             return Err("Chat mention must name a canonical account".into());
         }
     }

@@ -59,8 +59,6 @@ import {
   canonicalAccountAddress,
   conversationKey,
   parseAccountAddress,
-  toCoreAccountAddress,
-  withHomeServer,
 } from './identity'
 import { matchesWords, searchableText, searchWords } from './search'
 import { MlsConversationService, MlsSendError } from './mls-service'
@@ -250,12 +248,9 @@ export class ChatService {
         page: (key, before, limit) => this.withLock(async () =>
           (await this.client.conversationHistory?.(key, before, limit) ?? { entries: [] }) as CorePage),
       },
-      (entry) => this.withHomeServerEntry(entry),
-      (conversation) => {
-        const complete = this.withHomeServerConversation(conversation)
-        return { key: conversationKey(complete), conversation: complete }
-      },
-      conversationKey({ kind: 'direct', address: withHomeServer({ username }, capabilities.serverName) }),
+      (entry) => entry,
+      (conversation) => ({ key: conversationKey(conversation), conversation }),
+      conversationKey({ kind: 'direct', address: { username, server: capabilities.serverName! } }),
     )
     this.deviceId = client.deviceId
     this.lockName = lockName
@@ -594,7 +589,7 @@ export class ChatService {
       }
     }
     for (const entry of [...found.entries, ...found.related]) {
-      const normalized = this.withHomeServerEntry(entry)
+      const normalized = entry
       byId.set(normalized.id, normalized)
     }
     return [...byId.values()]
@@ -609,7 +604,7 @@ export class ChatService {
   private async newestEntries(key: string, limit: number): Promise<ChatHistoryEntry[]> {
     const page = await this.withLock(async () =>
       (await this.client.conversationHistory?.(key, undefined, limit) ?? { entries: [] }) as CorePage)
-    return page.entries.map((entry) => this.withHomeServerEntry(entry))
+    return page.entries.map((entry) => entry)
   }
 
   /**
@@ -624,7 +619,7 @@ export class ChatService {
       const page = await this.withLock(async () =>
         (await this.client.conversationHistory?.(key, before, 500) ?? { entries: [] }) as CorePage)
       for (const entry of page.entries) {
-        if (conversationKey(entry.conversation) === key) entries.push(this.withHomeServerEntry(entry))
+        if (conversationKey(entry.conversation) === key) entries.push(entry)
       }
       before = page.before ?? undefined
     } while (before)
@@ -638,7 +633,7 @@ export class ChatService {
       this.restoredByKeyVersion = version
       const loading = this.backup.restoredHistoryAsync().then((entries) => {
         const byKey = new Map<string, ChatHistoryEntry[]>()
-        for (const entry of entries.map((value) => this.withHomeServerEntry(value))) {
+        for (const entry of entries.map((value) => value)) {
           const key = conversationKey(entry.conversation)
           const list = byKey.get(key)
           if (list) list.push(entry)
@@ -653,46 +648,17 @@ export class ChatService {
     return this.restoredByKey
   }
 
-  private withHomeServerConversation(conversation: ConversationId): ConversationId {
-    if (conversation.kind !== 'direct') return conversation
-    return { kind: 'direct', address: withHomeServer(conversation.address, this.capabilities.serverName) }
-  }
-
-  private withHomeServerEntry(entry: ChatHistoryEntry): ChatHistoryEntry {
-    if (entry.conversation.kind !== 'direct') return entry
-    const conversation = this.withHomeServerConversation(entry.conversation) as Extract<ConversationId, { kind: 'direct' }>
-    return { ...entry, conversation, peer: canonicalAccountAddress(conversation.address) }
-  }
-
   private async loadLiveHistory(): Promise<ChatHistoryEntry[]> {
     const { history, expiry } = await this.withLock(async () => {
       const expiry = await this.client.purgeExpiredMessages(String(Date.now()))
       return { expiry, history: await this.client.history() }
     })
     await this.releaseExpiredAttachments(expiry)
-    return history.map((entry) => {
-      if (entry.conversation.kind !== 'direct') return entry
-      const address = withHomeServer(entry.conversation.address, this.capabilities.serverName)
-      return {
-        ...entry,
-        conversation: { kind: 'direct' as const, address },
-        peer: canonicalAccountAddress(address),
-      }
-    })
+    return history
   }
 
   async contacts(): Promise<ContactRecord[]> {
-    const contacts = await this.withLock(() => this.client.contacts())
-    return contacts.map((contact) => {
-      const parsed = parseAccountAddress(contact.peer)
-      if (!parsed) return contact
-      return {
-        ...contact,
-        peer: canonicalAccountAddress(
-          withHomeServer(parsed, this.capabilities.serverName),
-        ),
-      }
-    })
+    return await this.withLock(() => this.client.contacts())
   }
 
   profile(): Promise<ChatProfile> {
@@ -748,17 +714,7 @@ export class ChatService {
   }
 
   async profiles(): Promise<PeerChatProfile[]> {
-    const profiles = await this.withLock(() => this.client.profiles())
-    return profiles.map((profile) => {
-      const parsed = parseAccountAddress(profile.peer)
-      if (!parsed) return profile
-      return {
-        ...profile,
-        peer: canonicalAccountAddress(
-          withHomeServer(parsed, this.capabilities.serverName),
-        ),
-      }
-    })
+    return await this.withLock(() => this.client.profiles())
   }
 
   async setProfile(
@@ -812,7 +768,7 @@ export class ChatService {
         ),
       )
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const sendId = crypto.randomUUID()
     const summary = await this.withLock(() =>
       this.client.sendText(
@@ -857,8 +813,8 @@ export class ChatService {
         ),
       )
     }
-    const address = withHomeServer(conversation.address, this.capabilities.serverName)
-    const peer = toCoreAccountAddress(address, this.capabilities.serverName)
+    const address = conversation.address
+    const peer = canonicalAccountAddress(address)
     const self = `${this.username}@${this.capabilities.serverName}`
     const capability = peer === self
       ? null
@@ -941,7 +897,7 @@ export class ChatService {
         this.requireMls().sendPollContent(conversation.groupId, kind, body, expiresAfterSeconds),
       )
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const summary = await this.withLock(() =>
       this.client.sendPollContent(crypto.randomUUID(), peer, new Date().toISOString(), kind, body, expiresAfterSeconds),
     )
@@ -965,7 +921,7 @@ export class ChatService {
         ),
       )
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const summary = await this.withLock(() => this.client.sendReaction(
       crypto.randomUUID(),
       peer,
@@ -996,7 +952,7 @@ export class ChatService {
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const summary = await this.withLock(() => this.client.sendMessageMutation(
       crypto.randomUUID(),
       peer,
@@ -1021,7 +977,7 @@ export class ChatService {
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const summary = await this.withLock(() => this.client.sendReceipt(
       crypto.randomUUID(),
       peer,
@@ -1040,7 +996,7 @@ export class ChatService {
       )
       return
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const self = `${this.username}@${this.capabilities.serverName}`
     if (peer === self) return
     await this.withLock(() => this.client.sendTyping(
@@ -1085,7 +1041,7 @@ export class ChatService {
 
   /** Send one call signal to `peer` (its devices; see docs/chat-calls.md). */
   async sendCallSignal(peer: AccountAddress, call: ChatCallSignal): Promise<void> {
-    const address = toCoreAccountAddress(peer, this.capabilities.serverName)
+    const address = canonicalAccountAddress(peer)
     await this.withLock(() => this.client.sendCallSignal(
       crypto.randomUUID(),
       address,
@@ -1096,7 +1052,7 @@ export class ChatService {
 
   /** Put a finished call into `peer`'s timeline on this device. */
   async recordCallLog(peer: AccountAddress, body: ChatCallLog): Promise<void> {
-    const address = toCoreAccountAddress(peer, this.capabilities.serverName)
+    const address = canonicalAccountAddress(peer)
     await this.withLock(() => this.client.recordCallLog(address, body))
     this.notifyPeers()
   }
@@ -1152,7 +1108,7 @@ export class ChatService {
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
-    const peer = toCoreAccountAddress(conversation.address, this.capabilities.serverName)
+    const peer = canonicalAccountAddress(conversation.address)
     const summary = await this.withLock(() => this.client.sendDisappearingTimer(
       crypto.randomUUID(),
       peer,
@@ -1320,10 +1276,7 @@ export class ChatService {
   ): Promise<void> {
     if (!this.attachmentLedger) throw new Error('Chat attachment ledger is unavailable')
     const address = conversation.kind === 'direct'
-      ? canonicalAccountAddress(withHomeServer(
-          conversation.address,
-          this.capabilities.serverName,
-        ))
+      ? canonicalAccountAddress(conversation.address)
       : conversation.groupId
     const self = `${this.username}@${this.capabilities.serverName}`
     await this.attachmentLedger.create({
@@ -1394,7 +1347,7 @@ export class ChatService {
         for (const message of report.messages ?? []) {
           if (message.conversation.kind !== 'direct' || !message.content.call) continue
           this.emitCall({
-            peer: canonicalAccountAddress(withHomeServer(message.conversation.address, this.capabilities.serverName)),
+            peer: canonicalAccountAddress(message.conversation.address),
             senderDeviceId: message.senderDeviceId,
             sentAt: message.content.sentAt,
             call: message.content.call,
@@ -1402,10 +1355,7 @@ export class ChatService {
         }
         const directTyping = (report.messages ?? []).flatMap((message): ChatTypingEvent[] => {
           if (message.conversation.kind !== 'direct' || message.content.call) return []
-          const address = withHomeServer(
-            message.conversation.address,
-            this.capabilities.serverName,
-          )
+          const address = message.conversation.address
           return [{
             conversation: { kind: 'direct', address },
             sender: canonicalAccountAddress(address),
@@ -1472,7 +1422,7 @@ export class ChatService {
       }
       const authorities = new Set([self.server!])
       if (initialMember) {
-        const member = withHomeServer(initialMember, this.capabilities.serverName)
+        const member = initialMember
         if (!member.server) throw new Error('group member requires a server')
         authorities.add(member.server)
         initialMember = member
@@ -1500,7 +1450,7 @@ export class ChatService {
     await this.withMlsWorkflow(() =>
       this.requireMls().addMember(
         conversationId,
-        withHomeServer(member, this.capabilities.serverName),
+        member,
       ),
     )
     this.notifyPeers()
@@ -1510,7 +1460,7 @@ export class ChatService {
     await this.withMlsWorkflow(() =>
       this.requireMls().removeMember(
         conversationId,
-        withHomeServer(member, this.capabilities.serverName),
+        member,
       ),
     )
     this.notifyPeers()
@@ -1524,7 +1474,7 @@ export class ChatService {
     await this.withMlsWorkflow(() =>
       this.requireMls().setAdministrator(
         conversationId,
-        withHomeServer(member, this.capabilities.serverName),
+        member,
         isAdmin,
       ),
     )
@@ -1556,7 +1506,7 @@ export class ChatService {
     const finalized = await this.withMlsWorkflow(() =>
       this.requireMls().setOwnerRole(
         conversationId,
-        withHomeServer(member, this.capabilities.serverName),
+        member,
         isOwner,
       ),
     )
@@ -1775,7 +1725,7 @@ export class ChatService {
     const address = parseAccountAddress(peer)
     if (!address) throw new Error('invalid chat account address')
     return this.withLock(() =>
-      this.client.safetyNumber(toCoreAccountAddress(address, this.capabilities.serverName)),
+      this.client.safetyNumber(canonicalAccountAddress(address)),
     )
   }
 
@@ -1784,7 +1734,7 @@ export class ChatService {
     if (!address) throw new Error('invalid chat account address')
     const verified = await this.withLock(() =>
       this.client.verifySafetyNumber(
-        toCoreAccountAddress(address, this.capabilities.serverName),
+        canonicalAccountAddress(address),
         scannedPayload,
       ),
     )
@@ -2006,7 +1956,7 @@ export class ChatService {
   ): Promise<ContactRecord> {
     const address = parseAccountAddress(peer)
     if (!address) throw new Error('invalid chat account address')
-    const corePeer = toCoreAccountAddress(address, this.capabilities.serverName)
+    const corePeer = canonicalAccountAddress(address)
     const result = await this.withLock(() => action(corePeer))
     this.notifyPeers()
     return result

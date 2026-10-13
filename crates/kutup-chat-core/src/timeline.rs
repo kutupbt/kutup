@@ -1,8 +1,8 @@
 //! Per-conversation timelines (`docs/research/16-browser-storage-architecture.md`,
 //! Phase 2b).
 //!
-//! An index over the four history stores (inbound and sent direct messages,
-//! group messages, imported history), kept in the store's derived-index
+//! An index over the three history stores (inbound and sent direct messages,
+//! group messages), kept in the store's derived-index
 //! records and written in the same transaction as the records it indexes
 //! ([`changes`], called from each backend's `apply`). A directory holds one
 //! header per conversation; each conversation's references (time, store,
@@ -20,14 +20,12 @@ use kutup_chat_proto::content::kind;
 use kutup_chat_proto::{AccountAddress, ChatContent, ConversationId};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{
-    ChatDb, ImportedHistoryRecordV1, InboxMessage, MlsHistoryMessage, Pending, SentMessage,
-};
+use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
 
 /// Raised whenever what is indexed or how changes; a store with an older
 /// directory is indexed again from its records.
-pub(crate) const TIMELINE_VERSION: u32 = 2;
+pub(crate) const TIMELINE_VERSION: u32 = 3;
 /// References per chunk before it splits.
 pub(crate) const CHUNK_LIMIT: usize = 256;
 const DIRECTORY_KEY: &[u8] = b"timeline/directory";
@@ -38,7 +36,6 @@ pub enum Source {
     Inbox,
     Sent,
     Mls,
-    Imported,
 }
 
 /// From someone else.
@@ -136,7 +133,7 @@ pub(crate) fn direct(peer: &str) -> Result<ConversationId> {
 }
 
 /// Kinds left out of the history of direct messages (as the full history
-/// does), and the wider set left out of group and imported history.
+/// does), and the wider set left out of group history.
 fn hidden_direct(kind_name: &str) -> bool {
     matches!(
         kind_name,
@@ -309,22 +306,6 @@ pub(crate) fn place_mls(message: &MlsHistoryMessage) -> Vec<Indexed> {
     )
 }
 
-pub(crate) fn imported_id(transfer_id: &str, source_record_id: &str) -> String {
-    format!("{transfer_id}\u{0}{source_record_id}")
-}
-
-pub(crate) fn place_imported(message: &ImportedHistoryRecordV1) -> Vec<Indexed> {
-    place(
-        message.conversation.clone(),
-        Source::Imported,
-        imported_id(&message.transfer_id, &message.source_record_id),
-        message.timestamp_ms,
-        !message.outgoing,
-        &message.content,
-        hidden_other,
-    )
-}
-
 /// Index writes for `pending`, to commit with it. Nothing while the store
 /// has no current directory (it is indexed whole on open, [`ensure_built`]).
 /// The index writes for one commit, and the conversations it touched.
@@ -356,9 +337,6 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     for message in pending.mls_messages.values() {
         added.extend(place_mls(message));
     }
-    for message in pending.imported_history.values() {
-        added.extend(place_imported(message));
-    }
     // A group message still being sent shows on its conversation's newest
     // page without being indexed: its conversation changes all the same.
     let mut queued = HashSet::new();
@@ -377,8 +355,7 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
         && pending.delete_sent_message_ids.is_empty()
-        && pending.delete_mls_message_ids.is_empty()
-        && pending.delete_imported_history_ids.is_empty();
+        && pending.delete_mls_message_ids.is_empty();
     if added.is_empty() && nothing_removed {
         return Ok(Changes {
             writes: HashMap::new(),
@@ -404,14 +381,6 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     for id in &pending.delete_mls_message_ids {
         if let Some(message) = db.load_mls_message(id).await? {
             removed.extend(place_mls(&message));
-        }
-    }
-    for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
-        if let Some(message) = db
-            .load_imported_history(transfer_id, source_record_id)
-            .await?
-        {
-            removed.extend(place_imported(&message));
         }
     }
     let mut writer = Writer::new(db, &mut directory);
@@ -465,9 +434,6 @@ async fn ensure_timeline_built(db: &dyn ChatDb) -> Result<()> {
     }
     for message in db.list_mls_messages().await? {
         placed.extend(place_mls(&message));
-    }
-    for message in db.list_imported_history().await? {
-        placed.extend(place_imported(&message));
     }
     let mut directory = Directory {
         version: TIMELINE_VERSION,
@@ -927,11 +893,22 @@ mod tests {
     use futures_executor::block_on;
 
     fn text(body: &str) -> Vec<u8> {
-        serde_json::to_vec(&ChatContent::text("2026-10-08T10:00:00Z", 1, body)).unwrap()
+        serde_json::to_vec(&ChatContent::text_with_id(
+            uuid::Uuid::new_v4().to_string(),
+            "2026-10-08T10:00:00Z",
+            1,
+            body,
+        ))
+        .unwrap()
     }
 
     fn control(kind_name: &str, body: serde_json::Value) -> Vec<u8> {
-        let mut content = ChatContent::text("2026-10-08T10:00:00Z", 1, "");
+        let mut content = ChatContent::text_with_id(
+            uuid::Uuid::new_v4().to_string(),
+            "2026-10-08T10:00:00Z",
+            1,
+            "",
+        );
         content.kind = kind_name.to_string();
         content.body = body;
         serde_json::to_vec(&content).unwrap()

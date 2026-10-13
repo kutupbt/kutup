@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { canonicalAccountAddress, withHomeServer } from '@kutup/chat-core/identity'
+import { canonicalAccountAddress } from '@kutup/chat-core/identity'
 import { downloadChatMediaToCacheV1, openCachedChatMediaV1 } from '@kutup/chat-core/media'
 import type { ChatAttachmentDescriptorV1, ChatCallMedia, ChatGroupCall, ConversationId } from '@kutup/chat-core/types'
 import { freshAccessToken } from '@kutup/session/client'
@@ -155,7 +155,7 @@ export function ConversationView({
     const peer = conversation.kind === 'direct' ? conversation.address : null
     if (!controller || !peer) return
     try {
-      await controller.start(withHomeServer(peer, chat.capabilities?.serverName), media)
+      await controller.start(peer, media)
     } catch (error) {
       toast.error(error instanceof DOMException && error.name === 'NotAllowedError'
         ? t('chat.calls.noDevices')
@@ -288,7 +288,7 @@ export function ConversationView({
   const startExpiry = useCallback(
     (view: MessageView) => {
       const content = view.entry.content
-      if (view.outgoing || !content.messageId || !content.expiresAfterSeconds || content.expiresAtMs !== undefined) return
+      if (view.outgoing || !content.expiresAfterSeconds || content.expiresAtMs !== undefined) return
       if (expiryStarted.current.has(content.messageId)) return
       expiryStarted.current.add(content.messageId)
       void service

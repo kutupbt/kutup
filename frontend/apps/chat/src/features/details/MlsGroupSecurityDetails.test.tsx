@@ -15,7 +15,7 @@ const identityKeyId = '33'.repeat(32)
 const identityPublicKey = 'MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM='
 
 function group(): LocalMlsConversationRecord {
-  const authorization = { policyVersion: 1 as const, sequence: 1, applicationSenders: 1 as const }
+  const authorization = { policyVersion: 1 as const, sequence: 1, applicationSenders: 1 as const, groupInfoEditors: 2 as const }
   const cryptographic = {
     policyVersion: 1 as const,
     sequence: 1,

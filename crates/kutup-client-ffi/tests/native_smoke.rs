@@ -39,7 +39,7 @@ impl ChatHttpClient for MockHttp {
                     body_json: r#"{"deviceId":7}"#.into(),
                 })
             }
-            (ChatHttpMethod::Get, "/chat/users/alice/manifest") => {
+            (ChatHttpMethod::Get, "/chat/users/alice%40chat.test/manifest") => {
                 let manifest = self.manifest.lock().unwrap().clone();
                 Ok(match manifest {
                     Some(body_json) => ChatHttpResponse {
@@ -62,7 +62,7 @@ impl ChatHttpClient for MockHttp {
                     body_json: serde_json::to_string(&response).unwrap(),
                 })
             }
-            (ChatHttpMethod::Get, "/chat/users/alice/keys?syncDeviceId=7") => {
+            (ChatHttpMethod::Get, "/chat/users/alice%40chat.test/keys?syncDeviceId=7") => {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
                 let manifest: AccountManifestV1 = serde_json::from_str(
                     self.manifest
@@ -114,7 +114,7 @@ fn encrypted_install_registers_once_and_reopens() {
     ))
     .unwrap();
     assert_eq!(first.device_id(), 7);
-    assert_eq!(first.user(), "alice");
+    assert_eq!(first.user(), "alice@chat.test");
     assert_eq!(
         futures_executor::block_on(first.pending_send_count()).unwrap(),
         0
@@ -125,7 +125,7 @@ fn encrypted_install_registers_once_and_reopens() {
 
     let note = futures_executor::block_on(first.send_text(
         "native-note-1".into(),
-        "alice".into(),
+        "alice@chat.test".into(),
         "2026-07-16T12:00:00Z".into(),
         "remember on mobile".into(),
     ))
@@ -134,7 +134,7 @@ fn encrypted_install_registers_once_and_reopens() {
     assert_eq!(note.attempts, 0);
     let history = futures_executor::block_on(first.history()).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].peer, "alice");
+    assert_eq!(history[0].peer, "alice@chat.test");
     assert_eq!(
         history[0].content.text.as_deref(),
         Some("remember on mobile")

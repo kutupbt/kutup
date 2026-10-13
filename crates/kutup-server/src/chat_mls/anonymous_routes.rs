@@ -40,12 +40,8 @@ pub(crate) async fn get_anonymous_key_packages(
         .as_ref()
         .expect("active MLS policy requires federation")
         .server_name();
-    if request.recipient.server.as_deref() != Some(server_name) {
-        let destination = request
-            .recipient
-            .server
-            .as_deref()
-            .ok_or_else(unavailable)?;
+    if request.recipient.server != server_name {
+        let destination = request.recipient.server.as_str();
         authenticated_remote_policy(&state, destination).await?;
         let body = serde_json::to_vec(&request)
             .map_err(|error| AppError::internal(format!("serialize MLS request: {error}")))?;
@@ -149,12 +145,8 @@ pub(crate) async fn submit_anonymous_message(
         .as_ref()
         .expect("active MLS policy requires federation")
         .server_name();
-    if submission.recipient.server.as_deref() != Some(server_name) {
-        let destination = submission
-            .recipient
-            .server
-            .as_deref()
-            .ok_or_else(unavailable)?;
+    if submission.recipient.server != server_name {
+        let destination = submission.recipient.server.as_str();
         authenticated_remote_policy(&state, destination).await?;
         let mut tx = state.pool.begin().await?;
         sqlx::query(

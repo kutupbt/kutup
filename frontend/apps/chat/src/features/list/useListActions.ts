@@ -92,7 +92,7 @@ export function useListActions() {
         return run(async () => {
           if (newest) {
             markRead(key, newest.timestampMs)
-            await service!.markReadThrough(newest.conversation, newest.content.messageId!, newest.timestampMs)
+            await service!.markReadThrough(newest.conversation, newest.content.messageId, newest.timestampMs)
           }
           if (state?.markedUnread) {
             await service!.setConversationState(nextListState(conversation, state, { markedUnread: false }))

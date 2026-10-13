@@ -2,7 +2,7 @@ import { Link2, NotebookPen, Users } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { parseAccountAddress, withHomeServer } from '@kutup/chat-core/identity'
+import { parseAccountAddress, parseAccountInput } from '@kutup/chat-core/identity'
 import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -39,13 +39,14 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       openJoinLink(value.trim())
       return
     }
-    const parsed = parseAccountAddress(value)
+    const serverName = chat.capabilities?.serverName
+    const parsed = serverName ? parseAccountInput(value, serverName) : parseAccountAddress(value)
     if (!parsed) {
       setError(t('chat.errors.invalidAddress'))
       return
     }
     close()
-    const address = withHomeServer(parsed, chat.capabilities?.serverName)
+    const address = parsed
     // Someone not in the address book is offered Save to contacts in the
     // conversation itself, where it stays until saved or dismissed.
     void navigate(pathForAddress(address))

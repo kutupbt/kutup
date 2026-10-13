@@ -40,7 +40,7 @@ export function messageActor(message: ChatHistoryEntry, selfAddress: string): st
 
 /** The id other entries (replies, reactions, edits) point at. */
 export function messageIdOf(message: ChatHistoryEntry): string {
-  return message.content.messageId ?? message.id
+  return message.content.messageId
 }
 
 export interface MessageMutationState {
@@ -59,7 +59,7 @@ export function foldMutations(
 ): Map<string, MessageMutationState> {
   const targets = new Map<string, ChatHistoryEntry>()
   for (const message of history) {
-    if (message.content.messageId && !message.content.mutation) targets.set(message.content.messageId, message)
+    if (!message.content.mutation) targets.set(message.content.messageId, message)
   }
   const edits = new Map<string, ChatHistoryEntry>()
   const deleted = new Set<string>()
@@ -450,7 +450,7 @@ export function threadView(
   const shown = inThread.filter(
     (m) =>
       (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
-      !(m.content.messageId && opened.has(m.content.messageId)) &&
+      !opened.has(m.content.messageId) &&
       !repeatedStart(m),
   )
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
@@ -496,7 +496,7 @@ export function threadView(
         timestampMs: body.timestampMs,
         delivered: true,
         deduplicated: false,
-        content: { version: 1, kind: 'viewOnceViewed', sentAt: '', seq: '0', body: null },
+        content: { version: 1, kind: 'viewOnceViewed', sentAt: '', seq: '0', messageId: body.messageId, body: null },
       },
       id: body.messageId,
       author: body.sender,

@@ -111,7 +111,7 @@ impl MlsClient {
         let expected_message_id = context.send_id.to_string();
         if content.v == 0
             || content.v > ChatContent::VERSION
-            || content.message_id.as_deref() != Some(expected_message_id.as_str())
+            || content.message_id != expected_message_id.as_str()
             || content.sent_at.is_empty()
             || content.sent_at.len() > 128
         {
@@ -697,7 +697,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_text().map(|body| body.text) != Some(text.to_owned())
                 || content.reply_to.as_deref() != reply_to
@@ -832,7 +832,7 @@ impl MlsClient {
             .checked_add(1)
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
         let content = build(seq).map_err(ChatError::Invalid)?;
-        if content.message_id.as_deref() != Some(send_id) {
+        if content.message_id != send_id {
             return Err(ChatError::Invalid(
                 "MLS content id must match its send id".into(),
             ));
@@ -888,7 +888,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_reaction() != Some(expected)
             {
@@ -981,7 +981,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_message_mutation() != Some(expected)
             {
@@ -1075,7 +1075,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_receipt() != Some(expected)
             {
@@ -1160,7 +1160,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_typing() != Some(kutup_chat_proto::TypingBody { active })
             {
@@ -1245,7 +1245,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_disappearing_timer() != Some(expected)
             {
@@ -1363,7 +1363,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_attachment().as_ref() != Some(&descriptor)
                 || content
@@ -1607,11 +1607,10 @@ impl MlsClient {
             .await?
             .ok_or_else(|| ChatError::Invalid("unknown MLS send id".into()))?;
         let canonical_recipient = recipient.canonical();
-        if recipient.server.is_none()
-            || entry
-                .expected_recipients
-                .binary_search(&canonical_recipient)
-                .is_err()
+        if entry
+            .expected_recipients
+            .binary_search(&canonical_recipient)
+            .is_err()
         {
             return Err(ChatError::Trust(
                 "MLS application recipient is absent from the captured roster".into(),

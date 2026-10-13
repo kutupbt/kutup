@@ -171,7 +171,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
       return { text: item.kind === 'group' ? t('chat.list.newGroup') : '' }
     }
     const nameOf = (address: string) => personName(address, profiles, self.address, t)
-    const preview = messagePreview(item.last, mutations.get(item.last.content.messageId ?? item.last.id), t, {
+    const preview = messagePreview(item.last, mutations.get(item.last.content.messageId), t, {
       self: self.address,
       nameOf,
     })

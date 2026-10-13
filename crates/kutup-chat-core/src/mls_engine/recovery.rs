@@ -609,9 +609,7 @@ impl MlsClient {
                         .map_err(|error: kutup_chat_proto::AddressError| {
                             ChatError::Trust(error.to_string())
                         })?;
-                let destination = recipient.server.clone().ok_or_else(|| {
-                    ChatError::Trust("recovery recipient has no federation domain".into())
-                })?;
+                let destination = recipient.server.clone();
                 envelopes_by_domain
                     .entry(destination)
                     .or_default()
@@ -636,7 +634,7 @@ impl MlsClient {
                 )
             });
             let mut local_devices_after = Vec::new();
-            if creator.server.as_deref() == Some(destination.as_str()) {
+            if creator.server == destination.as_str() {
                 local_devices_after.push(MlsConversationDeviceV1 {
                     address: creator.clone(),
                     device_id: creator_device_id,
@@ -648,7 +646,7 @@ impl MlsClient {
                 let address = address.parse::<AccountAddress>().map_err(
                     |error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()),
                 )?;
-                if address.server.as_deref() == Some(destination.as_str()) {
+                if address.server == destination.as_str() {
                     local_devices_after.push(MlsConversationDeviceV1 { address, device_id });
                 }
             }
@@ -665,7 +663,7 @@ impl MlsClient {
                 next_participant_domains: domains.clone(),
                 local_members_after: members
                     .iter()
-                    .filter(|member| member.address.server.as_deref() == Some(destination))
+                    .filter(|member| member.address.server == *destination)
                     .cloned()
                     .collect(),
                 local_devices_after,

@@ -75,9 +75,17 @@ fn invitation_feedback_has_one_canonical_vector() {
         "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
     );
 
-    let mut malformed = feedback;
-    malformed.member = "bob".parse().unwrap();
-    assert!(malformed.validate().is_err());
+    // The bare-username member encoding is refused.
+    let bare = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
+    assert!(serde_json::from_slice::<MlsInvitationFeedbackV1>(bare).is_err());
+    assert!("bob".parse::<AccountAddress>().is_err());
+    // Another member changes the digest.
+    let mut other = feedback;
+    other.member = "carol@b.example".parse().unwrap();
+    assert_ne!(
+        other.feedback_digest().unwrap(),
+        "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
+    );
 }
 
 #[test]
@@ -477,7 +485,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
             next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
             local_members_after: members
                 .iter()
-                .filter(|member| member.address.server.as_deref() == Some(destination))
+                .filter(|member| member.address.server == destination)
                 .cloned()
                 .collect(),
             local_devices_after: vec![MlsConversationDeviceV1 {
@@ -1437,7 +1445,7 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "cb5a86c5566da5d31cc830c9ecd41faa0fd1c9c05739f58ae5798f813cf48c35"
+        "ba5cccaa3fe547d0afe5b1d2e6c6f72c182345e977fde1c383629b538b176ee5"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
@@ -1464,7 +1472,7 @@ fn private_group_policies_have_stable_canonical_vectors() {
     );
     assert_eq!(
         authorization.policy_digest().unwrap(),
-        "9428a5e307c99b64c9cc1fd5b0efb76567cd5845ca422a33ba25875664545bf7"
+        "964df3ba4e7fa69d6963a112e4d405ef57defc905fb87c39793cec96113ae6d2"
     );
 
     let cryptographic = MlsGroupCryptographicPolicyV1::v1_default();
@@ -1687,34 +1695,58 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
 }
 
 #[test]
-fn group_info_editors_default_keeps_existing_policy_bytes() {
+fn group_info_editors_is_always_in_the_canonical_policy() {
     let policy = MlsGroupAuthorizationPolicyV1::members_default();
+    let bytes = policy.canonical_bytes().unwrap();
     assert_eq!(
-        policy.canonical_bytes().unwrap(),
-        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1}"#.to_vec()
+        bytes,
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":2}"#.to_vec()
+    );
+    assert_eq!(
+        policy.policy_digest().unwrap(),
+        hex::encode(Sha256::digest(&bytes))
+    );
+    assert_eq!(
+        MlsGroupAuthorizationPolicyV1::from_canonical_bytes(&bytes).unwrap(),
+        policy
     );
     let open = MlsGroupAuthorizationPolicyV1 {
         group_info_editors: MlsGroupInfoEditorsV1::Members,
         ..policy.clone()
     };
-    let bytes = open.canonical_bytes().unwrap();
+    let open_bytes = open.canonical_bytes().unwrap();
     assert_eq!(
-        bytes,
+        open_bytes,
         br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":1}"#.to_vec()
     );
     assert_eq!(
-        MlsGroupAuthorizationPolicyV1::from_canonical_bytes(&bytes).unwrap(),
+        MlsGroupAuthorizationPolicyV1::from_canonical_bytes(&open_bytes).unwrap(),
         open
+    );
+    assert_ne!(
+        open.policy_digest().unwrap(),
+        policy.policy_digest().unwrap()
     );
     assert!(!open.same_rules(&policy));
     assert!(open.may_edit_group_info(false));
     assert!(!policy.may_edit_group_info(false));
     assert!(policy.may_edit_group_info(true));
-    // The default must not be spelled out: it would not be canonical.
-    assert!(MlsGroupAuthorizationPolicyV1::from_canonical_bytes(
-        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":2}"#
-    )
-    .is_err());
+    for refused in [
+        // The pre-wipe encoding left the default out.
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1}"#.as_slice(),
+        // A tampered or unknown value.
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":3}"#,
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":0}"#,
+        br#"{"policyVersion":1,"sequence":1,"applicationSenders":1,"groupInfoEditors":null}"#,
+        // Not canonical: reordered fields.
+        br#"{"policyVersion":1,"sequence":1,"groupInfoEditors":2,"applicationSenders":1}"#,
+    ] {
+        assert!(
+            MlsGroupAuthorizationPolicyV1::from_canonical_bytes(refused).is_err(),
+            "{}",
+            String::from_utf8_lossy(refused)
+        );
+    }
 }
 
 #[test]

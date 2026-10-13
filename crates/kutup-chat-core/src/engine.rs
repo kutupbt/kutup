@@ -162,7 +162,6 @@ pub struct Engine {
     state: EngineState,
     events: VecDeque<ChatEvent>,
     manifest_policy: ManifestPolicy,
-    local_server: Option<String>,
     sealed_sender_enabled: bool,
     /// The devices of each account as last fetched and verified this run
     /// (`bundles_for_send`). Never used to establish a session.
@@ -220,7 +219,6 @@ impl Engine {
             state: EngineState::Stopped,
             events: VecDeque::new(),
             manifest_policy,
-            local_server: None,
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
             known_devices_at: BTreeMap::new(),
@@ -291,17 +289,6 @@ impl Engine {
         Ok(())
     }
 
-    /// Bind bare local usernames to their canonical federation domain. This is
-    /// required before profile publication because delivery capabilities are
-    /// deliberately recipient-address-specific.
-    pub fn set_local_server(&mut self, server: &str) -> Result<()> {
-        kutup_chat_proto::AccountAddress::federated("validation", server)
-            .map_err(|error| ChatError::Invalid(error.to_string()))?;
-        self.session.bind_local_server(server)?;
-        self.local_server = Some(server.to_string());
-        Ok(())
-    }
-
     async fn own_device_list_version(&self) -> Result<Option<u64>> {
         if let Ok(canonical) = self.canonical_self() {
             if let Some(pinned) = self.session.manifest_trust(&canonical).await? {
@@ -357,24 +344,7 @@ impl Engine {
     }
 
     fn canonical_self(&self) -> Result<String> {
-        let address: kutup_chat_proto::AccountAddress =
-            self.session
-                .user()
-                .parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
-                    ChatError::Invalid(error.to_string())
-                })?;
-        if address.server.is_some() {
-            return Ok(address.canonical());
-        }
-        let server = self.local_server.as_deref().ok_or_else(|| {
-            ChatError::Invalid(
-                "local federation domain is required for profile capabilities".into(),
-            )
-        })?;
-        kutup_chat_proto::AccountAddress::federated(&address.username, server)
-            .map(|address| address.canonical())
-            .map_err(|error| ChatError::Invalid(error.to_string()))
+        Ok(self.session.user().to_owned())
     }
 
     /// Register a brand-new device end-to-end: generate keys, `POST` the
@@ -1287,7 +1257,7 @@ impl Engine {
         capability: &[u8; 16],
         now_seconds: i64,
     ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
-        if recipient.server.is_none() || now_seconds < 0 {
+        if now_seconds < 0 {
             return Err(ChatError::Invalid(
                 "anonymous MLS KeyPackage retrieval requires a canonical recipient and clock"
                     .into(),
@@ -1317,11 +1287,7 @@ impl Engine {
         incarnation: u64,
         now_seconds: i64,
     ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
-        if recipient.server.is_none()
-            || conversation_id.is_nil()
-            || incarnation == 0
-            || now_seconds < 0
-        {
+        if conversation_id.is_nil() || incarnation == 0 || now_seconds < 0 {
             return Err(ChatError::Invalid(
                 "identified MLS KeyPackage retrieval requires canonical identifiers and clock"
                     .into(),
@@ -1548,11 +1514,7 @@ impl Engine {
                 }
             }
         }
-        if content
-            .message_id
-            .as_deref()
-            .is_some_and(|message_id| message_id != send_id)
-        {
+        if content.message_id != send_id {
             return Err(ChatError::Invalid(
                 "encrypted content messageId must match transport sendId".into(),
             ));
@@ -1977,15 +1939,15 @@ impl Engine {
                     // The sender's device list moved on since this device
                     // last verified it: fetch it again at the next send.
                     if let Some(version) = message.content.device_list_version() {
-                        let peer = message.from.user.as_str();
-                        if self.known_devices.contains_key(peer)
+                        let peer = message.from.name();
+                        if self.known_devices.contains_key(&peer)
                             && self
                                 .session
-                                .manifest_trust(peer)
+                                .manifest_trust(&peer)
                                 .await?
                                 .is_some_and(|pinned| pinned.highest_sequence < version)
                         {
-                            self.known_devices.remove(peer);
+                            self.known_devices.remove(&peer);
                         }
                     }
                     ack_ids.push(message.id.clone());
@@ -2654,7 +2616,6 @@ impl Engine {
     /// accepted and the authenticated profile key is present.
     pub async fn media_delivery_capability(&self, peer: &str) -> Result<Option<[u8; 16]>> {
         if !self.sealed_sender_enabled
-            || self.local_server.is_none()
             || !self
                 .session
                 .contact(peer)
@@ -2676,16 +2637,7 @@ impl Engine {
                 .map_err(|error: kutup_chat_proto::AddressError| {
                     ChatError::Invalid(error.to_string())
                 })?;
-        let canonical_peer = if address.server.is_some() {
-            address.canonical()
-        } else {
-            kutup_chat_proto::AccountAddress::federated(
-                &address.username,
-                self.local_server.as_deref().expect("checked above"),
-            )
-            .map_err(|error| ChatError::Invalid(error.to_string()))?
-            .canonical()
-        };
+        let canonical_peer = address.canonical();
         kutup_chat_proto::derive_delivery_capability(&profile_key, &canonical_peer)
             .map(Some)
             .map_err(ChatError::Trust)
@@ -2694,9 +2646,7 @@ impl Engine {
     async fn issue_verified_sender_certificate(
         &self,
     ) -> Result<libsignal_protocol::SenderCertificate> {
-        let domain = self.local_server.as_deref().ok_or_else(|| {
-            ChatError::Trust("sealed sender requires the local federation domain".into())
-        })?;
+        let domain = self.session.server();
         let now_seconds = unix_millis().div_euclid(1000);
         let history = Rc::clone(&self.transport)
             .fetch_sealed_sender_policy(domain)
@@ -2723,9 +2673,7 @@ impl Engine {
             .sender
             .parse()
             .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-        let domain = sender_address.server.as_deref().ok_or_else(|| {
-            ChatError::Trust("sealed sender certificate address is not federated".into())
-        })?;
+        let domain = sender_address.server.as_str();
 
         let mut manifest_identity = self
             .session
@@ -2909,11 +2857,6 @@ fn parse_mls_device_credential_identity(identity: &str) -> Result<(String, u32)>
     let address: AccountAddress = account
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if address.server.is_none() {
-        return Err(ChatError::Trust(
-            "MLS credential identity requires a canonical federation domain".into(),
-        ));
-    }
     let device_id: u32 = device_id
         .parse()
         .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;

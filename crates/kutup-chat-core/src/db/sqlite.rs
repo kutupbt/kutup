@@ -18,10 +18,9 @@ use zeroize::Zeroize as _;
 
 use crate::db::{
     contact_state_code, contact_state_from_code, AccountManifestHistoryRecordV1, AuthorityTrust,
-    ChatDb, ContactRecord, HistoryTransferJournalV1, ImportedHistoryRecordV1, InboundEnvelope,
-    InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
-    MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, PeerProfile, Pending,
-    SentMessage,
+    ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
+    MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -147,31 +146,6 @@ CREATE TABLE IF NOT EXISTS sent_messages (
 );
 CREATE INDEX IF NOT EXISTS sent_messages_by_created_at
     ON sent_messages (created_at, send_id);
-CREATE TABLE IF NOT EXISTS imported_history (
-    transfer_id       TEXT NOT NULL,
-    source_record_id  TEXT NOT NULL,
-    source_device_id  INTEGER NOT NULL CHECK (source_device_id > 0),
-    conversation_json TEXT NOT NULL,
-    sender            TEXT NOT NULL,
-    sender_device_id  INTEGER NOT NULL CHECK (sender_device_id > 0),
-    outgoing          INTEGER NOT NULL,
-    content           BLOB NOT NULL,
-    timestamp_ms      INTEGER NOT NULL,
-    delivered         INTEGER NOT NULL,
-    PRIMARY KEY (transfer_id, source_record_id)
-);
-CREATE INDEX IF NOT EXISTS imported_history_by_time
-    ON imported_history (timestamp_ms, transfer_id, source_record_id);
-CREATE TABLE IF NOT EXISTS history_transfer_journals (
-    transfer_id TEXT PRIMARY KEY,
-    journal     BLOB NOT NULL
-);
-CREATE TABLE IF NOT EXISTS history_transfer_frames (
-    transfer_id TEXT NOT NULL,
-    frame_index INTEGER NOT NULL CHECK (frame_index >= 0),
-    frame       BLOB NOT NULL,
-    PRIMARY KEY (transfer_id, frame_index)
-);
 CREATE TABLE IF NOT EXISTS inbound_envelopes (
     id          TEXT PRIMARY KEY,
     cursor      INTEGER NOT NULL,
@@ -183,7 +157,6 @@ CREATE TABLE IF NOT EXISTS inbound_envelopes (
     received_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS inbound_by_cursor ON inbound_envelopes (cursor, id);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
 CREATE TABLE IF NOT EXISTS manifest_trust (
     peer               TEXT PRIMARY KEY,
     account            TEXT    NOT NULL,
@@ -226,7 +199,6 @@ CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
 CREATE TABLE IF NOT EXISTS contacts (
     peer             TEXT PRIMARY KEY,
     state            INTEGER NOT NULL,
@@ -237,7 +209,6 @@ CREATE TABLE IF NOT EXISTS contacts (
     sync_pending     INTEGER NOT NULL DEFAULT 0,
     sync_send_id     TEXT
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (9, 0);
 CREATE TABLE IF NOT EXISTS local_profile (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     profile BLOB NOT NULL
@@ -246,16 +217,6 @@ CREATE TABLE IF NOT EXISTS peer_profiles (
     peer    TEXT PRIMARY KEY,
     profile BLOB NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (10, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (11, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (12, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (13, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (15, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (16, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (17, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (18, 0);
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (19, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value INTEGER NOT NULL
@@ -319,7 +280,19 @@ impl SqliteChatDb {
         // SQLite free pages after its logical row is removed.
         db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
-        ensure_schema_upgrades(&conn)?;
+        // One schema version, created whole. A store from an older layout
+        // (development builds only; no native app has shipped) is refused
+        // rather than upgraded.
+        let foreign: i64 = db(conn.query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 1",
+            [],
+            |row| row.get(0),
+        ))?;
+        if foreign != 0 {
+            return Err(ChatError::Db(
+                "the chat store has an unknown schema version".into(),
+            ));
+        }
         Ok(Self {
             conn: RefCell::new(conn),
             commits: std::cell::Cell::new(0),
@@ -584,74 +557,6 @@ impl ChatDb for SqliteChatDb {
         ))?;
         let rows = db(stmt.query_map([], sent_message_row))?;
         rows.map(db).collect()
-    }
-
-    async fn load_imported_history(
-        &self,
-        transfer_id: &str,
-        source_record_id: &str,
-    ) -> Result<Option<ImportedHistoryRecordV1>> {
-        let conn = self.conn.borrow();
-        db(conn
-            .query_row(
-                "SELECT transfer_id, source_record_id, source_device_id,
-                        conversation_json, sender, sender_device_id, outgoing,
-                        content, timestamp_ms, delivered
-                 FROM imported_history
-                 WHERE transfer_id = ?1 AND source_record_id = ?2",
-                rusqlite::params![transfer_id, source_record_id],
-                imported_history_row,
-            )
-            .optional())
-    }
-
-    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
-        let conn = self.conn.borrow();
-        let mut statement = db(conn.prepare(
-            "SELECT transfer_id, source_record_id, source_device_id,
-                    conversation_json, sender, sender_device_id, outgoing,
-                    content, timestamp_ms, delivered
-             FROM imported_history
-             ORDER BY timestamp_ms, transfer_id, source_record_id",
-        ))?;
-        let rows = db(statement.query_map([], imported_history_row))?;
-        rows.map(db).collect()
-    }
-
-    async fn load_history_transfer_journal(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Option<HistoryTransferJournalV1>> {
-        let conn = self.conn.borrow();
-        let encoded: Option<Vec<u8>> = db(conn
-            .query_row(
-                "SELECT journal FROM history_transfer_journals WHERE transfer_id = ?1",
-                [transfer_id],
-                |row| row.get(0),
-            )
-            .optional())?;
-        encoded
-            .map(|value| {
-                serde_json::from_slice(&value).map_err(|error| ChatError::Db(error.to_string()))
-            })
-            .transpose()
-    }
-
-    async fn list_history_transfer_frames(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Vec<kutup_chat_proto::ChatHistoryTransferFrameV1>> {
-        let conn = self.conn.borrow();
-        let mut statement = db(conn.prepare(
-            "SELECT frame FROM history_transfer_frames
-             WHERE transfer_id = ?1 ORDER BY frame_index",
-        ))?;
-        let rows = db(statement.query_map([transfer_id], |row| row.get::<_, Vec<u8>>(0)))?;
-        rows.map(|row| {
-            let encoded = db(row)?;
-            serde_json::from_slice(&encoded).map_err(|error| ChatError::Db(error.to_string()))
-        })
-        .collect()
     }
 
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>> {
@@ -1125,101 +1030,6 @@ impl ChatDb for SqliteChatDb {
         for send_id in &pending.delete_sent_message_ids {
             db(tx.execute("DELETE FROM sent_messages WHERE send_id = ?1", [send_id]))?;
         }
-        for ((transfer_id, source_record_id), record) in &pending.imported_history {
-            let conversation_json = serde_json::to_string(&record.conversation)
-                .map_err(|error| ChatError::Db(error.to_string()))?;
-            let changed = db(tx.execute(
-                "INSERT INTO imported_history
-                     (transfer_id, source_record_id, source_device_id,
-                      conversation_json, sender, sender_device_id, outgoing,
-                      content, timestamp_ms, delivered)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-                 ON CONFLICT(transfer_id, source_record_id) DO UPDATE SET
-                   transfer_id = excluded.transfer_id
-                 WHERE imported_history.source_device_id = excluded.source_device_id
-                   AND imported_history.conversation_json = excluded.conversation_json
-                   AND imported_history.sender = excluded.sender
-                   AND imported_history.sender_device_id = excluded.sender_device_id
-                   AND imported_history.outgoing = excluded.outgoing
-                   AND imported_history.content = excluded.content
-                   AND imported_history.timestamp_ms = excluded.timestamp_ms
-                   AND imported_history.delivered = excluded.delivered",
-                rusqlite::params![
-                    transfer_id,
-                    source_record_id,
-                    record.source_device_id,
-                    conversation_json,
-                    record.sender,
-                    record.sender_device_id,
-                    i64::from(record.outgoing),
-                    record.content,
-                    record.timestamp_ms,
-                    i64::from(record.delivered),
-                ],
-            ))?;
-            if changed != 1 {
-                return Err(ChatError::Trust(format!(
-                    "immutable imported history conflicts at {transfer_id}/{source_record_id}"
-                )));
-            }
-        }
-        for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
-            db(tx.execute(
-                "DELETE FROM imported_history WHERE transfer_id = ?1 AND source_record_id = ?2",
-                rusqlite::params![transfer_id, source_record_id],
-            ))?;
-        }
-        for (transfer_id, journal) in &pending.history_transfer_journals {
-            match journal {
-                Some(journal) => {
-                    let encoded = serde_json::to_vec(journal)
-                        .map_err(|error| ChatError::Db(error.to_string()))?;
-                    db(tx.execute(
-                        "INSERT INTO history_transfer_journals (transfer_id, journal)
-                         VALUES (?1, ?2)
-                         ON CONFLICT(transfer_id) DO UPDATE SET journal = excluded.journal",
-                        rusqlite::params![transfer_id, encoded],
-                    ))?;
-                }
-                None => {
-                    db(tx.execute(
-                        "DELETE FROM history_transfer_frames WHERE transfer_id = ?1",
-                        [transfer_id],
-                    ))?;
-                    db(tx.execute(
-                        "DELETE FROM history_transfer_journals WHERE transfer_id = ?1",
-                        [transfer_id],
-                    ))?;
-                }
-            }
-        }
-        for ((transfer_id, index), frame) in &pending.history_transfer_frames {
-            match frame {
-                Some(frame) => {
-                    let encoded = serde_json::to_vec(frame)
-                        .map_err(|error| ChatError::Db(error.to_string()))?;
-                    let changed = db(tx.execute(
-                        "INSERT INTO history_transfer_frames (transfer_id, frame_index, frame)
-                         VALUES (?1, ?2, ?3)
-                         ON CONFLICT(transfer_id, frame_index) DO UPDATE SET frame = excluded.frame
-                         WHERE history_transfer_frames.frame = excluded.frame",
-                        rusqlite::params![transfer_id, *index as i64, encoded],
-                    ))?;
-                    if changed != 1 {
-                        return Err(ChatError::Trust(format!(
-                            "history transfer frame {transfer_id}/{index} changed across retry"
-                        )));
-                    }
-                }
-                None => {
-                    db(tx.execute(
-                        "DELETE FROM history_transfer_frames
-                         WHERE transfer_id = ?1 AND frame_index = ?2",
-                        rusqlite::params![transfer_id, *index as i64],
-                    ))?;
-                }
-            }
-        }
         for (id, inbound) in &pending.inbound {
             match inbound {
                 Some(item) => db(tx.execute(
@@ -1457,116 +1267,6 @@ fn inbound_row(row: &rusqlite::Row) -> rusqlite::Result<Result<InboundEnvelope>>
     }))
 }
 
-/// The original proof schema predated typed inbound failures. SQLite lacks
-/// `ADD COLUMN IF NOT EXISTS`, so inspect before applying the additive upgrade.
-fn ensure_schema_upgrades(conn: &Connection) -> Result<()> {
-    if !has_column(conn, "inbound_envelopes", "failure_kind")? {
-        db(conn.execute(
-            "ALTER TABLE inbound_envelopes ADD COLUMN failure_kind INTEGER",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "pre_keys", "used_at")? {
-        db(conn.execute("ALTER TABLE pre_keys ADD COLUMN used_at INTEGER", []))?;
-    }
-    if !has_column(conn, "local_identity", "device_id")? {
-        db(conn.execute(
-            "ALTER TABLE local_identity ADD COLUMN device_id INTEGER",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "outbox", "primary_delivered")? {
-        db(conn.execute(
-            "ALTER TABLE outbox ADD COLUMN primary_delivered INTEGER NOT NULL DEFAULT 0",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "outbox", "sync_leg")? {
-        db(conn.execute("ALTER TABLE outbox ADD COLUMN sync_leg BLOB", []))?;
-    }
-    if !has_column(conn, "outbox", "sealed_sender")? {
-        db(conn.execute(
-            "ALTER TABLE outbox ADD COLUMN sealed_sender INTEGER NOT NULL DEFAULT 0",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "outbox", "sealed_capability")? {
-        db(conn.execute("ALTER TABLE outbox ADD COLUMN sealed_capability BLOB", []))?;
-    }
-    if !has_column(conn, "sent_messages", "sender_device_id")? {
-        db(conn.execute(
-            "ALTER TABLE sent_messages ADD COLUMN sender_device_id INTEGER NOT NULL DEFAULT 0",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "mls_outbox", "content")? {
-        db(conn.execute(
-            "ALTER TABLE mls_outbox ADD COLUMN content BLOB NOT NULL DEFAULT X''",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "mls_outbox", "expected_recipients")? {
-        db(conn.execute(
-            "ALTER TABLE mls_outbox ADD COLUMN expected_recipients BLOB NOT NULL DEFAULT X'5B5D'",
-            [],
-        ))?;
-    }
-    if !has_column(conn, "mls_outbox", "deliveries")? {
-        db(conn.execute(
-            "ALTER TABLE mls_outbox ADD COLUMN deliveries BLOB NOT NULL DEFAULT X'5B5D'",
-            [],
-        ))?;
-    }
-    if has_column(conn, "mls_messages", "record_id")?
-        && !has_column(conn, "mls_messages", "transport_digest")?
-    {
-        db(conn.execute(
-            "ALTER TABLE mls_messages ADD COLUMN transport_digest BLOB NOT NULL
-             DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000'",
-            [],
-        ))?;
-    }
-    db(conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS pending_chat_registration (
-             id INTEGER PRIMARY KEY CHECK (id = 1), request BLOB NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS mls_messages (
-             record_id TEXT PRIMARY KEY,
-             message_id TEXT NOT NULL,
-             conversation_id BLOB NOT NULL CHECK (length(conversation_id) = 16),
-             incarnation INTEGER NOT NULL CHECK (incarnation > 0),
-             mls_group_id BLOB NOT NULL CHECK (length(mls_group_id) BETWEEN 16 AND 255),
-             epoch INTEGER NOT NULL CHECK (epoch >= 0),
-             sender TEXT NOT NULL,
-             sender_device_id INTEGER NOT NULL CHECK (sender_device_id > 0),
-             outgoing INTEGER NOT NULL,
-             cursor INTEGER,
-             transport_digest BLOB NOT NULL CHECK (length(transport_digest) = 32),
-             content BLOB NOT NULL,
-             timestamp_ms INTEGER NOT NULL,
-             delivered INTEGER NOT NULL,
-             deduplicated INTEGER NOT NULL
-         );",
-    ))?;
-    db(conn.execute(
-        "INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-         VALUES (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0), (14, 0), (15, 0), (16, 0)",
-        [],
-    ))?;
-    Ok(())
-}
-
-fn has_column(conn: &Connection, table: &str, wanted: &str) -> Result<bool> {
-    let mut stmt = db(conn.prepare(&format!("PRAGMA table_info({table})")))?;
-    let columns = db(stmt.query_map([], |row| row.get::<_, String>(1)))?;
-    for column in columns {
-        if db(column)? == wanted {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 fn unix_millis() -> i64 {
     crate::clock::unix_millis()
 }
@@ -1790,25 +1490,6 @@ fn sent_message_row(row: &rusqlite::Row) -> rusqlite::Result<SentMessage> {
     })
 }
 
-fn imported_history_row(row: &rusqlite::Row) -> rusqlite::Result<ImportedHistoryRecordV1> {
-    let conversation_json: String = row.get(3)?;
-    let conversation = serde_json::from_str(&conversation_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
-    })?;
-    Ok(ImportedHistoryRecordV1 {
-        transfer_id: row.get(0)?,
-        source_record_id: row.get(1)?,
-        source_device_id: row.get(2)?,
-        conversation,
-        sender: row.get(4)?,
-        sender_device_id: row.get(5)?,
-        outgoing: row.get::<_, i64>(6)? != 0,
-        content: row.get(7)?,
-        timestamp_ms: row.get(8)?,
-        delivered: row.get::<_, i64>(9)? != 0,
-    })
-}
-
 /// `SELECT <col-named `record`> FROM <table> WHERE <key_col> = <key>`.
 fn blob(conn: &Connection, table: &str, key_col: &str, key: &str) -> Result<Option<Vec<u8>>> {
     let sql = format!("SELECT record FROM {table} WHERE {key_col} = ?1");
@@ -1824,46 +1505,6 @@ fn blob_by_id(conn: &Connection, table: &str, id: u32) -> Result<Option<Vec<u8>>
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn upgrades_the_pre_typed_failure_journal_in_place() {
-        use futures_executor::block_on;
-
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
-             CREATE TABLE inbound_envelopes (
-                 id TEXT PRIMARY KEY, cursor INTEGER NOT NULL, envelope BLOB NOT NULL,
-                 state INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-                 last_error TEXT, received_at INTEGER NOT NULL
-             );
-             CREATE TABLE pre_keys (id INTEGER PRIMARY KEY, record BLOB NOT NULL);
-             CREATE TABLE outbox (
-                 send_id TEXT PRIMARY KEY, peer TEXT NOT NULL, content BLOB NOT NULL,
-                 envelopes BLOB NOT NULL, attempts INTEGER NOT NULL, created_at INTEGER NOT NULL
-             );
-             INSERT INTO outbox VALUES ('legacy-send', 'bob', X'01', X'02', 1, 123);",
-        )
-        .unwrap();
-        let db = SqliteChatDb::from_connection(conn).unwrap();
-        let count: i64 = db
-            .conn
-            .borrow()
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('inbound_envelopes')
-                 WHERE name = 'failure_kind'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-        assert!(has_column(&db.conn.borrow(), "pre_keys", "used_at").unwrap());
-        assert!(has_column(&db.conn.borrow(), "outbox", "primary_delivered").unwrap());
-        assert!(has_column(&db.conn.borrow(), "outbox", "sync_leg").unwrap());
-        let legacy = block_on(db.load_outbox("legacy-send")).unwrap().unwrap();
-        assert!(!legacy.primary_delivered);
-        assert!(legacy.sync.is_none());
-    }
 
     #[test]
     fn used_ec_prekeys_remain_loadable_until_the_grace_sweep() {
@@ -1883,156 +1524,22 @@ mod tests {
     }
 
     #[test]
-    fn imported_history_is_atomic_immutable_idempotent_and_presentation_ordered() {
-        use futures_executor::block_on;
-
-        fn record(id: &str, timestamp_ms: i64) -> ImportedHistoryRecordV1 {
-            ImportedHistoryRecordV1 {
-                transfer_id: "11111111-1111-4111-8111-111111111111".into(),
-                source_record_id: id.into(),
-                source_device_id: 1,
-                conversation: kutup_chat_proto::ConversationId::direct(
-                    kutup_chat_proto::AccountAddress::federated("bob", "b.test").unwrap(),
-                ),
-                sender: "bob@b.test".into(),
-                sender_device_id: 1,
-                outgoing: false,
-                content: serde_json::to_vec(&kutup_chat_proto::ChatContent::text(
-                    "2026-08-09T00:00:00Z",
-                    1,
-                    "hello",
-                ))
-                .unwrap(),
-                timestamp_ms,
-                delivered: true,
-            }
-        }
-
-        let db = SqliteChatDb::open_in_memory().unwrap();
-        let later = record("later", 200);
-        let earlier = record("earlier", 100);
-        let mut initial = Pending::default();
-        for record in [later.clone(), earlier.clone()] {
-            initial.imported_history.insert(
-                (record.transfer_id.clone(), record.source_record_id.clone()),
-                record,
-            );
-        }
-        block_on(db.apply(&initial)).unwrap();
-        block_on(db.apply(&initial)).unwrap();
-
-        assert_eq!(
-            block_on(db.list_imported_history()).unwrap(),
-            vec![earlier.clone(), later]
-        );
-        assert_eq!(
-            block_on(db.load_imported_history(&earlier.transfer_id, "earlier")).unwrap(),
-            Some(earlier.clone())
-        );
-
-        let mut conflicting = earlier;
-        conflicting.content = serde_json::to_vec(&kutup_chat_proto::ChatContent::text(
-            "2026-08-09T00:00:00Z",
-            1,
-            "tampered",
-        ))
+    fn a_store_from_an_older_schema_is_refused() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             INSERT INTO schema_migrations VALUES (1, 0), (16, 0);",
+        )
         .unwrap();
-        let mut rejected = Pending::default();
-        rejected.imported_history.insert(
-            (
-                conflicting.transfer_id.clone(),
-                conflicting.source_record_id.clone(),
-            ),
-            conflicting,
-        );
-        rejected.last_cursor = Some(99);
         assert!(matches!(
-            block_on(db.apply(&rejected)),
-            Err(ChatError::Trust(_))
+            SqliteChatDb::from_connection(conn),
+            Err(ChatError::Db(message)) if message.contains("unknown schema version")
         ));
-        assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
-    }
-
-    #[test]
-    fn history_transfer_journal_and_exact_frames_survive_restart_boundaries() {
-        use base64::Engine as _;
-        use futures_executor::block_on;
-
-        let b64 = |byte, len| base64::engine::general_purpose::STANDARD.encode(vec![byte; len]);
-        let request = kutup_chat_proto::ChatHistoryTransferRequestV1 {
-            version: 1,
-            transfer_id: "11111111-1111-4111-8111-111111111111".into(),
-            account: "alice@a.test".into(),
-            requesting_device_id: 2,
-            manifest_sequence: 1,
-            ephemeral_public_key: b64(1, 32),
-            request_nonce: b64(2, 32),
-            created_at_unix: 1_000,
-            expires_at_unix: 1_900,
-            device_signature: b64(3, 64),
-        };
-        let journal = HistoryTransferJournalV1 {
-            transfer_id: request.transfer_id.clone(),
-            role: crate::HistoryTransferRoleV1::Requester,
-            state: crate::HistoryTransferJournalStateV1::Requested,
-            request,
-            acceptance: None,
-            ephemeral_secret: [4; 32],
-            next_frame_index: 0,
-            updated_at_unix: 1_000,
-        };
-        let frame = kutup_chat_proto::ChatHistoryTransferFrameV1 {
-            version: 1,
-            transfer_id: journal.transfer_id.clone(),
-            transcript_hash: "05".repeat(32),
-            index: 0,
-            final_frame: true,
-            plaintext_bytes: 1,
-            nonce: b64(6, 24),
-            ciphertext: b64(7, 17),
-        };
-        let db = SqliteChatDb::open_in_memory().unwrap();
-        let mut pending = Pending::default();
-        pending
-            .history_transfer_journals
-            .insert(journal.transfer_id.clone(), Some(journal.clone()));
-        pending.history_transfer_frames.insert(
-            (frame.transfer_id.clone(), frame.index),
-            Some(frame.clone()),
-        );
-        block_on(db.apply(&pending)).unwrap();
-        assert_eq!(
-            block_on(db.load_history_transfer_journal(&journal.transfer_id)).unwrap(),
-            Some(journal.clone())
-        );
-        assert_eq!(
-            block_on(db.list_history_transfer_frames(&journal.transfer_id)).unwrap(),
-            vec![frame.clone()]
-        );
-
-        let mut changed = frame;
-        changed.ciphertext = b64(8, 17);
-        let mut conflict = Pending::default();
-        conflict
-            .history_transfer_frames
-            .insert((changed.transfer_id.clone(), changed.index), Some(changed));
-        conflict.last_cursor = Some(9);
-        assert!(matches!(
-            block_on(db.apply(&conflict)),
-            Err(ChatError::Trust(_))
-        ));
-        assert_eq!(block_on(db.load_last_cursor()).unwrap(), None);
-
-        let mut delete = Pending::default();
-        delete
-            .history_transfer_journals
-            .insert(journal.transfer_id.clone(), None);
-        block_on(db.apply(&delete)).unwrap();
-        assert!(
-            block_on(db.list_history_transfer_frames(&journal.transfer_id))
-                .unwrap()
-                .is_empty()
-        );
+        // A new store opens, and opens again.
+        let path = std::env::temp_dir().join(format!("kutup-chat-{}.db", uuid::Uuid::new_v4()));
+        drop(SqliteChatDb::open(&path).unwrap());
+        drop(SqliteChatDb::open(&path).unwrap());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -54,7 +54,7 @@ pub(crate) async fn federated_get_anonymous_key_packages(
         return signed_federation_error(federation, &authenticated, AppError::bad_request(error));
     }
     if authenticated.destination() != federation.server_name()
-        || request.recipient.server.as_deref() != Some(federation.server_name())
+        || request.recipient.server != federation.server_name()
     {
         return signed_federation_error(federation, &authenticated, unavailable());
     }
@@ -110,7 +110,7 @@ pub(crate) async fn federated_submit_anonymous_message(
     }
     if authenticated.destination() != federation.server_name()
         || transaction.origin_domain != authenticated.origin()
-        || transaction.submission.recipient.server.as_deref() != Some(federation.server_name())
+        || transaction.submission.recipient.server != federation.server_name()
     {
         return signed_federation_error(
             federation,

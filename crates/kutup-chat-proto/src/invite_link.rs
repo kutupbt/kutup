@@ -87,7 +87,7 @@ impl InviteJoinRequestV1 {
             .canonical()
             .parse()
             .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.requester || self.requester.server.is_none() {
+        if canonical != self.requester {
             return Err("an invite request names a canonical account".into());
         }
         if !(0..=crate::MAX_SAFE_CLOCK_MS).contains(&self.created_at_ms) {
@@ -358,13 +358,13 @@ mod tests {
             created_at_ms: 1,
         };
         request.validate().unwrap();
-        let local = InviteJoinRequestV1 {
-            requester: AccountAddress {
-                username: "bob".into(),
-                server: None,
-            },
-            created_at_ms: 1,
-        };
-        assert!(local.validate().is_err());
+        // A bare username is not an account address.
+        assert!(
+            serde_json::from_value::<InviteJoinRequestV1>(serde_json::json!({
+                "requester": { "username": "bob" },
+                "createdAtMs": 1
+            }))
+            .is_err()
+        );
     }
 }

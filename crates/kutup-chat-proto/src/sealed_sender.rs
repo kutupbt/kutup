@@ -16,7 +16,7 @@ pub fn derive_delivery_capability(
     let address: AccountAddress = canonical_recipient
         .parse()
         .map_err(|error: crate::AddressError| error.to_string())?;
-    if address.server.is_none() || address.canonical() != canonical_recipient {
+    if address.canonical() != canonical_recipient {
         return Err(
             "sealed delivery capability requires a canonical federated recipient address".into(),
         );
@@ -141,7 +141,8 @@ impl SealedMessageSubmissionV1 {
 pub struct FederatedSealedTransactionV1 {
     pub version: u16,
     pub origin: String,
-    /// Local username at the destination, never a sender identity.
+    /// The recipient's canonical `username@destination` address, never a
+    /// sender identity.
     pub recipient: String,
     pub sequence: u64,
     pub send_id: String,
@@ -162,18 +163,30 @@ impl FederatedSealedTransactionV1 {
         }
         kutup_federation_proto::validate_server_name(expected_destination)
             .map_err(|error| error.to_string())?;
-        let recipient =
-            AccountAddress::local(&self.recipient).map_err(|error| error.to_string())?;
+        let recipient = self.recipient_account()?;
         SealedMessageSubmissionV1 {
             send_id: self.send_id.clone(),
             capability: self.capability.clone(),
             envelopes: self.envelopes.clone(),
         }
         .validate()?;
-        if recipient.server.is_some() {
-            return Err("sealed federation recipient must be local".into());
+        if recipient.server != expected_destination {
+            return Err("sealed federation recipient must belong to the destination".into());
         }
         Ok(())
+    }
+
+    /// The recipient, parsed; only its canonical `username@server` form is
+    /// accepted.
+    pub fn recipient_account(&self) -> Result<AccountAddress, String> {
+        let recipient: AccountAddress = self
+            .recipient
+            .parse()
+            .map_err(|error: crate::AddressError| error.to_string())?;
+        if recipient.canonical() != self.recipient {
+            return Err("sealed federation recipient is not canonical".into());
+        }
+        Ok(recipient)
     }
 }
 

@@ -26,7 +26,7 @@ function entry(
     timestampMs: at,
     delivered: true,
     deduplicated: false,
-    content: { version: 1, kind: 'text', sentAt: '', seq: String(seq), body: null, ...content },
+    content: { version: 1, kind: 'text', sentAt: '', seq: String(seq), body: null, ...content, messageId: content.messageId ?? `e${seq}` },
   }
 }
 

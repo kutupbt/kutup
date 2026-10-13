@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { ChatBackupView } from '@kutup/chat-core/backup'
 import { fetchChatCapabilities, isSupportedChat } from '@kutup/chat-core/capabilities'
-import { canonicalAccountAddress, conversationKey, withHomeServer } from '@kutup/chat-core/identity'
+import { canonicalAccountAddress, conversationKey } from '@kutup/chat-core/identity'
 import { ChatService, ChatServiceError, type ChatConnectionStatus } from '@kutup/chat-core/service'
 import type {
   AccountAddress,
@@ -248,11 +248,11 @@ export function openChat(session: Session): void {
       set({ status: 'failed', failure: 'serverUnsupported', capabilities })
       return
     }
-    if (!session.username) {
+    if (!session.username || !capabilities.serverName) {
       set({ status: 'failed', failure: 'unavailable', capabilities })
       return
     }
-    const account = withHomeServer({ username: session.username }, capabilities.serverName)
+    const account = { username: session.username, server: capabilities.serverName }
     const mediaCache = privateCiphertextCacheForAccountV1(session.userId)
     void mediaCache.initialize().catch((error: unknown) => console.warn('chat: media cache unavailable', error))
     let service: ChatService

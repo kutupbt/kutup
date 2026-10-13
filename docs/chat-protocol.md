@@ -33,8 +33,14 @@ types do not cross Kutup's public API boundary.
 
 ## 2. Addresses and conversation types
 
-The stable address is canonical lowercase `username@server`. Display names and
-avatars are encrypted, mutable and non-unique; they are never routing keys.
+The stable address is canonical lowercase `username@server`. It is the only
+account form: on the wire (JSON `{"username", "server"}` with both required,
+or the `username@server` string), in the server mailbox (`chat_mailbox.sender`
+of an identified envelope), in sealed federation transactions (`recipient`)
+and in client stores. A bare username is refused wherever an account is
+decoded; a client qualifies what a person types (a bare name means the home
+server) before it reaches Chat. Display names and avatars are encrypted,
+mutable and non-unique; they are never routing keys.
 
 V1 conversation types are:
 
@@ -251,8 +257,10 @@ Note to Self is a self-addressed Direct conversation. Sent-message sync to
 linked devices is authenticated and identified. It never uses anonymous
 delivery or creates an MLS group.
 
-User-visible content carries a stable sender-generated UUID `messageId` inside
-the ciphertext. A text reply adds an optional canonical non-nil UUID `replyTo`
+Every content document, of every kind, carries a stable sender-generated
+`messageId` inside the ciphertext; content without it does not decode. For a
+sent message it equals the durable transport `sendId` (a UUID), and the engine
+refuses to send content whose `messageId` differs. A text reply adds an optional canonical non-nil UUID `replyTo`
 that references that logical ID. The reference uses the same encrypted content
 shape for Direct, Note to Self and MLS; it is never copied into mailbox,
 attachment or federation metadata. Clients resolve it only within the current
@@ -723,9 +731,11 @@ the wrapped key and a format marker are the only plain entries. Each record is
 stored under `HMAC-SHA256(index key, object store ‖ key)`, so no address or id
 is readable, and its value (CBOR) is sealed with XChaCha20-Poly1305 together
 with its original key, the object store and hashed key bound as associated
-data, so a record moved to another key or store does not open. A store written
-before this is converted on first open: read whole, then cleared and written
-back sealed with the key and marker in one durable transaction. The key opens
+data, so a record moved to another key or store does not open. A database
+without the wrapped key is a new store: on first open every object store is
+cleared and the key and marker are written in one durable transaction; any
+records it held are never read. The database is at IndexedDB version 13,
+which dropped the former history-transfer stores. The key opens
 only with the account master key, so a signed-out browser keeps an unreadable
 store and stays the same device when the account signs in again. Native
 clients use SQLCipher.

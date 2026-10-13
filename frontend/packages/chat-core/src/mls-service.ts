@@ -775,12 +775,10 @@ export class MlsConversationService {
       16,
       255,
     )
-    const { groupInfoEditors: _current, ...rest } = conversation.currentAuthorizationPolicy
     const nextPolicy: MlsGroupAuthorizationPolicy = {
-      ...rest,
+      ...conversation.currentAuthorizationPolicy,
       sequence: conversation.currentAuthorizationPolicy.sequence + 1,
-      // Administrators is the default and is left out of the policy.
-      ...(editors === 'members' ? { groupInfoEditors: 1 as const } : {}),
+      groupInfoEditors: editors === 'members' ? 1 : 2,
     }
     const prepared = await this.withCryptoLock(() =>
       this.client.prepareMlsAuthorizationPolicyChange(
@@ -2696,7 +2694,8 @@ function isAuthorizationPolicy(
     && value.policyVersion === 1
     && Number.isSafeInteger(value.sequence)
     && value.sequence >= 1
-    && [1, 2].includes(value.applicationSenders),
+    && [1, 2].includes(value.applicationSenders)
+    && [1, 2].includes(value.groupInfoEditors),
   )
 }
 
@@ -2982,6 +2981,7 @@ function validatePendingPolicyChange(
         || !Number.isSafeInteger(authorization.sequence)
         || authorization.sequence < 2
         || ![1, 2].includes(authorization.applicationSenders)
+        || ![1, 2].includes(authorization.groupInfoEditors)
       )
     )
     || (

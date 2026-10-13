@@ -153,6 +153,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       policyVersion: 1,
       sequence: 1,
       applicationSenders: 1,
+      groupInfoEditors: 2,
     },
     genesisCryptographicPolicy: {
       policyVersion: 1,
@@ -168,6 +169,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       policyVersion: 1,
       sequence: 1,
       applicationSenders: 1,
+      groupInfoEditors: 2,
     },
     currentCryptographicPolicy: {
       policyVersion: 1,
@@ -402,6 +404,7 @@ function pendingPolicy() {
       policyVersion: 1 as const,
       sequence: 2,
       applicationSenders: 2 as const,
+      groupInfoEditors: 2 as const,
     },
     currentRoster: activeGenesis().currentRoster,
     deliveries: [{ destination: 'alpha.example', deliveryDigest: '71'.repeat(32) }],
@@ -1524,6 +1527,7 @@ describe('MlsConversationService', () => {
         policyVersion: 1,
         sequence: 2,
         applicationSenders: 2,
+        groupInfoEditors: 2,
       },
       expect.stringMatching(/^[0-9]+$/),
     )
