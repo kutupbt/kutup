@@ -48,14 +48,24 @@ test('embedded images wait when turned off; metadata removal starts as set', asy
   await composer.getByRole('combobox', { name: 'To' }).press('Enter')
   await composer.getByRole('textbox', { name: 'Subject' }).fill(subject)
   await mail.getByRole('textbox', { name: 'Message' }).fill('Bakın: ')
+  // The image's upload is held a moment, and Send pressed meanwhile: the
+  // send waits for it (the button says Sending at once) instead of being lost.
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => (release = resolve))
+  await mail.route(/\/api\/mail\/drafts\/[^/]+\/attachments$/, async (route) => {
+    if (route.request().method() === 'POST') await held
+    await route.continue()
+  })
   await mail.locator('input[type="file"][accept="image/*"]').setInputFiles({ name: 'kirmizi.png', mimeType: 'image/png', buffer: PNG })
   const ask = mail.getByRole('dialog', { name: 'Insert image' })
   await expect(ask.getByRole('checkbox', { name: /Remove metadata/ })).not.toBeChecked()
   await ask.getByRole('button', { name: 'Inline' }).click()
   const named = mail.getByRole('dialog', { name: subject })
-  await expect(named.getByLabel('Uploading')).toHaveCount(0, { timeout: 60_000 })
   await named.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(named.getByRole('button', { name: 'Sending…' })).toBeVisible()
+  setTimeout(release, 3_000)
   await expect(mail.getByRole('button', { name: /^Send(ing…)?$/ })).toHaveCount(0, { timeout: 60_000 })
+  await mail.unroute(/\/api\/mail\/drafts\/[^/]+\/attachments$/)
 
   // Received: the image waits until loaded.
   await openWhenArrived(mail, new RegExp(subject))
