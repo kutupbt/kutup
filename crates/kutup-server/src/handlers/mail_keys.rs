@@ -392,9 +392,7 @@ pub async fn add_key(
     }
 
     let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
-    // Read in the write's own transaction (FOR SHARE): a re-seal of the
-    // account (which takes the row FOR UPDATE) is waited for, and a key
-    // sealed for the binding it replaced is refused.
+    // The account's key binding: a key sealed for any other is refused.
     let binding: String =
         sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
             .bind(user_id)
