@@ -20,8 +20,8 @@ use sha2::Digest;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-use crate::api::versions::{NewVersion, ORIGINAL};
-use crate::api::{ApiError, Client, File};
+use crate::api::versions::ORIGINAL;
+use crate::api::{Client, File};
 use crate::keyring::Keyring;
 
 /// How many times a save that lost a race is merged again and retried.
@@ -355,45 +355,28 @@ pub(crate) fn save_version(
         vault.collection_id,
         vault.folder_epoch,
     )?;
-    let sealed = drive_object::encrypt_file_blob(
-        contents,
-        &file_key,
-        DriveFileBlobContextV1::new(&file.id, file.key_generation)?,
-    )
-    .context("encrypt vault")?;
-    let stored = client.create_version(
-        &file.id,
-        sealed,
-        &NewVersion {
-            kind: "file".into(),
-            seq_at_snapshot: 0,
-            doc_key_id: 1,
+    // Over tus, conditional on what it was made from; the vault's size,
+    // SHA-256 and content hash land with it.
+    let hash_key = crate::names::folder_hash_key(vault.keys, vault.collection_id).ok();
+    let landed = crate::version_upload::upload_version(
+        client,
+        &crate::version_upload::NoRecords,
+        crate::version_upload::VersionRequest {
+            file: &file,
+            file_key: &file_key,
+            content: crate::version_upload::Content::Bytes(contents),
+            sha256: sha2::Sha256::digest(contents).into(),
+            hash_key: hash_key.as_ref(),
             based_on: Some(based_on(based_on_version)),
-            ..Default::default()
+            progress: crate::uploader::Progress::Quiet,
         },
-    );
-    match stored {
-        Ok(row) => {
-            let followed = crate::names::folder_hash_key(vault.keys, vault.collection_id).and_then(
-                |hash_key| {
-                    let sha256: [u8; 32] = sha2::Sha256::digest(contents).into();
-                    crate::uploader::follow_new_content(
-                        client,
-                        &file,
-                        &file_key,
-                        &hash_key,
-                        contents.len() as u64,
-                        &sha256,
-                    )
-                },
-            );
-            if let Err(e) = followed {
-                eprintln!("warning: the vault's details did not follow its new version: {e:#}");
-            }
-            Ok(Some(row.id))
-        }
-        Err(error) if version_conflict(&error).is_some() => Ok(None),
-        Err(error) => Err(error).context("save vault version"),
+    )
+    .context("save vault version")?;
+    // Any conflict (another version, a rename, a re-key) is merged again
+    // from what Drive holds then.
+    match landed {
+        crate::version_upload::Landed::Stored(version) => Ok(Some(version)),
+        crate::version_upload::Landed::Conflict(_) => Ok(None),
     }
 }
 
@@ -520,14 +503,6 @@ fn same_content(a: &Database, b: &Database) -> bool {
     let mut a = a.clone();
     a.config = b.config.clone();
     a == *b
-}
-
-/// The `409 version_conflict` in `error`: the version the file holds now.
-pub(crate) fn version_conflict(error: &anyhow::Error) -> Option<String> {
-    error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<ApiError>())
-        .and_then(|api| api.version_conflict.clone())
 }
 
 /// The file as Drive lists it now (its key may have moved on), with its key.

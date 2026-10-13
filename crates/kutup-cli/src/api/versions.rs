@@ -176,36 +176,6 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Stores a sealed whole-file version read from `encrypted` (`length`
-    /// bytes) in one request, without holding it in memory.
-    pub fn create_version_stream(
-        &self,
-        file_id: &str,
-        encrypted: impl std::io::Read + Send + 'static,
-        length: u64,
-        version: &NewVersion,
-    ) -> Result<VersionRow> {
-        let part = Part::reader_with_length(encrypted, length)
-            .file_name("version")
-            .mime_str("application/octet-stream")?;
-        let mut form = Form::new()
-            .text("kind", version.kind.clone())
-            .text("seqAtSnapshot", version.seq_at_snapshot.to_string())
-            .text("docKeyId", version.doc_key_id.to_string())
-            .text("keepForever", version.keep_forever.to_string());
-        if !version.label.is_empty() {
-            form = form.text("label", version.label.clone());
-        }
-        if let Some(based_on) = &version.based_on {
-            form = form.text("basedOn", based_on.clone());
-        }
-        let resp = self
-            .upload_request(Method::POST, &format!("/files/{file_id}/versions"))
-            .multipart(form.part("file", part))
-            .send()?;
-        super::decode_json(resp)
-    }
-
     /// Updates a version's label / keep-forever pin. Mirrors `PatchVersion`.
     pub fn patch_version(
         &self,

@@ -403,6 +403,7 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
                     status: 409,
                     message,
                     code: None,
+                    upload_id: None,
                     name_taken: None,
                     version_conflict: None,
                 })

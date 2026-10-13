@@ -241,6 +241,7 @@ pub fn upload_streaming(
         mtime_nanos,
         created_at: now,
         updated_at: now,
+        ..Default::default()
     };
     // Persist BEFORE the first PATCH: a crash at any later point leaves a
     // record + server session, which is exactly what resume needs.
@@ -426,7 +427,7 @@ fn run_patches(
 
 /// A 4xx (other than timeout/rate-limit) means the server rejected the
 /// upload outright; retrying the same session is pointless.
-fn is_permanent(err: &anyhow::Error) -> bool {
+pub(crate) fn is_permanent(err: &anyhow::Error) -> bool {
     matches!(err.downcast_ref::<ApiError>(),
              Some(e) if e.status < 500 && e.status != 408 && e.status != 429)
 }
@@ -458,7 +459,7 @@ fn unwrap_file_key(
     .context("unwrap resumed file key")
 }
 
-fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {
+pub(crate) fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -466,7 +467,7 @@ fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {
         .unwrap_or((0, 0))
 }
 
-fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> ProgressBar {
+pub(crate) fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> ProgressBar {
     match progress {
         Progress::Bar => crate::output::progress_bar(Some(plain_total.max(0) as u64), name),
         Progress::Quiet => ProgressBar::hidden(),
