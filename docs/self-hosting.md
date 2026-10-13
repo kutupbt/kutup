@@ -1145,11 +1145,14 @@ KUTUP_DEPLOY_HOST=root@kutup.example scripts/deploy.sh <commit>
 
 It refuses a commit whose CI on `master` did not pass. It pulls the three
 images and records their digests and the running ones under `deploy-history/`
-on the server, so a rollback is exact. Then it runs both backups (see Database
-backups and Mail), sets the image lines in `.env` (keeping `.env.bak-<old>`),
-checks out the commit, validates nginx, starts the stack and checks it:
+on the server. Then it runs both backups (see Database backups and Mail),
+checks out the commit and validates its nginx config, and only then sets the
+image lines in `.env` (keeping `.env.bak-<old>`), each pinned by digest as
+`<repo>:<tag>@sha256:…` so a re-pushed tag never changes what runs. It starts
+the stack and checks it:
 migrations, backend errors, Stalwart's setup, storage, and every app host. It
-keeps the new and the previous release's images and removes older ones.
+keeps the new and the previous release's images and removes older ones; a
+rollback is a deploy of the previous tag.
 `--dry-run` stops after pulling and changes nothing. `KUTUP_DEPLOY_KEY`,
 `KUTUP_DEPLOY_DIR` and `KUTUP_DEPLOY_HOSTS` are optional.
 

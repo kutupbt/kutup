@@ -8,7 +8,9 @@
 #   scripts/gate.sh web                 frontend install, WASM builds and tests, build
 #   scripts/gate.sh browser <suite>...  browser specs from tests/e2e/suites/<suite>.txt,
 #                                       against an already running stack
-#   scripts/gate.sh live <name>...      live gates: mail, backup, federation
+#   scripts/gate.sh live <name>...      live gates: mail, backup, federation, and pass
+#                                       (pass: against a running stack, KUTUP_LIVE_SERVER
+#                                       and KUTUP_LIVE_DATABASE_URL set)
 #   scripts/gate.sh all                 static, rust and web
 #
 # The Cargo roots: the workspace, plus three that stay outside it with their
@@ -108,12 +110,14 @@ browser() {
   local specs
   specs="$(suite_specs "$@")"
   step "Browser specs: $*"
+  # One spec path per word: spec paths never contain spaces.
+  # shellcheck disable=SC2086
   (cd tests/e2e && npm exec -- playwright test $specs --project=chromium)
 }
 
 live() {
   if [ "$#" -eq 0 ]; then
-    echo "gate: live needs a gate: mail backup federation" >&2
+    echo "gate: live needs a gate: mail backup federation pass" >&2
     return 2
   fi
   local name
@@ -122,7 +126,17 @@ live() {
       mail) step "Mail gate"; scripts/test-mail-inbound.sh ;;
       backup) step "Chat backup lifecycle"; scripts/test-chat-backup-integration.sh ;;
       federation) step "Two-server federation"; scripts/test-chat-federation.sh ;;
-      *) echo "gate: unknown live gate '$name' (mail backup federation)" >&2; return 2 ;;
+      pass)
+        : "${KUTUP_LIVE_SERVER:?live pass needs KUTUP_LIVE_SERVER (the backend of a running stack)}"
+        : "${KUTUP_LIVE_DATABASE_URL:?live pass needs KUTUP_LIVE_DATABASE_URL}"
+        step "Kutup Pass: live server tests"
+        cargo test --locked -p kutup-server --test pass_live -- --test-threads=1
+        step "Kutup Pass: two machines sync one vault"
+        KUTUP_SERVER="$KUTUP_LIVE_SERVER" scripts/verify-pass-sync.sh
+        step "Kutup Pass: the SSH agent against OpenSSH"
+        KUTUP_SERVER="$KUTUP_LIVE_SERVER" scripts/verify-pass-ssh.sh
+        ;;
+      *) echo "gate: unknown live gate '$name' (mail backup federation pass)" >&2; return 2 ;;
     esac
   done
 }

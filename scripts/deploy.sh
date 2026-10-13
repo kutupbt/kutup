@@ -8,6 +8,9 @@
 #   scripts/deploy.sh <tag> --dry-run  steps 1 and 2 only: checks CI, pulls the images
 #                                      and prints the plan; changes nothing
 #
+# A rollback is a deploy of the previous tag: its images stay on the server,
+# and .env pins every image by digest, recorded per deploy in deploy-history/.
+#
 # Settings (environment):
 #   KUTUP_DEPLOY_HOST   ssh destination, e.g. root@kutup.example   (required)
 #   KUTUP_DEPLOY_KEY    ssh identity file                          (optional)
@@ -75,10 +78,14 @@ set -euo pipefail
 dir="$1" tag="$2" sha="$3" wipe="$4" dry="$5" hosts="${6:-}"
 cd "$dir"
 # One value from .env, read literally (.env is a Compose file, not shell).
-env_get() { { grep -E "^$1=" .env || true; } | tail -1 | cut -d= -f2-; }
+env_get() {
+  { grep -E "^$1=" .env || true; } | tail -1 | cut -d= -f2- \
+    | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
 images="kutup-server kutup-web kutup-stalwart-setup"
-registry="$(grep -oE '^KUTUP_SERVER_IMAGE=[^:]+' .env | cut -d= -f2 | sed 's#/kutup-server$##')"
-old="$(grep -oE '^KUTUP_SERVER_IMAGE=.*:[0-9a-f]{12}$' .env | sed 's/.*://')"
+registry="$(env_get KUTUP_SERVER_IMAGE | sed -E 's#/kutup-server[:@].*##')"
+# The running tag; .env names images as <repo>:<tag>@sha256:<digest>.
+old="$(env_get KUTUP_SERVER_IMAGE | sed -nE 's/.*:([0-9a-f]{12})(@sha256:[0-9a-f]+)?$/\1/p')"
 echo "== $old -> $tag on $(hostname)"
 
 echo "== images and digests"
@@ -110,6 +117,7 @@ if [ "$wipe" = true ]; then
   project="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')"
   docker volume rm "${project}_postgres_data"
   backup_prefix="$(env_get KUTUP_BACKUP_PREFIX)"
+  mail_prefix="$(env_get KUTUP_MAIL_BACKUP_PREFIX)"
   bucket="$(env_get S3_BUCKET)"
   [ -n "$bucket" ] || { echo "deploy: S3_BUCKET is empty" >&2; exit 1; }
   # Everything in the bucket except the two backup prefixes.
@@ -117,22 +125,27 @@ if [ "$wipe" = true ]; then
     -e AWS_SECRET_ACCESS_KEY="$(env_get S3_SECRET_KEY)" \
     -e AWS_DEFAULT_REGION="$(env_get S3_REGION)" amazon/aws-cli:2.37.9 \
     --endpoint-url "$(env_get S3_ENDPOINT)" s3 rm "s3://$bucket/" --recursive --only-show-errors \
-    --exclude "${backup_prefix:-database-backups}/*" --exclude "mail-backups/*"
+    --exclude "${backup_prefix:-database-backups}/*" --exclude "${mail_prefix:-mail-backups}/*"
   # Mail still queued to outside hosts from the old accounts.
   docker compose up -d --wait stalwart >/dev/null
   docker compose exec -T stalwart sh -c 'command -v stalwart-cli >/dev/null && stalwart-cli queue remove --all' || true
 fi
 
 echo "== update"
-[ -n "$old" ] && cp .env ".env.bak-$old"
-for i in $images; do
-  var="$(echo "$i" | sed -e 's/^kutup-//' -e 's/-/_/g' | tr a-z A-Z)"
-  sed -i "s#^KUTUP_${var}_IMAGE=.*#KUTUP_${var}_IMAGE=$registry/$i:$tag#" .env
-done
-grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
+# The commit's compose files and nginx config first: if this fails, .env and
+# the running stack are untouched.
 git fetch -q origin
 git checkout -q --detach "$sha"
 docker compose run --rm --no-deps --entrypoint nginx nginx -t
+# Then the images, pinned by digest (the tag kept for reading), so a re-pushed
+# tag can never change what runs.
+[ -n "$old" ] && cp .env ".env.bak-$old"
+for i in $images; do
+  var="$(echo "$i" | sed -e 's/^kutup-//' -e 's/-/_/g' | tr '[:lower:]' '[:upper:]')"
+  digest="$(docker image inspect -f '{{index .RepoDigests 0}}' "$registry/$i:$tag" | sed 's/.*@//')"
+  sed -i "s#^KUTUP_${var}_IMAGE=.*#KUTUP_${var}_IMAGE=$registry/$i:$tag@$digest#" .env
+done
+grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
 docker compose up -d --wait
 docker compose restart nginx >/dev/null
 
@@ -140,7 +153,9 @@ echo "== checks"
 sleep 5
 docker compose exec -T postgres sh -c 'psql -U "${POSTGRES_USER:-kutup}" -d "${POSTGRES_DB:-kutup}" -tAc "select max(version) from _sqlx_migrations"' \
   | sed 's/^/latest migration: /'
-errors="$(docker compose logs backend --since 3m 2>&1 | grep -ciE 'error|panic' || true)"
+# Log lines at ERROR level and panics, not every line containing "error".
+errors="$(docker compose logs --no-color backend --since 3m 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
+  | grep -cE ' ERROR |level=error|panicked' || true)"
 echo "backend error lines: $errors"
 docker compose logs stalwart-setup --since 5m 2>&1 | grep -q 'Authentication-Results' \
   || { echo "deploy: stalwart-setup did not report Authentication-Results" >&2; exit 1; }
@@ -157,7 +172,7 @@ done
 
 echo "== images kept: $tag ${old:-}"
 docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^$registry/" \
-  | grep -vE ":($tag${old:+|$old})$" | xargs -r docker rmi -f >/dev/null
+  | grep -vE ":($tag${old:+|$old})$" | xargs -r docker rmi >/dev/null 2>&1 || true
 docker image prune -f >/dev/null
 df -h / | tail -1
 REMOTE
