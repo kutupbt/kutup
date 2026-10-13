@@ -31,7 +31,12 @@ struct Vectors {
     fingerprint: String,
     sha256_fingerprint: String,
     envelope_nonce: String,
+    /// Account envelope suite 2.
     envelope: String,
+    /// The same key as suite 1 sealed it (still opened, until the account
+    /// re-seals).
+    #[serde(default)]
+    envelope_v1: String,
     second_key_fingerprint: String,
     second_key_sha256_fingerprint: String,
     key_lists: Vec<KeyListVector>,
@@ -128,7 +133,14 @@ fn write_vectors() {
             flags: DEFAULT_FLAGS,
         },
     );
+    // Suite 1 bytes are kept as they were first written.
+    let envelope_v1 = std::fs::read_to_string(PATH)
+        .ok()
+        .and_then(|json| serde_json::from_str::<Vectors>(&json).ok())
+        .map(|b| if b.envelope_v1.is_empty() { b.envelope } else { b.envelope_v1 })
+        .unwrap_or_default();
     let vectors = Vectors {
+        envelope_v1,
         address: address.into(),
         login_email: "Alice@Example.com".into(),
         master_key: STANDARD.encode(master),
@@ -185,6 +197,14 @@ fn checked_in_vectors_hold() {
     )
     .unwrap();
     assert_eq!(STANDARD.encode(&*opened), v.secret_key);
+    // Suite 1, as kept before the re-seal, still opens.
+    let v1 = b64(&v.envelope_v1);
+    assert_eq!(
+        kutup_crypto::account_envelope::inspect(&v1).unwrap().suite,
+        kutup_crypto::account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305V1
+    );
+    let opened_v1 = open_address_key(&v1, &master, &v.login_email, &v.address, &fingerprint).unwrap();
+    assert_eq!(STANDARD.encode(&*opened_v1), v.secret_key);
     assert!(open_address_key(
         &b64(&v.envelope),
         &master,
