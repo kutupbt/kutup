@@ -18,8 +18,23 @@
 //   above it); a write that started from an older read gets the server's
 //   409 and reads again. One whose clock runs ahead writes high revisions;
 //   every device that reads them continues above them.
-// - The revisions themselves are not secret (the server stores them in
-//   clear), so this store keeps them plainly, per account, in IndexedDB.
+// - The store is on disk, where anyone with the disk can read and write it:
+//   entries are named by an HMAC of what they are about and hold the
+//   revision sealed to that name, under keys derived from the master key
+//   (Rust `revision_guard`). A disk attacker can delete an entry (the device
+//   is then a fresh one for that value) or put back an older copy of it, but
+//   can neither read the entries nor set one to a revision of its choosing.
+
+import { toBase64 } from './base64'
+import { getCryptoWasm } from './rustWasm'
+
+/** The account's keys for the store (Rust `revision_guard::GuardKeys`). */
+export interface GuardKeys {
+  entryId(scope: string, id: string): string
+  sealSeen(entry: string, revision: number): string
+  /** Throws when the sealed revision was moved to another entry or altered. */
+  openSeen(entry: string, sealed: string): number
+}
 
 /** A revision older than this device has already seen for the same value. */
 export class OlderThanSeenError extends Error {
@@ -33,13 +48,14 @@ export class OlderThanSeenError extends Error {
   }
 }
 
+/** Entries by name: each a revision sealed to its name. */
 export interface RevisionStore {
-  get(key: string): Promise<number | undefined>
-  put(key: string, revision: number): Promise<void>
+  get(entry: string): Promise<string | undefined>
+  put(entry: string, sealed: string): Promise<void>
 }
 
 export function memoryRevisionStore(): RevisionStore {
-  const seen = new Map<string, number>()
+  const seen = new Map<string, string>()
   return {
     get: (key) => Promise.resolve(seen.get(key)),
     put: (key, revision) => {
@@ -49,7 +65,7 @@ export function memoryRevisionStore(): RevisionStore {
   }
 }
 
-const DB_NAME = 'kutup-revisions'
+const DB_NAME = 'kutup-revisions-v2'
 const STORE = 'seen'
 
 function request<T>(req: IDBRequest<T>): Promise<T> {
@@ -83,7 +99,7 @@ export function indexedDbRevisionStore(): RevisionStore {
       const database = await db()
       if (!database) return fallback.get(key)
       const value = await request(database.transaction(STORE, 'readonly').objectStore(STORE).get(key))
-      return typeof value === 'number' ? value : undefined
+      return typeof value === 'string' ? value : undefined
     },
     async put(key, revision) {
       const database = await db()
@@ -102,17 +118,26 @@ function checkRevision(revision: number): number {
 export class RevisionGuard {
   constructor(
     private readonly store: RevisionStore,
-    private readonly userId: string,
+    private readonly keys: () => Promise<GuardKeys>,
     private readonly now: () => number = Date.now,
   ) {}
 
-  private key(scope: string, id: string): string {
-    return `${this.userId}\u0000${scope}\u0000${id}`
+  private async entry(scope: string, id: string): Promise<{ keys: GuardKeys; entry: string }> {
+    const keys = await this.keys()
+    return { keys, entry: keys.entryId(scope, id) }
   }
 
-  /** The highest revision seen of `scope`/`id` (0: none). */
+  /** The highest revision seen of `scope`/`id` (0: none, or an entry that was altered). */
   async seen(scope: string, id: string): Promise<number> {
-    return (await this.store.get(this.key(scope, id))) ?? 0
+    const { keys, entry } = await this.entry(scope, id)
+    const sealed = await this.store.get(entry)
+    if (!sealed) return 0
+    try {
+      return keys.openSeen(entry, sealed)
+    } catch {
+      // Altered or moved: no better than deleted, which the disk allows anyway.
+      return 0
+    }
   }
 
   /**
@@ -123,7 +148,10 @@ export class RevisionGuard {
     checkRevision(revision)
     const seen = await this.seen(scope, id)
     if (revision < seen) throw new OlderThanSeenError(scope, revision, seen)
-    if (revision > seen) await this.store.put(this.key(scope, id), revision)
+    if (revision > seen) {
+      const { keys, entry } = await this.entry(scope, id)
+      await this.store.put(entry, keys.sealSeen(entry, revision))
+    }
   }
 
   /** The revision to seal a new value of `scope`/`id` at, written on top of `base`. */
@@ -134,20 +162,41 @@ export class RevisionGuard {
 
 let shared: RevisionStore | null = null
 const guards = new Map<string, RevisionGuard>()
+/** Set by tests: keys that need no WASM. */
+let testKeys: ((userId: string) => GuardKeys) | null = null
 
 /** The account's guard over the browser's store. */
-export function revisionGuard(userId: string): RevisionGuard {
-  let guard = guards.get(userId)
+export function revisionGuard(session: { userId: string; masterKey: Uint8Array }): RevisionGuard {
+  let guard = guards.get(session.userId)
   if (!guard) {
     shared ??= indexedDbRevisionStore()
-    guard = new RevisionGuard(shared, userId)
-    guards.set(userId, guard)
+    const masterKey = toBase64(session.masterKey)
+    let keys: Promise<GuardKeys> | null = null
+    const forTests = testKeys
+    guard = new RevisionGuard(shared, () =>
+      forTests ? Promise.resolve(forTests(session.userId)) : (keys ??= getCryptoWasm().then((wasm) => new wasm.RevisionGuardKeys(masterKey))),
+    )
+    guards.set(session.userId, guard)
   }
   return guard
 }
 
-/** Forgets every account's history: a fresh device, for tests. */
+/** Forgets every account's history (a fresh device) and uses keys that need no WASM: for tests. */
 export function resetRevisionGuardsForTesting(): void {
   shared = memoryRevisionStore()
   guards.clear()
+  testKeys = plainGuardKeysForTesting
+}
+
+/** Keys for tests: entries named as they are, revisions as text, checked against their entry. */
+export function plainGuardKeysForTesting(account: string): GuardKeys {
+  return {
+    entryId: (scope, id) => `${account}:${scope}:${id}`,
+    sealSeen: (entry, revision) => `${entry}=${revision}`,
+    openSeen: (entry, sealed) => {
+      const [name, revision] = sealed.split('=')
+      if (name !== entry) throw new Error('moved')
+      return Number(revision)
+    },
+  }
 }

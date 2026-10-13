@@ -31,6 +31,7 @@ use crate::error::{CryptoError, Result};
 use crate::identity::incarnation_id_from_authority_public;
 use crate::key_binding;
 use crate::named_share::canonical_account;
+use crate::padding::Length;
 
 const PINS_KEY_SALT: &[u8] = b"kutup/identity-pins/v1\0";
 const PINS_KEY_INFO: &[u8] = b"kutup/identity-pins/list-key/v1\0";
@@ -41,6 +42,9 @@ const NONCE_LEN: usize = 24;
 const REVISION_LEN: usize = 8;
 const HEADER_LEN: usize = 8 + 2 + REVISION_LEN + NONCE_LEN;
 const TAG_LEN: usize = 16;
+/// How a list is padded before it is sealed: its length then tells only
+/// roughly how many accounts it pins.
+const PADDING: Length = Length::Bucket(256);
 
 /// The most accounts one list keeps.
 pub const MAX_PINS: usize = 10_000;
@@ -260,7 +264,7 @@ pub fn seal_with_nonce(
     if revision == 0 {
         return Err(invalid("revisions start at 1"));
     }
-    let plain = Zeroizing::new(encode(list)?);
+    let plain = Zeroizing::new(PADDING.pad(&encode(list)?)?);
     let ciphertext = XChaCha20Poly1305::new(key.into())
         .encrypt(
             XNonce::from_slice(nonce),
@@ -293,13 +297,16 @@ pub fn open(key: &[u8; 32], owner: &str, sealed: &[u8]) -> Result<(IdentityPinsV
         )
         .map(Zeroizing::new)
         .map_err(|_| CryptoError::AuthFailed)?;
+    let plain = Zeroizing::new(PADDING.unpad(plain.to_vec())?);
     Ok((decode(&plain)?, revision))
 }
 
 /// Checks a sealed list's framing, size and revision without opening it (the
 /// server's view), and returns the revision.
 pub fn inspect(sealed: &[u8]) -> Result<u64> {
-    if sealed.len() <= HEADER_LEN + TAG_LEN || sealed.len() > HEADER_LEN + MAX_LIST_BYTES + TAG_LEN
+    if sealed.len() <= HEADER_LEN + TAG_LEN
+        || sealed.len() > MAX_SEALED_BYTES
+        || !PADDING.allows_padded_len(sealed.len() - HEADER_LEN - TAG_LEN)
     {
         return Err(invalid("size is invalid"));
     }
@@ -314,7 +321,7 @@ pub fn inspect(sealed: &[u8]) -> Result<u64> {
 }
 
 /// The largest sealed list.
-pub const MAX_SEALED_BYTES: usize = HEADER_LEN + MAX_LIST_BYTES + TAG_LEN;
+pub const MAX_SEALED_BYTES: usize = HEADER_LEN + MAX_LIST_BYTES + 256 + TAG_LEN;
 
 #[cfg(test)]
 mod tests {

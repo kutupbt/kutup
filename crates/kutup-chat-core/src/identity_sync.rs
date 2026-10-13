@@ -70,6 +70,13 @@ impl IdentityPinsSync {
             return Ok(cached.clone());
         }
         let loaded = match transport.fetch_identity_pins().await? {
+            // None, though this engine has seen one: the server dropped it,
+            // and writing from nothing would erase the pins it held.
+            None if self.highest_seen > 0 => {
+                return Err(ChatError::Trust(
+                    "identity pins: the server answered no list after one was seen".into(),
+                ))
+            }
             None => (0, IdentityPinsV1::default()),
             Some(record) => {
                 let sealed = STANDARD

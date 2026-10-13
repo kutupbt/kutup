@@ -11,6 +11,9 @@ default = ["mnemonic"]
 mnemonic = ["dep:bip39"]
 # OpenPGP mail address keys (`mail_key`); off for clients that do not need rPGP (Chat).
 mail = ["dep:pgp", "dep:rand", "dep:rsa"]
+# Builders of malformed values for negative vectors; on for this crate's own
+# tests only (the dev-dependency on itself below), never for a client.
+test-vectors = []
 
 [dependencies]
 dryoc.workspace = true
@@ -40,6 +43,7 @@ rsa = { version = "=0.9.10", default-features = false, optional = true }
 pgp = { version = "=0.21.0", default-features = false, features = ["wasm"], optional = true }
 
 [dev-dependencies]
+kutup-crypto = { path = ".", features = ["test-vectors"] }
 serde.workspace = true
 hex.workspace = true
 uuid.workspace = true

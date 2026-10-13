@@ -3058,3 +3058,54 @@ pub fn open_contact_card(
         String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))?;
     revisioned(text, revision)
 }
+
+/// The account's keys for its store of revisions seen: entry names that do
+/// not reveal what they are about, and revisions sealed to their entry.
+#[wasm_bindgen]
+pub struct RevisionGuardKeys {
+    keys: kutup_crypto::revision_guard::GuardKeys,
+}
+
+#[wasm_bindgen]
+impl RevisionGuardKeys {
+    #[wasm_bindgen(constructor)]
+    pub fn new(master_key_base64: &str) -> Result<RevisionGuardKeys, JsValue> {
+        let master_key = master_key_32(master_key_base64)?;
+        Ok(Self {
+            keys: kutup_crypto::revision_guard::GuardKeys::derive(&master_key)
+                .map_err(|error| js_error(&error.to_string()))?,
+        })
+    }
+
+    /// The store's name for `scope`/`id`.
+    #[wasm_bindgen(js_name = entryId)]
+    pub fn entry_id(&self, scope: &str, id: &str) -> Result<String, JsValue> {
+        self.keys
+            .entry_id(scope, id)
+            .map_err(|error| js_error(&error.to_string()))
+    }
+
+    /// `revision` sealed for `entry` (base64).
+    #[wasm_bindgen(js_name = sealSeen)]
+    pub fn seal_seen(&self, entry: &str, revision: f64) -> Result<String, JsValue> {
+        let sealed = self
+            .keys
+            .seal_seen(entry, revision_arg(revision)?)
+            .map_err(|error| js_error(&error.to_string()))?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// The revision sealed for `entry`; throws when it was moved or altered.
+    #[wasm_bindgen(js_name = openSeen)]
+    pub fn open_seen(&self, entry: &str, sealed_base64: &str) -> Result<f64, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "revision")?;
+        let revision = self
+            .keys
+            .open_seen(entry, &sealed)
+            .map_err(|error| js_error(&error.to_string()))?;
+        if revision > 9_007_199_254_740_991 {
+            return Err(js_error("revision is past a safe integer"));
+        }
+        Ok(revision as f64)
+    }
+}

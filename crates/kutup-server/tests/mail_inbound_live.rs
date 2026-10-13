@@ -1359,6 +1359,63 @@ fn sealed_name_at(
     )
 }
 
+/// Renames `kind`/`id` (a folder, label or filter) to `name` sealed at
+/// `revision`, on top of `base`; returns the status and the body.
+#[allow(clippy::too_many_arguments)]
+fn rename_place(
+    c: &reqwest::blocking::Client,
+    base_url: &str,
+    user: &User,
+    kind: kutup_crypto::mail_names::MailNameKind,
+    id: &str,
+    base: Option<i64>,
+    revision: u64,
+    name: &str,
+) -> (u16, Value) {
+    let path = match kind {
+        kutup_crypto::mail_names::MailNameKind::Folder => "folders",
+        kutup_crypto::mail_names::MailNameKind::Label => "labels",
+        kutup_crypto::mail_names::MailNameKind::Filter => "filters",
+    };
+    let mut body = json!({ "name": sealed_name_at(user, kind, id, revision, name) });
+    if let Some(base) = base {
+        body["baseNameRevision"] = json!(base);
+    }
+    let r = bearer(
+        c.patch(format!("{base_url}/api/mail/{path}/{id}")),
+        &user.token,
+    )
+    .json(&body)
+    .send()
+    .unwrap();
+    let status = r.status().as_u16();
+    (status, r.json().unwrap_or(Value::Null))
+}
+
+/// A rename is stored only on top of the name it started from, newer than it.
+fn renames_are_guarded(
+    c: &reqwest::blocking::Client,
+    base_url: &str,
+    user: &User,
+    kind: kutup_crypto::mail_names::MailNameKind,
+    id: &str,
+) {
+    let rename =
+        |base, revision, name| rename_place(c, base_url, user, kind, id, base, revision, name);
+    assert_eq!(rename(None, 2, "Yeni").0, 400);
+    assert_eq!(rename(Some(1), 1, "Yeni").0, 400);
+    assert_eq!(rename(Some(1), 2, "Yeni").0, 204);
+    let (status, late) = rename(Some(1), 3, "Eski");
+    assert_eq!(status, 409);
+    assert_eq!(
+        (late["code"].as_str(), late["revision"].as_i64()),
+        (Some("revision_conflict"), Some(2))
+    );
+    // Past what JavaScript holds exactly: refused, so nobody can stop renames for good.
+    assert_eq!(rename(Some(2), 1 << 53, "Son").0, 400);
+    assert_eq!(rename(Some(2), 3, "Yeni ad").0, 204);
+}
+
 #[test]
 fn folders_and_labels() {
     use kutup_crypto::mail_names::MailNameKind::{Folder, Label};
@@ -1525,6 +1582,7 @@ fn folders_and_labels() {
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 201);
+    renames_are_guarded(&c, &base, &user, Label, &label);
     let r = bearer(c.patch(format!("{base}/api/mail/messages")), &user.token)
         .json(&json!({ "ids": [message], "addLabels": [label] }))
         .send()
@@ -1640,6 +1698,7 @@ fn filters_file_mail_on_arrival_and_on_existing_mail() {
         }),
     );
     assert_eq!(r.status().as_u16(), 201);
+    renames_are_guarded(&c, &base, &user, Filter, &filter);
     // A filter that names no action, or someone else's folder, is refused.
     let bad = uuid::Uuid::new_v4().to_string();
     let name = sealed_name(&user, Filter, &bad, "Bad");
