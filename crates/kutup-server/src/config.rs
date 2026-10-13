@@ -397,6 +397,12 @@ impl Config {
         if !cfg.mail_inbound_token.is_empty() && cfg.mail_inbound_token.len() < 32 {
             panic!("MAIL_INBOUND_TOKEN must be at least 32 characters long");
         }
+        if !cfg.admin_account.trim().is_empty() && parse_admin_account(&cfg.admin_account).is_none()
+        {
+            panic!(
+                "ADMIN_ACCOUNT must be username:password (a username of 3 to 32 lowercase letters, digits, _ or -)"
+            );
+        }
         cfg
     }
 }
