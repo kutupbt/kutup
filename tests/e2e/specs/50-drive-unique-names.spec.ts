@@ -2,7 +2,8 @@
 // (docs/plans/drive-unique-names.md):
 //   1. the same file uploaded again is skipped; a different one under a
 //      taken name (case aside) asks Keep both / Replace (a new version of
-//      the file there, office documents too) / Skip;
+//      the file there, office documents too; not notes and code, whose
+//      content is the text editor's state) / Skip;
 //   2. a folder dropped again goes into the folder already there and sends
 //      only what changed, asking once with "apply to all";
 //   3. renames refuse a taken name, case aside — but Turkish İ keeps its dot;
@@ -58,55 +59,55 @@ test('the same file again is skipped; a different one under a taken name asks', 
   await mkdir(`${dir}/upper`, { recursive: true })
   await mkdir(`${dir}/third`, { recursive: true })
   await mkdir(`${dir}/fourth`, { recursive: true })
-  await writeFile(`${dir}/report.txt`, 'first version')
-  await writeFile(`${dir}/again/report.txt`, 'first version')
-  await writeFile(`${dir}/upper/REPORT.TXT`, 'a different file')
-  await writeFile(`${dir}/third/report.txt`, 'the replacement')
-  await writeFile(`${dir}/fourth/report.txt`, 'never sent')
+  await writeFile(`${dir}/report.dat`, 'first version')
+  await writeFile(`${dir}/again/report.dat`, 'first version')
+  await writeFile(`${dir}/upper/REPORT.DAT`, 'a different file')
+  await writeFile(`${dir}/third/report.dat`, 'the replacement')
+  await writeFile(`${dir}/fourth/report.dat`, 'never sent')
 
-  await upload(page, `${dir}/report.txt`)
-  await expect(item(page, 'report.txt')).toBeVisible({ timeout: 60_000 })
+  await upload(page, `${dir}/report.dat`)
+  await expect(item(page, 'report.dat')).toBeVisible({ timeout: 60_000 })
   await expect.poll(() => uploads.count).toBe(1)
 
   // The same bytes under the same name: nothing is sent.
-  await upload(page, `${dir}/again/report.txt`)
+  await upload(page, `${dir}/again/report.dat`)
   await expect(panel(page).getByText('Already in this folder')).toBeVisible({ timeout: 60_000 })
   expect(uploads.count).toBe(1)
 
   // A different file whose name differs only in case: asked.
-  await upload(page, `${dir}/upper/REPORT.TXT`)
+  await upload(page, `${dir}/upper/REPORT.DAT`)
   await expect(conflict(page)).toBeVisible({ timeout: 60_000 })
-  await expect(conflict(page)).toContainText('“REPORT.TXT” is already here')
-  await expect(conflict(page)).toContainText('“REPORT (2).TXT”')
+  await expect(conflict(page)).toContainText('“REPORT.DAT” is already here')
+  await expect(conflict(page)).toContainText('“REPORT (2).DAT”')
   // One file: nothing to apply to the rest.
   await expect(conflict(page).getByRole('checkbox')).toHaveCount(0)
   await conflict(page).getByRole('button', { name: 'Keep both' }).click()
-  await expect(item(page, 'REPORT (2).TXT')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'report.txt')).toBeVisible()
+  await expect(item(page, 'REPORT (2).DAT')).toBeVisible({ timeout: 60_000 })
+  await expect(item(page, 'report.dat')).toBeVisible()
 
   // Replace: the new content becomes the newest version of the file there
   // (Proton's Replace), uploaded over tus as a version (`versionOf`) — no
   // new file, nothing in the trash.
   const beforeReplace = uploads.count
-  await upload(page, `${dir}/third/report.txt`)
+  await upload(page, `${dir}/third/report.dat`)
   await conflict(page).getByRole('button', { name: 'Replace' }).click()
   await expect(panel(page).getByText('Uploads complete')).toBeVisible({ timeout: 60_000 })
   expect(uploads.count).toBe(beforeReplace + 1)
   expect(uploads.versions).toBe(1)
   await page.reload()
-  await expect(item(page, 'report.txt')).toHaveCount(1, { timeout: 60_000 })
-  await expect(item(page, 'report (2).txt')).toHaveCount(0)
+  await expect(item(page, 'report.dat')).toHaveCount(1, { timeout: 60_000 })
+  await expect(item(page, 'report (2).dat')).toHaveCount(0)
   await openSection(page, 'Trash')
-  await expect(item(page, 'REPORT.TXT')).toHaveCount(0)
-  await expect(item(page, 'report.txt')).toHaveCount(0)
+  await expect(item(page, 'REPORT.DAT')).toHaveCount(0)
+  await expect(item(page, 'report.dat')).toHaveCount(0)
   await openSection(page, 'My files')
   // The same replacement again is now the same file: skipped.
-  await upload(page, `${dir}/third/report.txt`)
+  await upload(page, `${dir}/third/report.dat`)
   await expect(panel(page).getByText('Already in this folder').first()).toBeVisible({ timeout: 60_000 })
 
   // Skip: nothing changes.
   const before = uploads.count
-  await upload(page, `${dir}/fourth/report.txt`)
+  await upload(page, `${dir}/fourth/report.dat`)
   await conflict(page).getByRole('button', { name: 'Skip' }).click()
   await expect(panel(page).getByText('Skipped')).toBeVisible({ timeout: 30_000 })
   expect(uploads.count).toBe(before)
