@@ -616,6 +616,26 @@ pub async fn patch(
         )
             .into_response();
     }
+    // A new version's writer must still be allowed to write the file: one
+    // whose access was taken away loses the upload (and the file's slot).
+    if kind == "version" {
+        match crate::drive_writes::can_write_file(&state.pool, user_id, file_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                drop(tx);
+                let _ = state
+                    .storage
+                    .abort_multipart(&storage_path, &s3_upload_id)
+                    .await;
+                let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+                    .bind(upload_id)
+                    .execute(&state.pool)
+                    .await;
+                return tus_text(StatusCode::FORBIDDEN, "forbidden");
+            }
+            Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
+        }
+    }
     if received_bytes + chunk_len > total_bytes {
         return tus_text(StatusCode::PAYLOAD_TOO_LARGE, "chunk exceeds Upload-Length");
     }
@@ -715,6 +735,7 @@ pub async fn patch(
                 user_id,
                 upload_id,
                 file_id,
+                collection_id: coll_id,
                 total_bytes,
                 metadata_envelope,
                 metadata_revision,
@@ -822,7 +843,8 @@ pub async fn patch(
     .await
     .is_err()
     {
-        let _ = state.storage.delete(&storage_path).await;
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db insert file");
     }
     if sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id=$2")
@@ -832,7 +854,8 @@ pub async fn patch(
         .await
         .is_err()
     {
-        let _ = state.storage.delete(&storage_path).await;
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db quota update");
     }
     if sqlx::query("DELETE FROM uploads WHERE id=$1")
@@ -841,11 +864,12 @@ pub async fn patch(
         .await
         .is_err()
     {
-        let _ = state.storage.delete(&storage_path).await;
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db delete upload");
     }
     if tx.commit().await.is_err() {
-        let _ = state.storage.delete(&storage_path).await;
+        drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db commit");
     }
 
@@ -858,6 +882,18 @@ pub async fn patch(
         ],
     )
         .into_response()
+}
+
+/// After the parts were stitched, storing the file failed: the upload cannot
+/// go on, so its object and its row go (the row would otherwise hold the file
+/// id and the reserved room until the sweep, which could not abort it).
+/// Call it with the transaction dropped: it holds the row's lock.
+async fn drop_landed(state: &AppState, storage_path: &str, upload_id: Uuid) {
+    let _ = state.storage.delete(storage_path).await;
+    let _ = sqlx::query("DELETE FROM uploads WHERE id=$1")
+        .bind(upload_id)
+        .execute(&state.pool)
+        .await;
 }
 
 /// The finaliser's re-checks (see `patch`): the refusal, if one applies.
@@ -959,8 +995,14 @@ pub async fn delete(
         Err(_) => return tus_text(StatusCode::NOT_FOUND, ""),
     };
 
+    // The uploader's own upload, or an upload of a new version of a file in
+    // one of the caller's folders: an owner can free their file's one upload
+    // slot from someone who left it open.
     let row: Option<(String, String)> = match sqlx::query_as(
-        "SELECT storage_path, s3_upload_id FROM uploads WHERE id=$1 AND user_id=$2",
+        "SELECT u.storage_path, u.s3_upload_id FROM uploads u
+         WHERE u.id = $1 AND (u.user_id = $2 OR (u.kind = 'version' AND EXISTS (
+             SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
+             WHERE f.id = u.file_id AND c.owner_user_id = $2)))",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -989,9 +1031,8 @@ pub async fn delete(
         )
             .into_response();
     }
-    if sqlx::query("DELETE FROM uploads WHERE id=$1 AND user_id=$2")
+    if sqlx::query("DELETE FROM uploads WHERE id=$1")
         .bind(upload_id)
-        .bind(user_id)
         .execute(&state.pool)
         .await
         .is_err()

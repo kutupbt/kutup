@@ -47,7 +47,7 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 409 | A folder restored at the top level needs a name there |
-| `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; its `uploadId` when it is the caller's) |
+| `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `newKeyNeeded` | 409 | A new key must be made first |
@@ -1940,10 +1940,14 @@ sent, and again when its last part lands: the caller may write the file
 (`409 version_conflict`), its key has not changed (`409`), the metadata is
 its next revision (`409 revision_conflict`), and the upload fits the
 uploader's storage and share limits (`413`). One open upload per file:
-another is `409 versionUploading`, with `idleSeconds` since its last part
-and its `uploadId` when it is the caller's. A client cancels its own idle
-one (left by a crash; tus `DELETE`) and starts again, and waits for an
-active one (a save running on another device), never merging over it. The last part stores the version, the
+another is `409 versionUploading`, with `idleSeconds` since its last part,
+and its `uploadId` when the caller uploads it (`yours: true`) or owns the
+folder (`yours: false`): either may cancel it (tus `DELETE`), so nobody can
+hold the file's slot. A client cancels its own idle one (left by a crash)
+and starts again, and waits for an active one (a save running on another
+device), never merging over it. Each part re-checks that its writer may
+still write the file: one whose access was taken away loses the upload.
+Purging the file drops its open version upload. The last part stores the version, the
 file's new metadata and its content hash in one transaction, charged to the
 uploader as a multipart version is; refused there, the upload is discarded
 at once. An abandoned one is reaped like any tus upload, and reserves its

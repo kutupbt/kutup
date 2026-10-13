@@ -523,16 +523,29 @@ impl StorageService {
 
     /// Discards a multipart upload (user cancel / stale-upload sweep) — mirrors
     /// `AbortMultipart`. Idempotent per the S3 spec.
+    /// Aborts a multipart upload. One the store no longer knows (aborted
+    /// before, or completed) is gone already: that is success, so a row
+    /// left behind can still be cleaned up.
     pub async fn abort_multipart(&self, key: &str, upload_id: &str) -> Result<()> {
-        self.client
+        match self
+            .client
             .abort_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
             .upload_id(upload_id)
             .send()
             .await
-            .context("s3 abort multipart")?;
-        Ok(())
+        {
+            Ok(_) => Ok(()),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|service| service.is_no_such_upload()) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(anyhow::Error::new(error).context("s3 abort multipart")),
+        }
     }
 }
 
