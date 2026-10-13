@@ -1032,10 +1032,15 @@ async fn bound_client(
     if addresses.is_empty() {
         anyhow::bail!("federation host resolved to no addresses");
     }
+    // The same address list as every other outbound connection; only a test
+    // stack (FEDERATION_TEST_ALLOW_PRIVATE, refused unless APP_ENV=test)
+    // reaches peers on private networks, and over http for peers and
+    // discovery too. NAT64, 6to4 and Teredo addresses are refused as well,
+    // so an IPv6-only server behind DNS64 cannot reach IPv4-only peers.
     if !allow_private_test_network
         && addresses
             .iter()
-            .any(|address| ssrf::is_private_ip(address.ip()))
+            .any(|address| !ssrf::is_public(address.ip()))
     {
         anyhow::bail!("federation to private/internal addresses is not allowed");
     }

@@ -319,6 +319,7 @@ async fn find_icon(domain: &str) -> Option<Icon> {
             limit: PAGE_LIMIT_BYTES,
             truncate: true,
             wanted: &|kind| kind == "text/html" || kind == "application/xhtml+xml",
+            body: None,
         },
     )
     .await
@@ -357,6 +358,7 @@ async fn find_icon(domain: &str) -> Option<Icon> {
                 truncate: false,
                 // Icons often come with a wrong type; their bytes decide.
                 wanted: &|kind| !kind.starts_with("text/") && kind != "image/svg+xml",
+                body: None,
             },
         )
         .await
