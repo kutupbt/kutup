@@ -68,17 +68,30 @@ one (a vault file, a mail key, a folder), under the account's own keys.
   `/user/me`), never from preflight, and is kept in the session
   (`session.envelopeBinding`, CLI `Session.envelope_binding`); every seal and
   open uses it, never an email, a username or an address.
-- Other at-rest formats that bind a name (audit of 2026-10-12, every seal,
-  derivation and store name) move to the key binding in the next PR (L2
-  below), as new format versions only, there being nothing old to read:
+- The other at-rest formats that bound a name (audit of 2026-10-12, every
+  seal, derivation and store name) moved to the key binding (L2 below), as
+  new format versions only, there being nothing old to read: no reader for
+  the old form, no migration. Each vector file lists the values that must be
+  refused, the old address-bound value among them.
 
-| Bound to a name | What |
-|---|---|
-| Kutup address | identity pins (`identity_pins.rs` AAD) |
-| Kutup address | contact cards and their summary signature (`contact_card.rs`) |
-| Kutup address | mail folder, label and filter names (`mail_names.rs` AAD) |
-| Kutup address | Chat's own copy of the account profile (`kutup-chat-core` `profile.rs`) |
-| Kutup address | a Chat localStorage key (`pendingTimers.ts`, not sealed; renamed by account id) |
+| Was bound to | What | Now |
+|---|---|---|
+| Kutup address | identity pins (`identity_pins.rs` AAD) | `KUTIP2` suite 2, the key binding; vectors `identity-pins-v2.json` |
+| Kutup address | contact cards and their summary signature (`contact_card.rs`) | `KUTCC2` suite 2 and `kutup/contact-summary/v2`, the key binding (the server checks summaries against `users.key_binding`); vectors `contact-card-v2.json` |
+| Kutup address | mail folder, label and filter names (`mail_names.rs` AAD) | `KUTMN2` suite 2, the key binding; vectors `mail-names-v2.json` |
+| Kutup address | Chat's own copy of the account profile key (`kutup-chat-core` `profile.rs`, the wrapped key) | wrapped under `kutup-chat-profile-wrap-v2`, from the master key and the key binding; vectors `crates/kutup-chat-core/tests/vectors/profile-wrap-v2.json`. Its envelope header still names the address, as the whole profile record does for peers and the server's check |
+| Kutup address | a Chat localStorage key (`pendingTimers.ts`, not sealed) | `kutup.chat.pending-default-timers.v2:<user id>` |
+
+  Chat no longer takes over anything an older version kept in plaintext:
+  drafts and read positions (`kutup.chat.drafts.v1:<address>`,
+  `kutup:chat:read:<user id>`) and the old timer key are deleted when Chat
+  opens and never read, and a backup-mirror row that is not sealed is a
+  damaged store, not one to seal, so an account that later takes the same
+  username inherits nothing. Parameters that carried the binding under the
+  name `login_email` / `loginEmail` (`kdf`, `account_envelope`'s
+  `canonical_binding` and header field, `pass_vault`, `mail_key`, their
+  WASM and TypeScript wrappers) are named `binding`; their bytes did not
+  change.
 
   Already bound to ids (no change): Chat's device store, sealed storage and
   backup (a hash of server and user id), the media cache, the Pass outbox,
@@ -168,7 +181,7 @@ The whole encryption design was reviewed while the identity changed.
 | M4 | Fake preflight answers as HMACs under the server's own stored key | done |
 | M5 | No binding before the password is proved (it comes with the session) | done |
 | M6 | Re-sealed envelopes checked before sending | not needed: no re-seal |
-| L2 | Identity pins, contact cards, mail folder and label names and Chat's own profile copy bound to the key binding instead of the address (new format versions only); signed statements about an address keep naming it | next PR |
+| L2 | Identity pins, contact cards, mail folder and label names and Chat's own profile copy bound to the key binding instead of the address (new format versions only); signed statements about an address keep naming it | done |
 
 Before v1, each separate: password change, raisable Argon2id parameters,
 OPAQUE/SRP, key transparency. Master key rotation (authority succession, old
@@ -195,7 +208,7 @@ server could also require the object id where a purpose has one.
 1. **Identity:** the key binding, sign-in by name, the binding only with a
    session, account envelopes suite 2, derived temporary passwords,
    session/CLI/tests by name, `/user/me` and the menus (PR #167).
-2. **Formats off the address** (L2): identity pins, contact cards, mail
-   names, Chat's own profile copy.
+2. **Formats off the address** (L2, done): identity pins, contact cards,
+   mail names, Chat's own profile copy, Chat's local keys.
 3. **Recovery email:** the system sender, the table, Settings → Recovery,
    codes, notices.
