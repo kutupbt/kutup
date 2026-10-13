@@ -24,7 +24,8 @@
 #      running ones (deploy-history/), so a rollback is exact;
 #   3. with --wipe: lists what the bucket wipe would delete (aws-cli --dryrun)
 #      and refuses if a backup is among it;
-#   4. checks out the commit and validates its nginx config;
+#   4. checks out the commit and validates its nginx config, and runs the new
+#      server's check-config against .env (also in --dry-run);
 #   5. backs up the database and Mail's Stalwart data (the systemd backup units);
 #   6. with --wipe only: stops the stack, drops the database volume and empties
 #      the bucket except the backup prefixes; Stalwart's volume (DKIM keys) stays;
@@ -59,6 +60,10 @@ cd "$root"
 git fetch -q origin master
 sha="$(git rev-parse --verify -q "$tag^{commit}")" || { echo "deploy: $tag is not a commit here" >&2; exit 1; }
 git merge-base --is-ancestor "$sha" origin/master || { echo "deploy: $tag is not on master" >&2; exit 1; }
+# Only a server that knows the subcommand may be asked: an older one ignores
+# the word and starts a full second backend on the live database.
+has_check_config=false
+git grep -q '"check-config"' "$sha" -- crates/kutup-server/src && has_check_config=true
 
 echo "== CI for $sha"
 ci="$(gh run list --commit "$sha" --workflow CI --branch master --json status,conclusion \
@@ -78,9 +83,9 @@ if $wipe && ! $dry; then
   [ "$answer" = "${host#*@}" ] || { echo "deploy: not confirmed" >&2; exit 1; }
 fi
 
-ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "${KUTUP_DEPLOY_HOSTS:-}" <<'REMOTE'
+ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" <<'REMOTE'
 set -euo pipefail
-dir="$1" tag="$2" sha="$3" wipe="$4" dry="$5" hosts="${6:-}"
+dir="$1" tag="$2" sha="$3" wipe="$4" dry="$5" has_check_config="$6" hosts="${7:-}"
 cd "$dir"
 # One value from .env, read literally (.env is a Compose file, not shell).
 env_get() {
@@ -144,6 +149,32 @@ if [ "$wipe" = true ]; then
   echo "   objects to delete: $would; database volume to drop; Stalwart's volume kept"
 fi
 
+# The new server's settings check against this .env (kutup-server
+# check-config: environment only, no database), with the new image and the
+# current compose files; repeated after the checkout below.
+check_config() {
+  local out
+  if [ "$has_check_config" != true ]; then
+    echo "   (this release has no check-config; skipped)"
+    return 0
+  fi
+  # A named, time-limited container, removed whatever happens: no second
+  # server stays up (a timeout alone stops the client, not the container).
+  local name="kutup-check-config-$$" status=0
+  out="$(KUTUP_SERVER_IMAGE="$registry/kutup-server:$tag" \
+    timeout 120 docker compose run --rm --no-deps -T --name "$name" backend check-config 2>&1)" || status=$?
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  if [ "$status" = 0 ]; then
+    echo "   $out"
+  else
+    printf '%s\n' "$out" >&2
+    echo "deploy: the new release refuses this server's settings (above)" >&2
+    return 1
+  fi
+}
+echo "== settings check"
+check_config
+
 if [ "$dry" = true ]; then
   rm -f "$record"
   echo "== dry run: would back up${wipe:+, wipe: $wipe}, check out $sha, set .env to $tag"
@@ -158,6 +189,7 @@ echo "== update: the commit's compose files and nginx config"
 # database, the bucket, .env and the running stack as they were.
 git checkout -q --detach "$sha"
 docker compose run --rm --no-deps --entrypoint nginx nginx -t
+check_config
 
 echo "== backups"
 since="$(date '+%Y-%m-%d %H:%M:%S')"

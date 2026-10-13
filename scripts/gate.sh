@@ -52,6 +52,8 @@ static() {
 
 rust_workspace() {
   step "Workspace tests"
+  # --workspace on purpose: feature unification turns on kutup-crypto's
+  # `mail` feature, and its vector tests need it (a per-crate run skips them).
   cargo test --locked --workspace --all-targets
 }
 
