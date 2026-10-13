@@ -19,6 +19,7 @@ COPY crates crates
 COPY scripts/build-chat-wasm.sh scripts/build-chat-wasm.sh
 COPY scripts/build-crypto-wasm.sh scripts/build-crypto-wasm.sh
 COPY scripts/build-pass-wasm.sh scripts/build-pass-wasm.sh
+COPY scripts/build-mail-search-wasm.sh scripts/build-mail-search-wasm.sh
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 # The workspace sources are touched before compiling, as Dockerfile.server
 # does: Cargo decides what to rebuild by file time, the target directories
@@ -33,6 +34,7 @@ RUN --mount=type=cache,id=kutup-browser-cargo-registry,target=/usr/local/cargo/r
     && find crates -type f -exec touch {} + \
     && bash scripts/build-crypto-wasm.sh \
     && bash scripts/build-pass-wasm.sh \
+    && bash scripts/build-mail-search-wasm.sh \
     && bash scripts/build-chat-wasm.sh
 
 FROM node:22-alpine AS builder

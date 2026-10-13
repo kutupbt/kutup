@@ -28,6 +28,7 @@ import { useRequiredSession } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { sanitizeSignature } from './sanitize'
+import { searchText } from './searchText'
 import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
 import { autocryptKey, openPgp } from './pgp'
 import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
@@ -131,7 +132,7 @@ export function membersOf<T extends Pick<MailMessage, 'id' | 'folder' | 'directi
 export const rowSeen = (row: MailMessage) => (row.conversation ? row.conversation.unread === 0 : row.seen)
 export const rowStarred = (row: MailMessage) => row.conversation?.starred ?? row.starred
 
-interface Page {
+export interface Page {
   messages: MailMessage[]
   next?: string | null
   /** With a numbered page: how many the place holds with these filters. */
@@ -473,6 +474,31 @@ async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, 
     }
   }
   return undefined
+}
+
+/**
+ * One message's text for body search (docs/plans/mail-body-search.md): opened
+ * as for reading (OpenPGP from outside decrypted too), signatures not checked,
+ * which search does not need.
+ */
+export async function openMessageText(account: MailAccount, message: MailMessage): Promise<string> {
+  const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
+  const opened = await openWithKeys(account, new Uint8Array(response.data))
+  const sender = message.from?.address
+  const outside = message.direction === 'inbound' && !!sender && !sender.endsWith(`@${account.domain}`)
+  const pgp = outside
+    ? await openPgp(
+        opened.data,
+        {
+          decrypt: (bytes, signerKey) => openWithKeys(account, bytes, signerKey),
+          verifyDetached: (signature, content, key) => verifyMailDetachedSignature(signature, content, key),
+          verifyCleartext: (text, key) => verifyMailCleartext(text, key),
+        },
+        [],
+      ).catch(() => null)
+    : null
+  const parsed = await parseMessage(pgp?.message ?? opened.data)
+  return searchText(message.subject, parsed)
 }
 
 /**

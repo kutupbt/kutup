@@ -9,6 +9,7 @@ import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { useContentSearch, useContentSearchState } from '@kutup/mail-core/contentSearch'
 import { notificationStatus, requestNotifications, showNotification, type NotificationStatus } from './desktopNotifications'
 import { registerMailtoHandler } from './mailto'
 
@@ -45,6 +46,30 @@ function NotificationSettings() {
           </Button>
         ) : status === 'default' ? (
           <Button onClick={() => void requestNotifications().then(setStatus)}>{t('notifications.enable')}</Button>
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+/** Proton's Clear browser data, for body search's index. */
+function ContentSearchSettings() {
+  const { t } = useTranslation()
+  const search = useContentSearch()
+  const state = useContentSearchState(search)
+  if (!search) return null
+  const kept = state.status !== 'off' || state.indexed > 0
+  return (
+    <section className="mt-8 space-y-3" aria-labelledby="content-search-heading">
+      <h2 id="content-search-heading" className="text-sm font-medium">
+        {t('contentSearch.settingsTitle')}
+      </h2>
+      <div className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+        <span className="text-sm text-muted-foreground">{kept ? t('contentSearch.settingsOn', { count: state.indexed }) : t('contentSearch.settingsOff')}</span>
+        {kept ? (
+          <Button variant="outline" onClick={() => void search.deleteAll().then(() => toast.success(t('contentSearch.deleted')))}>
+            {t('contentSearch.delete')}
+          </Button>
         ) : null}
       </div>
     </section>
@@ -161,6 +186,7 @@ export function GeneralSettingsPage() {
         />
       </div>
       <NotificationSettings />
+      <ContentSearchSettings />
       <section className="mt-8 space-y-3" aria-labelledby="images-heading">
         <h2 id="images-heading" className="text-sm font-medium">
           {t('remoteImages.settingsTitle')}

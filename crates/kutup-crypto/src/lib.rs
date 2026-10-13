@@ -30,6 +30,7 @@
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
 //! - [`contact_card`] — signed contact summaries and sealed contact cards.
 //! - [`mail_names`] — sealed names of mail folders, labels and filters.
+//! - [`mail_search`] — the browser's Mail search index at rest.
 //! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
@@ -58,6 +59,7 @@ pub mod local_state;
 #[cfg(feature = "mail")]
 pub mod mail_key;
 pub mod mail_names;
+pub mod mail_search;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;

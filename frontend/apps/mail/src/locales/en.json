@@ -1025,5 +1025,24 @@
     "test": "Send test notification",
     "testTitle": "You have a new email",
     "testBody": "This is how new mail will look."
+  },
+  "contentSearch": {
+    "title": "Search message content",
+    "hint": "Search the text of your messages, not only subjects and addresses. Kept encrypted in this browser.",
+    "enable": "Enable",
+    "enableTitle": "Search message content?",
+    "enableBody": "Mail downloads a copy of your messages to this browser, encrypted, to search their text. It takes a while for a large mailbox and carries on next time you open Mail.",
+    "progressLabel": "Message download status",
+    "progress": "Message download status: {{indexed}} of {{total}}",
+    "paused": "Downloading paused",
+    "pause": "Pause",
+    "resume": "Resume",
+    "limited": "For messages newer than {{date}} (this browser ran out of room).",
+    "results": "Results include message text, searched in this browser.",
+    "settingsTitle": "Message content search",
+    "settingsOn": "The text of {{count}} messages is kept encrypted in this browser for searching.",
+    "settingsOff": "Not kept in this browser.",
+    "delete": "Delete local search data",
+    "deleted": "Local search data deleted."
   }
 }

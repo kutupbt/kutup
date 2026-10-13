@@ -4040,6 +4040,227 @@ fn new_mail_notifications_list_unread_inbox_mail() {
 }
 
 #[test]
+fn body_search_lists_what_to_index_and_follows_changes() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let alice_address = set_up_address(&c, &base, &alice);
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = bob_address.address.split_once('@').unwrap().1.to_string();
+    let send = |subject: &str| -> String {
+        let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+            bob_address.address, alice_address.address
+        );
+        let split = mail_key::encrypt_split(
+            &[&alice_address.public_key, &bob_address.public_key],
+            &bob_address.secret_key,
+            mime.as_bytes(),
+        )
+        .unwrap();
+        let meta = json!({
+            "to": [{ "address": alice_address.address }],
+            "subject": subject,
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[1]), alice_address.address.clone(): b64(&split.key_packets[0]) },
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+            ]))
+            .send()
+            .unwrap();
+        assert!(r.status().is_success(), "send: {}", r.status());
+        message_id
+    };
+    let start: Value = bearer(
+        c.get(format!("{base}/api/mail/search-index/changes")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(start["changed"], json!([]));
+    let start = start["next"].as_str().unwrap().to_string();
+    let first = send("bir");
+    std::thread::sleep(Duration::from_millis(20));
+    let second = send("iki");
+    let first = wait_for(&c, &base, &alice, &first)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let second = wait_for(&c, &base, &alice, &second)["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // What to index: everything but Drafts, newest first, in pages.
+    let page = |before: Option<&str>| -> Value {
+        let mut request = bearer(c.get(format!("{base}/api/mail/search-index")), &alice.token)
+            .query(&[("limit", "1")]);
+        if let Some(before) = before {
+            request = request.query(&[("before", before)]);
+        }
+        request.send().unwrap().json().unwrap()
+    };
+    let one = page(None);
+    assert_eq!(one["total"], 2);
+    assert_eq!(one["messages"][0]["id"], second.as_str());
+    let two = page(one["next"].as_str());
+    assert_eq!(two["messages"][0]["id"], first.as_str());
+    assert!(two["next"].is_null());
+
+    // The change feed (Proton's event loop for local search): from where it
+    // was before the mail came, the two new messages; then a move, a label
+    // and a star; then a deletion, as a tombstone with its time. Changes of
+    // transactions still running wait, so each check polls a little.
+    let changes = |token: &str, since: Option<&str>| -> Value {
+        let mut request = bearer(
+            c.get(format!("{base}/api/mail/search-index/changes")),
+            token,
+        );
+        if let Some(since) = since {
+            request = request.query(&[("since", since)]);
+        }
+        let r = request.send().unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        r.json().unwrap()
+    };
+    // Everything up to now, followed page by page (one change a page).
+    let follow = |since: &str,
+                  until: &dyn Fn(&[Value], &[Value]) -> bool|
+     -> (Vec<Value>, Vec<Value>, String) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let (mut changed, mut gone, mut cursor) = (Vec::new(), Vec::new(), since.to_string());
+        loop {
+            let page: Value = bearer(
+                c.get(format!("{base}/api/mail/search-index/changes")),
+                &alice.token,
+            )
+            .query(&[("since", cursor.as_str()), ("limit", "1")])
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+            assert_eq!(page["resync"], false);
+            changed.extend(page["changed"].as_array().unwrap().iter().cloned());
+            gone.extend(page["gone"].as_array().unwrap().iter().cloned());
+            cursor = page["next"].as_str().unwrap().to_string();
+            if page["more"] == true {
+                continue;
+            }
+            if until(&changed, &gone) {
+                return (changed, gone, cursor);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the feed did not catch up: {changed:?} {gone:?}"
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    let ids_of = |rows: &[Value]| -> Vec<String> {
+        rows.iter()
+            .map(|m| m["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (changed, gone, cursor) = follow(&start, &|changed, _| {
+        let ids = ids_of(changed);
+        ids.contains(&first) && ids.contains(&second)
+    });
+    assert!(gone.is_empty());
+    assert!(changed.iter().all(|m| m["folder"] == "inbox"));
+
+    let patch = |body: Value| {
+        let r = bearer(c.patch(format!("{base}/api/mail/messages")), &alice.token)
+            .json(&body)
+            .send()
+            .unwrap();
+        assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    };
+    patch(json!({ "ids": [first], "folder": "archive" }));
+    let (changed, _, cursor) = follow(&cursor, &|changed, _| {
+        changed
+            .iter()
+            .any(|m| m["id"] == first.as_str() && m["folder"] == "archive")
+    });
+    assert!(
+        !ids_of(&changed).contains(&second),
+        "only what changed: {changed:?}"
+    );
+    let label = uuid::Uuid::new_v4().to_string();
+    let name = sealed_name(
+        &alice,
+        &alice_address.address,
+        kutup_crypto::mail_names::MailNameKind::Label,
+        &label,
+        "Faturalar",
+    );
+    let r = bearer(c.post(format!("{base}/api/mail/labels")), &alice.token)
+        .json(&json!({ "id": label, "name": name, "color": "#22aa55" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201);
+    patch(json!({ "ids": [second], "addLabels": [label] }));
+    let (_, _, cursor) = follow(&cursor, &|changed, _| {
+        changed
+            .iter()
+            .any(|m| m["id"] == second.as_str() && m["labels"] == json!([label]))
+    });
+    patch(json!({ "ids": [second], "starred": true }));
+    let (_, _, cursor) = follow(&cursor, &|changed, _| {
+        changed
+            .iter()
+            .any(|m| m["id"] == second.as_str() && m["starred"] == true)
+    });
+    patch(json!({ "ids": [second], "folder": "trash" }));
+    let r = bearer(
+        c.post(format!("{base}/api/mail/messages/delete")),
+        &alice.token,
+    )
+    .json(&json!({ "ids": [second] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.json::<Value>().unwrap()["updated"], 1);
+    let (_, gone, _) = follow(&cursor, &|_, gone| ids_of(gone).contains(&second));
+    let tombstone = gone.iter().find(|g| g["id"] == second.as_str()).unwrap();
+    assert!(tombstone["receivedAt"].is_string());
+
+    // A cursor ahead of the server (a restored database) asks for a rebuild.
+    let ahead = changes(
+        &alice.token,
+        Some("999999999999.00000000-0000-0000-0000-000000000000"),
+    );
+    assert_eq!(ahead["resync"], true);
+
+    // Another account's feed holds none of it; a cursor must be one.
+    let theirs = changes(&bob.token, None);
+    let theirs = changes(&bob.token, theirs["next"].as_str());
+    assert!(!ids_of(theirs["changed"].as_array().unwrap()).contains(&first));
+    for bad in [
+        "nope",
+        "-1.00000000-0000-0000-0000-000000000000",
+        "1.notauuid",
+    ] {
+        let r = bearer(
+            c.get(format!("{base}/api/mail/search-index/changes")),
+            &alice.token,
+        )
+        .query(&[("since", bad)])
+        .send()
+        .unwrap();
+        assert_eq!(r.status().as_u16(), 400, "{bad}");
+    }
+}
+
+#[test]
 fn senders_whose_images_always_load() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");

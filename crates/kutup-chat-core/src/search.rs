@@ -39,8 +39,6 @@ use std::rc::Rc;
 
 use kutup_chat_proto::ChatContent;
 use serde::{Deserialize, Serialize};
-use unicode_normalization::char::is_combining_mark;
-use unicode_normalization::UnicodeNormalization;
 
 use crate::db::{
     ChatDb, ImportedHistoryRecordV1, InboxMessage, MlsHistoryMessage, Pending, SentMessage,
@@ -57,49 +55,16 @@ pub(crate) const SHARD_CHARS: usize = 3;
 pub(crate) const BUCKET_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Encoded size of the decoded records kept between queries.
 pub(crate) const CACHE_BYTES: usize = 4 * 1024 * 1024;
-/// Longer words are cut to this many characters (a query word is too).
-const MAX_WORD_CHARS: usize = 64;
 const DIRECTORY_KEY: &[u8] = b"search/directory";
 /// Terms that are not words start with a control character, which [`words`]
 /// never yields.
 const MESSAGE_TERM: char = '\u{1}';
 const TARGET_TERM: char = '\u{2}';
 
-/// Folds text for searching: Turkish dotted and dotless I to i, accents
-/// removed (canonical decomposition, combining marks dropped), lowercase.
-pub fn fold(text: &str) -> String {
-    let turkish: String = text
-        .chars()
-        .map(|c| match c {
-            'İ' | 'I' | 'ı' => 'i',
-            other => other,
-        })
-        .collect();
-    turkish
-        .nfkd()
-        .filter(|c| !is_combining_mark(*c))
-        .flat_map(char::to_lowercase)
-        .nfkd()
-        .filter(|c| !is_combining_mark(*c))
-        .collect()
-}
-
-/// The distinct folded words of `text`: runs of letters and digits.
-pub fn words(text: &str) -> Vec<String> {
-    let folded = fold(text);
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for word in folded.split(|c: char| !c.is_alphanumeric()) {
-        if word.is_empty() {
-            continue;
-        }
-        let word: String = word.chars().take(MAX_WORD_CHARS).collect();
-        if seen.insert(word.clone()) {
-            out.push(word);
-        }
-    }
-    out
-}
+// Folding and words are shared with Mail's index (`kutup-search`).
+#[cfg(test)]
+use kutup_search::fold;
+pub use kutup_search::words;
 
 /// One indexed entry, as a shard holds it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
