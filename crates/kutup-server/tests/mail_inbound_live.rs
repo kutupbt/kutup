@@ -899,7 +899,7 @@ fn sending_safety() {
     .unwrap();
     let row = senders
         .as_array()
-        .unwrap()
+        .unwrap_or_else(|| panic!("senders: {senders}"))
         .iter()
         .find(|s| s["userId"] == bouncer.id.as_str())
         .expect("paused sender listed");

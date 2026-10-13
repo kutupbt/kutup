@@ -247,7 +247,7 @@ pub async fn list_reports(
     let rows: Vec<ReportRow> = sqlx::query_as(if resolved {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at,
-                u.id, COALESCE(u.email, ''), u.username, u.is_active,
+                u.id, COALESCE(u.email, '') AS email, u.username, u.is_active,
                 (SELECT COUNT(*) FROM public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM public_link_reports r
            JOIN public_shares p ON p.id = r.share_id
@@ -257,7 +257,7 @@ pub async fn list_reports(
     } else {
         "SELECT r.id, r.reason, r.details, r.link, r.created_at, r.resolved_at, r.resolution,
                 p.id, p.share_type, p.created_at, p.removed_at,
-                u.id, COALESCE(u.email, ''), u.username, u.is_active,
+                u.id, COALESCE(u.email, '') AS email, u.username, u.is_active,
                 (SELECT COUNT(*) FROM public_link_reports o WHERE o.share_id = p.id AND o.resolved_at IS NULL)
            FROM public_link_reports r
            JOIN public_shares p ON p.id = r.share_id
@@ -314,7 +314,7 @@ pub async fn list_reports(
 async fn open_report(pool: &PgPool, id: &str) -> AppResult<(Uuid, Uuid, Uuid, String)> {
     let id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
     let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT p.id, p.owner_user_id, COALESCE(u.email, '')
+        "SELECT p.id, p.owner_user_id, COALESCE(u.email, '') AS email
            FROM public_link_reports r
            JOIN public_shares p ON p.id = r.share_id
            JOIN users u ON u.id = p.owner_user_id

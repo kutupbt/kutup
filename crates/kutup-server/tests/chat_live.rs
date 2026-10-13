@@ -75,16 +75,27 @@ fn login_with_password(c: &Client, base: &str, name: &str, password: &str) -> St
         .unwrap()
         .json()
         .unwrap();
-    if preflight["accountProtectionSuite"] == 0 {
-        let bootstrap: Value = c
-            .post(format!("{base}/api/auth/login"))
-            .json(&json!({ "name": name, "loginKey": b64(password.as_bytes()) }))
-            .send()
-            .unwrap()
-            .json()
-            .unwrap();
-        assert_eq!(bootstrap["requiresSetup"], true);
-        let setup_token = bootstrap["setupToken"].as_str().expect("setup token");
+    // Every account, the administrator awaiting its setup too, derives its
+    // login key under the salt preflight answers.
+    let derived = kutup_crypto::kdf::derive_account_protection_keys_b64(
+        password,
+        preflight["accountProtectionSalt"].as_str().unwrap(),
+        kutup_crypto::kdf::AccountProtectionParameters {
+            memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
+            iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
+            parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
+        },
+    )
+    .unwrap();
+    let response = c
+        .post(format!("{base}/api/auth/login"))
+        .json(&json!({ "name": name, "loginKey": b64(derived.login_key.as_slice()) }))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "test admin login");
+    let login: Value = response.json().unwrap();
+    if login["requiresSetup"] == true {
+        let setup_token = login["setupToken"].as_str().expect("setup token");
         let mut rng = rand::thread_rng();
         let mut master_key = [0u8; 32];
         let mut recovery_entropy = [0u8; 32];
@@ -138,27 +149,7 @@ fn login_with_password(c: &Client, base: &str, name: &str, password: &str) -> St
             .unwrap()
             .to_string();
     }
-    let parameters = kutup_crypto::kdf::AccountProtectionParameters {
-        memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
-        iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
-        parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
-    };
-    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
-        password,
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-        parameters,
-    )
-    .unwrap();
-    let response = c
-        .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "name": name, "loginKey": b64(keys.login_key.as_slice()) }))
-        .send()
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "test admin login");
-    response.json::<Value>().unwrap()["accessToken"]
-        .as_str()
-        .unwrap()
-        .to_string()
+    login["accessToken"].as_str().unwrap().to_string()
 }
 
 /// Registers a fresh account and returns `(key binding, username, access_token, …)`.

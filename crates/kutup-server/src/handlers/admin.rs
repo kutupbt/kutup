@@ -113,7 +113,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT id, COALESCE(email, ''), COALESCE(username, ''), storage_quota_bytes, storage_used_bytes,
+        r#"SELECT id, COALESCE(email, '') AS email, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, totp_enabled, is_first_login, created_at
            FROM users ORDER BY created_at DESC"#,
     )
@@ -388,7 +388,7 @@ pub async fn delete_user(
 
     // Break-glass admin can never be deleted.
     let (target_email, target_username): (String, Option<String>) =
-        sqlx::query_as("SELECT COALESCE(email, ''), username FROM users WHERE id = $1")
+        sqlx::query_as("SELECT COALESCE(email, '') AS email, username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await
@@ -1840,7 +1840,7 @@ pub async fn wipe_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT COALESCE(email, ''), username FROM users WHERE id = $1")
+        sqlx::query_as("SELECT COALESCE(email, '') AS email, username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
