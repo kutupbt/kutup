@@ -152,7 +152,8 @@ fn http_and_socket_refuse_the_same_frames() {
     );
     assert_eq!(status, StatusCode::FORBIDDEN);
     // A device that is not the caller's is not accepted at all.
-    let (status, _) = post(
+    // (deviceNotAuthorized: the client registers its own, it is not signed out).
+    let (status, body) = post(
         &c,
         &base,
         &viewer,
@@ -160,7 +161,8 @@ fn http_and_socket_refuse_the_same_frames() {
         mine.id,
         frame(&file, &mine.seed, mine.id, 7, |_| {}),
     );
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "deviceNotAuthorized");
 
     // The same bad frames over the socket, then one good frame: only the
     // good one is kept.
