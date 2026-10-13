@@ -106,6 +106,10 @@ pub struct Config {
     /// Test stacks: every rate limit's default raised (`RATE_LIMITS_RELAXED`;
     /// APP_ENV=test only).
     pub rate_limits_relaxed: bool,
+    /// Who may register on a database with no setting yet
+    /// (`REGISTRATION_MODE`: on, code or off; default off). The
+    /// administrators' choice wins from then on (docs/plans/registration-codes.md).
+    pub registration_mode: crate::registration::RegistrationMode,
     /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
     /// the server reports no groups, refuses the group routes, and the apps
     /// show direct chats only; groups made earlier stay stored, unreachable.
@@ -320,6 +324,12 @@ impl Config {
             env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
         }
         crate::ratelimit::configure(env, rate_limits_relaxed);
+        let registration_mode = crate::registration::RegistrationMode::parse(&env.choice(
+            "REGISTRATION_MODE",
+            "off",
+            &["on", "code", "off"],
+        ))
+        .unwrap_or(crate::registration::RegistrationMode::Off);
         let federation_test_allow_private = env.bool("FEDERATION_TEST_ALLOW_PRIVATE", false);
         if federation_test_allow_private && app_env != "test" {
             env.error("FEDERATION_TEST_ALLOW_PRIVATE may only be enabled with APP_ENV=test");
@@ -444,6 +454,7 @@ impl Config {
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
             federation_test_allow_private,
             rate_limits_relaxed,
+            registration_mode,
             chat_groups: get_env_bool("CHAT_GROUPS", true),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),

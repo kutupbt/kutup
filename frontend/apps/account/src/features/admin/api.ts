@@ -8,10 +8,14 @@ import type {
   AdminSettings,
   AdminStats,
   BulkFederationPeerRetryResponse,
+  CreatedRegistrationCode,
   FederationDomainRule,
   FederationMinimumTrust,
   FederationMode,
   FederationPeerEvidence,
+  RegistrationCode,
+  RegistrationCodeUse,
+  SignedUpWith,
   UserRow,
 } from '@kutup/session/api-types'
 
@@ -170,6 +174,45 @@ export function useAdminSettings() {
 export function useUpdateAdminSettings() {
   return useAdminMutation(async (body: Partial<AdminSettings>) => {
     await api.put('/admin/settings', body)
+  })
+}
+
+// --- referral codes (docs/plans/registration-codes.md) -------------------
+
+const codesKey = [...adminKey, 'registration-codes'] as const
+
+export function useRegistrationCodes() {
+  return useQuery({
+    queryKey: codesKey,
+    queryFn: async () => (await api.get<RegistrationCode[]>('/admin/registration-codes')).data,
+  })
+}
+
+/** Makes a code; the result holds its text, which the server never returns again. */
+export function useCreateRegistrationCode() {
+  return useAdminMutation(
+    async (body: { note: string; expiresAt: string | null; maxUses: number | null }) =>
+      (await api.post<CreatedRegistrationCode>('/admin/registration-codes', body)).data,
+  )
+}
+
+export function useRevokeRegistrationCode() {
+  return useAdminMutation(async (id: string) => (await api.post<RegistrationCode>(`/admin/registration-codes/${id}/revoke`)).data)
+}
+
+export function useRegistrationCodeUses(id: string | null) {
+  return useQuery({
+    queryKey: [...codesKey, id, 'uses'],
+    enabled: id !== null,
+    queryFn: async () => (await api.get<RegistrationCodeUse[]>(`/admin/registration-codes/${id}/uses`)).data,
+  })
+}
+
+/** The code an account signed up with, or null. */
+export function useUserRegistrationCode(userId: string) {
+  return useQuery({
+    queryKey: [...usersKey, userId, 'registration-code'],
+    queryFn: async () => (await api.get<SignedUpWith | null>(`/admin/users/${userId}/registration-code`)).data,
   })
 }
 

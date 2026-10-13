@@ -3,7 +3,7 @@ import { Copy } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import type { UserRow } from '@kutup/session/api-types'
@@ -28,6 +28,7 @@ import {
   useForceDisable2fa,
   useRotateTempPassword,
   useUpdateUser,
+  useUserRegistrationCode,
   useWipeUser,
 } from './api'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
@@ -116,6 +117,33 @@ type Pending =
   | { kind: 'rotate'; password: string }
   | { kind: 'wipe'; password: string }
   | { kind: 'delete' }
+
+/** Which referral code the account signed up with (docs/plans/registration-codes.md). */
+function SignedUpWithFact({ userId }: { userId: string }) {
+  const { t, i18n } = useTranslation()
+  const code = useUserRegistrationCode(userId)
+  if (code.isPending || code.isError) return null
+  return (
+    <Fact label={t('admin.user.signedUpWith')}>
+      {code.data ? (
+        <>
+          <Link to="/admin/codes" className="font-medium text-primary hover:underline">
+            <Mono>…{code.data.hint}</Mono>
+          </Link>
+          {code.data.note ? <span className="text-muted-foreground"> · {code.data.note}</span> : null}
+          <div className="text-xs text-muted-foreground">
+            {t('admin.user.signedUpWithBy', {
+              name: code.data.createdBy ?? t('admin.activity.deletedUser'),
+              when: formatInstant(code.data.usedAt, i18n.language),
+            })}
+          </div>
+        </>
+      ) : (
+        t('admin.user.noReferralCode')
+      )}
+    </Fact>
+  )
+}
 
 export function UserPage() {
   const { t, i18n } = useTranslation()
@@ -250,6 +278,7 @@ export function UserPage() {
             {formatBytes(user.storageUsedBytes, lang)} / {formatBytes(user.storageQuotaBytes, lang)}
           </Fact>
           <Fact label={t('admin.users.columns.twoFactor')}>{user.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</Fact>
+          <SignedUpWithFact userId={user.id} />
         </CardContent>
       </Card>
 

@@ -214,10 +214,15 @@ const registered = new WeakSet<AccountKeys>()
  * same keys when the sign-in half failed (a rate limit, a lost connection):
  * the account is created once, and a retry only signs in.
  */
-export async function registerAndSignIn(username: string, keys: AccountKeys): Promise<void> {
+export async function registerAndSignIn(username: string, keys: AccountKeys, registrationCode?: string): Promise<void> {
   if (!registered.has(keys)) {
     const driveKeyBinding = await driveKeyBindingFor(keys, username)
-    await api.post('/auth/register', { username, ...registrationBody(keys), driveKeyBinding })
+    await api.post('/auth/register', {
+      username,
+      ...(registrationCode ? { registrationCode } : {}),
+      ...registrationBody(keys),
+      driveKeyBinding,
+    })
     registered.add(keys)
   }
   const { data } = await api.post<LoginResponse>('/auth/login', { name: username, loginKey: keys.loginKey })

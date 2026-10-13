@@ -18,7 +18,12 @@ use kutup_crypto::{
     kdf, mnemonic,
 };
 
-pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -> Result<()> {
+pub fn run(
+    json: bool,
+    server_flag: Option<&str>,
+    username_flag: Option<&str>,
+    code_flag: Option<&str>,
+) -> Result<()> {
     let b64 = base64::engine::general_purpose::STANDARD;
 
     let mut server = server_flag.unwrap_or("").to_string();
@@ -111,6 +116,11 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
 
     let req = RegisterRequest {
         username: username.clone(),
+        registration_code: code_flag
+            .map(str::to_owned)
+            .or_else(|| std::env::var("KUTUP_REGISTRATION_CODE").ok())
+            .map(|code| code.trim().to_owned())
+            .filter(|code| !code.is_empty()),
         key_binding: key_binding.clone(),
         login_key: b64.encode(account_keys.login_key.as_slice()),
         master_key_envelope,

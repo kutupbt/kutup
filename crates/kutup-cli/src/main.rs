@@ -55,6 +55,10 @@ enum Commands {
         /// Username (3-32 chars: lowercase letters, numbers, _ and -).
         #[arg(long)]
         username: Option<String>,
+        /// Referral code, when the server's registration needs one (also
+        /// KUTUP_REGISTRATION_CODE).
+        #[arg(long)]
+        code: Option<String>,
     },
     /// Authenticate and store session.
     Login {
@@ -244,9 +248,16 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
-        Commands::Register { server, username } => {
-            commands::register::run(cli.json, server.as_deref(), username.as_deref())
-        }
+        Commands::Register {
+            server,
+            username,
+            code,
+        } => commands::register::run(
+            cli.json,
+            server.as_deref(),
+            username.as_deref(),
+            code.as_deref(),
+        ),
         Commands::Login { server, username } => commands::login::run(
             &cli.profile,
             cli.json,

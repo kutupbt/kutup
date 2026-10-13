@@ -39,6 +39,7 @@ mod openapi;
 mod photos;
 mod public_fetch;
 mod ratelimit;
+mod registration;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
@@ -665,6 +666,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/auth/register",
             post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
+        )
+        .route(
+            "/api/auth/registration-code/check",
+            post(auth::check_registration_code)
+                .route_layer(from_fn(middleware::rate_limit_registration_code_check)),
         )
         .route(
             "/api/auth/login/preflight",
@@ -2023,6 +2029,23 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
+                )
+                .route(
+                    "/api/admin/registration-codes",
+                    get(handlers::registration_codes::list)
+                        .post(handlers::registration_codes::create),
+                )
+                .route(
+                    "/api/admin/registration-codes/:id/revoke",
+                    post(handlers::registration_codes::revoke),
+                )
+                .route(
+                    "/api/admin/registration-codes/:id/uses",
+                    get(handlers::registration_codes::uses),
+                )
+                .route(
+                    "/api/admin/users/:id/registration-code",
+                    get(handlers::registration_codes::user_code),
                 )
                 .route("/api/admin/maps", get(maps::admin_get).put(maps::admin_put))
                 .route(

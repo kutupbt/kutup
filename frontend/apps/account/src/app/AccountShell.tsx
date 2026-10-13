@@ -1,6 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, Ticket, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -63,6 +63,7 @@ export function AccountShell() {
             <>
               <SectionLabel>{t('nav.admin')}</SectionLabel>
               <SidebarNavLink to="/admin/users" icon={<Users />} label={t('nav.users')} />
+              <SidebarNavLink to="/admin/codes" icon={<Ticket />} label={t('nav.referralCodes')} />
               <SidebarNavLink to="/admin/reports" icon={<Flag />} label={t('nav.reports')} />
               <SidebarNavLink to="/admin/feedback" icon={<MessageSquareText />} label={t('nav.feedback')} />
               <SidebarNavLink to="/admin/activity" icon={<Activity />} label={t('nav.activity')} />

@@ -711,17 +711,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     responses((status = 200, description = "Site settings", body = crate::models::AdminSettingsResponse))
 )]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT key, value FROM site_settings WHERE key IN ('registration_enabled')",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|_| AppError::internal("internal error"))?;
-    let registration_enabled = rows
-        .iter()
-        .find(|(key, _)| key == "registration_enabled")
-        .map(|(_, value)| value != "false")
-        .unwrap_or(true);
+    let registration_mode = crate::registration::mode(&state).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -736,7 +726,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     .await?;
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     Ok(Json(json!({
-        "registrationEnabled": registration_enabled,
+        "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
@@ -747,7 +737,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
-    registration_enabled: Option<bool>,
+    registration_mode: Option<crate::registration::RegistrationMode>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
@@ -767,7 +757,7 @@ pub async fn update_settings(
     admin: AdminUser,
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
-    if req.registration_enabled.is_none()
+    if req.registration_mode.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
@@ -794,15 +784,8 @@ pub async fn update_settings(
     }
 
     let mut transaction = state.pool.begin().await?;
-    if let Some(enabled) = req.registration_enabled {
-        sqlx::query(
-            "INSERT INTO site_settings (key, value) VALUES ('registration_enabled', $1) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        )
-        .bind(if enabled { "true" } else { "false" })
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| AppError::internal("internal error"))?;
+    if let Some(mode) = req.registration_mode {
+        crate::registration::set_mode(&mut transaction, mode).await?;
     }
     for (key, value) in [
         (
@@ -836,7 +819,7 @@ pub async fn update_settings(
         "settings.update",
         None,
         json!({
-            "registrationEnabled": req.registration_enabled,
+            "registrationMode": req.registration_mode,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
