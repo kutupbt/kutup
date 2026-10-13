@@ -364,7 +364,7 @@ jobs:
         run: npm exec -- playwright test specs/55-contacts.spec.ts specs/56-contact-pickers.spec.ts specs/74-contact-shields.spec.ts --project=chromium
       - name: Run the Pass browser specs
         working-directory: tests/e2e
-        run: npm exec -- playwright test specs/76-pass-vault.spec.ts specs/77-pass-merge.spec.ts specs/78-pass-offline.spec.ts specs/79-pass-unlock.spec.ts specs/150-pass-import.spec.ts specs/151-pass-pin.spec.ts specs/152-pass-site-icons.spec.ts specs/153-pass-custom-icons.spec.ts --project=chromium
+        run: npm exec -- playwright test specs/76-pass-vault.spec.ts specs/77-pass-merge.spec.ts specs/78-pass-offline.spec.ts specs/79-pass-unlock.spec.ts specs/150-pass-import.spec.ts specs/151-pass-pin.spec.ts specs/152-pass-site-icons.spec.ts specs/153-pass-custom-icons.spec.ts specs/154-pass-vault-keys.spec.ts --project=chromium
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single

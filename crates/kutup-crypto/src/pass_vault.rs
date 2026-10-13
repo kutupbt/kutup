@@ -46,7 +46,10 @@ pub struct VaultSecret {
 impl std::fmt::Debug for VaultSecret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VaultSecret")
-            .field("password_hash", &self.password_hash.as_ref().map(|_| "[redacted]"))
+            .field(
+                "password_hash",
+                &self.password_hash.as_ref().map(|_| "[redacted]"),
+            )
             .field(
                 "generated_password",
                 &self.generated_password.as_ref().map(|_| "[redacted]"),
@@ -333,8 +336,16 @@ mod tests {
         both.generated_password = Some(Zeroizing::new("b".into()));
         assert!(seal(&both).is_err());
         assert!(seal(&VaultSecret::generated("", None)).is_err());
-        assert!(seal(&VaultSecret::generated(&"x".repeat(MAX_PASSWORD_BYTES + 1), None)).is_err());
-        assert!(seal(&VaultSecret::chosen(None, Some(&[0; MAX_KEY_FILE_BYTES + 1]))).is_err());
+        assert!(seal(&VaultSecret::generated(
+            &"x".repeat(MAX_PASSWORD_BYTES + 1),
+            None
+        ))
+        .is_err());
+        assert!(seal(&VaultSecret::chosen(
+            None,
+            Some(&[0; MAX_KEY_FILE_BYTES + 1])
+        ))
+        .is_err());
         assert!(seal(&VaultSecret::chosen(None, Some(&[]))).is_err());
     }
 }

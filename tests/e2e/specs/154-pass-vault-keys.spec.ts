@@ -23,15 +23,15 @@ test('pass: a new vault gets a random key kept in the account, shown for KeePass
   await page.getByRole('button', { name: 'Vault actions' }).click()
   await page.getByRole('menuitem', { name: 'Show vault key…' }).click()
   const dialog = page.getByRole('dialog', { name: 'Key of Anahtarlı' })
-  await expect(dialog.getByLabel('Vault key')).toHaveCount(0)
+  await expect(dialog.getByLabel('Vault key', { exact: true })).toHaveCount(0)
   await dialog.getByLabel('Your Kutup password').fill('not my password')
   await dialog.getByRole('button', { name: 'Show key' }).click()
   await expect(dialog.getByText('That is not your Kutup password.')).toBeVisible({ timeout: 30_000 })
   await dialog.getByLabel('Your Kutup password').fill(PASSWORD)
   await dialog.getByRole('button', { name: 'Show key' }).click()
-  await expect(dialog.getByLabel('Vault key')).toHaveText('•••••-•••••-•••••-•••••-•••••', { timeout: 30_000 })
+  await expect(dialog.getByLabel('Vault key', { exact: true })).toHaveText('•••••-•••••-•••••-•••••-•••••', { timeout: 30_000 })
   await dialog.getByRole('button', { name: 'Show password' }).click()
-  const key = (await dialog.getByLabel('Vault key').textContent()) ?? ''
+  const key = (await dialog.getByLabel('Vault key', { exact: true }).textContent()) ?? ''
   expect(key).toMatch(/^[0-9a-hjkmnp-tv-z]{5}(-[0-9a-hjkmnp-tv-z]{5}){4}$/)
   await dialog.getByRole('button', { name: 'Copy vault key' }).click()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(key)

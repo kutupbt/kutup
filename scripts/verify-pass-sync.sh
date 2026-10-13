@@ -54,12 +54,11 @@ same() { [ "$1" = "$2" ] || fail "$3: got '$1', want '$2'"; }
 # A new mtime for the next local write.
 tick() { sleep 1.1; }
 
-EMAIL="pass$$-$(date +%s)@example.com"
-echo "==> account $EMAIL @ $KUTUP_SERVER"
-"$BIN" --profile "$A" register --server "$KUTUP_SERVER" --email "$EMAIL" \
-  --username "pass$(date +%s | tail -c 7)$((RANDOM % 100))" >/dev/null
-"$BIN" --profile "$A" login --server "$KUTUP_SERVER" --email "$EMAIL" >/dev/null
-"$BIN" --profile "$B" login --server "$KUTUP_SERVER" --email "$EMAIL" >/dev/null
+NAME="pass$(date +%s | tail -c 7)$((RANDOM % 100))"
+echo "==> account $NAME @ $KUTUP_SERVER"
+"$BIN" --profile "$A" register --server "$KUTUP_SERVER" --username "$NAME" >/dev/null
+"$BIN" --profile "$A" login --server "$KUTUP_SERVER" --username "$NAME" >/dev/null
+"$BIN" --profile "$B" login --server "$KUTUP_SERVER" --username "$NAME" >/dev/null
 pass "machine A registered, machine B signed in"
 
 FOLDER="$("$BIN" --profile "$A" --json mkdir "Passwords-$$" | jq -r .id)"
@@ -131,9 +130,15 @@ for m in "$A" "$B"; do
   same "$(vault get "$TMP/$m/vault.kdbx" Bank URL)" https://bank.example "$m: A's URL"
   same "$(vault get "$TMP/$m/vault.kdbx" Bank Notes)" "kept-key note" "$m: B's note"
 done
+# Kept as its hash only (the vaults saved by sync still open with the
+# password, above): there is no generated key to show.
+if "$BIN" --profile "$A" pass show-key "$FILE_ID" >/dev/null 2>"$TMP/show-key.err"; then
+  fail "a chosen password is not shown"
+fi
+grep -q "password chosen for it" "$TMP/show-key.err" || { cat "$TMP/show-key.err"; fail "show-key says why"; }
 "$BIN" --profile "$A" pass forget "$FILE_ID" >/dev/null
 same "$("$BIN" --profile "$A" --json pass ls | jq length)" 0 "kept keys after forget"
-pass "with the key kept in the account, sync merges without a password; forget removes it"
+pass "with the key kept in the account (its hash), sync merges without a password; forget removes it"
 
 # --- without the key: a conflict copy, as for any file ---
 tick

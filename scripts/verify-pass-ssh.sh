@@ -49,9 +49,9 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; exit 1; }
 
 export KUTUP_PASSWORD="pass-ssh-pw-$$-123456"
 export VAULT_PASSWORD="vault-pw-$$"
-EMAIL="passssh$$-$(date +%s)@example.com"
-"$BIN" --profile "$P" register --server "$KUTUP_SERVER" --email "$EMAIL" --username "pssh$(date +%s | tail -c 7)$((RANDOM % 100))" >/dev/null 2>&1
-"$BIN" --profile "$P" login --server "$KUTUP_SERVER" --email "$EMAIL" >/dev/null 2>&1
+NAME="pssh$(date +%s | tail -c 7)$((RANDOM % 100))"
+"$BIN" --profile "$P" register --server "$KUTUP_SERVER" --username "$NAME" >/dev/null 2>&1
+"$BIN" --profile "$P" login --server "$KUTUP_SERVER" --username "$NAME" >/dev/null 2>&1
 FOLDER="$("$BIN" --profile "$P" --json mkdir "Keys-$$" | jq -r .id)"
 mkdir -p "$TMP/sync"
 
