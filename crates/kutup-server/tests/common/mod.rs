@@ -79,6 +79,16 @@ pub fn register(c: &Client, base: &str) -> User {
     register_with(c, base, true)
 }
 
+/// Registers `username`, answering the registration's status (and not
+/// signing in).
+#[allow(dead_code)]
+pub fn register_named(c: &Client, base: &str, username: &str) -> reqwest::StatusCode {
+    match register_attempt(c, base, true, username.to_owned()) {
+        Ok(_) => reqwest::StatusCode::CREATED,
+        Err(status) => status,
+    }
+}
+
 /// An account as an older client makes it: no Drive key binding
 /// (docs/plans/drive-identity-pins.md).
 pub fn register_without_binding(c: &Client, base: &str) -> User {
@@ -86,10 +96,21 @@ pub fn register_without_binding(c: &Client, base: &str) -> User {
 }
 
 fn register_with(c: &Client, base: &str, binding: bool) -> User {
+    let tag = rand::thread_rng().next_u64() % 1_000_000_000;
+    match register_attempt(c, base, binding, format!("int{tag}")) {
+        Ok(user) => user,
+        Err(status) => panic!("register: {status}"),
+    }
+}
+
+fn register_attempt(
+    c: &Client,
+    base: &str,
+    binding: bool,
+    username: String,
+) -> Result<User, reqwest::StatusCode> {
     let mut rng = rand::thread_rng();
-    let tag = rng.next_u64() % 1_000_000_000;
     let key_binding = uuid::Uuid::new_v4().to_string();
-    let username = format!("int{tag}");
     let password = "integrity-pw-123456";
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -138,7 +159,9 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         .json(&body)
         .send()
         .unwrap();
-    assert!(r.status().is_success(), "register: {}", r.status());
+    if !r.status().is_success() {
+        return Err(r.status());
+    }
     let r = c
         .post(format!("{base}/api/auth/login"))
         .header("x-kutup-client", "cli")
@@ -159,7 +182,7 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         .unwrap()
         .to_string();
     let account = format!("{username}@{}", server_domain(c, base));
-    User {
+    Ok(User {
         id,
         binding: key_binding,
         login_key: b64(keys.login_key.as_slice()),
@@ -169,7 +192,7 @@ fn register_with(c: &Client, base: &str, binding: bool) -> User {
         token,
         identity,
         master_key,
-    }
+    })
 }
 
 pub fn me(c: &Client, base: &str, token: &str) -> Value {
