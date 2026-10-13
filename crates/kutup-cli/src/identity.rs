@@ -328,5 +328,13 @@ pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
         bail!("{account} has not signed their Drive keys yet");
     }
     // A new identity is trusted as seen, never as verified.
-    pin(ctx, me, account, &person.authority, PinUpdate::Accepted).map(drop)
+    match pin(ctx, me, account, &person.authority, PinUpdate::Accepted)? {
+        // The same person under another address: renamed. Following their
+        // rename moves the pin; trusting it here would pin them twice.
+        Recorded::KnownElsewhere { pin } => bail!(
+            "the identity at {account} is someone you already know as {}: their address changed, and it is followed once their rename is confirmed",
+            pin.account
+        ),
+        _ => Ok(()),
+    }
 }

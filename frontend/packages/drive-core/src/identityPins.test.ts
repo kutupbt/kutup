@@ -30,17 +30,20 @@ vi.mock('@kutup/crypto/identityPins', () => ({
   // Rust's identity_pins::record, modelled: first use pins, accepted or
   // verified replace (the old incarnation kept), the same authority keeps its history.
   recordIdentityPin: vi.fn(
-    (list: { pins: Pin[] }, account: string, authority: string, update: 'firstSeen' | 'accepted' | 'verified', since: string) => {
+    (current: { text: string; list: { pins: Pin[] } }, account: string, authority: string, update: 'firstSeen' | 'accepted' | 'verified', since: string) => {
+      const list = current.list
+      const out = (next: Record<string, unknown>, changed: boolean, result: Record<string, unknown>) =>
+        Promise.resolve({ pins: { text: JSON.stringify(next), list: next }, changed, result })
       if (recordOverride.next) {
         const result = recordOverride.next
         recordOverride.next = null
-        return Promise.resolve({ list, changed: false, result })
+        return out(list, false, result)
       }
       const pins = list.pins.map((pin) => ({ ...pin }))
       const at = pins.findIndex((pin) => pin.account === account)
       const state = update === 'verified' ? 'verified' : 'seen'
-      const unchanged = Promise.resolve({ list: { ...list, pins }, changed: false, result: { kind: 'unchanged' } })
-      const pinned = () => Promise.resolve({ list: { ...list, pins }, changed: true, result: { kind: 'pinned' } })
+      const unchanged = out({ ...list, pins }, false, { kind: 'unchanged' })
+      const pinned = () => out({ ...list, pins }, true, { kind: 'pinned' })
       if (at < 0) {
         pins.push({ account, authorityPublicKey: authority, state, since })
         pins.sort((a, b) => (a.account < b.account ? -1 : 1))
@@ -58,10 +61,15 @@ vi.mock('@kutup/crypto/identityPins', () => ({
       return pinned()
     },
   ),
-  sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, list: unknown) => Promise.resolve(JSON.stringify({ binding, revision, list }))),
+  EMPTY_PINS: { text: '{"pins":[]}', list: { pins: [] } },
+  sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, pins: { text: string }) =>
+    Promise.resolve(JSON.stringify({ binding, revision, list: JSON.parse(pins.text) as unknown })),
+  ),
   openIdentityPins: vi.fn((_m: string, binding: string, sealed: string) => {
     const parsed = JSON.parse(sealed) as { binding: string; revision: number; list: unknown }
-    return parsed.binding === binding ? Promise.resolve({ list: parsed.list, revision: parsed.revision }) : Promise.reject(new Error('another account'))
+    return parsed.binding === binding
+      ? Promise.resolve({ pins: { text: JSON.stringify(parsed.list), list: parsed.list }, revision: parsed.revision })
+      : Promise.reject(new Error('another account'))
   }),
 }))
 
@@ -259,6 +267,14 @@ describe('checkIdentity', () => {
     recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'verified' } }
     expect(await checkIdentity(me, 'alicia@kutup.dev')).toEqual({ kind: 'ok', verified: true })
     expect(server.pins).toBeNull()
+  })
+
+  it('says when the identity to accept is someone known under another address', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    publish('bob@kutup.dev', 'A')
+    recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'seen' } }
+    await expect(acceptIdentity(me, 'bob@kutup.dev')).rejects.toMatchObject({ other: 'alice@kutup.dev' })
   })
 
   it('writes back what it does not know: detached pins and later fields', async () => {

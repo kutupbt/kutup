@@ -320,6 +320,7 @@
     },
     "accept": "Yeni kimliğe güven",
     "acceptFailed": "Kaydedilemedi. Yeniden deneyin.",
+    "knownElsewhere": "Bu kimlik, {{other}} olarak tanıdığınız biri. Adresi değişmiş; adını değiştirdiği doğrulanınca izlenecek.",
     "shareAnyway": "Yine de paylaş",
     "verified": "{{name}} doğrulandı",
     "verify": "{{name}} kişisini doğrula",

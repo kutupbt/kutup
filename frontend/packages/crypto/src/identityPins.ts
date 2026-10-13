@@ -22,6 +22,8 @@ export interface IdentityPin {
   formerly?: string[]
   /** The newest rename verified for it: a later chain must hold it (no rollback). */
   renames?: { sequence: number; digest: string; [later: string]: unknown }
+  /** On a detached pin: why it left its address (`rename`: it comes back as it was; `replaced`: the user replaced it). */
+  detachedBy?: 'rename' | 'replaced'
   /** Fields from a later version: kept and written back as they are. */
   [later: string]: unknown
 }
@@ -58,17 +60,35 @@ export async function incarnationIdOfAuthority(authorityPublicKey: string): Prom
 }
 
 /**
- * Seals the pin list at `revision` (pins sorted by account), bound to the
- * account's key binding (`session.envelopeBinding`), never its address.
+ * The pin list as JavaScript holds it: `text` is the list's canonical JSON,
+ * exactly as Rust wrote it, and the only form passed back to Rust; `list` is
+ * a read-only view of it. JavaScript never re-serializes the list, so fields
+ * from a later version (numbers included) reach the next seal untouched.
  */
-export async function sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, list: IdentityPins): Promise<string> {
-  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, binding, revision, JSON.stringify(list))
+export interface PinsText {
+  text: string
+  list: IdentityPins
 }
 
-/** Opens the pin list of the account whose key binding is `binding`: the list and the revision it was sealed at. */
-export async function openIdentityPins(masterKeyBase64: string, binding: string, sealed: string): Promise<{ list: IdentityPins; revision: number }> {
+function pinsText(text: string): PinsText {
+  return { text, list: JSON.parse(text) as IdentityPins }
+}
+
+/** An empty list. */
+export const EMPTY_PINS: PinsText = pinsText('{"pins":[]}')
+
+/**
+ * Seals the pin list at `revision`, bound to the account's key binding
+ * (`session.envelopeBinding`), never its address.
+ */
+export async function sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pins: PinsText): Promise<string> {
+  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, binding, revision, pins.text)
+}
+
+/** Opens the pin list of the account whose key binding is `binding`, and the revision it was sealed at. */
+export async function openIdentityPins(masterKeyBase64: string, binding: string, sealed: string): Promise<{ pins: PinsText; revision: number }> {
   const opened = (await getCryptoWasm()).openIdentityPins(masterKeyBase64, binding, sealed)
-  return { list: JSON.parse(opened.value) as IdentityPins, revision: opened.revision }
+  return { pins: pinsText(opened.value), revision: opened.revision }
 }
 
 /**
@@ -96,18 +116,18 @@ export type PinUpdate = 'firstSeen' | 'accepted' | 'verified'
  * authority. The list after, and whether it changed.
  */
 export async function recordIdentityPin(
-  list: IdentityPins,
+  pins: PinsText,
   account: string,
   authorityPublicKey: string,
   update: PinUpdate,
   since: string,
-): Promise<{ list: IdentityPins; changed: boolean; result: Recorded }> {
-  const out = (await getCryptoWasm()).recordIdentityPin(JSON.stringify(list), account, authorityPublicKey, update, since) as {
+): Promise<{ pins: PinsText; changed: boolean; result: Recorded }> {
+  const out = (await getCryptoWasm()).recordIdentityPin(pins.text, account, authorityPublicKey, update, since) as {
     pins: string
     changed: boolean
     result: Recorded
   }
-  return { list: JSON.parse(out.pins) as IdentityPins, changed: out.changed, result: out.result }
+  return { pins: pinsText(out.pins), changed: out.changed, result: out.result }
 }
 
 /** A pin that had an address before, and where it is now (`null`: detached, not known). */
@@ -149,8 +169,8 @@ export type PinMatch =
   | { kind: 'moved'; pins: MovedPin[] }
   | { kind: 'new' }
 
-export async function lookupIdentityPin(list: IdentityPins, address: string, publishedAuthority: string | null): Promise<PinMatch> {
-  return (await getCryptoWasm()).lookupIdentityPin(JSON.stringify(list), address, publishedAuthority ?? undefined) as PinMatch
+export async function lookupIdentityPin(pins: PinsText, address: string, publishedAuthority: string | null): Promise<PinMatch> {
+  return (await getCryptoWasm()).lookupIdentityPin(pins.text, address, publishedAuthority ?? undefined) as PinMatch
 }
 
 /** What following a rename did. */
@@ -170,11 +190,11 @@ export interface RenameApplied {
  * rolls back the rename pinned.
  */
 export async function applyAccountRenameToPins(
-  list: IdentityPins,
+  pins: PinsText,
   authorityPublicKey: string,
   chain: readonly AccountRenameV1[],
-): Promise<{ list: IdentityPins; applied: RenameApplied }> {
-  const result = (await getCryptoWasm()).applyAccountRenameToPins(JSON.stringify(list), authorityPublicKey, JSON.stringify(chain))
-  const { pins, ...applied } = result as RenameApplied & { pins: string }
-  return { list: JSON.parse(pins) as IdentityPins, applied }
+): Promise<{ pins: PinsText; applied: RenameApplied }> {
+  const result = (await getCryptoWasm()).applyAccountRenameToPins(pins.text, authorityPublicKey, JSON.stringify(chain))
+  const { pins: text, ...applied } = result as RenameApplied & { pins: string }
+  return { pins: pinsText(text), applied }
 }

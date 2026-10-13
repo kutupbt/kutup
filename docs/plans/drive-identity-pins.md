@@ -115,9 +115,16 @@ statement at that sequence.
 most once in the whole list. Pins pushed off their address are kept in
 `detached`, never dropped: by a rename landing on their address, or by the
 user accepting another authority there. Their `account` is the last address
-they were known at. They keep their trust and history, so their own rename
-chain, or their return to that address, re-attaches them as they were. At
-most 256 are kept; past that, the oldest unverified go first, then the oldest.
+they were known at, and `detachedBy` says why they left it:
+- **`rename`:** their own rename chain, or their return to that address,
+  re-attaches them as they were.
+- **`replaced`:** the user put another identity there. They come back only
+  through their own rename chain. Met at that address again, they are a former
+  holder: `formerAddressTaken` on first sight, and only `seen` if accepted
+  again. A server replaying an old identity cannot get it trusted back silently.
+
+`detachedBy` is set on detached pins and only on them. At most 256 are kept;
+past that, the oldest unverified go first, then the oldest.
 
 **Fields added later (normative).** Every struct of the list (the list, a
 pin, an anchor) keeps fields it does not know. They are read past, kept, and
@@ -127,7 +134,11 @@ canonical. So an older app never strips a newer app's data, and a newer app
 can add fields without a new suite. A writer that adds something older readers
 would misread sets the list's `minReader` above their version (this reader is
 version 1). Those readers then refuse the list ("needs a newer app") instead of
-misreading it. `minReader` is never written as 1.
+misreading it. `minReader` is never written as 1. Numbers in later fields are
+integers or exactly representable values, since anything else could not
+round-trip to the canonical bytes. JavaScript never re-serializes the list: the
+browser holds the canonical text Rust wrote and hands that text back to Rust
+(`PinsText`). Its parsed objects are read-only views.
 
 **One set of rules for every app** (`identity_pins`, also through WASM), so
 a pin one app writes is never undone or misread by another. Drive, Chat core
@@ -139,7 +150,11 @@ and the CLI all go through them:
   - An address some pin had before gives `formerAddressTaken`: not pinned.
     Drive and the CLI say `changed`, and Chat quarantines.
   - An account already pinned under another name gives `knownElsewhere`: not
-    pinned twice. Its trust holds, and following its chain moves it.
+    pinned twice. Its trust holds, and following its chain moves it. When the
+    user tries to accept it at the new address, Drive says "someone you already
+    know as …" and the CLI's `kutup identity trust` fails with that message.
+    Fetching and applying the chain there needs the rename endpoints
+    (docs/plans/username-renames.md); until they land it stays this message.
   - `accepted` and `verified` replace another authority at the address. The
     replaced pin is detached and its incarnation is kept in `replaced`.
   - The same authority keeps its history.

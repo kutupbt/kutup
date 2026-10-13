@@ -2473,6 +2473,7 @@ fn pin_of(
         replaced: vec![],
         formerly: vec![],
         renames: None,
+        detached_by: None,
         unknown: Default::default(),
     }
 }

@@ -320,6 +320,7 @@
     },
     "accept": "Trust the new identity",
     "acceptFailed": "It could not be saved. Try again.",
+    "knownElsewhere": "This identity is someone you already know as {{other}}. Their address changed; it is followed once their renaming is confirmed.",
     "shareAnyway": "Share anyway",
     "verified": "{{name}} is verified",
     "verify": "Verify {{name}}",

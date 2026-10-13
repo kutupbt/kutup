@@ -175,6 +175,7 @@ fn plain(pin: (&str, &AccountIdentityKeysV1, PinState)) -> IdentityPinV1 {
         replaced: vec![],
         formerly: vec![],
         renames: None,
+        detached_by: None,
         unknown: Default::default(),
     }
 }
@@ -245,6 +246,28 @@ fn renames() -> RenameVectors {
     without_david
         .pins
         .retain(|pin| pin.account != "david@kutup.dev");
+    // Frank verified, then replaced by the user with another identity, which
+    // has since left the address.
+    let mut frank_replaced = after.clone();
+    identity_pins::record(
+        &mut frank_replaced,
+        "frank@example.org",
+        &b64(&frank),
+        PinUpdate::Verified,
+        SINCE,
+    )
+    .unwrap();
+    identity_pins::record(
+        &mut frank_replaced,
+        "frank@example.org",
+        &b64(&stranger),
+        PinUpdate::Accepted,
+        SINCE,
+    )
+    .unwrap();
+    frank_replaced
+        .pins
+        .retain(|pin| pin.account != "frank@example.org");
     // The renamed pin as only seen: verifying it keeps its former addresses.
     let mut seen_after = after.clone();
     seen_after.pins[0].state = PinState::Seen;
@@ -313,11 +336,25 @@ fn renames() -> RenameVectors {
             PinUpdate::Verified,
         ),
         record_case(
-            "the detached holder met at its last address: back with its trust",
+            "the holder a rename pushed off, met at its last address: back with its trust",
             &without_david,
             "david@kutup.dev",
             &erin,
             PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "an identity the user replaced, met at its address again: warned",
+            &frank_replaced,
+            "frank@example.org",
+            &frank,
+            PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "an identity the user replaced, accepted again: only seen",
+            &frank_replaced,
+            "frank@example.org",
+            &frank,
+            PinUpdate::Accepted,
         ),
     ];
     let anchored = |formerly: &[&str], anchor: Option<(u64, String)>| {
@@ -399,7 +436,7 @@ fn renames() -> RenameVectors {
         },
     ];
     let preserved = format!(
-        r#"{{"pins":[{{"account":"dave@kutup.dev","authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","formerly":["davey@kutup.dev"],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"detached":[{{"account":"frank@example.org","authorityPublicKey":"{}","state":"verified","since":"2026-10-12T09:00:00Z","note":null}}],"laterList":{{"a":[1,2]}}}}"#,
+        r#"{{"pins":[{{"account":"dave@kutup.dev","authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","formerly":["davey@kutup.dev"],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"detached":[{{"account":"frank@example.org","authorityPublicKey":"{}","state":"verified","since":"2026-10-12T09:00:00Z","detachedBy":"replaced","note":null}}],"laterList":{{"a":[1,2]}}}}"#,
         b64(&dave),
         digest(),
         b64(&frank)
@@ -449,6 +486,7 @@ fn pins() -> IdentityPinsV1 {
                 replaced: vec![],
                 formerly: vec![],
                 renames: None,
+                detached_by: None,
                 unknown: Default::default(),
             },
             IdentityPinV1 {
@@ -467,6 +505,7 @@ fn pins() -> IdentityPinsV1 {
                     digest: "5f".repeat(32),
                     unknown: Default::default(),
                 }),
+                detached_by: None,
                 unknown: Default::default(),
             },
             IdentityPinV1 {
@@ -477,6 +516,7 @@ fn pins() -> IdentityPinsV1 {
                 replaced: vec![carol_before.incarnation_id()],
                 formerly: vec![],
                 renames: None,
+                detached_by: None,
                 unknown: Default::default(),
             },
         ],

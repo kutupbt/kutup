@@ -116,6 +116,7 @@ fn identity_pins_sync_by_revision() {
             replaced: vec![],
             formerly: vec![],
             renames: None,
+            detached_by: None,
             unknown: Default::default(),
         }],
         ..Default::default()
