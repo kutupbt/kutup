@@ -57,8 +57,36 @@ impl FromRequestParts<AppState> for AuthUser {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
-        authenticate_access_token(state, &token).await
+        let user = authenticate_access_token(state, &token).await?;
+        if let Some(slot) = parts.extensions.get::<SessionVersionSlot>() {
+            *slot.0.lock().unwrap() = Some(user.session.version.clone());
+        }
+        Ok(user)
     }
+}
+
+/// Where an authenticated request leaves its account's session version for
+/// [`session_version_header`] to send back.
+#[derive(Clone, Default)]
+pub struct SessionVersionSlot(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+pub const SESSION_VERSION_HEADER: &str = "x-kutup-session-version";
+
+/// Stamps `X-Kutup-Session-Version` on every authenticated answer, so each
+/// app (on its own origin) notices a password, 2FA, role or key binding
+/// change made anywhere and re-reads its account (docs/api.md, "Session
+/// version"). Read in the same query that checks the session, so it is as
+/// fresh as the request's own authority.
+pub async fn session_version_header(mut req: Request, next: Next) -> Response {
+    let slot = SessionVersionSlot::default();
+    req.extensions_mut().insert(slot.clone());
+    let mut response = next.run(req).await;
+    if let Some(version) = slot.0.lock().unwrap().take() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&version) {
+            response.headers_mut().insert(SESSION_VERSION_HEADER, value);
+        }
+    }
+    response
 }
 
 /// An authenticated admin — mirrors `Required()` + `AdminRequired()`.

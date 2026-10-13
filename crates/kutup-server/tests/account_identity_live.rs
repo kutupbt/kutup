@@ -230,3 +230,37 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
         .unwrap();
     assert!(r.status().is_success(), "delete: {}", r.status());
 }
+
+#[test]
+fn answers_carry_the_session_version_and_errors_a_code() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let user = register(&c, &base);
+    let version = |token: &str| {
+        let response = bearer(c.get(format!("{base}/api/user/me")), token)
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        response
+            .headers()
+            .get("x-kutup-session-version")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .expect("session version header")
+    };
+    let first = version(&user.token);
+    assert_eq!(first.len(), 16);
+    assert_eq!(version(&user.token), first, "stable while nothing changes");
+    // A client error names a code, the status's default here.
+    let refused: Value = c
+        .get(format!("{base}/api/user/me"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(refused["code"], "unauthorized");
+}
