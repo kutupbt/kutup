@@ -1703,7 +1703,11 @@ fn chat_v1_contract() {
     assert_eq!(envs.len(), 1, "limit=1 returns one");
     assert_eq!(page["more"], true, "more pages");
     let c0 = envs[0]["cursor"].as_u64().unwrap();
-    assert_eq!(envs[0]["sender"], json!(account_a), "sender is A's full address");
+    assert_eq!(
+        envs[0]["sender"],
+        json!(account_a),
+        "sender is A's full address"
+    );
     let first_id = envs[0]["id"].as_str().unwrap().to_string();
     println!("ok  - drain page 1 (cursor={c0})");
 

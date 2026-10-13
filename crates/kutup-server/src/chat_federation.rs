@@ -1930,11 +1930,41 @@ fn validate_transaction(
             "federated recipient does not belong to this server",
         ));
     }
+    // Exactly the canonical spelling: what is stored and routed on is the
+    // string as sent, so `alice@Origin.Example` is refused here (400), not by
+    // the mailbox's check (a 500 the origin would retry forever).
+    if !is_canonical_account(&transaction.sender) || !is_canonical_account(&transaction.recipient) {
+        return Err(AppError::bad_request(
+            "federated accounts must be in canonical form",
+        ));
+    }
     Ok(())
+}
+
+/// Whether `value` is an account address exactly as Kutup spells it.
+fn is_canonical_account(value: &str) -> bool {
+    value
+        .parse::<AccountAddress>()
+        .is_ok_and(|address| address.canonical() == value)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn federated_accounts_must_be_spelled_canonically() {
+        assert!(super::is_canonical_account("alice@origin.example"));
+        for refused in [
+            "alice@Origin.Example",
+            "alice@origin.example.",
+            "alice@localhost",
+            "alice@10.0.0.1",
+            "Alice@origin.example",
+            "alice",
+        ] {
+            assert!(!super::is_canonical_account(refused), "{refused}");
+        }
+    }
+
     use super::delivery_request_id;
     use uuid::Uuid;
 
