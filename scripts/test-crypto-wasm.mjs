@@ -886,4 +886,36 @@ assert.deepEqual(crypto.deriveSafetyNumber('bob@example.org', two, 'alice@kutup.
 assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', one, safety.qrPayload), true)
 assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', two, safety.qrPayload), false)
 
+// OPAQUE sign-in (kutup-crypto opaque, suite 1): the browser's client against
+// the vectors' sealed setup and stored record gives the vectors' export key,
+// which opens the master key envelope; what must fail, fails.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/opaque-v1.json`, 'utf8'))
+  const server = crypto.OpaqueServer.open(v.sealedSetup, v.setupKey, v.setupKeyId)
+  assert.throws(() => crypto.OpaqueServer.open(v.sealedSetup, v.setupKey, v.setupKeyId + 1))
+  const signIn = (record, password, keyBinding = v.keyBinding) => {
+    const login = crypto.OpaqueLogin.start(password)
+    const started = server.loginStart(record, login.request, keyBinding)
+    const finalization = login.finish(started.response)
+    crypto.OpaqueServer.loginFinish(started.state, finalization)
+    return login
+  }
+  const login = signIn(v.storedRecord, v.password)
+  assert.equal(login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), v.masterKey)
+  assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, '9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0'))
+  assert.throws(() => login.finish('AAAA'), /already finished/)
+  assert.throws(() => signIn(v.storedRecord, 'wrong'), /authentication failed/)
+  assert.throws(() => signIn(undefined, v.password, 'nobody'), /authentication failed/)
+  // The password change: the new record, the new password, the new envelope only.
+  const changed = signIn(v.newStoredRecord, v.newPassword)
+  assert.equal(changed.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding), v.masterKey)
+  assert.throws(() => login.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding))
+  assert.throws(() => signIn(v.newStoredRecord, v.password), /authentication failed/)
+  // A registration made in the browser signs in, and its envelope opens.
+  const registration = crypto.OpaqueRegistration.start('browser password')
+  const record = crypto.OpaqueServer.record(registration.finish(server.registrationResponse(registration.request, v.keyBinding)))
+  const envelope = registration.sealMasterKey(v.masterKey, v.keyBinding)
+  assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
+}
+
 console.log('crypto WASM canonical vectors passed')

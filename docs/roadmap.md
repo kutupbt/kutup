@@ -92,6 +92,15 @@ Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 | Native Android upload key, Play App Signing/Console, and release metadata | external + each native app's repository (Android) |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
 
+### Dependency supply-chain checks
+
+Crypto dependencies are pinned exactly (`=x.y.z`, docs/cryptographic-dependencies.md)
+and locked in `Cargo.lock`, but nothing checks advisories, licences or duplicate
+versions automatically. Add `cargo deny` (advisories, bans, licences, sources) to
+the static gate, and consider `cargo vet` audits for the crypto crates
+(`opaque-ke`, `voprf`, `hpke-rs`, `pgp`, `dryoc`, `ed25519-dalek`). Raised in the
+OPAQUE review (2026-10-13).
+
 ---
 
 ## Important (should-have, can ship after v1)
