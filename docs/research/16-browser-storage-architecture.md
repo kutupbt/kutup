@@ -80,7 +80,9 @@ engine lock Kutup already has.
 3. **Format marker.** A plaintext `meta` entry names the format. A store in
    the old plaintext format is converted on first open: everything is read,
    then written encrypted and the plaintext deleted in one durable
-   transaction, so a crash leaves either the old store or the new one.
+   transaction, so a crash leaves either the old store or the new one. (Later removed: since the 2026-10 production reset a
+   database without the wrapped key is cleared and started fresh instead,
+   `docs/chat-protocol.md` "Browser storage".)
 4. **A timeline per conversation (Phase 2).** Phase 2a removes repeated
    work: history is loaded once per change and not at all when a reconcile
    committed nothing (the stores count their commits). Phase 2b adds a
