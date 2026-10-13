@@ -77,10 +77,11 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
 
 - `POST /api/auth/register` takes an optional `registrationCode`.
 - **Mode check:**
-  - `off`: 403 `registration_closed`.
-  - `code` with no code: 403 `registration_code_required`.
-- **Redeeming a code** happens in the transaction that creates the user, before the
-  user row:
+  - `off`: 403 `registrationClosed`.
+  - `code` with no code: 403 `registrationCodeRequired`.
+- **Redeeming a code** happens in the transaction that creates the user, right after
+  the user row (the code row's lock orders concurrent sign-ups; a refusal rolls
+  both back):
   ```sql
   UPDATE registration_codes SET uses = uses + 1
    WHERE code_hash = $1 AND revoked_at IS NULL
@@ -88,7 +89,7 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
      AND (max_uses IS NULL OR uses < max_uses)
   RETURNING id
   ```
-  - No row: 403 `registration_code_invalid`, one answer for unknown, expired,
+  - No row: 403 `registrationCodeInvalid`, one answer for unknown, expired,
     revoked and used up (no oracle).
   - Otherwise: insert the user and the `registration_code_uses` row, then commit.
   - Any later failure rolls the use back.
@@ -179,6 +180,6 @@ Who invited whom is `registration_code_uses.user_id` → `registration_codes.cre
     transaction);
   - `REGISTRATION_MODE` in the typed Config;
   - the auth-check rate limiter for code attempts;
-  - error codes in the shared list (`registration_closed`,
-    `registration_code_required`, `registration_code_invalid`).
+  - error codes in the shared list (`registrationClosed`,
+    `registrationCodeRequired`, `registrationCodeInvalid`).
 - **Base:** slate/integration.
