@@ -4,6 +4,7 @@
 //! (no stubs). See `docs/roadmap.md` / the rewrite branch for what remains.
 
 mod api;
+mod collab_device;
 mod collection_crypto;
 mod commands;
 mod config;
@@ -26,6 +27,7 @@ mod uploader;
 mod vaultsync;
 mod version_upload;
 mod whiteboard;
+mod yjs_sync;
 
 use clap::{Parser, Subcommand};
 
