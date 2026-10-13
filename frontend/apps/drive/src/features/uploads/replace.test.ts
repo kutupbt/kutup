@@ -53,12 +53,13 @@ beforeEach(() => {
 })
 
 describe('Replace', () => {
-  it('is offered for files on this server, office documents and whiteboards too, but not notes', () => {
+  it('is offered for files on this server, office documents and whiteboards too, but not what holds Yjs state', () => {
     expect(canReplace(folder, holder)).toBe(true)
     for (const name of ['plan.docx', 'sheet.xlsx', 'deck.pptx', 'scan.pdf', 'board.excalidraw', 'photo.jpg']) {
       expect(canReplace(folder, { ...holder, name }), name).toBe(true)
     }
-    for (const name of ['notes.md', 'todo.txt', 'main.rs']) {
+    // Notes, code and place lists: a whole-file version would break them.
+    for (const name of ['notes.md', 'todo.txt', 'main.rs', 'Trip.kutupmap']) {
       expect(canReplace(folder, { ...holder, name }), name).toBe(false)
     }
     expect(canReplace({ ...folder, canUpload: false }, holder)).toBe(false)
@@ -95,7 +96,7 @@ describe('Replace', () => {
   })
 
   it('goes on with its own open replacement when this browser remembers it', async () => {
-    mocks.streamVersionUpload.mockRejectedValue(new VersionUploading('u1'))
+    mocks.streamVersionUpload.mockRejectedValue(new VersionUploading('u1', 5, true))
     mocks.list.mockResolvedValue([pending('u0'), pending('u1')])
     mocks.resumeUpload.mockResolvedValue({ fileId: 'f1', version: true })
     expect(await replaceContent(folder, holder, file, { signal })).toEqual({ done: { fileId: 'f1', version: true } })
@@ -103,7 +104,7 @@ describe('Replace', () => {
   })
 
   it('offers to start again only when its own open replacement stopped an hour ago', async () => {
-    mocks.streamVersionUpload.mockRejectedValue(new VersionUploading('u1', ABANDONED_VERSION_UPLOAD_SECONDS))
+    mocks.streamVersionUpload.mockRejectedValue(new VersionUploading('u1', ABANDONED_VERSION_UPLOAD_SECONDS, true))
     expect(await replaceContent(folder, holder, file, { signal })).toEqual({ problem: 'ownUpload', uploadId: 'u1' })
     mocks.list.mockResolvedValue([pending('u1')])
     mocks.resumeUpload.mockRejectedValue(new NotTheSameFile())
@@ -112,11 +113,21 @@ describe('Replace', () => {
 
   it('never cancels its own replacement that may be running elsewhere (a slow link idles for minutes)', async () => {
     for (const idle of [0, 300, ABANDONED_VERSION_UPLOAD_SECONDS - 1]) {
-      mocks.streamVersionUpload.mockRejectedValueOnce(new VersionUploading('u1', idle))
+      mocks.streamVersionUpload.mockRejectedValueOnce(new VersionUploading('u1', idle, true))
       expect(await replaceContent(folder, holder, file, { signal })).toEqual({ problem: 'othersUpload' })
     }
     mocks.streamVersionUpload.mockRejectedValueOnce(new VersionUploading('u1'))
     expect(await replaceContent(folder, holder, file, { signal })).toEqual({ problem: 'othersUpload' })
+  })
+
+  it('lets the folder owner cancel someone else’s abandoned replacement, never go on with it', async () => {
+    // A record under the same id here (this browser is the owner's) is not theirs to resume.
+    mocks.list.mockResolvedValue([pending('u1')])
+    mocks.streamVersionUpload.mockRejectedValueOnce(new VersionUploading('u1', ABANDONED_VERSION_UPLOAD_SECONDS, false))
+    expect(await replaceContent(folder, holder, file, { signal })).toEqual({ problem: 'ownUpload', uploadId: 'u1' })
+    mocks.streamVersionUpload.mockRejectedValueOnce(new VersionUploading('u1', 60, false))
+    expect(await replaceContent(folder, holder, file, { signal })).toEqual({ problem: 'othersUpload' })
+    expect(mocks.resumeUpload).not.toHaveBeenCalled()
   })
 
   it('cancels its own open replacement and forgets it', async () => {

@@ -9,4 +9,10 @@ describe('the notice when a document is replaced under a tab', () => {
     // Reopened for another reason (a session started elsewhere): the queue is kept.
     expect(lostUnsentEdits(false, 3)).toBe(false)
   })
+
+  it('counts a whiteboard drawing not saved yet, even with every frame sent', () => {
+    expect(lostUnsentEdits(true, 0, true)).toBe(true)
+    expect(lostUnsentEdits(false, 0, true)).toBe(false)
+    expect(lostUnsentEdits(true, 0, false)).toBe(false)
+  })
 })

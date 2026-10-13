@@ -107,6 +107,8 @@ export class VersionUploading extends Error {
   constructor(
     readonly uploadId: string | null,
     readonly idleSeconds: number | null = null,
+    /** True: this account uploads it (it may go on); false with an id: the folder's owner, who may cancel it. */
+    readonly yours = false,
   ) {
     super('a new version of this file is being uploaded')
   }
@@ -443,7 +445,7 @@ function nameTakenOf(error: unknown): UploadNameTaken | null {
 export function versionRefusalOf(error: unknown): VersionConflict | VersionUploading | null {
   const response = (error as { originalResponse?: { getStatus(): number; getBody(): string } | null }).originalResponse
   if (!response || response.getStatus() !== 409) return null
-  let body: { code?: unknown; error?: unknown; uploadId?: unknown; idleSeconds?: unknown }
+  let body: { code?: unknown; error?: unknown; uploadId?: unknown; idleSeconds?: unknown; yours?: unknown }
   try {
     body = JSON.parse(response.getBody()) as typeof body
   } catch {
@@ -455,6 +457,7 @@ export function versionRefusalOf(error: unknown): VersionConflict | VersionUploa
     return new VersionUploading(
       typeof body.uploadId === 'string' ? body.uploadId : null,
       typeof body.idleSeconds === 'number' ? body.idleSeconds : null,
+      body.yours === true,
     )
   }
   if (body.error === 'file key changed' || body.error === 'file needs a re-key') return new VersionConflict('key')
@@ -464,6 +467,28 @@ export function versionRefusalOf(error: unknown): VersionConflict | VersionUploa
 /** A refusal that settles the upload: the name is taken, or the file changed. */
 function refusalOf(error: unknown): Error | null {
   return nameTakenOf(error) ?? versionRefusalOf(error)
+}
+
+/**
+ * What a failed request means for an upload (exported for tests):
+ * - `refused`: the name is taken or the file changed (the server discarded
+ *   the upload); an open version upload refusing ours at create keeps the
+ *   record this browser has of that one (same file id);
+ * - `gone`: a remembered upload the server no longer has;
+ * - `final`: a refusal waiting does not cure — among them a 403 when the
+ *   writer lost access mid-upload (the server already discarded it);
+ * - `wait`: the connection (or the server) is away: go on later.
+ * Everything but `wait` forgets the remembered upload unless said.
+ */
+export function settleUploadError(
+  status: number,
+  refused: Error | null,
+  resuming: boolean,
+): { kind: 'refused' | 'gone' | 'final' | 'wait'; forget: boolean } {
+  if (refused) return { kind: 'refused', forget: !(refused instanceof VersionUploading) }
+  if (status === 404 || status === 410) return { kind: resuming ? 'gone' : 'final', forget: true }
+  if (isFinal(status)) return { kind: 'final', forget: true }
+  return { kind: 'wait', forget: false }
 }
 
 /** A failure that waiting does not cure: the server refused, or the upload is gone. */
@@ -609,27 +634,13 @@ async function send(opts: SendOptions): Promise<string> {
       },
       onError(err) {
         if (finished || opts.signal?.aborted) return
+        const settled = settleUploadError(statusOf(err), refusalOf(err), Boolean(opts.uploadUrl))
+        if (settled.kind !== 'wait') {
+          if (settled.forget) void forget()
+          finish(settled.kind === 'refused' ? refusalOf(err) : settled.kind === 'gone' ? new UploadNoLongerOnServer() : err)
+          return
+        }
         const status = statusOf(err)
-        // Someone else took the name, or changed the file, meanwhile: the
-        // server discarded the upload (or never opened it).
-        const refused = refusalOf(err)
-        if (refused) {
-          // The open upload refused at create may be the one this browser
-          // remembers under the same file id: that record stays.
-          if (!(refused instanceof VersionUploading)) void forget()
-          finish(refused)
-          return
-        }
-        if (status === 404 || status === 410) {
-          void forget()
-          finish(opts.uploadUrl ? new UploadNoLongerOnServer() : err)
-          return
-        }
-        if (isFinal(status)) {
-          void forget()
-          finish(err)
-          return
-        }
         // The connection is gone (or the server is): wait, then go on from
         // where the server stopped. tus asks it with HEAD.
         if (!waiting) console.warn('upload: waiting to go on', status, err instanceof Error ? err.message : err)

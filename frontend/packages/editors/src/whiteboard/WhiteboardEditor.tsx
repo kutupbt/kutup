@@ -50,6 +50,7 @@ import type {
 } from '@excalidraw/excalidraw/element/types'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { updateSession, useRequiredSession } from '@kutup/session/store'
+import { hasLocalChanges } from './unsaved'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
@@ -71,6 +72,8 @@ const Excalidraw = lazy(() =>
 
 export interface WhiteboardEditorHandle {
   save: () => Promise<{ bytes: Uint8Array }>
+  /** Something was drawn here since the last save (or since it opened). */
+  hasUnsavedChanges: () => boolean
 }
 
 interface Props {
@@ -153,6 +156,9 @@ function WhiteboardEditorBase(
   // Per-element versionNonce snapshot of what we've already broadcast.
   // Used to compute "changed since last broadcast" diffs in onChange.
   const lastBroadcastRef = useRef<Map<string, number>>(new Map())
+  // Drawn here since the last save: a Replace or a restore elsewhere drops
+  // it, and the page says so (replacedNotice).
+  const unsavedRef = useRef(false)
 
   // Set during applyRemote → updateScene; suppresses the onChange echo
   // that would otherwise re-broadcast the remote elements right back.
@@ -251,8 +257,10 @@ function WhiteboardEditorBase(
         const files = api.getFiles()
         const json = serializeAsJSON(elements, appState, files, 'local')
         const bytes = new TextEncoder().encode(json)
+        unsavedRef.current = false
         return Promise.resolve({ bytes })
       },
+      hasUnsavedChanges: () => unsavedRef.current,
     }),
     [],
   )
@@ -631,6 +639,11 @@ function WhiteboardEditorBase(
             // A viewer's scene changes only by others' edits (and its own
             // view state); it sends none and stores no images.
             if (!readOnly) {
+              // Before the broadcast records it as sent.
+              const api = apiRef.current
+              if (!unsavedRef.current && api) {
+                unsavedRef.current = hasLocalChanges(api.getSceneElementsIncludingDeleted(), lastBroadcastRef.current)
+              }
               scheduleBroadcast()
               maybeUploadDirtyAssets()
             }
