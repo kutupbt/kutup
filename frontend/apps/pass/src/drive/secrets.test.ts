@@ -30,11 +30,13 @@ const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', env
 const conflict = (revision: number) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict', revision } } })
 
 /** A vault handle whose keepKey seals the fake way, at the revision asked. */
-function handle() {
+function handle(mine: string[] = []) {
   const keepKey = vi.fn((_m: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean) =>
     Promise.resolve(`${generated ? 'generated' : 'sealed'}:${binding}:${fileId}:${revision}`),
   )
-  return { keepKey, vault: { keepKey } as unknown as VaultHandle }
+  // The kept keys that are this vault's own key.
+  const keptKeyIsMine = vi.fn((envelope: string) => Promise.resolve(mine.includes(envelope)))
+  return { keepKey, vault: { keepKey, keptKeyIsMine } as unknown as VaultHandle }
 }
 
 describe('kept vault keys', () => {
@@ -79,7 +81,16 @@ describe('kept vault keys', () => {
     expect(put.mock.calls).toEqual([['/pass/vault-secrets/v', { envelope: `generated:${BINDING}:v:${revision}`, baseRevision: T }]])
   })
 
-  it('keeps once more on top of a key another device kept first', async () => {
+  it('stops when the key another device kept first is this same key', async () => {
+    const theirs = row('sealed', BINDING, T + 9)
+    get.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [theirs] })
+    put.mockRejectedValueOnce(conflict(T + 9))
+    const { vault } = handle([theirs.envelope])
+    await keepVaultKey(session, 'v', vault)
+    expect(put).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps once more on top of another key another device kept first', async () => {
     get.mockResolvedValueOnce({ data: [] }).mockResolvedValueOnce({ data: [row('sealed', BINDING, T + 9)] })
     put.mockRejectedValueOnce(conflict(T + 9)).mockResolvedValueOnce({})
     const { vault } = handle()

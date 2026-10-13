@@ -107,7 +107,11 @@ export async function putKeptKey(session: Session, fileId: string, sealed: Seale
   } catch (error) {
     if (conflict(error) !== sealed.revision) throw error
   }
-  await revisionGuard(session).accept(KEPT_SCOPE, fileId, sealed.revision)
+  // Stored: remembering it here is best effort (a store that fails only
+  // means this browser trusts the next read, as a fresh one does).
+  await revisionGuard(session)
+    .accept(KEPT_SCOPE, fileId, sealed.revision)
+    .catch(() => undefined)
 }
 
 /** Seals the key of the vault open in `vault` to replace the kept one at `base`. */
@@ -119,19 +123,27 @@ export async function sealVaultKey(session: Session, fileId: string, vault: Vaul
 
 /**
  * Keeps the key of the vault open in `vault` (the key it was opened or made
- * with) for `fileId`, on top of the key kept now; when another device kept
- * one meanwhile, once more on top of that. A password the person chose is
- * kept only as its SHA-256; a `generated` one as it is, to be shown.
+ * with) for `fileId`, on top of the key kept now. When another device kept
+ * one meanwhile: done if it is this same key; otherwise once more on top of
+ * it (this vault's key is the one just used). A password the person chose
+ * is kept only as its SHA-256; a `generated` one as it is, to be shown.
  */
 export async function keepVaultKey(session: Session, fileId: string, vault: VaultHandle, generated = false): Promise<void> {
-  const keptNow = async () => (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)?.revision ?? 0
+  const keptNow = async () => (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)
+  let base = (await keptNow())?.revision ?? 0
   for (let attempt = 0; ; attempt++) {
     try {
-      await putKeptKey(session, fileId, await sealVaultKey(session, fileId, vault, await keptNow(), generated))
+      await putKeptKey(session, fileId, await sealVaultKey(session, fileId, vault, base, generated))
       return
     } catch (error) {
       if (attempt > 0 || conflict(error) === null) throw error
     }
+    const newer = await keptNow()
+    if (newer && (await vault.keptKeyIsMine(newer.envelope, session.masterKey, session.envelopeBinding, fileId))) {
+      await revisionGuard(session).accept(KEPT_SCOPE, fileId, newer.revision)
+      return
+    }
+    base = newer?.revision ?? 0
   }
 }
 

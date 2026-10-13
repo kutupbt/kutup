@@ -71,6 +71,11 @@ export class VaultHandle {
     return call({ call: 'keepKey', handle: this.handle, masterKey, binding, fileId, revision, generated })
   }
 
+  /** Whether the kept key `envelope` is the key this vault is open with (checked in the worker). */
+  keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): Promise<boolean> {
+    return call({ call: 'keptKeyIsMine', handle: this.handle, envelope, masterKey, binding, fileId })
+  }
+
   view(): Promise<VaultView> {
     return call({ call: 'view', handle: this.handle })
   }

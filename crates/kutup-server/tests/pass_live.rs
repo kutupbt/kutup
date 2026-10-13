@@ -157,6 +157,37 @@ fn vault_secrets() {
     );
     assert_eq!(list(&c, &base, &owner).len(), 1);
 
+    // Two devices keeping the first key of a vault at once: one is stored,
+    // the other gets the 409, never a silent overwrite.
+    let fresh = seal_file(&folder, &uuid(), b"another KeePass file");
+    assert!(upload(&c, &base, &owner.token, &folder, &fresh)
+        .status()
+        .is_success());
+    let envelopes: Vec<String> = (0..6)
+        .map(|i| sealed_for(&owner, &fresh.id, &format!("first-{i}")))
+        .collect();
+    let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = envelopes
+            .iter()
+            .map(|envelope| {
+                let (c, base, owner, id) = (&c, &base, &owner, &fresh.id);
+                scope.spawn(move || put_on(c, base, owner, id, envelope, 0).status())
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::NO_CONTENT)
+            .count(),
+        1,
+        "{statuses:?}"
+    );
+    assert!(statuses
+        .iter()
+        .all(|s| *s == StatusCode::NO_CONTENT || *s == StatusCode::CONFLICT));
+
     // Kept only on top of the key the change started from: a device that
     // read the first one does not overwrite the second, nor does an older
     // revision.

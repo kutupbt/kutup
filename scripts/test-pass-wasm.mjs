@@ -93,18 +93,16 @@ assert.equal(Buffer.from(kept, 'base64').length, Buffer.from(vectors.sealedChose
 for (const bad of [0, -1, 1.5]) {
   assert.throws(() => pass.Vault.open(rekeyed, 'yeni', null, null).keepKey(masterKey, vectors.binding, vectors.fileId, bad, true))
 }
-// The vector set's refused envelopes for this purpose do not open as a kept
-// key, for the vault (object) and account they name.
-const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-envelope-v2.json`, 'utf8'))
-const passVectors = envelopeVectors.purposes.find((p) => p.purpose === 6)
-const passVaultId = [...Buffer.from(passVectors.objectId, 'base64')].map((b) => b.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5')
-for (const refused of passVectors.refused) {
-  assert.throws(
-    () => pass.openKept(refused.envelope, Buffer.from(envelopeVectors.key, 'base64'), envelopeVectors.binding, passVaultId),
-    undefined,
-    refused.why,
-  )
-}
+// The revision is authenticated: the checked-in key opens at its revision,
+// and the same envelope with the revision changed in its header does not.
+const chosenEnvelope = Buffer.from(vectors.sealedChosen, 'base64')
+assert.equal(pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, vectors.fileId).revision, vectors.revision)
+// Header: ... revision (8 bytes) | nonce (24) | ciphertext length (4) | ciphertext (3121 + 16).
+const lastRevisionByte = chosenEnvelope.length - (3121 + 16) - 4 - 24 - 1
+assert.equal(chosenEnvelope.readBigUInt64BE(lastRevisionByte - 7), BigInt(vectors.revision))
+const relabelled = Buffer.from(chosenEnvelope)
+relabelled[lastRevisionByte] ^= 2
+assert.throws(() => pass.openKept(relabelled.toString('base64'), masterKey, vectors.binding, vectors.fileId))
 assert.ok(pass.Vault.open(rekeyed, null, Buffer.from(keptKey.passwordHash, 'base64'), null))
 // Opened with a kept key, only the password's hash is known: nothing to keep.
 assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, false))
