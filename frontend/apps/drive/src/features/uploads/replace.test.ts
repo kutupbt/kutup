@@ -53,9 +53,14 @@ beforeEach(() => {
 })
 
 describe('Replace', () => {
-  it('is offered for files on this server that do not open in Office', () => {
+  it('is offered for files on this server, office documents and whiteboards too, but not notes', () => {
     expect(canReplace(folder, holder)).toBe(true)
-    expect(canReplace(folder, { ...holder, name: 'plan.docx' })).toBe(false)
+    for (const name of ['plan.docx', 'sheet.xlsx', 'deck.pptx', 'scan.pdf', 'board.excalidraw', 'photo.jpg']) {
+      expect(canReplace(folder, { ...holder, name }), name).toBe(true)
+    }
+    for (const name of ['notes.md', 'todo.txt', 'main.rs']) {
+      expect(canReplace(folder, { ...holder, name }), name).toBe(false)
+    }
     expect(canReplace({ ...folder, canUpload: false }, holder)).toBe(false)
     expect(canReplace({ ...folder, source: 'remote', remoteShareId: 's1' }, holder)).toBe(false)
   })

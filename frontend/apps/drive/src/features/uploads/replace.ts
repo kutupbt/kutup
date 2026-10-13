@@ -1,5 +1,5 @@
 import { hashBlob } from '@kutup/crypto/contentHash'
-import { opensInOffice } from '@kutup/drive-core/editorKind'
+import { editorKindFor } from '@kutup/drive-core/editorKind'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { contentHashIn } from '@kutup/drive-core/names'
 import { rekeyFile } from '@kutup/drive-core/rekey'
@@ -27,9 +27,11 @@ export function canReplace(folder: Folder, holder: DriveFile): boolean {
     folderLocation(folder).kind === 'local' &&
     holder.fileKey !== null &&
     holder.name !== null &&
-    // What opens in Office keeps its own history (a collaboration log, a
-    // note's state): new content comes in through its editor.
-    !opensInOffice(holder.name)
+    // A note's content is its Yjs state, not the file's bytes: replacing it
+    // would be an import, not a new version. Office documents, PDFs and
+    // whiteboards take a new version like any file: the server sets it at
+    // the collaboration log's head and open tabs reopen from it.
+    editorKindFor(holder.name) !== 'text'
   )
 }
 

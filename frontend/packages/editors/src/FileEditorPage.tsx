@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStor
 import { useTranslation } from 'react-i18next'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { lostUnsentEdits } from './replacedNotice'
 import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKind } from '@kutup/drive-core/kinds'
 import { kindTileSvg } from '@kutup/drive-ui/kindTile'
@@ -381,7 +382,11 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
             setGeneration((g) => g + 1)
           }
         }}
-        onOutdated={(base) => {
+        onOutdated={(base, reset) => {
+          // Edits not yet stored were made on what was replaced: not kept.
+          if (lostUnsentEdits(reset === true, unsentCollabFrames())) {
+            toast.warning(t('file.replacedUnsentLost'), { duration: 20_000 })
+          }
           setOpenAt(base ?? null)
           setOpened(null)
           setReopen((n) => n + 1)
@@ -524,7 +529,7 @@ function Workspace({
   mayRename: boolean
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
   /** The office session's base is another version: reopen from it. */
-  onOutdated: (base?: SessionBase) => void
+  onOutdated: (base?: SessionBase, reset?: boolean) => void
 }) {
   const { t } = useTranslation()
   const back = useBack(folder)
@@ -574,7 +579,9 @@ function Workspace({
           />
         )
       case 'whiteboard':
-        return <WhiteboardEditor ref={whiteboardRef} {...common} initialBytes={opened.bytes} readOnly={readOnly} />
+        return (
+          <WhiteboardEditor ref={whiteboardRef} {...common} initialBytes={opened.bytes} readOnly={readOnly} onOutdated={onOutdated} />
+        )
       case 'viewer': {
         const viewer = chooseViewer(name)
         return viewer ? <viewer.Component filename={name} blobUrl={opened.blobUrl} mimeType={opened.mimeType} /> : null

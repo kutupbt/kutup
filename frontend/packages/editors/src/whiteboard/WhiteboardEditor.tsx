@@ -50,7 +50,7 @@ import type {
 } from '@excalidraw/excalidraw/element/types'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { updateSession, useRequiredSession } from '@kutup/session/store'
-import { CollabTransport, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
+import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
 import {
@@ -84,6 +84,11 @@ interface Props {
   readOnly?: boolean
   /** The file key of an older generation: images stored before a re-key. */
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
+  /**
+   * The file was replaced under this tab (a new version from Drive, a
+   * restore elsewhere): reopen from the newest version.
+   */
+  onOutdated?: (base?: undefined, reset?: boolean) => void
 }
 
 // Module-level cache of registerDevice promises — same pattern as
@@ -109,7 +114,7 @@ interface CursorPayload {
 }
 
 function WhiteboardEditorBase(
-  { fileId, initialBytes, fileKey, keyGeneration, readOnly = false, fileKeyAt }: Props,
+  { fileId, initialBytes, fileKey, keyGeneration, readOnly = false, fileKeyAt, onOutdated }: Props,
   ref: Ref<WhiteboardEditorHandle>,
 ) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
@@ -137,6 +142,8 @@ function WhiteboardEditorBase(
 
   // Collab state held in refs so callbacks see latest without rebinding.
   const transportRef = useRef<CollabTransport | null>(null)
+  const onOutdatedRef = useRef(onOutdated)
+  onOutdatedRef.current = onOutdated
   const deviceIdRef = useRef<number | null>(null)
   const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
   const docKeyIdRef = useRef<number>(1)
@@ -273,6 +280,11 @@ function WhiteboardEditorBase(
       const transport = new CollabTransport({
         url: wsUrl,
         lastSeenSeq: () => lastSeenSeqRef.current,
+        // The room's base was reset (the file replaced or restored): what
+        // this tab draws on is gone, so it reopens from the newest version.
+        onBase: (message: BaseMsg) => {
+          if (message.reset) onOutdatedRef.current?.(undefined, true)
+        },
         onHello: (h: HelloMsg) => {
           docKeyIdRef.current = h.currentDocKeyId
           lastSeenSeqRef.current = h.headSeq

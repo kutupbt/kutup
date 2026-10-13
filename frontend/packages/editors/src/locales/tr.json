@@ -249,7 +249,8 @@
     "myFiles": "Dosyalarım",
     "sharedWithMe": "Benimle paylaşılanlar",
     "sharedBy": "{{name}} paylaştı",
-    "sharedByOwner": "Sizinle {{sharer}} paylaştı; sahibi {{owner}}"
+    "sharedByOwner": "Sizinle {{sharer}} paylaştı; sahibi {{owner}}",
+    "replacedUnsentLost": "Bu belge değiştirildi; gönderilmemiş değişiklikleriniz korunmadı."
   },
   "viewer": {
     "imageUnreadable": "Bu tarayıcı bu görseli gösteremiyor. Cihazında açmak için indir."

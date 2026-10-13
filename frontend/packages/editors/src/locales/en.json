@@ -249,7 +249,8 @@
     "myFiles": "My files",
     "sharedWithMe": "Shared with me",
     "sharedBy": "From {{name}}",
-    "sharedByOwner": "Shared with you by {{sharer}}; owned by {{owner}}"
+    "sharedByOwner": "Shared with you by {{sharer}}; owned by {{owner}}",
+    "replacedUnsentLost": "This document was replaced; your unsent changes were not kept."
   },
   "viewer": {
     "imageUnreadable": "This browser can't display this image. Download it to open it on your device."

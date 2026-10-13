@@ -2,7 +2,7 @@
 // (docs/plans/drive-unique-names.md):
 //   1. the same file uploaded again is skipped; a different one under a
 //      taken name (case aside) asks Keep both / Replace (a new version of
-//      the file there) / Skip;
+//      the file there, office documents too) / Skip;
 //   2. a folder dropped again goes into the folder already there and sends
 //      only what changed, asking once with "apply to all";
 //   3. renames refuse a taken name, case aside — but Turkish İ keeps its dot;
@@ -110,6 +110,33 @@ test('the same file again is skipped; a different one under a taken name asks', 
   await conflict(page).getByRole('button', { name: 'Skip' }).click()
   await expect(panel(page).getByText('Skipped')).toBeVisible({ timeout: 30_000 })
   expect(uploads.count).toBe(before)
+  await context.close()
+})
+
+test('an office document is replaced as a new version too', async ({ browser }, testInfo) => {
+  // Office documents, PDFs and whiteboards take a Replace like any file
+  // (notes do not: their content is Yjs state). The server sets the version
+  // at the collaboration log's head, and tabs that have the document open
+  // reopen from it; that part needs OnlyOffice open in a second page and is
+  // left to the collaboration specs.
+  const { context, page } = await freshDrive(browser, 'uniquedocx')
+  const uploads = countUploads(page)
+  const dir = testInfo.outputPath('docx')
+  await mkdir(`${dir}/new`, { recursive: true })
+  await writeFile(`${dir}/plan.docx`, 'the first draft')
+  await writeFile(`${dir}/new/plan.docx`, 'the second draft')
+
+  await upload(page, `${dir}/plan.docx`)
+  await expect(item(page, 'plan.docx')).toBeVisible({ timeout: 60_000 })
+  await upload(page, `${dir}/new/plan.docx`)
+  await expect(conflict(page)).toBeVisible({ timeout: 60_000 })
+  await conflict(page).getByRole('button', { name: 'Replace' }).click()
+  await expect(panel(page).getByText('Uploads complete')).toBeVisible({ timeout: 60_000 })
+  expect(uploads.count).toBe(2)
+  expect(uploads.versions).toBe(1)
+  await page.reload()
+  await expect(item(page, 'plan.docx')).toHaveCount(1, { timeout: 60_000 })
+  await expect(item(page, 'plan (2).docx')).toHaveCount(0)
   await context.close()
 })
 
