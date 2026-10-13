@@ -33,6 +33,8 @@ export interface IdentityPins {
   pins: IdentityPin[]
   /** Pins pushed off their address (a rename landed there, or another identity was accepted there): kept with their trust. */
   detached?: IdentityPin[]
+  /** Incarnation ids of replaced identities whose detached pin was dropped: still warned about. */
+  replacedIds?: string[]
   /** The lowest reader version that may read the list (absent: 1). */
   minReader?: number
   [later: string]: unknown
@@ -151,7 +153,7 @@ export type Recorded =
   | { kind: 'unchanged' }
   | { kind: 'formerAddressTaken'; pins: MovedPin[] }
   | { kind: 'knownElsewhere'; pin: IdentityPin }
-  | { kind: 'replacedIdentity'; pin: IdentityPin }
+  | { kind: 'replacedIdentity'; pin: IdentityPin | null; incarnationId: string }
 
 /**
  * What the list says about `address`, given the authority published there
@@ -172,7 +174,7 @@ export type PinMatch =
   | { kind: 'renamed'; pin: IdentityPin }
   | { kind: 'returned'; pin: IdentityPin }
   | { kind: 'moved'; pins: MovedPin[] }
-  | { kind: 'replaced'; pin: IdentityPin }
+  | { kind: 'replaced'; pin: IdentityPin | null; incarnationId: string }
   | { kind: 'new' }
 
 export async function lookupIdentityPin(pins: PinsText, address: string, publishedAuthority: string | null): Promise<PinMatch> {

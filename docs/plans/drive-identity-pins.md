@@ -130,7 +130,12 @@ they were known at, and `detachedBy` says why they left it:
   (`verified`) pins it again.
 
 `detachedBy` is set on detached pins and only on them. At most 256 are kept;
-past that, the oldest unverified go first, then the oldest.
+past that, the oldest unverified go first, then the oldest. A replaced pin
+that is dropped this way leaves its incarnation id in the list's
+`replacedIds` (at most 4,096, oldest first), so it is still warned about
+wherever it turns up. An id there is never also pinned. Accepting a replaced
+identity again starts a fresh pin: its old addresses and rename anchor went
+with the revoked trust.
 
 **Fields added later (normative).** Every struct of the list (the list, a
 pin, an anchor) keeps fields it does not know. They are read past, kept, and

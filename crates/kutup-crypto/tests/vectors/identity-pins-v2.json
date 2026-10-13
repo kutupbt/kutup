@@ -262,7 +262,8 @@
             "state": "seen",
             "since": "2026-10-13T12:00:00Z",
             "detachedBy": "replaced"
-          }
+          },
+          "incarnationId": "1be4088353bbca5fb025ff646dff5444b5f3c91058a896675c20632f012001da"
         }
       },
       {
@@ -276,7 +277,8 @@
             "state": "seen",
             "since": "2026-10-13T12:00:00Z",
             "detachedBy": "replaced"
-          }
+          },
+          "incarnationId": "1be4088353bbca5fb025ff646dff5444b5f3c91058a896675c20632f012001da"
         }
       }
     ],
@@ -451,7 +453,8 @@
             "state": "seen",
             "since": "2026-10-13T12:00:00Z",
             "detachedBy": "replaced"
-          }
+          },
+          "incarnationId": "1be4088353bbca5fb025ff646dff5444b5f3c91058a896675c20632f012001da"
         }
       },
       {
@@ -470,7 +473,8 @@
             "state": "seen",
             "since": "2026-10-13T12:00:00Z",
             "detachedBy": "replaced"
-          }
+          },
+          "incarnationId": "1be4088353bbca5fb025ff646dff5444b5f3c91058a896675c20632f012001da"
         }
       },
       {
@@ -522,6 +526,10 @@
       {
         "case": "pinned and detached at once",
         "pins": "{\"pins\":[{\"account\":\"dave@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}],\"detached\":[{\"account\":\"david@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}]}"
+      },
+      {
+        "case": "a replaced identity remembered and pinned at once",
+        "pins": "{\"pins\":[{\"account\":\"dave@kutup.dev\",\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\"}],\"replacedIds\":[\"59e8d537e29628e88fc769daef7929239dd6d01a40c0138de3175757fe5e8574\"]}"
       },
       {
         "case": "for a newer reader",

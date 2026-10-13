@@ -434,6 +434,17 @@ fn renames() -> RenameVectors {
             .unwrap(),
         },
         RefusedList {
+            case: "a replaced identity remembered and pinned at once".into(),
+            pins: {
+                let mut list = IdentityPinsV1 {
+                    pins: vec![plain(("dave@kutup.dev", &dave, PinState::Seen))],
+                    ..Default::default()
+                };
+                list.replaced_ids = vec![dave.incarnation_id()];
+                serde_json::to_string(&list).unwrap()
+            },
+        },
+        RefusedList {
             case: "for a newer reader".into(),
             pins: r#"{"pins":[],"minReader":2}"#.into(),
         },
