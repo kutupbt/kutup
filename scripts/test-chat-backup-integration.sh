@@ -11,9 +11,7 @@ test_admin_password="BackupIntegrationAdmin123!"
 # username:password (the password may hold colons).
 export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 # The live tests sign in many times a minute (as the mail gate does).
-export RATE_LIMIT_LOGIN_PER_MIN=1000
-export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
-export RATE_LIMIT_REGISTER_PER_HOUR=1000
+export RATE_LIMITS_RELAXED=true
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
