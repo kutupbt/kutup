@@ -282,6 +282,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         .unwrap();
     assert_eq!(head.status(), StatusCode::NOT_FOUND);
     assert_eq!(used(&c, &base, &owner.token), before + blob.len() as i64);
+    purge_accounts(&c, &base, &[&owner, &stranger]);
 }
 
 /// The table refuses a row that mixes a new file's fields with a version's.
@@ -405,4 +406,5 @@ fn a_version_over_tus_stands_at_the_log_head() {
         .unwrap()
         .clone();
     assert!(rows.iter().any(|v| v["seqAtSnapshot"] == 7), "{versions}");
+    purge_accounts(&c, &base, &[&owner]);
 }

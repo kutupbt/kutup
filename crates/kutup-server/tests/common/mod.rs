@@ -427,6 +427,29 @@ pub fn owner_link_key(link_key: &[u8; 32], owner: &User, link_id: &str) -> Strin
 /// The administrator's token, signing in by username as any account does
 /// (its temporary password derived under the salt preflight answers),
 /// completing its first-login setup on a fresh server.
+/// Deletes `users` for good through the administrator (`KUTUP_LIVE_ADMIN`
+/// as `name:password`), so the gate's purge checks see nothing left behind.
+/// Without an administrator the accounts stay (a run outside the gate).
+pub fn purge_accounts(c: &Client, base: &str, users: &[&User]) {
+    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+        eprintln!("KUTUP_LIVE_ADMIN unset; test accounts are kept");
+        return;
+    };
+    let (name, password) = admin
+        .split_once(':')
+        .expect("KUTUP_LIVE_ADMIN is name:password");
+    let token = admin_token(c, base, password, name);
+    for user in users {
+        let r = bearer(
+            c.delete(format!("{base}/api/admin/users/{}", user.id)),
+            &token,
+        )
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT, "purge {}", user.id);
+    }
+}
+
 pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> String {
     let preflight: Value = c
         .get(format!("{base}/api/auth/login/preflight?name={username}"))

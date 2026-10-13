@@ -366,6 +366,7 @@ fn names_are_unique_in_a_folder() {
     let stranger = register(&c, &base);
     let r = ask(&stranger, vec![free]);
     assert!(r.status() == StatusCode::FORBIDDEN || r.status() == StatusCode::NOT_FOUND);
+    purge_accounts(&c, &base, &[&owner, &stranger]);
 }
 
 #[test]
@@ -384,8 +385,8 @@ fn top_level_folder_names_are_unique_per_owner() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["holder"]["id"], first.id);
     // Another account's top level is its own.
-    let other = register(&c, &base);
-    let (status, _, _) = folder_named(&c, &base, &other, None, &projects);
+    let other_account = register(&c, &base);
+    let (status, _, _) = folder_named(&c, &base, &other_account, None, &projects);
     assert!(status.is_success());
 
     // A folder moved to the top level brings a name free there.
@@ -491,6 +492,7 @@ fn top_level_folder_names_are_unique_per_owner() {
     .json()
     .unwrap();
     assert_eq!(restored["nameHash"], other, "{restored}");
+    purge_accounts(&c, &base, &[&owner, &other_account]);
 }
 
 fn tus_create_named(

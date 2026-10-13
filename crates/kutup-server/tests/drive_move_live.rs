@@ -438,4 +438,5 @@ fn drive_move_contract() {
     assert_eq!(parent_of(&grandchild.id), Value::Null);
     assert_eq!(parent_of(&parent.id), grandchild.id.as_str());
     assert_eq!(parent_of(&child.id), parent.id.as_str());
+    purge_accounts(&c, &base, &[&owner, &editor, &viewer, &stranger]);
 }
