@@ -11,6 +11,8 @@ test_admin_password="BackupIntegrationAdmin123!"
 # username:password (scripts/test-mail-inbound.sh keeps the older
 # email:username:password, which still reads).
 export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
+# The live tests sign in many times a minute (as the mail gate does).
+export RATE_LIMIT_LOGIN_PER_MIN=1000
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
