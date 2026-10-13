@@ -9,7 +9,8 @@
   "boot": {
     "opening": "Opening your Drive…",
     "failedTitle": "Drive could not open",
-    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again.",
+    "keysChanged": "This account's keys changed on the server since you signed in. Sign in again."
   },
   "nav": {
     "myFiles": "My files",

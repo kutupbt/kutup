@@ -53,7 +53,12 @@ export async function activateSession(
     throw new Error('the session belongs to a different account than its keys')
   }
   if (me.envelopeBinding !== keys.keyBinding) {
+    // This sign-in is over: ended on the server too (best effort), and the
+    // keys dropped here.
+    await api.post('/auth/logout').catch(() => undefined)
     clearSession()
+    keys.masterKey.fill(0)
+    keys.privateKey.fill(0)
     throw new KeyBindingMismatchError()
   }
   setSession(

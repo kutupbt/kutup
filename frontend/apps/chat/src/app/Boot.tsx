@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { bootChildApp } from '@kutup/session/childBoot'
+import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel } from '@kutup/ui/components/states'
 
-type State = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error' }
+type State = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; keysChanged: boolean }
 
 /**
  * Chat gets its session from the account app: consume a fork, restore this
@@ -31,7 +32,9 @@ export function Boot({ children }: { children: ReactNode }) {
         if (result.next) void navigate.current(result.next, { replace: true })
         setState({ kind: 'ready' })
       })
-      .catch(() => setState({ kind: 'error' }))
+      .catch((error: unknown) =>
+        setState({ kind: 'error', keysChanged: error instanceof KeyBindingMismatchError }),
+      )
   }, [])
 
   useEffect(run, [run])
@@ -41,7 +44,7 @@ export function Boot({ children }: { children: ReactNode }) {
     return (
       <div className="mx-auto flex min-h-svh max-w-md flex-col justify-center gap-4 p-6">
         <Alert variant="error" title={t('boot.failedTitle')}>
-          {t('boot.failedDescription')}
+          {t(state.keysChanged ? 'boot.keysChanged' : 'boot.failedDescription')}
         </Alert>
         <Button onClick={run}>{t('common.retry')}</Button>
       </div>

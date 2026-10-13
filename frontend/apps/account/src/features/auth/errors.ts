@@ -1,4 +1,5 @@
 import type { useTranslation } from 'react-i18next'
+import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
 
 type TFunction = ReturnType<typeof useTranslation>['t']
@@ -10,6 +11,7 @@ type TFunction = ReturnType<typeof useTranslation>['t']
  * registration conflict names the field that is taken.
  */
 export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: string): string {
+  if (error instanceof KeyBindingMismatchError) return t('auth.errors.keysChanged')
   const code = apiErrorCode(error)
   if (code === 'too_many_requests') return t('auth.errors.locked')
   if (code === 'network') return t('auth.errors.network')

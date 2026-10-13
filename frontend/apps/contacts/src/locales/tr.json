@@ -2,7 +2,8 @@
   "boot": {
     "opening": "Kişileriniz açılıyor…",
     "failedTitle": "Kişiler açılamadı",
-    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanmadı. Bağlantınızı denetleyip yeniden deneyin."
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanmadı. Bağlantınızı denetleyip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   },
   "notFound": {
     "title": "Sayfa bulunamadı",

@@ -58,7 +58,8 @@
       "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
       "emailTaken": "That email already has an account. Sign in instead, or go back and use another email.",
       "usernameTaken": "That username is taken. Go back and choose another.",
-      "generic": "Something went wrong. Try again."
+      "generic": "Something went wrong. Try again.",
+      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator."
     },
     "strength": {
       "label": "Strength: {{strength}}",

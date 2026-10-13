@@ -56,6 +56,12 @@ function dismissedKey(): string | null {
 }
 
 function readDismissed(): Set<string> {
+  try {
+    // The unkeyed list from before was shared by every account here.
+    localStorage.removeItem(DISMISSED)
+  } catch {
+    // Storage blocked.
+  }
   const key = dismissedKey()
   if (!key) return new Set()
   try {
