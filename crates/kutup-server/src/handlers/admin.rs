@@ -61,11 +61,12 @@ fn valid_admin_username(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// Whether `email` is the protected break-glass admin (case-insensitive) — mirrors
-/// `isBreakGlass`. The break-glass admin can never be demoted, disabled, or deleted.
-fn is_break_glass(state: &AppState, email: &str) -> bool {
-    let bg = &state.config.break_glass_admin_email;
-    !bg.is_empty() && bg.eq_ignore_ascii_case(email)
+/// Whether `username` is the protected break-glass admin (case-insensitive) —
+/// mirrors `isBreakGlass`. The break-glass admin can never be demoted, disabled, or
+/// deleted.
+fn is_break_glass(state: &AppState, username: &str) -> bool {
+    let bg = &state.config.break_glass_admin_username;
+    !bg.is_empty() && bg.eq_ignore_ascii_case(username)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -124,7 +125,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         .into_iter()
         .map(
             |(id, email, username, quota, used, is_admin, is_active, totp, first, created)| {
-                let is_protected = is_break_glass(&state, &email);
+                let is_protected = is_break_glass(&state, &username);
                 UserRow {
                     id,
                     email,
@@ -147,14 +148,16 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateUserRequest {
-    email: String,
     username: String,
-    temp_password: String,
+    /// The temporary password, derived in the administrator's browser.
+    setup: crate::handlers::auth::SetupKey,
     storage_quota_bytes: i64,
 }
 
-/// `POST /api/admin/users` — mirrors `CreateUser`. Creates a first-login account with a
-/// temp password; the user establishes their E2EE key material on first login.
+/// `POST /api/admin/users` — creates a first-login account under a temporary
+/// password the administrator's browser derived (the server never sees it);
+/// the user establishes their E2EE key material on first sign-in. It signs in
+/// with its username; no email is asked (a recovery email is the user's own).
 #[utoipa::path(
     post,
     path = "/api/admin/users",
@@ -168,9 +171,7 @@ pub async fn create_user(
     admin: AdminUser,
     Json(mut req): Json<CreateUserRequest>,
 ) -> AppResult<Response> {
-    if req.temp_password.is_empty() {
-        return Err(AppError::bad_request("tempPassword required"));
-    }
+    let hash = req.setup.checked_hash()?;
     if req.username.is_empty() {
         return Err(AppError::bad_request("username required"));
     }
@@ -201,12 +202,9 @@ pub async fn create_user(
         return Err(AppError::bad_request("storage quota must be positive"));
     }
 
-    let hash =
-        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
-
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
-               email, username, login_key_hash,
+               username, login_key_hash,
                master_key_envelope, recovery_key_envelope,
                drive_private_key_envelope,
                public_key, account_authority_public_key, account_authority_key_id,
@@ -214,13 +212,16 @@ pub async fn create_user(
                account_protection_suite, account_protection_salt,
                argon_memory_kib, argon_iterations, argon_parallelism,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4)
+           ) VALUES ($1,$2,'','','','','','','','',$3,$4,$5,$6,$7,false,true,$8)
            RETURNING id"#,
     )
-    // Optional: an account signs in with its username (a recovery email comes later).
-    .bind((!req.email.trim().is_empty()).then(|| req.email.trim()))
     .bind(&req.username)
     .bind(&hash)
+    .bind(i16::try_from(req.setup.account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&req.setup.account_protection_salt)
+    .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
     .bind(req.storage_quota_bytes)
     .fetch_one(&state.pool)
     .await;
@@ -234,7 +235,6 @@ pub async fn create_user(
         "user.create",
         Some(new_id),
         json!({
-            "email": req.email,
             "username": req.username,
             "storageQuotaBytes": req.storage_quota_bytes,
         }),
@@ -274,8 +274,10 @@ pub async fn update_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Load the target's current state for the break-glass + last-admin guards.
-    let (target_email, target_is_admin, target_is_active): (String, bool, bool) =
-        sqlx::query_as("SELECT COALESCE(email, ''), is_admin, is_active FROM users WHERE id = $1")
+    let (target_username, target_is_admin, target_is_active): (String, bool, bool) =
+        sqlx::query_as(
+            "SELECT COALESCE(username, ''), is_admin, is_active FROM users WHERE id = $1",
+        )
             .bind(target)
             .fetch_optional(&state.pool)
             .await
@@ -287,7 +289,7 @@ pub async fn update_user(
     let wants_disable = req.is_active == Some(false);
 
     // Break-glass admin is immutable: never demote or disable it.
-    if is_break_glass(&state, &target_email) && (wants_demote || wants_disable) {
+    if is_break_glass(&state, &target_username) && (wants_demote || wants_disable) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -362,7 +364,7 @@ pub async fn update_user(
         &admin.user_id,
         "user.update",
         Some(target),
-        json!({"email": target_email, "changes": changes}),
+        json!({"username": target_username, "changes": changes}),
     )
     .await;
     Ok(Json(json!({"message": "updated"})).into_response())
@@ -393,7 +395,7 @@ pub async fn delete_user(
             .ok()
             .flatten()
             .ok_or_else(|| AppError::not_found("not found"))?;
-    if is_break_glass(&state, &target_email) {
+    if is_break_glass(&state, target_username.as_deref().unwrap_or_default()) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -1732,7 +1734,8 @@ async fn wake_federation_outbox(pool: &PgPool, domain: Option<&str>) -> AppResul
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RotateTempPasswordRequest {
-    temp_password: String,
+    /// The new temporary password, derived in the administrator's browser.
+    setup: crate::handlers::auth::SetupKey,
 }
 
 /// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
@@ -1759,17 +1762,15 @@ pub async fn rotate_temp_password(
     Path(id): Path<String>,
     Json(req): Json<RotateTempPasswordRequest>,
 ) -> AppResult<Response> {
-    if req.temp_password.is_empty() {
-        return Err(AppError::bad_request("tempPassword required"));
-    }
+    let hash = req.setup.checked_hash()?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(String, bool)> =
-        sqlx::query_as("SELECT COALESCE(email, ''), is_first_login FROM users WHERE id = $1")
+        sqlx::query_as("SELECT COALESCE(username, ''), is_first_login FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
-    let Some((email, is_first_login)) = row else {
+    let Some((username, is_first_login)) = row else {
         return Err(AppError::not_found("not found"));
     };
     if !is_first_login {
@@ -1779,13 +1780,19 @@ pub async fn rotate_temp_password(
         ));
     }
 
-    let hash =
-        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
     sqlx::query(
-        "UPDATE users SET login_key_hash = $1, updated_at = NOW() WHERE id = $2 AND is_first_login",
+        "UPDATE users SET login_key_hash = $1, account_protection_suite = $3,
+                account_protection_salt = $4, argon_memory_kib = $5,
+                argon_iterations = $6, argon_parallelism = $7, updated_at = NOW()
+          WHERE id = $2 AND is_first_login",
     )
     .bind(&hash)
     .bind(target)
+    .bind(i16::try_from(req.setup.account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&req.setup.account_protection_salt)
+    .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
     .execute(&state.pool)
     .await?;
 
@@ -1794,7 +1801,7 @@ pub async fn rotate_temp_password(
         &admin.user_id,
         "user.rotate_temp_password",
         Some(target),
-        json!({"email": email}),
+        json!({"username": username}),
     )
     .await;
     Ok(Json(json!({"message": "temp password rotated"})).into_response())
@@ -1803,7 +1810,9 @@ pub async fn rotate_temp_password(
 #[derive(Debug, Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WipeUserRequest {
-    temp_password: String,
+    /// The temporary password it starts again with, derived in the
+    /// administrator's browser.
+    setup: crate::handlers::auth::SetupKey,
 }
 
 /// `POST /api/admin/users/{id}/wipe` — the destructive "reset" for a user who lost both
@@ -1827,9 +1836,7 @@ pub async fn wipe_user(
     Path(id): Path<String>,
     Json(req): Json<WipeUserRequest>,
 ) -> AppResult<Response> {
-    if req.temp_password.is_empty() {
-        return Err(AppError::bad_request("tempPassword required"));
-    }
+    let hash = req.setup.checked_hash()?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(String, Option<String>)> =
@@ -1840,7 +1847,7 @@ pub async fn wipe_user(
     let Some((email, username)) = row else {
         return Err(AppError::not_found("not found"));
     };
-    if is_break_glass(&state, &email) {
+    if is_break_glass(&state, username.as_deref().unwrap_or_default()) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -1893,17 +1900,15 @@ pub async fn wipe_user(
         .await?;
 
     // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password.
-    let hash =
-        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',
                drive_private_key_envelope = '',
                public_key = '', account_authority_public_key = '',
                account_authority_key_id = '', account_incarnation_id = '',
-               drive_signing_public_key = '', account_protection_suite = 0,
-               account_protection_salt = '', argon_memory_kib = 0,
-               argon_iterations = 0, argon_parallelism = 0,
+               drive_signing_public_key = '', account_protection_suite = $3,
+               account_protection_salt = $4, argon_memory_kib = $5,
+               argon_iterations = $6, argon_parallelism = $7,
                recovery_key_verifier = '', drive_key_binding = NULL,
                login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
@@ -1911,6 +1916,11 @@ pub async fn wipe_user(
     )
     .bind(&hash)
     .bind(target)
+    .bind(i16::try_from(req.setup.account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&req.setup.account_protection_salt)
+    .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
     .execute(&state.pool)
     .await?;
 

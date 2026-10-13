@@ -11,12 +11,13 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_region: String,
     pub app_env: String,
-    /// The single bootstrap admin account, `email:username:password`. Created at first boot;
-    /// this is the protected "break-glass" admin. From `ADMIN_ACCOUNT`.
+    /// The single bootstrap admin account, `username:password` (the older
+    /// `email:username:password` still reads). Created at first boot; this is the
+    /// protected "break-glass" admin. From `ADMIN_ACCOUNT`.
     pub admin_account: String,
-    /// Email of the break-glass admin, derived from `admin_account`. Never demotable/
+    /// Username of the break-glass admin, from `admin_account`. Never demotable/
     /// disableable/deletable via the API/UI. Empty when `ADMIN_ACCOUNT` is unset.
-    pub break_glass_admin_email: String,
+    pub break_glass_admin_username: String,
     /// e.g. `https://kutup.example.com` — published as the federation API base.
     pub server_url: String,
     /// Comma-separated CORS allowlist (`*` allowed in dev only).
@@ -319,7 +320,7 @@ impl Config {
             s3_region: get_env("S3_REGION", "us-east-1"),
             app_env,
             admin_account: get_env("ADMIN_ACCOUNT", ""),
-            break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
+            break_glass_admin_username: break_glass_username(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
             allowed_origins: get_env("ALLOWED_ORIGINS", "https://localhost:38443"),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
@@ -402,16 +403,12 @@ impl Config {
 
 /// Extracts the break-glass admin's email (the first field of `email:username:password`) —
 /// mirrors `breakGlassEmail`. Empty when the account is unset or malformed.
-fn break_glass_email(admin_account: &str) -> String {
-    let acct = admin_account.trim();
-    if acct.is_empty() {
-        return String::new();
+fn break_glass_username(admin_account: &str) -> String {
+    let parts: Vec<&str> = admin_account.trim().splitn(3, ':').collect();
+    match parts.as_slice() {
+        [username, _password] | [_, username, _password] => username.trim().to_string(),
+        _ => String::new(),
     }
-    let parts: Vec<&str> = acct.splitn(3, ':').collect();
-    if parts.len() != 3 {
-        return String::new();
-    }
-    parts[0].trim().to_string()
 }
 
 fn must_env(key: &str) -> String {

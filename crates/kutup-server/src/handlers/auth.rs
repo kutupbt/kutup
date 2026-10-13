@@ -104,6 +104,10 @@ pub struct LoginResponse {
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
     color: String,
+    /// What the account's envelopes carry (its key binding, or its old
+    /// sign-in email until they are re-sealed); given only with the session.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    envelope_binding: String,
     #[serde(skip_serializing_if = "is_false")]
     requires_totp: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,9 +228,9 @@ fn lockout_key(account: Option<Uuid>, name: &str) -> String {
 
 /// A fake binding for a name that is not an account, the same each time,
 /// shaped as a real one (a key binding), so preflight tells nothing.
-fn fake_binding(name: &str) -> String {
+fn fake_binding(secret: &str, name: &str) -> String {
     let bytes = STANDARD
-        .decode(deterministic_fake_bytes(name, "envelope-binding", 16))
+        .decode(deterministic_fake_bytes(secret, name, "envelope-binding", 16))
         .unwrap_or_else(|_| vec![0; 16]);
     let mut b = [0u8; 16];
     b.copy_from_slice(&bytes[..16]);
@@ -290,6 +294,58 @@ fn validate_account_protection(
     }
     .validate_v1()
     .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
+}
+
+/// A first-login account's temporary password as the administrator's browser
+/// derived it (docs/plans/account-identity.md): the login key, with the
+/// salt and parameters it came from. The server never sees the password,
+/// as for any other account; sign-in derives the same way, and setup then
+/// replaces all of it with the account's own.
+#[derive(Debug, Default, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SetupKey {
+    pub login_key: String,
+    pub account_protection_suite: u16,
+    pub account_protection_salt: String,
+    pub argon_memory_kib: u32,
+    pub argon_iterations: u32,
+    pub argon_parallelism: u32,
+}
+
+impl SetupKey {
+    /// Checked as an account's own protection is; the login key's hash to store.
+    pub(crate) fn checked_hash(&self) -> AppResult<String> {
+        validate_account_protection(
+            self.account_protection_suite,
+            &self.account_protection_salt,
+            self.argon_memory_kib,
+            self.argon_iterations,
+            self.argon_parallelism,
+        )?;
+        let login_key = decode_canonical_base64_exact(&self.login_key, 32, "setup.loginKey")?;
+        bcrypt::hash(login_key, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))
+    }
+
+    /// Derived here, once, from a password the server was given (the
+    /// break-glass administrator in ADMIN_ACCOUNT).
+    pub(crate) fn derive(password: &str) -> anyhow::Result<Self> {
+        use kutup_crypto::kdf::{
+            derive_account_protection_keys, AccountProtectionParameters,
+            AccountProtectionSuiteId, ACCOUNT_PROTECTION_SALT_LEN,
+        };
+        let mut salt = [0u8; ACCOUNT_PROTECTION_SALT_LEN];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+        let parameters = AccountProtectionParameters::V1;
+        let keys = derive_account_protection_keys(password, &salt, parameters)?;
+        Ok(SetupKey {
+            login_key: STANDARD.encode(keys.login_key.as_slice()),
+            account_protection_suite: AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16(),
+            account_protection_salt: STANDARD.encode(salt),
+            argon_memory_kib: parameters.memory_kib,
+            argon_iterations: parameters.iterations,
+            argon_parallelism: parameters.parallelism,
+        })
+    }
 }
 
 /// A key binding as drawn: a UUID v4, lowercase and hyphenated.
@@ -633,9 +689,12 @@ pub async fn get_login_preflight(
 ) -> AppResult<Response> {
     let name = q.name()?;
     let account = account_by_name(&state, &name).await?;
-    let row: Option<(i16, String, i32, i32, i32, String)> = match account {
+    // Every account has a salt, one an administrator made too (its
+    // temporary password is derived as any other), so nothing here tells
+    // a new account, an unknown name or a real one apart.
+    let row: Option<(i16, String, i32, i32, i32)> = match account {
         Some(id) => sqlx::query_as(
-            "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism, envelope_binding FROM users WHERE id = $1",
+            "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism FROM users WHERE id = $1",
         )
         .bind(id)
         .fetch_optional(&state.pool)
@@ -643,20 +702,23 @@ pub async fn get_login_preflight(
         None => None,
     };
 
-    let (suite, salt, memory_kib, iterations, parallelism, binding) = match row {
+    let (suite, salt, memory_kib, iterations, parallelism) = match row {
         Some(row) => row,
         None => (
             kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
-            deterministic_fake_bytes(&name, "account-protection", 16),
+            deterministic_fake_bytes(
+                &state.config.jwt_secret,
+                &name,
+                "account-protection",
+                16,
+            ),
             kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
             kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
-            fake_binding(&name),
         ),
     };
 
     Ok(Json(PreflightLoginResponse {
-        envelope_binding: binding,
         account_protection_suite: u16::try_from(suite).unwrap_or(0),
         account_protection_salt: salt,
         argon_memory_kib: u32::try_from(memory_kib).unwrap_or(0),
@@ -774,6 +836,7 @@ pub async fn login(
         i64,
         i64,
         bool,
+        bool,
         String,
         String,
         String,
@@ -782,8 +845,8 @@ pub async fn login(
         r#"SELECT id, login_key_hash, master_key_envelope,
                   drive_private_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
-                  account_protection_salt,
-                  COALESCE(username, ''), COALESCE(color, '')
+                  is_first_login,
+                  COALESCE(username, ''), COALESCE(color, ''), envelope_binding
            FROM users WHERE id = $1"#,
     )
     .bind(account)
@@ -801,9 +864,10 @@ pub async fn login(
         quota_bytes,
         used_bytes,
         is_active,
-        account_protection_salt,
+        is_first_login,
         username,
         color,
+        envelope_binding,
     )) = row
     else {
         // Run bcrypt anyway to keep timing constant.
@@ -829,7 +893,7 @@ pub async fn login(
     let user_id = id.to_string();
 
     // First-login account — no key material yet.
-    if account_protection_salt.is_empty() {
+    if is_first_login {
         let setup_token = jwt::generate_setup_token(&user_id, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
@@ -865,6 +929,7 @@ pub async fn login(
         quota_bytes,
         used_bytes,
         &color,
+        &envelope_binding,
     )
     .await
 }
@@ -905,12 +970,14 @@ pub async fn login_two_fa(
         String,
         bool,
         String,
+        String,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT totp_secret, master_key_envelope,
                   drive_private_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
-                  COALESCE(username, ''), is_active, COALESCE(color, '')
+                  COALESCE(username, ''), is_active, COALESCE(color, ''),
+                  envelope_binding
            FROM users WHERE id = $1"#,
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -928,6 +995,7 @@ pub async fn login_two_fa(
         username,
         is_active,
         color,
+        envelope_binding,
     )) = row
     else {
         return Err(AppError::unauthorized("unauthorized"));
@@ -964,6 +1032,7 @@ pub async fn login_two_fa(
         quota_bytes,
         used_bytes,
         &color,
+        &envelope_binding,
     )
     .await
 }
@@ -999,9 +1068,10 @@ pub async fn get_recovery_preflight(
             envelope_binding,
         },
         None => {
-            let binding = fake_binding(&name);
+            let secret = &state.config.jwt_secret;
+            let binding = fake_binding(secret, &name);
             PreflightRecoverResponse {
-                recovery_key_envelope: deterministic_fake_account_envelope(&binding),
+                recovery_key_envelope: deterministic_fake_account_envelope(secret, &binding),
                 envelope_binding: binding,
             }
         }
@@ -1572,8 +1642,8 @@ pub async fn complete_setup(
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
     let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
-    // Only update while the account-protection salt is still empty — prevents
-    // replay after setup completes.
+    // Only while the account is still a first-login one — prevents replay
+    // after setup completes.
     let res = sqlx::query(
         r#"UPDATE users SET
               login_key_hash = $1,
@@ -1587,7 +1657,7 @@ pub async fn complete_setup(
               drive_key_binding = $17,
               key_binding = $18, envelope_binding = $18,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $16 AND account_protection_salt = ''"#,
+           WHERE id = $16 AND is_first_login"#,
     )
     .bind(&hash)
     .bind(&req.master_key_envelope)
@@ -1694,6 +1764,7 @@ async fn issue_tokens_and_respond(
     quota: i64,
     used: i64,
     color: &str,
+    envelope_binding: &str,
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
@@ -1717,6 +1788,7 @@ async fn issue_tokens_and_respond(
         storage_quota_bytes: quota,
         storage_used_bytes: used,
         color: color.to_string(),
+        envelope_binding: envelope_binding.to_string(),
         ..Default::default()
     };
     if client.uses_cookie() {
@@ -1801,23 +1873,41 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
 }
 
 /// Derives a stable base64 salt from email+purpose — mirrors `deterministicFakeSalt`.
-fn deterministic_fake_bytes(email: &str, purpose: &str, len: usize) -> String {
-    let input = format!("{email}:{purpose}:kutup-fake-salt-2024");
-    let input = input.as_bytes();
-    let mut b = vec![0u8; len];
-    for (i, slot) in b.iter_mut().enumerate() {
-        *slot = input[i % input.len()] ^ ((i * 7 + 13) as u8);
+/// Bytes that stand in for a real account's, for a name that is not one:
+/// the same each time, and told from real ones by no one without the
+/// server's secret (an HMAC under a key derived from it).
+fn deterministic_fake_bytes(secret: &str, name: &str, purpose: &str, len: usize) -> String {
+    use hmac::{Hmac, Mac};
+    let key = {
+        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret.as_bytes())
+            .expect("any key length");
+        mac.update(b"kutup/fake-account/v1\0");
+        mac.finalize().into_bytes()
+    };
+    let mut out = Vec::with_capacity(len);
+    let mut counter = 0u32;
+    while out.len() < len {
+        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&key).expect("any key length");
+        mac.update(purpose.as_bytes());
+        mac.update(b"\0");
+        mac.update(name.trim().to_lowercase().as_bytes());
+        mac.update(b"\0");
+        mac.update(&counter.to_be_bytes());
+        out.extend_from_slice(&mac.finalize().into_bytes());
+        counter += 1;
     }
-    STANDARD.encode(b)
+    out.truncate(len);
+    STANDARD.encode(out)
 }
 
-fn deterministic_fake_account_envelope(email: &str) -> String {
+fn deterministic_fake_account_envelope(secret: &str, binding: &str) -> String {
     let key = STANDARD
-        .decode(deterministic_fake_bytes(email, "recovery-envelope-key", 32))
+        .decode(deterministic_fake_bytes(secret, binding, "recovery-envelope-key", 32))
         .expect("deterministic fake key is base64");
     let nonce = STANDARD
         .decode(deterministic_fake_bytes(
-            email,
+            secret,
+            binding,
             "recovery-envelope-nonce",
             24,
         ))
@@ -1826,7 +1916,7 @@ fn deterministic_fake_account_envelope(email: &str) -> String {
         &[0u8; 32],
         &key,
         kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
-        email,
+        binding,
         &nonce,
     )
     .expect("fake recovery envelope inputs are valid");
@@ -1876,19 +1966,31 @@ mod tests {
 
     #[test]
     fn fake_salt_is_deterministic_and_purpose_scoped() {
-        let a = deterministic_fake_bytes("x@y.z", "kdf", 16);
-        let b = deterministic_fake_bytes("x@y.z", "kdf", 16);
-        let c = deterministic_fake_bytes("x@y.z", "login", 16);
+        let secret = "a-server-secret-of-at-least-32-bytes";
+        let a = deterministic_fake_bytes(secret, "ada", "kdf", 16);
+        let b = deterministic_fake_bytes(secret, " ADA ", "kdf", 16);
+        let c = deterministic_fake_bytes(secret, "ada", "login", 16);
+        let d = deterministic_fake_bytes("another-server-secret-of-32-bytes!!", "ada", "kdf", 16);
         assert_eq!(a, b);
         assert_ne!(a, c);
+        // Without the secret nothing is told: another server answers otherwise.
+        assert_ne!(a, d);
+        // Longer than one HMAC block.
+        assert_eq!(
+            STANDARD
+                .decode(deterministic_fake_bytes(secret, "ada", "long", 40))
+                .unwrap()
+                .len(),
+            40
+        );
         // 16 raw bytes → 24-char standard base64.
         assert_eq!(a.len(), 24);
     }
 
     #[test]
     fn fake_recovery_envelope_is_stable_and_structurally_valid() {
-        let first = deterministic_fake_account_envelope("User@Example.com");
-        let second = deterministic_fake_account_envelope("User@Example.com");
+        let first = deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
+        let second = deterministic_fake_account_envelope("s".repeat(32).as_str(), "User@Example.com");
         assert_eq!(first, second);
         let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
         kutup_crypto::account_envelope::validate(

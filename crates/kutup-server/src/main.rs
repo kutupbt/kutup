@@ -443,35 +443,54 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
     if account_env.is_empty() {
         return;
     }
+    // `username:password`; the older `email:username:password` still reads
+    // (its email is not kept: accounts sign in with their username).
     let parts: Vec<&str> = account_env.trim().splitn(3, ':').collect();
-    if parts.len() != 3 {
-        tracing::warn!(
-            "bootstrapAdmin: malformed ADMIN_ACCOUNT (expected email:username:password)"
-        );
-        return;
-    }
-    let (email, username, password) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-    if email.is_empty() || username.is_empty() || password.is_empty() {
+    let (username, password) = match parts.as_slice() {
+        [username, password] => (username.trim(), password.trim()),
+        [_email, username, password] => (username.trim(), password.trim()),
+        _ => {
+            tracing::warn!("bootstrapAdmin: malformed ADMIN_ACCOUNT (expected username:password)");
+            return;
+        }
+    };
+    if username.is_empty() || password.is_empty() {
         tracing::warn!("bootstrapAdmin: ADMIN_ACCOUNT has an empty field — skipping");
         return;
     }
 
-    let exists: Option<i64> =
-        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = $1 OR username = $2")
-            .bind(email)
-            .bind(username)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
+    let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE username = $1")
+        .bind(username)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
     if exists.unwrap_or(0) > 0 {
         return;
     }
 
-    let hash = match bcrypt::hash(password, 10) {
+    // Derived as the administrator's browser derives any temporary password,
+    // so sign-in is the same for every account (Argon2id: off the runtime).
+    let secret = password.to_string();
+    let setup = match tokio::task::spawn_blocking(move || {
+        crate::handlers::auth::SetupKey::derive(&secret)
+    })
+    .await
+    {
+        Ok(Ok(setup)) => setup,
+        Ok(Err(e)) => {
+            tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
+            return;
+        }
+    };
+    let hash = match setup.checked_hash() {
         Ok(h) => h,
         Err(e) => {
-            tracing::warn!("bootstrapAdmin: bcrypt error for {email}: {e}");
+            tracing::warn!("bootstrapAdmin: {e:?}");
             return;
         }
     };
@@ -481,7 +500,7 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
         .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
     let res = sqlx::query(
         r#"INSERT INTO users (
-            email, username, login_key_hash,
+            username, login_key_hash,
             master_key_envelope, recovery_key_envelope,
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
@@ -489,19 +508,21 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
             account_protection_suite, account_protection_salt,
             argon_memory_kib, argon_iterations, argon_parallelism,
             is_admin, is_first_login, storage_quota_bytes
-        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true,$4)"#,
+        ) VALUES ($1,$2,'','','','','','','','',$3,$4,$5,$6,$7,true,true,$8)"#,
     )
-    .bind(email)
     .bind(username)
     .bind(&hash)
+    .bind(i16::try_from(setup.account_protection_suite).unwrap_or(i16::MAX))
+    .bind(&setup.account_protection_salt)
+    .bind(i32::try_from(setup.argon_memory_kib).unwrap_or(i32::MAX))
+    .bind(i32::try_from(setup.argon_iterations).unwrap_or(i32::MAX))
+    .bind(i32::try_from(setup.argon_parallelism).unwrap_or(i32::MAX))
     .bind(storage_quota_bytes)
     .execute(pool)
     .await;
     match res {
-        Ok(_) => tracing::info!(
-            "bootstrapAdmin: created break-glass admin account {email} (@{username})"
-        ),
-        Err(e) => tracing::warn!("bootstrapAdmin: insert error for {email}: {e}"),
+        Ok(_) => tracing::info!("bootstrapAdmin: created break-glass admin account @{username}"),
+        Err(e) => tracing::warn!("bootstrapAdmin: insert error for @{username}: {e}"),
     }
 }
 

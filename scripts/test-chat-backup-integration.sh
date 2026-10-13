@@ -6,10 +6,11 @@ project="${KUTUP_BACKUP_PROJECT:-kutup-chat-backup-test}"
 port="${KUTUP_BACKUP_TEST_PORT:-39083}"
 db_port="${KUTUP_BACKUP_DB_PORT:-39084}"
 s3_port="${KUTUP_BACKUP_S3_PORT:-39085}"
-test_admin_email="backup-admin@kutup.dev"
 test_admin_username="backupadmin"
 test_admin_password="BackupIntegrationAdmin123!"
-export ADMIN_ACCOUNT="$test_admin_email:$test_admin_username:$test_admin_password"
+# username:password (scripts/test-mail-inbound.sh keeps the older
+# email:username:password, which still reads).
+export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
@@ -53,6 +54,7 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 # One identity per account: an old account re-sealed to its key binding
 # (docs/plans/account-identity.md); it needs the database to make one.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
 

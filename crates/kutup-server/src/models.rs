@@ -82,9 +82,8 @@ pub struct AdminSettingsResponse {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightLoginResponse {
-    /// What the account's envelopes carry now (docs/plans/account-identity.md):
-    /// its key binding, or its old sign-in email until they are re-sealed.
-    pub envelope_binding: String,
+    // No envelope binding here: it comes with the session, once the password
+    // is proved (docs/plans/account-identity.md).
     pub account_protection_suite: u16,
     pub account_protection_salt: String,
     pub argon_memory_kib: u32,
@@ -463,9 +462,9 @@ pub struct UserRow {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAdminUserRequest {
-    pub email: String,
     pub username: String,
-    pub temp_password: String,
+    /// The temporary password, derived in the administrator's browser.
+    pub setup: crate::handlers::auth::SetupKey,
     pub storage_quota_bytes: i64,
 }
 
