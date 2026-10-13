@@ -188,7 +188,7 @@ function FeedbackCard({
         <dd className="min-w-0 truncate">
           {item.userId ? (
             <Link to={`/admin/users/${item.userId}`} className="font-medium hover:underline">
-              {item.userEmail}
+              {item.userUsername}
             </Link>
           ) : (
             <span className="text-muted-foreground">{t('admin.feedback.deletedAccount')}</span>

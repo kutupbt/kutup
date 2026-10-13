@@ -5,11 +5,11 @@ import { createNote, item, noteLive, openItem } from '../fixtures/drive'
 const PASSWORD = 'Deneme123*DriveIdentityPassword'
 const NEW_PASSWORD = 'Deneme123*DriveIdentityAfterWipe'
 
-/** Shares the note open on `page` with `email`; returns the dialog. */
-async function shareOpenNote(page: Page, email: string) {
+/** Shares the note open on `page` with `address`; returns the dialog. */
+async function shareOpenNote(page: Page, address: string) {
   await page.getByRole('button', { name: 'Share', exact: true }).click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('Email or Kutup address').fill(email)
+  await dialog.getByLabel('Email or Kutup address').fill(address)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   return dialog
 }
@@ -33,7 +33,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   const first = await createNote(aliceDrive)
   await noteLive(aliceDrive)
   const shared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
-  await shareOpenNote(aliceDrive, bob.email)
+  await shareOpenNote(aliceDrive, bob.address)
   expect((await shared).status()).toBe(204)
   await a.close()
 
@@ -50,11 +50,11 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await signInAsAdmin(admin)
   const adminPage = await admin.newPage()
   await adminPage.goto(appUrl('account', '/admin/users'))
-  await adminPage.getByPlaceholder('Search by email or username').fill(alice.email)
-  await adminPage.getByRole('row').filter({ hasText: alice.email }).first().click()
+  await adminPage.getByPlaceholder('Search by username or address').fill(alice.username)
+  await adminPage.getByRole('row').filter({ hasText: alice.username }).first().click()
   await adminPage.getByRole('button', { name: 'Wipe account', exact: true }).click()
   const confirm = adminPage.getByRole('alertdialog')
-  await confirm.getByRole('textbox').fill(alice.email)
+  await confirm.getByRole('textbox').fill(alice.username)
   await confirm.getByRole('button', { name: 'Wipe account', exact: true }).click()
   const copy = adminPage.getByRole('button', { name: 'Copy' }).first()
   await expect(copy).toBeVisible({ timeout: 30_000 })
@@ -64,7 +64,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   const a2 = await browser.newContext()
   const setup = await a2.newPage()
   await setup.goto(appUrl('account', '/login'))
-  await setup.getByLabel('Email', { exact: true }).fill(alice.email)
+  await setup.getByLabel('Username', { exact: true }).fill(alice.username)
   await setup.getByLabel('Password', { exact: true }).fill(temporary)
   await submitThroughRateLimit(setup, 'Sign in', setup.getByRole('heading', { name: 'Finish setting up your account' }))
   await finishNewKeys(setup, NEW_PASSWORD)
@@ -73,7 +73,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await noteLive(aliceDrive)
   const aliceSecondUrl = aliceDrive.url()
   const reshared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
-  await shareOpenNote(aliceDrive, bob.email)
+  await shareOpenNote(aliceDrive, bob.address)
   expect((await reshared).status()).toBe(204)
   await a2.close()
 
@@ -86,7 +86,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   const bobDrive = await openDrive(b)
   await createNote(bobDrive)
   await noteLive(bobDrive)
-  const dialog = await shareOpenNote(bobDrive, alice.email)
+  const dialog = await shareOpenNote(bobDrive, alice.address)
   await expect(dialog.getByText(/identity changed/)).toBeVisible({ timeout: 30_000 })
   const anyway = bobDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await dialog.getByTestId('identity-share-anyway').click()

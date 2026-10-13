@@ -56,7 +56,6 @@ async function restartHomeservers(
   accounts: Array<{
     server: Server
     postgres: 'postgres-a' | 'postgres-b'
-    email: string
     username: string
   }>,
 ): Promise<void> {
@@ -80,7 +79,7 @@ async function restartHomeservers(
     await expect.poll(async () => {
       try {
         const response = await fetch(
-          apiUrl(`/auth/login/preflight?email=${encodeURIComponent(account.email)}`, account.server),
+          apiUrl(`/auth/login/preflight?name=${encodeURIComponent(account.username)}`, account.server),
         )
         if (!response.ok) return false
         const preflight = await response.json() as { accountProtectionSalt?: string }
@@ -248,8 +247,8 @@ test.describe('two-server continuous backup recovery', () => {
     expect(backupRows('postgres-a', alice.username), 'closing Alice browser must not remove her account').toBe(1)
     expect(backupRows('postgres-b', bob.username), 'closing Bob browser must not remove his account').toBe(1)
     await restartHomeservers([
-      { server: 'primary', postgres: 'postgres-a', email: alice.email, username: alice.username },
-      { server: 'secondary', postgres: 'postgres-b', email: bob.email, username: bob.username },
+      { server: 'primary', postgres: 'postgres-a', username: alice.username },
+      { server: 'secondary', postgres: 'postgres-b', username: bob.username },
     ])
     expect(backupRows('postgres-a', alice.username), 'Alice account must survive homeserver restart').toBe(1)
     expect(backupRows('postgres-b', bob.username), 'Bob account must survive homeserver restart').toBe(1)

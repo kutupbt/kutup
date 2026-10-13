@@ -20,9 +20,6 @@ pub struct ChatSettings {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreflightResponse {
-    /// What the account's sealed keys are bound to.
-    #[serde(default)]
-    pub envelope_binding: String,
     pub account_protection_suite: u16,
     pub account_protection_salt: String,
     pub argon_memory_kib: u32,
@@ -91,6 +88,9 @@ pub struct LoginResponse {
     pub drive_private_key_envelope: String,
     #[serde(default)]
     pub public_key: String,
+    /// What the account's sealed keys are bound to; only with a session.
+    #[serde(default)]
+    pub envelope_binding: String,
     #[serde(default)]
     pub requires_totp: bool,
     #[serde(default)]

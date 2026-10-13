@@ -20,7 +20,7 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
-import { adminKey } from './api'
+import { adminKey, useServerName } from './api'
 
 // Mail groups for administrators (docs/plans/mail-groups.md): every group,
 // the role addresses first; creating lists and shared mailboxes (a shared
@@ -30,14 +30,6 @@ import { adminKey } from './api'
 const groupsAdminKey = [...adminKey, 'mail', 'groups'] as const
 const GIB = 1024 * 1024 * 1024
 const POLICIES: PostPolicy[] = ['anyone', 'local', 'members', 'managers']
-
-function useServerName() {
-  return useQuery({
-    queryKey: ['auth-settings', 'server-name'],
-    staleTime: Infinity,
-    queryFn: async () => (await api.get<{ chat?: { serverName?: string } }>('/auth/settings')).data.chat?.serverName ?? '',
-  })
-}
 
 export function MailGroupsPage() {
   const { t, i18n } = useTranslation()

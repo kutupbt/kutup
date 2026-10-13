@@ -72,13 +72,6 @@ pub(crate) fn login_with_password(
     // Step 1: preflight — fetch the complete account-protection revision.
     eprintln!("Deriving keys…");
     let preflight = client.login_preflight(name).context("preflight")?;
-    // What the account's keys are bound to: its key binding (or, before the
-    // web app re-seals them, its old sign-in email); never re-sealed here.
-    let binding = if preflight.envelope_binding.is_empty() {
-        name.to_string()
-    } else {
-        preflight.envelope_binding.clone()
-    };
 
     // Step 2: run Argon2id once, then expand the KEK and login key.
     kdf::AccountProtectionSuiteId::try_from(preflight.account_protection_suite)
@@ -116,6 +109,13 @@ pub(crate) fn login_with_password(
     if resp.requires_setup {
         bail!("account requires first-login setup — use the web UI to complete setup first");
     }
+    // What the account's keys are bound to (its key binding, or before the
+    // web app re-seals them its old sign-in email), told only with the
+    // session; never re-sealed here.
+    if resp.envelope_binding.is_empty() {
+        bail!("the server did not say what the account's keys are bound to");
+    }
+    let binding = resp.envelope_binding.clone();
 
     // Step 5: derive the KEK and decrypt the master + private keys.
     eprintln!("Decrypting vault…");

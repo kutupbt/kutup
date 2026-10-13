@@ -13,3 +13,14 @@ ALTER TABLE users ALTER COLUMN envelope_binding SET NOT NULL;
 -- which sets both.
 ALTER TABLE users ALTER COLUMN envelope_binding SET DEFAULT '';
 ALTER TABLE users ALTER COLUMN email DROP NOT NULL;
+-- An administrator's temporary password is derived in their browser now
+-- (docs/plans/account-identity.md, review H1): an account still waiting for
+-- its first sign-in under a password the server was sent as it is cannot
+-- sign in any more (an administrator gives it a new one), and gets a salt
+-- of its own, so preflight tells it from no other account.
+UPDATE users
+   SET login_key_hash = '',
+       account_protection_suite = 1,
+       account_protection_salt = encode(uuid_send(gen_random_uuid()), 'base64'),
+       argon_memory_kib = 65536, argon_iterations = 3, argon_parallelism = 1
+ WHERE is_first_login AND account_protection_salt = '';

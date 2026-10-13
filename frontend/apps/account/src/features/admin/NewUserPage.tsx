@@ -26,10 +26,9 @@ export function NewUserPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const create = useCreateUser()
-  const [created, setCreated] = useState<{ email: string; tempPassword: string } | null>(null)
+  const [created, setCreated] = useState<{ username: string; tempPassword: string } | null>(null)
 
   const schema = z.object({
-    email: z.string().trim().min(1, t('auth.validation.emailRequired')).includes('@', { message: t('auth.validation.emailInvalid') }),
     username: z.string().trim().regex(USERNAME, t('auth.validation.username')),
     tempPassword: z.string().min(1, t('admin.newUser.tempPasswordRequired')),
     storageQuotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
@@ -42,7 +41,7 @@ export function NewUserPage() {
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', username: '', tempPassword: generateTempPassword(), storageQuotaGib: 10 },
+    defaultValues: { username: '', tempPassword: generateTempPassword(), storageQuotaGib: 10 },
   })
 
   // The server's default for new accounts, once it is known.
@@ -54,12 +53,11 @@ export function NewUserPage() {
   const onSubmit = handleSubmit((values) => {
     create.mutate(
       {
-        email: values.email.trim(),
         username: values.username.trim(),
         tempPassword: values.tempPassword,
         storageQuotaBytes: gibToBytes(values.storageQuotaGib),
       },
-      { onSuccess: () => setCreated({ email: values.email.trim(), tempPassword: values.tempPassword }) },
+      { onSuccess: () => setCreated({ username: values.username.trim(), tempPassword: values.tempPassword }) },
     )
   })
 
@@ -71,7 +69,7 @@ export function NewUserPage() {
     return (
       <PageBody width="prose">
         {crumbs}
-        <PageHeader title={t('admin.newUser.createdTitle')} description={t('admin.newUser.createdDescription', { email: created.email })} />
+        <PageHeader title={t('admin.newUser.createdTitle')} description={t('admin.newUser.createdDescription', { name: created.username })} />
         <Card>
           <CardContent className="space-y-4 p-5">
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-3">
@@ -102,11 +100,8 @@ export function NewUserPage() {
         <CardContent className="p-5">
           <form className="space-y-4" onSubmit={(e) => void onSubmit(e)} noValidate>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label={t('auth.fields.email')} error={errors.email?.message} required>
-                {(field) => <Input {...field} {...register('email')} type="email" autoComplete="off" autoFocus />}
-              </Field>
-              <Field label={t('auth.fields.username')} error={errors.username?.message} required>
-                {(field) => <Input {...field} {...register('username')} autoComplete="off" autoCapitalize="off" spellCheck={false} />}
+              <Field label={t('auth.fields.username')} error={errors.username?.message} description={t('admin.newUser.usernameHint')} required>
+                {(field) => <Input {...field} {...register('username')} autoComplete="off" autoCapitalize="off" spellCheck={false} autoFocus />}
               </Field>
             </div>
             <Field

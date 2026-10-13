@@ -159,7 +159,7 @@ test('anyone reports a link; an administrator takes it down', async ({ browser }
   await reports.goto(appUrl('account', '/admin/reports'))
   const card = reports.getByTestId('link-report').filter({ hasText: complaint })
   await expect(card).toBeVisible({ timeout: 60_000 })
-  await expect(card).toContainText(alice.email)
+  await expect(card).toContainText(alice.username)
   await expect(card.getByRole('link', { name: 'Open the link' })).toHaveAttribute('href', link)
   await card.getByRole('button', { name: 'Take link down' }).click()
   await reports.getByRole('alertdialog').getByRole('button', { name: 'Take link down' }).click()

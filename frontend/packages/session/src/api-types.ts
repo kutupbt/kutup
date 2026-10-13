@@ -263,6 +263,7 @@ export interface AdminActivityEntry {
   adminUsername: string | null
   targetUserId: string | null
   targetEmail: string | null
+  targetUsername: string | null
   payload: Record<string, unknown>
   occurredAt: string
 }

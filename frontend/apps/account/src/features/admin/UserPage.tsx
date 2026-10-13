@@ -162,7 +162,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t(disabling ? 'admin.user.disableTitle' : 'admin.user.enableTitle')}
-            description={t(disabling ? 'admin.user.disableDescription' : 'admin.user.enableDescription', { email: user.email })}
+            description={t(disabling ? 'admin.user.disableDescription' : 'admin.user.enableDescription', { name: user.username })}
             submit={t(disabling ? 'admin.user.disable' : 'admin.user.enable')}
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
             onConfirm={() => update.mutate({ id: user.id, patch: { isActive: !disabling } }, { onSuccess: close })} />
@@ -174,7 +174,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t(promoting ? 'admin.user.promoteTitle' : 'admin.user.demoteTitle')}
-            description={t(promoting ? 'admin.user.promoteDescription' : 'admin.user.demoteDescription', { email: user.email })}
+            description={t(promoting ? 'admin.user.promoteDescription' : 'admin.user.demoteDescription', { name: user.username })}
             submit={t(promoting ? 'admin.user.promote' : 'admin.user.demote')}
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
             onConfirm={() => update.mutate({ id: user.id, patch: { isAdmin: promoting } }, { onSuccess: close })} />
@@ -184,7 +184,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t('admin.user.twoFactorTitle')}
-            description={t('admin.user.twoFactorDescription', { email: user.email })}
+            description={t('admin.user.twoFactorDescription', { name: user.username })}
             submit={t('admin.user.twoFactorOff')}
             pending={disable2fa.isPending} error={disable2fa.error} errorFallback={t('admin.user.actionFailed')}
             onConfirm={() => disable2fa.mutate(user.id, { onSuccess: () => { toast.success(t('admin.user.twoFactorDone')); close() } })} />
@@ -193,7 +193,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common} warningVariant="warn"
             title={t('admin.user.rotateTitle')}
-            description={t('admin.user.rotateDescription', { email: user.email })}
+            description={t('admin.user.rotateDescription', { name: user.username })}
             submit={t('admin.user.rotate')}
             pending={rotate.isPending} error={rotate.error} errorFallback={t('admin.user.actionFailed')}
             onConfirm={() => rotate.mutate({ id: user.id, tempPassword: pending.password }, {
@@ -204,9 +204,9 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t('admin.user.wipeTitle')}
-            description={t('admin.user.wipeDescription', { email: user.email })}
+            description={t('admin.user.wipeDescription', { name: user.username })}
             warning={t('admin.user.wipeWarning')}
-            confirmPhrase={user.email}
+            confirmPhrase={user.username}
             submit={t('admin.user.wipe')}
             pending={wipe.isPending} error={wipe.error} errorFallback={t('admin.user.actionFailed')}
             onConfirm={() => wipe.mutate({ id: user.id, tempPassword: pending.password }, {
@@ -217,13 +217,13 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t('admin.user.deleteTitle')}
-            description={t('admin.user.deleteDescription', { email: user.email })}
+            description={t('admin.user.deleteDescription', { name: user.username })}
             warning={t('admin.user.deleteWarning')}
-            confirmPhrase={user.email}
+            confirmPhrase={user.username}
             submit={t('admin.user.delete')}
             pending={remove.isPending} error={remove.error} errorFallback={t('admin.user.actionFailed')}
             onConfirm={() => remove.mutate(user.id, {
-              onSuccess: () => { toast.success(t('admin.user.deleted', { email: user.email })); void navigate('/admin/users') },
+              onSuccess: () => { toast.success(t('admin.user.deleted', { name: user.username })); void navigate('/admin/users') },
             })} />
         )
     }
@@ -231,9 +231,9 @@ export function UserPage() {
 
   return (
     <PageBody width="prose">
-      <Breadcrumb items={[{ label: t('nav.users'), to: '/admin/users' }, { label: user.email }]} />
+      <Breadcrumb items={[{ label: t('nav.users'), to: '/admin/users' }, { label: user.username }]} />
       <div className="space-y-2">
-        <PageHeader title={user.email} />
+        <PageHeader title={user.username} />
         <div className="flex flex-wrap items-center gap-2">
           <UserStatus user={user} />
           {user.isAdmin ? <Badge>{t('admin.users.admin')}</Badge> : null}

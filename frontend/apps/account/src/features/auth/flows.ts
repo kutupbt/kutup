@@ -31,8 +31,6 @@ import { activateSession } from '@kutup/session/profile'
 import { getSession, updateSession } from '@kutup/session/store'
 
 interface Preflight {
-  /** What the account's keys are bound to (docs/plans/account-identity.md). */
-  envelopeBinding: string
   accountProtectionSuite: number
   accountProtectionSalt: string
   argonMemoryKib: number
@@ -48,6 +46,8 @@ interface LoginResponse {
   masterKeyEnvelope: string
   drivePrivateKeyEnvelope: string
   publicKey: string
+  /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
+  envelopeBinding?: string
   requiresTotp?: boolean
   preAuthToken?: string
   requiresSetup?: boolean
@@ -57,7 +57,6 @@ interface LoginResponse {
 /** A second factor is due. Holds the derived key-encryption key, never the password. */
 export interface TotpChallenge {
   name: string
-  binding: string
   preAuthToken: string
   keyEncryptionKey: Uint8Array
   loginKey: string
@@ -144,47 +143,39 @@ async function ensureDriveKeyBinding(masterKey: Uint8Array): Promise<void> {
 }
 
 /**
- * Username (or Kutup address) + password. An account an administrator
- * created still has no key material (empty protection salt): its temporary
- * password is sent as-is and the server answers `requiresSetup`. An account
- * whose keys are still bound to its old sign-in email comes back with a
- * pending re-seal.
+ * Username (or Kutup address) + password, derived under the salt preflight
+ * answers, for every account: one an administrator created too (its
+ * temporary password was derived in the administrator's browser), which the
+ * server answers with `requiresSetup`. The keys' binding comes only with the
+ * session. An account whose keys are still bound to its old sign-in email
+ * comes back with a pending re-seal.
  */
 export async function signIn(name: string, password: string): Promise<SignInResult> {
   const { data: preflight } = await api.get<Preflight>('/auth/login/preflight', {
     params: { name },
   })
-  const binding = preflight.envelopeBinding
-  const protection = protectionFrom(preflight)
-  let loginKey: string
-  let keyEncryptionKey: Uint8Array | null = null
-  if (protection.salt === '') {
-    loginKey = toBase64(new TextEncoder().encode(password))
-  } else {
-    const derived = await deriveAccountProtectionInWorker(password, protection)
-    keyEncryptionKey = derived.keyEncryptionKey
-    loginKey = toBase64(derived.loginKey)
-  }
+  const derived = await deriveAccountProtectionInWorker(password, protectionFrom(preflight))
+  const keyEncryptionKey = derived.keyEncryptionKey
+  const loginKey = toBase64(derived.loginKey)
 
   const { data } = await api.post<LoginResponse>('/auth/login', { name, loginKey })
   if (data.requiresSetup && data.setupToken) {
+    keyEncryptionKey.fill(0)
     return { kind: 'setup', setup: { name, setupToken: data.setupToken } }
   }
-  if (!keyEncryptionKey) throw new Error('the server returned a session for an account without keys')
   if (data.requiresTotp && data.preAuthToken) {
-    return { kind: 'totp', challenge: { name, binding, preAuthToken: data.preAuthToken, keyEncryptionKey, loginKey } }
+    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, keyEncryptionKey, loginKey } }
   }
-  return finishSignIn(data, name, binding, keyEncryptionKey, loginKey)
+  return finishSignIn(data, name, keyEncryptionKey, loginKey)
 }
 
 /** Unlocks and activates; keeps the password keys for a re-seal when one is due. */
-async function finishSignIn(
-  data: LoginResponse,
-  name: string,
-  binding: string,
-  keyEncryptionKey: Uint8Array,
-  loginKey: string,
-): Promise<SignInResult> {
+async function finishSignIn(data: LoginResponse, name: string, keyEncryptionKey: Uint8Array, loginKey: string): Promise<SignInResult> {
+  const binding = data.envelopeBinding
+  if (!binding) {
+    keyEncryptionKey.fill(0)
+    throw new Error('the server did not say what the keys are bound to')
+  }
   try {
     await unlockAndActivate(data, binding, keyEncryptionKey)
   } catch (error) {
@@ -203,7 +194,7 @@ export async function completeTotp(challenge: TotpChallenge, code: string): Prom
     preAuthToken: challenge.preAuthToken,
     code,
   })
-  return finishSignIn(data, challenge.name, challenge.binding, challenge.keyEncryptionKey, challenge.loginKey)
+  return finishSignIn(data, challenge.name, challenge.keyEncryptionKey, challenge.loginKey)
 }
 
 /** Fresh account keys bound to a key binding drawn here (Argon2id in a worker). */

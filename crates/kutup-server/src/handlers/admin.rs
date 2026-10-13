@@ -1984,6 +1984,8 @@ struct ActivityEntry {
     /// The target's live email — `null` once deleted; the payload keeps the
     /// at-action-time snapshot.
     target_email: Option<String>,
+    /// The target's live username — `null` once deleted.
+    target_username: Option<String>,
     payload: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
     occurred_at: OffsetDateTime,
@@ -2053,7 +2055,7 @@ pub async fn activity_export(
     let limit = q.limit.unwrap_or(1000).clamp(1, 5000);
     let entries = load_activity_entries(&state.pool, &q, limit).await?;
     let mut csv = String::from(
-        "id,occurred_at,action,admin_user_id,admin_email,admin_username,target_user_id,target_email,payload\n",
+        "id,occurred_at,action,admin_user_id,admin_email,admin_username,target_user_id,target_email,target_username,payload\n",
     );
     for entry in entries {
         let values = [
@@ -2071,6 +2073,7 @@ pub async fn activity_export(
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
             entry.target_email.unwrap_or_default(),
+            entry.target_username.unwrap_or_default(),
             serde_json::to_string(&entry.payload)
                 .map_err(|_| AppError::internal("could not serialize audit payload"))?,
         ];
@@ -2120,12 +2123,13 @@ async fn load_activity_entries(
         Option<String>,
         Option<Uuid>,
         Option<String>,
+        Option<String>,
         serde_json::Value,
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT l.id, l.action, l.admin_user_id, a.email, a.username,
-                  l.target_user_id, t.email, l.payload, l.occurred_at
+                  l.target_user_id, t.email, t.username, l.payload, l.occurred_at
            FROM admin_audit_log l
            LEFT JOIN users a ON a.id = l.admin_user_id
            LEFT JOIN users t ON t.id = l.target_user_id
@@ -2155,7 +2159,7 @@ async fn load_activity_entries(
     Ok(rows
         .into_iter()
         .map(
-            |(id, action, admin_id, a_email, a_username, target_id, t_email, payload, at)| {
+            |(id, action, admin_id, a_email, a_username, target_id, t_email, t_username, payload, at)| {
                 ActivityEntry {
                     id,
                     action,
@@ -2164,6 +2168,7 @@ async fn load_activity_entries(
                     admin_username: a_username,
                     target_user_id: target_id,
                     target_email: t_email,
+                    target_username: t_username,
                     payload,
                     occurred_at: at,
                 }

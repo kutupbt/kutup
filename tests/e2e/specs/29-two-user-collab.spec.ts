@@ -38,7 +38,7 @@ test('a note in a shared folder is edited together by two people', async ({ brow
   })
   await itemAction(a, folder, 'Share')
   const dialog = a.getByRole('dialog')
-  await dialog.getByLabel('Email or Kutup address').fill(bob.email)
+  await dialog.getByLabel('Email or Kutup address').fill(bob.address)
   await dialog.getByLabel('Can add and edit files').check()
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect.poll(() => localShare, { timeout: 30_000 }).toBe(201)
@@ -114,7 +114,7 @@ test('a file is shared from its own view', async ({ browser }) => {
   await a.getByRole('button', { name: 'Share', exact: true }).click()
   const dialog = a.getByRole('dialog').filter({ hasText: "They get this file's own key" })
   await expect(dialog.getByRole('heading').first()).toContainText(note)
-  await dialog.getByLabel('Email or Kutup address').fill(bob.email)
+  await dialog.getByLabel('Email or Kutup address').fill(bob.address)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(a.getByText(`Shared with ${bob.username}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
   // Still in the editor.
@@ -140,7 +140,7 @@ test('a file is shared from its own view', async ({ browser }) => {
   await officeReady({ page: a, logs })
   await a.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(dialog.getByRole('heading').first()).toContainText('.docx')
-  await dialog.getByLabel('Email or Kutup address').fill(bob.email)
+  await dialog.getByLabel('Email or Kutup address').fill(bob.address)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   await expect(a.getByText(`Shared with ${bob.username}`, { exact: false }).first()).toBeVisible({ timeout: 30_000 })
 

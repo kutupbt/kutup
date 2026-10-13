@@ -29,6 +29,6 @@ test("a sign-in link made for someone else's tab signs nobody in", async ({ brow
   const tab = await victim.newPage()
   await tab.goto(link)
   await tab.waitForURL((url) => url.origin === appOrigin('account') && url.pathname === '/login', { timeout: 60_000 })
-  await expect(tab.getByLabel('Email', { exact: true })).toBeVisible()
+  await expect(tab.getByLabel('Username', { exact: true })).toBeVisible()
   await victim.close()
 })

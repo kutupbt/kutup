@@ -1,4 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ACCOUNT_PROTECTION_DEFAULTS, generateAccountProtectionSalt, toBase64 } from '@kutup/crypto'
+import { deriveAccountProtectionInWorker } from '@kutup/crypto/accountProtectionWorker'
 import api from '@kutup/session/client'
 import type {
   AdminActivityResponse,
@@ -37,6 +39,15 @@ export function useAdminStats() {
   })
 }
 
+/** The domain after the @ of this server's addresses. */
+export function useServerName() {
+  return useQuery({
+    queryKey: ['auth-settings', 'server-name'],
+    staleTime: Infinity,
+    queryFn: async () => (await api.get<{ chat?: { serverName?: string } }>('/auth/settings')).data.chat?.serverName ?? '',
+  })
+}
+
 export function useAdminUsers() {
   return useQuery({
     queryKey: usersKey,
@@ -44,16 +55,34 @@ export function useAdminUsers() {
   })
 }
 
+/**
+ * A temporary password as the server keeps it (docs/plans/account-identity.md):
+ * derived here, under a salt of its own, as any password is; the server
+ * never sees the password, and the account's first sign-in derives the same.
+ */
+export async function setupKeyFor(tempPassword: string) {
+  const protection = { ...ACCOUNT_PROTECTION_DEFAULTS, salt: toBase64(generateAccountProtectionSalt()) }
+  const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(tempPassword, protection)
+  keyEncryptionKey.fill(0)
+  return {
+    loginKey: toBase64(loginKey),
+    accountProtectionSuite: protection.suite,
+    accountProtectionSalt: protection.salt,
+    argonMemoryKib: protection.memoryKib,
+    argonIterations: protection.iterations,
+    argonParallelism: protection.parallelism,
+  }
+}
+
 export interface CreateUserInput {
-  email: string
   username: string
   tempPassword: string
   storageQuotaBytes: number
 }
 
 export function useCreateUser() {
-  return useAdminMutation(async (body: CreateUserInput) => {
-    await api.post('/admin/users', body)
+  return useAdminMutation(async ({ username, tempPassword, storageQuotaBytes }: CreateUserInput) => {
+    await api.post('/admin/users', { username, setup: await setupKeyFor(tempPassword), storageQuotaBytes })
   })
 }
 
@@ -77,13 +106,13 @@ export function useForceDisable2fa() {
 
 export function useRotateTempPassword() {
   return useAdminMutation(async ({ id, tempPassword }: { id: string; tempPassword: string }) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, { tempPassword })
+    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, { setup: await setupKeyFor(tempPassword) })
   })
 }
 
 export function useWipeUser() {
   return useAdminMutation(async ({ id, tempPassword }: { id: string; tempPassword: string }) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { tempPassword })
+    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { setup: await setupKeyFor(tempPassword) })
   })
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { appUrl, finishNewKeys, newAccount, signInAsAdmin } from '../fixtures/apps'
+import { ADMIN_USERNAME, appUrl, finishNewKeys, newAccount, signInAsAdmin } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*FirstLoginPassword'
 
@@ -12,7 +12,6 @@ test('an account an administrator created finishes setup at its first sign-in', 
   await signInAsAdmin(adminContext)
   const admin = await adminContext.newPage()
   await admin.goto(appUrl('account', '/admin/users/new'))
-  await admin.getByLabel('Email', { exact: true }).fill(person.email)
   await admin.getByLabel('Username', { exact: true }).fill(person.username)
   await admin.getByRole('button', { name: 'Create user' }).click()
   await expect(admin.getByRole('heading', { name: 'User created' })).toBeVisible({ timeout: 30_000 })
@@ -24,7 +23,7 @@ test('an account an administrator created finishes setup at its first sign-in', 
   const context = await browser.newContext()
   const page = await context.newPage()
   await page.goto(appUrl('account', '/login'))
-  await page.getByLabel('Email', { exact: true }).fill(person.email)
+  await page.getByLabel('Username', { exact: true }).fill(person.username)
   await page.getByLabel('Password', { exact: true }).fill(temporary!)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible({ timeout: 60_000 })
@@ -38,7 +37,7 @@ test('an account an administrator created finishes setup at its first sign-in', 
     [PASSWORD, 'Welcome'],
   ] as const) {
     await page.goto(appUrl('account', '/login'))
-    await page.getByLabel('Email', { exact: true }).fill(person.email)
+    await page.getByLabel('Username', { exact: true }).fill(person.username)
     await page.getByLabel('Password', { exact: true }).fill(password)
     await page.getByRole('button', { name: 'Sign in' }).click()
     if (outcome === 'Welcome') await expect(page.getByRole('heading', { name: /^Welcome/ })).toBeVisible({ timeout: 60_000 })
@@ -51,16 +50,16 @@ test('an account an administrator created finishes setup at its first sign-in', 
   await context.close()
 })
 
-test('sign-in refuses a wrong password and an unknown email alike', async ({ browser }) => {
+test('sign-in refuses a wrong password and an unknown name alike', async ({ browser }) => {
   const context = await browser.newContext()
   const page = await context.newPage()
-  for (const email of ['admin@kutup.dev', `nobody-${Date.now()}@kutup.dev`]) {
+  for (const name of [ADMIN_USERNAME, `nobody${Date.now()}`]) {
     await page.goto(appUrl('account', '/login'))
-    await page.getByLabel('Email', { exact: true }).fill(email)
+    await page.getByLabel('Username', { exact: true }).fill(name)
     await page.getByLabel('Password', { exact: true }).fill('Not*TheRightPassword123')
     await page.getByRole('button', { name: 'Sign in' }).click()
     // The same message either way: sign-in does not reveal which accounts exist.
-    await expect(page.getByRole('alert').filter({ hasText: 'Sign-in failed. Check your email and password.' })).toBeVisible({ timeout: 60_000 })
+    await expect(page.getByRole('alert').filter({ hasText: 'Sign-in failed. Check your username and password.' })).toBeVisible({ timeout: 60_000 })
     await expect(page).toHaveURL(/\/login/)
   }
   await context.close()
