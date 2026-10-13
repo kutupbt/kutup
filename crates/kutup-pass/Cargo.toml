@@ -9,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 # The patched copy of the `keepass` crate (vendor/keepass/KUTUP.md).
 keepass = { path = "vendor/keepass", features = ["save_kdbx4", "totp"] }
+# Kept vault keys (kept.rs) use the account envelope format.
+kutup-crypto = { path = "../kutup-crypto" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 uuid.workspace = true
 thiserror.workspace = true

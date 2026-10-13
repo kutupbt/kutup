@@ -154,11 +154,11 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
     setPending(true)
     setError(null)
     try {
-      await openVault(vault, key, session.userId)
+      const opened = await openVault(vault, key, session.userId)
       clearLocked(fileId)
       if (remember) {
         try {
-          await keepKey(session, fileId, key)
+          await keepKey(session, fileId, opened.vault())
         } catch {
           toast.error(t('unlock.keepFailed'))
         }

@@ -14,9 +14,9 @@ use zeroize::Zeroizing;
 /// The composite key of a vault: a password, a key file, or both.
 #[derive(Clone, Default)]
 pub struct VaultKey {
-    password: Option<Zeroizing<String>>,
-    password_hash: Option<Zeroizing<[u8; 32]>>,
-    key_file: Option<Zeroizing<Vec<u8>>>,
+    pub(crate) password: Option<Zeroizing<String>>,
+    pub(crate) password_hash: Option<Zeroizing<[u8; 32]>>,
+    pub(crate) key_file: Option<Zeroizing<Vec<u8>>>,
 }
 
 impl std::fmt::Debug for VaultKey {
@@ -49,6 +49,16 @@ impl VaultKey {
     pub fn with_password_hash(mut self, hash: &[u8; 32]) -> Self {
         self.password_hash = Some(Zeroizing::new(*hash));
         self
+    }
+
+    /// The password's hash, when that is how the key holds the password.
+    pub fn password_hash(&self) -> Option<&[u8; 32]> {
+        self.password_hash.as_deref()
+    }
+
+    /// The key file's contents, if the key has one.
+    pub fn key_file(&self) -> Option<&[u8]> {
+        self.key_file.as_deref().map(Vec::as_slice)
     }
 
     /// Adds the contents of a key file (any of KeePass's key file kinds).

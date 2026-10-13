@@ -4,12 +4,14 @@
 // bound to the account's key binding and the vault (docs/plans/account-identity.md).
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fromBase64, toBase64 } from '@kutup/crypto/base64'
-import { openPassVaultSecret, sealPassVaultSecret, type PassVaultSecret } from '@kutup/crypto/passVault'
+import { fromBase64 } from '@kutup/crypto/base64'
 import api from '@kutup/session/client'
 import type { Session } from '@kutup/session/store'
-import { keyFileSecret } from '../vault/client'
+import { openKept, type KeptKey, type VaultHandle } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
+
+// What is kept, and how, is decided once, in Rust (kutup_pass::kept, through
+// the Pass worker); this file only moves records to and from the server.
 
 interface SecretRow {
   fileId: string
@@ -26,11 +28,11 @@ export function useVaultSecrets() {
   })
 }
 
-async function openRow(session: Session, rows: SecretRow[] | undefined, fileId: string): Promise<PassVaultSecret | null> {
+async function openRow(session: Session, rows: SecretRow[] | undefined, fileId: string): Promise<KeptKey | null> {
   const row = rows?.find((r) => r.fileId === fileId)
   if (!row) return null
   try {
-    return await openPassVaultSecret(row.envelope, toBase64(session.masterKey), session.envelopeBinding, fileId)
+    return await openKept(row.envelope, session.masterKey, session.envelopeBinding, fileId)
   } catch {
     // Sealed for another account or vault: as if there were none.
     return null
@@ -68,23 +70,24 @@ export async function keptGeneratedPassword(session: Session, rows: SecretRow[] 
   return (await openRow(session, rows, fileId))?.generatedPassword ?? null
 }
 
+/** Stores a kept key (from {@link VaultHandle.keepKey}) for vault `fileId`. */
+export async function putKeptKey(fileId: string, envelope: string): Promise<void> {
+  await api.put(`/pass/vault-secrets/${fileId}`, { envelope })
+}
+
 /**
- * Keeps the key of vault `fileId` in the account. A password the person
- * chose is kept only as its SHA-256; a `generated` one as it is, to be shown.
+ * Keeps the key of the vault open in `vault` (the key it was opened or made
+ * with) for `fileId`. A password the person chose is kept only as its
+ * SHA-256; a `generated` one as it is, to be shown.
  */
-export async function keepVaultKey(session: Session, fileId: string, key: VaultKeyInput, generated = false): Promise<void> {
-  if (key.password === null && key.passwordHash) throw new Error('a kept key is kept from the password')
-  const keyFile = key.keyFile ? await keyFileSecret(key.keyFile) : null
-  const secret = { password: key.password, keyFile: keyFile ? toBase64(keyFile) : null, generated }
-  await api.put(`/pass/vault-secrets/${fileId}`, {
-    envelope: await sealPassVaultSecret(toBase64(session.masterKey), session.envelopeBinding, fileId, secret),
-  })
+export async function keepVaultKey(session: Session, fileId: string, vault: VaultHandle, generated = false): Promise<void> {
+  await putKeptKey(fileId, await vault.keepKey(session.masterKey, session.envelopeBinding, fileId, generated))
 }
 
 export function useKeepVaultKey() {
   const queryClient = useQueryClient()
-  return async (session: Session, fileId: string, key: VaultKeyInput, generated = false): Promise<void> => {
-    await keepVaultKey(session, fileId, key, generated)
+  return async (session: Session, fileId: string, vault: VaultHandle, generated = false): Promise<void> => {
+    await keepVaultKey(session, fileId, vault, generated)
     await queryClient.invalidateQueries({ queryKey: secretsKey })
   }
 }

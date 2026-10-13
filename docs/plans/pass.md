@@ -379,7 +379,12 @@ one database, plus a report of what happened.
   Creating or opening a vault offers to remember it; a record of a vault
   its owner cannot reach now (unshared, perhaps only for a moment) is
   unlisted, never deleted on a read (a failed access check fails the
-  request), and purging the vault deletes them all. `kutup sync` tries the kept secret before the environment and the
+  request), and purging the vault deletes them all. What is kept, from
+  which key, and what opens is decided in one place, `kutup_pass::kept`
+  (`seal` from an open vault's key, `open` to a key): the CLI calls it
+  directly and the website through the Pass worker (`Vault.keepKey`,
+  `openKept`), so the browser never handles a key file's reduction or the
+  payload itself. `kutup sync` tries the kept secret before the environment and the
   prompt, offers to keep a typed password, and `kutup pass keep|ls|forget`
   manages them headless.
 - **Vault secrets and the account's binding** (docs/plans/account-identity.md):
