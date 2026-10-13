@@ -70,6 +70,11 @@ rust() {
 }
 
 web() {
+  # The apps' Vite configs import TypeScript from packages/config, which Node
+  # loads natively from 22.18 (type stripping on by default). CI and the
+  # images use the newest Node 22; an older local Node fails the build.
+  node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=18)?0:1)' \
+    || { echo "gate: web needs Node 22.18 or newer (this is $(node -v))" >&2; return 2; }
   step "Frontend dependencies"
   pnpm -C frontend install --frozen-lockfile
   step "WASM modules"
@@ -109,6 +114,10 @@ browser() {
   fi
   local specs
   specs="$(suite_specs "$@")"
+  if [ -z "$specs" ]; then
+    echo "gate: suite '$*' lists no specs" >&2
+    return 2
+  fi
   step "Browser specs: $*"
   # One spec path per word: spec paths never contain spaces.
   # shellcheck disable=SC2086
