@@ -1427,7 +1427,7 @@ fn chat_v1_contract() {
 
     let denied = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/profile/{}",
+            "{base}/api/chat/users/{account_a}/profile/{}",
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1438,7 +1438,7 @@ fn chat_v1_contract() {
 
     let visible_v1: Value = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/profile/{}",
+            "{base}/api/chat/users/{account_a}/profile/{}",
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1483,7 +1483,7 @@ fn chat_v1_contract() {
     assert_eq!(owner, profile_v2);
     let old_still_visible = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/profile/{}",
+            "{base}/api/chat/users/{account_a}/profile/{}",
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1526,7 +1526,7 @@ fn chat_v1_contract() {
     );
     let sync_bundles_value: Value = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}"
+            "{base}/api/chat/users/{account_a}/keys?syncDeviceId={dev_a}"
         ))
         .bearer_auth(&ta)
         .send()
@@ -1611,7 +1611,7 @@ fn chat_v1_contract() {
 
     // A fetches B's bundles: kyber always present, one-time EC consumed.
     let bundles_value: Value = c
-        .get(format!("{base}/api/chat/users/{ub}/keys"))
+        .get(format!("{base}/api/chat/users/{account_b}/keys"))
         .bearer_auth(&ta)
         .send()
         .unwrap()
@@ -1633,7 +1633,7 @@ fn chat_v1_contract() {
     println!("ok  - bundle fetch + account-signed manifest binding");
 
     let send = |send_id: &str, dev: u32, reg: u32, content: &str| {
-        c.post(format!("{base}/api/chat/users/{ub}/messages"))
+        c.post(format!("{base}/api/chat/users/{account_b}/messages"))
             .bearer_auth(&ta)
             .json(&json!({
                 "senderDeviceId": dev_a,
