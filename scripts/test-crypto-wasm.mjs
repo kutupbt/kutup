@@ -901,20 +901,27 @@ assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', t
     return login
   }
   const login = signIn(v.storedRecord, v.password)
-  assert.equal(login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), v.masterKey)
   assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, '9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0'))
+  assert.equal(login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), v.masterKey)
+  // Opened once: the export key is gone.
+  assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), /not finished/)
   assert.throws(() => login.finish('AAAA'), /already finished/)
   assert.throws(() => signIn(v.storedRecord, 'wrong'), /authentication failed/)
   assert.throws(() => signIn(undefined, v.password, 'nobody'), /authentication failed/)
   // The password change: the new record, the new password, the new envelope only.
   const changed = signIn(v.newStoredRecord, v.newPassword)
   assert.equal(changed.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding), v.masterKey)
-  assert.throws(() => login.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding))
+  // The old export key does not open the new envelope.
+  const old = signIn(v.storedRecord, v.password)
+  assert.throws(() => old.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding))
+  old.close()
+  assert.throws(() => old.openMasterKey(v.masterKeyEnvelope, v.keyBinding), /not finished/)
   assert.throws(() => signIn(v.newStoredRecord, v.password), /authentication failed/)
   // A registration made in the browser signs in, and its envelope opens.
   const registration = crypto.OpaqueRegistration.start('browser password')
   const record = crypto.OpaqueServer.record(registration.finish(server.registrationResponse(registration.request, v.keyBinding)))
   const envelope = registration.sealMasterKey(v.masterKey, v.keyBinding)
+  assert.throws(() => registration.sealMasterKey(v.masterKey, v.keyBinding), /not finished/)
   assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
 }
 

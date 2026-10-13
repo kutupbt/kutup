@@ -101,6 +101,10 @@ the static gate, and consider `cargo vet` audits for the crypto crates
 (`opaque-ke`, `voprf`, `hpke-rs`, `pgp`, `dryoc`, `ed25519-dalek`). Raised in the
 OPAQUE review (2026-10-13).
 
+Also from that review: the crypto WASM module carries `OpaqueServer` (the
+server half of OPAQUE) for the vector tests. A second build with a test
+feature would keep it out of the production bundle.
+
 ---
 
 ## Important (should-have, can ship after v1)

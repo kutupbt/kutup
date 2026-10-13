@@ -3164,17 +3164,24 @@ impl OpaqueRegistration {
     /// Seals the account's master key for this password: the password envelope.
     #[wasm_bindgen(js_name = sealMasterKey)]
     pub fn seal_master_key(
-        &self,
+        &mut self,
         master_key_base64: &str,
         key_binding: &str,
     ) -> Result<String, JsValue> {
+        // Once: the export key is wiped afterwards, sealed or not.
         let export = self
             .export
-            .as_ref()
+            .take()
             .ok_or_else(|| js_error("opaque: the registration is not finished"))?;
         export
             .seal_master_key(&master_key_32(master_key_base64)?, key_binding)
             .map_err(opaque_error)
+    }
+
+    /// Ends the registration: its state and export key are wiped.
+    pub fn close(&mut self) {
+        self.state = None;
+        self.export = None;
     }
 }
 
@@ -3220,9 +3227,14 @@ impl OpaqueLogin {
     }
 
     /// Opens the account's password envelope (sent once the server accepted
-    /// the finalization): the master key, canonical base64.
+    /// the finalization): the master key, canonical base64, as the session
+    /// layer holds it. Once it opens, the export key is wiped.
     #[wasm_bindgen(js_name = openMasterKey)]
-    pub fn open_master_key(&self, envelope: &str, key_binding: &str) -> Result<String, JsValue> {
+    pub fn open_master_key(
+        &mut self,
+        envelope: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
         let export = self
             .export
             .as_ref()
@@ -3230,7 +3242,16 @@ impl OpaqueLogin {
         let master_key = export
             .open_master_key(envelope, key_binding)
             .map_err(opaque_error)?;
+        // Opened: the export key is no longer needed.
+        self.export = None;
         Ok(STANDARD.encode(master_key.as_slice()))
+    }
+
+    /// Ends the sign-in: its state and export key are wiped (a reauth, which
+    /// opens nothing, or a sign-in given up).
+    pub fn close(&mut self) {
+        self.state = None;
+        self.export = None;
     }
 }
 
@@ -3300,7 +3321,10 @@ impl OpaqueServer {
             kutup_crypto::opaque::credential_identifier(key_binding_or_name)
                 .map_err(opaque_error)?
         } else {
-            kutup_crypto::opaque::unknown_credential_identifier(key_binding_or_name)
+            kutup_crypto::opaque::unknown_credential_identifier(
+                &kutup_crypto::opaque::CanonicalName::parse(key_binding_or_name)
+                    .map_err(opaque_error)?,
+            )
         };
         let started = kutup_crypto::opaque::server_login_start(
             &self.secrets,

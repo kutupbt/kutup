@@ -127,7 +127,9 @@ fn derive(master_key_envelope: &str, new_master_key_envelope: &str) -> Vectors {
             .unwrap()
             .as_slice()),
         master_key_envelope: master_key_envelope.into(),
-        unknown_credential: b64(&opaque::unknown_credential_identifier("nobody")),
+        unknown_credential: b64(&opaque::unknown_credential_identifier(
+            &opaque::CanonicalName::parse("nobody").unwrap(),
+        )),
         new_password: NEW_PASSWORD.into(),
         new_stored_record: b64(&opaque::server_registration_record(&changed.record).unwrap()),
         new_master_key_envelope: new_master_key_envelope.into(),

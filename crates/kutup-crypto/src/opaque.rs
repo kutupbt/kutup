@@ -38,11 +38,10 @@ use opaque_ke::{
     Ristretto255, ServerLogin, ServerLoginParameters, ServerRegistration, ServerSetup, TripleDh,
 };
 use sha2::{Sha256, Sha512};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::account_envelope::{self, AccountEnvelopePurpose};
 use crate::error::{CryptoError, Result};
-use crate::kdf;
 
 /// The suite number stored with each account's record.
 pub const SUITE: u16 = 1;
@@ -56,7 +55,13 @@ const SETUP_AAD: &[u8] = b"kutup/opaque-setup/v1\0";
 const SETUP_MAGIC: &[u8; 8] = b"KUTOPS1\0";
 const NONCE_LEN: usize = 24;
 
-/// Argon2id at the account-protection V1 cost: the suite's KSF.
+/// Suite 1's Argon2id passes. Its own constants: a change to the account
+/// protection elsewhere must never change suite 1.
+const KSF_PASSES: u64 = 3;
+/// Suite 1's Argon2id memory: 64 MiB (one lane).
+const KSF_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+
+/// Argon2id at 64 MiB, 3 passes, 1 lane: the suite's KSF.
 #[derive(Default)]
 pub struct Argon2idV1;
 
@@ -70,8 +75,8 @@ impl Ksf for Argon2idV1 {
             output.as_mut_slice(),
             input.as_slice(),
             &[0u8; 16],
-            kdf::OPSLIMIT,
-            kdf::MEMLIMIT,
+            KSF_PASSES,
+            KSF_MEMORY_BYTES,
             PasswordHashAlgorithm::Argon2id13,
         )
         .map_err(|_| InternalError::KsfError)?;
@@ -128,6 +133,22 @@ fn protocol(error: ProtocolError) -> CryptoError {
     }
 }
 
+/// Parses an OPAQUE message or state, and refuses it unless it is exactly the
+/// canonical encoding (opaque-ke's parsers ignore trailing bytes): every message,
+/// record and stored state has one byte string only.
+macro_rules! exact {
+    ($ty:ty, $bytes:expr) => {{
+        let bytes: &[u8] = $bytes;
+        let value = <$ty>::deserialize(bytes).map_err(protocol)?;
+        if value.serialize().as_slice() != bytes {
+            return Err(CryptoError::InvalidInput(
+                "opaque: not a canonical message".into(),
+            ));
+        }
+        value
+    }};
+}
+
 fn client_finish_params(ksf: &Argon2idV1) -> ClientLoginFinishParameters<'_, '_, '_, Suite1> {
     ClientLoginFinishParameters::new(Some(CONTEXT), Default::default(), Some(ksf))
 }
@@ -145,6 +166,13 @@ fn server_params() -> ServerLoginParameters<'static, 'static> {
 pub struct ExportKey(Zeroizing<Vec<u8>>);
 
 impl ExportKey {
+    /// Takes the key out of opaque-ke's result, wiping the original.
+    fn take(source: &mut [u8]) -> Self {
+        let key = Self(Zeroizing::new(source.to_vec()));
+        source.zeroize();
+        key
+    }
+
     /// The key that seals the account's master key (the password envelope),
     /// bound to the account's key binding.
     pub fn master_key_kek(&self, key_binding: &str) -> Result<Zeroizing<[u8; 32]>> {
@@ -244,9 +272,9 @@ impl ClientRegistering {
         rng: &mut R,
         response: &[u8],
     ) -> Result<Registered> {
-        let response = RegistrationResponse::<Suite1>::deserialize(response).map_err(protocol)?;
+        let response = exact!(RegistrationResponse::<Suite1>, response);
         let ksf = Argon2idV1;
-        let finished = self
+        let mut finished = self
             .state
             .finish(
                 rng,
@@ -257,7 +285,7 @@ impl ClientRegistering {
             .map_err(protocol)?;
         Ok(Registered {
             record: finished.message.serialize().to_vec(),
-            export_key: ExportKey(Zeroizing::new(finished.export_key.to_vec())),
+            export_key: ExportKey::take(&mut finished.export_key),
         })
     }
 }
@@ -309,15 +337,15 @@ impl ClientSigningIn {
         rng: &mut R,
         response: &[u8],
     ) -> Result<SignedIn> {
-        let response = CredentialResponse::<Suite1>::deserialize(response).map_err(protocol)?;
+        let response = exact!(CredentialResponse::<Suite1>, response);
         let ksf = Argon2idV1;
-        let finished = self
+        let mut finished = self
             .state
             .finish(rng, &self.password, response, client_finish_params(&ksf))
             .map_err(protocol)?;
         Ok(SignedIn {
             finalization: finished.message.serialize().to_vec(),
-            export_key: ExportKey(Zeroizing::new(finished.export_key.to_vec())),
+            export_key: ExportKey::take(&mut finished.export_key),
         })
     }
 }
@@ -331,10 +359,48 @@ pub fn credential_identifier(key_binding: &str) -> Result<Vec<u8>> {
     Ok([CREDENTIAL_PREFIX, key_binding.as_bytes()].concat())
 }
 
+/// A sign-in name in its one form: lowercase, trimmed, a username or a
+/// `username@server` address. Two spellings of one name are one name, so
+/// they get one fake answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalName(String);
+
+impl CanonicalName {
+    pub fn parse(name: &str) -> Result<Self> {
+        let name = name.trim().to_ascii_lowercase();
+        let (user, server) = match name.split_once('@') {
+            Some((user, server)) => (user, Some(server)),
+            None => (name.as_str(), None),
+        };
+        let user_ok = (1..=64).contains(&user.len())
+            && user.bytes().all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-' || b == b'.'
+            });
+        let server_ok = server.is_none_or(|server| {
+            (1..=253).contains(&server.len())
+                && server.bytes().all(|b| {
+                    b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || b == b'.'
+                        || b == b'-'
+                        || b == b':'
+                })
+        });
+        if !user_ok || !server_ok {
+            return Err(CryptoError::InvalidInput("not a sign-in name".into()));
+        }
+        Ok(Self(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// The identifier of a name that is no account (or a name held after a
 /// rename): its fake answer is the same each time.
-pub fn unknown_credential_identifier(canonical_name: &str) -> Vec<u8> {
-    [CREDENTIAL_PREFIX, UNKNOWN_PREFIX, canonical_name.as_bytes()].concat()
+pub fn unknown_credential_identifier(name: &CanonicalName) -> Vec<u8> {
+    [CREDENTIAL_PREFIX, UNKNOWN_PREFIX, name.as_str().as_bytes()].concat()
 }
 
 /// A server's OPAQUE secrets, as stored (sealed).
@@ -381,7 +447,9 @@ fn seal_server_setup_with_nonce(
     key_id: u16,
     nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
-    let plain = Zeroizing::new(secrets.0.serialize().to_vec());
+    let mut serialized = secrets.0.serialize();
+    let plain = Zeroizing::new(serialized.to_vec());
+    serialized.as_mut_slice().zeroize();
     let aad = [SETUP_AAD, &key_id.to_be_bytes()].concat();
     let ciphertext = XChaCha20Poly1305::new(key.into())
         .encrypt(
@@ -426,9 +494,17 @@ pub fn open_server_setup(sealed: &[u8], key: &[u8; 32], key_id: u16) -> Result<S
             )
             .map_err(|_| CryptoError::AuthFailed)?,
     );
-    ServerSetup::<Suite1>::deserialize(&plain)
-        .map(ServerSecrets)
-        .map_err(|_| CryptoError::InvalidInput("the sealed OPAQUE setup is malformed".into()))
+    let setup = ServerSetup::<Suite1>::deserialize(&plain)
+        .map_err(|_| CryptoError::InvalidInput("the sealed OPAQUE setup is malformed".into()))?;
+    let mut again = setup.serialize();
+    let canonical = again.as_slice() == plain.as_slice();
+    again.as_mut_slice().zeroize();
+    if !canonical {
+        return Err(CryptoError::InvalidInput(
+            "the sealed OPAQUE setup is malformed".into(),
+        ));
+    }
+    Ok(ServerSecrets(setup))
 }
 
 /// The server's answer to a registration request for `key_binding`. Stateless:
@@ -438,7 +514,7 @@ pub fn server_registration_response(
     request: &[u8],
     key_binding: &str,
 ) -> Result<Vec<u8>> {
-    let request = RegistrationRequest::<Suite1>::deserialize(request).map_err(protocol)?;
+    let request = exact!(RegistrationRequest::<Suite1>, request);
     let started = ServerRegistration::<Suite1>::start(
         &secrets.0,
         request,
@@ -450,7 +526,7 @@ pub fn server_registration_response(
 
 /// Checks a record a client uploaded, and returns it as stored.
 pub fn server_registration_record(upload: &[u8]) -> Result<Vec<u8>> {
-    let upload = RegistrationUpload::<Suite1>::deserialize(upload).map_err(protocol)?;
+    let upload = exact!(RegistrationUpload::<Suite1>, upload);
     Ok(ServerRegistration::<Suite1>::finish(upload)
         .serialize()
         .to_vec())
@@ -484,11 +560,11 @@ pub fn server_login_start_with<R: RngCore + CryptoRng>(
     request: &[u8],
     credential: &[u8],
 ) -> Result<ServerSigningIn> {
-    let record = record
-        .map(ServerRegistration::<Suite1>::deserialize)
-        .transpose()
-        .map_err(protocol)?;
-    let request = CredentialRequest::<Suite1>::deserialize(request).map_err(protocol)?;
+    let record = match record {
+        Some(record) => Some(exact!(ServerRegistration::<Suite1>, record)),
+        None => None,
+    };
+    let request = exact!(CredentialRequest::<Suite1>, request);
     let started = ServerLogin::start(
         rng,
         &secrets.0,
@@ -507,9 +583,8 @@ pub fn server_login_start_with<R: RngCore + CryptoRng>(
 /// Checks the client's finalization against the kept state:
 /// [`CryptoError::AuthFailed`] for a wrong password or an unknown name.
 pub fn server_login_finish(state: &[u8], finalization: &[u8]) -> Result<()> {
-    let state = ServerLogin::<Suite1>::deserialize(state).map_err(protocol)?;
-    let finalization =
-        CredentialFinalization::<Suite1>::deserialize(finalization).map_err(protocol)?;
+    let state = exact!(ServerLogin::<Suite1>, state);
+    let finalization = exact!(CredentialFinalization::<Suite1>, finalization);
     state
         .finish(finalization, server_params())
         .map_err(protocol)?;
@@ -575,7 +650,7 @@ mod tests {
             sign_in(&secrets, Some(&record), &credential, "wrong horse"),
             Err(CryptoError::AuthFailed)
         ));
-        let unknown = unknown_credential_identifier("nobody");
+        let unknown = unknown_credential_identifier(&CanonicalName::parse("nobody").unwrap());
         assert!(matches!(
             sign_in(&secrets, None, &unknown, "correct horse"),
             Err(CryptoError::AuthFailed)
@@ -601,7 +676,7 @@ mod tests {
             &secrets,
             None,
             &request,
-            &unknown_credential_identifier("nobody"),
+            &unknown_credential_identifier(&CanonicalName::parse("nobody").unwrap()),
         )
         .unwrap();
         assert_eq!(real.response.len(), fake.response.len());
@@ -650,5 +725,69 @@ mod tests {
             old.open_master_key(&envelope, BINDING).is_err(),
             "the old export key no longer opens it"
         );
+    }
+
+    #[test]
+    fn only_canonical_messages_are_accepted() {
+        let secrets = ServerSecrets::generate();
+        let junk = |bytes: &[u8]| [bytes, &[0u8]].concat();
+        let (client, request) = client_registration_start("pw").unwrap();
+        assert!(server_registration_response(&secrets, &junk(&request), BINDING).is_err());
+        let response = server_registration_response(&secrets, &request, BINDING).unwrap();
+        let (again, _) = client_registration_start("pw").unwrap();
+        assert!(again.finish(&junk(&response)).is_err());
+        let upload = client.finish(&response).unwrap().record;
+        assert!(server_registration_record(&junk(&upload)).is_err());
+        let record = server_registration_record(&upload).unwrap();
+        let credential = credential_identifier(BINDING).unwrap();
+        let (client, request) = client_login_start("pw").unwrap();
+        assert!(server_login_start(&secrets, Some(&junk(&record)), &request, &credential).is_err());
+        assert!(server_login_start(&secrets, Some(&record), &junk(&request), &credential).is_err());
+        let server = server_login_start(&secrets, Some(&record), &request, &credential).unwrap();
+        let (other, _) = client_login_start("pw").unwrap();
+        assert!(other.finish(&junk(&server.response)).is_err());
+        let done = client.finish(&server.response).unwrap();
+        assert!(server_login_finish(&junk(&server.state), &done.finalization).is_err());
+        assert!(server_login_finish(&server.state, &junk(&done.finalization)).is_err());
+        server_login_finish(&server.state, &done.finalization).unwrap();
+        // The sealed setup's plaintext too.
+        let key = [3u8; 32];
+        let mut serialized = secrets.0.serialize().to_vec();
+        serialized.push(0);
+        let mut nonce = [0u8; NONCE_LEN];
+        nonce[0] = 1;
+        let aad = [SETUP_AAD, &1u16.to_be_bytes()].concat();
+        let ciphertext = XChaCha20Poly1305::new((&key).into())
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &serialized,
+                    aad: &aad,
+                },
+            )
+            .unwrap();
+        let sealed = [
+            SETUP_MAGIC.as_slice(),
+            &1u16.to_be_bytes(),
+            &nonce,
+            &ciphertext,
+        ]
+        .concat();
+        assert!(open_server_setup(&sealed, &key, 1).is_err());
+    }
+
+    #[test]
+    fn a_name_has_one_form() {
+        assert_eq!(
+            CanonicalName::parse(" Alice ").unwrap(),
+            CanonicalName::parse("alice").unwrap()
+        );
+        assert_eq!(
+            unknown_credential_identifier(&CanonicalName::parse("Bob@Kutup.dev").unwrap()),
+            unknown_credential_identifier(&CanonicalName::parse("bob@kutup.dev").unwrap())
+        );
+        for bad in ["", "a b", "ali\u{0131}", "x@", "@y", "a@b@c"] {
+            assert!(CanonicalName::parse(bad).is_err(), "{bad}");
+        }
     }
 }

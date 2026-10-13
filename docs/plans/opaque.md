@@ -230,9 +230,23 @@ pins, and the next setup starts a new incarnation. OPAQUE keeps that:
 
 - The client's OPAQUE state stays inside WASM objects: `OpaqueRegistration` and
   `OpaqueLogin`, with `start()` returning the request and `finish(response)`
-  returning the record or finalization and the KEK. JavaScript never sees the
-  password-derived state, the export key or the KEK. It gets an opaque handle,
-  and `openMasterKey(envelope)` runs inside.
+  returning the record or finalization. JavaScript never sees the
+  password-derived state, the export key or the KEK.
+  - `openMasterKey(envelope, keyBinding)` returns the master key itself
+    (canonical base64), as the session layer has always held it.
+    `sealMasterKey(masterKey, keyBinding)` returns the password envelope.
+  - Both wipe the export key once they succeed. `close()` wipes it in any case:
+    a reauth opens nothing, and a sign-in given up is closed.
+  - A finish runs once.
+- Every OPAQUE message, record, login state and sealed setup is accepted only in
+  its exact canonical encoding (opaque-ke's own parsers ignore trailing bytes).
+- `OpaqueServer` (the server half) is in the WASM module for the vector tests
+  and tools. It holds no secret a browser has, and a page has no setup key to
+  open. Moving it behind a build feature would need a second WASM build for the
+  tests: a roadmap line, not done.
+- opaque-ke's `ServerSetup` does not wipe itself when dropped. The server wipes
+  its own copies (the serialized setup, the export keys); the setup in the
+  server process's memory is inside the server's trust boundary.
 - Argon2id at 64 MiB runs in the existing crypto worker, as today, so the page
   doesn't freeze.
 - **Web flows:** sign-in, the reauth dialog, password change, recovery and the
