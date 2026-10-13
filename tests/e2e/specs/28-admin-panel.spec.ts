@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { ADMIN_USERNAME, appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
+import { ADMIN_USERNAME, appUrl, newAccount, registerAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 
 test.describe.serial('administration', () => {
   let context: BrowserContext
@@ -120,9 +120,12 @@ test.describe.serial('administration', () => {
       await signIn.goto(appUrl('account', '/login'))
       await signIn.getByLabel('Username', { exact: true }).fill(person.username)
       await signIn.getByLabel('Password', { exact: true }).fill(password)
-      await signIn.getByRole('button', { name: 'Sign in' }).click()
-      if (outcome === 'failed') await expect(signIn.getByRole('alert').filter({ hasText: 'Sign-in failed' })).toBeVisible({ timeout: 60_000 })
-      else await expect(signIn.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible({ timeout: 60_000 })
+      // Through the edge's sign-in limit, as every sign-in of the suite.
+      const done =
+        outcome === 'failed'
+          ? signIn.getByRole('alert').filter({ hasText: 'Sign-in failed' })
+          : signIn.getByRole('heading', { name: 'Finish setting up your account' })
+      await submitThroughRateLimit(signIn, 'Sign in', done)
     }
     await fresh.close()
 
