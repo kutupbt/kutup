@@ -3109,3 +3109,242 @@ impl RevisionGuardKeys {
         Ok(revision as f64)
     }
 }
+
+// --- OPAQUE sign-in (docs/plans/opaque.md) -----------------------------------
+// The client's state, the password and the export key stay inside these
+// objects: JavaScript passes messages in and out, and gets the master key
+// once the account's envelope opens.
+
+fn opaque_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    match error {
+        kutup_crypto::error::CryptoError::AuthFailed => js_error("opaque: authentication failed"),
+        other => js_error(&other.to_string()),
+    }
+}
+
+/// A registration (sign-up, password change, recovery) in progress.
+#[wasm_bindgen]
+pub struct OpaqueRegistration {
+    state: Option<kutup_crypto::opaque::ClientRegistering>,
+    request: String,
+    export: Option<kutup_crypto::opaque::ExportKey>,
+}
+
+#[wasm_bindgen]
+impl OpaqueRegistration {
+    /// Starts registering `password`; send `request` to the server.
+    pub fn start(password: &str) -> Result<OpaqueRegistration, JsValue> {
+        let (state, request) =
+            kutup_crypto::opaque::client_registration_start(password).map_err(opaque_error)?;
+        Ok(Self {
+            state: Some(state),
+            request: STANDARD.encode(request),
+            export: None,
+        })
+    }
+
+    /// The registration request (canonical base64).
+    #[wasm_bindgen(getter)]
+    pub fn request(&self) -> String {
+        self.request.clone()
+    }
+
+    /// Finishes with the server's response: the record to upload. Once.
+    pub fn finish(&mut self, response_base64: &str) -> Result<String, JsValue> {
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| js_error("opaque: the registration is already finished"))?;
+        let response = decode_canonical_base64(response_base64, "registration response")?;
+        let done = state.finish(&response).map_err(opaque_error)?;
+        self.export = Some(done.export_key);
+        Ok(STANDARD.encode(done.record))
+    }
+
+    /// Seals the account's master key for this password: the password envelope.
+    #[wasm_bindgen(js_name = sealMasterKey)]
+    pub fn seal_master_key(
+        &mut self,
+        master_key_base64: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
+        // Once: the export key is wiped afterwards, sealed or not.
+        let export = self
+            .export
+            .take()
+            .ok_or_else(|| js_error("opaque: the registration is not finished"))?;
+        export
+            .seal_master_key(&master_key_32(master_key_base64)?, key_binding)
+            .map_err(opaque_error)
+    }
+
+    /// Ends the registration: its state and export key are wiped.
+    pub fn close(&mut self) {
+        self.state = None;
+        self.export = None;
+    }
+}
+
+/// A sign-in (or reauthentication) in progress.
+#[wasm_bindgen]
+pub struct OpaqueLogin {
+    state: Option<kutup_crypto::opaque::ClientSigningIn>,
+    request: String,
+    export: Option<kutup_crypto::opaque::ExportKey>,
+}
+
+#[wasm_bindgen]
+impl OpaqueLogin {
+    /// Starts signing in with `password`; send `request` to the server.
+    pub fn start(password: &str) -> Result<OpaqueLogin, JsValue> {
+        let (state, request) =
+            kutup_crypto::opaque::client_login_start(password).map_err(opaque_error)?;
+        Ok(Self {
+            state: Some(state),
+            request: STANDARD.encode(request),
+            export: None,
+        })
+    }
+
+    /// The credential request (canonical base64).
+    #[wasm_bindgen(getter)]
+    pub fn request(&self) -> String {
+        self.request.clone()
+    }
+
+    /// Finishes with the server's response: the finalization to send. Throws
+    /// "opaque: authentication failed" for a wrong password (or an unknown
+    /// name, or a server other than the one registered with). Once.
+    pub fn finish(&mut self, response_base64: &str) -> Result<String, JsValue> {
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| js_error("opaque: the sign-in is already finished"))?;
+        let response = decode_canonical_base64(response_base64, "credential response")?;
+        let done = state.finish(&response).map_err(opaque_error)?;
+        self.export = Some(done.export_key);
+        Ok(STANDARD.encode(done.finalization))
+    }
+
+    /// Opens the account's password envelope (sent once the server accepted
+    /// the finalization): the master key, canonical base64, as the session
+    /// layer holds it. Once it opens, the export key is wiped.
+    #[wasm_bindgen(js_name = openMasterKey)]
+    pub fn open_master_key(
+        &mut self,
+        envelope: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
+        let export = self
+            .export
+            .as_ref()
+            .ok_or_else(|| js_error("opaque: the sign-in is not finished"))?;
+        let master_key = export
+            .open_master_key(envelope, key_binding)
+            .map_err(opaque_error)?;
+        // Opened: the export key is no longer needed.
+        self.export = None;
+        Ok(STANDARD.encode(master_key.as_slice()))
+    }
+
+    /// Ends the sign-in: its state and export key are wiped (a reauth, which
+    /// opens nothing, or a sign-in given up).
+    pub fn close(&mut self) {
+        self.state = None;
+        self.export = None;
+    }
+}
+
+/// The server's half, for tests and tools (servers use kutup-crypto directly):
+/// a sealed setup opened under its key.
+#[wasm_bindgen]
+pub struct OpaqueServer {
+    secrets: kutup_crypto::opaque::ServerSecrets,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpaqueServerLoginJs {
+    state: String,
+    response: String,
+}
+
+#[wasm_bindgen]
+impl OpaqueServer {
+    /// Opens a setup sealed under `key` (canonical base64) for `key_id`.
+    pub fn open(
+        sealed_base64: &str,
+        key_base64: &str,
+        key_id: u16,
+    ) -> Result<OpaqueServer, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "sealed setup")?;
+        let secrets =
+            kutup_crypto::opaque::open_server_setup(&sealed, &master_key_32(key_base64)?, key_id)
+                .map_err(opaque_error)?;
+        Ok(Self { secrets })
+    }
+
+    #[wasm_bindgen(js_name = registrationResponse)]
+    pub fn registration_response(
+        &self,
+        request_base64: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
+        let request = decode_canonical_base64(request_base64, "registration request")?;
+        kutup_crypto::opaque::server_registration_response(&self.secrets, &request, key_binding)
+            .map(|response| STANDARD.encode(response))
+            .map_err(opaque_error)
+    }
+
+    /// The record to store from a client's upload.
+    pub fn record(upload_base64: &str) -> Result<String, JsValue> {
+        let upload = decode_canonical_base64(upload_base64, "registration upload")?;
+        kutup_crypto::opaque::server_registration_record(&upload)
+            .map(|record| STANDARD.encode(record))
+            .map_err(opaque_error)
+    }
+
+    /// Answers a sign-in request for the account with `key_binding` (its
+    /// `record`), or, with no record, for the unknown `name`.
+    #[wasm_bindgen(js_name = loginStart)]
+    pub fn login_start(
+        &self,
+        record_base64: Option<String>,
+        request_base64: &str,
+        key_binding_or_name: &str,
+    ) -> Result<JsValue, JsValue> {
+        let request = decode_canonical_base64(request_base64, "credential request")?;
+        let record = record_base64
+            .map(|record| decode_canonical_base64(&record, "record"))
+            .transpose()?;
+        let credential = if record.is_some() {
+            kutup_crypto::opaque::credential_identifier(key_binding_or_name)
+                .map_err(opaque_error)?
+        } else {
+            kutup_crypto::opaque::unknown_credential_identifier(
+                &kutup_crypto::opaque::CanonicalName::parse(key_binding_or_name)
+                    .map_err(opaque_error)?,
+            )
+        };
+        let started = kutup_crypto::opaque::server_login_start(
+            &self.secrets,
+            record.as_deref(),
+            &request,
+            &credential,
+        )
+        .map_err(opaque_error)?;
+        serde_wasm_bindgen::to_value(&OpaqueServerLoginJs {
+            state: STANDARD.encode(started.state),
+            response: STANDARD.encode(started.response),
+        })
+        .map_err(|error| js_error(&format!("encode: {error}")))
+    }
+
+    /// Checks a client's finalization against the kept state.
+    #[wasm_bindgen(js_name = loginFinish)]
+    pub fn login_finish(state_base64: &str, finalization_base64: &str) -> Result<(), JsValue> {
+        let state = decode_canonical_base64(state_base64, "login state")?;
+        let finalization = decode_canonical_base64(finalization_base64, "finalization")?;
+        kutup_crypto::opaque::server_login_finish(&state, &finalization).map_err(opaque_error)
+    }
+}
