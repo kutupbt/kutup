@@ -57,13 +57,11 @@ CREATE INDEX account_renames_user ON account_renames (user_id, accepted_at DESC)
 ALTER TABLE mail_addresses
     ADD COLUMN state text NOT NULL DEFAULT 'active'
         CHECK (state IN ('active', 'receiving', 'closed', 'freed')),
-    ADD COLUMN folded text,
-    ADD COLUMN receive_until timestamptz;
-UPDATE mail_addresses
-   SET folded = kutup_fold(split_part(address, '@', 1)) || '@'
-                || lower(split_part(address, '@', 2));
-ALTER TABLE mail_addresses
-    ALTER COLUMN folded SET NOT NULL,
+    -- The address folded, always derived from it (no write can disagree).
+    ADD COLUMN folded text NOT NULL GENERATED ALWAYS AS (
+        kutup_fold(split_part(address, '@', 1)) || '@' || lower(split_part(address, '@', 2))
+    ) STORED,
+    ADD COLUMN receive_until timestamptz,
     DROP CONSTRAINT mail_addresses_address_key;
 CREATE UNIQUE INDEX mail_addresses_live ON mail_addresses (folded)
     WHERE state <> 'freed';

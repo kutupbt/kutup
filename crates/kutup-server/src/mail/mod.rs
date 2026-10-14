@@ -116,7 +116,9 @@ fn try_later() -> Reply {
 /// temporary failure (`4.3.0`), so the sender retries.
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
-    let row: Option<(Uuid, Uuid, Option<Vec<u8>>, i64, i64)> = sqlx::query_as(
+    // address id, account, its primary key (none yet), quota, used.
+    type Row = (Uuid, Uuid, Option<Vec<u8>>, i64, i64);
+    let row: Option<Row> = sqlx::query_as(
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active

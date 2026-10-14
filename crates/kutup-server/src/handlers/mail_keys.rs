@@ -94,8 +94,7 @@ pub(crate) async fn create_own_address(
     let address = mail_key::canonical_address(&format!("{username}@{server_name}"))
         .map_err(|_| AppError::bad_request("the username is not a valid mail address"))?;
     let created: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO mail_addresses (user_id, address, folded)
-         VALUES ($1, $2, kutup_fold(split_part($2, '@', 1)) || '@' || lower(split_part($2, '@', 2)))
+        "INSERT INTO mail_addresses (user_id, address) VALUES ($1, $2)
          ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
     )
     .bind(user_id)

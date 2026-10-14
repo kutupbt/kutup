@@ -359,9 +359,8 @@ mod tests {
             .await
             .unwrap();
             sqlx::query(
-                "INSERT INTO mail_addresses (user_id, address, folded, state, receive_until)
-                 VALUES ($1, $2 || '@sweep.test', kutup_fold($2) || '@sweep.test', $3,
-                         now() + $4::interval)",
+                "INSERT INTO mail_addresses (user_id, address, state, receive_until)
+                 VALUES ($1, $2 || '@sweep.test', $3, now() + $4::interval)",
             )
             .bind(user_id)
             .bind(name)
@@ -405,8 +404,7 @@ mod tests {
         assert_eq!(names, expected);
         // The freed address no longer holds its spelling: another row may.
         sqlx::query(
-            "INSERT INTO mail_addresses (user_id, address, folded)
-             VALUES ($1, $2 || '@sweep.test', kutup_fold($2) || '@sweep.test')",
+            "INSERT INTO mail_addresses (user_id, address) VALUES ($1, $2 || '@sweep.test')",
         )
         .bind(user_id)
         .bind(&freeing)

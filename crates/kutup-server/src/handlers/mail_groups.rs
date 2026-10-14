@@ -858,10 +858,7 @@ pub async fn admin_create(
         }
         other => other.into(),
     })?;
-    sqlx::query(
-        "INSERT INTO mail_addresses (group_id, address, folded)
-         VALUES ($1, $2, kutup_fold(split_part($2, '@', 1)) || '@' || lower(split_part($2, '@', 2)))",
-    )
+    sqlx::query("INSERT INTO mail_addresses (group_id, address) VALUES ($1, $2)")
         .bind(id)
         .bind(&address)
         .execute(&mut *tx)
