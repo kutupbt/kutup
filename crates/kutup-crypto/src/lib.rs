@@ -68,6 +68,7 @@ pub mod mail_search;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod names;
 pub mod opaque;
 pub mod opaque_login_state;
 pub mod padding;

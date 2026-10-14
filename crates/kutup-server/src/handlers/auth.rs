@@ -576,20 +576,6 @@ pub async fn register(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
-    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
-        return Err(AppError::bad_request(
-            "this username is reserved for the server",
-        ));
-    }
-    if crate::mail::groups::is_group_name(
-        &state.pool,
-        &req.username,
-        &state.config.chat_server_name,
-    )
-    .await?
-    {
-        return Err(AppError::conflict("this username is taken"));
-    }
     let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
     use kutup_crypto::account_envelope::AccountEnvelopePurpose;
     validate_account_envelope(
@@ -621,6 +607,19 @@ pub async fn register(
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
+    // One account per folded name, against every name in use or held and
+    // every address (docs/plans/username-renames.md, "Folded names").
+    if let Err(unavailable) = crate::account_names::available(
+        &mut tx,
+        &state.config.chat_server_name,
+        &state.config.break_glass_admin_username,
+        &req.username,
+        None,
+    )
+    .await?
+    {
+        return Err(unavailable.error());
+    }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
             username, master_key_envelope, recovery_key_envelope,
@@ -656,6 +655,13 @@ pub async fn register(
         Ok(id) => id,
         Err(err) => return Err(map_insert_conflict(err)),
     };
+    crate::account_names::claim(
+        &mut tx,
+        &req.username,
+        user_id,
+        Some(&req.account_incarnation_id),
+    )
+    .await?;
     // The code is used up with the account (a failure below rolls both back):
     // checked above, taken here, where the row's lock orders concurrent
     // sign-ups, so a code with N uses admits N accounts.

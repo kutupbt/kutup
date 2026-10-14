@@ -7,6 +7,7 @@
 //! handler slice lands.
 
 mod account_heads;
+mod account_names;
 mod albums;
 mod auth_check;
 mod calls;
@@ -525,8 +526,10 @@ async fn bootstrap_admin(
     let (username, password) = (username.as_str(), password.as_str());
 
     // A failed check is not "no admin yet": nothing is created on an error.
+    // Any name in that folded form counts, held ones too (the break-glass
+    // account cannot be renamed; a held spelling is never re-created).
     let exists: Option<i64> = match sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE username = $1",
+        "SELECT COUNT(*) FROM account_names WHERE folded = kutup_fold($1)",
     )
     .bind(username)
     .fetch_optional(pool)
@@ -613,9 +616,16 @@ async fn bootstrap_admin(
     .fetch_one(&mut *tx)
     .await;
     let created = match res {
-        Ok(id) => {
-            crate::handlers::mail_keys::create_own_address(&mut tx, server_name, id, username).await
-        }
+        Ok(id) => match crate::account_names::claim(&mut tx, username, id, None).await {
+            Ok(()) => {
+                crate::handlers::mail_keys::create_own_address(&mut tx, server_name, id, username)
+                    .await
+            }
+            Err(e) => {
+                tracing::warn!("bootstrapAdmin: the name @{username} is taken: {e:?}");
+                return;
+            }
+        },
         Err(e) => {
             tracing::warn!("bootstrapAdmin: insert error for @{username}: {e}");
             return;

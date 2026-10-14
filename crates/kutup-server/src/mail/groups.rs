@@ -561,8 +561,9 @@ pub async fn ensure_system_groups(pool: &PgPool, server_name: &str) -> anyhow::R
         .execute(&mut *tx)
         .await?;
         sqlx::query(
-            "INSERT INTO mail_addresses (group_id, address)
-             SELECT id, address FROM mail_groups WHERE system_role = $1
+            "INSERT INTO mail_addresses (group_id, address, folded)
+             SELECT id, address, kutup_fold(split_part(address, '@', 1)) || '@' || lower(split_part(address, '@', 2))
+               FROM mail_groups WHERE system_role = $1
              ON CONFLICT DO NOTHING",
         )
         .bind(role)

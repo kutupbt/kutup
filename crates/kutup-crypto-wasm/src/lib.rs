@@ -4035,3 +4035,10 @@ pub fn verify_account_rename_chain(
     })
     .map_err(|error| js_error(&format!("encode rename chain: {error}")))
 }
+
+/// The folded form of a name (`kutup_crypto::names::fold`): lowercase,
+/// without `.`, `_` and `-`. One account per folded name.
+#[wasm_bindgen(js_name = foldName)]
+pub fn fold_name(name: &str) -> String {
+    kutup_crypto::names::fold(name)
+}

@@ -223,20 +223,6 @@ pub async fn create_user(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
-    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
-        return Err(AppError::bad_request(
-            "this username is reserved for the server",
-        ));
-    }
-    if crate::mail::groups::is_group_name(
-        &state.pool,
-        &req.username,
-        &state.config.chat_server_name,
-    )
-    .await?
-    {
-        return Err(AppError::conflict("this username is taken"));
-    }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
         req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
@@ -246,6 +232,19 @@ pub async fn create_user(
     }
 
     let mut tx = state.pool.begin().await?;
+    // One account per folded name (docs/plans/username-renames.md). The
+    // break-glass account itself is made by `bootstrap_admin`, not here.
+    if let Err(unavailable) = crate::account_names::available(
+        &mut tx,
+        &state.config.chat_server_name,
+        &state.config.break_glass_admin_username,
+        &req.username,
+        None,
+    )
+    .await?
+    {
+        return Err(unavailable.error());
+    }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
@@ -269,6 +268,7 @@ pub async fn create_user(
         Ok(id) => id,
         Err(e) => return Err(map_insert_conflict(e)),
     };
+    crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,
         &state.config.chat_server_name,

@@ -1362,3 +1362,20 @@ fn print_account_rename_vector() {
         })
     );
 }
+
+/// Folded names: the same table the web checks through WASM.
+#[test]
+fn name_fold_vector() {
+    use kutup_crypto::names;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["nameFold"];
+    for pair in v["names"].as_array().unwrap() {
+        assert_eq!(names::fold(pair[0].as_str().unwrap()), pair[1].as_str().unwrap());
+    }
+    for pair in v["addresses"].as_array().unwrap() {
+        assert_eq!(
+            names::fold_address(pair[0].as_str().unwrap()).as_deref(),
+            pair[1].as_str()
+        );
+    }
+}

@@ -432,5 +432,25 @@
       "signingBytes": "6b757475702f6465766963652d7265766f636174696f6e2f763100589e7761f046389c3f42fc2da2bb2c30649da74cb7e646ab84e8c908289b42d800096b757475702e6465765555555555555555555555555555555555555555555555555555555555555555000001a0c4506fe8",
       "signature": "/yqavNiKOgQ0pDqbIA0kLhIyPxRBDfFZNig0dIxw0tlCpgWzfnLxvWB+/9LGMMvScGppYPZJg7q3df0koeAuCQ=="
     }
+  },
+  "nameFold": {
+    "description": "Folded names (kutup-crypto/src/names.rs): the local part lowercase (ASCII only) without '.', '_' and '-'; an address folds its local part and lowercases its domain, or is null with an empty side.",
+    "names": [
+      ["ada", "ada"],
+      ["Ada.L", "adal"],
+      ["ada_l", "adal"],
+      ["a..b", "ab"],
+      ["_a", "a"],
+      ["a-", "a"],
+      ["a_-b", "ab"],
+      ["A.d-A_l", "adal"],
+      ["name.123", "name123"],
+      ["ça", "ça"]
+    ],
+    "addresses": [
+      ["Ada.L@Kutup.Dev", "adal@kutup.dev"],
+      ["_.-@kutup.dev", null],
+      ["ada", null]
+    ]
   }
 }

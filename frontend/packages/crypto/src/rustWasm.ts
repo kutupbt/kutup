@@ -52,6 +52,7 @@ export interface CryptoWasmModule {
   ): string
   deriveSafetyNumber(localAuthorityBase64: string, peerAuthorityBase64: string): { fingerprint: string; qrPayload: string }
   safetyQrMatches(localAuthorityBase64: string, peerAuthorityBase64: string, scanned: string): boolean
+  foldName(name: string): string
   signAccountRename(masterKeyBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
   verifyAccountRenameChain(
     authorityPublicBase64: string,

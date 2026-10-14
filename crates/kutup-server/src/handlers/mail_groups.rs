@@ -720,41 +720,35 @@ pub struct CreateMailGroup {
 }
 
 /// Whether `name` may become a group's address: the username rules, no
-/// reserved name, no account's username and no address in use.
+/// reserved name, and no account name (current or held) or address in use in
+/// any spelling (`account_names::available`, the one check for registration,
+/// groups and renames).
 pub(crate) async fn group_name_free(state: &AppState, name: &str) -> AppResult<String> {
-    let valid = (3..=32).contains(&name.chars().count())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
-    if !valid {
-        return Err(AppError::bad_request(
-            "a group name has 3-32 lowercase letters, digits, _ and -",
-        ));
-    }
-    if crate::mail::RESERVED_LOCAL_PARTS.contains(&name) {
-        return Err(AppError::bad_request(
-            "this name is reserved for the server",
-        ));
-    }
     let address = kutup_crypto::mail_key::canonical_address(&format!(
         "{name}@{}",
         state.config.chat_server_name
     ))
     .map_err(|_| AppError::bad_request("not a valid address"))?;
-    let taken: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM users WHERE username = $1)
-             OR EXISTS (SELECT 1 FROM mail_addresses WHERE address = $2)
-             OR EXISTS (SELECT 1 FROM mail_groups WHERE address = $2)",
+    let mut conn = state.pool.acquire().await?;
+    match crate::account_names::available(
+        &mut conn,
+        &state.config.chat_server_name,
+        &state.config.break_glass_admin_username,
+        name,
+        None,
     )
-    .bind(name)
-    .bind(&address)
-    .fetch_one(&state.pool)
-    .await?;
-    if taken {
-        return Err(AppError::conflict("this name is already taken")
-            .with_details(json!({ "code": "nameTaken" })));
+    .await?
+    {
+        Ok(_) => Ok(address),
+        Err(crate::account_names::Unavailable::Invalid) => Err(AppError::bad_request(
+            "a group name has 3-32 lowercase letters, digits, _ and -",
+        )),
+        Err(crate::account_names::Unavailable::Reserved) => Err(AppError::bad_request(
+            "this name is reserved for the server",
+        )),
+        Err(_) => Err(AppError::conflict("this name is already taken")
+            .with_details(json!({ "code": "nameTaken" }))),
     }
-    Ok(address)
 }
 
 /// `POST /api/admin/mail/groups` — creates a group.
@@ -864,7 +858,10 @@ pub async fn admin_create(
         }
         other => other.into(),
     })?;
-    sqlx::query("INSERT INTO mail_addresses (group_id, address) VALUES ($1, $2)")
+    sqlx::query(
+        "INSERT INTO mail_addresses (group_id, address, folded)
+         VALUES ($1, $2, kutup_fold(split_part($2, '@', 1)) || '@' || lower(split_part($2, '@', 2)))",
+    )
         .bind(id)
         .bind(&address)
         .execute(&mut *tx)
