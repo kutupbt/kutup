@@ -832,10 +832,8 @@ mod tests {
         sqlx::query(
             "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
                 drive_private_key_envelope, public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key,
-                account_protection_suite, account_protection_salt, argon_memory_kib,
-                argon_iterations, argon_parallelism, login_key_hash)
-             VALUES ($1, $2, '', '', '', '', $3, $4, $5, '', 1, '', 65536, 3, 1, '')",
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+             VALUES ($1, $2, '', '', '', '', $3, $4, $5, '')",
         )
         .bind(user_id)
         .bind(&username)
@@ -1025,10 +1023,8 @@ mod tests {
         sqlx::query(
             "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
                 drive_private_key_envelope, public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key,
-                account_protection_suite, account_protection_salt, argon_memory_kib,
-                argon_iterations, argon_parallelism, login_key_hash)
-             VALUES ($1, $2, '', '', '', '', $3, $4, $5, '', 1, '', 65536, 3, 1, '')",
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+             VALUES ($1, $2, '', '', '', '', $3, $4, $5, '')",
         )
         .bind(user_id)
         .bind(&username)
