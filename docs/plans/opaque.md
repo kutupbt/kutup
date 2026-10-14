@@ -291,4 +291,3 @@ Rust module directly. `KUTUP_PASSWORD` still works. Profiles keep no OPAQUE stat
 
 **Native clients later:** 64 MiB Argon2id is fine on phones, and the suite table
 handles a later bump.
-
