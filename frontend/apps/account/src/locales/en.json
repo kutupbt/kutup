@@ -59,6 +59,7 @@
       "slowDown": "Too many attempts from here. Wait a minute, then try again.",
       "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator.",
       "signInAgain": "The sign-in ended before it finished. Sign in again.",
+      "setupExpired": "Your first sign-in ran out of time, or your temporary password was replaced. Sign in again with the temporary password you have now.",
       "serverKeyChanged": "The server's sign-in key changed while your account was being made. Try again; if it keeps happening, tell the server's administrator.",
       "keyBindingTaken": "Your account's keys could not be stored. Try again; if it keeps happening, tell the server's administrator."
     },

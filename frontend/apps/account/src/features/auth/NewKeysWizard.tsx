@@ -9,7 +9,7 @@ import { Field } from '@kutup/ui/components/field'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Spinner } from '@kutup/ui/components/states'
 import { AuthLayout } from './AuthLayout'
-import { authErrorMessage } from './errors'
+import { authErrorMessage, bodyCode } from './errors'
 import { generateAccountKeys, releaseAccountKeys, type AccountKeys } from './flows'
 import { MIN_PASSWORD_SCORE, passwordScore, usePasswordStrength } from './passwordStrength'
 import { PasswordStrengthMeter } from './PasswordStrengthMeter'
@@ -32,6 +32,7 @@ export function NewKeysWizard({
   validateLeading,
   setupToken,
   onKeysConfirmed,
+  onSetupExpired,
 }: {
   title: string
   description: string
@@ -44,6 +45,8 @@ export function NewKeysWizard({
   /** An administrator-created account's first sign-in: what allows registering its password. */
   setupToken?: string
   onKeysConfirmed: (keys: AccountKeys) => Promise<void>
+  /** The setup token ran out or was replaced (`setupTokenInvalid`): the first sign-in starts over. */
+  onSetupExpired?: () => void
 }) {
   const { t } = useTranslation()
   const [step, setStep] = useState<Step>('password')
@@ -92,7 +95,11 @@ export function NewKeysWizard({
       // The keys' worker has the password now; the form lets it go.
       reset()
       setStep('phrase')
-    } catch {
+    } catch (err) {
+      if (onSetupExpired && bodyCode(err) === 'setupTokenInvalid') {
+        onSetupExpired()
+        return
+      }
       setError(t('auth.errors.keyGenerationFailed'))
       setStep('password')
     }
@@ -129,7 +136,10 @@ export function NewKeysWizard({
             setPending(true)
             setError(null)
             onKeysConfirmed(keys)
-              .catch((err: unknown) => setError(authErrorMessage(err, t, 'auth.errors.generic')))
+              .catch((err: unknown) => {
+                if (onSetupExpired && bodyCode(err) === 'setupTokenInvalid') onSetupExpired()
+                else setError(authErrorMessage(err, t, 'auth.errors.generic'))
+              })
               .finally(() => setPending(false))
           }}
         />

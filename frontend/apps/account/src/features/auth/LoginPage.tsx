@@ -13,7 +13,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
-import { authErrorMessage } from './errors'
+import { authErrorMessage, bodyCode } from './errors'
 import { abandonTotp, completeTotp, signIn, type TotpChallenge } from './flows'
 import { setPendingSetup } from './pendingSetup'
 
@@ -31,7 +31,10 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<TotpChallenge | null>(null)
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(
+    // Sent back from a first sign-in whose setup token ran out.
+    () => (params.get('setup') === 'expired' ? t('auth.errors.setupExpired') : null),
+  )
 
   // A sign-in waiting for its code ends with this page, or when another
   // replaces it: its worker holds the password and the export key.
@@ -87,8 +90,9 @@ export function LoginPage() {
       const result = await completeTotp(challenge, code.trim())
       if (result.kind === 'signedIn') signedIn()
     } catch (err) {
-      if (err instanceof OpaqueWorkerClosed) {
-        // The sign-in itself ended (it failed after the code): start over.
+      if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'preAuthInvalid') {
+        // The sign-in itself ended (it failed after the code, its first step
+        // expired, or the password changed meanwhile): start over.
         setChallenge(null)
         setCode('')
         setError(t('auth.errors.signInAgain'))

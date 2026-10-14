@@ -11,7 +11,10 @@ const flows = vi.hoisted(() => ({
 vi.mock('./flows', () => flows)
 vi.mock('@kutup/session/store', () => ({ useSession: () => null }))
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ OpaqueWorkerClosed: class OpaqueWorkerClosed extends Error {} }))
-vi.mock('./errors', () => ({ authErrorMessage: () => 'failed' }))
+vi.mock('./errors', () => ({
+  authErrorMessage: () => 'failed',
+  bodyCode: (error: { code?: string }) => error.code,
+}))
 
 const { LoginPage } = await import('./LoginPage')
 const { OpaqueWorkerClosed } = await import('@kutup/crypto/opaqueWorker')
@@ -58,5 +61,19 @@ describe('the code step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
     await screen.findByLabelText('Username', { exact: true })
     await waitFor(() => expect(screen.getByText('The sign-in ended before it finished. Sign in again.')).toBeTruthy())
+  })
+
+  it('a first step that ran out goes back to the password; a wrong code stays on the code', async () => {
+    await reachCodeStep()
+    flows.completeTotp.mockRejectedValueOnce(Object.assign(new Error('401'), { code: 'invalidCredentials' }))
+    fireEvent.change(screen.getByLabelText('Authentication code'), { target: { value: '000000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    await screen.findByText('failed')
+    expect(screen.getByLabelText('Authentication code')).toBeTruthy()
+    expect(flows.abandonTotp).not.toHaveBeenCalled()
+    flows.completeTotp.mockRejectedValueOnce(Object.assign(new Error('401'), { code: 'preAuthInvalid' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    await screen.findByLabelText('Username', { exact: true })
+    expect(flows.abandonTotp).toHaveBeenCalledWith(challenge)
   })
 })

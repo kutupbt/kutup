@@ -29,6 +29,9 @@ export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: stri
     return t(bodyCode(error) === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked')
   }
   if (code === 'network') return t('auth.errors.network')
+  // The first step's token ran out, or the password changed since.
+  if (code === 'unauthenticated' && bodyCode(error) === 'preAuthInvalid') return t('auth.errors.signInAgain')
+  if (code === 'unauthenticated' && bodyCode(error) === 'setupTokenInvalid') return t('auth.errors.setupExpired')
   if (code === 'unauthenticated') return t(fallbackKey)
   if (code === 'conflict') {
     const message = apiErrorMessage(error, '')
@@ -38,6 +41,7 @@ export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: stri
   return apiErrorMessage(error, t(fallbackKey))
 }
 
-function bodyCode(error: unknown): string | undefined {
+/** The `code` the server gave a refusal (`preAuthInvalid`, `setupTokenInvalid`, …). */
+export function bodyCode(error: unknown): string | undefined {
   return isAxiosError(error) ? (error.response?.data as { code?: string } | undefined)?.code : undefined
 }
