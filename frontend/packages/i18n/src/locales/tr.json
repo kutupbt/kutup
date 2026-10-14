@@ -417,6 +417,7 @@
     "history": "Bu uygulamanın geçmişi",
     "historyEmpty": "Gösterilecek bir şey yok.",
     "startedFresh": "#{{sequence}} izlenmeye başlandı",
+    "startedFreshUnreadable": "Bu cihazın kaydı okunamadı; #{{sequence}} izlenmeye başlandı",
     "reanchoredRollback": "Sunucudaki eski verilerle devam edildi (#{{from}} → #{{to}})",
     "reanchoredFork": "Sunucudaki diğer geçmişle devam edildi (#{{from}} → #{{to}})",
     "reanchoredTooOld": "Uzun bir aradan sonra güncellendi (#{{from}} → #{{to}})",

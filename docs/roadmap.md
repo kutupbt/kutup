@@ -213,6 +213,18 @@ packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
 
+**The account head in native clients** (docs/plans/rollback-protection.md):
+`kutup-client-ffi`'s HTTP transport stores Chat's identity pin list without
+the account head today. On an account that keeps one, the server refuses the
+write (409), and Chat's pin sync, which is best effort, keeps to its own
+pins. Before a native app ships, its transport writes and reads pins through
+Rust `account_head`, the way the web Chat transport goes through the web head
+client:
+- a `LocalHeadStateV1` kept in its SQLite store, one device per app;
+- the verified index checked on reads;
+- the chain started on the index basis;
+- a blocked state shown in the app.
+
 ### Responsive web · mobile selection mode
 
 Per the design + user direction: long-press / "Select" button on mobile turns the page into Google-Drive-style full-screen takeover with checkboxes, top "Cancel · N selected · Select all" bar, bottom action bar (Share / Move / Delete / More).

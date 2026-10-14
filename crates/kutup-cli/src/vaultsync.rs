@@ -77,6 +77,8 @@ struct Account {
     master_key: Zeroizing<Vec<u8>>,
     /// What the account's envelopes are bound to (docs/plans/account-identity.md).
     binding: String,
+    /// The profile's data directory: the account head's device state.
+    dir: std::path::PathBuf,
 }
 
 impl VaultKeys {
@@ -126,12 +128,30 @@ impl VaultKeys {
         }
     }
 
-    /// The signed-in account, whose vault secrets open vaults; read again
-    /// on every pass.
-    pub fn sign_in(&mut self, session: &crate::session::Session) -> Result<()> {
+    /// The signed-in account of `profile`, whose vault secrets open vaults;
+    /// read again on every pass.
+    pub fn sign_in(&mut self, session: &crate::session::Session, profile: &str) -> Result<()> {
         self.account = Some(Account {
             master_key: Zeroizing::new(session.master_key_bytes()?),
             binding: session.binding().to_string(),
+            dir: crate::config::data_dir(profile)?,
+        });
+        self.stored = None;
+        Ok(())
+    }
+
+    /// The same account again after its session was refreshed (one pass of a
+    /// sync): its keys read again, its profile kept.
+    pub fn refresh(&mut self, session: &crate::session::Session) -> Result<()> {
+        let dir = self
+            .account
+            .as_ref()
+            .map(|account| account.dir.clone())
+            .context("vault keys are not signed in")?;
+        self.account = Some(Account {
+            master_key: Zeroizing::new(session.master_key_bytes()?),
+            binding: session.binding().to_string(),
+            dir,
         });
         self.stored = None;
         Ok(())
@@ -217,12 +237,19 @@ impl VaultKeys {
 
     fn open_stored(&mut self, client: &Client, file_id: &str) -> Option<kutup_pass::kept::Kept> {
         let account = self.account.as_ref()?;
-        let stored = self.stored.get_or_insert_with(|| {
-            client
-                .list_vault_secrets()
-                .map(|rows| rows.into_iter().map(|r| (r.file_id, r.envelope)).collect())
-                .unwrap_or_default()
-        });
+        if self.stored.is_none() {
+            // Held to the account head; refused (or unreachable), no kept key
+            // is used and vaults ask for their own.
+            self.stored = Some(
+                verified_secrets(client, &account.master_key, &account.binding, &account.dir)
+                    .map(|rows| rows.into_iter().map(|r| (r.file_id, r.envelope)).collect())
+                    .unwrap_or_else(|error| {
+                        eprintln!("  The kept vault keys could not be checked: {error:#}");
+                        BTreeMap::new()
+                    }),
+            );
+        }
+        let stored = self.stored.as_ref()?;
         let envelope = account_envelope::decode_canonical_b64(stored.get(file_id)?).ok()?;
         let id = Uuid::parse_str(file_id).ok()?;
         kutup_pass::kept::open(
@@ -254,6 +281,7 @@ impl VaultKeys {
             client,
             &account.master_key,
             &account.binding,
+            &account.dir,
             file_id,
             contents,
             Some(password),
@@ -271,14 +299,101 @@ impl VaultKeys {
     }
 }
 
+/// The vault secrets are the account head's `passSecrets` scope, one value per
+/// vault file (docs/plans/rollback-protection.md).
+const HEAD_SCOPE: &str = "passSecrets";
+/// What the revision guard calls a vault's kept key (as the web does).
+const GUARD_SCOPE: &str = "pass-vault-secret";
+
+/// The account head for the signed-in account whose keys these are.
+pub(crate) fn secrets_head<'a>(
+    client: &'a Client,
+    master_key: &[u8],
+    binding: &str,
+    dir: &std::path::Path,
+) -> Result<crate::account_head::CliHead<'a>> {
+    let master_key: [u8; 32] = master_key
+        .try_into()
+        .context("master key must be 32 bytes")?;
+    let incarnation =
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)?.incarnation_id();
+    crate::account_head::CliHead::open(
+        client,
+        &master_key,
+        binding,
+        &incarnation,
+        dir.to_path_buf(),
+    )
+}
+
+fn envelope_revision(envelope_b64: &str) -> u64 {
+    base64::engine::general_purpose::STANDARD
+        .decode(envelope_b64)
+        .ok()
+        .and_then(|envelope| kutup_crypto::account_envelope::inspect(&envelope).ok())
+        .and_then(|header| header.revision)
+        .unwrap_or(0)
+}
+
+/// The account's vault secrets, held to the account head: a list with one
+/// more or fewer than the head vouches for, or one at another revision, is
+/// refused (read again once first). While this device is blocked on another
+/// history, held to its own guard only.
+pub(crate) fn verified_secrets(
+    client: &Client,
+    master_key: &[u8],
+    binding: &str,
+    dir: &std::path::Path,
+) -> Result<Vec<crate::api::pass::VaultSecretRow>> {
+    let mut head = secrets_head(client, master_key, binding, dir)?;
+    let guard = crate::account_head::CliHead::guard(
+        dir,
+        master_key
+            .try_into()
+            .context("master key must be 32 bytes")?,
+    )?;
+    let mut last = None;
+    for _ in 0..2 {
+        let index = match head.index(HEAD_SCOPE) {
+            Ok(index) => Some(index),
+            Err(error) if error.downcast_ref::<crate::errors::HeadBlocked>().is_some() => {
+                eprintln!("  Note: {error}");
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        let rows = client.list_vault_secrets()?;
+        let checked = (|| -> Result<()> {
+            if let Some(index) = &index {
+                index.expect_listing(rows.iter().map(|row| row.file_id.as_str()))?;
+                for row in &rows {
+                    index.expect(&row.file_id, envelope_revision(&row.envelope))?;
+                }
+            }
+            for row in &rows {
+                guard.accept(GUARD_SCOPE, &row.file_id, envelope_revision(&row.envelope))?;
+            }
+            Ok(())
+        })();
+        match checked {
+            Ok(()) => return Ok(rows),
+            Err(error) => last = Some(error),
+        }
+    }
+    Err(last.expect("two attempts"))
+}
+
 /// Keeps what opens vault `file_id` (whose current contents are `contents`)
 /// in the account: checked to open the vault by itself, sealed under the
-/// master key for `binding` (a password only as its SHA-256) and stored.
-/// Returns the envelope (base64).
+/// master key for `binding` (a password only as its SHA-256) and stored with
+/// the next account head. When another device kept a key meanwhile: done if
+/// it is this same key, else again on top of it. Returns the envelope (base64).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn keep_secret(
     client: &Client,
     master_key: &[u8],
     binding: &str,
+    dir: &std::path::Path,
     file_id: &str,
     contents: &[u8],
     password: Option<&str>,
@@ -293,56 +408,78 @@ pub(crate) fn keep_secret(
     }
     kutup_pass::open(contents, &key).map_err(|_| anyhow!("this key does not open the vault"))?;
     let id = Uuid::parse_str(file_id)?;
-    // On top of the key kept now, if any (docs/plans/sealed-revisions.md);
-    // when another device kept one meanwhile, done if it is this same key,
-    // else once more on top of it.
-    let kept_now = |client: &Client| -> Result<Option<(u64, Vec<u8>)>> {
-        Ok(client
+    let guard = crate::account_head::CliHead::guard(
+        dir,
+        master_key
+            .try_into()
+            .context("master key must be 32 bytes")?,
+    )?;
+    let guard = &guard;
+    let mut head = secrets_head(client, master_key, binding, dir)?;
+    let mut done: Option<String> = None;
+    let stored = head.listed_write(HEAD_SCOPE, |_index, _attempt| {
+        let now = client
             .list_vault_secrets()?
             .into_iter()
-            .find(|row| row.file_id == file_id)
-            .and_then(|row| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(row.envelope)
-                    .ok()
-            })
-            .map(|envelope| {
-                let revision = kutup_crypto::account_envelope::inspect(&envelope)
-                    .ok()
-                    .and_then(|header| header.revision)
-                    .unwrap_or(0);
-                (revision, envelope)
-            }))
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let mut base = kept_now(client)?.map_or(0, |(revision, _)| revision);
-    for attempt in 0..2 {
-        let revision = now.max(base + 1);
+            .find(|row| row.file_id == file_id);
+        // This same key kept already (by another device, or by an earlier try
+        // whose answer was lost): nothing to send.
+        if let Some(row) = &now {
+            let envelope = account_envelope::decode_canonical_b64(&row.envelope)?;
+            if kutup_pass::kept::open(&envelope, master_key, binding, id.as_bytes())
+                .is_ok_and(|kept| kept.key.same_as(&key))
+            {
+                done = Some(row.envelope.clone());
+                return Ok(None);
+            }
+        }
+        let base = now
+            .as_ref()
+            .map_or(0, |row| envelope_revision(&row.envelope));
+        let revision = guard.next(GUARD_SCOPE, file_id, base)?;
         let sealed =
             kutup_pass::kept::seal(master_key, binding, id.as_bytes(), revision, &key, false)?;
         let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
-        if client.put_vault_secret(file_id, &envelope, base)? {
-            return Ok(envelope);
+        Ok(Some(crate::account_head::Edit {
+            changes: vec![(file_id.to_owned(), Some(revision))],
+            send: Box::new(move |sealed_head: &str| {
+                if !client.put_vault_secret(file_id, &envelope, base, sealed_head)? {
+                    return Ok(None);
+                }
+                guard.accept(GUARD_SCOPE, file_id, revision)?;
+                Ok(Some(envelope))
+            }),
+        }))
+    })?;
+    stored
+        .or(done)
+        .ok_or_else(|| anyhow!("the vault key was not kept"))
+}
+
+/// Forgets the account's kept key of vault `file_id`, with the next account
+/// head; one already gone is nothing to do.
+pub(crate) fn forget_secret(
+    client: &Client,
+    master_key: &[u8],
+    binding: &str,
+    dir: &std::path::Path,
+    file_id: &str,
+) -> Result<()> {
+    let mut head = secrets_head(client, master_key, binding, dir)?;
+    head.listed_write(HEAD_SCOPE, |index, _attempt| {
+        if index.revision(file_id).is_none() {
+            return Ok(None);
         }
-        let newer = kept_now(client)?;
-        if let Some((_, kept)) = &newer {
-            if kutup_pass::kept::open(kept, master_key, binding, id.as_bytes())
-                .is_ok_and(|kept| kept.key.same_as(&key))
-            {
-                return Ok(base64::engine::general_purpose::STANDARD.encode(kept));
-            }
-        }
-        if attempt == 1 {
-            break;
-        }
-        base = newer.map_or(0, |(revision, _)| revision);
-    }
-    Err(anyhow!(
-        "another device kept a different key for this vault meanwhile; run this again to keep yours"
-    ))
+        Ok(Some(crate::account_head::Edit {
+            changes: vec![(file_id.to_owned(), None)],
+            send: Box::new(move |sealed_head: &str| {
+                Ok(client
+                    .delete_vault_secret(file_id, sealed_head)?
+                    .then_some(()))
+            }),
+        }))
+    })?;
+    Ok(())
 }
 
 /// Where a vault lives on Drive and what opens it there.

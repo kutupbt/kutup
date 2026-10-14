@@ -7,7 +7,12 @@ type TFunction = ReturnType<typeof useTranslation>['t']
 export function describeHeadEvent(event: LocalHeadEvent, t: TFunction): { text: string; atMs: number } {
   switch (event.kind) {
     case 'startedFresh':
-      return { text: t('accountHead.startedFresh', { sequence: event.anchor.sequence }), atMs: event.atMs }
+      return {
+        text: t(event.reason === 'unreadable' ? 'accountHead.startedFreshUnreadable' : 'accountHead.startedFresh', {
+          sequence: event.anchor.sequence,
+        }),
+        atMs: event.atMs,
+      }
     case 'forgotten':
       return { text: t('accountHead.forgotten', { from: event.from.sequence }), atMs: event.atMs }
     case 'reanchored': {

@@ -55,6 +55,10 @@ pub struct IdentityPinsRecord {
 pub struct IdentityPinsWrite {
     pub base_revision: u64,
     pub envelope: String,
+    /// The revision sealed in the envelope's header. Not sent to the server
+    /// (it reads it from the header): a transport that writes the account
+    /// head with the list (docs/plans/rollback-protection.md) names it there.
+    pub revision: u64,
 }
 
 /// The chat server, as the engine sees it. Implementations translate these to the

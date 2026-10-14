@@ -128,6 +128,7 @@ fn do_sync(
     vaults: &mut VaultKeys,
 ) -> Result<()> {
     let ctx = require_session(profile)?;
+    vaults.sign_in(&ctx.session, profile)?;
     let result = syncengine::sync(
         &ctx.client,
         &ctx.store,

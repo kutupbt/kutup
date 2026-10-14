@@ -465,4 +465,7 @@ pub struct IdentityPinsRecord {
 pub struct IdentityPinsWrite {
     pub base_revision: u64,
     pub envelope: String,
+    /// The next sealed account head (docs/plans/rollback-protection.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }

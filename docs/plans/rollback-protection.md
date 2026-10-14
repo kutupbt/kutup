@@ -297,6 +297,44 @@ Too old re-anchors with a quiet notice. Account → Security shows "Data state":
 the sequence this app verified, whether this app wrote it, when it was seen
 here (the head holds no time), and the app's log.
 
+**Chat** keeps the synced identity pins as a listed value through the web
+client, not a second anchor of its own:
+- Chat core passes the revision it sealed with each write. The web Chat
+  transport sends the write through `listedWrite('pins', …)`.
+- On reads, the transport checks the revision the server names against the
+  verified index, and Chat core checks the sealed revision against that one.
+- A list the head does not vouch for, or an app blocked on another history,
+  is not used. Chat keeps to its own pins, and the shell's banner says why.
+
+The native transport (`kutup-client-ffi`) writes no head yet. On an account
+with one, the server refuses its pin writes, which Chat takes as best effort.
+It gets the same checks, in Rust, before a native app ships (docs/roadmap.md).
+
+**The CLI** keeps the same `LocalHeadStateV1`, sealed, in the profile's data
+directory (`account-head-<name>`), and a sealed revision guard
+(`revisions.json`):
+- The guard replaces the plaintext `identity-pins-revision`, and takes over
+  its value once.
+- Pins (`kutup identity`) and Pass vault secrets (`kutup pass keep`,
+  `forget`, `ls`, `show-key`, and the keys sync and the ssh agent use) go
+  through one `listed_write`.
+- A rollback or fork stops listed writes with exit code 6.
+- `kutup account state` shows where the device stands, and `kutup account
+  reanchor` continues with the server's data after a confirmation (`--yes`
+  for scripts), logged in the device's state.
+- Too old re-anchors with a notice on stderr.
+- **The state on disk** (the #205 review):
+  - Every read and change of the state file and the guard is under the
+    profile's lock (`account-head.lock`), re-read inside it. The anchor never
+    moves back, except by a re-anchoring, which is checked against the anchor
+    it was decided on.
+  - Writes go to a temporary file of their own, are synced, renamed over the
+    file, and the directory is synced.
+  - A state that does not open is kept aside (`….corrupt-<ms>`), with a
+    warning. The fresh state records why it started over, and the first
+    anchor's log entry says so (`startedOver` in `kutup account state`).
+  - The old plaintext revision file goes only after the guard holds its value.
+
 **Writes to the local store** count only once IndexedDB commits them. A
 request's success comes first, and a page closed in between would lose an
 anchor or a re-anchoring.

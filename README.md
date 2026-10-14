@@ -144,7 +144,7 @@ development and air-gapped image preparation.
 
 `kutup` is a Rust CLI for the same E2EE primitives as the web — register, login, account recovery, ls, upload (resumable), download, sync, trash, share, versions, devices, 2fa, public-link consumption, file/folder rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
 
-Scripting-friendly: every command honors a global `--json` flag (stdout is exactly one JSON document; prompts/progress/status go to stderr, and with `--json` even errors are emitted as JSON on stderr), and exit codes are differentiated — `0` ok, `1` generic, `2` usage, `3` auth/session, `4` not found, `5` network/server. Destructive commands prompt `[y/N]` and take `--yes` for non-interactive use.
+Scripting-friendly: every command honors a global `--json` flag (stdout is exactly one JSON document; prompts/progress/status go to stderr, and with `--json` even errors are emitted as JSON on stderr), and exit codes are differentiated — `0` ok, `1` generic, `2` usage, `3` auth/session, `4` not found, `5` network/server, `6` the account's history on the server was rolled back or forked (see `kutup account state`; `kutup account reanchor` goes on with the server's data). Destructive commands prompt `[y/N]` and take `--yes` for non-interactive use.
 
 **Build from source** (Rust ≥ 1.91.1):
 

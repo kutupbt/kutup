@@ -83,6 +83,13 @@ impl IdentityPinsSync {
                     .map_err(|_| ChatError::Invalid("identity pins are not base64".into()))?;
                 let (list, revision) =
                     identity_pins::open(&self.key, &self.binding, &sealed).map_err(crypto)?;
+                // The revision the server (and the account head the
+                // transport checked it against) named is the sealed one.
+                if revision != record.revision {
+                    return Err(ChatError::Trust(
+                        "identity pins: the list is not the revision the server named".into(),
+                    ));
+                }
                 if revision < self.highest_seen {
                     return Err(ChatError::Trust(
                         "identity pins: the server answered an older list than seen".into(),
@@ -190,6 +197,7 @@ impl IdentityPinsSync {
             let write = IdentityPinsWrite {
                 base_revision: revision,
                 envelope: STANDARD.encode(sealed),
+                revision: next,
             };
             self.cache = None;
             if transport.store_identity_pins(&write).await? {
