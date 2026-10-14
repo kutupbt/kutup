@@ -730,8 +730,8 @@ fn execute_file_action(
                 *local_changed,
             )?;
             report_yjs(rel, &synced, result);
-            if !synced.busy {
-                record_yjs(store, pair, rel, &root.join(rel), entry)?;
+            if let Some(stat) = &synced.stat {
+                record_yjs(store, pair, rel, stat, entry)?;
             }
         }
         FileAction::Pull => {
@@ -942,8 +942,8 @@ fn execute_file_action(
                 eprintln!("  ↓ {rel} (edited on Drive since; kept)");
                 let synced = crate::yjs_sync::sync_file(client, peer, &target, false)?;
                 report_yjs(rel, &synced, result);
-                if !synced.busy {
-                    record_yjs(store, pair, rel, &root.join(rel), entry)?;
+                if let Some(stat) = &synced.stat {
+                    record_yjs(store, pair, rel, stat, entry)?;
                 }
             }
         }
@@ -1019,12 +1019,24 @@ fn report_yjs(rel: &str, synced: &crate::yjs_sync::Synced, result: &mut SyncResu
     if synced.busy {
         eprintln!("  ⏸ {rel}: changed while syncing; left for the next run");
     }
+    if synced.waiting {
+        eprintln!(
+            "  ⏸ {rel}: another editor is opening it for the first time; \
+             your edit goes up on the next run"
+        );
+    }
 }
 
-/// Records a note or list as in sync with the file now on disk (its Yjs base
-/// is recorded beside it by [`crate::yjs_sync`]).
-fn record_yjs(store: &Store, pair: &str, rel: &str, abs: &Path, entry: &RemoteEntry) -> Result<()> {
-    let stat = stat_local(abs)?;
+/// Records a note or list as in sync with the file as it was compared or
+/// written (`stat`, taken there: a save after it is a change next run). Its
+/// Yjs base is recorded beside it by [`crate::yjs_sync`].
+fn record_yjs(
+    store: &Store,
+    pair: &str,
+    rel: &str,
+    stat: &LocalFile,
+    entry: &RemoteEntry,
+) -> Result<()> {
     store.put_sync_file(
         pair,
         rel,
@@ -1386,7 +1398,7 @@ fn latest_version_id(client: &Client, file_id: &str) -> Result<String> {
         .unwrap_or_default())
 }
 
-fn stat_local(path: &Path) -> Result<LocalFile> {
+pub(crate) fn stat_local(path: &Path) -> Result<LocalFile> {
     let m = std::fs::metadata(path)?;
     let (mtime_secs, mtime_nanos) = m
         .modified()

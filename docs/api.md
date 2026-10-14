@@ -3319,15 +3319,18 @@ base64 sealed collab frames.
   order, never the bridge's own. `404` for an unknown subscription.
 - **`POST devices`** `{ fileId, devices: [{ deviceId, userId,
   authorityPublicKey, publicSigning, challenge, issuedAtMs, signature }],
-  revocations: [{ authorityPublicKey, publicSigning, revokedAtMs, signature
-  }] }` → `{ accepted: [deviceId], refused: [{ deviceId, code }],
-  revocationsThrough }`. The bridge announces the editing account's
+  revocations: [{ seq, authorityPublicKey, publicSigning, revokedAtMs,
+  signature }] }` → `{ accepted: [deviceId], refused: [{ deviceId, code }],
+  revocationsThrough }`. `seq` is the bridge's own order of its revocations
+  (never a clock), and `revocationsThrough` the highest `seq` home has
+  processed for the account: the bridge sends what comes after it. The bridge announces the editing account's
   collaboration devices (docs/plans/device-registration.md) and forwards its
   signed revocations, at most 50 entries in all. A device is kept only when
   its `DeviceRegistrationV1` names the bridge and verifies under the share
   recipient's authority. Refusal codes are `doesNotVerify`, `notRecipient`,
   `expired` (older than the 30-day lease, or dated ahead), `revoked`,
-  `keyInUse` and `tooManyDevices` (20 per account). Rate limit:
+  `keyInUse` and `tooManyDevices` (20 in use per account: not revoked, within
+the lease). Rate limit:
   `RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN` per (domain, capability).
 - **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions,
   unknownDevices, expiredDevices }` (positions are null for relayed-only or

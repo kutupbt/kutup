@@ -9,7 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { deterministicSeed } from '@kutup/collab/session'
-import { fillDoc, type Place } from '@kutup/map/list'
+import { fillDoc, parseListJson, uploadPlaceId, type Place } from '@kutup/map/list'
 
 /** The repository root: the nearest folder up from here holding `crates/kutup-collab`. */
 function repoRoot(): string {
@@ -40,6 +40,34 @@ const PLACES: Place[] = [
 ]
 
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex')
+const utf8 = (text: string) => new TextEncoder().encode(text)
+const BOM = [0xef, 0xbb, 0xbf]
+
+// Files as uploaded: what a note's or a list's first editor seeds from, read
+// the way the editors read them (TextDecoder; parseListJson with the upload's
+// place ids). Rust: seed_text_upload / seed_list_upload.
+const TEXT_FILES: Record<string, Uint8Array> = {
+  bom: new Uint8Array([...BOM, ...utf8('# Notlar\n')]),
+  crlf: utf8('one\r\ntwo\r\n'),
+  invalidUtf8: new Uint8Array([0x61, 0xff, 0x62, 0xc3, 0x28, 0x0a]),
+}
+const LIST_FILES: Record<string, Uint8Array> = {
+  bomAndMissingIds: new Uint8Array([
+    ...BOM,
+    ...utf8(JSON.stringify({ format: 'kutupmap', version: 1, places: [
+      { name: 'No id', lat: 41, lon: 29 },
+      { id: 'bad id!', name: 'Bad id', lat: 41.5, lon: 29.5, addedAt: '2026-10-13T10:00:00Z' },
+      { id: 'k', name: 'Kept', lat: 40, lon: 28, addedAt: '2026-02-29T10:00:00Z' },
+    ] })),
+  ]),
+  oddFields: utf8(JSON.stringify({ format: 'kutupmap', version: 1.0, places: [
+    { id: 'a', name: '\u00a0 Trimmed \u00a0', lat: 41, lon: 29, addedAt: '2026-10-13' },
+    { id: 'b', name: 'String lat', lat: '41', lon: 29 },
+    { id: 'c', name: 'Offset', lat: -12.5, lon: 180, addedAt: '2026-10-13T10:00:00.5+03:00', note: 'n' },
+    { id: 'c', name: 'Duplicate id', lat: 1, lon: 1 },
+  ] })),
+  notAList: utf8('{"format":"other"}'),
+}
 
 function current() {
   return {
@@ -52,6 +80,20 @@ function current() {
       seed: hex(deterministicSeed(FILE_ID, (doc) => doc.getText('content').insert(0, text))),
     })),
     list: { places: PLACES, seed: hex(deterministicSeed(FILE_ID, (doc) => fillDoc(doc, PLACES))) },
+    textUploads: Object.entries(TEXT_FILES).map(([name, bytes]) => ({
+      name,
+      bytes: hex(bytes),
+      seed: hex(deterministicSeed(FILE_ID, (doc) => doc.getText('content').insert(0, new TextDecoder().decode(bytes)))),
+    })),
+    listUploads: Object.entries(LIST_FILES).map(([name, bytes]) => {
+      let places: Place[] = []
+      try {
+        places = parseListJson(bytes, (index) => uploadPlaceId(FILE_ID, index))
+      } catch {
+        // Not a list: it starts empty, as in the editor.
+      }
+      return { name, bytes: hex(bytes), seed: hex(deterministicSeed(FILE_ID, (doc) => fillDoc(doc, places))) }
+    }),
   }
 }
 

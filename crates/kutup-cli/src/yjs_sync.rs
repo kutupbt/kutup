@@ -20,7 +20,7 @@ use crate::api::versions::{NewVersion, VersionRow};
 use crate::api::{ApiError, Client, File};
 use crate::collab_device::{not_authorized, Device, Signer};
 use crate::keyring::Keyring;
-use crate::session::{Session, Store, YjsBase};
+use crate::session::{Session, Store, YjsBase, YjsWriting};
 
 /// The CLI as a collaboration peer for one sync run: its device, registered
 /// (or renewed) on first use, so a run without notes or lists registers
@@ -150,16 +150,24 @@ impl Doc {
         }
     }
 
-    /// The first content of a file nobody has opened, made from its upload as
-    /// every editor makes it (the same Yjs item wherever it is made).
-    fn seed(list: bool, file_id: &str, original: &[u8]) -> Vec<u8> {
+    /// The first content of a file nobody has opened, made from its file's
+    /// bytes as every editor makes it (the same Yjs item wherever it is
+    /// made; `kutup-collab` and the web share vectors for it).
+    fn seed(list: bool, file_id: &str, content: &[u8]) -> Vec<u8> {
         if list {
-            // A list whose upload is not one starts empty, as in the editor.
-            let places = kutup_collab::parse_list_json(original).unwrap_or_default();
-            kutup_collab::seed_list(file_id, &places)
+            kutup_collab::seed_list_upload(file_id, content)
         } else {
-            kutup_collab::seed_text(file_id, &String::from_utf8_lossy(original))
+            kutup_collab::seed_text_upload(file_id, content)
         }
+    }
+
+    /// How close `local` is to what the document holds (0 to 1).
+    fn likeness(&self, local: &[u8]) -> f32 {
+        similar::TextDiff::from_chars(
+            String::from_utf8_lossy(local).as_ref(),
+            String::from_utf8_lossy(&self.render()).as_ref(),
+        )
+        .ratio()
     }
 }
 
@@ -169,8 +177,11 @@ struct Remote {
     /// Every frame up to here is in `doc`.
     through: i64,
     doc_key_id: u32,
-    /// This device's highest sender sequence in the log.
-    sender_high: i64,
+    /// The sequence this run's frames count up from: a random prefix above
+    /// every one this device has used (`randomSenderSeqPrefix` on the web),
+    /// so two runs at once, or a run after the log was trimmed, never reuse
+    /// one.
+    sender_next: i64,
     /// Nobody has opened it: no saved state, no frame. `doc` holds the seed
     /// (applied here, sent only in front of an edit).
     seed: Option<Vec<u8>>,
@@ -242,8 +253,8 @@ fn read_remote(
     }
     let never_opened = !saved && page.head_seq == 0 && base.is_none_or(|(_, seq)| *seq == 0);
     let seed = if never_opened {
-        let original = original_bytes(client, keys)?;
-        let seed = Doc::seed(list, &file.id, &original);
+        let content = current_content(client, keys)?;
+        let seed = Doc::seed(list, &file.id, &content);
         doc.apply_v1(&seed)?;
         Some(seed)
     } else {
@@ -256,7 +267,7 @@ fn read_remote(
             .ok()
             .filter(|id| *id > 0)
             .ok_or_else(|| anyhow!("the server sent no document key id"))?,
-        sender_high: page.my_sender_seq_high,
+        sender_next: sender_prefix(page.my_sender_seq_high),
         seed,
     })
 }
@@ -283,18 +294,28 @@ fn apply_frame(doc: &Doc, keys: &Keys, packed: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// The original upload, decrypted (the content of a file nobody has opened).
-fn original_bytes(client: &Client, keys: &Keys) -> Result<Vec<u8>> {
+/// What a file nobody has opened holds, decrypted, as the editors seed from
+/// it: its newest whole-file version, else its upload.
+fn current_content(client: &Client, keys: &Keys) -> Result<Vec<u8>> {
     let file = &keys.file;
-    let blob = client
-        .download_original(&file.id)
-        .context("download the original upload")?;
-    let context = DriveFileBlobContextV1::new(&file.id, file.original_key_generation)?;
-    Ok(decrypt_file_blob(
-        &blob,
-        &keys.at(file.original_key_generation)?,
-        context,
-    )?)
+    let (key, generation) = crate::file_crypto::content_key(file, &keys.current)?;
+    let (response, _) = client
+        .download_current_stream(&file.id)
+        .context("download the file")?;
+    let blob = response.bytes().context("download the file")?;
+    let context = DriveFileBlobContextV1::new(&file.id, generation)?;
+    Ok(decrypt_file_blob(&blob, &key, context)?)
+}
+
+/// A sender sequence prefix above `must_exceed`: 31 random bits, shifted
+/// past the counter's 32 (as `randomSenderSeqPrefix`).
+fn sender_prefix(must_exceed: i64) -> i64 {
+    loop {
+        let candidate = i64::from(rand::random::<u32>() & 0x7FFF_FFFF) << 32;
+        if candidate > must_exceed {
+            return candidate;
+        }
+    }
 }
 
 /// Sends `update` as one signed frame; its log position. A sequence another
@@ -315,8 +336,8 @@ fn send(
     let file = &keys.file;
     let mut attempt = 0;
     loop {
-        remote.sender_high += 1;
-        let sequence = remote.sender_high;
+        remote.sender_next += 1;
+        let sequence = remote.sender_next;
         let result = peer.with_device(|device| {
             let context = CollabFrameContextV1::new(
                 kind::YJS_UPDATE,
@@ -333,11 +354,11 @@ fn send(
         match result {
             Err(e) if attempt == 0 && refused(&e) => {
                 attempt += 1;
-                // Re-read where this device's sequence and the document key
-                // are now, then try once more.
+                // Re-read the document key and this device's sequences, and
+                // go on above them under a new prefix.
                 let page =
                     peer.with_device(|d| client.collab_frames(&file.id, d.id, remote.through))?;
-                remote.sender_high = remote.sender_high.max(page.my_sender_seq_high);
+                remote.sender_next = sender_prefix(page.my_sender_seq_high);
                 remote.doc_key_id =
                     u32::try_from(page.current_doc_key_id).unwrap_or(remote.doc_key_id);
             }
@@ -385,9 +406,15 @@ pub struct Synced {
     /// differed: Drive's copy was kept under this name, and the local file's
     /// content went up as an edit.
     pub conflict_copy: Option<String>,
-    /// The file changed on disk while it was being synced: nothing written or
-    /// recorded; the next run takes it.
+    /// The file changed on disk while it was being synced: nothing written;
+    /// the next run takes it.
     pub busy: bool,
+    /// Nobody has opened it yet, and another editor claimed its first
+    /// content but has not sent it: the local edit waits for the next run.
+    pub waiting: bool,
+    /// The file as recorded in sync (taken where it was compared or
+    /// written), when it is.
+    pub stat: Option<crate::syncengine::LocalFile>,
 }
 
 /// One file to sync.
@@ -408,13 +435,23 @@ pub struct Target<'a> {
 }
 
 /// The base recorded for `target`, when it is for this file.
-fn base_of(target: &Target) -> Result<Option<(Vec<u8>, i64)>> {
-    Ok(match target.store.yjs_base(target.pair, target.rel)? {
-        Some(base) if base.file_id == target.file.id => {
-            Some((STANDARD.decode(&base.state)?, base.seq))
-        }
-        _ => None,
-    })
+fn base_of(target: &Target) -> Result<Option<YjsBase>> {
+    Ok(target
+        .store
+        .yjs_base(target.pair, target.rel)?
+        .filter(|base| base.file_id == target.file.id))
+}
+
+fn base_state(base: &YjsBase) -> Result<(Vec<u8>, i64)> {
+    Ok((STANDARD.decode(&base.state)?, base.seq))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Records the base of a note or list the sync just uploaded as a new file:
@@ -436,6 +473,8 @@ pub fn record_upload(
             file_id: file_id.to_owned(),
             state: STANDARD.encode(doc.state_v2()),
             seq: 0,
+            pending: Vec::new(),
+            writing: None,
         },
     )
 }
@@ -447,6 +486,7 @@ pub fn unchanged_since_base(client: &Client, peer: &mut Peer, target: &Target) -
     let Some(base) = base_of(target)? else {
         return Ok(false);
     };
+    let base = base_state(&base)?;
     let list = crate::editor_kind::is_place_list(target.rel);
     let keys = Keys {
         file: target.file.clone(),
@@ -458,9 +498,65 @@ pub fn unchanged_since_base(client: &Client, peer: &mut Peer, target: &Target) -
     Ok(remote.doc.render() == recorded.render())
 }
 
+/// Test builds only: `KUTUP_TEST_YJS_FAULT=<point>` stops the process at
+/// that point (`after-send`, `after-write`), or edits the file there
+/// (`touch-after-send`), so the live check can prove a later run makes no
+/// edit twice (scripts/verify-yjs-sync.sh).
+fn fault(point: &str, file: &Path) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(wanted) = std::env::var("KUTUP_TEST_YJS_FAULT") else {
+        return;
+    };
+    if wanted == point {
+        eprintln!("    (test fault: stopped {point})");
+        std::process::exit(99);
+    }
+    if wanted == format!("touch-{point}") {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(file) {
+            let _ = f.write_all(b"touched\n");
+        }
+    }
+}
+
+/// Settles a write the last run began: from what the file holds, whether
+/// the merged document reached it.
+fn settle_writing(target: &Target, base: &mut YjsBase, list: bool) -> Result<()> {
+    let Some(writing) = base.writing.take() else {
+        return Ok(());
+    };
+    let local = std::fs::read(&target.abs).unwrap_or_default();
+    let written = match sha256_hex(&local) {
+        hash if hash == writing.after => true,
+        hash if hash == writing.before => false,
+        // Changed since, either way: the base is the state the file is
+        // nearer to.
+        _ => {
+            let merged = Doc::new(list);
+            merged.apply_v2(&STANDARD.decode(&writing.state)?)?;
+            let recorded = Doc::new(list);
+            recorded.apply_v2(&STANDARD.decode(&base.state)?)?;
+            merged.likeness(&local) >= recorded.likeness(&local)
+        }
+    };
+    if written {
+        base.state = writing.state;
+        base.seq = writing.seq;
+    }
+    target.store.put_yjs_base(target.pair, target.rel, base)
+}
+
 /// Syncs one note, code file or place list both ways; records where it is
 /// in sync. `local_changed`: the file on disk differs from what was last
 /// recorded (or there is no record).
+///
+/// Crash-safe in order: a local edit is recorded (as the base, with its
+/// update bytes pending) before it is sent, and sent again byte for byte
+/// until acknowledged; a merged document is recorded as being written before
+/// it is, and settled from the file afterwards. No run ever makes the same
+/// edit twice as new operations.
 pub fn sync_file(
     client: &Client,
     peer: &mut Peer,
@@ -471,25 +567,47 @@ pub fn sync_file(
     let mut out = Synced::default();
     let file_key =
         crate::file_crypto::open_key(target.file, target.dir_keys).context("decrypt file key")?;
-    let base = base_of(target)?;
+    let mut base = base_of(target)?;
+    if let Some(base) = base.as_mut() {
+        settle_writing(target, base, list)?;
+    }
     let mut keys = Keys {
         file: target.file.clone(),
         current: file_key,
     };
-    let mut remote = read_remote(client, peer, &keys, base.as_ref(), list)?;
+    let recorded_state = base.as_ref().map(base_state).transpose()?;
+    let mut remote = read_remote(client, peer, &keys, recorded_state.as_ref(), list)?;
+
+    // Updates the last run did not see acknowledged: the same bytes again.
+    if let Some(base) = base.as_mut().filter(|b| !b.pending.is_empty()) {
+        let pending: Vec<Vec<u8>> = base
+            .pending
+            .iter()
+            .map(|u| STANDARD.decode(u))
+            .collect::<std::result::Result<_, _>>()?;
+        for update in &pending {
+            remote.doc.apply_v1(update)?;
+            send(client, peer, &keys, &mut remote, update)?;
+        }
+        base.pending.clear();
+        target.store.put_yjs_base(target.pair, target.rel, base)?;
+        out.sent = true;
+    }
 
     let before = std::fs::metadata(&target.abs).ok();
     let local = match &before {
         Some(_) => Some(std::fs::read(&target.abs).context("read the local file")?),
         None => None,
     };
-    // The local edit, as Yjs operations.
-    let edit = match (&local, &base) {
-        (Some(local), Some((state, _))) if local_changed => {
+    // The local edit, as Yjs operations, and the state the file then holds.
+    let edit = match (&local, &recorded_state) {
+        (Some(local), Some((state, seq))) if local_changed => {
             // Against the state last synced: what the user changed since.
             let recorded = Doc::new(list);
             recorded.apply_v2(state)?;
-            recorded.edit_to(local)?
+            recorded
+                .edit_to(local)?
+                .map(|update| (update, recorded.state_v2(), *seq))
         }
         (Some(local), None) if !remote.doc.holds(local) => {
             // Never synced, and different: Drive's copy is kept beside it,
@@ -497,11 +615,14 @@ pub fn sync_file(
             let copy = (target.conflict_name)()?;
             write_new(&target.root.join(&copy), &remote.doc.render())?;
             out.conflict_copy = Some(copy);
-            remote.doc.edit_to(local)?
+            let mine = Doc::new(list);
+            mine.apply_v2(&remote.doc.state_v2())?;
+            mine.edit_to(local)?
+                .map(|update| (update, mine.state_v2(), remote.through))
         }
         _ => None,
     };
-    if let Some(update) = edit {
+    if let Some((update, state_with_edit, seq)) = edit {
         // Content goes under a key only the folder's current people hold.
         let (file, current) = crate::cryptohelpers::rekey_file_if_behind(
             client,
@@ -512,36 +633,96 @@ pub fn sync_file(
             target.folder_epoch,
         )?;
         keys = Keys { file, current };
+        let mut updates = Vec::new();
         if let Some(seed) = remote.seed.take() {
-            // The first content goes in first, once (every seeder's is the
-            // same item); the claim tells tabs it is there.
-            client.claim_seed(&target.file.id)?;
-            send(client, peer, &keys, &mut remote, &seed)?;
+            // The first content goes in first, once: only by the editor that
+            // claimed it, as tabs do.
+            if !client.claim_seed(&target.file.id)? {
+                out.waiting = true;
+                return Ok(out);
+            }
+            updates.push(seed);
         }
-        remote.doc.apply_v1(&update)?;
-        send(client, peer, &keys, &mut remote, &update)?;
+        updates.push(update);
+        // Recorded before it is sent: whatever happens next, the next run
+        // sends these bytes, never a new edit of the same change.
+        let journal = YjsBase {
+            file_id: target.file.id.clone(),
+            state: STANDARD.encode(&state_with_edit),
+            seq,
+            pending: updates.iter().map(|u| STANDARD.encode(u)).collect(),
+            writing: None,
+        };
+        target
+            .store
+            .put_yjs_base(target.pair, target.rel, &journal)?;
+        for update in &updates {
+            remote.doc.apply_v1(update)?;
+            send(client, peer, &keys, &mut remote, update)?;
+        }
+        fault("after-send", &target.abs);
+        base = Some(YjsBase {
+            pending: Vec::new(),
+            ..journal
+        });
+        target
+            .store
+            .put_yjs_base(target.pair, target.rel, base.as_ref().expect("set above"))?;
         out.sent = true;
     }
 
     let merged = remote.doc.render();
+    let merged_base = YjsBase {
+        file_id: target.file.id.clone(),
+        state: STANDARD.encode(remote.doc.state_v2()),
+        seq: remote.through,
+        pending: Vec::new(),
+        writing: None,
+    };
+    // Not over an edit made while this ran: the next run takes it (the base
+    // is what the file held when read, so its edit is diffed right).
+    let unchanged =
+        || std::fs::metadata(&target.abs).ok().map(|m| stamp(&m)) == before.as_ref().map(stamp);
     if local.as_deref() != Some(merged.as_slice()) {
-        // Not over an edit made while this ran.
-        if std::fs::metadata(&target.abs).ok().map(|m| stamp(&m)) != before.as_ref().map(stamp) {
+        if !unchanged() {
             out.busy = true;
             return Ok(out);
         }
+        let writing = YjsBase {
+            writing: Some(YjsWriting {
+                before: sha256_hex(local.as_deref().unwrap_or_default()),
+                after: sha256_hex(&merged),
+                state: merged_base.state.clone(),
+                seq: merged_base.seq,
+            }),
+            ..base.clone().unwrap_or_else(|| YjsBase {
+                // Nothing here yet: an empty document is what the absent
+                // file held.
+                state: STANDARD.encode(Doc::new(list).state_v2()),
+                seq: 0,
+                ..merged_base.clone()
+            })
+        };
+        target
+            .store
+            .put_yjs_base(target.pair, target.rel, &writing)?;
         write_new(&target.abs, &merged)?;
+        fault("after-write", &target.abs);
+        target
+            .store
+            .put_yjs_base(target.pair, target.rel, &merged_base)?;
         out.written = true;
+        out.stat = Some(crate::syncengine::stat_local(&target.abs)?);
+    } else {
+        target
+            .store
+            .put_yjs_base(target.pair, target.rel, &merged_base)?;
+        if unchanged() {
+            out.stat = Some(crate::syncengine::stat_local(&target.abs)?);
+        } else {
+            out.busy = true;
+        }
     }
-    target.store.put_yjs_base(
-        target.pair,
-        target.rel,
-        &YjsBase {
-            file_id: target.file.id.clone(),
-            state: STANDARD.encode(remote.doc.state_v2()),
-            seq: remote.through,
-        },
-    )?;
     if out.sent {
         // Saved as the editor's autosave saves after an edit, so CLI-only
         // use keeps the log short. A convenience: the edit is in the log.
@@ -556,17 +737,31 @@ fn stamp(meta: &std::fs::Metadata) -> (u64, Option<std::time::SystemTime>) {
     (meta.len(), meta.modified().ok())
 }
 
-/// Writes `bytes` to `dest` through a temporary file beside it.
+/// Writes `bytes` to `dest` through a temporary file beside it (its own
+/// name, so two writers never share one), synced to disk with the folder
+/// before the run goes on.
 fn write_new(dest: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
     let name = dest
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow!("bad file name"))?;
-    let tmp = dest.with_file_name(format!(".kutup-tmp-{name}"));
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
+    let parent = dest.parent().ok_or_else(|| anyhow!("bad file path"))?;
+    std::fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".kutup-tmp-{name}-{:016x}", rand::random::<u64>()));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, dest)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).context("write the file");
     }
-    std::fs::write(&tmp, bytes).context("write temp file")?;
-    std::fs::rename(&tmp, dest).context("rename into place")?;
+    // The rename itself, durable (a folder cannot be opened for this on
+    // every platform; there it is the system's to keep).
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }

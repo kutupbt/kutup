@@ -260,33 +260,110 @@ fn clamp(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
 }
 
-/// A JSON value as JavaScript's `Number()` reads it (numbers and numeric
-/// strings).
-fn number_of(value: Option<&serde_json::Value>) -> Option<f64> {
-    match value? {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::String(s) => s.trim().parse().ok(),
-        _ => None,
-    }
-}
-
 fn valid_id(id: &str) -> bool {
     (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
-fn valid_time(value: &str) -> bool {
-    time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).is_ok()
+/// A place's time: RFC 3339 exactly as `list.ts` checks it, by hand on both
+/// sides (`Date.parse` and Rust's parsers each accept more, differently):
+/// `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)`, upper-case `T` and `Z`, a real
+/// calendar day, no leap second.
+pub fn valid_time(value: &str) -> bool {
+    let b = value.as_bytes();
+    let digits = |range: std::ops::Range<usize>| -> Option<u32> {
+        let part = b.get(range)?;
+        part.iter()
+            .all(u8::is_ascii_digit)
+            .then(|| part.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0')))
+    };
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        digits(0..4),
+        digits(5..7),
+        digits(8..10),
+        digits(11..13),
+        digits(14..16),
+        digits(17..19),
+    ) else {
+        return false;
+    };
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return false;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    if day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    let mut rest = &b[19..];
+    if rest.first() == Some(&b'.') {
+        let fraction = rest[1..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if fraction == 0 {
+            return false;
+        }
+        rest = &rest[1 + fraction..];
+    }
+    match rest {
+        [b'Z'] => true,
+        [sign, h1, h2, b':', m1, m2] if (*sign == b'+' || *sign == b'-') => {
+            let all = [h1, h2, m1, m2].iter().all(|c| c.is_ascii_digit());
+            all && (h1 - b'0') * 10 + (h2 - b'0') <= 23 && (m1 - b'0') * 10 + (m2 - b'0') <= 59
+        }
+        _ => false,
+    }
 }
 
-/// A place as stored, or `None` when it is not one (no name, bad
-/// coordinates): `normalizePlace` in `list.ts`. A place without a usable id
-/// gets a new one.
-pub fn normalize_place(value: &serde_json::Value) -> Option<Place> {
+/// ECMAScript's `String.prototype.trim` (its WhiteSpace and LineTerminator
+/// sets differ from Rust's `trim`: U+FEFF in, U+0085 out).
+fn js_trim(value: &str) -> &str {
+    let space = |c: char| {
+        matches!(
+            c,
+            '\u{9}'
+                | '\u{A}'
+                | '\u{B}'
+                | '\u{C}'
+                | '\u{D}'
+                | ' '
+                | '\u{A0}'
+                | '\u{1680}'
+                | '\u{2000}'
+                ..='\u{200A}'
+                    | '\u{2028}'
+                    | '\u{2029}'
+                    | '\u{202F}'
+                    | '\u{205F}'
+                    | '\u{3000}'
+                    | '\u{FEFF}'
+        )
+    };
+    value.trim_matches(space)
+}
+
+/// A place as stored, or `None` when it is not one (no name, coordinates
+/// that are not numbers in range): `normalizePlace` in `list.ts`. A place
+/// without a usable id gets `id_for()`.
+pub fn normalize_place(
+    value: &serde_json::Value,
+    id_for: impl FnOnce() -> String,
+) -> Option<Place> {
     let v = value.as_object()?;
     let text = |key: &str| v.get(key).and_then(|x| x.as_str());
-    let lat = number_of(v.get("lat"))?;
-    let lon = number_of(v.get("lon"))?;
-    let name = clamp(text("name").unwrap_or("").trim(), MAX_NAME);
+    let number = |key: &str| v.get(key).and_then(|x| x.as_f64());
+    let lat = number("lat")?;
+    let lon = number("lon")?;
+    let name = clamp(js_trim(text("name").unwrap_or("")), MAX_NAME);
     if !lat.is_finite()
         || !lon.is_finite()
         || !(-90.0..=90.0).contains(&lat)
@@ -297,7 +374,7 @@ pub fn normalize_place(value: &serde_json::Value) -> Option<Place> {
     }
     let id = match text("id") {
         Some(id) if valid_id(id) => id.to_owned(),
-        _ => uuid::Uuid::new_v4().to_string(),
+        _ => id_for(),
     };
     Some(Place {
         id,
@@ -326,32 +403,68 @@ fn ordered(mut places: Vec<Place>) -> Vec<Place> {
     places
 }
 
+/// A file's bytes as text, as the web's `TextDecoder` reads them: invalid
+/// UTF-8 replaced, a leading byte-order mark dropped.
+pub fn text_of(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    text.strip_prefix('\u{FEFF}').unwrap_or(&text).to_owned()
+}
+
 /// The places in a stored list (`parseListJson`): an empty file (or a
-/// one-byte placeholder) is an empty list; entries that are not places, and
-/// repeated ids, are dropped.
-pub fn parse_list_json(bytes: &[u8]) -> Result<Vec<Place>> {
-    let text = std::str::from_utf8(bytes).map_err(|_| CollabError::NotAPlaceList)?;
-    let text = text.trim();
-    if text.chars().count() <= 1 {
+/// one-character placeholder) is an empty list; entries that are not places,
+/// and repeated ids, are dropped; a place without a usable id gets
+/// `id_for(index)` (its position among the entries).
+pub fn parse_list_json_with(bytes: &[u8], id_for: impl Fn(usize) -> String) -> Result<Vec<Place>> {
+    let text = text_of(bytes);
+    let text = js_trim(&text);
+    if text.encode_utf16().count() <= 1 {
         return Ok(Vec::new());
     }
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|_| CollabError::NotAPlaceList)?;
+    // `version === 1` in JavaScript: `1.0` is the same number.
+    let version_1 = value.get("version").and_then(|v| v.as_f64()) == Some(1.0);
     let places = match (
         value.get("format").and_then(|f| f.as_str()),
-        value.get("version").and_then(|v| v.as_i64()),
         value.get("places").and_then(|p| p.as_array()),
     ) {
-        (Some("kutupmap"), Some(1), Some(places)) => places,
+        (Some("kutupmap"), Some(places)) if version_1 => places,
         _ => return Err(CollabError::NotAPlaceList),
     };
     let mut seen = std::collections::BTreeSet::new();
     Ok(places
         .iter()
         .take(MAX_PLACES)
-        .filter_map(normalize_place)
+        .enumerate()
+        .filter_map(|(index, value)| normalize_place(value, || id_for(index)))
         .filter(|place| seen.insert(place.id.clone()))
         .collect())
+}
+
+/// The places in a list someone edited here: a place without an id is new,
+/// and gets a random one.
+pub fn parse_list_json(bytes: &[u8]) -> Result<Vec<Place>> {
+    parse_list_json_with(bytes, |_| uuid::Uuid::new_v4().to_string())
+}
+
+/// The id a place without one gets in a file's first content: the same for
+/// every peer seeding that file (`uploadId` in `list.ts`).
+pub fn upload_place_id(file_id: &str, index: usize) -> String {
+    format!("{}-{index}", file_id.replace('-', ""))
+}
+
+/// The first content of a list nobody has opened, from its file's bytes as
+/// every editor makes it: its places (no place, if it is not a list).
+pub fn seed_list_upload(file_id: &str, bytes: &[u8]) -> Vec<u8> {
+    let places =
+        parse_list_json_with(bytes, |index| upload_place_id(file_id, index)).unwrap_or_default();
+    seed_list(file_id, &places)
+}
+
+/// The first content of a note or code file nobody has opened, from its
+/// file's bytes as every editor makes it.
+pub fn seed_text_upload(file_id: &str, bytes: &[u8]) -> Vec<u8> {
+    seed_text(file_id, &text_of(bytes))
 }
 
 /// A number as `JSON.stringify` writes it: whole numbers without a fraction.
@@ -448,10 +561,12 @@ impl ListDoc {
                     let mut fields = entry_json(&entry, &txn);
                     fields.insert("id".into(), serde_json::Value::from(id));
                     // An id the entry is keyed by is kept as it is.
-                    normalize_place(&serde_json::Value::Object(fields)).map(|mut place| {
-                        place.id = id.to_owned();
-                        place
-                    })
+                    normalize_place(&serde_json::Value::Object(fields), || id.to_owned()).map(
+                        |mut place| {
+                            place.id = id.to_owned();
+                            place
+                        },
+                    )
                 }
                 _ => None,
             })
@@ -663,7 +778,8 @@ mod tests {
     #[test]
     fn list_json_reads_and_writes_the_web_form() {
         let json = br#"{"format":"kutupmap","version":1,"places":[
-            {"id":"b","name":"  Moda ","lat":"40.98","lon":29,"addedAt":"2026-10-13T11:00:00.000Z"},
+            {"id":"b","name":"  Moda ","lat":40.98,"lon":29,"addedAt":"2026-10-13T11:00:00.000Z"},
+            {"id":"s","name":"A string","lat":"40.98","lon":29},
             {"id":"a","name":"Galata","lat":41.5,"lon":28.97,"addedAt":"2026-10-13T10:00:00.000Z"},
             {"id":"a","name":"again","lat":1,"lon":1},
             {"id":"x","name":"nowhere","lat":91,"lon":0},
@@ -686,6 +802,48 @@ mod tests {
         );
         assert!(parse_list_json(b"").unwrap().is_empty());
         assert!(parse_list_json(b"{\"format\":\"other\"}").is_err());
+    }
+
+    #[test]
+    fn times_are_rfc_3339_with_a_real_day() {
+        for good in [
+            "2026-10-13T10:00:00Z",
+            "2026-10-13T10:00:00.123Z",
+            "2028-02-29T23:59:59+03:00",
+            "2026-01-01T00:00:00-12:30",
+        ] {
+            assert!(valid_time(good), "{good}");
+        }
+        for bad in [
+            "2026-10-13",
+            "2026-10-13 10:00:00Z",
+            "2026-10-13t10:00:00z",
+            "2026-02-29T10:00:00Z",
+            "2026-13-01T10:00:00Z",
+            "2026-10-13T24:00:00Z",
+            "2026-10-13T10:00:60Z",
+            "2026-10-13T10:00:00.Z",
+            "2026-10-13T10:00:00+24:00",
+            "2026-10-13T10:00:00",
+        ] {
+            assert!(!valid_time(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_upload_reads_as_the_web_reads_it() {
+        let file = "11111111-1111-4111-8111-111111111111";
+        // A byte-order mark is dropped, as TextDecoder drops it.
+        assert_eq!(text_of(b"\xef\xbb\xbfhello"), "hello");
+        assert_eq!(
+            seed_text_upload(file, b"\xef\xbb\xbfhi"),
+            seed_text(file, "hi")
+        );
+        // Places without an id get the same one on every peer.
+        let list = b"\xef\xbb\xbf{\"format\":\"kutupmap\",\"version\":1.0,\"places\":[{\"name\":\"A\",\"lat\":1,\"lon\":2}]}";
+        let places = parse_list_json_with(list, |i| upload_place_id(file, i)).unwrap();
+        assert_eq!(places[0].id, "11111111111141118111111111111111-0");
+        assert_eq!(seed_list_upload(file, list), seed_list_upload(file, list));
     }
 
     #[test]

@@ -132,6 +132,56 @@ YJS="$("$BIN" --profile "$A" --json versions list "$NOTE_ID" | jq '[.[] | select
 [ "$YJS" -ge 1 ] || fail "the CLI saved yjs versions"
 pass "one Drive file each with a stable id; no conflict copies; $YJS yjs versions"
 
+# --- an interrupted run never sends an edit twice ---
+# Each case stops (or disturbs) machine A at one point of a sync, then lets
+# it run again: every line must reach both machines exactly once.
+faulty() { # point: one run stopped (or disturbed) there
+  KUTUP_TEST_YJS_FAULT="$1" "$BIN" --profile "$A" sync "$TMP/$A" "$FOLDER" >/dev/null 2>"$TMP/$A.log" || true
+}
+once() { # text: exactly once on both machines
+  for m in "$A" "$B"; do
+    same "$(grep -c -- "$1" "$TMP/$m/notes/todo.md")" 1 "$m: '$1' once"
+  done
+}
+tick
+printf 'gönderildi\n' >>"$TMP/$A/notes/todo.md"
+faulty after-send
+sync_on "$A"
+sync_on "$B"
+sync_on "$A"
+once gönderildi
+tick
+printf 'yazıldı\n' >>"$TMP/$B/notes/todo.md"
+sync_on "$B"
+faulty after-write
+sync_on "$A"
+sync_on "$B"
+once yazıldı
+tick
+printf 'meşgul\n' >>"$TMP/$A/notes/todo.md"
+faulty touch-after-send
+grep -q "changed while syncing" "$TMP/$A.log" || { cat "$TMP/$A.log"; fail "the disturbed run saw the change"; }
+sync_on "$A"
+sync_on "$B"
+sync_on "$A"
+once meşgul
+once touched
+same "$(note "$A")" "$(note "$B")" "the same text on both after interrupted runs"
+pass "a run stopped after sending, after writing, or disturbed mid-way sends no edit twice"
+
+# --- a list file with a byte-order mark, missing ids and odd fields ---
+printf '\xef\xbb\xbf{"format":"kutupmap","version":1.0,"places":[{"name":"İzmir","lat":38.42,"lon":27.14},{"id":"bad id!","name":" Bodrum ","lat":37.03,"lon":27.43,"addedAt":"2026-10-13"}]}' >"$TMP/$A/coast.kutupmap"
+sync_on "$A"
+sync_on "$B"
+same "$(jq -r '[.places[].name] | sort | join(",")' "$TMP/$B/coast.kutupmap")" "Bodrum,İzmir" "B has the odd list"
+tick
+jq '.places |= map(if .name == "İzmir" then .name = "İzmir Körfezi" else . end)' "$TMP/$B/coast.kutupmap" >"$TMP/l" && mv "$TMP/l" "$TMP/$B/coast.kutupmap"
+sync_on "$B"
+sync_on "$A"
+same "$(jq -r '[.places[].name] | sort | join(",")' "$TMP/$A/coast.kutupmap")" "Bodrum,İzmir Körfezi" "A has B's edit"
+find "$TMP/$A" "$TMP/$B" -name '*conflict*' | grep -q . && fail "no conflict copies"
+pass "a list with a byte-order mark, missing ids and odd fields syncs as one list"
+
 # --- devices: one signed device per machine; a revoked one is replaced ---
 DEVICES="$("$BIN" --profile "$A" --json devices list)"
 same "$(jq '[.[] | select(.trusted)] | length' <<<"$DEVICES")" 2 "trusted devices"

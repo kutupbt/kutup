@@ -507,9 +507,32 @@ pub struct CollabDevice {
 #[serde(rename_all = "camelCase")]
 pub struct YjsBase {
     pub file_id: String,
-    /// Yjs V2, base64.
+    /// Yjs V2, base64: what the file on disk held at the last sync (with any
+    /// edit of it in `pending` already in).
     pub state: String,
     /// Every frame of the log up to here is in `state`.
+    pub seq: i64,
+    /// Updates (Yjs V1, base64) sent or being sent and not yet acknowledged:
+    /// sent again, byte for byte, by the next run (Yjs drops a repeat by
+    /// its client and clock), never made again as new operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
+    /// A merged file being written: the next run tells from the file whether
+    /// it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writing: Option<YjsWriting>,
+}
+
+/// A write of a merged document in progress.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YjsWriting {
+    /// SHA-256 (hex) of the file before, and of what is being written.
+    pub before: String,
+    pub after: String,
+    /// The merged state (Yjs V2, base64) and its log position: the base once
+    /// the file holds `after`.
+    pub state: String,
     pub seq: i64,
 }
 

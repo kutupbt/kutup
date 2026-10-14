@@ -113,11 +113,31 @@ upload, which the first editor turns into a deterministic seed
   conflict copy, and the local file goes up as an edit over it, as for other
   files. A list counts as different only when its places differ, not its
   JSON layout.
-- **Never opened.** The seed is applied locally and sent, after `claim-seed`,
-  only in front of the CLI's first edit, so a pull writes nothing to the
-  server. The CLI sends it whatever the claim says: the seed is the same Yjs
-  item wherever it is made, so a second copy merges into one. This also
-  covers a claim winner that never sent its seed.
+- **Never opened.** The seed is made from the file's current content (its
+  newest whole-file version, else its upload), as the editors make it.
+  `kutup-collab`'s `seed_text_upload` and `seed_list_upload` read the bytes
+  as the web does, and shared vectors starting from file bytes pin that
+  (a byte-order mark, CRLF, invalid UTF-8, lists with missing ids and odd
+  fields).
+  - It is applied locally, and sent only in front of the CLI's first edit, so
+    a pull writes nothing to the server.
+  - As tabs do, the CLI sends it only when its `claim-seed` won. Otherwise the
+    edit waits for the next run.
+- **Crash safety.** No run ever makes the same edit twice as new operations:
+  - **Before sending,** a local edit is recorded: the base becomes the state
+    the file held, and the update bytes are kept as pending. A later run sends
+    those exact bytes again until they are acknowledged, and Yjs drops a
+    repeat by its client and clock.
+  - **Before writing** a merged document, the base records the write it is
+    about to make (hashes before and after, the merged state). The next run
+    settles it from what the file holds.
+  - **The stat recorded** is taken where the file was compared or written. A
+    save after that point is a change for the next run, never overwritten.
+  - **Writes** go through a temporary file of their own, synced to disk with
+    its folder.
+- **Sender sequences.** A random 31-bit prefix above the device's highest
+  sequence, then a counter, as the web's `randomSenderSeqPrefix`. Two runs at
+  once, or a run after the log was trimmed, never reuse a sequence.
 - **Saved versions.** One `yjs` version after each edit the CLI sends, as the
   editor's autosave saves after an edit; the server trims the log there.
 - **Deleted here.** Before deleting the Drive file, the CLI checks that the
@@ -127,6 +147,11 @@ upload, which the first editor turns into a deterministic seed
   statement (docs/plans/device-registration.md), renewed after 15 days, and
   registered again when the server answers `deviceNotAuthorized`. It is kept
   encrypted in the CLI's store and forgotten at logout.
+- **Checked live.**
+  - `scripts/verify-yjs-sync.sh` runs two CLI machines, including runs stopped
+    after a send or a write, and a file changed mid-run.
+  - Browser spec 114 (`KUTUP_CLI`) runs a tab (Yjs in JavaScript) and the CLI
+    (yrs) editing one note at once.
 - **Limits.** One edit goes up as one frame, so an edit over 1 MiB is
   refused with a message, as the editor's own frame limit would refuse it.
   Frames that do not open under the file key are skipped, as a tab skips

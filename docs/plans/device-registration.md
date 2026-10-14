@@ -113,8 +113,10 @@ It refuses an entry, with a per-entry code, when:
 - the statement is older than the 30-day lease or dated more than a day ahead
   (`expired`);
 - its key was revoked (`revoked`) or belongs to another device (`keyInUse`);
-- the account already has 20 active devices on that domain
-  (`tooManyDevices`).
+- the account already has 20 devices in use on that domain: not revoked,
+  with a statement within the lease (`tooManyDevices`). Devices of ended
+  sign-ins stop renewing and drop out of the count; home sweeps them a week
+  past their lease. The bridge logs what home refuses.
 
 A renewal is the same announce with a newer statement.
 
@@ -130,11 +132,22 @@ frames are not kept. On `unknownDevices` the bridge announces the devices and
 sends the frames again once. On `expiredDevices` it asks its clients to renew
 (`{"type":"renewDevice","deviceIds":[…]}` on the socket).
 
-**Revocations.** The bridge forwards its account's signed revocations in its
-announces, oldest first, from the mark home last confirmed
-(`revocationsThrough`, kept in `collab_revocation_marks`). More than 50 page
-over several announces, none skipped. Home deactivates the device and keeps
-the key in `remote_revoked_device_keys`, so it can never be announced again.
+**Revocations.** Each local revocation gets this server's next revocation
+sequence number. The signed time is data only, and a local revoke's time must
+be within a day of the server clock.
+- **Order:** the bridge forwards its account's signed revocations in sequence
+  order, after the mark home last answered (`revocationsThrough`, kept in
+  `collab_revocation_marks` as home gave it).
+- **Home's mark:** home records, per (domain, incarnation), the highest
+  sequence it processed (`remote_revocation_marks`) and answers that.
+- **Why not times:** a client's clock, fast or slow, can neither skip a
+  revocation nor stall the paging, and many revocations in one millisecond
+  page normally.
+- **Paging:** more than 50 page over several announces, none skipped. A
+  bridge stops when home's mark does not advance.
+- **Storage:** home deactivates the device and keeps the key in
+  `remote_revoked_device_keys`, per (server, key), so that server can never
+  announce it again. Another server's account cannot block it.
 The uploads sweeper deletes the devices of incarnations that no share names
 any more. Revoked keys stay.
 
