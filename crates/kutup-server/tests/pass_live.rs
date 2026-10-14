@@ -384,8 +384,10 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
     let (_, ke1) = kutup_crypto::opaque::client_login_start(&other.password).unwrap();
     let named = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
         .header("x-kutup-client", "cli")
-        .json(&json!({ "name": other.username, "credentialRequest": b64(&ke1),
-                       "purpose": "reauth", "for": "pass" }))
+        .json(
+            &json!({ "name": other.username, "credentialRequest": b64(&ke1),
+                       "purpose": "reauth", "for": "pass" }),
+        )
         .send()
         .unwrap();
     assert_eq!(named.status(), StatusCode::BAD_REQUEST);
