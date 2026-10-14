@@ -81,7 +81,7 @@ pub fn derive_safety_number(
     let local_key = decode_authority_key("local self-authority key", local_authority_public_key)?;
     let peer_key = decode_authority_key("peer self-authority key", &trust.self_authority_key)?;
     // One number for every app (kutup-crypto safety_number).
-    let shared = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
+    let shared = kutup_crypto::safety_number::derive(&local_key, &peer_key)
         .map_err(|error| ChatError::Invalid(error.to_string()))?;
     let (fingerprint, qr_payload) = (shared.fingerprint, shared.qr_payload);
 

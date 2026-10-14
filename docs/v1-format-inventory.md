@@ -80,8 +80,8 @@ must be refused: another key binding, the address in place of the binding, a
 changed header, nonce or ciphertext, and the old address-bound value.
 Statements to other people keep naming the address, because the address is
 what they are about: the Drive key binding, named shares and profile key
-shares, safety numbers, MLS credentials, the mail key's own address and the
-peer-facing profile envelopes.
+shares, MLS credentials, the mail key's own address and the peer-facing
+profile envelopes. Safety numbers (V2) name only the two authority keys.
 
 `DriveEnvelopeV1` is encoded as magic `KUTPDE1\0`, big-endian suite ID,
 purpose, zero reserved byte, epoch, revision, 16-byte object UUID, 16-byte

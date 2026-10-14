@@ -37,6 +37,7 @@
 
 pub mod account_envelope;
 pub mod account_head;
+pub mod account_rename;
 pub mod asset;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;

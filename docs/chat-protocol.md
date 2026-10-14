@@ -158,10 +158,14 @@ history. The browser and native bindings derive the expected QR in Rust. Only
 an exact scan atomically promotes the candidate and keeps the old incarnation
 history. A network status label or blind “verify” button cannot promote trust.
 
-The shared safety encoding sorts both `(canonical account, raw authority key)`
-pairs, encodes them under `kutup/chat/safety-number/v1`, hashes with SHA-256,
-and renders the full digest as sixteen lossless five-digit groups. The QR is a
-versioned `kutup://verify/chat/v1/…` encoding of the canonical public payload.
+The shared safety encoding sorts the two raw account authority keys, encodes
+them under `kutup/safety-number/v2`, hashes with SHA-256, and renders the full
+digest as sixteen lossless five-digit groups. The QR is a versioned
+`kutup://verify/v2/…` encoding of the canonical public payload. It names no
+address, as Signal's names only the ACI and identity key: a rename keeps the
+number, and any other account under a name (a new incarnation, a new holder of
+a released name) has another authority and so another number
+(docs/plans/username-renames.md).
 The derivation lives in `kutup-crypto` (`safety_number`), so Drive and the CLI
 show the same number.
 

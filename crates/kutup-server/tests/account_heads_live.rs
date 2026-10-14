@@ -123,7 +123,7 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
             &pins_key,
             &user.binding,
             revision,
-            &kutup_crypto::identity_pins::IdentityPinsV1 { pins: vec![] },
+            &kutup_crypto::identity_pins::IdentityPinsV1::default(),
         )
         .unwrap())
     };

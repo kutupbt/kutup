@@ -1190,3 +1190,175 @@ fn print_device_registration_vector() {
         })
     );
 }
+
+#[derive(Deserialize)]
+struct SafetyNumberVec {
+    #[serde(rename = "localAuthority")]
+    local_authority: String,
+    #[serde(rename = "peerAuthority")]
+    peer_authority: String,
+    fingerprint: String,
+    #[serde(rename = "qrPayload")]
+    qr_payload: String,
+    /// A new incarnation under the same name: another authority, another number.
+    #[serde(rename = "newIncarnationAuthority")]
+    new_incarnation_authority: String,
+    #[serde(rename = "newIncarnationFingerprint")]
+    new_incarnation_fingerprint: String,
+}
+
+/// The safety number binds the two authorities and nothing else: no address,
+/// so a rename keeps it; a new incarnation (a new holder of a released name)
+/// has another authority and another number.
+#[test]
+fn safety_number_vector() {
+    use kutup_crypto::safety_number;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v: SafetyNumberVec = serde_json::from_value(all["safetyNumber"].clone()).unwrap();
+    let key = |s: &str| -> [u8; 32] { b64(s).try_into().unwrap() };
+    let number = safety_number::derive(&key(&v.local_authority), &key(&v.peer_authority)).unwrap();
+    assert_eq!(number.fingerprint, v.fingerprint);
+    assert_eq!(number.qr_payload, v.qr_payload);
+    assert_eq!(
+        safety_number::derive(&key(&v.peer_authority), &key(&v.local_authority)).unwrap(),
+        number
+    );
+    let other = safety_number::derive(&key(&v.local_authority), &key(&v.new_incarnation_authority))
+        .unwrap();
+    assert_eq!(other.fingerprint, v.new_incarnation_fingerprint);
+    assert_ne!(other.fingerprint, number.fingerprint);
+    assert!(!safety_number::matches_qr_payload(
+        &number,
+        &other.qr_payload
+    ));
+}
+
+#[test]
+#[ignore]
+fn print_safety_number_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::safety_number;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let (a, b, c) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+    let n = safety_number::derive(&a, &b).unwrap();
+    let o = safety_number::derive(&a, &c).unwrap();
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V2): the two account authorities only, sorted; no address, so a rename keeps the number and a new incarnation changes it.",
+            "localAuthority": e(&a), "peerAuthority": e(&b),
+            "fingerprint": n.fingerprint, "qrPayload": n.qr_payload,
+            "newIncarnationAuthority": e(&c), "newIncarnationFingerprint": o.fingerprint,
+        })
+    );
+}
+
+/// Account renames (kutup-crypto/src/account_rename.rs): a chain signed by
+/// the account authority; broken, rolled-back or foreign chains are refused.
+#[test]
+fn account_rename_vector() {
+    use kutup_crypto::account_rename::{self, AccountRenameV1};
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["accountRename"];
+    let master: [u8; 32] = b64(v["masterKey"].as_str().unwrap()).try_into().unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+    let authority = identity.authority_public_key();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(authority),
+        v["authorityPublicKey"]
+    );
+    let chain: Vec<AccountRenameV1> = serde_json::from_value(v["chain"].clone()).unwrap();
+    // Signatures are deterministic (Ed25519): the same chain signs again.
+    for statement in &chain {
+        let again = account_rename::sign(
+            &identity,
+            statement.sequence,
+            &statement.previous,
+            &statement.current,
+            statement.issued_at_ms,
+        )
+        .unwrap();
+        assert_eq!(&again, statement);
+    }
+    assert_eq!(
+        hex::encode(
+            account_rename::signing_bytes(
+                &chain[0].incarnation_id,
+                chain[0].sequence,
+                &chain[0].previous,
+                &chain[0].current,
+                chain[0].issued_at_ms
+            )
+            .unwrap()
+        ),
+        v["firstSigningBytes"].as_str().unwrap()
+    );
+    let view = account_rename::verify_chain(&authority, &chain).unwrap();
+    assert_eq!(view.first, v["first"].as_str().unwrap());
+    assert_eq!(view.current, v["current"].as_str().unwrap());
+    let shorter = account_rename::verify_chain(&authority, &chain[..1]).unwrap();
+    assert!(view.extends(&shorter) && !shorter.extends(&view));
+    for bad in v["invalidChains"].as_array().unwrap() {
+        let parsed: Result<Vec<AccountRenameV1>, _> = serde_json::from_value(bad["chain"].clone());
+        if let Ok(parsed) = parsed {
+            assert!(
+                account_rename::verify_chain(&authority, &parsed).is_err(),
+                "{}",
+                bad["why"]
+            );
+        }
+    }
+    let other: [u8; 32] = b64(v["otherAuthorityPublicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    assert!(account_rename::verify_chain(&other, &chain).is_err());
+}
+
+#[test]
+#[ignore]
+fn print_account_rename_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::account_rename;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x11; 32]).unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+    let t = 1_790_000_000_000i64;
+    let first =
+        account_rename::sign(&identity, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    let second =
+        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
+    let gap = account_rename::sign(&identity, 2, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    let unlinked =
+        account_rename::sign(&identity, 2, "bob@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
+    let backwards =
+        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t - 1000).unwrap();
+    let mut tampered = second.clone();
+    tampered.current = "mallory@kutup.dev".into();
+    let mut foreign =
+        account_rename::sign(&other, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    foreign.incarnation_id = identity.incarnation_id();
+    let mut moved = first.clone();
+    moved.current = "alicia@other.dev".into();
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
+            "masterKey": e(&[0x11; 32]),
+            "authorityPublicKey": e(&identity.authority_public_key()),
+            "otherAuthorityPublicKey": e(&other.authority_public_key()),
+            "chain": [first, second],
+            "firstSigningBytes": hex::encode(account_rename::signing_bytes(&first.incarnation_id, 1, &first.previous, &first.current, t).unwrap()),
+            "first": "alice@kutup.dev",
+            "current": "ali@kutup.dev",
+            "invalidChains": [
+                { "why": "starts at 2", "chain": [gap] },
+                { "why": "does not link", "chain": [first, unlinked] },
+                { "why": "out of time order", "chain": [first, backwards] },
+                { "why": "tampered", "chain": [first, tampered] },
+                { "why": "signed by another authority", "chain": [foreign] },
+                { "why": "another server", "chain": [moved] },
+                { "why": "empty", "chain": [] }
+            ]
+        })
+    );
+}

@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
-use kutup_crypto::identity_pins::{self, IdentityPinV1, IdentityPinsV1, PinState};
+use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate, Recorded};
 use kutup_crypto::safety_number;
 
 use crate::api::types::IdentityPinsWrite;
@@ -220,37 +220,18 @@ fn now_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-/// Pins `account` to `authority` in `state`, keeping the replaced identity in
-/// its history; merges with whatever another app stored meanwhile.
-fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, state: PinState) -> Result<()> {
+/// Records `update` about `account` at `authority` (the rules every app shares:
+/// `identity_pins::record`); merges with whatever another app stored meanwhile.
+fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) -> Result<Recorded> {
     let key = identity_pins::derive_key(&me.master_key)?;
     for _ in 0..5 {
         let (revision, mut list) = load_pins(ctx, me)?;
-        let index = list.pins.iter().position(|p| p.account == account);
-        let mut replaced = Vec::new();
-        if let Some(i) = index {
-            let previous = &list.pins[i];
-            if previous.authority_public_key == authority
-                && (previous.state == state || previous.state == PinState::Verified)
-            {
-                return Ok(());
-            }
-            let previous = list.pins.remove(i);
-            replaced = previous.replaced.clone();
-            if previous.authority_public_key != authority {
-                replaced.push(incarnation_id_from_authority_public(&previous.authority()?));
-            }
+        let before = list.clone();
+        let since = identity_pins::since_from_unix(now_seconds());
+        let recorded = identity_pins::record(&mut list, account, authority, update, &since)?;
+        if list == before {
+            return Ok(recorded);
         }
-        let excess = replaced.len().saturating_sub(identity_pins::MAX_REPLACED);
-        replaced.drain(..excess);
-        list.pins.push(IdentityPinV1 {
-            account: account.to_string(),
-            authority_public_key: authority.to_string(),
-            state,
-            since: identity_pins::since_from_unix(now_seconds()),
-            replaced,
-        });
-        list.pins.sort_by(|a, b| a.account.cmp(&b.account));
         // A time, above every revision seen (docs/plans/drive-identity-pins.md).
         let next = now_millis().max(revision + 1).max(highest_seen(me) + 1);
         let sealed = identity_pins::seal(&key, &me.binding, next, &list)?;
@@ -259,7 +240,7 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, state: PinState) -> R
             envelope: STANDARD.encode(sealed),
         })? {
             remember(me, next);
-            return Ok(());
+            return Ok(recorded);
         }
     }
     bail!("the identity pin list kept changing")
@@ -306,10 +287,19 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
             verified: p.state == PinState::Verified,
         }),
         Some(_) => Ok(Status::Changed),
-        None => {
-            pin(ctx, me, account, &person.authority, PinState::Seen)?;
-            Ok(Status::Ok { verified: false })
-        }
+        None => match pin(ctx, me, account, &person.authority, PinUpdate::FirstSeen)? {
+            // Someone the user knew had this address and is elsewhere now: this
+            // is another person (accept with `kutup identity trust`).
+            Recorded::FormerAddressTaken { .. } => Ok(Status::Changed),
+            // An identity the user replaced, turning up again: its trust is
+            // revoked (accept it with `kutup identity trust`, or verify it).
+            Recorded::ReplacedIdentity { .. } => Ok(Status::Changed),
+            // The same account, pinned under another of its names.
+            Recorded::KnownElsewhere { pin } => Ok(Status::Ok {
+                verified: pin.state == PinState::Verified,
+            }),
+            Recorded::Pinned | Recorded::Unchanged => Ok(Status::Ok { verified: false }),
+        },
     }
 }
 
@@ -318,23 +308,20 @@ pub fn safety(
     ctx: &Ctx,
     me: &Me,
     account: &str,
-) -> Result<(safety_number::SafetyNumberV1, Published)> {
+) -> Result<(safety_number::SafetyNumberV2, Published)> {
     let person = published(ctx, me, account)?;
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet: nothing to compare");
     }
     let authority =
         key32(&person.authority).ok_or_else(|| anyhow!("{account}'s authority key is invalid"))?;
-    Ok((
-        safety_number::derive(&me.account, &me.authority(), account, &authority)?,
-        person,
-    ))
+    Ok((safety_number::derive(&me.authority(), &authority)?, person))
 }
 
 /// Mark `account` verified (the user compared the safety number with them);
 /// a changed identity is accepted with it.
 pub fn verify(ctx: &Ctx, me: &Me, account: &str, person: &Published) -> Result<()> {
-    pin(ctx, me, account, &person.authority, PinState::Verified)
+    pin(ctx, me, account, &person.authority, PinUpdate::Verified).map(drop)
 }
 
 /// Trust `account`'s current identity from now on, without comparing it.
@@ -343,11 +330,14 @@ pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet");
     }
-    let (_, list) = load_pins(ctx, me)?;
-    let replacing = list.pins.iter().find(|p| p.account == account);
-    if replacing.is_some_and(|p| p.authority_public_key == person.authority) {
-        return Ok(());
-    }
     // A new identity is trusted as seen, never as verified.
-    pin(ctx, me, account, &person.authority, PinState::Seen)
+    match pin(ctx, me, account, &person.authority, PinUpdate::Accepted)? {
+        // The same person under another address: renamed. Following their
+        // rename moves the pin; trusting it here would pin them twice.
+        Recorded::KnownElsewhere { pin } => bail!(
+            "the identity at {account} is someone you already know as {}: their address changed, and it is followed once their rename is confirmed",
+            pin.account
+        ),
+        _ => Ok(()),
+    }
 }

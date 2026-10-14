@@ -2,7 +2,7 @@ import { Shield, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAcceptIdentity, useIdentityStatus, usePersonSafetyNumber, useVerifyPerson } from '@kutup/drive-core/identityStatus'
-import { IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
+import { IdentityKnownElsewhere, IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -164,7 +164,11 @@ export function IdentityBanner({ account, claimed }: { account: string | null | 
           <VerifyPersonDialog account={account} claimed={claimed} open={verifying} onOpenChange={setVerifying} />
         </>
       ) : null}
-      {accept.isError ? <p className="w-full text-xs text-destructive">{t('identityCheck.acceptFailed')}</p> : null}
+      {accept.error instanceof IdentityKnownElsewhere ? (
+        <p className="w-full text-xs text-destructive">{t('identityCheck.knownElsewhere', { other: accept.error.other })}</p>
+      ) : accept.isError ? (
+        <p className="w-full text-xs text-destructive">{t('identityCheck.acceptFailed')}</p>
+      ) : null}
     </div>
   )
 }
