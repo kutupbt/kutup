@@ -56,14 +56,24 @@ test('the password is changed, guarded by a second factor, and reset with the re
   await expect(page.getByLabel('New password', { exact: true })).toHaveValue('')
   await submitThroughRateLimit(page, 'Change password', page.getByText('Password changed. Your other devices are signed out.').first(), passwords(FIRST))
 
+  // Account → Security lists it, as this device's.
+  const events = page.getByRole('list', { name: 'Security events' })
+  await expect(events.getByRole('listitem').filter({ hasText: 'Password changed' }).filter({ hasText: 'This device' })).toBeVisible()
+
   // A second factor, while signed in here.
   await page.getByRole('button', { name: 'Set up two-factor authentication' }).click()
   const manual = (await page.getByText('Or enter this key manually:').textContent()) ?? ''
   const secret = manual.replace('Or enter this key manually:', '').trim()
   expect(secret).toMatch(/^[A-Z2-7]+=*$/)
-  await page.getByLabel('6-digit code').fill(totp(secret))
-  await page.getByRole('button', { name: 'Verify and turn on' }).click()
-  await expect(page.getByRole('button', { name: 'Turn off two-factor authentication' })).toBeVisible({ timeout: 30_000 })
+  // Turning it on asks for the password too (a totp grant); a wrong one is refused.
+  await submitThroughRateLimit(page, 'Verify and turn on', page.getByText('That is not your Kutup password.'), async () => {
+    await page.getByLabel('6-digit code').fill(totp(secret))
+    await page.getByLabel('Your Kutup password').fill('Not*MyPassword12345')
+  })
+  await submitThroughRateLimit(page, 'Verify and turn on', page.getByRole('button', { name: 'Turn off two-factor authentication' }), async () => {
+    await page.getByLabel('6-digit code').fill(totp(secret))
+    await page.getByLabel('Your Kutup password').fill(SECOND)
+  })
   await own.close()
 
   // Elsewhere: the first password is gone; the second asks for the code, then signs in.
@@ -88,5 +98,11 @@ test('the password is changed, guarded by a second factor, and reset with the re
   await signIn(recover, account.username, THIRD, 'code')
   await recover.getByLabel('Authentication code').fill(totp(secret))
   await submitThroughRateLimit(recover, 'Verify', recover.getByRole('heading', { name: /^Welcome/ }))
+
+  // The recovery is listed, made by no session of this account.
+  await recover.goto(appUrl('account', '/settings/security'))
+  const listed = recover.getByRole('list', { name: 'Security events' })
+  await expect(listed.getByRole('listitem').filter({ hasText: 'Password reset with the recovery phrase' })).toBeVisible()
+  await expect(listed.getByRole('listitem').filter({ hasText: 'Password reset with the recovery phrase' }).getByText('This device')).toHaveCount(0)
   await recovering.close()
 })

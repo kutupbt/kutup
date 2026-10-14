@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +16,7 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Section } from '@kutup/ui/components/page'
 import { MIN_PASSWORD_SCORE, passwordScore, usePasswordStrength } from '../auth/passwordStrength'
 import { PasswordStrengthMeter } from '../auth/PasswordStrengthMeter'
+import { securityEventsKey } from './api'
 
 /**
  * Changes the account password (docs/plans/opaque.md): the current password
@@ -31,6 +33,7 @@ async function changePassword(current: string, next: string): Promise<void> {
 
 export function ChangePasswordSection() {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const schema = z
@@ -64,6 +67,8 @@ export function ChangePasswordSection() {
       await changePassword(current, password)
       reset()
       toast.success(t('settings.security.passwordChanged'))
+      // The change is the newest security event.
+      void queryClient.invalidateQueries({ queryKey: securityEventsKey })
     } catch (err) {
       // The passwords go either way; the message says what to type again.
       reset()
