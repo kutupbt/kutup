@@ -454,10 +454,27 @@ pub async fn delete_user(
     purge_mail(&state, target).await?;
     hand_over_contributions(&state.pool, target).await?;
 
+    // Its names stay held, receiving nothing, until the hold ends: nobody
+    // takes a deleted person's name, nor their mail, before then
+    // (docs/plans/username-renames.md).
+    let (hold_days, _) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE account_names SET state = 'held', receive_until = now(),
+                free_at = now() + make_interval(days => $2::int)
+          WHERE user_id = $1",
+    )
+    .bind(target)
+    .bind(hold_days as i32)
+    .execute(&mut *tx)
+    .await?;
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await;
+    if res.as_ref().is_ok_and(|r| r.rows_affected() > 0) {
+        tx.commit().await?;
+    }
     match res {
         Ok(r) if r.rows_affected() > 0 => {
             audit(
@@ -2078,6 +2095,14 @@ pub async fn wipe_user(
         "DELETE FROM mail_filters WHERE user_id = $1",
         "DELETE FROM pass_vault_secrets WHERE user_id = $1",
         "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
+        // Old names held by the old incarnation stop receiving now: no one
+        // holds the keys their mail would be sealed to. They are freed on
+        // their own dates; the current name waits for the new incarnation,
+        // which complete-setup records (docs/plans/username-renames.md).
+        "UPDATE mail_addresses SET state = 'closed', receive_until = now()
+          WHERE user_id = $1 AND state = 'receiving'",
+        "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+        "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
     ] {
         sqlx::query(statement)
             .bind(target)

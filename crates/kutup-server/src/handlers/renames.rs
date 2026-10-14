@@ -510,3 +510,115 @@ pub(crate) async fn close_address(
     .await?;
     Ok(())
 }
+
+/// What an administrator does to a held name.
+#[derive(Clone, Copy)]
+enum AdminAction {
+    /// Receiving at it ends now.
+    Close,
+    /// It is free now, before its date.
+    Free,
+}
+
+async fn admin_name(
+    state: &AppState,
+    admin: &crate::middleware::AdminUser,
+    name: &str,
+    action: AdminAction,
+) -> AppResult<Response> {
+    let admin_id = trusted_uuid(&admin.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    let held: Option<(String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT name, user_id FROM account_names
+          WHERE folded = kutup_fold($1) AND state = 'held' FOR UPDATE",
+    )
+    .bind(name)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((held_name, owner)) = held else {
+        return Err(AppError::conflict("not a held name")
+            .with_details(json!({ "code": "notHeld" })));
+    };
+    let (kind, audit_action) = match action {
+        AdminAction::Close => {
+            sqlx::query(
+                "UPDATE account_names SET receive_until = LEAST(COALESCE(receive_until, now()), now())
+                  WHERE folded = kutup_fold($1)",
+            )
+            .bind(&held_name)
+            .execute(&mut *tx)
+            .await?;
+            if let Some(owner) = owner {
+                close_address(&mut tx, owner, &held_name, &state.config.chat_server_name).await?;
+            }
+            (security_events::Kind::NameClosed, "name.close")
+        }
+        AdminAction::Free => {
+            sqlx::query("DELETE FROM account_names WHERE folded = kutup_fold($1)")
+                .bind(&held_name)
+                .execute(&mut *tx)
+                .await?;
+            if let Some(owner) = owner {
+                sqlx::query(
+                    "UPDATE mail_addresses SET state = 'freed', receive_until = NULL
+                      WHERE user_id = $1 AND split_part(folded, '@', 1) = kutup_fold($2)
+                        AND state IN ('receiving', 'closed')",
+                )
+                .bind(owner)
+                .bind(&held_name)
+                .execute(&mut *tx)
+                .await?;
+            }
+            (security_events::Kind::NameFreed, "name.free")
+        }
+    };
+    if let Some(owner) = owner {
+        security_events::record_names(&mut tx, owner, kind, None, Some(admin_id), &held_name, None)
+            .await?;
+    }
+    tx.commit().await?;
+    crate::handlers::admin::audit(
+        &state.pool,
+        &admin.user_id,
+        audit_action,
+        owner,
+        json!({ "name": held_name }),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `POST /api/admin/names/{name}/close` — receiving at a held name ends now.
+#[utoipa::path(
+    post,
+    path = "/api/admin/names/{name}/close",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("name" = String, Path, description = "A held name")),
+    responses((status = 204), (status = 409, description = "notHeld"))
+)]
+pub async fn admin_close(
+    State(state): State<AppState>,
+    admin: crate::middleware::AdminUser,
+    Path(name): Path<String>,
+) -> AppResult<Response> {
+    admin_name(&state, &admin, &name, AdminAction::Close).await
+}
+
+/// `POST /api/admin/names/{name}/free` — a held name is free now: anyone may
+/// take it (a new owner is another incarnation; pins of the old one warn).
+#[utoipa::path(
+    post,
+    path = "/api/admin/names/{name}/free",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("name" = String, Path, description = "A held name")),
+    responses((status = 204), (status = 409, description = "notHeld"))
+)]
+pub async fn admin_free(
+    State(state): State<AppState>,
+    admin: crate::middleware::AdminUser,
+    Path(name): Path<String>,
+) -> AppResult<Response> {
+    admin_name(&state, &admin, &name, AdminAction::Free).await
+}

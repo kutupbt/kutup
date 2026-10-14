@@ -88,6 +88,12 @@ pub fn spawn_all(
                 Ok(rows) => tracing::info!(rows, "remote collaboration devices swept"),
                 Err(error) => tracing::warn!("remote device sweep failed: {error}"),
             }
+            // Old addresses past their receiving, names past their hold.
+            match crate::account_names::sweep(&pool).await {
+                Ok((0, 0)) => {}
+                Ok((closed, freed)) => tracing::info!(closed, freed, "account names swept"),
+                Err(error) => tracing::warn!("account name sweep failed: {error:?}"),
+            }
             // Used and expired grants, and sign-ins never finished.
             if let Err(error) = crate::grants::sweep(&pool).await {
                 tracing::warn!(%error, "grant sweep failed");

@@ -271,3 +271,37 @@ pub async fn set_incarnation(
     .await?;
     Ok(())
 }
+
+/// The hourly sweep: old addresses whose receiving ended are closed (mail to
+/// them bounces), and names whose hold ended are freed: the name is anyone's
+/// again, and its last address row becomes `freed` (kept, with its keys, for
+/// the mail it received; holding the address no more).
+pub async fn sweep(pool: &sqlx::PgPool) -> AppResult<(u64, u64)> {
+    let closed = sqlx::query(
+        "UPDATE mail_addresses SET state = 'closed'
+          WHERE state = 'receiving' AND receive_until <= now()",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    let mut tx = pool.begin().await?;
+    let freed: Vec<(String, Option<Uuid>)> = sqlx::query_as(
+        "DELETE FROM account_names WHERE state = 'held' AND free_at <= now()
+         RETURNING folded, user_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (folded, user_id) in &freed {
+        sqlx::query(
+            "UPDATE mail_addresses SET state = 'freed', receive_until = NULL
+              WHERE split_part(folded, '@', 1) = $1 AND user_id IS NOT DISTINCT FROM $2
+                AND state IN ('receiving', 'closed')",
+        )
+        .bind(folded)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok((closed, freed.len() as u64))
+}

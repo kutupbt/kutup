@@ -780,6 +780,14 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route(
+            "/api/admin/names/:name/close",
+            post(handlers::renames::admin_close),
+        )
+        .route(
+            "/api/admin/names/:name/free",
+            post(handlers::renames::admin_free),
+        )
         .route("/api/user/rename/check", get(handlers::renames::check))
         .route("/api/user/rename", post(handlers::renames::rename))
         .route("/api/user/names", get(handlers::renames::names))
