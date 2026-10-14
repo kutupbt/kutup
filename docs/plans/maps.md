@@ -249,7 +249,18 @@ goes beyond Signal parity.
    development and the retry forgot the link).
    4b progress (2026-09-26): lists work end to end.
    - The `.kutupmap` format is in `@kutup/map/list`: a Yjs map of places
-     keyed by id, and JSON when stored or downloaded.
+     keyed by id, and JSON when stored or downloaded. Reading a file follows
+     one rule, shared with `kutup-collab` (the CLI) and pinned by byte-level
+     seed vectors:
+     - a byte-order mark is dropped;
+     - coordinates must be finite JSON numbers (a number too large for a
+       double, Infinity to `JSON.parse`, drops that place, not the list);
+     - a lone UTF-16 surrogate escape in a string becomes U+FFFD;
+     - a time must be strict RFC 3339 with a real calendar day, or it becomes
+       1970-01-01;
+     - names are trimmed as JavaScript trims;
+     - a place without a usable id gets `<file id without dashes>-<index>` in
+       a file's first content, so every peer seeding it makes the same items.
    - The Maps app (`apps/maps`):
      - your maps: your own lists wherever they are, those in folders shared
        with you, and those shared with you by themselves;

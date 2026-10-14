@@ -38,6 +38,11 @@ unicode-normalization = "0.1"
 sha2 = "0.10"
 chacha20poly1305 = "0.10"
 ed25519-dalek = "2"
+# Yjs in Rust (the Yjs project's own port, same update encoding): Kutup's
+# collaboration content for peers without a browser (crates/kutup-collab).
+# Pinned with the web's yjs: the seed vectors must keep passing on any bump.
+yrs = "=0.28.0"
+similar = "2"
 p256 = "0.13"
 # BIP39 recovery-phrase encoding (English wordlist) — mirrors frontend/src/crypto/mnemonic.ts.
 bip39 = "2"

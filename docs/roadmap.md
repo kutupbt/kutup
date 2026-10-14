@@ -1138,6 +1138,15 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).
+- **Web: seeding after a lost claim.** An editor that loses `claim-seed`
+  waits for the winner's seed; if the winner never sends it, the document
+  opens empty. The seed is the same Yjs item wherever it is made, so the
+  editor could send it whenever the log is empty and no version exists, as
+  the CLI does (docs/plans/cli-yjs-sync.md, *As built*).
+- **Place lists: shared JSON vector.** The CLI writes `.kutupmap` files in the
+  web's layout (`encodeListJson`), but no checked-in vector pins the bytes
+  between the two. Places added in the same millisecond are ordered by
+  locale on the web and by code point in Rust.
 - **Sync engine: whiteboard assets.** `kutup sync` pushes/pulls `.excalidraw`
   files as opaque bytes; the extract/hydrate steps only run in
   `upload`/`download`. Wire `crate::whiteboard` into the engine's

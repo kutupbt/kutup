@@ -18,6 +18,8 @@ export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
 export RATE_LIMIT_REGISTER_PER_HOUR=1000
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
+# The device tests register more than 20 devices on one account in a minute.
+export RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=1000
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
@@ -86,6 +88,21 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test registration_codes_live -- --nocapture
+
+# The collaboration log over HTTP (the CLI's way in): kept like a socket's
+# frame, and every bad frame refused alike on both paths.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test collab_frames_live -- --nocapture
+# Collaboration devices: only the account's own statement registers one.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test devices_live -- --nocapture
+
+# Remote collaboration devices: only the share recipient's own announced,
+# fresh, unrevoked devices; revocations page past one announce.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server remote_devices::tests -- --nocapture
 
 # Kutup Pass on the server: vault secrets, reauth under the sign-in check,
 # the PIN's three tries per sign-in.

@@ -503,6 +503,18 @@ pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> St
     let Some(setup_token) = login["setupToken"].as_str() else {
         return login["accessToken"].as_str().unwrap().to_string();
     };
+    complete_setup(c, base, setup_token, username, password).0
+}
+
+/// Completes an account's first sign-in (an administrator made or wiped it):
+/// new keys, a new identity, the password. The session and the identity.
+pub fn complete_setup(
+    c: &Client,
+    base: &str,
+    setup_token: &str,
+    username: &str,
+    password: &str,
+) -> (String, AccountIdentityKeysV1) {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -552,7 +564,7 @@ pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> St
     let status = completed.status();
     let body: Value = completed.json().unwrap();
     assert_eq!(status, StatusCode::OK, "admin setup: {body}");
-    body["accessToken"].as_str().unwrap().to_string()
+    (body["accessToken"].as_str().unwrap().to_string(), identity)
 }
 
 /// A temporary password as an administrator's browser derives it (the
@@ -571,4 +583,108 @@ pub fn setup_key(password: &str) -> Value {
         "argonIterations": parameters.iterations,
         "argonParallelism": parameters.parallelism,
     })
+}
+
+/// A collaboration device: its id and the seed of the key it signs frames with.
+pub struct Device {
+    pub id: i64,
+    pub seed: [u8; 32],
+}
+
+/// A one-time device registration challenge (base64).
+pub fn device_challenge(c: &Client, base: &str, user: &User) -> String {
+    let r: Value = bearer(c.post(format!("{base}/api/devices/challenge")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    r["challenge"].as_str().unwrap().to_string()
+}
+
+/// The registration body for `device_key`, signed by `signer`'s authority for
+/// `user`'s account over `challenge`, now (docs/plans/device-registration.md).
+pub fn device_registration_body(
+    c: &Client,
+    base: &str,
+    user: &User,
+    signer: &User,
+    device_key: &[u8; 32],
+    challenge: &str,
+) -> Value {
+    let raw: [u8; 32] = STANDARD.decode(challenge).unwrap().try_into().unwrap();
+    let server = server_domain(c, base);
+    let issued_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let statement = kutup_crypto::device_registration::DeviceStatement {
+        server: &server,
+        user_id: &user.id,
+        device_public: device_key,
+        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+        challenge: &raw,
+        issued_at_ms,
+    };
+    let signature = kutup_crypto::device_registration::sign(&signer.identity, &statement).unwrap();
+    json!({
+        "publicSigning": STANDARD.encode(device_key),
+        "label": "test device",
+        "challenge": challenge,
+        "issuedAtMs": issued_at_ms,
+        "signature": signature,
+    })
+}
+
+/// The account's signed revocation body for `device_key`.
+pub fn device_revocation_body(c: &Client, base: &str, user: &User, device_key: &[u8; 32]) -> Value {
+    let revoked_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let signature = kutup_crypto::device_registration::sign_revocation(
+        &user.identity,
+        &server_domain(c, base),
+        device_key,
+        revoked_at_ms,
+    )
+    .unwrap();
+    json!({ "revokedAtMs": revoked_at_ms, "signature": signature })
+}
+
+/// A device registered the proper way: a fresh challenge, signed by the
+/// account's own authority.
+/// Signs `user` in again: a new session (token) of the same account.
+pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
+    let r = c
+        .post(format!("{base}/api/auth/login"))
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "name": user.username, "loginKey": user.login_key }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "login: {}", r.status());
+    r.json::<Value>().unwrap()["accessToken"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let key = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    let challenge = device_challenge(c, base, user);
+    let r = bearer(c.post(format!("{base}/api/devices")), &user.token)
+        .json(&device_registration_body(
+            c, base, user, user, &key, &challenge,
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CREATED, "register a device");
+    let body: Value = r.json().unwrap();
+    Device {
+        id: body["deviceId"].as_i64().unwrap(),
+        seed,
+    }
 }

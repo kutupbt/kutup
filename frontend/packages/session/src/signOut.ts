@@ -1,7 +1,34 @@
+import { toBase64 } from '@kutup/crypto/base64'
+import { signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
 import api from './client'
 import { clearPersisted } from './persistedStore'
 import { broadcastLogout } from './sessionSync'
-import { clearSession } from './store'
+import { clearSession, getSession } from './store'
+
+/** How long a sign-out waits for its device's revocation. */
+const REVOKE_WAIT_MS = 2000
+
+/**
+ * Revokes this origin's collaboration device for good, signed by the account
+ * (docs/plans/device-registration.md). Best effort: ending the sign-in
+ * already retires it on the server; this also makes its key unusable
+ * anywhere, even if a copy of it survived.
+ */
+async function revokeOwnDevice(): Promise<void> {
+  const session = getSession()
+  const device = session?.device
+  if (!session || !device) return
+  const at = session.address.lastIndexOf('@')
+  if (at < 0) return
+  const revokedAtMs = Date.now()
+  const signature = await signDeviceRevocation(
+    toBase64(session.masterKey),
+    session.address.slice(at + 1),
+    toBase64(device.publicKey),
+    revokedAtMs,
+  )
+  await api.delete(`/devices/${device.id}`, { data: { revokedAtMs, signature }, timeout: REVOKE_WAIT_MS })
+}
 
 /**
  * Sign out of Kutup from any app: the server ends the whole sign-in (the
@@ -12,6 +39,10 @@ import { clearSession } from './store'
  */
 export async function signOut(): Promise<boolean> {
   let confirmed = false
+  await Promise.race([
+    revokeOwnDevice().catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, REVOKE_WAIT_MS)),
+  ])
   try {
     await api.post('/auth/logout')
     confirmed = true

@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@kutup/session/client'
 import { broadcastColor } from '@kutup/session/sessionSync'
-import { updateSession } from '@kutup/session/store'
+import { getSession, updateSession } from '@kutup/session/store'
+import { toBase64 } from '@kutup/crypto/base64'
+import { signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
 
 // --- profile ------------------------------------------------------------
 
@@ -133,10 +135,20 @@ export const devicesKey = ['devices'] as const
 export interface EditorDevice {
   deviceId: number
   label: string
+  /** Its Ed25519 public key, base64: what a revocation names. */
+  publicSigning: string
+  /** Not revoked. */
   isActive: boolean
+  /** Not revoked, and its sign-in is live: edits from it are taken. */
+  trusted: boolean
+  /** Trusted and renewed within 30 days: one of the at most 20 in use. */
+  inUse: boolean
   createdAt: string
   lastSeenAt: string | null
 }
+
+/** The most devices an account has in use (docs/plans/device-registration.md). */
+export const MAX_DEVICES_IN_USE = 20
 
 export function useDevices() {
   return useQuery({
@@ -148,11 +160,29 @@ export function useDevices() {
 export function useRevokeDevice() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (id: number) => {
-      await api.delete(`/devices/${id}`)
+    // Revoking is the account's act: its key signs it, so a session alone
+    // cannot revoke the account's devices.
+    mutationFn: async (device: EditorDevice) => {
+      const session = getSession()
+      if (!session) throw new Error('not signed in')
+      const revokedAtMs = Date.now()
+      const signature = await signDeviceRevocation(
+        toBase64(session.masterKey),
+        serverOfAddress(session.address),
+        device.publicSigning,
+        revokedAtMs,
+      )
+      await api.delete(`/devices/${device.deviceId}`, { data: { revokedAtMs, signature } })
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: devicesKey })
     },
   })
+}
+
+/** The server part of a Kutup address (`username@server`): what device revocations name. */
+function serverOfAddress(address: string): string {
+  const at = address.lastIndexOf('@')
+  if (at < 0 || at === address.length - 1) throw new Error('the account address has no server')
+  return address.slice(at + 1)
 }

@@ -77,7 +77,7 @@ fn extension_of(name: &str) -> String {
 
 /// Whether `name` is a place list, as `isListName` in `map/src/list.ts`
 /// reads it: ending in `.kutupmap` (a name that is only "kutupmap" is not).
-fn is_place_list(name: &str) -> bool {
+pub(crate) fn is_place_list(name: &str) -> bool {
     name.to_lowercase().ends_with(&format!(".{PLACE_LIST_EXT}"))
 }
 

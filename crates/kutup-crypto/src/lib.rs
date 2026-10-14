@@ -45,6 +45,7 @@ pub mod chat_media;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
+pub mod device_registration;
 pub mod drive_envelope;
 pub mod drive_key_binding;
 pub mod drive_names;
@@ -75,5 +76,6 @@ pub mod revision_guard;
 pub mod safety_number;
 pub mod stream;
 pub mod thumbnail;
+pub mod yjs_seed;
 
 pub use error::{CryptoError, Result};

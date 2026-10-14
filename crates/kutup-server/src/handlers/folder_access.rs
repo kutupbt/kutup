@@ -760,11 +760,22 @@ pub async fn rotate(
         .execute(&mut *tx)
         .await?;
     for share in &req.federated_shares {
-        sqlx::query("UPDATE federated_outgoing_shares SET named_share_envelope = $2 WHERE id = $1")
-            .bind(share.id)
-            .bind(&share.named_share_envelope)
-            .execute(&mut *tx)
-            .await?;
+        // The new wrap names the recipient's incarnation as well (checked
+        // with the rest of the envelope above): a re-share after their
+        // account reset moves whose devices may write.
+        let recipient_incarnation = NamedShareEnvelopeV1::decode_b64(&share.named_share_envelope)
+            .map(|envelope| hex::encode(envelope.recipient_incarnation_id))
+            .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
+        sqlx::query(
+            "UPDATE federated_outgoing_shares SET named_share_envelope = $2,
+                                                   recipient_incarnation_id = $3
+             WHERE id = $1",
+        )
+        .bind(share.id)
+        .bind(&share.named_share_envelope)
+        .bind(&recipient_incarnation)
+        .execute(&mut *tx)
+        .await?;
     }
     sqlx::query("DELETE FROM federated_outgoing_shares WHERE collection_id = $1 AND id = ANY($2)")
         .bind(collection_id)

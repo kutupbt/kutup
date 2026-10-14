@@ -81,6 +81,13 @@ pub fn spawn_all(
         loop {
             tick.tick().await;
             uploads_sweep_once(&pool, &storage, chat.media_delivery_retention_days).await;
+            // Devices of people no share here names any more (their revoked
+            // keys keep a tombstone).
+            match crate::remote_devices::sweep(&pool).await {
+                Ok(0) => {}
+                Ok(rows) => tracing::info!(rows, "remote collaboration devices swept"),
+                Err(error) => tracing::warn!("remote device sweep failed: {error}"),
+            }
         }
     });
 }

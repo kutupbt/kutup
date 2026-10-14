@@ -40,6 +40,7 @@ mod photos;
 mod public_fetch;
 mod ratelimit;
 mod registration;
+mod remote_devices;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
@@ -1133,6 +1134,8 @@ fn build_router(state: AppState) -> Router {
         )
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
+        .route("/api/devices/challenge", post(devices::challenge))
+        .route("/api/devices/:id/renew", post(devices::renew))
         .route("/api/devices/:id", delete(devices::revoke))
         // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
@@ -1548,6 +1551,17 @@ fn build_router(state: AppState) -> Router {
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
         // on `new WebSocket`, so the token may arrive via ?token=). ---
         .route("/api/files/:fileId/collab/ws", get(collab::ws))
+        // The log over HTTP, for a peer without a socket (the CLI).
+        .route(
+            "/api/files/:fileId/collab/frames",
+            get(collab::get_frames)
+                .post(collab::post_frame)
+                // One sealed frame at most.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::envelope::MAX_PLAINTEXT_BYTES
+                        + kutup_crypto::envelope::MIN_PACKED,
+                )),
+        )
         // --- Public shares. Create is authenticated; the read/download endpoints are
         // anonymous (the token is the capability). ---
         .route("/api/share", post(shares::create_public_share))
@@ -1759,6 +1773,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/devices",
+            post(collab_federation::devices)
+                .route_layer(DefaultBodyLimit::max(256 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

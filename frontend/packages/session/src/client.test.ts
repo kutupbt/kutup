@@ -71,6 +71,7 @@ const seedAuth = (token: string | null) => {
     totpEnabled: false,
     color: null,
     currentDeviceId: null,
+    device: null,
   }, token)
 }
 

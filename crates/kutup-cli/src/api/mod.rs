@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 pub mod assets;
+pub mod collab;
 pub mod devices;
 pub mod federation;
 pub mod files;

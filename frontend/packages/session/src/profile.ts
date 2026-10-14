@@ -79,7 +79,8 @@ export async function activateSession(
       publicKey: keys.publicKey,
       masterKey: keys.masterKey,
       privateKey: keys.privateKey,
-      currentDeviceId: null,
+      currentDeviceId: keys.device?.id ?? null,
+      device: keys.device ?? null,
     },
     accessToken,
   )
