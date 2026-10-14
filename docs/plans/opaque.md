@@ -167,10 +167,10 @@ start and finish.
     the grant.
   - The credential epoch changes, which ends other sessions except the caller's.
   - On recovery, the recovery envelope stays as it is.
-- **`POST /api/auth/login/start`** `{ name, credentialRequest, purpose: "session" | "reauth" }`
+- **`POST /api/auth/login/start`** `{ name, credentialRequest, purpose: "session" }` or `{ credentialRequest, purpose: "reauth", for }`
   → `{ loginId, credentialResponse, suite: 1 }`.
   - A name that is no account, or one held after a rename, gets the fake answer.
-  - `reauth` needs a signed-in caller and its name.
+  - `reauth` needs a signed-in caller and names no account: the server takes the session's own (a name sent with it is `400`), so a rename made elsewhere cannot make it fail.
 - **`POST /api/auth/login/finish`** `{ loginId, credentialFinalization }` → for `session`:
   `{ …the session as today, keyBinding, masterKeyEnvelope, … }`; for `reauth`:
   `{ grant, expiresAt }`.

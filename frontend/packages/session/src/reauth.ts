@@ -70,10 +70,7 @@ async function reauthenticate<T>(password: string, purpose: GrantPurpose | 'veri
   const session = getSession()
   if (!session) throw new Error('not signed in')
   const once = async () => {
-    const { data, signIn } = await opaqueLogin<T>(session.username ?? session.address, password, {
-      purpose: 'reauth',
-      for: purpose,
-    })
+    const { data, signIn } = await opaqueLogin<T>(password, { purpose: 'reauth', for: purpose })
     signIn.close()
     return data
   }
