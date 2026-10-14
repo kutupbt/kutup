@@ -27,6 +27,13 @@ import {
   type Recorded,
 } from '@kutup/crypto/identityPins'
 import { OlderThanSeenError, revisionGuard, toBase64 } from '@kutup/crypto'
+import {
+  accountHead,
+  HeadBlockedError,
+  IndexMismatchError,
+  NotInVerifiedIndexError,
+  type VerifiedIndex,
+} from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import type { DriveIdentity } from './identity'
 
@@ -155,21 +162,71 @@ export class PinsRolledBack extends Error {
   }
 }
 
-async function fetchPins(me: DriveIdentity): Promise<PinStore> {
-  let data: { revision: number; envelope: string } | null = null
+/** The pin list is one value of the account head's `pins` scope (docs/plans/rollback-protection.md). */
+const HEAD_SCOPE = 'pins'
+const HEAD_ID = 'pins'
+
+function headFor(me: DriveIdentity) {
+  return accountHead({ userId: me.userId, masterKey: me.masterKey, envelopeBinding: me.binding })
+}
+
+/**
+ * The account head's index of the pin list, or null when it cannot vouch
+ * (this app is blocked on another history: reads go on, held to this
+ * browser's own guard only, and the shell's banner says why).
+ */
+async function pinsIndex(me: DriveIdentity): Promise<VerifiedIndex | null> {
   try {
-    data = (await api.get<{ revision: number; envelope: string }>('/user/identity-pins')).data
+    return await (await headFor(me)).verifiedIndex(HEAD_SCOPE)
+  } catch (error) {
+    if (error instanceof HeadBlockedError) return null
+    if (error instanceof IndexMismatchError) throw new PinsRolledBack()
+    throw error
+  }
+}
+
+async function readPins(): Promise<{ revision: number; envelope: string } | null> {
+  try {
+    return (await api.get<{ revision: number; envelope: string }>('/user/identity-pins')).data
   } catch (error) {
     if (!(isAxiosError(error) && error.response?.status === 404)) throw error
+    return null
   }
+}
+
+async function fetchPins(me: DriveIdentity): Promise<PinStore> {
+  // The list and the head's index are two reads: a write landing between
+  // them is read again once before it counts as a list the head does not
+  // vouch for.
+  for (let attempt = 0; ; attempt++) {
+    const index = await pinsIndex(me)
+    const data = await readPins()
+    try {
+      return await openPins(me, data, index)
+    } catch (error) {
+      if (error instanceof NotInVerifiedIndexError && attempt === 0) continue
+      if (error instanceof NotInVerifiedIndexError) throw new PinsRolledBack()
+      throw error
+    }
+  }
+}
+
+async function openPins(
+  me: DriveIdentity,
+  data: { revision: number; envelope: string } | null,
+  index: VerifiedIndex | null,
+): Promise<PinStore> {
   const guard = revisionGuard(me)
   if (!data) {
-    // None stored, though this browser has seen one: held back by the server.
+    // None stored, though this browser has seen one, or the head lists one:
+    // held back by the server.
     if ((await guard.seen(PINS_SCOPE, PINS_ID)) > 0) throw new PinsRolledBack()
+    index?.expectListing([])
     return { revision: 0, pins: EMPTY_PINS }
   }
   // The revision is the one sealed in the list's header, not the server's word.
   const { pins, revision } = await openIdentityPins(toBase64(me.masterKey), me.binding, data.envelope)
+  index?.expect(HEAD_ID, revision)
   try {
     await guard.accept(PINS_SCOPE, PINS_ID, revision)
   } catch (error) {
@@ -198,24 +255,31 @@ function pinStore(me: DriveIdentity): Promise<PinStore> {
  */
 function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsText | null>): Promise<void> {
   const run = async () => {
-    for (let attempt = 0; attempt < 5; attempt++) {
+    const head = await headFor(me)
+    await head.listedWrite(HEAD_SCOPE, async (_index, attempt) => {
+      // Past the first try another app wrote first: read the list again.
+      if (attempt > 1) store = null
       const current = await pinStore(me)
       const list = await change(current.pins)
-      if (!list) return
+      if (!list) return null
       const guard = revisionGuard(me)
       const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
       const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
-      try {
-        await api.put('/user/identity-pins', { baseRevision: current.revision, envelope })
-        await guard.accept(PINS_SCOPE, PINS_ID, revision)
-        store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: list }) }
-        return
-      } catch (error) {
-        if (!(isAxiosError(error) && error.response?.status === 409)) throw error
-        store = null
+      return {
+        changes: [[HEAD_ID, revision]],
+        send: async (sealedHead) => {
+          try {
+            await api.put('/user/identity-pins', { baseRevision: current.revision, envelope, head: sealedHead })
+          } catch (error) {
+            // Read again on the next try, whatever the conflict was.
+            if (isAxiosError(error) && error.response?.status === 409) store = null
+            throw error
+          }
+          await guard.accept(PINS_SCOPE, PINS_ID, revision)
+          store = { userId: me.userId, loaded: Promise.resolve({ revision, pins: list }) }
+        },
       }
-    }
-    throw new Error('the identity pin list kept changing')
+    })
   }
   const result = writes.then(run, run)
   writes = result.catch(() => undefined)

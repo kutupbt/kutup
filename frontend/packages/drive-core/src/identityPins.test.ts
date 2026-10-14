@@ -82,11 +82,48 @@ const server = {
   puts: 0,
   conflictOnce: false,
   batches: [] as string[][],
+  heads: [] as (string | undefined)[],
 }
+
+// The account head (docs/plans/rollback-protection.md), its rules kept
+// small: an index of the one `pins` value, covered or not, and listed writes
+// redone on a conflict as the real client does. Its own tests are in
+// @kutup/session/accountHead.test.ts.
+const head = vi.hoisted(() => ({ covered: false, revision: 0, blocked: false, sent: [] as string[] }))
+vi.mock('@kutup/session/accountHead', async () => {
+  const actual = await vi.importActual<typeof import('@kutup/session/accountHead')>('@kutup/session/accountHead')
+  const index = () => new actual.VerifiedIndex('pins', head.covered, head.covered ? [['pins', head.revision]] : [], null)
+  const conflicted = (error: unknown) => {
+    const code = (error as { response?: { status?: number; data?: { code?: string } } }).response?.data?.code
+    return code === 'head_conflict' || code === 'revision_conflict'
+  }
+  const client = {
+    verifiedIndex: () => (head.blocked ? Promise.reject(new actual.HeadBlockedError('fork')) : Promise.resolve(index())),
+    listedWrite: async <T,>(_scope: string, edit: (i: InstanceType<typeof actual.VerifiedIndex>, attempt: number) => Promise<{ changes: [string, number | null][]; send: (h: string) => Promise<T> } | null>) => {
+      for (let attempt = 1; ; attempt++) {
+        if (head.blocked) throw new actual.HeadBlockedError('fork')
+        const change = await edit(index(), attempt)
+        if (!change) return undefined
+        try {
+          const sealed = `head-${head.sent.length + 1}`
+          const result = await change.send(sealed)
+          head.sent.push(sealed)
+          head.revision = change.changes[0][1] ?? 0
+          return result
+        } catch (error) {
+          if (conflicted(error) && attempt < 5) continue
+          throw error
+        }
+      }
+    },
+  }
+  return { ...actual, accountHead: () => Promise.resolve(client) }
+})
 
 vi.mock('@kutup/session/client', () => {
   const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, response: { status: 404 } })
-  const conflict = () => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409 } })
+  const conflict = () =>
+    Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict' } } })
   return {
     default: {
       get: vi.fn((url: string) => {
@@ -99,8 +136,9 @@ vi.mock('@kutup/session/client', () => {
         server.batches.push(body.accounts)
         return Promise.resolve({ data: body.accounts.flatMap((a) => server.people.get(a) ?? []) })
       }),
-      put: vi.fn((_url: string, body: { baseRevision: number; envelope: string }) => {
+      put: vi.fn((_url: string, body: { baseRevision: number; envelope: string; head?: string }) => {
         server.puts++
+        server.heads.push(body.head)
         if (server.conflictOnce) {
           server.conflictOnce = false
           // Another app stored revision 1 with a pin of its own.
@@ -156,6 +194,8 @@ beforeEach(() => {
   server.puts = 0
   server.conflictOnce = false
   server.batches = []
+  server.heads = []
+  Object.assign(head, { covered: false, revision: 0, blocked: false, sent: [] })
   resetRevisionGuardsForTesting()
 })
 
@@ -237,6 +277,39 @@ describe('checkIdentity', () => {
     // The server replays an older list, sealed at revision 1 (it cannot relabel it).
     server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [] } }) }
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
+  })
+
+  it('writes the list with the next account head', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    expect(server.heads.at(-1)).toMatch(/^head-\d+$/)
+  })
+
+  it('refuses a list the account head does not vouch for', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    resetIdentityPinsForTesting()
+    // The head lists another revision than the list the server hands out
+    // (one this browser never saw, so its own guard alone would take it).
+    resetRevisionGuardsForTesting()
+    head.covered = true
+    head.revision = server.pins!.revision + 1
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
+    head.revision = server.pins!.revision
+    resetIdentityPinsForTesting()
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: false })
+  })
+
+  it('reads go on while this app is blocked on another history; writes stop', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    resetIdentityPinsForTesting()
+    head.blocked = true
+    const puts = server.puts
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: false })
+    publish('dave@kutup.dev', 'D')
+    await checkIdentity(me, 'dave@kutup.dev')
+    expect(server.puts).toBe(puts)
   })
 
   it('seals the list to the key binding, not to the address', async () => {

@@ -400,6 +400,13 @@ describe('listed writes', () => {
     expect(unseal(sent).scopes).toEqual([engine.scope('passSecrets', [['v2', 2]])])
   })
 
+  it('an edit with nothing to change sends nothing, and starts no chain', async () => {
+    const engine = new FakeEngine()
+    const { http, calls } = server({ 'GET /account/index/pins': () => ({ head: null, values: [], basis: 'b' }) })
+    await expect(new AccountHeadClient(engine, memoryRevisionStore(), http).listedWrite('pins', () => Promise.resolve(null))).resolves.toBeUndefined()
+    expect(calls.filter(([method]) => method === 'POST')).toHaveLength(0)
+  })
+
   it('a refusal other than a conflict is not retried', async () => {
     const engine = new FakeEngine()
     const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [] })

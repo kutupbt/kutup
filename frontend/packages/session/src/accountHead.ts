@@ -360,17 +360,22 @@ export class AccountHeadClient {
   /**
    * A listed write of `scope`: the edit is made against the verified index,
    * sent with the next head, and redone (up to five times) when another
-   * device wrote first. The chain is started first when there is none. One
-   * listed write at a time in this page.
+   * device wrote first (`attempt` counts from 1: past the first, re-read the
+   * value). The chain is started first when there is none. An edit that
+   * returns null changes nothing and sends nothing. One listed write at a
+   * time in this page.
    */
-  listedWrite<T>(scope: HeadScopeName, edit: (index: VerifiedIndex) => Promise<ListedEdit<T>>): Promise<T> {
+  listedWrite<T>(scope: HeadScopeName, edit: (index: VerifiedIndex, attempt: number) => Promise<ListedEdit<T> | null>): Promise<T | undefined> {
     const run = () => this.write(scope, edit)
     const result = this.writes.then(run, run)
     this.writes = result.catch(() => undefined)
     return result
   }
 
-  private async write<T>(scope: HeadScopeName, edit: (index: VerifiedIndex) => Promise<ListedEdit<T>>): Promise<T> {
+  private async write<T>(
+    scope: HeadScopeName,
+    edit: (index: VerifiedIndex, attempt: number) => Promise<ListedEdit<T> | null>,
+  ): Promise<T | undefined> {
     for (let attempt = 1; ; attempt++) {
       if (this.condition.kind === 'blocked') throw new HeadBlockedError(this.condition.reason)
       // Every attempt reads the index again: an earlier one met a newer head.
@@ -379,6 +384,9 @@ export class AccountHeadClient {
       const state = await this.load()
       const writer = this.engine.writer(state.deviceId)
       try {
+        const change = await edit(index, attempt)
+        // Nothing to change (the edit found it already done): nothing is sent.
+        if (change === null) return undefined
         if (index.basis !== null) {
           // No head yet: the chain starts on the index's basis, covering
           // every value; then this write follows it.
@@ -386,7 +394,6 @@ export class AccountHeadClient {
           await this.http.post('/account/head', { head: first, basis: index.basis })
           await this.commit(first)
         }
-        const change = await edit(index)
         const head = this.engine.next(writer, [this.engine.scope(scope, applied(index.values, change.changes))])
         const result = await change.send(head)
         await this.commit(head)
