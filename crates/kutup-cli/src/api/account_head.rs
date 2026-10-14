@@ -36,17 +36,33 @@ impl Client {
     }
 
     /// The chain from sequence `from` to the newest, oldest first, every page
-    /// of it; `None` when `from` is past what the server keeps (`410`).
+    /// of it; `None` when `from` is past what the server keeps (`410`). A
+    /// server cannot keep this asking: the pages are as many as the kept
+    /// window needs, and each must start further on than the one before.
     pub fn get_account_heads(&self, from: u64) -> Result<Option<Vec<String>>> {
+        const PAGE: u64 = 200;
+        let most_pages = kutup_crypto::account_head::RETENTION / PAGE + 2;
         let mut heads = Vec::new();
         let mut next = Some(from);
-        while let Some(from) = next {
-            let resp = self.get(&format!("/account/heads?from={from}"))?;
+        let mut pages = 0;
+        while let Some(at) = next {
+            pages += 1;
+            if pages > most_pages {
+                anyhow::bail!(
+                    "the server's account history did not end within the window it keeps"
+                );
+            }
+            let resp = self.get(&format!("/account/heads?from={at}"))?;
             if resp.status().as_u16() == 410 {
                 return Ok(None);
             }
             let page: HeadsPage = super::decode_json(resp)?;
             heads.extend(page.heads);
+            if let Some(following) = page.next {
+                if following <= at {
+                    anyhow::bail!("the server's account history paged backwards");
+                }
+            }
             next = page.next;
         }
         Ok(Some(heads))

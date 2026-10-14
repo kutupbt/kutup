@@ -48,7 +48,8 @@ export interface Reanchored {
 
 /** Something a device notes about its anchor, newest last. */
 export type LocalHeadEvent =
-  | { kind: 'startedFresh'; anchor: HeadAnchor; atMs: number }
+  /** `reason` when it was not a first use: `unreadable` (the stored state did not open). */
+  | { kind: 'startedFresh'; anchor: HeadAnchor; atMs: number; reason?: string }
   | { kind: 'reanchored'; record: Reanchored }
   | { kind: 'forgotten'; from: HeadAnchor; atMs: number }
 
@@ -63,6 +64,8 @@ export interface LocalHeadState {
   /** When the anchor last changed (Unix ms; 0: never). */
   anchoredAtMs: number
   log: LocalHeadEvent[]
+  /** Why this state started over before its first anchor (`unreadable`). */
+  startedOver?: string
 }
 
 /** A scope's index, as the server lists it: value ids and their revisions. */

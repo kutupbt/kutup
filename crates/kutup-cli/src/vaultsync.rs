@@ -417,21 +417,20 @@ pub(crate) fn keep_secret(
     let guard = &guard;
     let mut head = secrets_head(client, master_key, binding, dir)?;
     let mut done: Option<String> = None;
-    let stored = head.listed_write(HEAD_SCOPE, |index, attempt| {
+    let stored = head.listed_write(HEAD_SCOPE, |_index, _attempt| {
         let now = client
             .list_vault_secrets()?
             .into_iter()
             .find(|row| row.file_id == file_id);
-        if attempt > 1 {
-            if let Some(row) = &now {
-                let envelope = account_envelope::decode_canonical_b64(&row.envelope)?;
-                if kutup_pass::kept::open(&envelope, master_key, binding, id.as_bytes())
-                    .is_ok_and(|kept| kept.key.same_as(&key))
-                {
-                    // Another device kept this same key first: nothing to do.
-                    done = Some(row.envelope.clone());
-                    return Ok(None);
-                }
+        // This same key kept already (by another device, or by an earlier try
+        // whose answer was lost): nothing to send.
+        if let Some(row) = &now {
+            let envelope = account_envelope::decode_canonical_b64(&row.envelope)?;
+            if kutup_pass::kept::open(&envelope, master_key, binding, id.as_bytes())
+                .is_ok_and(|kept| kept.key.same_as(&key))
+            {
+                done = Some(row.envelope.clone());
+                return Ok(None);
             }
         }
         let base = now
@@ -441,10 +440,6 @@ pub(crate) fn keep_secret(
         let sealed =
             kutup_pass::kept::seal(master_key, binding, id.as_bytes(), revision, &key, false)?;
         let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
-        if index.revision(file_id) == Some(revision) {
-            done = Some(envelope);
-            return Ok(None);
-        }
         Ok(Some(crate::account_head::Edit {
             changes: vec![(file_id.to_owned(), Some(revision))],
             send: Box::new(move |sealed_head: &str| {

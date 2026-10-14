@@ -45,9 +45,20 @@ pub fn run(profile: &str, json: bool, cmd: &AccountCmd) -> Result<()> {
                     Some(sequence) => println!("The server shows:      #{sequence}"),
                     None => println!("The server shows:      no history yet"),
                 }
+                if report.started_over.as_deref() == Some("unreadable") {
+                    println!("This device started over: its stored record could not be read (kept aside).");
+                }
             }
         }
         AccountCmd::Reanchor { yes } => {
+            // Nobody confirms what they did not see: with --json the warning
+            // is not shown, so --yes must be given on purpose.
+            if json && !*yes {
+                return Err(crate::errors::UsageError(
+                    "--json needs --yes for kutup account reanchor".into(),
+                )
+                .into());
+            }
             if report.status == "trusted" {
                 if json {
                     print_json(

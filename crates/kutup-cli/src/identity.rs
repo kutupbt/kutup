@@ -224,12 +224,22 @@ fn read_pins(
 /// again once when a write landed between the two reads).
 pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
     let mut head = me.head(ctx)?;
-    let index = head.index(HEAD_SCOPE)?;
-    match read_pins(ctx, me, &index) {
+    let index = |head: &mut crate::account_head::CliHead<'_>| match head.index(HEAD_SCOPE) {
+        Ok(index) => Ok(index),
+        // Blocked on another history: reads go on, held to this device's own
+        // guard; listed writes stop (exit 6).
+        Err(error) if error.downcast_ref::<crate::errors::HeadBlocked>().is_some() => {
+            eprintln!("note: {error}");
+            Ok(crate::account_head::Index::uncovered(HEAD_SCOPE))
+        }
+        Err(error) => Err(error),
+    };
+    let first = index(&mut head)?;
+    match read_pins(ctx, me, &first) {
         Ok(read) => Ok(read),
         Err(_) => {
-            let index = head.index(HEAD_SCOPE)?;
-            read_pins(ctx, me, &index)
+            let again = index(&mut head)?;
+            read_pins(ctx, me, &again)
         }
     }
 }

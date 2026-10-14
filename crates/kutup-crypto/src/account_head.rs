@@ -695,9 +695,15 @@ pub const MAX_LOCAL_SEALED_BYTES: usize = 16 * 1024;
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum LocalHeadEvent {
     /// The device had no anchor (new, cleared, or its state did not open) and
-    /// trusted the head it read first.
+    /// trusted the head it read first. `reason` says why it had none when
+    /// that was not a first use: `unreadable` (its stored state did not open).
     #[serde(rename_all = "camelCase")]
-    StartedFresh { anchor: Anchor, at_ms: u64 },
+    StartedFresh {
+        anchor: Anchor,
+        at_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// The device moved to another history ([`reanchor`]).
     #[serde(rename_all = "camelCase")]
     Reanchored { record: Reanchored },
@@ -723,6 +729,10 @@ pub struct LocalHeadStateV1 {
     /// When the anchor last changed, in Unix milliseconds (0: never).
     pub anchored_at_ms: u64,
     pub log: Vec<LocalHeadEvent>,
+    /// Why this state started over before its first anchor (`unreadable`):
+    /// kept until the anchor it starts from is logged with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_over: Option<String>,
 }
 
 impl LocalHeadStateV1 {
@@ -741,6 +751,7 @@ impl LocalHeadStateV1 {
             anchor: None,
             anchored_at_ms: 0,
             log: Vec::new(),
+            started_over: None,
         };
         state.validate()?;
         Ok(state)
@@ -783,9 +794,11 @@ impl LocalHeadStateV1 {
             None => {
                 self.anchor = Some(anchor.clone());
                 self.anchored_at_ms = at_ms;
+                let reason = self.started_over.take();
                 self.note(LocalHeadEvent::StartedFresh {
                     anchor: anchor.clone(),
                     at_ms,
+                    reason,
                 });
                 true
             }
@@ -803,6 +816,13 @@ impl LocalHeadStateV1 {
         self.anchored_at_ms = at_ms;
         self.note(LocalHeadEvent::Forgotten { from, at_ms });
         true
+    }
+
+    /// A fresh state that replaces one which did not open (`reason`, e.g.
+    /// `unreadable`): the anchor it then starts from is logged with why.
+    pub fn starting_over(mut self, reason: &str) -> Self {
+        self.started_over = Some(reason.to_owned());
+        self
     }
 
     /// After [`reanchor`]: the anchor moves to the new head, back or sideways
@@ -1322,5 +1342,34 @@ mod tests {
             open_local_state(&keys, BINDING, INCARNATION, &sealed_state).unwrap(),
             state
         );
+    }
+
+    #[test]
+    fn a_state_that_started_over_says_why_with_its_first_anchor() {
+        let keys = keys();
+        let sealed = chain(&keys, 1);
+        let state = LocalHeadStateV1::with_device(INCARNATION, "device-a")
+            .unwrap()
+            .starting_over("unreadable");
+        // Kept through a save until the first anchor.
+        let reopened = open_local_state(
+            &keys,
+            BINDING,
+            INCARNATION,
+            &seal_local_state(&keys, BINDING, &state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reopened.started_over.as_deref(), Some("unreadable"));
+        let mut state = reopened;
+        let verified = check(&keys, BINDING, INCARNATION, None, &sealed[0], None)
+            .unwrap()
+            .verified
+            .unwrap();
+        state.advance(&verified, 7);
+        assert!(matches!(
+            state.log.as_slice(),
+            [LocalHeadEvent::StartedFresh { reason: Some(reason), .. }] if reason == "unreadable"
+        ));
+        assert_eq!(state.started_over, None);
     }
 }

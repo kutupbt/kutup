@@ -27,6 +27,10 @@ describe('describeHeadEvent', () => {
       expect(lines[1]).toContain('#9')
       for (const line of lines.slice(2)) expect(line).toMatch(/#9 → #4/)
       expect(new Set(lines).size).toBe(lines.length)
+      // Started over because the stored record did not open: said so.
+      const unreadable = describeHeadEvent({ kind: 'startedFresh', anchor: anchor(3), atMs: 1, reason: 'unreadable' }, t).text
+      expect(unreadable).toContain('#3')
+      expect(unreadable).not.toBe(lines[0])
     }
   })
 })

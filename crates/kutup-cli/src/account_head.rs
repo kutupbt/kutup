@@ -45,6 +45,17 @@ pub struct Index {
 }
 
 impl Index {
+    /// No index to hold values to (the device is blocked on another history,
+    /// so only its own guard holds them).
+    pub fn uncovered(scope: &str) -> Self {
+        Self {
+            scope: scope.to_owned(),
+            values: Vec::new(),
+            covered: false,
+            basis: None,
+        }
+    }
+
     pub fn revision(&self, id: &str) -> Option<u64> {
         self.values
             .iter()
@@ -101,6 +112,10 @@ pub struct Guard {
 }
 
 impl Guard {
+    fn dir(&self) -> &Path {
+        self.path.parent().unwrap_or_else(|| Path::new("."))
+    }
+
     fn load(&self) -> BTreeMap<String, String> {
         std::fs::read_to_string(&self.path)
             .ok()
@@ -119,8 +134,11 @@ impl Guard {
             .unwrap_or(0))
     }
 
-    /// A revision read or written: refused when older than one seen, kept when newer.
+    /// A revision read or written: refused when older than one seen, kept
+    /// when newer. Read and written under the profile's lock, so two
+    /// processes never lose each other's entries.
     pub fn accept(&self, scope: &str, id: &str, revision: u64) -> Result<()> {
+        let _lock = lock_profile(self.dir())?;
         let seen = self.seen(scope, id)?;
         if revision < seen {
             bail!("{scope}: revision {revision} is older than {seen}, already seen on this device");
@@ -143,24 +161,162 @@ impl Guard {
     }
 }
 
+/// The profile's lock (`account-head.lock`): one process at a time reads and
+/// writes its head state and revision guard. Held until dropped.
+fn lock_profile(dir: &Path) -> Result<std::fs::File> {
+    let path = dir.join("account-head.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    file.lock()
+        .with_context(|| format!("lock {}", path.display()))?;
+    Ok(file)
+}
+
+/// Replaces `path` with `bytes` so that a crash leaves the old file or the new
+/// one, never a torn one: a temporary of its own name, written and synced,
+/// renamed over it, and the directory synced.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, bytes).with_context(|| format!("write {}", temporary.display()))?;
+    use std::io::Write as _;
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("state");
+    let temporary = path.with_file_name(format!(
+        ".{name}.{}.{}.{}.tmp",
+        std::process::id(),
+        now_ms(),
+        SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
     }
-    std::fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))
+    let written = (|| -> Result<()> {
+        let mut file = options
+            .open(&temporary)
+            .with_context(|| format!("create {}", temporary.display()))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path).with_context(|| format!("replace {}", path.display()))?;
+        #[cfg(unix)]
+        if let Some(dir) = path.parent() {
+            std::fs::File::open(dir)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// What this profile keeps of the account head for one incarnation: the
+/// sealed `LocalHeadStateV1` file, read and changed only under the profile's
+/// lock.
+pub(crate) struct StateStore {
+    keys: HeadKeys,
+    binding: String,
+    incarnation: String,
+    dir: PathBuf,
+}
+
+impl StateStore {
+    pub(crate) fn new(
+        master_key: &[u8; 32],
+        binding: &str,
+        incarnation: &str,
+        dir: PathBuf,
+    ) -> Result<Self> {
+        Ok(Self {
+            keys: HeadKeys::derive(master_key)?,
+            binding: binding.to_owned(),
+            incarnation: incarnation.to_owned(),
+            dir,
+        })
+    }
+
+    fn path(&self) -> Result<PathBuf> {
+        Ok(self.dir.join(format!(
+            "account-head-{}",
+            self.keys.local_state_name(&self.incarnation)?
+        )))
+    }
+
+    /// This device's state (under the lock briefly).
+    pub(crate) fn load(&self) -> Result<LocalHeadStateV1> {
+        let _lock = lock_profile(&self.dir)?;
+        self.load_locked()
+    }
+
+    /// With the lock held. None stored: a fresh state. One that does not open
+    /// is never dropped silently: it is kept aside, a warning says so, and the
+    /// fresh state records why it started over.
+    fn load_locked(&self) -> Result<LocalHeadStateV1> {
+        let path = self.path()?;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(LocalHeadStateV1::new(&self.incarnation)?)
+            }
+            Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        };
+        let opened = STANDARD.decode(text.trim()).ok().and_then(|sealed| {
+            account_head::open_local_state(&self.keys, &self.binding, &self.incarnation, &sealed)
+                .ok()
+        });
+        if let Some(state) = opened {
+            return Ok(state);
+        }
+        let aside = path.with_file_name(format!(
+            "{}.corrupt-{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("account-head"),
+            now_ms()
+        ));
+        std::fs::rename(&path, &aside).with_context(|| format!("keep {} aside", path.display()))?;
+        eprintln!(
+            "warning: this device's record of the account's history ({}) could not be read; it is kept as {}. \
+             This device starts over and trusts the server's current history.",
+            path.display(),
+            aside.display()
+        );
+        let fresh = LocalHeadStateV1::new(&self.incarnation)?.starting_over("unreadable");
+        self.save_locked(&fresh)?;
+        Ok(fresh)
+    }
+
+    fn save_locked(&self, state: &LocalHeadStateV1) -> Result<()> {
+        let sealed = account_head::seal_local_state(&self.keys, &self.binding, state)?;
+        write_private(&self.path()?, STANDARD.encode(sealed).as_bytes())
+    }
+
+    /// Changes the state under the lock, read fresh inside it: `change`
+    /// returns whether it changed anything (then it is saved). Another
+    /// process's change made meanwhile is never overwritten by an older copy.
+    pub(crate) fn update<T>(
+        &self,
+        change: impl FnOnce(&mut LocalHeadStateV1) -> Result<(bool, T)>,
+    ) -> Result<T> {
+        let _lock = lock_profile(&self.dir)?;
+        let mut state = self.load_locked()?;
+        let (changed, out) = change(&mut state)?;
+        if changed {
+            self.save_locked(&state)?;
+        }
+        Ok(out)
+    }
 }
 
 /// The account head for one signed-in profile.
 pub struct CliHead<'a> {
     client: &'a Client,
-    keys: HeadKeys,
-    binding: String,
-    incarnation: String,
-    dir: PathBuf,
+    store: StateStore,
     verified: Option<VerifiedHead>,
     /// What the last check found that was not trusted, for `reanchor`.
     blocked: Option<Blocked>,
@@ -183,6 +339,9 @@ pub struct HeadReport {
     pub status: String,
     pub anchor: Option<u64>,
     pub current: Option<u64>,
+    /// Why this device last started over, when it was not a first use
+    /// (`unreadable`: its stored record did not open, and was kept aside).
+    pub started_over: Option<String>,
 }
 
 impl<'a> CliHead<'a> {
@@ -193,16 +352,12 @@ impl<'a> CliHead<'a> {
         incarnation: &str,
         dir: PathBuf,
     ) -> Result<Self> {
-        let head = Self {
+        Ok(Self {
             client,
-            keys: HeadKeys::derive(master_key)?,
-            binding: binding.to_owned(),
-            incarnation: incarnation.to_owned(),
-            dir,
+            store: StateStore::new(master_key, binding, incarnation, dir)?,
             verified: None,
             blocked: None,
-        };
-        Ok(head)
+        })
     }
 
     /// This profile's sealed revision guard, taking over the older plaintext
@@ -217,55 +372,31 @@ impl<'a> CliHead<'a> {
             if let Ok(revision) = text.trim().parse::<u64>() {
                 if revision > 0 {
                     // Taken over as seen: an older list is refused as before.
-                    let _ = guard.accept(
-                        crate::identity::PINS_GUARD_SCOPE,
-                        crate::identity::PINS_GUARD_ID,
-                        revision,
-                    );
+                    // The old file goes only once the guard holds it (written
+                    // and synced); a failure keeps it for the next run.
+                    guard
+                        .accept(
+                            crate::identity::PINS_GUARD_SCOPE,
+                            crate::identity::PINS_GUARD_ID,
+                            revision,
+                        )
+                        .context("taking over identity-pins-revision")?;
                 }
             }
-            let _ = std::fs::remove_file(&old);
+            std::fs::remove_file(&old).with_context(|| format!("remove {}", old.display()))?;
         }
         Ok(guard)
     }
 
-    fn state_path(&self) -> Result<PathBuf> {
-        Ok(self.dir.join(format!(
-            "account-head-{}",
-            self.keys.local_state_name(&self.incarnation)?
-        )))
-    }
-
-    /// This device's state; one that does not open (or none) is a fresh one.
     fn load(&self) -> Result<LocalHeadStateV1> {
-        let path = self.state_path()?;
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            if let Some(state) = STANDARD.decode(text.trim()).ok().and_then(|sealed| {
-                account_head::open_local_state(
-                    &self.keys,
-                    &self.binding,
-                    &self.incarnation,
-                    &sealed,
-                )
-                .ok()
-            }) {
-                return Ok(state);
-            }
-        }
-        Ok(LocalHeadStateV1::new(&self.incarnation)?)
+        self.store.load()
     }
 
-    fn save(&self, state: &LocalHeadStateV1) -> Result<()> {
-        let sealed = account_head::seal_local_state(&self.keys, &self.binding, state)?;
-        write_private(&self.state_path()?, STANDARD.encode(sealed).as_bytes())
-    }
-
+    /// The verified head becomes the anchor, never moving it back.
     fn advance(&self) -> Result<()> {
         if let Some(verified) = &self.verified {
-            let mut state = self.load()?;
-            if state.advance(verified, now_ms()) {
-                self.save(&state)?;
-            }
+            self.store
+                .update(|state| Ok((state.advance(verified, now_ms()), ())))?;
         }
         Ok(())
     }
@@ -309,9 +440,9 @@ impl<'a> CliHead<'a> {
             _ => None,
         };
         let checked = account_head::check(
-            &self.keys,
-            &self.binding,
-            &self.incarnation,
+            &self.store.keys,
+            &self.store.binding,
+            &self.store.incarnation,
             state.anchor.as_ref(),
             &current,
             segment.as_deref(),
@@ -326,18 +457,24 @@ impl<'a> CliHead<'a> {
                 // notice, never blocking (docs/plans/rollback-protection.md §7).
                 let anchor = state.anchor.clone().expect("too old needs an anchor");
                 let (record, verified) = account_head::reanchor(
-                    &self.keys,
-                    &self.binding,
-                    &self.incarnation,
+                    &self.store.keys,
+                    &self.store.binding,
+                    &self.store.incarnation,
                     &anchor,
                     &current,
                     segment.as_deref(),
                     false,
                     now_ms(),
                 )?;
-                let mut state = state;
-                state.reanchored(&record);
-                self.save(&state)?;
+                // Only from the anchor it was decided on: another process
+                // that moved it meanwhile is not overwritten.
+                self.store.update(|state| {
+                    if state.anchor.as_ref() != Some(&anchor) {
+                        return Ok((false, ()));
+                    }
+                    state.reanchored(&record);
+                    Ok((true, ()))
+                })?;
                 self.verified = Some(verified);
                 eprintln!(
                     "note: this device had not been used for a long time; it now follows the account's current data (#{})",
@@ -382,7 +519,7 @@ impl<'a> CliHead<'a> {
         let covered = match &self.verified {
             None => false,
             Some(verified) => {
-                match account_head::check_index(&self.keys, verified, scope, &record.values) {
+                match account_head::check_index(&self.store.keys, verified, scope, &record.values) {
                     Ok(IndexCheck::Matches) => true,
                     Ok(IndexCheck::Uncovered) => false,
                     Err(_) => bail!(
@@ -414,16 +551,16 @@ impl<'a> CliHead<'a> {
     ) -> Result<Option<T>> {
         for attempt in 1..=5 {
             let index = self.index(scope)?;
-            let writer = self.keys.writer(&self.load()?.device_id)?;
+            let writer = self.store.keys.writer(&self.load()?.device_id)?;
             let Some(change) = edit(&index, attempt)? else {
                 return Ok(None);
             };
             if let Some(basis) = &index.basis {
-                let entry = self.keys.scope_digest(scope, &index.values)?;
+                let entry = self.store.keys.scope_digest(scope, &index.values)?;
                 let (first, verified) = account_head::first(
-                    &self.keys,
-                    &self.binding,
-                    &self.incarnation,
+                    &self.store.keys,
+                    &self.store.binding,
+                    &self.store.incarnation,
                     &writer,
                     vec![entry],
                 )?;
@@ -444,13 +581,14 @@ impl<'a> CliHead<'a> {
                 };
             }
             let values: Vec<(String, u64)> = values.into_iter().collect();
-            let entry = self.keys.scope_digest(scope, &values)?;
+            let entry = self.store.keys.scope_digest(scope, &values)?;
             let verified = self.verified.as_ref().context("no verified account head")?;
             let next = verified.next(&writer, vec![entry])?;
-            let sealed = account_head::seal(&self.keys, &self.binding, &next)?;
+            let sealed = account_head::seal(&self.store.keys, &self.store.binding, &next)?;
             match (change.send)(&STANDARD.encode(&sealed))? {
                 Some(done) => {
-                    let committed = verified.committed(&self.keys, &self.binding, &sealed)?;
+                    let committed =
+                        verified.committed(&self.store.keys, &self.store.binding, &sealed)?;
                     self.verified = Some(committed);
                     self.advance()?;
                     return Ok(Some(done));
@@ -471,7 +609,14 @@ impl<'a> CliHead<'a> {
             }
             _ => first,
         };
-        let anchor = self.load()?.anchor.map(|anchor| anchor.sequence);
+        let state = self.load()?;
+        let anchor = state.anchor.as_ref().map(|anchor| anchor.sequence);
+        let started_over = state.started_over.clone().or_else(|| {
+            state.log.iter().rev().find_map(|event| match event {
+                account_head::LocalHeadEvent::StartedFresh { reason, .. } => reason.clone(),
+                _ => None,
+            })
+        });
         let sequence = current
             .as_deref()
             .and_then(|head| STANDARD.decode(head).ok())
@@ -487,6 +632,7 @@ impl<'a> CliHead<'a> {
             status,
             anchor,
             current: sequence,
+            started_over,
         })
     }
 
@@ -494,37 +640,34 @@ impl<'a> CliHead<'a> {
     /// confirmed (a restore from a backup looks the same), logged locally.
     /// Returns false when there was nothing to continue from.
     pub fn continue_with_server(&mut self) -> Result<bool> {
-        let mut state = self.load()?;
-        match self.blocked.take() {
-            None => Ok(false),
-            Some(Blocked::NoHead) => {
-                state.forgotten(now_ms());
-                self.save(&state)?;
-                Ok(true)
-            }
-            Some(Blocked::On {
-                current, segment, ..
-            }) => {
+        let Some(blocked) = self.blocked.take() else {
+            return Ok(false);
+        };
+        // Decided and recorded under the lock, on the anchor as stored now.
+        let store = &self.store;
+        let verified = store.update(|state| match &blocked {
+            Blocked::NoHead => Ok((state.forgotten(now_ms()), None)),
+            Blocked::On { current, segment } => {
                 let anchor = state
                     .anchor
                     .clone()
                     .context("nothing remembered to move from")?;
                 let (record, verified) = account_head::reanchor(
-                    &self.keys,
-                    &self.binding,
-                    &self.incarnation,
+                    &store.keys,
+                    &store.binding,
+                    &store.incarnation,
                     &anchor,
-                    &current,
+                    current,
                     segment.as_deref(),
                     true,
                     now_ms(),
                 )?;
                 state.reanchored(&record);
-                self.save(&state)?;
-                self.verified = Some(verified);
-                Ok(true)
+                Ok((true, Some(verified)))
             }
-        }
+        })?;
+        self.verified = verified;
+        Ok(true)
     }
 }
 
@@ -595,5 +738,127 @@ mod tests {
             1_790_000_000_000
         );
         assert!(!dir.join("identity-pins-revision").exists());
+    }
+
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const INCARNATION: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    /// `n` verified heads of one account, each on the one before.
+    fn verified_chain(n: usize) -> Vec<VerifiedHead> {
+        let keys = HeadKeys::derive(&[7u8; 32]).unwrap();
+        let writer = keys.writer("device-a").unwrap();
+        let entry = |i: u64| {
+            keys.scope_digest("pins", &[("pins".to_string(), i)])
+                .unwrap()
+        };
+        let (_, first) =
+            account_head::first(&keys, BINDING, INCARNATION, &writer, vec![entry(1)]).unwrap();
+        let mut heads = vec![first];
+        for i in 2..=n as u64 {
+            let last = heads.last().unwrap();
+            let next = last.next(&writer, vec![entry(i)]).unwrap();
+            let sealed = account_head::seal(&keys, BINDING, &next).unwrap();
+            heads.push(last.committed(&keys, BINDING, &sealed).unwrap());
+        }
+        heads
+    }
+
+    fn store(dir: &Path) -> StateStore {
+        StateStore::new(&[7u8; 32], BINDING, INCARNATION, dir.to_path_buf()).unwrap()
+    }
+
+    #[test]
+    fn two_processes_advancing_at_once_keep_the_highest_anchor_and_every_guard_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let heads = std::sync::Arc::new(verified_chain(40));
+        let threads: Vec<_> = (0..4)
+            .map(|t| {
+                let dir = temp.path().to_path_buf();
+                let heads = heads.clone();
+                std::thread::spawn(move || {
+                    // Each its own handles, as another process would have.
+                    let store = store(&dir);
+                    let guard = CliHead::guard(&dir, &[7u8; 32]).unwrap();
+                    for (i, head) in heads.iter().enumerate() {
+                        // Out of order across threads: some go back to older heads.
+                        let pick = if (i + t) % 3 == 0 {
+                            &heads[i / 2]
+                        } else {
+                            head
+                        };
+                        store
+                            .update(|state| Ok((state.advance(pick, 1), ())))
+                            .unwrap();
+                        guard
+                            .accept("s", &format!("{t}-{i}"), 1 + i as u64)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let state = store(temp.path()).load().unwrap();
+        assert_eq!(
+            state.anchor.unwrap().sequence,
+            40,
+            "the anchor never moved back"
+        );
+        let guard = CliHead::guard(temp.path(), &[7u8; 32]).unwrap();
+        for t in 0..4 {
+            for i in 0..40 {
+                assert_eq!(guard.seen("s", &format!("{t}-{i}")).unwrap(), 1 + i as u64);
+            }
+        }
+        // Nothing half-written left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_state_is_kept_aside_and_the_start_over_recorded() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(temp.path());
+        let path = store.path().unwrap();
+        std::fs::write(&path, "not a sealed state").unwrap();
+        let state = store.load().unwrap();
+        assert_eq!(state.anchor, None);
+        assert_eq!(state.started_over.as_deref(), Some("unreadable"));
+        let aside: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(aside[0].path()).unwrap(),
+            "not a sealed state"
+        );
+        // The reason is stored, and goes with the first anchor into the log.
+        let heads = verified_chain(1);
+        store
+            .update(|state| Ok((state.advance(&heads[0], 5), ())))
+            .unwrap();
+        let state = store.load().unwrap();
+        assert!(matches!(
+            state.log.as_slice(),
+            [account_head::LocalHeadEvent::StartedFresh { reason: Some(reason), .. }] if reason == "unreadable"
+        ));
+    }
+
+    #[test]
+    fn a_failed_takeover_keeps_the_old_revision_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
+        // The guard's file cannot be written (a directory stands in its place).
+        std::fs::create_dir(dir.join("revisions.json")).unwrap();
+        assert!(CliHead::guard(dir, &[7u8; 32]).is_err());
+        assert!(dir.join("identity-pins-revision").exists());
     }
 }

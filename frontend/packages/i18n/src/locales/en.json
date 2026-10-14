@@ -417,6 +417,7 @@
     "history": "This app's history",
     "historyEmpty": "Nothing to show.",
     "startedFresh": "Started following #{{sequence}}",
+    "startedFreshUnreadable": "This device's record could not be read; started following #{{sequence}}",
     "reanchoredRollback": "Continued with the server's older data (#{{from}} → #{{to}})",
     "reanchoredFork": "Continued with the server's other history (#{{from}} → #{{to}})",
     "reanchoredTooOld": "Caught up after a long time (#{{from}} → #{{to}})",
