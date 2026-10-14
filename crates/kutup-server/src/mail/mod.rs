@@ -112,14 +112,15 @@ fn try_later() -> Reply {
 /// in any spelling (`.`, `_`, `-` and case fold away), that receives (the
 /// account's current address, or an old one in its receiving window), with a
 /// primary key, on an active account with room in its pool. A closed or freed
-/// address is unknown (`5.1.1`).
+/// address is unknown (`5.1.1`); one whose keys are not stored yet is a
+/// temporary failure (`4.3.0`), so the sender retries.
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
-    let row: Option<(Uuid, Uuid, Vec<u8>, i64, i64)> = sqlx::query_as(
+    let row: Option<(Uuid, Uuid, Option<Vec<u8>>, i64, i64)> = sqlx::query_as(
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
-           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+           LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
             AND a.state IN ('active', 'receiving')",
     )
@@ -131,6 +132,10 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
         try_later()
     })?;
     let (address_id, user_id, public_key, quota, used) = row.ok_or_else(unknown)?;
+    // An address whose keys are not stored yet (a new account, or a rename,
+    // moments before its client uploads them): try again later, never a
+    // permanent refusal.
+    let public_key = public_key.ok_or_else(try_later)?;
     let reserved = crate::storage_pool::reserved(&state.pool, user_id, Default::default())
         .await
         .map_err(|_| try_later())?;
