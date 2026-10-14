@@ -121,15 +121,22 @@ export class VerifiedIndex {
     if (this.covered && this.revisions.get(id) !== revision) throw new NotInVerifiedIndexError(this.scope, id)
   }
 
-  /** Refuses a listing whose ids are not exactly the covered index's. */
-  expectListing(ids: Iterable<string>): void {
+  /**
+   * Refuses a listing whose ids are not exactly the covered index's, or,
+   * with `prefix`, exactly its ids that start with it (one kind of a scope
+   * that holds several: `folder:` of `mailNames`).
+   */
+  expectListing(ids: Iterable<string>, prefix?: string): void {
     if (!this.covered) return
+    const expected = prefix === undefined ? this.revisions.size : [...this.revisions.keys()].filter((id) => id.startsWith(prefix)).length
     const seen = new Set<string>()
     for (const id of ids) {
-      if (!this.revisions.has(id) || seen.has(id)) throw new NotInVerifiedIndexError(this.scope, null)
+      if (!this.revisions.has(id) || seen.has(id) || (prefix !== undefined && !id.startsWith(prefix))) {
+        throw new NotInVerifiedIndexError(this.scope, null)
+      }
       seen.add(id)
     }
-    if (seen.size !== this.revisions.size) throw new NotInVerifiedIndexError(this.scope, null)
+    if (seen.size !== expected) throw new NotInVerifiedIndexError(this.scope, null)
   }
 }
 

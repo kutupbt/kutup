@@ -421,5 +421,8 @@
     "reanchoredFork": "Continued with the server's other history (#{{from}} → #{{to}})",
     "reanchoredTooOld": "Caught up after a long time (#{{from}} → #{{to}})",
     "forgotten": "Continued after the server lost its history (was #{{from}})"
+  },
+  "mailPlaces": {
+    "unnamedFolder": "Unnamed folder"
   }
 }

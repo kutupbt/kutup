@@ -330,6 +330,13 @@ describe('indexes', () => {
     expect(() => index.expectListing(['a', 'a'])).toThrow(NotInVerifiedIndexError)
     // Uncovered: nothing to hold it to yet.
     new VerifiedIndex('contacts', false, [], null).expectListing(['x'])
+    // One kind of a scope that holds several.
+    const names = new VerifiedIndex('mailNames', true, [['folder:a', 1], ['label:b', 2], ['folder:c', 3]], null)
+    names.expectListing(['folder:c', 'folder:a'], 'folder:')
+    names.expectListing(['label:b'], 'label:')
+    names.expectListing([], 'filter:')
+    expect(() => names.expectListing(['folder:a'], 'folder:')).toThrow(NotInVerifiedIndexError)
+    expect(() => names.expectListing(['folder:a', 'folder:c', 'label:b'], 'folder:')).toThrow(NotInVerifiedIndexError)
   })
 })
 

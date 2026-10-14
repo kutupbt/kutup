@@ -421,5 +421,8 @@
     "reanchoredFork": "Sunucudaki diğer geçmişle devam edildi (#{{from}} → #{{to}})",
     "reanchoredTooOld": "Uzun bir aradan sonra güncellendi (#{{from}} → #{{to}})",
     "forgotten": "Sunucu geçmişini yitirdikten sonra devam edildi (önceki #{{from}})"
+  },
+  "mailPlaces": {
+    "unnamedFolder": "Adsız klasör"
   }
 }
