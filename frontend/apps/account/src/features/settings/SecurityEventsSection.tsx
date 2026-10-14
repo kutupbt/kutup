@@ -1,3 +1,5 @@
+import { isAxiosError } from 'axios'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -18,6 +20,14 @@ export function SecurityEventsSection() {
   const { t, i18n } = useTranslation()
   const events = useSecurityEvents()
   const list = events.data?.pages.flatMap((page) => page.events) ?? []
+  // A cursor the server no longer knows (400): start again from the newest.
+  const staleCursor =
+    events.isFetchNextPageError && isAxiosError(events.error) && events.error.response?.status === 400
+  const { refetch } = events
+  useEffect(() => {
+    // Refetching an infinite query starts from its first page.
+    if (staleCursor) void refetch({ cancelRefetch: false })
+  }, [staleCursor, refetch])
   const device = (event: (typeof list)[number]) => {
     const where = securityEventDevice(event)
     return where ? t(where.key, where.values) : null
@@ -29,7 +39,7 @@ export function SecurityEventsSection() {
         <CardContent className="p-5">
           {events.isPending ? (
             <LoadingPanel label={t('common.loading')} />
-          ) : events.isError ? (
+          ) : events.isError && !staleCursor ? (
             <Alert variant="error">{t('settings.security.events.failed')}</Alert>
           ) : list.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('settings.security.events.none')}</p>

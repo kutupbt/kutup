@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { createHmac } from 'node:crypto'
 import { expect, test, type Page } from '@playwright/test'
 import { appUrl, newAccount, registerAccount, submitThroughRateLimit } from '../fixtures/apps'
@@ -105,4 +106,40 @@ test('the password is changed, guarded by a second factor, and reset with the re
   await expect(listed.getByRole('listitem').filter({ hasText: 'Password reset with the recovery phrase' })).toBeVisible()
   await expect(listed.getByRole('listitem').filter({ hasText: 'Password reset with the recovery phrase' }).getByText('This device')).toHaveCount(0)
   await recovering.close()
+})
+
+// A new OPAQUE setup on the server (docs/plans/opaque.md, rotation): the
+// record moves at the account's next sign-in, silently, once, and the owner
+// sees it. Restarting the server under a newer key takes the test stack's
+// own command, so this runs only where one is given (E2E_OPAQUE_ROTATE; see
+// tests/e2e/README.md).
+test('a new server setup moves the password record at the next sign-in, once', async ({ browser }) => {
+  const rotate = process.env.E2E_OPAQUE_ROTATE
+  test.skip(!rotate, 'E2E_OPAQUE_ROTATE: a command that makes a newer OPAQUE setup key current and restarts the server')
+  test.slow()
+  const account = newAccount('opaquerot', FIRST)
+  const made = await browser.newContext()
+  await registerAccount(made, account)
+  await made.close()
+
+  execSync(rotate!, { stdio: 'inherit', timeout: 300_000 })
+
+  const refreshed = (page: Page) =>
+    page.getByRole('list', { name: 'Security events' }).getByRole('listitem').filter({ hasText: 'Your sign-in was refreshed' })
+  const first = await browser.newContext()
+  const tab = await first.newPage()
+  await signIn(tab, account.username, FIRST, 'Welcome')
+  await tab.goto(appUrl('account', '/settings/security'))
+  await expect(refreshed(tab).filter({ hasText: 'This device' })).toBeVisible({ timeout: 30_000 })
+  await first.close()
+
+  // Moved: the same password still signs in, a wrong one still fails, and
+  // nothing moves again.
+  const again = await browser.newContext()
+  const next = await again.newPage()
+  await signIn(next, account.username, 'Not*TheRightPassword1', 'failed')
+  await signIn(next, account.username, FIRST, 'Welcome')
+  await next.goto(appUrl('account', '/settings/security'))
+  await expect(refreshed(next)).toHaveCount(1)
+  await again.close()
 })

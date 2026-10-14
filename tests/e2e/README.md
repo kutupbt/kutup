@@ -98,6 +98,19 @@ Mail, and sets it back to "Everyone"; no restart is needed, since the stored
 setting wins over the variable after the first start. CI's `Mail browser
 specs` job on master runs the Mail and Contacts lines on a stack of its own.
 
+## OPAQUE setup rotation
+
+Spec 156's rotation test restarts the server under a newer OPAQUE setup key
+(`docs/plans/opaque.md`), which only the stack's owner can do. It runs when
+`E2E_OPAQUE_ROTATE` holds a shell command that does that and returns once the
+API answers again. Otherwise it is skipped, as in CI. For a Compose stack:
+
+1. Append `,<next id>:<base64 of 32 random bytes>` to `OPAQUE_SETUP_KEYS`. The
+   highest id is current; keep every key so that the stack still opens its
+   stored setups afterwards.
+2. Run `docker compose up -d --no-build --wait backend` with the new list.
+3. Poll `/api/health` until it answers.
+
 ## Required Chat backup gates
 
 Use the repository scripts from the workspace root. They own disposable Compose
