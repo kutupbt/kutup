@@ -137,6 +137,22 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken:
     Ok(data.claims)
 }
 
+/// Whether `token` is one this server signed as a setup token, expired or
+/// not: only to say which refusal a client gets (an expired setup token
+/// means signing in again), never to accept it.
+pub fn is_setup_token_signed(token: &str, secret: &str) -> bool {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = false;
+    validation.validate_aud = false;
+    validation.required_spec_claims.clear();
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .is_ok_and(|data| data.claims.sub == "setup")
+}
+
 /// Validates a setup token: its user id and credential epoch.
 pub fn validate_setup_token(token: &str, secret: &str) -> Result<(String, Vec<u8>), String> {
     special(token, secret, "setup")
@@ -199,6 +215,22 @@ mod tests {
             ("u3".to_string(), vec![3; 16])
         );
         assert!(validate_setup_token(&pre, SECRET).is_err());
+    }
+
+    #[test]
+    fn an_expired_setup_token_is_still_known_as_one() {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let mut claims = base_claims("u7", false, "setup", SETUP_TTL_SECS);
+        claims.exp = now - 10;
+        let expired = sign(&claims, SECRET).unwrap();
+        assert!(validate_setup_token(&expired, SECRET).is_err());
+        assert!(is_setup_token_signed(&expired, SECRET));
+        let access = generate_access_token("u7", false, "s7", SECRET).unwrap();
+        assert!(!is_setup_token_signed(&access, SECRET));
+        assert!(!is_setup_token_signed(
+            &expired,
+            "another-secret-also-32-bytes-long-yeah"
+        ));
     }
 
     #[test]

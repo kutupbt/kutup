@@ -574,6 +574,10 @@ pub async fn register_start(
             // account: its temporary password, under a new key binding.
             Some(token) => {
                 if crate::jwt::validate_setup_token(&token, &state.config.jwt_secret).is_err() {
+                    // A setup token past its time: sign in again.
+                    if crate::jwt::is_setup_token_signed(&token, &state.config.jwt_secret) {
+                        return Err(crate::handlers::auth::setup_token_invalid());
+                    }
                     let caller = crate::middleware::authenticate_access_token(&state, &token)
                         .await
                         .map_err(|_| AppError::unauthorized("invalid token"))?;

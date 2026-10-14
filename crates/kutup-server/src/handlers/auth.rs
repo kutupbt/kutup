@@ -1569,7 +1569,7 @@ fn pre_auth_invalid() -> AppError {
 
 /// The first sign-in's setup token is expired, not one, already used, or from
 /// a temporary password since replaced: sign in again.
-fn setup_token_invalid() -> AppError {
+pub(crate) fn setup_token_invalid() -> AppError {
     AppError::unauthorized("sign in again")
         .with_details(serde_json::json!({ "code": "setupTokenInvalid" }))
 }
