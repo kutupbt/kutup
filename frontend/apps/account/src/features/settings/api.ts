@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@kutup/session/client'
+import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
 import { getSession, updateSession } from '@kutup/session/store'
 import { toBase64 } from '@kutup/crypto/base64'
@@ -59,11 +60,18 @@ export function useStartTotp() {
   })
 }
 
+/** A code, and the account password that allows the change (a `totp` grant, made at the last moment). */
+export interface TotpChange {
+  code: string
+  password: OneUseSecret
+}
+
 export function useVerifyTotp() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (code: string) => {
-      await api.post('/user/2fa/verify', { code })
+    mutationFn: async ({ code, password }: TotpChange) => {
+      const grant = await accountGrant(password.take(), 'totp')
+      await api.post('/user/2fa/verify', { code, grant })
     },
     onSuccess: async () => {
       updateSession({ totpEnabled: true })
@@ -75,8 +83,9 @@ export function useVerifyTotp() {
 export function useDisableTotp() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (code: string) => {
-      await api.delete('/user/2fa', { data: { code } })
+    mutationFn: async ({ code, password }: TotpChange) => {
+      const grant = await accountGrant(password.take(), 'totp')
+      await api.delete('/user/2fa', { data: { code, grant } })
     },
     onSuccess: async () => {
       updateSession({ totpEnabled: false })
@@ -199,6 +208,10 @@ export interface SecurityEvent {
   at: string
   /** Made by the session asking (this device). */
   thisSession: boolean
+  /** The kind of session that made it (`web-account`, `cli`, …), as the session list has it; null for a recovery or an administrator's reset. */
+  client: string | null
+  /** That session's User-Agent; null as `client` is. */
+  userAgent: string | null
   /** Done by an administrator. */
   byAdmin: boolean
 }

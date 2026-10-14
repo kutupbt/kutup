@@ -41,6 +41,25 @@ export class WrongPasswordError extends Error {
 }
 
 /**
+ * A password handed to a mutation that is read once, then gone: react-query
+ * keeps a mutation's variables (`mutation.variables`) until it is reset.
+ */
+export class OneUseSecret {
+  #value: string | null
+
+  constructor(value: string) {
+    this.#value = value
+  }
+
+  take(): string {
+    const value = this.#value
+    this.#value = null
+    if (value === null) throw new Error('the password was already used')
+    return value
+  }
+}
+
+/**
  * A grant for `purpose`, for the signed-in account's `password`. Throws
  * {@link WrongPasswordError} for a wrong password, {@link ReauthLockedError}
  * during the lockout, and the request's error when Kutup cannot be reached.

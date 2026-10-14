@@ -13,7 +13,7 @@ import {
 import api from './client'
 
 /** What a grant authorizes (one use, a few minutes, bound to the account). */
-export type GrantPurpose = 'pass' | 'passwordChange' | 'totp' | 'deleteAccount' | 'adminReset'
+export type GrantPurpose = 'pass' | 'passwordChange' | 'totp' | 'adminReset'
 
 interface LoginStartResponse {
   loginId: string

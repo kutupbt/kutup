@@ -203,6 +203,8 @@
       "changePassword": "Parolayı değiştir",
       "passwordChanged": "Parola değiştirildi. Diğer cihazlarınızın oturumu kapatıldı.",
       "wrongCurrentPassword": "Geçerli parolanız doğru değil.",
+      "yourPassword": "Kutup parolanız",
+      "wrongPassword": "Bu, Kutup parolanız değil.",
       "passwordChangeFailed": "Parola değiştirilemedi. Yeniden deneyin.",
       "passwordSignsOutOthers": "Hesabınıza giriş yapmış diğer tüm cihazların oturumu kapatılır. Bu cihaz oturumda kalır.",
       "events": {
@@ -213,6 +215,7 @@
         "older": "Daha eski olayları göster",
         "byAdmin": "Bir yönetici tarafından",
         "thisDevice": "Bu cihaz",
+        "device": "{{device}}",
         "kind": {
           "passwordChange": "Parola değiştirildi",
           "recovery": "Parola kurtarma ifadesiyle sıfırlandı",

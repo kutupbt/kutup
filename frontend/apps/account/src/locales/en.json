@@ -203,6 +203,8 @@
       "changePassword": "Change password",
       "passwordChanged": "Password changed. Your other devices are signed out.",
       "wrongCurrentPassword": "Your current password is not right.",
+      "yourPassword": "Your Kutup password",
+      "wrongPassword": "That is not your Kutup password.",
       "passwordChangeFailed": "The password could not be changed. Try again.",
       "passwordSignsOutOthers": "Every other device signed in to your account is signed out. This one stays signed in.",
       "events": {
@@ -213,6 +215,7 @@
         "older": "Show older events",
         "byAdmin": "By an administrator",
         "thisDevice": "This device",
+        "device": "{{device}}",
         "kind": {
           "passwordChange": "Password changed",
           "recovery": "Password reset with the recovery phrase",

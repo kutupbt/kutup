@@ -7,7 +7,7 @@ import { Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { useSecurityEvents } from './api'
-import { securityEventLabel } from './securityEvents'
+import { securityEventDevice, securityEventLabel } from './securityEvents'
 
 /**
  * Changes to how this account signs in (docs/plans/opaque.md), newest
@@ -18,6 +18,10 @@ export function SecurityEventsSection() {
   const { t, i18n } = useTranslation()
   const events = useSecurityEvents()
   const list = events.data?.pages.flatMap((page) => page.events) ?? []
+  const device = (event: (typeof list)[number]) => {
+    const where = securityEventDevice(event)
+    return where ? t(where.key, where.values) : null
+  }
 
   return (
     <Section title={t('settings.security.events.title')} description={t('settings.security.events.description')}>
@@ -34,6 +38,7 @@ export function SecurityEventsSection() {
               {list.map((event) => (
                 <li key={event.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm first:pt-0 last:pb-0">
                   <span className="font-medium">{t(securityEventLabel(event))}</span>
+                  {device(event) ? <span className="text-muted-foreground">{device(event)}</span> : null}
                   {event.byAdmin ? <Badge variant="warn">{t('settings.security.events.byAdmin')}</Badge> : null}
                   {event.thisSession ? <Badge variant="neutral">{t('settings.security.events.thisDevice')}</Badge> : null}
                   <time className="ml-auto text-muted-foreground" dateTime={event.at}>

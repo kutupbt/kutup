@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { conflictCode, opaqueRegister } from '@kutup/session/opaque'
-import { accountGrant } from '@kutup/session/reauth'
+import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import api from '@kutup/session/client'
 import type {
   AdminActivityResponse,
@@ -79,24 +79,6 @@ async function temporaryPassword(tempPassword: string, auth: { grant: string } |
   }
 }
 
-/**
- * A password handed to a mutation that is read once, then gone: react-query
- * keeps a mutation's variables (`mutation.variables`) until it is reset.
- */
-export class OneUseSecret {
-  #value: string | null
-
-  constructor(value: string) {
-    this.#value = value
-  }
-
-  take(): string {
-    const value = this.#value
-    this.#value = null
-    if (value === null) throw new Error('the password was already used')
-    return value
-  }
-}
 
 /**
  * A grant to reset `id`: the administrator proves their own password first

@@ -23,7 +23,6 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import {
-  OneUseSecret,
   useAdminUsers,
   useDeleteUser,
   useForceDisable2fa,
@@ -32,6 +31,7 @@ import {
   useUserRegistrationCode,
   useWipeUser,
 } from './api'
+import { OneUseSecret } from '@kutup/session/reauth'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
 import { MailSendingCard } from './MailSending'
 import { UserStatus } from './UsersPage'
