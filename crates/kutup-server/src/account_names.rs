@@ -365,6 +365,87 @@ mod tests {
         );
     }
 
+    /// The resolver finds the account whose current name is typed, in any
+    /// spelling, and no other: not another account's, not a held name's
+    /// (`kutup_current_user`'s parameter once shared the name of a column of
+    /// `account_names`, and the lookup compared every row with its own name).
+    #[tokio::test]
+    async fn live_the_resolver_finds_only_the_named_current_account() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let tag = &a.simple().to_string()[..10];
+        let (name_a, name_b, held_a) = (
+            format!("res_a{tag}"),
+            format!("resb{tag}"),
+            format!("old_a{tag}"),
+        );
+        for (id, name) in [(a, &name_a), (b, &name_b)] {
+            sqlx::query(
+                "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                    drive_private_key_envelope, public_key, account_authority_public_key,
+                    account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+                 VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+            )
+            .bind(id)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for (name, user_id, state, free) in [
+            (&name_a, a, "current", None),
+            (&name_b, b, "current", None),
+            (&held_a, a, "held", Some("+30 days")),
+        ] {
+            sqlx::query(
+                "INSERT INTO account_names (folded, name, user_id, state, free_at)
+                 VALUES (kutup_fold($1), $1, $2, $3, now() + $4::interval)",
+            )
+            .bind(name)
+            .bind(user_id)
+            .bind(state)
+            .bind(free)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let resolve = |typed: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<Uuid>>("SELECT kutup_current_user($1)")
+                    .bind(typed)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(resolve(name_a.clone()).await, Some(a));
+        assert_eq!(resolve(format!("res.a{tag}")).await, Some(a));
+        assert_eq!(resolve(format!("RES-A{tag}")).await, Some(a));
+        assert_eq!(resolve(name_b.clone()).await, Some(b));
+        assert_eq!(resolve(format!("res_b{tag}")).await, Some(b));
+        assert_eq!(resolve(held_a.clone()).await, None, "a held name");
+        assert_eq!(resolve(format!("nobody{tag}")).await, None);
+        sqlx::query("DELETE FROM account_names WHERE user_id = ANY($1)")
+            .bind(vec![a, b])
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(vec![a, b])
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
     /// The sweep: an old address past its receiving is closed, a name past
     /// its hold is freed (gone from the names, its address row freed and no
     /// longer holding the address), and a name still held stays.
