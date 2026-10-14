@@ -22,3 +22,10 @@ pub struct NotFound(pub String);
 #[derive(Debug, Error)]
 #[error("{0}")]
 pub struct UsageError(pub String);
+
+/// The server showed this device an older account history than it has seen,
+/// or another one (docs/plans/rollback-protection.md): listed writes stop
+/// until `kutup account reanchor` — exit code 6. Holds `rollback` or `fork`.
+#[derive(Debug, Error)]
+#[error("the account's data on the server is not the history this device knows ({0}): another device may have been shown a different one, or the server was restored from a backup; review, then run `kutup account reanchor`")]
+pub struct HeadBlocked(pub String);

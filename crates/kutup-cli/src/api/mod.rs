@@ -10,6 +10,7 @@
 //! methods (e.g. `tus_head` for resume) exist for completeness/future use.
 #![allow(dead_code)]
 
+pub mod account_head;
 pub mod assets;
 pub mod collab;
 pub mod devices;

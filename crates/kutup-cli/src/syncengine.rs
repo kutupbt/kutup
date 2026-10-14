@@ -301,7 +301,7 @@ pub fn sync(
     let mut result = SyncResult::default();
     let master_key = sess.master_key_bytes().context("master key")?;
     let mut peer = crate::yjs_sync::Peer::new(client, store, sess);
-    vaults.sign_in(sess)?;
+    vaults.refresh(sess)?;
     let root = PathBuf::from(local_dir);
     let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     let pair = sync_pair_id(collection_id, &canonical_root.to_string_lossy());

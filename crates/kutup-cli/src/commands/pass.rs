@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_file_meta, locate_file, FoundFile};
 use crate::output::print_json;
-use crate::vaultsync::{fetch_current, keep_secret, VaultFile};
+use crate::vaultsync::{fetch_current, forget_secret, keep_secret, verified_secrets, VaultFile};
 
 #[derive(Subcommand)]
 pub enum PassCmd {
@@ -105,6 +105,7 @@ fn keep(
         &ctx.client,
         &master_key,
         ctx.session.binding(),
+        &crate::config::data_dir(profile)?,
         file_id,
         &contents,
         password.as_deref().map(String::as_str),
@@ -119,6 +120,19 @@ fn keep(
     Ok(())
 }
 
+/// The account's vault secrets, held to the account head.
+fn secrets(
+    ctx: &crate::context::Ctx,
+    profile: &str,
+) -> Result<Vec<crate::api::pass::VaultSecretRow>> {
+    verified_secrets(
+        &ctx.client,
+        &ctx.session.master_key_bytes()?,
+        ctx.session.binding(),
+        &crate::config::data_dir(profile)?,
+    )
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KeptVault {
@@ -129,7 +143,7 @@ struct KeptVault {
 fn ls(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
     let mut vaults = Vec::new();
-    for row in ctx.client.list_vault_secrets()? {
+    for row in secrets(&ctx, profile)? {
         let name = locate(&ctx, &row.file_id)
             .map(|found| decrypt_file_meta(&found.file, &found.keys).0)
             .unwrap_or_else(|_| "[not found]".to_owned());
@@ -155,9 +169,7 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
     if !force {
         // A generated key may be kept nowhere else: forgetting it would lose
         // the vault. Not knowing counts as generated.
-        if let Some(row) = ctx
-            .client
-            .list_vault_secrets()?
+        if let Some(row) = secrets(&ctx, profile)?
             .into_iter()
             .find(|row| row.file_id == file_id)
         {
@@ -182,7 +194,13 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
             }
         }
     }
-    ctx.client.delete_vault_secret(file_id)?;
+    forget_secret(
+        &ctx.client,
+        &ctx.session.master_key_bytes()?,
+        ctx.session.binding(),
+        &crate::config::data_dir(profile)?,
+        file_id,
+    )?;
     if json {
         print_json(&serde_json::json!({ "fileId": file_id, "forgotten": true }))?;
     } else {
@@ -196,9 +214,7 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
 /// there is nothing to show for it.
 fn show_key(profile: &str, json: bool, file_id: &str) -> Result<()> {
     let ctx = require_session(profile)?;
-    let row = ctx
-        .client
-        .list_vault_secrets()?
+    let row = secrets(&ctx, profile)?
         .into_iter()
         .find(|row| row.file_id == file_id)
         .ok_or_else(|| anyhow::anyhow!("your account keeps no key for vault {file_id}"))?;

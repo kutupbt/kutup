@@ -108,6 +108,22 @@ impl Me {
     fn authority(&self) -> [u8; 32] {
         self.identity.authority_public_key()
     }
+
+    /// The account head for this profile (docs/plans/rollback-protection.md).
+    pub fn head<'a>(&self, ctx: &'a Ctx) -> Result<crate::account_head::CliHead<'a>> {
+        crate::account_head::CliHead::open(
+            &ctx.client,
+            &self.master_key,
+            &self.binding,
+            &self.identity.incarnation_id(),
+            config::data_dir(&self.profile)?,
+        )
+    }
+
+    /// This profile's sealed revision guard.
+    pub fn guard(&self) -> Result<crate::account_head::Guard> {
+        crate::account_head::CliHead::guard(&config::data_dir(&self.profile)?, &self.master_key)
+    }
 }
 
 /// Looks `account` up: here, or through their server.
@@ -164,46 +180,58 @@ fn bound(person: &Published) -> bool {
 
 // ------------------------------------------------------------------ pins
 
-fn revision_file(me: &Me) -> Result<std::path::PathBuf> {
-    Ok(config::data_dir(&me.profile)?.join("identity-pins-revision"))
-}
+/// What the revision guard calls the pin list (as the web does).
+pub const PINS_GUARD_SCOPE: &str = "identity-pins";
+pub const PINS_GUARD_ID: &str = "list";
+/// The pin list is one value of the account head's `pins` scope.
+const HEAD_SCOPE: &str = "pins";
+const HEAD_ID: &str = "pins";
 
-/// The highest revision this device has seen: a server cannot quietly hand
-/// back an older list.
-fn highest_seen(me: &Me) -> u64 {
-    revision_file(me)
-        .ok()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| text.trim().parse().ok())
-        .unwrap_or(0)
-}
-
-fn remember(me: &Me, revision: u64) {
-    if revision > highest_seen(me) {
-        if let Ok(path) = revision_file(me) {
-            let _ = std::fs::write(path, revision.to_string());
-        }
-    }
-}
-
-/// The account's pin list and its revision.
-pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
+/// Reads the list and opens it, held to `index` and to this device's guard.
+fn read_pins(
+    ctx: &Ctx,
+    me: &Me,
+    index: &crate::account_head::Index,
+) -> Result<(u64, IdentityPinsV1)> {
     let key = identity_pins::derive_key(&me.master_key)?;
+    let guard = me.guard()?;
     let (revision, list) = match ctx.client.get_identity_pins()? {
-        None => (0, IdentityPinsV1::default()),
+        None => {
+            if guard.seen(PINS_GUARD_SCOPE, PINS_GUARD_ID)? > 0 {
+                bail!("the server returned no identity pin list, though this device has seen one");
+            }
+            index.expect_listing([])?;
+            (0, IdentityPinsV1::default())
+        }
         Some(record) => {
             let sealed = STANDARD
                 .decode(&record.envelope)
                 .context("identity pins are not base64")?;
             let (list, revision) = identity_pins::open(&key, &me.binding, &sealed)?;
+            index.expect(HEAD_ID, revision)?;
             (revision, list)
         }
     };
-    if revision < highest_seen(me) {
-        bail!("the server returned an older identity pin list than this device has seen");
+    if revision > 0 {
+        guard
+            .accept(PINS_GUARD_SCOPE, PINS_GUARD_ID, revision)
+            .context("the server returned an older identity pin list than this device has seen")?;
     }
-    remember(me, revision);
     Ok((revision, list))
+}
+
+/// The account's pin list and its revision, held to the account head (read
+/// again once when a write landed between the two reads).
+pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
+    let mut head = me.head(ctx)?;
+    let index = head.index(HEAD_SCOPE)?;
+    match read_pins(ctx, me, &index) {
+        Ok(read) => Ok(read),
+        Err(_) => {
+            let index = head.index(HEAD_SCOPE)?;
+            read_pins(ctx, me, &index)
+        }
+    }
 }
 
 fn now_millis() -> u64 {
@@ -221,29 +249,46 @@ fn now_seconds() -> u64 {
 }
 
 /// Records `update` about `account` at `authority` (the rules every app shares:
-/// `identity_pins::record`); merges with whatever another app stored meanwhile.
+/// `identity_pins::record`) with the next account head; merges with whatever
+/// another app stored meanwhile.
 fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) -> Result<Recorded> {
     let key = identity_pins::derive_key(&me.master_key)?;
-    for _ in 0..5 {
-        let (revision, mut list) = load_pins(ctx, me)?;
+    let guard = me.guard()?;
+    let guard = &guard;
+    let mut head = me.head(ctx)?;
+    let mut outcome = None;
+    head.listed_write(HEAD_SCOPE, |index, _attempt| {
+        let (revision, mut list) = read_pins(ctx, me, index)?;
         let before = list.clone();
         let since = identity_pins::since_from_unix(now_seconds());
         let recorded = identity_pins::record(&mut list, account, authority, update, &since)?;
+        outcome = Some(recorded.clone());
         if list == before {
-            return Ok(recorded);
+            return Ok(None);
         }
         // A time, above every revision seen (docs/plans/drive-identity-pins.md).
-        let next = now_millis().max(revision + 1).max(highest_seen(me) + 1);
+        let next = guard
+            .next(PINS_GUARD_SCOPE, PINS_GUARD_ID, revision)?
+            .max(now_millis());
         let sealed = identity_pins::seal(&key, &me.binding, next, &list)?;
-        if ctx.client.put_identity_pins(&IdentityPinsWrite {
-            base_revision: revision,
-            envelope: STANDARD.encode(sealed),
-        })? {
-            remember(me, next);
-            return Ok(recorded);
-        }
-    }
-    bail!("the identity pin list kept changing")
+        let envelope = STANDARD.encode(sealed);
+        Ok(Some(crate::account_head::Edit {
+            changes: vec![(HEAD_ID.to_owned(), Some(next))],
+            send: Box::new(move |sealed_head: &str| {
+                let stored = ctx.client.put_identity_pins(&IdentityPinsWrite {
+                    base_revision: revision,
+                    envelope,
+                    head: Some(sealed_head.to_owned()),
+                })?;
+                if !stored {
+                    return Ok(None);
+                }
+                guard.accept(PINS_GUARD_SCOPE, PINS_GUARD_ID, next)?;
+                Ok(Some(()))
+            }),
+        }))
+    })?;
+    outcome.context("the identity pin list was not read")
 }
 
 // ---------------------------------------------------------------- checks
