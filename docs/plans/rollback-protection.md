@@ -208,7 +208,7 @@ Every write of a listed value also writes the next head, in the same request:
   two reads never looks like a rollback. An unknown scope is `404`, which the
   client treats as `Uncovered`. All three are limited per account (300 a
   minute).
-- **Value ids per scope:** a contact's id; `folder:`, `label:` or `filter:`
+- **Value ids per scope:** a contact's UID (client-chosen, unique per account, never changed); `folder:`, `label:` or `filter:`
   and the id for mail names; `pins`; a Pass secret's vault file id.
 
 **Audit: every write to a listed value, and its head.**
