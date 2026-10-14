@@ -41,7 +41,7 @@ CREATE TABLE opaque_login_states (
     purpose text NOT NULL CHECK (purpose IN ('session', 'reauth')),
     -- Reauth only: the signed-in session asking, and what its grant is for.
     session_id uuid REFERENCES auth_sessions(id) ON DELETE CASCADE,
-    grant_for text CHECK (grant_for IN ('pass', 'passwordChange', 'totp', 'adminReset')),
+    grant_for text CHECK (grant_for IN ('pass', 'passwordChange', 'totp', 'adminReset', 'verify')),
     source text NOT NULL,
     -- The lockout key as auth_check makes it (it holds a NUL: bytes, not text).
     lockout_key bytea NOT NULL,

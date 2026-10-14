@@ -339,7 +339,7 @@ third sessions (2026-10-13). The wire is the one above, plus the addendum.
   updates the row first and ends sessions and grants in the same
   transaction, so a sign-in that straddles it never outlives it.
 - **Reauth:** `for` is one of `pass`, `passwordChange`, `totp`,
-  `adminReset`. The account is compared by user id, and the
+  `adminReset`, or `verify` (the password checked, no grant kept: Pass unlock). The account is compared by user id, and the
   finish must come from the session that started it.
 - **Registration:**
   - `register/start` checks a grant without using it, and needs a grant, the

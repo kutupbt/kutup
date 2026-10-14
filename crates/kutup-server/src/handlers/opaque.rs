@@ -66,9 +66,33 @@ pub struct LoginStartRequest {
     #[serde(default = "session_purpose")]
     purpose: String,
     /// Reauth only: what the grant is for (`pass`, `passwordChange`, `totp`,
-    /// `adminReset`).
+    /// `adminReset`), or `verify`: the password checked, no grant.
     #[serde(default, rename = "for")]
     grant_for: Option<String>,
+}
+
+/// What a reauth is for: a one-time grant for one action, or (`verify`) the
+/// password checked and nothing kept (unlocking Pass on this device).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReauthFor {
+    Grant(Purpose),
+    Verify,
+}
+
+impl ReauthFor {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "verify" => Some(ReauthFor::Verify),
+            name => Purpose::for_reauth(name).map(ReauthFor::Grant),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            ReauthFor::Grant(purpose) => purpose.as_str(),
+            ReauthFor::Verify => "verify",
+        }
+    }
 }
 
 fn session_purpose() -> String {
@@ -120,7 +144,7 @@ pub async fn login_start(
             let grant_for = req
                 .grant_for
                 .as_deref()
-                .and_then(Purpose::for_reauth)
+                .and_then(ReauthFor::parse)
                 .ok_or_else(|| AppError::bad_request("reauth needs a valid for"))?;
             let token = crate::middleware::bearer_from_headers(&headers)
                 .ok_or_else(|| AppError::unauthorized("reauth needs a session"))?;
@@ -382,9 +406,9 @@ pub async fn login_finish(
         if Some(caller.session.session_id) != session_id {
             return Err(AppError::invalid_credentials());
         }
-        let purpose = grant_for
+        let reauth_for = grant_for
             .as_deref()
-            .and_then(Purpose::for_reauth)
+            .and_then(ReauthFor::parse)
             .ok_or_else(|| AppError::internal("reauth purpose"))?;
         // Only while the password proved is still the account's.
         let mut tx = state.pool.begin().await?;
@@ -394,6 +418,11 @@ pub async fn login_finish(
         {
             return Err(AppError::invalid_credentials());
         }
+        let ReauthFor::Grant(purpose) = reauth_for else {
+            // The password checked, under the same lockout; nothing kept.
+            tx.commit().await?;
+            return Ok(Json(serde_json::json!({ "ok": true })).into_response());
+        };
         let grant = grants::issue(
             &mut *tx,
             purpose,

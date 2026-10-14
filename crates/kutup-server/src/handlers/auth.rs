@@ -789,6 +789,7 @@ pub(crate) async fn signed_in_answer(
         &color,
         &envelope_binding,
         epoch,
+        AppError::invalid_credentials,
     )
     .await
 }
@@ -817,7 +818,7 @@ pub async fn login_two_fa(
 
     let (user_id, epoch) =
         jwt::validate_pre_auth_token(&req.pre_auth_token, &state.config.jwt_secret)
-            .map_err(|_| AppError::unauthorized("invalid pre-auth token"))?;
+            .map_err(|_| pre_auth_invalid())?;
 
     type Row = (
         Option<String>,
@@ -875,7 +876,9 @@ pub async fn login_two_fa(
                 "too many failed attempts, please log in again",
             ));
         }
-        return Err(AppError::unauthorized("invalid TOTP code"));
+        // A wrong code: try the code again (the token still holds).
+        return Err(AppError::unauthorized("invalid TOTP code")
+            .with_details(serde_json::json!({ "code": "invalidCredentials" })));
     }
     ratelimit::record_totp_attempt(&req.pre_auth_token, true);
 
@@ -894,6 +897,7 @@ pub async fn login_two_fa(
         &color,
         &envelope_binding,
         &epoch,
+        pre_auth_invalid,
     )
     .await
 }
@@ -1413,7 +1417,7 @@ pub async fn complete_setup(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
     let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid setup token"))?;
+        .map_err(|_| setup_token_invalid())?;
 
     let account: Option<(bool, String)> =
         sqlx::query_as("SELECT is_active, COALESCE(username, '') FROM users WHERE id = $1")
@@ -1502,11 +1506,9 @@ pub async fn complete_setup(
         Err(err) if matches!(&err, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")) => {
             return Err(map_insert_conflict(err))
         }
-        _ => {
-            return Err(AppError::bad_request(
-                "setup already completed or user not found",
-            ))
-        }
+        // Done already, or the temporary password changed since this
+        // token's sign-in (an admin reset): sign in again.
+        _ => return Err(setup_token_invalid()),
     }
     crate::grants::end_all(&mut tx, uid).await?;
     tx.commit().await?;
@@ -1525,7 +1527,7 @@ pub async fn complete_setup(
     tx.commit().await?;
     if held.is_none() {
         sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
-        return Err(AppError::invalid_credentials());
+        return Err(setup_token_invalid());
     }
     let access = jwt::generate_access_token(
         &user_id,
@@ -1556,6 +1558,21 @@ pub async fn complete_setup(
 }
 
 // --- helpers ---
+
+/// The 2FA step's token is expired, not one, or from a password the account
+/// no longer has: back to the password step (a wrong code is
+/// `invalidCredentials`, and the token still holds).
+fn pre_auth_invalid() -> AppError {
+    AppError::unauthorized("sign in again")
+        .with_details(serde_json::json!({ "code": "preAuthInvalid" }))
+}
+
+/// The first sign-in's setup token is expired, not one, already used, or from
+/// a temporary password since replaced: sign in again.
+fn setup_token_invalid() -> AppError {
+    AppError::unauthorized("sign in again")
+        .with_details(serde_json::json!({ "code": "setupTokenInvalid" }))
+}
 
 /// Inside `tx`: whether the account still holds the credential whose epoch
 /// (`auth_check::credential_epoch`) a sign-in proved, and if so its record's
@@ -1619,6 +1636,7 @@ async fn issue_tokens_and_respond(
     color: &str,
     envelope_binding: &str,
     epoch: &[u8],
+    stale: fn() -> AppError,
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
@@ -1628,7 +1646,7 @@ async fn issue_tokens_and_respond(
     let Some(record_key) = credential_held(&mut tx, uid, epoch).await? else {
         drop(tx);
         sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
-        return Err(AppError::invalid_credentials());
+        return Err(stale());
     };
     // Registered under a setup that is no longer the current one: moved by
     // the client now, while it holds the password (docs/plans/opaque.md §5).

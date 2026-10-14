@@ -37,7 +37,9 @@ Specific codes, where an app does something particular (a test in
 
 | Code | Status | Meaning |
 |---|---|---|
-| `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id (not an expired session) |
+| `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
+| `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
+| `setupTokenInvalid` | 401 | `complete-setup`: the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
@@ -302,8 +304,10 @@ session (`400` otherwise)
 
 `purpose` is `session` (sign-in, the default) or `reauth`: a signed-in person
 proving the password again for a grant, `for` one of `pass`, `passwordChange`,
-`totp`, `adminReset`. A reauth counts against the account's
-lockout and ceiling as a sign-in does.
+`totp`, `adminReset`; or `for: "verify"`, the password checked and nothing
+kept (`login/finish` answers `{"ok": true}` and stores no grant; Pass unlock
+uses it). A reauth counts against the account's lockout and ceiling as a
+sign-in does.
 
 **Response:** `{ "loginId": "<uuid>", "credentialResponse": "<base64 KE2>", "suite": 1 }`.
 

@@ -536,6 +536,52 @@ fn two_step_sign_in_changes_take_the_password() {
         .send()
         .unwrap();
     assert_eq!(again.status(), StatusCode::CONFLICT);
+    // The second step: a wrong code is tried again, a token that is no
+    // longer good goes back to the password.
+    let second_step = |token: &str, code: &str| {
+        let r = c
+            .post(format!("{base}/api/auth/login/2fa"))
+            .header("x-kutup-client", "cli")
+            .json(&json!({ "preAuthToken": token, "code": code }))
+            .send()
+            .unwrap();
+        let status = r.status();
+        (
+            status,
+            r.json::<Value>().unwrap_or(Value::Null)["code"].clone(),
+        )
+    };
+    let first = sign_in(&c, &base, &user.username, &user.password);
+    let pre_auth = first["preAuthToken"]
+        .as_str()
+        .expect("the second step")
+        .to_owned();
+    let wrong = if code() == "000000" {
+        "111111"
+    } else {
+        "000000"
+    };
+    assert_eq!(
+        second_step(&pre_auth, wrong),
+        (StatusCode::UNAUTHORIZED, json!("invalidCredentials"))
+    );
+    assert_eq!(
+        second_step("not-a-token", &code()),
+        (StatusCode::UNAUTHORIZED, json!("preAuthInvalid"))
+    );
+    // A new password between the two steps: the token is over.
+    let mut user = user;
+    let grant = reauth_grant(&c, &base, &user, "passwordChange");
+    let changed = "two-step-new-password-1";
+    assert_eq!(
+        set_password(&c, &base, &user, &grant, Some(&user.token), changed),
+        StatusCode::NO_CONTENT
+    );
+    user.password = changed.to_owned();
+    assert_eq!(
+        second_step(&pre_auth, &code()),
+        (StatusCode::UNAUTHORIZED, json!("preAuthInvalid"))
+    );
     let disable = |grant: &str| {
         bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
             .json(&json!({ "code": code(), "grant": grant }))
@@ -548,5 +594,36 @@ fn two_step_sign_in_changes_take_the_password() {
         disable(&reauth_grant(&c, &base, &user, "totp")),
         StatusCode::OK
     );
+    purge_accounts(&c, &base, &[&user]);
+}
+
+#[test]
+fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let (status, body, _) = opaque_login(
+        &c,
+        &base,
+        &user.username,
+        &user.password,
+        "reauth",
+        Some("verify"),
+        Some(&user.token),
+    );
+    assert_eq!((status, body), (StatusCode::OK, json!({ "ok": true })));
+    // Nor is a setup token anything but one.
+    let r = c
+        .post(format!("{base}/api/auth/complete-setup"))
+        .header("x-kutup-client", "cli")
+        .bearer_auth("not-a-token")
+        .json(&json!({}))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "setupTokenInvalid");
     purge_accounts(&c, &base, &[&user]);
 }
