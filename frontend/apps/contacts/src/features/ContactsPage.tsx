@@ -74,7 +74,7 @@ export function ContactsPage() {
 
   function deleteChosen() {
     remove.mutate(
-      chosen.map((contact) => contact.id),
+      chosen.map((contact) => ({ id: contact.id, uid: contact.uid })),
       {
         onSuccess: () => {
           toast.success(t('contacts.deleted', { count: chosen.length }))

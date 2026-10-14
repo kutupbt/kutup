@@ -161,7 +161,7 @@ export function ContactView({ contact, groups, backTo }: { contact: Contact; gro
         error={remove.error}
         errorFallback={t('contacts.deleteFailed')}
         onConfirm={() =>
-          remove.mutate([contact.id], {
+          remove.mutate([{ id: contact.id, uid: contact.uid }], {
             onSuccess: () => {
               setConfirming(false)
               toast.success(t('contacts.deleted', { count: 1 }))
