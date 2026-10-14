@@ -105,9 +105,13 @@ fn a_new_password_ends_the_other_sign_ins_and_keeps_the_master_key() {
         .unwrap()
         .to_owned();
     let new_password = "a-new-password-654321";
+    // A grant that does not fit is refused at register/start already.
     let change = |grant: &str, token: Option<&str>| {
         let (record, key_id, export_key) =
-            opaque_register(&c, &base, new_password, &user.binding, Some(grant), None);
+            match try_opaque_register(&c, &base, new_password, &user.binding, Some(grant), None) {
+                Ok(registered) => registered,
+                Err((status, _)) => return status,
+            };
         let mut request = c
             .post(format!("{base}/api/auth/opaque/register/finish"))
             .json(&json!({
@@ -198,8 +202,11 @@ fn a_recovery_sets_a_new_password_and_ends_every_sign_in() {
             .unwrap()
     };
     assert_eq!(grant_for(&[7u8; 32]).status(), StatusCode::UNAUTHORIZED);
-    let grant: Value = grant_for(proof.as_slice()).json().unwrap();
-    let grant = grant["grant"].as_str().unwrap().to_owned();
+    let granted: Value = grant_for(proof.as_slice()).json().unwrap();
+    let grant = granted["grant"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recovery grant: {granted}"))
+        .to_owned();
     let new_password = "recovered-password-112233";
     let (record, key_id, export_key) =
         opaque_register(&c, &base, new_password, &user.binding, Some(&grant), None);

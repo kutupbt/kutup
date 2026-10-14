@@ -16,6 +16,8 @@ export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 export RATE_LIMIT_LOGIN_PER_MIN=1000
 export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
 export RATE_LIMIT_REGISTER_PER_HOUR=1000
+# Recovery grants and preflights, from several tests in an hour.
+export RATE_LIMIT_RECOVERY_PER_HOUR=1000
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
