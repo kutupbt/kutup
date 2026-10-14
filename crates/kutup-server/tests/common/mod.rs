@@ -98,6 +98,13 @@ pub fn register_named(c: &Client, base: &str, username: &str) -> StatusCode {
     }
 }
 
+/// Registers `username` exactly (any spelling the server takes): the user,
+/// or the status it was refused with.
+#[allow(dead_code)]
+pub fn register_as(c: &Client, base: &str, username: &str) -> Result<User, StatusCode> {
+    register_attempt(c, base, true, username.to_owned())
+}
+
 fn register_with(c: &Client, base: &str, binding: bool) -> Result<User, StatusCode> {
     let tag = rand::thread_rng().next_u64() % 1_000_000_000;
     register_attempt(c, base, binding, format!("int{tag}"))
@@ -200,7 +207,9 @@ pub fn opaque_login(
         c.post(format!("{base}/api/auth/login/start"))
             .header("x-kutup-client", "cli")
             .json(&json!({
-                "name": name, "credentialRequest": b64(&request),
+                // A reauth names no account: it is the session's own.
+                "name": (purpose != "reauth").then_some(name),
+                "credentialRequest": b64(&request),
                 "purpose": purpose, "for": grant_for,
             })),
     )

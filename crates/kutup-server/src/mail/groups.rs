@@ -72,20 +72,6 @@ pub async fn find<'e, E: PgExecutor<'e>>(
     .await
 }
 
-/// Whether `username` is a group's name on this server (group names and
-/// usernames share the address namespace).
-pub async fn is_group_name(pool: &PgPool, username: &str, server_name: &str) -> sqlx::Result<bool> {
-    let address = format!(
-        "{}@{}",
-        username.to_ascii_lowercase(),
-        server_name.to_ascii_lowercase()
-    );
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM mail_groups WHERE address = $1)")
-        .bind(address)
-        .fetch_one(pool)
-        .await
-}
-
 /// Who receives `group`'s mail now: its active members with a key; for a
 /// system group without any, every active administrator with a key.
 pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receiver>> {

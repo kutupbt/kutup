@@ -187,6 +187,13 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN=600 # edits sent over HTTP (the CLI editing notes), per device
 # RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=20 # collaboration device registrations, per account
 # RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN=300 # account head, chain and index reads, per account
+# RATE_LIMIT_RENAME_CHECKS_PER_15_MIN=30 # name checks before a rename, per account
+# A name an account leaves (a rename, a deletion) stays held this many days
+# before anyone may take it; a renamed account's old address receives (only)
+# for the second number of days, then bounces. Both seed the values
+# administrators set under Administration (docs/plans/username-renames.md).
+# NAME_HOLD_DAYS=180
+# OLD_ADDRESS_RECEIVE_DAYS=90
 # RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN=60 # devices another server announces, per server and share
 # RATE_LIMIT_CALL_LINK_PER_MIN=60       # opening and joining a meeting link need no account
 # RATE_LIMIT_CALL_LINK_POLL_PER_MIN=600 # a meeting's waiting room, asked about every few seconds

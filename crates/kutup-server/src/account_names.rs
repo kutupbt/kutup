@@ -8,7 +8,9 @@
 //!   current name answers; a held one is [`renamed`], with the chains, never
 //!   another account's keys;
 //! - **where a delivery goes** (Chat and MLS traffic): a held name still
-//!   reaches its account ([`routed`]), so nothing in flight is lost.
+//!   reaches its account (the delivery queries select through
+//!   `account_names` by the folded name, any state), so nothing in flight is
+//!   lost.
 //!
 //! Both fold the name first, so every spelling resolves alike, and the
 //! federated paths use the same functions as the local ones.
@@ -26,22 +28,6 @@ pub async fn current<'e, E: sqlx::PgExecutor<'e>>(
     Ok(sqlx::query_scalar(
         "SELECT n.user_id FROM account_names n JOIN users u ON u.id = n.user_id
           WHERE n.folded = kutup_fold($1) AND n.state = 'current' AND u.is_active",
-    )
-    .bind(name)
-    .fetch_optional(executor)
-    .await?
-    .flatten())
-}
-
-/// The account a delivery to `name` reaches: its current name, or one it
-/// still holds.
-pub async fn routed<'e, E: sqlx::PgExecutor<'e>>(
-    executor: E,
-    name: &str,
-) -> AppResult<Option<Uuid>> {
-    Ok(sqlx::query_scalar(
-        "SELECT n.user_id FROM account_names n JOIN users u ON u.id = n.user_id
-          WHERE n.folded = kutup_fold($1) AND u.is_active",
     )
     .bind(name)
     .fetch_optional(executor)
@@ -316,5 +302,126 @@ pub async fn renamed_or(
         Ok(Some(renamed)) => renamed,
         Ok(None) => otherwise,
         Err(error) => error,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sweep: an old address past its receiving is closed, a name past
+    /// its hold is freed (gone from the names, its address row freed and no
+    /// longer holding the address), and a name still held stays.
+    #[tokio::test]
+    async fn live_the_sweep_closes_and_frees_on_their_dates() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let user_id = Uuid::new_v4();
+        let tag = &user_id.simple().to_string()[..10];
+        let (current, closing, freeing) = (
+            format!("cur{tag}"),
+            format!("old_{tag}"),
+            format!("gone{tag}"),
+        );
+        sqlx::query(
+            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                drive_private_key_envelope, public_key, account_authority_public_key,
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+             VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+        )
+        .bind(user_id)
+        .bind(&current)
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (name, state, receive, free) in [
+            (&current, "current", None, None),
+            (&closing, "held", Some("-1 hour"), Some("+30 days")),
+            (&freeing, "held", Some("-2 days"), Some("-1 hour")),
+        ] {
+            sqlx::query(
+                "INSERT INTO account_names (folded, name, user_id, state, receive_until, free_at)
+                 VALUES (kutup_fold($1), $1, $2, $3, now() + $4::interval, now() + $5::interval)",
+            )
+            .bind(name)
+            .bind(user_id)
+            .bind(state)
+            .bind(receive)
+            .bind(free)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO mail_addresses (user_id, address, folded, state, receive_until)
+                 VALUES ($1, $2 || '@sweep.test', kutup_fold($2) || '@sweep.test', $3,
+                         now() + $4::interval)",
+            )
+            .bind(user_id)
+            .bind(name)
+            .bind(if state == "current" {
+                "active"
+            } else {
+                "receiving"
+            })
+            .bind(receive)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sweep(&pool).await.unwrap();
+        let states: Vec<(String, String)> = sqlx::query_as(
+            "SELECT split_part(address, '@', 1), state FROM mail_addresses
+              WHERE user_id = $1 ORDER BY address",
+        )
+        .bind(user_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let state = |name: &str| {
+            states
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, s)| s.clone())
+                .unwrap()
+        };
+        assert_eq!(state(&current), "active");
+        assert_eq!(state(&closing), "closed");
+        assert_eq!(state(&freeing), "freed");
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM account_names WHERE user_id = $1 ORDER BY name")
+                .bind(user_id)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let mut expected = vec![current.clone(), closing.clone()];
+        expected.sort();
+        assert_eq!(names, expected);
+        // The freed address no longer holds its spelling: another row may.
+        sqlx::query(
+            "INSERT INTO mail_addresses (user_id, address, folded)
+             VALUES ($1, $2 || '@sweep.test', kutup_fold($2) || '@sweep.test')",
+        )
+        .bind(user_id)
+        .bind(&freeing)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM account_names WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
