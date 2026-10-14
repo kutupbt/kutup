@@ -102,7 +102,14 @@ impl ChatTransport for NativeTransport {
             .request(
                 ChatHttpMethod::Put,
                 "/user/identity-pins".into(),
-                Some(encode(write)?),
+                // The server reads the revision from the envelope's header.
+                // This transport writes no account head yet: the native
+                // apps will (docs/roadmap.md), and a headed account refuses
+                // the write (409), which pin sync takes as best effort.
+                Some(encode(&serde_json::json!({
+                    "baseRevision": write.base_revision,
+                    "envelope": write.envelope,
+                }))?),
             )
             .await?;
         if response.status == 409 {

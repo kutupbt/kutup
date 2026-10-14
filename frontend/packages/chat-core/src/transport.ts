@@ -1,5 +1,7 @@
 import axios from 'axios'
+import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
+import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
 import type {
   ChatDevice,
@@ -14,6 +16,12 @@ import type {
   PendingMlsInvitation,
   RecoverMlsConversationRequest,
 } from './types'
+
+function signedIn() {
+  const session = getSession()
+  if (!session) throw new Error('not signed in')
+  return session
+}
 
 /** Authenticated REST adapter consumed by the Rust engine. */
 /** Extra waits for an ordering quorum, after the API client's own retries. */
@@ -118,24 +126,61 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/manifest', manifest).then((response) => response.data)
   }
 
-  /** The account's synced identity pins, shared with Drive (docs/plans/drive-identity-pins.md). */
+  /**
+   * The account's synced identity pins, shared with Drive
+   * (docs/plans/drive-identity-pins.md), held to the account head
+   * (docs/plans/rollback-protection.md): the revision the server names must
+   * be the one the verified index lists, and the engine checks the sealed one
+   * against it. A list the head does not vouch for, or an app blocked on
+   * another history, throws: Chat keeps to its own pins, and the shell's
+   * banner says why.
+   */
   async fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null> {
-    try {
-      return await api.get<{ revision: number; envelope: string }>('/user/identity-pins').then((response) => response.data)
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) return null
-      throw error
+    const head = await accountHead(signedIn())
+    // Two reads: a write landing between them is read again once.
+    for (let attempt = 0; ; attempt++) {
+      const index = await head.verifiedIndex('pins')
+      let record: { revision: number; envelope: string } | null
+      try {
+        record = await api.get<{ revision: number; envelope: string }>('/user/identity-pins').then((response) => response.data)
+      } catch (error) {
+        if (!(axios.isAxiosError(error) && error.response?.status === 404)) throw error
+        record = null
+      }
+      try {
+        if (record) index.expect('pins', record.revision)
+        else index.expectListing([])
+        return record
+      } catch (error) {
+        if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
+      }
     }
   }
 
-  async storeIdentityPins(write: { baseRevision: number; envelope: string }): Promise<boolean> {
-    try {
-      await api.put('/user/identity-pins', write)
-      return true
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) return false
-      throw error
-    }
+  /**
+   * Stores the engine's next list with the next account head. `false` when
+   * another app stored a list first (the engine reads it again and redoes its
+   * change); sent again on a new head when only another value moved; a
+   * write whose answer was lost is found in the index and counts as stored.
+   */
+  async storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean> {
+    let stored = false
+    await (await accountHead(signedIn())).listedWrite('pins', (index) => {
+      const listed = index.revision('pins') ?? 0
+      if (listed === write.revision) {
+        stored = true
+        return Promise.resolve(null)
+      }
+      if (listed !== write.baseRevision) return Promise.resolve(null)
+      return Promise.resolve({
+        changes: [['pins', write.revision]] as const,
+        send: async (head: string) => {
+          await api.put('/user/identity-pins', { baseRevision: write.baseRevision, envelope: write.envelope, head })
+          stored = true
+        },
+      })
+    })
+    return stored
   }
 
   async fetchOwnProfile(): Promise<unknown | null> {
