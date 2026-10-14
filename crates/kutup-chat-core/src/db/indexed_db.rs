@@ -835,6 +835,28 @@ impl ChatDb for IndexedDbChatDb {
             operations.push(self.put(&meta, string_key(LAST_SENT_SEQ), &seq)?);
         }
 
+        // A peer that moved to another address: its old records go, after
+        // every write (the same transaction wrote them under the new one).
+        let moved = &pending.delete_peer_records;
+        for address in &moved.identities {
+            operations.push(self.delete(&identities, string_key(address)));
+        }
+        for peer in &moved.manifest_trust {
+            operations.push(self.delete(&manifest_trust, string_key(peer)));
+        }
+        for (peer, incarnation_id, version) in &moved.manifest_history {
+            operations.push(self.delete(
+                &manifest_history,
+                triple_key(peer, incarnation_id, &version.to_string()),
+            ));
+        }
+        for peer in &moved.contacts {
+            operations.push(self.delete(&contacts, string_key(peer)));
+        }
+        for peer in &moved.peer_profiles {
+            operations.push(self.delete(&peer_profiles, string_key(peer)));
+        }
+
         finish_write(transaction, operations).await?;
         self.commits.set(self.commits.get() + 1);
         self.journal

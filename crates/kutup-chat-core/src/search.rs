@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
+use crate::renames::RenameAliases;
 use crate::timeline::{self, EntryRef, Indexed, Source, ROUTED};
 
 /// Raised whenever what is indexed or how changes; a store with an older
@@ -288,16 +289,22 @@ fn document(placed: Vec<Indexed>, content: &[u8]) -> Option<Document> {
     })
 }
 
-fn inbox_document(message: &InboxMessage) -> Result<Option<Document>> {
-    Ok(document(timeline::place_inbox(message)?, &message.content))
+fn inbox_document(message: &InboxMessage, aliases: &RenameAliases) -> Result<Option<Document>> {
+    Ok(document(
+        timeline::place_inbox(message, aliases)?,
+        &message.content,
+    ))
 }
 
-fn sent_document(message: &SentMessage) -> Result<Option<Document>> {
-    Ok(document(timeline::place_sent(message)?, &message.content))
+fn sent_document(message: &SentMessage, aliases: &RenameAliases) -> Result<Option<Document>> {
+    Ok(document(
+        timeline::place_sent(message, aliases)?,
+        &message.content,
+    ))
 }
 
-fn mls_document(message: &MlsHistoryMessage) -> Option<Document> {
-    document(timeline::place_mls(message), &message.content)
+fn mls_document(message: &MlsHistoryMessage, aliases: &RenameAliases) -> Option<Document> {
+    document(timeline::place_mls(message, aliases), &message.content)
 }
 
 /// Shards and document chunks read and changed for one commit.
@@ -494,6 +501,18 @@ impl<'a> Writer<'a> {
     }
 }
 
+/// Marks the stored search index stale in `pending` (see
+/// `timeline::invalidate`).
+pub(crate) async fn invalidate(db: &dyn ChatDb, pending: &mut Pending) -> Result<()> {
+    if let Some(mut directory) = load_directory(db).await? {
+        directory.version = 0;
+        pending
+            .index_values
+            .insert(DIRECTORY_KEY.to_vec(), Some(encode(&directory)?));
+    }
+    Ok(())
+}
+
 async fn load_directory(db: &dyn ChatDb) -> Result<Option<Directory>> {
     db.load_index_value(DIRECTORY_KEY)
         .await?
@@ -530,15 +549,16 @@ pub(crate) async fn changes(
     db: &dyn ChatDb,
     pending: &Pending,
 ) -> Result<HashMap<Vec<u8>, Option<Vec<u8>>>> {
+    let aliases = crate::renames::load_aliases(db, Some(pending)).await?;
     let mut added: Vec<Document> = Vec::new();
     for message in &pending.messages {
-        added.extend(inbox_document(message)?);
+        added.extend(inbox_document(message, &aliases)?);
     }
     for message in pending.sent_messages.values() {
-        added.extend(sent_document(message)?);
+        added.extend(sent_document(message, &aliases)?);
     }
     for message in pending.mls_messages.values() {
-        added.extend(mls_document(message));
+        added.extend(mls_document(message, &aliases));
     }
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
@@ -556,7 +576,7 @@ pub(crate) async fn changes(
     let mut removed: Vec<Document> = Vec::new();
     for id in &pending.delete_message_ids {
         if let Some(message) = db.load_message(id).await? {
-            removed.extend(inbox_document(&message)?);
+            removed.extend(inbox_document(&message, &aliases)?);
         }
     }
     if !pending.delete_messages_for_peers.is_empty() {
@@ -564,18 +584,18 @@ pub(crate) async fn changes(
         let peers: HashSet<&String> = pending.delete_messages_for_peers.iter().collect();
         for message in db.list_messages().await? {
             if peers.contains(&message.peer) {
-                removed.extend(inbox_document(&message)?);
+                removed.extend(inbox_document(&message, &aliases)?);
             }
         }
     }
     for id in &pending.delete_sent_message_ids {
         if let Some(message) = db.load_sent_message(id).await? {
-            removed.extend(sent_document(&message)?);
+            removed.extend(sent_document(&message, &aliases)?);
         }
     }
     for id in &pending.delete_mls_message_ids {
         if let Some(message) = db.load_mls_message(id).await? {
-            removed.extend(mls_document(&message));
+            removed.extend(mls_document(&message, &aliases));
         }
     }
     let mut writer = Writer::new(db, directory);
@@ -592,6 +612,7 @@ pub(crate) async fn changes(
 /// after this was added, and after [`SEARCH_VERSION`] moves on. Each
 /// period's documents are numbered in time order.
 pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
+    let aliases = crate::renames::load_aliases(db, None).await?;
     let existing = db.load_index_value(DIRECTORY_KEY).await?;
     if let Some(bytes) = &existing {
         if decode::<Directory>(bytes).is_ok_and(|directory| directory.version == SEARCH_VERSION) {
@@ -606,13 +627,13 @@ pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
     }
     let mut documents: Vec<Document> = Vec::new();
     for message in db.list_messages().await? {
-        documents.extend(inbox_document(&message)?);
+        documents.extend(inbox_document(&message, &aliases)?);
     }
     for message in db.list_sent_messages().await? {
-        documents.extend(sent_document(&message)?);
+        documents.extend(sent_document(&message, &aliases)?);
     }
     for message in db.list_mls_messages().await? {
-        documents.extend(mls_document(&message));
+        documents.extend(mls_document(&message, &aliases));
     }
     documents.sort_by(|left, right| {
         (left.posting.ts, left.posting.source, &left.posting.id).cmp(&(
@@ -1294,15 +1315,16 @@ mod tests {
 
     /// What a rebuild from the records would hold.
     fn expected(db: &SqliteChatDb) -> Snapshot {
+        let aliases = block_on(crate::renames::load_aliases(db, None)).unwrap();
         let mut documents = Vec::new();
         for message in block_on(db.list_messages()).unwrap() {
-            documents.extend(inbox_document(&message).unwrap());
+            documents.extend(inbox_document(&message, &aliases).unwrap());
         }
         for message in block_on(db.list_sent_messages()).unwrap() {
-            documents.extend(sent_document(&message).unwrap());
+            documents.extend(sent_document(&message, &aliases).unwrap());
         }
         for message in block_on(db.list_mls_messages()).unwrap() {
-            documents.extend(mls_document(&message));
+            documents.extend(mls_document(&message, &aliases));
         }
         let mut out = Snapshot::new();
         for document in documents {

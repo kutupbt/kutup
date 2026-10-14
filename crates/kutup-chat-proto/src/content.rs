@@ -94,6 +94,11 @@ pub mod kind {
     /// A call in the timeline ("Missed voice call"), written by each device
     /// for itself; never sent, and refused if it ever arrives. [IMPL]
     pub const CALL_LOG: &str = "callLog";
+    /// A peer's username changed ("ada_l changed their username to
+    /// ada_lovelace"): written by each device for itself when it follows the
+    /// peer's verified rename chain (docs/plans/username-renames.md); never
+    /// sent, and refused if it ever arrives. [IMPL]
+    pub const PEER_RENAMED: &str = "peerRenamed";
     /// A group call started or ended (MLS only); the start shows in the
     /// timeline with a way to join. [IMPL]
     pub const GROUP_CALL: &str = "groupCall";
@@ -884,7 +889,25 @@ impl ChatContent {
 
     /// Kinds only this device's engine writes; they never travel.
     pub fn is_local_only_kind(kind: &str) -> bool {
-        kind == kind::GROUP_UPDATE || kind == kind::CALL_LOG || kind == kind::UNDECRYPTABLE
+        kind == kind::GROUP_UPDATE
+            || kind == kind::CALL_LOG
+            || kind == kind::UNDECRYPTABLE
+            || kind == kind::PEER_RENAMED
+    }
+
+    pub fn peer_renamed_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        body: &PeerRenamedBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Self::account_control(kind::PEER_RENAMED, message_id, sent_at, 0, body)
+    }
+
+    pub fn as_peer_renamed(&self) -> Option<PeerRenamedBody> {
+        let body: PeerRenamedBody = self.as_account_control(kind::PEER_RENAMED)?;
+        body.validate().ok()?;
+        Some(body)
     }
 
     pub fn group_update_with_id(
@@ -1146,6 +1169,28 @@ pub struct ResendBody {
     /// The id the message inside was first sent under.
     pub send_id: String,
     pub content: Box<ChatContent>,
+}
+
+/// Body of a local [`kind::PEER_RENAMED`] record: the peer moved from one
+/// address to another along its verified rename chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerRenamedBody {
+    pub from: String,
+    pub to: String,
+    /// The chain's sequence after this rename: one record per rename.
+    pub sequence: u64,
+}
+
+impl PeerRenamedBody {
+    pub fn validate(&self) -> Result<(), String> {
+        let from: crate::AccountAddress = self.from.parse().map_err(|e: crate::AddressError| e.0)?;
+        let to: crate::AccountAddress = self.to.parse().map_err(|e: crate::AddressError| e.0)?;
+        if from == to || self.sequence == 0 {
+            return Err("a rename record names two addresses and its sequence".into());
+        }
+        Ok(())
+    }
 }
 
 /// Body of a local [`kind::UNDECRYPTABLE`] record.

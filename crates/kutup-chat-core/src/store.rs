@@ -212,6 +212,15 @@ impl ChatStore {
         if let Some(bytes) = self.pending.borrow().identities.get(address) {
             return Ok(Some(bytes.clone()));
         }
+        if self
+            .pending
+            .borrow()
+            .delete_peer_records
+            .identities
+            .contains(address)
+        {
+            return Ok(None);
+        }
         self.db.load_identity(address).await
     }
 
@@ -272,6 +281,43 @@ impl ChatStore {
             .borrow_mut()
             .peer_profiles
             .insert(profile.peer.clone(), profile);
+    }
+
+    /// Stages moving the libsignal session and identity of a peer's device
+    /// from `from` to `to` (both `name.deviceId` keys under their address):
+    /// the ratchet carries on under the peer's new address. Nothing when the
+    /// device has neither.
+    pub(crate) async fn stage_device_move(
+        &self,
+        from: &str,
+        to: &str,
+        device_id: u32,
+    ) -> ChatResult<()> {
+        let old = format!("{from}.{device_id}");
+        let new = format!("{to}.{device_id}");
+        let staged = self.pending.borrow().sessions.get(&old).cloned();
+        let session = match staged {
+            Some(staged) => staged,
+            None => self.db.load_session(&old).await?,
+        };
+        let identity = self.peer_identity(&old).await?;
+        let mut pending = self.pending.borrow_mut();
+        if let Some(bytes) = session {
+            pending.sessions.insert(new.clone(), Some(bytes));
+            pending.sessions.insert(old.clone(), None);
+        }
+        if let Some(bytes) = identity {
+            pending.identities.insert(new, bytes);
+            pending.identities.remove(&old);
+            pending.delete_peer_records.identities.insert(old);
+        }
+        Ok(())
+    }
+
+    /// Stages deleting records of a peer under an address it left (see
+    /// [`crate::db::PeerRecordDeletes`]), and the rename alias log.
+    pub(crate) fn with_pending<R>(&self, change: impl FnOnce(&mut crate::db::Pending) -> R) -> R {
+        change(&mut self.pending.borrow_mut())
     }
 
     pub(crate) fn delete_messages_for_peer(&self, peer: &str) {
@@ -455,6 +501,15 @@ impl IdentityAdapter {
     async fn stored_identity(&self, key: &str) -> Result<Option<IdentityKey>> {
         if let Some(bytes) = self.pending.borrow().identities.get(key) {
             return Ok(Some(IdentityKey::decode(bytes)?));
+        }
+        if self
+            .pending
+            .borrow()
+            .delete_peer_records
+            .identities
+            .contains(key)
+        {
+            return Ok(None);
         }
         match self
             .db

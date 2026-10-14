@@ -487,7 +487,10 @@ batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
 local-only record of a finished call, like `groupUpdate` and `undecryptable`:
-none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
+none of them is ever sent, and one that arrives from anyone is refused. So is
+`peerRenamed` (`PeerRenamedBody { from, to, sequence }`), the line a device
+writes for itself when it follows a peer's verified rename chain
+(docs/plans/username-renames.md). `groupCall`
 (`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).
 

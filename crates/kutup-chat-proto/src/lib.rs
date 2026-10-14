@@ -53,7 +53,7 @@ pub use calls::{
 pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
     DisappearingExpiryStartBody, DisappearingTimerBody, GroupUpdateBody, GroupUpdateChange,
-    MessageMutationBody, MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody,
+    MessageMutationBody, MessageMutationOperation, PeerRenamedBody, ReactionBody, ReadPositionBody, ReceiptBody,
     ReceiptState, SentTranscriptBody, StickerRemovedBody, StickerSavedBody, TextBody, TypingBody,
     ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
 };

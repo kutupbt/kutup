@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
+use crate::renames::RenameAliases;
 
 /// Raised whenever what is indexed or how changes; a store with an older
 /// directory is indexed again from its records.
@@ -158,6 +159,7 @@ fn visible(content: &ChatContent) -> bool {
             | kind::POLL_TERMINATE
             | kind::GROUP_CALL
             | kind::CALL_LOG
+            | kind::PEER_RENAMED
             | kind::UNDECRYPTABLE
             | kind::LIVE_LOCATION_STOP
             | kind::CONVERSATION_STATE
@@ -190,6 +192,19 @@ fn routed_conversation(content: &ChatContent) -> Option<ConversationId> {
         return None;
     }
     serde_json::from_value(content.body.get("conversation")?.clone()).ok()
+}
+
+/// A routed control's direct conversation, where its peer is now.
+fn routed_through(target: ConversationId, aliases: &RenameAliases) -> ConversationId {
+    match &target {
+        ConversationId::Direct { address } => {
+            let now = aliases.resolve(&address.canonical());
+            now.parse::<AccountAddress>()
+                .map(ConversationId::direct)
+                .unwrap_or(target)
+        }
+        ConversationId::Group { .. } => target,
+    }
 }
 
 fn content_of(bytes: &[u8]) -> Option<ChatContent> {
@@ -230,6 +245,7 @@ pub(crate) fn decodes_to(bytes: &[u8], hidden: fn(&str) -> bool) -> bool {
 /// not decode is indexed as visible, as the full history shows it.
 fn place(
     conversation: ConversationId,
+    aliases: &RenameAliases,
     source: Source,
     id: String,
     ts: i64,
@@ -271,7 +287,11 @@ fn place(
         flags,
     };
     let mut placed = Vec::with_capacity(2);
-    if let Some(target) = decoded.as_ref().and_then(routed_conversation) {
+    if let Some(target) = decoded
+        .as_ref()
+        .and_then(routed_conversation)
+        .map(|target| routed_through(target, aliases))
+    {
         if target != conversation {
             placed.push(Indexed {
                 conversation: target,
@@ -297,9 +317,16 @@ fn place(
     placed
 }
 
-pub(crate) fn place_inbox(message: &InboxMessage) -> Result<Vec<Indexed>> {
+/// The direct conversation of `peer`: where it is now, through the rename
+/// aliases (history keeps the address it was written under).
+pub(crate) fn direct_of(peer: &str, aliases: &RenameAliases) -> Result<ConversationId> {
+    direct(&aliases.resolve(peer))
+}
+
+pub(crate) fn place_inbox(message: &InboxMessage, aliases: &RenameAliases) -> Result<Vec<Indexed>> {
     Ok(place(
-        direct(&message.peer)?,
+        direct_of(&message.peer, aliases)?,
+        aliases,
         Source::Inbox,
         message.id.clone(),
         message.received_at,
@@ -309,9 +336,10 @@ pub(crate) fn place_inbox(message: &InboxMessage) -> Result<Vec<Indexed>> {
     ))
 }
 
-pub(crate) fn place_sent(message: &SentMessage) -> Result<Vec<Indexed>> {
+pub(crate) fn place_sent(message: &SentMessage, aliases: &RenameAliases) -> Result<Vec<Indexed>> {
     Ok(place(
-        direct(&message.peer)?,
+        direct_of(&message.peer, aliases)?,
+        aliases,
         Source::Sent,
         message.send_id.clone(),
         message.created_at,
@@ -321,11 +349,12 @@ pub(crate) fn place_sent(message: &SentMessage) -> Result<Vec<Indexed>> {
     ))
 }
 
-pub(crate) fn place_mls(message: &MlsHistoryMessage) -> Vec<Indexed> {
+pub(crate) fn place_mls(message: &MlsHistoryMessage, aliases: &RenameAliases) -> Vec<Indexed> {
     place(
         ConversationId::Group {
             group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
         },
+        aliases,
         Source::Mls,
         message.record_id.clone(),
         message.timestamp_ms,
@@ -355,16 +384,17 @@ pub(crate) async fn changes(db: &dyn ChatDb, pending: &Pending) -> Result<Change
 }
 
 async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes> {
+    let aliases = crate::renames::load_aliases(db, Some(pending)).await?;
     let mut added: Vec<Indexed> = Vec::new();
     let mut removed: Vec<Indexed> = Vec::new();
     for message in &pending.messages {
-        added.extend(place_inbox(message)?);
+        added.extend(place_inbox(message, &aliases)?);
     }
     for message in pending.sent_messages.values() {
-        added.extend(place_sent(message)?);
+        added.extend(place_sent(message, &aliases)?);
     }
     for message in pending.mls_messages.values() {
-        added.extend(place_mls(message));
+        added.extend(place_mls(message, &aliases));
     }
     // A group message still being sent shows on its conversation's newest
     // page without being indexed: its conversation changes all the same.
@@ -399,23 +429,23 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     }
     for id in &pending.delete_message_ids {
         if let Some(message) = db.load_message(id).await? {
-            removed.extend(place_inbox(&message)?);
+            removed.extend(place_inbox(&message, &aliases)?);
         }
     }
     for id in &pending.delete_sent_message_ids {
         if let Some(message) = db.load_sent_message(id).await? {
-            removed.extend(place_sent(&message)?);
+            removed.extend(place_sent(&message, &aliases)?);
         }
     }
     for id in &pending.delete_mls_message_ids {
         if let Some(message) = db.load_mls_message(id).await? {
-            removed.extend(place_mls(&message));
+            removed.extend(place_mls(&message, &aliases));
         }
     }
     let mut writer = Writer::new(db, &mut directory);
     for peer in &pending.delete_messages_for_peers {
         writer
-            .remove_source(&direct(peer)?.key(), Source::Inbox)
+            .remove_source(&direct_of(peer, &aliases)?.key(), Source::Inbox)
             .await?;
     }
     for indexed in removed {
@@ -454,15 +484,16 @@ async fn ensure_timeline_built(db: &dyn ChatDb) -> Result<()> {
             }
         }
     }
+    let aliases = crate::renames::load_aliases(db, None).await?;
     let mut placed: Vec<Indexed> = Vec::new();
     for message in db.list_messages().await? {
-        placed.extend(place_inbox(&message)?);
+        placed.extend(place_inbox(&message, &aliases)?);
     }
     for message in db.list_sent_messages().await? {
-        placed.extend(place_sent(&message)?);
+        placed.extend(place_sent(&message, &aliases)?);
     }
     for message in db.list_mls_messages().await? {
-        placed.extend(place_mls(&message));
+        placed.extend(place_mls(&message, &aliases));
     }
     let mut directory = Directory {
         version: TIMELINE_VERSION,
@@ -503,6 +534,19 @@ async fn ensure_timeline_built(db: &dyn ChatDb) -> Result<()> {
         .index_values
         .insert(DIRECTORY_KEY.to_vec(), Some(encode(&directory)?));
     db.apply(&pending).await
+}
+
+/// Marks the stored timelines stale in `pending`: the next [`ensure_built`]
+/// indexes the whole store again, clearing what they held (a followed rename
+/// moves a peer's history to another conversation).
+pub(crate) async fn invalidate(db: &dyn ChatDb, pending: &mut Pending) -> Result<()> {
+    if let Some(mut directory) = load_directory(db).await? {
+        directory.version = 0;
+        pending
+            .index_values
+            .insert(DIRECTORY_KEY.to_vec(), Some(encode(&directory)?));
+    }
+    crate::search::invalidate(db, pending).await
 }
 
 pub(crate) async fn load_directory(db: &dyn ChatDb) -> Result<Option<Directory>> {
@@ -1014,15 +1058,16 @@ mod tests {
 
     /// What a rebuild from the records would hold.
     fn expected(db: &SqliteChatDb) -> BTreeMap<String, Vec<EntryRef>> {
+        let aliases = block_on(crate::renames::load_aliases(db, None)).unwrap();
         let mut placed = Vec::new();
         for message in block_on(db.list_messages()).unwrap() {
-            placed.extend(place_inbox(&message).unwrap());
+            placed.extend(place_inbox(&message, &aliases).unwrap());
         }
         for message in block_on(db.list_sent_messages()).unwrap() {
-            placed.extend(place_sent(&message).unwrap());
+            placed.extend(place_sent(&message, &aliases).unwrap());
         }
         for message in block_on(db.list_mls_messages()).unwrap() {
-            placed.extend(place_mls(&message));
+            placed.extend(place_mls(&message, &aliases));
         }
         let mut out: BTreeMap<String, Vec<EntryRef>> = BTreeMap::new();
         for indexed in placed {

@@ -589,6 +589,33 @@ pub struct Pending {
     /// Highest locally allocated outbound content sequence. Advanced in the
     /// same transaction as the ratchet/outbox/history write.
     pub(crate) last_sent_seq: Option<u64>,
+    /// A peer's records under an address it left (a followed rename,
+    /// `renames.rs`): deleted in the transaction that writes them under the
+    /// new one. Applied after every write.
+    pub(crate) delete_peer_records: PeerRecordDeletes,
+}
+
+/// Records deleted under a peer's old address when it moves (sessions go
+/// through [`Pending::sessions`], whose `None` deletes).
+#[derive(Default)]
+pub(crate) struct PeerRecordDeletes {
+    /// libsignal identity keys, by `name.deviceId`.
+    pub(crate) identities: HashSet<String>,
+    pub(crate) manifest_trust: HashSet<String>,
+    /// `(peer, incarnation, sequence)`.
+    pub(crate) manifest_history: HashSet<(String, String, u64)>,
+    pub(crate) contacts: HashSet<String>,
+    pub(crate) peer_profiles: HashSet<String>,
+}
+
+impl PeerRecordDeletes {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.identities.is_empty()
+            && self.manifest_trust.is_empty()
+            && self.manifest_history.is_empty()
+            && self.contacts.is_empty()
+            && self.peer_profiles.is_empty()
+    }
 }
 
 impl Pending {
@@ -628,6 +655,7 @@ impl Pending {
             && self.registration_upload.is_none()
             && self.last_cursor.is_none()
             && self.last_sent_seq.is_none()
+            && self.delete_peer_records.is_empty()
     }
 
     pub(crate) fn clear(&mut self) {

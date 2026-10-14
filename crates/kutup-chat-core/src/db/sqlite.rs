@@ -1229,6 +1229,27 @@ impl ChatDb for SqliteChatDb {
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
             };
         }
+        // A peer that moved to another address: its old records go, after
+        // every write (the same transaction wrote them under the new one).
+        let moved = &pending.delete_peer_records;
+        for address in &moved.identities {
+            db(tx.execute("DELETE FROM identities WHERE address = ?1", [address]))?;
+        }
+        for peer in &moved.manifest_trust {
+            db(tx.execute("DELETE FROM manifest_trust WHERE peer = ?1", [peer]))?;
+        }
+        for (peer, incarnation_id, sequence) in &moved.manifest_history {
+            db(tx.execute(
+                "DELETE FROM manifest_history WHERE peer = ?1 AND incarnation_id = ?2 AND sequence = ?3",
+                rusqlite::params![peer, incarnation_id, *sequence as i64],
+            ))?;
+        }
+        for peer in &moved.contacts {
+            db(tx.execute("DELETE FROM contacts WHERE peer = ?1", [peer]))?;
+        }
+        for peer in &moved.peer_profiles {
+            db(tx.execute("DELETE FROM peer_profiles WHERE peer = ?1", [peer]))?;
+        }
         if let Some(cursor) = pending.last_cursor {
             // MAX guards monotonicity: the drain cursor never moves backwards.
             db(tx.execute(

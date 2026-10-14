@@ -2269,6 +2269,148 @@ impl Session {
         Ok(trust)
     }
 
+    /// Moves a peer that followed a verified rename chain from `from` to
+    /// `to` (docs/plans/username-renames.md), in one transaction: its trust
+    /// pin and manifest history, contact state, profile, and the libsignal
+    /// sessions and identities of its devices (`devices`, besides those of
+    /// its newest manifest). History stays under the address it was written
+    /// with; the rename alias log sends it to the new thread, where a local
+    /// `peerRenamed` line is written once per rename (its id names the
+    /// incarnation and sequence). Returns false when there is nothing at
+    /// `from`: moved already (a restart re-runs it as a no-op).
+    pub(crate) async fn move_peer(
+        &mut self,
+        from: &str,
+        to: &str,
+        known: crate::renames::KnownRenamesV1,
+        devices: &[u32],
+    ) -> Result<bool> {
+        let result = self.stage_peer_move(from, to, known, devices).await;
+        match result {
+            Ok(true) => {
+                self.store.commit().await?;
+                // The moved history is indexed under its new thread now.
+                crate::timeline::ensure_built(&**self.store.db()).await?;
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(error) => {
+                self.store.discard();
+                Err(error)
+            }
+        }
+    }
+
+    async fn stage_peer_move(
+        &mut self,
+        from: &str,
+        to: &str,
+        known: crate::renames::KnownRenamesV1,
+        devices: &[u32],
+    ) -> Result<bool> {
+        if crate::renames::same_address(from, to) {
+            return Ok(false);
+        }
+        let db = Rc::clone(self.store.db());
+        let Some(mut trust) = db.load_manifest_trust(from).await? else {
+            return Ok(false);
+        };
+        if let Some(existing) = db.load_manifest_trust(to).await? {
+            // Someone else pinned at the new address: never merged into this
+            // peer (the server would have to have handed out two identities).
+            if existing.incarnation_id != trust.incarnation_id {
+                return Err(ChatError::Trust(
+                    "the renamed peer's new address is pinned to another identity".into(),
+                ));
+            }
+        }
+        let incarnation_id = trust.incarnation_id.clone();
+        let mut all_devices: std::collections::BTreeSet<u32> = devices.iter().copied().collect();
+        for sequence in 1..=trust.highest_sequence {
+            let Some(mut record) = db
+                .load_manifest_history(from, &incarnation_id, sequence)
+                .await?
+            else {
+                continue;
+            };
+            if sequence == trust.highest_sequence {
+                all_devices.extend(
+                    record
+                        .manifest
+                        .devices
+                        .iter()
+                        .map(|device| device.device_id),
+                );
+            }
+            record.peer = to.to_string();
+            self.store.stage_manifest_history(record);
+            self.store.with_pending(|pending| {
+                pending.delete_peer_records.manifest_history.insert((
+                    from.to_string(),
+                    incarnation_id.clone(),
+                    sequence,
+                ))
+            });
+        }
+        for device_id in all_devices {
+            self.store.stage_device_move(from, to, device_id).await?;
+        }
+        if let Some(reset) = trust.pending_reset.as_mut() {
+            reset.candidate.peer = to.to_string();
+            for record in &mut reset.history {
+                record.peer = to.to_string();
+            }
+        }
+        let sequence = known.sequence;
+        trust.peer = to.to_string();
+        trust.renames = Some(known);
+        self.store.stage_manifest_trust(trust);
+        if let Some(mut contact) = db.load_contact(from).await? {
+            contact.peer = to.to_string();
+            self.store.stage_contact(contact);
+        }
+        if let Some(mut profile) = db.load_peer_profile(from).await? {
+            profile.peer = to.to_string();
+            self.store.stage_peer_profile(profile);
+        }
+        let mut aliases = crate::renames::load_aliases(&*db, None).await?;
+        aliases.record(from, to);
+        // The line in the thread, once per rename.
+        let now = now_millis();
+        let content = ChatContent::peer_renamed_with_id(
+            format!("rename:{incarnation_id}:{sequence}"),
+            crate::clock::rfc3339(now),
+            &kutup_chat_proto::PeerRenamedBody {
+                from: from.to_string(),
+                to: to.to_string(),
+                sequence,
+            },
+        )
+        .map_err(ChatError::Content)?;
+        self.store.stage_sent_message(SentMessage {
+            send_id: content.message_id.clone(),
+            peer: to.to_string(),
+            sender_device_id: self.device_id(),
+            content: serde_json::to_vec(&content).map_err(|e| ChatError::Content(e.to_string()))?,
+            created_at: now,
+            delivered_at: Some(now),
+            delivered: true,
+            deduplicated: false,
+        });
+        let mut stale = crate::db::Pending::default();
+        crate::timeline::invalidate(&*db, &mut stale).await?;
+        self.store.with_pending(|pending| -> Result<()> {
+            crate::renames::stage_aliases(pending, &aliases)?;
+            pending.index_values.extend(stale.index_values);
+            let moved = &mut pending.delete_peer_records;
+            moved.manifest_trust.insert(from.to_string());
+            moved.contacts.insert(from.to_string());
+            moved.peer_profiles.insert(from.to_string());
+            Ok(())
+        })?;
+        Ok(true)
+    }
+
     pub(crate) async fn accept_authority_reset(&mut self, peer: &str) -> Result<ManifestTrust> {
         let mut retained = self
             .manifest_trust(peer)

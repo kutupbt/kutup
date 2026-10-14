@@ -22,7 +22,9 @@ use base64::Engine as _;
 use kutup_crypto::account_rename::{self, AccountRenameV1};
 use serde::{Deserialize, Serialize};
 
-use crate::db::ManifestTrust;
+use std::collections::BTreeMap;
+
+use crate::db::{ChatDb, ManifestTrust, Pending};
 use crate::error::{ChatError, Result};
 
 /// The only lookup format this client reads; another is unverifiable.
@@ -169,6 +171,80 @@ pub fn select(trust: &ManifestTrust, chains: &RenameChainsV1) -> Result<Option<V
             addresses: view.addresses,
         },
     }))
+}
+
+/// Where the rename alias log lives among the derived index records.
+pub(crate) const ALIASES_KEY: &[u8] = b"renames/aliases";
+
+/// The addresses peers left, and where each peer is now: history keeps the
+/// address it was written under (messages, Note to Self controls, backups),
+/// and the timeline, search and the app read it through this log, so a
+/// thread follows its peer. Kept with the store; never sent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameAliases {
+    /// Folded old address → the peer's newest address.
+    #[serde(default)]
+    pub moved: BTreeMap<String, String>,
+}
+
+impl RenameAliases {
+    /// Where the peer last known at `address` is now (`address` itself when
+    /// it never moved).
+    pub fn resolve(&self, address: &str) -> String {
+        self.moved
+            .get(&fold(address))
+            .cloned()
+            .unwrap_or_else(|| address.to_string())
+    }
+
+    /// Records that the peer at `from` is `to` now. Earlier addresses that
+    /// led to `from` lead to `to`; `to` itself is no longer an alias (a
+    /// peer that took a name back).
+    pub fn record(&mut self, from: &str, to: &str) {
+        let to_folded = fold(to);
+        for target in self.moved.values_mut() {
+            if same_address(target, from) {
+                *target = to.to_string();
+            }
+        }
+        self.moved.remove(&to_folded);
+        if fold(from) != to_folded {
+            self.moved.insert(fold(from), to.to_string());
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.moved.is_empty()
+    }
+}
+
+/// The alias log as `pending` would leave it: its staged copy, else the
+/// stored one.
+pub(crate) async fn load_aliases(
+    db: &dyn ChatDb,
+    pending: Option<&Pending>,
+) -> Result<RenameAliases> {
+    if let Some(Some(bytes)) = pending.and_then(|pending| pending.index_values.get(ALIASES_KEY)) {
+        return decode_aliases(bytes);
+    }
+    match db.load_index_value(ALIASES_KEY).await? {
+        Some(bytes) => decode_aliases(&bytes),
+        None => Ok(RenameAliases::default()),
+    }
+}
+
+fn decode_aliases(bytes: &[u8]) -> Result<RenameAliases> {
+    serde_json::from_slice(bytes).map_err(|error| ChatError::Db(format!("rename aliases: {error}")))
+}
+
+/// Stages `aliases` with the commit in `pending`.
+pub(crate) fn stage_aliases(pending: &mut Pending, aliases: &RenameAliases) -> Result<()> {
+    let bytes = serde_json::to_vec(aliases)
+        .map_err(|error| ChatError::Db(format!("rename aliases: {error}")))?;
+    pending
+        .index_values
+        .insert(ALIASES_KEY.to_vec(), Some(bytes));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -349,5 +425,26 @@ pub(crate) mod tests {
         let mut gone = chains(&ada, &["ada_l@kutup.test", "ada@kutup.test"]);
         gone.chains[0].state = "gone".into();
         assert_eq!(select(&trust, &gone).unwrap(), None);
+    }
+
+    #[test]
+    fn aliases_follow_a_peer_through_every_rename_and_back() {
+        let mut aliases = RenameAliases::default();
+        aliases.record("ada_l@kutup.test", "ada_lovelace@kutup.test");
+        assert_eq!(
+            aliases.resolve("ada-l@kutup.test"),
+            "ada_lovelace@kutup.test"
+        );
+        aliases.record("ada_lovelace@kutup.test", "ada_king@kutup.test");
+        assert_eq!(aliases.resolve("ada_l@kutup.test"), "ada_king@kutup.test");
+        assert_eq!(
+            aliases.resolve("ada_lovelace@kutup.test"),
+            "ada_king@kutup.test"
+        );
+        // Back to the first name: it is the peer's address again, not an alias.
+        aliases.record("ada_king@kutup.test", "ada_l@kutup.test");
+        assert_eq!(aliases.resolve("ada_l@kutup.test"), "ada_l@kutup.test");
+        assert_eq!(aliases.resolve("ada_king@kutup.test"), "ada_l@kutup.test");
+        assert_eq!(aliases.resolve("grace@kutup.test"), "grace@kutup.test");
     }
 }
