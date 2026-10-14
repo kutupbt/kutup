@@ -7,6 +7,31 @@ const T = 1_791_633_600_000
 const get = vi.fn<(...args: unknown[]) => Promise<unknown>>()
 const put = vi.fn<(...args: unknown[]) => Promise<unknown>>()
 vi.mock('@kutup/session/client', () => ({ default: { get: (...a: unknown[]) => get(...a), put: (...a: unknown[]) => put(...a) } }))
+// The account head (docs/plans/rollback-protection.md), its rules kept
+// small: the index the test says per attempt, and listed writes redone on a
+// conflict as the real client does (its own tests: @kutup/session).
+const head = vi.hoisted(() => ({ index: (_attempt: number): [string, number][] => [], covered: false }))
+vi.mock('@kutup/session/accountHead', async () => {
+  const actual = await vi.importActual<typeof import('@kutup/session/accountHead')>('@kutup/session/accountHead')
+  const index = (attempt: number) => new actual.VerifiedIndex('passSecrets', head.covered, head.index(attempt), null)
+  const client = {
+    verifiedIndex: () => Promise.resolve(index(1)),
+    listedWrite: async <T,>(_scope: string, edit: (i: InstanceType<typeof actual.VerifiedIndex>, attempt: number) => Promise<{ send: (h: string) => Promise<T> } | null>) => {
+      for (let attempt = 1; ; attempt++) {
+        const change = await edit(index(attempt), attempt)
+        if (!change) return undefined
+        try {
+          return await change.send(`head-${attempt}`)
+        } catch (error) {
+          const code = (error as { response?: { data?: { code?: string } } }).response?.data?.code
+          if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < 5) continue
+          throw error
+        }
+      }
+    },
+  }
+  return { ...actual, accountHead: () => Promise.resolve(client) }
+})
 // A fake sealed key is "<kind>:<binding>:<fileId>:<revision>"; "AAEC" is
 // base64 of [0, 1, 2], the password hash the fake keeps.
 vi.mock('../vault/client', () => ({
@@ -22,7 +47,8 @@ vi.mock('../vault/client', () => ({
   }),
 }))
 
-import { keepVaultKey, keptGeneratedPassword, keptKey, keptKeyKind, putKeptKey } from './secrets'
+import { NotInVerifiedIndexError } from '@kutup/session/accountHead'
+import { forgetVaultKey, keepVaultKey, keptGeneratedPassword, keptKey, keptKeyKind, loadVaultSecrets, putKeptKey } from './secrets'
 
 const BINDING = '5f0c2f6e-1d2b-4c3a-8e9f-0a1b2c3d4e5f'
 const session = { userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: BINDING } as unknown as Session
@@ -43,6 +69,8 @@ describe('kept vault keys', () => {
   beforeEach(() => {
     get.mockReset()
     put.mockReset()
+    head.index = () => []
+    head.covered = false
     resetRevisionGuardsForTesting()
   })
 
@@ -78,7 +106,7 @@ describe('kept vault keys', () => {
     const revision = keepKey.mock.calls[0][3]
     expect(revision).toBeGreaterThan(T)
     expect(keepKey).toHaveBeenCalledWith(session.masterKey, BINDING, 'v', revision, true)
-    expect(put.mock.calls).toEqual([['/pass/vault-secrets/v', { envelope: `generated:${BINDING}:v:${revision}`, baseRevision: T }]])
+    expect(put.mock.calls).toEqual([['/pass/vault-secrets/v', { envelope: `generated:${BINDING}:v:${revision}`, baseRevision: T, head: 'head-1' }]])
   })
 
   it('stops when the key another device kept first is this same key', async () => {
@@ -99,12 +127,42 @@ describe('kept vault keys', () => {
     expect((put.mock.calls[1][1] as { baseRevision: number }).baseRevision).toBe(T + 9)
   })
 
-  it('counts a keep whose answer was lost as kept when tried again', async () => {
-    // The first try was stored; its answer never came. Trying again finds
-    // the key at its own revision.
+  it('counts a keep whose answer was lost as kept when tried again, sending nothing more', async () => {
+    // The first try was stored (with its head); its answer never came. The
+    // head's index then lists the key at its own revision.
     put.mockRejectedValueOnce(conflict(T + 3))
+    head.index = (attempt) => (attempt > 1 ? [['v', T + 3]] : [])
     await expect(putKeptKey(session, 'v', { envelope: `sealed:${BINDING}:v:${T + 3}`, revision: T + 3, base: 0 })).resolves.toBeUndefined()
-    put.mockRejectedValueOnce(conflict(T + 4))
+    expect(put).toHaveBeenCalledTimes(1)
+    // Another key there: tried again, and refused in the end.
+    put.mockReset()
+    put.mockRejectedValue(conflict(T + 4))
+    head.index = () => [['v', T + 4]]
     await expect(putKeptKey(session, 'v', { envelope: `sealed:${BINDING}:v:${T + 5}`, revision: T + 5, base: T + 3 })).rejects.toThrow('409')
+  })
+
+  it('forgets a kept key with the next head, and nothing when it is gone already', async () => {
+    const del = vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({})
+    const api = (await import('@kutup/session/client')).default as unknown as { delete: typeof del }
+    api.delete = del
+    head.index = () => [['v', T]]
+    await forgetVaultKey(session, 'v')
+    expect(del).toHaveBeenCalledWith('/pass/vault-secrets/v', { data: { head: 'head-1' } })
+    head.index = () => []
+    await forgetVaultKey(session, 'v')
+    expect(del).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a list of kept keys the head does not vouch for, and a key at another revision', async () => {
+    head.covered = true
+    head.index = () => [['v', T]]
+    get.mockResolvedValue({ data: [row('sealed', BINDING, T), { ...row('sealed', BINDING, T), fileId: 'w' }] })
+    await expect(loadVaultSecrets(session)).rejects.toBeInstanceOf(NotInVerifiedIndexError)
+    // One the head lists at another revision opens to nothing.
+    head.index = () => [['v', T + 1]]
+    get.mockResolvedValue({ data: [row('sealed', BINDING, T)] })
+    const rows = await loadVaultSecrets(session)
+    expect(rows[0]?.vouched).toBe(T + 1)
+    expect(await keptKey(session, rows, 'v')).toBeNull()
   })
 })

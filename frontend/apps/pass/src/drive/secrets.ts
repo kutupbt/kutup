@@ -4,11 +4,16 @@
 // bound to the account's key binding and the vault (docs/plans/account-identity.md).
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { isAxiosError } from 'axios'
 import { revisionGuard } from '@kutup/crypto'
 import { fromBase64 } from '@kutup/crypto/base64'
+import {
+  accountHead,
+  HeadBlockedError,
+  NotInVerifiedIndexError,
+  type VerifiedIndex,
+} from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
-import type { Session } from '@kutup/session/store'
+import { getSession, type Session } from '@kutup/session/store'
 import { openKept, type KeptKey, type VaultHandle } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 
@@ -24,6 +29,11 @@ interface SecretRow {
   /** The revision in the envelope's header, as the server read it. */
   revision: number
   updatedAt: string
+  /**
+   * The revision the account head vouches for (docs/plans/rollback-protection.md),
+   * when it covers the vault secrets: the key must open at exactly this one.
+   */
+  vouched?: number
 }
 
 /** What the revision guard calls a vault's kept key. */
@@ -31,10 +41,55 @@ const KEPT_SCOPE = 'pass-vault-secret'
 
 export const secretsKey = ['pass', 'vault-secrets'] as const
 
+/** The vault secrets are the account head's `passSecrets` scope, one value per vault file. */
+const HEAD_SCOPE = 'passSecrets'
+
+function headFor(session: Session) {
+  return accountHead(session)
+}
+
+/**
+ * The head's index of the vault secrets, or null when it cannot vouch (this
+ * app is blocked on another history: reads go on, held to this browser's own
+ * guard, and the banner says why).
+ */
+async function secretsIndex(session: Session): Promise<VerifiedIndex | null> {
+  try {
+    return await (await headFor(session)).verifiedIndex(HEAD_SCOPE)
+  } catch (error) {
+    if (error instanceof HeadBlockedError) return null
+    throw error
+  }
+}
+
+/**
+ * The account's vault secrets, held to the head: a list with one more or one
+ * fewer than the head vouches for is refused (read again once first, for a
+ * write landing between the two reads), and each row carries the revision it
+ * must open at. Refused, no kept key is used: vaults open with their password.
+ */
+export async function loadVaultSecrets(session: Session): Promise<SecretRow[]> {
+  for (let attempt = 0; ; attempt++) {
+    const index = await secretsIndex(session)
+    const rows = (await api.get<SecretRow[]>('/pass/vault-secrets')).data
+    try {
+      index?.expectListing(rows.map((row) => row.fileId))
+    } catch (error) {
+      if (error instanceof NotInVerifiedIndexError && attempt === 0) continue
+      throw error
+    }
+    return rows.map((row) => (index?.covered ? { ...row, vouched: index.revision(row.fileId) } : row))
+  }
+}
+
 export function useVaultSecrets() {
   return useQuery({
     queryKey: secretsKey,
-    queryFn: async () => (await api.get<SecretRow[]>('/pass/vault-secrets')).data,
+    queryFn: () => {
+      const session = getSession()
+      if (!session) throw new Error('not signed in')
+      return loadVaultSecrets(session)
+    },
   })
 }
 
@@ -43,6 +98,8 @@ async function openRow(session: Session, rows: SecretRow[] | undefined, fileId: 
   if (!row) return null
   try {
     const kept = await openKept(row.envelope, session.masterKey, session.envelopeBinding, fileId)
+    // Not the one the account head vouches for: rolled back, or brought back.
+    if (row.vouched !== undefined && kept.revision !== row.vouched) return null
     // Older than one this browser has seen: the server replaying an old key.
     await revisionGuard(session).accept(KEPT_SCOPE, fileId, kept.revision)
     return kept
@@ -91,22 +148,24 @@ export interface SealedKey {
   base: number
 }
 
-function conflict(error: unknown): number | null {
-  if (!isAxiosError(error) || error.response?.status !== 409) return null
-  const body = error.response.data as { code?: string; revision?: number } | undefined
-  return body?.code === 'revision_conflict' ? (body.revision ?? 0) : null
-}
-
 /**
- * Stores a kept key for vault `fileId`. Stored already (a retry after an
- * answer that was lost) counts as stored.
+ * Stores a kept key for vault `fileId`, with the next account head. Stored
+ * already (a retry after an answer that was lost) counts as stored: the
+ * head's index then lists this very revision, and nothing is sent again.
  */
 export async function putKeptKey(session: Session, fileId: string, sealed: SealedKey): Promise<void> {
-  try {
-    await api.put(`/pass/vault-secrets/${fileId}`, { envelope: sealed.envelope, baseRevision: sealed.base })
-  } catch (error) {
-    if (conflict(error) !== sealed.revision) throw error
-  }
+  await (await headFor(session)).listedWrite(HEAD_SCOPE, (index) =>
+    Promise.resolve(
+      index.revision(fileId) === sealed.revision
+        ? null
+        : {
+            changes: [[fileId, sealed.revision]] as const,
+            send: async (head: string) => {
+              await api.put(`/pass/vault-secrets/${fileId}`, { envelope: sealed.envelope, baseRevision: sealed.base, head })
+            },
+          },
+    ),
+  )
   // Stored: remembering it here is best effort (a store that fails only
   // means this browser trusts the next read, as a fresh one does).
   await revisionGuard(session)
@@ -123,28 +182,32 @@ export async function sealVaultKey(session: Session, fileId: string, vault: Vaul
 
 /**
  * Keeps the key of the vault open in `vault` (the key it was opened or made
- * with) for `fileId`, on top of the key kept now. When another device kept
- * one meanwhile: done if it is this same key; otherwise once more on top of
- * it (this vault's key is the one just used). A password the person chose
- * is kept only as its SHA-256; a `generated` one as it is, to be shown.
+ * with) for `fileId`, on top of the key kept now, with the next account head.
+ * When another device kept one meanwhile: done if it is this same key;
+ * otherwise again on top of it (this vault's key is the one just used). A
+ * password the person chose is kept only as its SHA-256; a `generated` one
+ * as it is, to be shown.
  */
 export async function keepVaultKey(session: Session, fileId: string, vault: VaultHandle, generated = false): Promise<void> {
-  const keptNow = async () => (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)
-  let base = (await keptNow())?.revision ?? 0
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await putKeptKey(session, fileId, await sealVaultKey(session, fileId, vault, base, generated))
-      return
-    } catch (error) {
-      if (attempt > 0 || conflict(error) === null) throw error
+  let kept: number | null = null
+  await (await headFor(session)).listedWrite(HEAD_SCOPE, async (index, attempt) => {
+    const now = (await api.get<SecretRow[]>('/pass/vault-secrets')).data.find((r) => r.fileId === fileId)
+    if (attempt > 1 && now && (await vault.keptKeyIsMine(now.envelope, session.masterKey, session.envelopeBinding, fileId))) {
+      // Another device kept this same key first: nothing to do.
+      kept = now.revision
+      return null
     }
-    const newer = await keptNow()
-    if (newer && (await vault.keptKeyIsMine(newer.envelope, session.masterKey, session.envelopeBinding, fileId))) {
-      await revisionGuard(session).accept(KEPT_SCOPE, fileId, newer.revision)
-      return
+    const sealed = await sealVaultKey(session, fileId, vault, now?.revision ?? 0, generated)
+    if (index.revision(fileId) === sealed.revision) return null
+    return {
+      changes: [[fileId, sealed.revision]],
+      send: async (head) => {
+        await api.put(`/pass/vault-secrets/${fileId}`, { envelope: sealed.envelope, baseRevision: sealed.base, head })
+        kept = sealed.revision
+      },
     }
-    base = newer?.revision ?? 0
-  }
+  })
+  if (kept !== null) await revisionGuard(session).accept(KEPT_SCOPE, fileId, kept)
 }
 
 export function useKeepVaultKey() {
@@ -155,10 +218,28 @@ export function useKeepVaultKey() {
   }
 }
 
+/** Forgets the kept key of vault `fileId`, with the next account head (gone already: nothing to do). */
+export async function forgetVaultKey(session: Session, fileId: string): Promise<void> {
+  await (await headFor(session)).listedWrite(HEAD_SCOPE, (index) =>
+    Promise.resolve(
+      index.revision(fileId) === undefined
+        ? null
+        : {
+            changes: [[fileId, null]] as const,
+            send: async (head: string) => {
+              await api.delete(`/pass/vault-secrets/${fileId}`, { data: { head } })
+            },
+          },
+    ),
+  )
+}
+
 export function useForgetVaultKey() {
   const queryClient = useQueryClient()
   return async (fileId: string): Promise<void> => {
-    await api.delete(`/pass/vault-secrets/${fileId}`)
+    const session = getSession()
+    if (!session) throw new Error('not signed in')
+    await forgetVaultKey(session, fileId)
     await queryClient.invalidateQueries({ queryKey: secretsKey })
   }
 }
