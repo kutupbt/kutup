@@ -149,6 +149,31 @@ Every write of a listed value also writes the next head, in the same request:
   later** (a roadmap line; until then Chat's link is used where a device has
   one).
 
+### 8. Settled in the crypto review (main session, 2026-10-14)
+
+- **Too old means past the window.** `RETENTION` (1,000 heads) is a crate
+  constant the server prunes by. A head shown without its chain is `tooOld`
+  only when it is more than `RETENTION` past the anchor. Any smaller gap the
+  server will not show is a fork, so a server cannot pass a fork off as too old.
+- **Anything that does not hold together is a fork.** That covers a segment that
+  starts elsewhere, is spliced, or does not reach the current head. It is
+  blocking, never an error to retry. Only a head that does not open, or names
+  another incarnation, is an error.
+- **Re-anchoring runs the check itself** (`reanchor`). It re-anchors on `tooOld`
+  always, and on `rollback` or `fork` only when the person confirmed it. The
+  record carries the status the check found, not one a caller passes in.
+- **Only a verified head counts.** `check` (for `fresh`, `current`, `extends`)
+  and `reanchor` produce one, and so does `committed` (the device's own next
+  head, once the server stored it). Indexes are checked, and next heads written,
+  only against it. Anchors come from verified heads only.
+- **Index checks** answer `matches` or `uncovered`. A difference is an error.
+- **In the browser,** one `AccountHeadKeys` per signed-in account holds the keys
+  and the verified head inside WASM. The master key crosses once, and is wiped.
+- **Format durability:** the head is `deny_unknown_fields` under its suite byte.
+  A new field in the head is a new suite, and older clients must update to read
+  it (and so to write). That is accepted: scopes are already an open list, so a
+  new kind of value never needs a new field.
+
 ## Is it needed before the wipe?
 
 **No format of existing values changes.** The head is a new object, and no value

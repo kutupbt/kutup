@@ -354,7 +354,13 @@ pub fn open(keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<AccountHead
     Ok(head)
 }
 
-/// What a device remembers of a head: its sequence and digest.
+/// How many heads the server keeps (the chain a device's anchor can be shown
+/// to descend from). The server prunes below this window; a device whose anchor
+/// is further back than this cannot verify its descent ([`HeadStatus::TooOld`]).
+pub const RETENTION: u64 = 1000;
+
+/// What a device remembers of a head: its sequence and digest. Only a check
+/// or a re-anchoring gives one ([`VerifiedHead::anchor`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Anchor {
@@ -364,13 +370,59 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    /// The anchor of a sealed head.
-    pub fn of(sealed: &[u8]) -> Result<Self> {
+    fn of(sealed: &[u8]) -> Result<Self> {
         Ok(Self {
             sequence: inspect(sealed)?,
             digest: hex::encode(digest(sealed)),
         })
     }
+}
+
+/// A head this device has verified (by [`check`] or [`reanchor`]): the only
+/// kind an index is checked against, and the only kind a next head is
+/// written on top of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedHead {
+    head: AccountHeadV1,
+    sealed: Vec<u8>,
+    anchor: Anchor,
+}
+
+impl VerifiedHead {
+    pub fn head(&self) -> &AccountHeadV1 {
+        &self.head
+    }
+
+    /// What to remember now.
+    pub fn anchor(&self) -> &Anchor {
+        &self.anchor
+    }
+
+    /// The next head, written by `writer`, with `entries` replaced.
+    pub fn next(&self, writer: &str, entries: Vec<ScopeV1>) -> Result<AccountHeadV1> {
+        self.head.next(&self.sealed, writer, entries)
+    }
+
+    /// After the server stored `sealed` (this device's next head): the newly
+    /// verified head, which must directly follow this one.
+    pub fn committed(&self, keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<Self> {
+        let head = open(keys, binding, sealed)?;
+        if head.sequence != self.head.sequence + 1
+            || head.previous.as_deref() != Some(self.anchor.digest.as_str())
+            || head.incarnation_id != self.head.incarnation_id
+        {
+            return Err(invalid("the head does not follow the verified one"));
+        }
+        verified(head, sealed)
+    }
+}
+
+fn verified(head: AccountHeadV1, sealed: &[u8]) -> Result<VerifiedHead> {
+    Ok(VerifiedHead {
+        anchor: Anchor::of(sealed)?,
+        sealed: sealed.to_vec(),
+        head,
+    })
 }
 
 /// How the current head relates to what a device remembers.
@@ -384,21 +436,32 @@ pub enum HeadStatus {
     /// A later head, descending from the one remembered.
     Extends,
     /// A head older than the one remembered: the server rolled the account
-    /// back (or was restored from a backup).
+    /// back (or was restored from a backup). Blocking.
     Rollback,
-    /// A head at or after the remembered sequence that does not descend from
-    /// the remembered head: another history (or a restore from a backup).
+    /// A head that does not descend from the remembered one, or a chain the
+    /// server will not or cannot show within its window: another history (or a
+    /// restore from a backup). Blocking.
     Fork,
-    /// The remembered head is older than the chain the server keeps: it can be
-    /// neither confirmed nor refuted; re-anchor, with a notice.
+    /// The remembered head is further back than the server keeps
+    /// ([`RETENTION`]): descent can be neither shown nor refuted. Re-anchor,
+    /// with a notice; not blocking.
     TooOld,
+}
+
+/// The outcome of a check: the status, and the verified head when it is
+/// trusted (`fresh`, `current`, `extends`); the others need [`reanchor`].
+#[derive(Clone, Debug)]
+pub struct Checked {
+    pub status: HeadStatus,
+    pub verified: Option<VerifiedHead>,
 }
 
 /// Checks the current head (`current`, sealed) against `anchor`, what this
 /// device remembers (its highest seen, or its own last write). `segment` is
 /// the chain from the anchor's sequence to the current one inclusive, as the
-/// server returns it, or `None` when the server no longer keeps it (`410`).
-/// The current head must open, and name `incarnation_id`.
+/// server returns it, or `None` when it does not. The current head must open
+/// and name `incarnation_id`; anything else the server shows that does not
+/// hold together is a fork, never an error to retry.
 pub fn check(
     keys: &HeadKeys,
     binding: &str,
@@ -406,47 +469,94 @@ pub fn check(
     anchor: Option<&Anchor>,
     current: &[u8],
     segment: Option<&[Vec<u8>]>,
-) -> Result<HeadStatus> {
+) -> Result<Checked> {
     let head = open(keys, binding, current)?;
     if head.incarnation_id != incarnation_id {
         return Err(invalid("the head is another incarnation's"));
     }
+    let status = status_of(
+        keys,
+        binding,
+        incarnation_id,
+        &head,
+        anchor,
+        current,
+        segment,
+    );
+    let verified = match status {
+        HeadStatus::Fresh | HeadStatus::Current | HeadStatus::Extends => {
+            Some(verified(head, current)?)
+        }
+        _ => None,
+    };
+    Ok(Checked { status, verified })
+}
+
+fn status_of(
+    keys: &HeadKeys,
+    binding: &str,
+    incarnation_id: &str,
+    head: &AccountHeadV1,
+    anchor: Option<&Anchor>,
+    current: &[u8],
+    segment: Option<&[Vec<u8>]>,
+) -> HeadStatus {
     let Some(anchor) = anchor else {
-        return Ok(HeadStatus::Fresh);
+        return HeadStatus::Fresh;
     };
     if head.sequence < anchor.sequence {
-        return Ok(HeadStatus::Rollback);
+        return HeadStatus::Rollback;
     }
     if head.sequence == anchor.sequence {
-        return Ok(if hex::encode(digest(current)) == anchor.digest {
+        return if hex::encode(digest(current)) == anchor.digest {
             HeadStatus::Current
         } else {
             HeadStatus::Fork
-        });
+        };
     }
     let Some(segment) = segment else {
-        return Ok(HeadStatus::TooOld);
+        // Only a gap past what the server keeps may go unshown.
+        return if head.sequence - anchor.sequence > RETENTION {
+            HeadStatus::TooOld
+        } else {
+            HeadStatus::Fork
+        };
     };
-    // The segment runs from the remembered head to the current one, each head
-    // naming the one before it.
-    let expected = (head.sequence - anchor.sequence + 1) as usize;
-    if segment.len() != expected || segment.last().map(Vec::as_slice) != Some(current) {
-        return Err(invalid("the chain segment does not reach the current head"));
+    if descends(keys, binding, incarnation_id, anchor, current, segment) {
+        HeadStatus::Extends
+    } else {
+        HeadStatus::Fork
     }
-    if hex::encode(digest(&segment[0])) != anchor.digest {
-        return Ok(HeadStatus::Fork);
+}
+
+/// Whether `segment` runs from the anchored head to `current`, each head
+/// naming the one before it.
+fn descends(
+    keys: &HeadKeys,
+    binding: &str,
+    incarnation_id: &str,
+    anchor: &Anchor,
+    current: &[u8],
+    segment: &[Vec<u8>],
+) -> bool {
+    let Ok(current_sequence) = inspect(current) else {
+        return false;
+    };
+    let expected = (current_sequence - anchor.sequence + 1) as usize;
+    if segment.len() != expected
+        || segment.last().map(Vec::as_slice) != Some(current)
+        || hex::encode(digest(&segment[0])) != anchor.digest
+    {
+        return false;
     }
-    for pair in segment.windows(2) {
-        let later = open(keys, binding, &pair[1])?;
-        let earlier_sequence = inspect(&pair[0])?;
-        if later.sequence != earlier_sequence + 1
-            || later.previous.as_deref() != Some(hex::encode(digest(&pair[0]))).as_deref()
-            || later.incarnation_id != incarnation_id
-        {
-            return Err(invalid("the chain segment is broken"));
-        }
-    }
-    Ok(HeadStatus::Extends)
+    segment.windows(2).all(|pair| {
+        let (Ok(earlier), Ok(later)) = (inspect(&pair[0]), open(keys, binding, &pair[1])) else {
+            return false;
+        };
+        later.sequence == earlier + 1
+            && later.previous.as_deref() == Some(hex::encode(digest(&pair[0]))).as_deref()
+            && later.incarnation_id == incarnation_id
+    })
 }
 
 /// What a device logs when it re-anchors: from what it remembered to the
@@ -455,68 +565,106 @@ pub fn check(
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Reanchored {
-    pub from: Option<Anchor>,
+    pub from: Anchor,
     pub to: Anchor,
-    /// The status that led to it: `fresh`, `tooOld` (no notice needed beyond
-    /// a passing one), or `rollback` / `fork`, which only the person decides.
-    pub reason: String,
+    /// The status the check found: `tooOld`, `rollback` or `fork`.
+    pub status: HeadStatus,
     /// When, in Unix milliseconds.
     pub at_ms: u64,
 }
 
-/// Re-anchors this device on the current head (`current`, sealed), after
-/// [`check`] gave `status`: a first use, a remembered head too old to verify,
-/// or, only when the person chose it, a rollback or fork (a restore from a
-/// backup). The head must open and name `incarnation_id`. Returns the new
-/// anchor and the record to log.
+/// Re-anchors this device on the current head when [`check`] did not trust
+/// it. It runs the check again itself:
+/// - `tooOld` re-anchors (the client shows a notice);
+/// - `rollback` and `fork` re-anchor only when the person `confirmed` it (a
+///   restore from a backup looks the same; the person decides);
+/// - a trusted head needs no re-anchoring (an error).
+///
+/// Returns the record to log and the newly verified head.
+#[allow(clippy::too_many_arguments)]
 pub fn reanchor(
     keys: &HeadKeys,
     binding: &str,
     incarnation_id: &str,
-    from: Option<&Anchor>,
+    anchor: &Anchor,
     current: &[u8],
-    status: &HeadStatus,
+    segment: Option<&[Vec<u8>]>,
+    confirmed: bool,
     at_ms: u64,
-) -> Result<Reanchored> {
-    let head = open(keys, binding, current)?;
-    if head.incarnation_id != incarnation_id {
-        return Err(invalid("the head is another incarnation's"));
-    }
-    let reason = match status {
-        HeadStatus::Fresh => "fresh",
-        HeadStatus::TooOld => "tooOld",
-        HeadStatus::Rollback => "rollback",
-        HeadStatus::Fork => "fork",
-        HeadStatus::Current | HeadStatus::Extends => {
+) -> Result<(Reanchored, VerifiedHead)> {
+    let checked = check(
+        keys,
+        binding,
+        incarnation_id,
+        Some(anchor),
+        current,
+        segment,
+    )?;
+    match checked.status {
+        HeadStatus::TooOld => {}
+        HeadStatus::Rollback | HeadStatus::Fork if confirmed => {}
+        HeadStatus::Rollback | HeadStatus::Fork => {
             return Err(invalid(
-                "nothing to re-anchor: the head descends from the anchor",
+                "a rollback or a fork is re-anchored only when the person confirms it",
             ))
         }
-    };
-    Ok(Reanchored {
-        from: from.cloned(),
-        to: Anchor::of(current)?,
-        reason: reason.to_owned(),
-        at_ms,
-    })
+        HeadStatus::Fresh | HeadStatus::Current | HeadStatus::Extends => {
+            return Err(invalid("nothing to re-anchor: the head is trusted"))
+        }
+    }
+    let head = open(keys, binding, current)?;
+    let verified = verified(head, current)?;
+    Ok((
+        Reanchored {
+            from: anchor.clone(),
+            to: verified.anchor.clone(),
+            status: checked.status,
+            at_ms,
+        },
+        verified,
+    ))
 }
 
-/// Checks a scope's index (as the server lists it) against the verified head:
-/// `Ok(true)` if it matches, `Ok(false)` if the head does not cover the scope
-/// yet (trust on first use until its first write), an error if it differs.
+/// What a scope's index says against the verified head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IndexCheck {
+    /// The index is exactly the one the head describes.
+    Matches,
+    /// The head does not cover the scope yet: trust on first use, until the
+    /// scope's first write puts it in the head.
+    Uncovered,
+}
+
+/// Checks a scope's index (as the server lists it) against a verified head;
+/// an error when it differs (a value rolled back, dropped or brought back).
 pub fn check_index(
     keys: &HeadKeys,
-    head: &AccountHeadV1,
+    verified: &VerifiedHead,
     scope: &str,
     index: &[(String, u64)],
-) -> Result<bool> {
-    let Some(entry) = head.scope(scope) else {
-        return Ok(false);
+) -> Result<IndexCheck> {
+    let Some(entry) = verified.head.scope(scope) else {
+        return Ok(IndexCheck::Uncovered);
     };
     if keys.scope_digest(scope, index)? != *entry {
         return Err(invalid("the index does not match the head"));
     }
-    Ok(true)
+    Ok(IndexCheck::Matches)
+}
+
+/// The account's first head, verified as written (the server has none yet).
+pub fn first(
+    keys: &HeadKeys,
+    binding: &str,
+    incarnation_id: &str,
+    writer: &str,
+    scopes: Vec<ScopeV1>,
+) -> Result<(Vec<u8>, VerifiedHead)> {
+    let head = AccountHeadV1::first(incarnation_id, writer, scopes)?;
+    let sealed = seal(keys, binding, &head)?;
+    let verified = verified(head, &sealed)?;
+    Ok((sealed, verified))
 }
 
 #[cfg(test)]
@@ -574,15 +722,42 @@ mod tests {
         assert!(open(&keys, BINDING, &relabelled).is_err());
     }
 
+    fn status(
+        keys: &HeadKeys,
+        anchor: Option<&Anchor>,
+        current: &[u8],
+        segment: Option<&[Vec<u8>]>,
+    ) -> HeadStatus {
+        check(keys, BINDING, INCARNATION, anchor, current, segment)
+            .unwrap()
+            .status
+    }
+
+    fn verified_of(keys: &HeadKeys, sealed: &[u8]) -> VerifiedHead {
+        check(keys, BINDING, INCARNATION, None, sealed, None)
+            .unwrap()
+            .verified
+            .unwrap()
+    }
+
     #[test]
-    fn an_index_is_checked_whatever_its_order() {
+    fn an_index_is_checked_only_against_a_verified_head() {
         let keys = keys();
         let entry = keys
             .scope_digest("contacts", &index(&[("a", 1), ("b", 2)]))
             .unwrap();
-        let head =
-            AccountHeadV1::first(INCARNATION, &keys.writer("d").unwrap(), vec![entry]).unwrap();
-        assert!(check_index(&keys, &head, "contacts", &index(&[("b", 2), ("a", 1)])).unwrap());
+        let (_, head) = first(
+            &keys,
+            BINDING,
+            INCARNATION,
+            &keys.writer("d").unwrap(),
+            vec![entry],
+        )
+        .unwrap();
+        assert_eq!(
+            check_index(&keys, &head, "contacts", &index(&[("b", 2), ("a", 1)])).unwrap(),
+            IndexCheck::Matches
+        );
         // A rolled-back value, a dropped one, one brought back: refused.
         assert!(check_index(&keys, &head, "contacts", &index(&[("a", 1), ("b", 1)])).is_err());
         assert!(check_index(&keys, &head, "contacts", &index(&[("a", 1)])).is_err());
@@ -593,9 +768,10 @@ mod tests {
             &index(&[("a", 1), ("b", 2), ("c", 3)])
         )
         .is_err());
-        // A scope the head does not cover yet.
-        assert!(!check_index(&keys, &head, "mailNames", &index(&[("x", 1)])).unwrap());
-        // Twice the same id, or revision 0: not an index.
+        assert_eq!(
+            check_index(&keys, &head, "mailNames", &index(&[("x", 1)])).unwrap(),
+            IndexCheck::Uncovered
+        );
         assert!(keys
             .scope_digest("contacts", &index(&[("a", 1), ("a", 2)]))
             .is_err());
@@ -606,19 +782,26 @@ mod tests {
     fn devices_tell_extension_rollback_fork_and_age_apart() {
         let keys = keys();
         let sealed = chain(&keys, 4);
-        let anchor = Anchor::of(&sealed[1]).unwrap();
-        let status = |current: &[u8], segment: Option<&[Vec<u8>]>| {
-            check(&keys, BINDING, INCARNATION, Some(&anchor), current, segment).unwrap()
-        };
+        let anchor = verified_of(&keys, &sealed[1]).anchor().clone();
+        assert_eq!(status(&keys, None, &sealed[3], None), HeadStatus::Fresh);
         assert_eq!(
-            check(&keys, BINDING, INCARNATION, None, &sealed[3], None).unwrap(),
-            HeadStatus::Fresh
+            status(&keys, Some(&anchor), &sealed[1], None),
+            HeadStatus::Current
         );
-        assert_eq!(status(&sealed[1], None), HeadStatus::Current);
-        assert_eq!(status(&sealed[3], Some(&sealed[1..])), HeadStatus::Extends);
-        assert_eq!(status(&sealed[0], None), HeadStatus::Rollback);
-        assert_eq!(status(&sealed[3], None), HeadStatus::TooOld);
-        // Another history from head 2 on: a fork, at the same sequence or later.
+        assert_eq!(
+            status(&keys, Some(&anchor), &sealed[3], Some(&sealed[1..])),
+            HeadStatus::Extends
+        );
+        assert_eq!(
+            status(&keys, Some(&anchor), &sealed[0], None),
+            HeadStatus::Rollback
+        );
+        // A segment withheld inside the server's window is no excuse: a fork.
+        assert_eq!(
+            status(&keys, Some(&anchor), &sealed[3], None),
+            HeadStatus::Fork
+        );
+        // Another history from head 2 on, at the same sequence or later.
         let other = {
             let writer = keys.writer("device-b").unwrap();
             let entry = keys
@@ -635,28 +818,31 @@ mod tests {
                 .unwrap();
             vec![second.clone(), seal(&keys, BINDING, &third).unwrap()]
         };
-        assert_eq!(status(&other[0], None), HeadStatus::Fork);
-        assert_eq!(status(&other[1], Some(&other)), HeadStatus::Fork);
-        // A segment that does not reach the current head, or is broken: refused.
-        assert!(check(
-            &keys,
-            BINDING,
-            INCARNATION,
-            Some(&anchor),
-            &sealed[3],
-            Some(&sealed[1..3])
-        )
-        .is_err());
+        assert_eq!(
+            status(&keys, Some(&anchor), &other[0], None),
+            HeadStatus::Fork
+        );
+        assert_eq!(
+            status(&keys, Some(&anchor), &other[1], Some(&other)),
+            HeadStatus::Fork
+        );
+        // A segment that does not reach the current head, or is spliced: a fork.
+        assert_eq!(
+            status(&keys, Some(&anchor), &sealed[3], Some(&sealed[1..3])),
+            HeadStatus::Fork
+        );
         let spliced = vec![sealed[1].clone(), other[1].clone(), sealed[3].clone()];
-        assert!(check(
-            &keys,
-            BINDING,
-            INCARNATION,
-            Some(&anchor),
-            &sealed[3],
-            Some(&spliced)
-        )
-        .is_err());
+        assert_eq!(
+            status(&keys, Some(&anchor), &sealed[3], Some(&spliced)),
+            HeadStatus::Fork
+        );
+        // Only trusted outcomes give a verified head.
+        assert!(
+            check(&keys, BINDING, INCARNATION, Some(&anchor), &sealed[0], None)
+                .unwrap()
+                .verified
+                .is_none()
+        );
         // Another incarnation's head: refused.
         assert!(check(
             &keys,
@@ -667,6 +853,42 @@ mod tests {
             Some(&sealed[1..])
         )
         .is_err());
+    }
+
+    #[test]
+    fn too_old_only_past_what_the_server_keeps() {
+        let keys = keys();
+        let sealed = chain(&keys, 1);
+        let old = Anchor {
+            sequence: 1,
+            digest: hex::encode(digest(&sealed[0])),
+        };
+        // A head far past the anchor, with no chain shown.
+        let writer = keys.writer("d").unwrap();
+        let mut far = open(&keys, BINDING, &sealed[0]).unwrap();
+        far.sequence = 1 + RETENTION + 1;
+        far.previous = Some("ab".repeat(32));
+        far.writer = writer;
+        let far = seal(&keys, BINDING, &far).unwrap();
+        assert_eq!(status(&keys, Some(&old), &far, None), HeadStatus::TooOld);
+        let mut near = open(&keys, BINDING, &far).unwrap();
+        near.sequence = 1 + RETENTION;
+        let near = seal(&keys, BINDING, &near).unwrap();
+        assert_eq!(status(&keys, Some(&old), &near, None), HeadStatus::Fork);
+    }
+
+    #[test]
+    fn a_head_is_written_on_the_verified_one_and_committed() {
+        let keys = keys();
+        let sealed = chain(&keys, 2);
+        let verified = verified_of(&keys, &sealed[1]);
+        let writer = keys.writer("device-a").unwrap();
+        let next = seal(&keys, BINDING, &verified.next(&writer, vec![]).unwrap()).unwrap();
+        let committed = verified.committed(&keys, BINDING, &next).unwrap();
+        assert_eq!(committed.anchor().sequence, 3);
+        // Something else than its direct successor is not committed.
+        assert!(verified.committed(&keys, BINDING, &sealed[0]).is_err());
+        assert!(committed.committed(&keys, BINDING, &next).is_err());
     }
 
     #[test]
@@ -687,43 +909,47 @@ mod tests {
     }
 
     #[test]
-    fn reanchoring_is_explicit_and_recorded() {
+    fn reanchoring_needs_the_check_and_for_a_fork_the_person() {
         let keys = keys();
         let sealed = chain(&keys, 3);
-        let anchor = Anchor::of(&sealed[2]).unwrap();
-        let record = reanchor(
-            &keys,
-            BINDING,
-            INCARNATION,
-            Some(&anchor),
-            &sealed[0],
-            &HeadStatus::Rollback,
-            5,
-        )
-        .unwrap();
-        assert_eq!(record.to, Anchor::of(&sealed[0]).unwrap());
-        assert_eq!(
-            (record.from, record.reason.as_str(), record.at_ms),
-            (Some(anchor.clone()), "rollback", 5)
-        );
-        // A head that descends needs no re-anchoring.
+        let anchor = verified_of(&keys, &sealed[2]).anchor().clone();
+        // A rollback: refused unless confirmed; the record carries what the check found.
         assert!(reanchor(
             &keys,
             BINDING,
             INCARNATION,
-            Some(&anchor),
-            &sealed[2],
-            &HeadStatus::Current,
+            &anchor,
+            &sealed[0],
+            None,
+            false,
             5
         )
         .is_err());
+        let (record, verified) = reanchor(
+            &keys,
+            BINDING,
+            INCARNATION,
+            &anchor,
+            &sealed[0],
+            None,
+            true,
+            5,
+        )
+        .unwrap();
+        assert_eq!(record.status, HeadStatus::Rollback);
+        assert_eq!(
+            (&record.from, &record.to, record.at_ms),
+            (&anchor, verified.anchor(), 5)
+        );
+        // A trusted head needs no re-anchoring.
         assert!(reanchor(
             &keys,
             BINDING,
-            &"2".repeat(64),
+            INCARNATION,
+            &anchor,
+            &sealed[2],
             None,
-            &sealed[0],
-            &HeadStatus::Fresh,
+            true,
             5
         )
         .is_err());

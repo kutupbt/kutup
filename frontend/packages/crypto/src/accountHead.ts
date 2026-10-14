@@ -1,9 +1,11 @@
 // The account head (docs/plans/rollback-protection.md): Rust owns the format,
 // the digests and the checks (kutup-crypto account_head); this is the
-// browser's door to them. Sealed heads travel as canonical base64.
+// browser's door to them. One AccountHead per signed-in account: its keys,
+// and the head this page verified, stay in WASM. Sealed heads travel as
+// canonical base64.
 
 import { toBase64 } from './base64'
-import { getCryptoWasm } from './rustWasm'
+import { getCryptoWasm, type AccountHeadKeysHandle } from './rustWasm'
 
 /** One scope's entry: how many values, and the digest of their (id, revision) pairs. */
 export interface HeadScope {
@@ -12,7 +14,7 @@ export interface HeadScope {
   digest: string
 }
 
-export interface AccountHead {
+export interface AccountHeadValue {
   incarnationId: string
   sequence: number
   previous?: string
@@ -20,7 +22,7 @@ export interface AccountHead {
   scopes: HeadScope[]
 }
 
-/** What a device remembers of a head. */
+/** What a device remembers of a head. Only a check or a re-anchoring gives one. */
 export interface HeadAnchor {
   sequence: number
   digest: string
@@ -28,105 +30,84 @@ export interface HeadAnchor {
 
 /**
  * How the current head relates to what this device remembers:
- * `fresh` (nothing remembered), `current`, `extends`; `rollback` and `fork`
- * (blocking: the person decides, a restore from a backup looks the same);
- * `tooOld` (the remembered head is older than the chain the server keeps:
- * re-anchor with a notice).
+ * - `fresh` (nothing remembered), `current`, `extends`: trusted;
+ * - `rollback`, `fork`: blocking; the person decides (a restore from a backup
+ *   looks the same) and may re-anchor;
+ * - `tooOld`: the remembered head is further back than the server keeps:
+ *   re-anchor with a notice.
  */
 export type HeadStatus = { kind: 'fresh' | 'current' | 'extends' | 'rollback' | 'fork' | 'tooOld' }
 
 /** What a device logs when it re-anchors. */
 export interface Reanchored {
-  from?: HeadAnchor | null
+  from: HeadAnchor
   to: HeadAnchor
-  reason: 'fresh' | 'tooOld' | 'rollback' | 'fork'
+  status: HeadStatus
   atMs: number
 }
 
 /** A scope's index, as the server lists it: value ids and their revisions. */
 export type HeadIndex = ReadonlyArray<readonly [string, number]>
 
-export async function accountHeadWriter(masterKey: Uint8Array, deviceId: string): Promise<string> {
-  return (await getCryptoWasm()).accountHeadWriter(toBase64(masterKey), deviceId)
-}
+/** The account head for one signed-in account. Call `close()` at sign-out. */
+export class AccountHead {
+  private constructor(private readonly handle: AccountHeadKeysHandle) {}
 
-export async function accountHeadScope(masterKey: Uint8Array, scope: string, index: HeadIndex): Promise<HeadScope> {
-  return (await getCryptoWasm()).accountHeadScope(toBase64(masterKey), scope, JSON.stringify(index)) as HeadScope
-}
+  static async open(masterKey: Uint8Array, binding: string, incarnationId: string): Promise<AccountHead> {
+    const wasm = await getCryptoWasm()
+    return new AccountHead(new wasm.AccountHeadKeys(toBase64(masterKey), binding, incarnationId))
+  }
 
-/** The next head, sealed: after `previous` (null: the account's first), with `scopes` replaced. */
-export async function nextAccountHead(
-  masterKey: Uint8Array,
-  binding: string,
-  incarnationId: string,
-  previous: string | null,
-  writer: string,
-  scopes: readonly HeadScope[],
-): Promise<string> {
-  return (await getCryptoWasm()).nextAccountHead(
-    toBase64(masterKey),
-    binding,
-    incarnationId,
-    previous ?? undefined,
-    writer,
-    JSON.stringify(scopes),
-  )
-}
+  writer(deviceId: string): string {
+    return this.handle.writer(deviceId)
+  }
 
-export async function openAccountHead(masterKey: Uint8Array, binding: string, sealed: string): Promise<AccountHead> {
-  return (await getCryptoWasm()).openAccountHead(toBase64(masterKey), binding, sealed) as AccountHead
-}
+  scope(scope: string, index: HeadIndex): HeadScope {
+    return this.handle.scope(scope, JSON.stringify(index)) as HeadScope
+  }
 
-export async function accountHeadAnchor(sealed: string): Promise<HeadAnchor> {
-  return (await getCryptoWasm()).accountHeadAnchor(sealed) as HeadAnchor
-}
+  /**
+   * Checks `current` against `anchor`. `segment` is the chain from the anchor
+   * to `current`, or null when the server did not show it. A trusted head
+   * becomes the verified one, and `anchor` is what to remember.
+   */
+  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; anchor?: HeadAnchor } {
+    return this.handle.check(anchor ? JSON.stringify(anchor) : undefined, current, segment ? JSON.stringify(segment) : undefined) as {
+      status: HeadStatus
+      anchor?: HeadAnchor
+    }
+  }
 
-/** See {@link HeadStatus}; `segment` is the chain from the anchor to `current`, or null when the server no longer keeps it. */
-export async function checkAccountHead(
-  masterKey: Uint8Array,
-  binding: string,
-  incarnationId: string,
-  anchor: HeadAnchor | null,
-  current: string,
-  segment: readonly string[] | null,
-): Promise<HeadStatus> {
-  return (await getCryptoWasm()).checkAccountHead(
-    toBase64(masterKey),
-    binding,
-    incarnationId,
-    anchor ? JSON.stringify(anchor) : undefined,
-    current,
-    segment ? JSON.stringify(segment) : undefined,
-  ) as HeadStatus
-}
+  /** Re-anchors after a check did not trust the head (`rollback`/`fork` only when the person `confirmed`); the record to log. */
+  reanchor(anchor: HeadAnchor, current: string, segment: readonly string[] | null, confirmed: boolean): Reanchored {
+    return this.handle.reanchor(JSON.stringify(anchor), current, segment ? JSON.stringify(segment) : undefined, confirmed, Date.now()) as Reanchored
+  }
 
-/** Whether a scope's index matches the verified head (false: the head does not cover it yet); throws if it differs. */
-export async function checkAccountHeadIndex(
-  masterKey: Uint8Array,
-  binding: string,
-  current: string,
-  scope: string,
-  index: HeadIndex,
-): Promise<boolean> {
-  return (await getCryptoWasm()).checkAccountHeadIndex(toBase64(masterKey), binding, current, scope, JSON.stringify(index))
-}
+  /** `matches`, or `uncovered` (the head does not cover the scope yet); throws if it differs or no head is verified. */
+  checkIndex(scope: string, index: HeadIndex): 'matches' | 'uncovered' {
+    return this.handle.checkIndex(scope, JSON.stringify(index)) as 'matches' | 'uncovered'
+  }
 
-/** Re-anchors on `current` after a check gave `status`; the record to log. */
-export async function reanchorAccountHead(
-  masterKey: Uint8Array,
-  binding: string,
-  incarnationId: string,
-  anchor: HeadAnchor | null,
-  current: string,
-  status: HeadStatus,
-): Promise<Reanchored> {
-  return (await getCryptoWasm()).reanchorAccountHead(
-    toBase64(masterKey),
-    binding,
-    incarnationId,
-    anchor ? JSON.stringify(anchor) : undefined,
-    current,
-    JSON.stringify(status),
-    Date.now(),
-  ) as Reanchored
+  /** The next head, sealed, on top of the verified one. */
+  next(writer: string, scopes: readonly HeadScope[]): string {
+    return this.handle.next(writer, JSON.stringify(scopes))
+  }
+
+  /** The account's first head, sealed (the server has none yet). */
+  first(writer: string, scopes: readonly HeadScope[]): string {
+    return this.handle.first(writer, JSON.stringify(scopes))
+  }
+
+  /** After the server stored `sealed`: it becomes the verified head; what to remember. */
+  committed(sealed: string): HeadAnchor {
+    return this.handle.committed(sealed) as HeadAnchor
+  }
+
+  verifiedHead(): AccountHeadValue | null {
+    return this.handle.verifiedHead() as AccountHeadValue | null
+  }
+
+  close(): void {
+    this.handle.free()
+  }
 }

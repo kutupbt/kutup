@@ -1,14 +1,15 @@
 //! Checked-in vectors for the account head (docs/plans/rollback-protection.md):
 //! a chain of three sealed heads, the scope digests, every outcome of a check
-//! (fresh, current, extends, rollback, fork, too old), the indexes refused, and
-//! a re-anchoring record. Regenerate only for a deliberate format change:
+//! (fresh, current, extends, rollback, fork in its several shapes, too old),
+//! the indexes refused, and a re-anchoring record. Regenerate only for a
+//! deliberate format change:
 //! `KUTUP_WRITE_HEAD_VECTORS=1 cargo test -p kutup-crypto --test account_head_vectors -- --ignored`.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use kutup_crypto::account_head::{self, AccountHeadV1, Anchor, HeadKeys, HeadStatus};
+use kutup_crypto::account_head::{self, AccountHeadV1, Anchor, HeadKeys, HeadStatus, IndexCheck};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -23,19 +24,26 @@ struct Vectors {
     master_key: String,
     binding: String,
     incarnation_id: String,
+    retention: u64,
     device: String,
     writer: String,
     /// The contacts index after each head (ids and revisions).
     indexes: Vec<Vec<(String, u64)>>,
-    /// The heads as JSON, and sealed (fixed nonces).
+    /// The heads as JSON, and sealed (fixed nonces), and their anchors.
     heads: Vec<String>,
     sealed: Vec<String>,
     anchors: Vec<Anchor>,
     /// Another history: a head 2 by another device after head 1.
     forked: String,
+    /// A head further past the first than the server keeps, and one exactly
+    /// the window past it: both shown without their chain.
+    far: String,
+    near: String,
     checks: Vec<Check>,
     /// Indexes the last head refuses.
     refused_indexes: Vec<RefusedIndex>,
+    /// Re-anchoring on head 1 after head 3 was remembered (a rollback the
+    /// person confirmed).
     reanchored: account_head::Reanchored,
 }
 
@@ -45,10 +53,10 @@ struct Check {
     case: String,
     /// Index into `anchors` (absent: no anchor).
     anchor: Option<usize>,
-    /// Index into `sealed`, or "forked".
+    /// A name: an index into `sealed`, `forked`, `far` or `near`.
     current: String,
-    /// The chain segment as indexes into `sealed` (absent: the server no longer keeps it).
-    segment: Option<Vec<usize>>,
+    /// The chain segment as names (absent: the server did not show it).
+    segment: Option<Vec<String>>,
     status: HeadStatus,
 }
 
@@ -57,6 +65,45 @@ struct Check {
 struct RefusedIndex {
     case: String,
     index: Vec<(String, u64)>,
+}
+
+struct Material {
+    keys: HeadKeys,
+    sealed: Vec<Vec<u8>>,
+    forked: Vec<u8>,
+    far: Vec<u8>,
+    near: Vec<u8>,
+}
+
+impl Material {
+    fn named(&self, name: &str) -> Vec<u8> {
+        match name {
+            "forked" => self.forked.clone(),
+            "far" => self.far.clone(),
+            "near" => self.near.clone(),
+            index => self.sealed[index.parse::<usize>().unwrap()].clone(),
+        }
+    }
+
+    fn status(
+        &self,
+        anchor: Option<&Anchor>,
+        current: &str,
+        segment: Option<&[String]>,
+    ) -> HeadStatus {
+        let segment: Option<Vec<Vec<u8>>> =
+            segment.map(|s| s.iter().map(|name| self.named(name)).collect());
+        account_head::check(
+            &self.keys,
+            BINDING,
+            INCARNATION,
+            anchor,
+            &self.named(current),
+            segment.as_deref(),
+        )
+        .unwrap()
+        .status
+    }
 }
 
 fn derive() -> Vectors {
@@ -79,15 +126,9 @@ fn derive() -> Vectors {
     let mut sealed: Vec<Vec<u8>> = Vec::new();
     for (i, index) in indexes.iter().enumerate() {
         let entry = keys.scope_digest("contacts", index).unwrap();
-        let head = if i == 0 {
-            AccountHeadV1::first(INCARNATION, &writer, vec![entry]).unwrap()
-        } else {
-            heads
-                .last()
-                .cloned()
-                .unwrap()
-                .next(&sealed[i - 1], &writer, vec![entry])
-                .unwrap()
+        let head = match heads.last() {
+            None => AccountHeadV1::first(INCARNATION, &writer, vec![entry]).unwrap(),
+            Some(before) => before.next(&sealed[i - 1], &writer, vec![entry]).unwrap(),
         };
         sealed.push(
             account_head::seal_for_vectors(&keys, BINDING, &head, &[i as u8 + 1; 24]).unwrap(),
@@ -103,33 +144,41 @@ fn derive() -> Vectors {
         )
         .unwrap();
     let forked = account_head::seal_for_vectors(&keys, BINDING, &forked_head, &[9u8; 24]).unwrap();
-    let anchors: Vec<Anchor> = sealed.iter().map(|s| Anchor::of(s).unwrap()).collect();
-    let current = |name: &str| {
-        if name == "forked" {
-            forked.clone()
-        } else {
-            sealed[name.parse::<usize>().unwrap()].clone()
-        }
+    let beyond = |sequence: u64, nonce: u8| {
+        let mut head = heads[0].clone();
+        head.sequence = sequence;
+        head.previous = Some("ab".repeat(32));
+        account_head::seal_for_vectors(&keys, BINDING, &head, &[nonce; 24]).unwrap()
     };
-    let check = |case: &str, anchor: Option<usize>, cur: &str, segment: Option<Vec<usize>>| {
-        let segment_bytes: Option<Vec<Vec<u8>>> = segment
-            .as_ref()
-            .map(|s| s.iter().map(|&i| sealed[i].clone()).collect());
-        let status = account_head::check(
-            &keys,
-            BINDING,
-            INCARNATION,
-            anchor.map(|i| &anchors[i]),
-            &current(cur),
-            segment_bytes.as_deref(),
-        )
-        .unwrap();
+    let far = beyond(1 + account_head::RETENTION + 1, 10);
+    let near = beyond(1 + account_head::RETENTION, 11);
+    let anchors: Vec<Anchor> = sealed
+        .iter()
+        .map(|s| {
+            account_head::check(&keys, BINDING, INCARNATION, None, s, None)
+                .unwrap()
+                .verified
+                .unwrap()
+                .anchor()
+                .clone()
+        })
+        .collect();
+    let material = Material {
+        keys,
+        sealed,
+        forked,
+        far,
+        near,
+    };
+    let check = |case: &str, anchor: Option<usize>, current: &str, segment: Option<&[&str]>| {
+        let segment: Option<Vec<String>> =
+            segment.map(|s| s.iter().map(|n| n.to_string()).collect());
         Check {
             case: case.into(),
             anchor,
-            current: cur.into(),
+            current: current.into(),
+            status: material.status(anchor.map(|i| &anchors[i]), current, segment.as_deref()),
             segment,
-            status,
         }
     };
     let checks = vec![
@@ -139,7 +188,7 @@ fn derive() -> Vectors {
             "a later head descending from the anchor",
             Some(0),
             "2",
-            Some(vec![0, 1, 2]),
+            Some(&["0", "1", "2"]),
         ),
         check("an older head: rolled back", Some(2), "0", None),
         check(
@@ -149,10 +198,34 @@ fn derive() -> Vectors {
             None,
         ),
         check(
-            "the server no longer keeps the chain: too old",
+            "a chain withheld within the server's window: forked",
             Some(0),
             "2",
             None,
+        ),
+        check(
+            "a chain withheld beyond the server's window: too old",
+            Some(0),
+            "far",
+            None,
+        ),
+        check(
+            "a gap exactly the window wide, withheld: forked",
+            Some(0),
+            "near",
+            None,
+        ),
+        check(
+            "a segment that starts elsewhere: forked",
+            Some(0),
+            "2",
+            Some(&["forked", "1", "2"]),
+        ),
+        check(
+            "a spliced segment: forked",
+            Some(0),
+            "2",
+            Some(&["0", "forked", "2"]),
         ),
     ];
     let last = indexes[2].clone();
@@ -173,13 +246,14 @@ fn derive() -> Vectors {
             index: [last.clone(), vec![("uid-carol".into(), 1_790_000_000_000)]].concat(),
         },
     ];
-    let reanchored = account_head::reanchor(
-        &keys,
+    let (reanchored, _) = account_head::reanchor(
+        &material.keys,
         BINDING,
         INCARNATION,
-        Some(&anchors[2]),
-        &sealed[0],
-        &HeadStatus::Rollback,
+        &anchors[2],
+        &material.sealed[0],
+        None,
+        true,
         1_791_000_000_000,
     )
     .unwrap();
@@ -187,6 +261,7 @@ fn derive() -> Vectors {
         master_key: STANDARD.encode(master),
         binding: BINDING.into(),
         incarnation_id: INCARNATION.into(),
+        retention: account_head::RETENTION,
         device: device.into(),
         writer,
         indexes,
@@ -194,9 +269,11 @@ fn derive() -> Vectors {
             .iter()
             .map(|h| serde_json::to_string(h).unwrap())
             .collect(),
-        sealed: sealed.iter().map(|s| STANDARD.encode(s)).collect(),
+        sealed: material.sealed.iter().map(|s| STANDARD.encode(s)).collect(),
         anchors,
-        forked: STANDARD.encode(&forked),
+        forked: STANDARD.encode(&material.forked),
+        far: STANDARD.encode(&material.far),
+        near: STANDARD.encode(&material.near),
         checks,
         refused_indexes,
         reanchored,
@@ -222,16 +299,32 @@ fn checked_in_vectors_hold() {
     assert_eq!(v, derive());
     let master: [u8; 32] = STANDARD.decode(&v.master_key).unwrap().try_into().unwrap();
     let keys = HeadKeys::derive(&master).unwrap();
-    // Every sealed head opens to its JSON; the last head checks its index and
-    // refuses the others.
+    // Every sealed head opens to its JSON; the last one, verified, checks its
+    // index and refuses the others.
     for (sealed, json) in v.sealed.iter().zip(&v.heads) {
         let head =
             account_head::open(&keys, &v.binding, &STANDARD.decode(sealed).unwrap()).unwrap();
         assert_eq!(&serde_json::to_string(&head).unwrap(), json);
     }
-    let last =
-        account_head::open(&keys, &v.binding, &STANDARD.decode(&v.sealed[2]).unwrap()).unwrap();
-    assert!(account_head::check_index(&keys, &last, "contacts", &v.indexes[2]).unwrap());
+    let last = account_head::check(
+        &keys,
+        &v.binding,
+        &v.incarnation_id,
+        None,
+        &STANDARD.decode(&v.sealed[2]).unwrap(),
+        None,
+    )
+    .unwrap()
+    .verified
+    .unwrap();
+    assert_eq!(
+        account_head::check_index(&keys, &last, "contacts", &v.indexes[2]).unwrap(),
+        IndexCheck::Matches
+    );
+    assert_eq!(
+        account_head::check_index(&keys, &last, "mailNames", &[]).unwrap(),
+        IndexCheck::Uncovered
+    );
     for refused in &v.refused_indexes {
         assert!(
             account_head::check_index(&keys, &last, "contacts", &refused.index).is_err(),

@@ -81,14 +81,7 @@ export interface CryptoWasmModule {
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountEnvelope(envelopeBase64: string): number
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
-  accountHeadWriter(masterKeyBase64: string, deviceId: string): string
-  accountHeadScope(masterKeyBase64: string, scope: string, indexJson: string): unknown
-  nextAccountHead(masterKeyBase64: string, binding: string, incarnationId: string, previousBase64: string | undefined, writer: string, scopesJson: string): string
-  openAccountHead(masterKeyBase64: string, binding: string, sealedBase64: string): unknown
-  accountHeadAnchor(sealedBase64: string): unknown
-  checkAccountHead(masterKeyBase64: string, binding: string, incarnationId: string, anchorJson: string | undefined, currentBase64: string, segmentJson: string | undefined): unknown
-  checkAccountHeadIndex(masterKeyBase64: string, binding: string, currentBase64: string, scope: string, indexJson: string): boolean
-  reanchorAccountHead(masterKeyBase64: string, binding: string, incarnationId: string, anchorJson: string | undefined, currentBase64: string, statusJson: string, atMs: number): unknown
+  AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
   generateMailGroupKey(
     groupAddress: string,
     createdAtSecs: number,
@@ -582,6 +575,20 @@ export interface LiveLocationUpdate {
 }
 
 let modulePromise: Promise<CryptoWasmModule> | null = null
+
+/** The account head's keys and verified head (Rust `kutup_crypto::account_head`); kept in WASM. */
+export interface AccountHeadKeysHandle {
+  writer(deviceId: string): string
+  scope(scope: string, indexJson: string): unknown
+  check(anchorJson: string | undefined, currentBase64: string, segmentJson: string | undefined): unknown
+  reanchor(anchorJson: string, currentBase64: string, segmentJson: string | undefined, confirmed: boolean, atMs: number): unknown
+  checkIndex(scope: string, indexJson: string): unknown
+  next(writer: string, scopesJson: string): string
+  first(writer: string, scopesJson: string): string
+  committed(sealedBase64: string): unknown
+  verifiedHead(): unknown
+  free(): void
+}
 
 export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {

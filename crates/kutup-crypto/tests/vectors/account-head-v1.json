@@ -2,6 +2,7 @@
   "masterKey": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
   "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
   "incarnationId": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "retention": 1000,
   "device": "device-alpha",
   "writer": "317bb084ab6b9696ca627e4f1eec1bbb80bdbeed54e087e436e6f43efee5d579",
   "indexes": [
@@ -57,6 +58,8 @@
     }
   ],
   "forked": "S1VUQUgxAAAAAQAAAAAAAAACCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJQByXEJCwHgx0cJAQzgL+wYVH7FZ2o/7A8oTsQ9THo4WVB2oggoJ4F3e/qmBxX6M7eegaldJcs8FS/JS4VezUjUmoSHGe9+8a6lEDnl3D3BxD81+6TLpKlwWfLs0+hfvCj0ORCLWMtPDkyRR32VRND+dkrhIDxZ3DEx/otGbbXDrWqVvwxGInLeLtK8ZftKj8/Jekg/P2RZZ9R1Dgi3aOWQc2M6edvyetxaaF730bQN+JNWjhvv7mqJWAYJOuFaNF7yITVawxwCYNHSCdjguGkXrMHYAG+IYfbvW5PEbk9CWM2kDEY7AheEISxKmAKVLyiWsJusMbSSYyGB22/yOqzXSap/ZfRrfxwXntM8rXg8aPewImm8D/cpJrqL8dOGphgk+Pggq2r7N8sibSSDGiDlt/KFNuC+TeNsOn8L5MAM5bKt6CtM+msPyHkoTuREoVoaQ6qcGnLWbMn+nJ5dqpP5oJDZKgbyKWuhN8UJqmuUo5sAdmSrGEgB+ZAhPOhN6Zcg==",
+  "far": "S1VUQUgxAAAAAQAAAAAAAAPqCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKGx6DLRg3Ge+wsuOWQkYtNB69RJBZhMDz99oUC/TebJYeZHswIF9C1ptm+EKhqlA7IoQDDpewffveIAPkWU1fs4sl4f/t6Ig2yBS8Vyx+eKNHue/U1wlT6dE3eik4ZnLAs7C602DNSwOwZnhiguCYUPEZ2Au+Q/1NiGR4PTm/VmNw7xIr32s1Kp1OUYteOX2an4KvBgxuHRyHO05myPhq2tBuampGiQotpFBXeW+3NrVWYOXqX9omHPkGMHEMCN1fEKwIA0N9INzFy8RNDNTCqr5HRkGLjDiaUvieh2T7AYX5U/94MKgWT2RKbc7OhHr5w1g+d/LMMsV4iRuwRmfDK7k4gCAlBWGNK0JeaNNok0tIQLmdg9Ac+zSxSifRhnxExym7yNSqGMwIu4Eux0ugXgmw2ikZNYXbGyr3vrjTjC+ehYmtGcH4QbgME2xsr7VdsyV2c1ecFJvtyIXcSLyXaBDE0lB6LlM/4UX9kb3Lu/2G3YRh3yAzgVnZqFi5eL1GzEvbbA==",
+  "near": "S1VUQUgxAAAAAQAAAAAAAAPpCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLV/xQFkYeapuOWndJc0kBC7YZ/YZ9ymUbenjkbVUogA33s74unTnkggUH8cnFLddsTLlYc8lmxqUNKxf64bEHM9GDaAaHhdCQQBn2Xn8KimS0COiLumubB/myz5pugizsg+mnV8Sxrk2Pv1P18O+Kk79FazafsU+si38DGQZTbEJiGCFT40FuL0WLh0aqdwLoGz152oQd9hpKbnkPW7G5dYTU+5E61M1U33zkJqw+JHg6tyrfksNG1/HvG/KpmrgYN81Z/abp7iqX0aMQpUBlXW8luKebbANuVF+3o7qRiSO4UnQqgbRtekiySEOT9Vsj+DHlb8mmIjbrm8D9VvxJdxUqGUDkdZqL2zi8aO5SZH97/sSbauZqmLdP2RjLB9lMO4mmrB9kAwT8nb8i6kFA91oQSccttv5lniavvT91x0gMqlBkwnflcbICo7Qaa3+ylQB3/Wfe+7V4+Sejo+UMnYj70T1xuHjHYUVqqVUXY9cTIS4NMQsLfm6Qilk77+A+5kiryA==",
   "checks": [
     {
       "case": "no history: trusted from now on",
@@ -81,9 +84,9 @@
       "anchor": 0,
       "current": "2",
       "segment": [
-        0,
-        1,
-        2
+        "0",
+        "1",
+        "2"
       ],
       "status": {
         "kind": "extends"
@@ -108,12 +111,56 @@
       }
     },
     {
-      "case": "the server no longer keeps the chain: too old",
+      "case": "a chain withheld within the server's window: forked",
       "anchor": 0,
       "current": "2",
       "segment": null,
       "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a chain withheld beyond the server's window: too old",
+      "anchor": 0,
+      "current": "far",
+      "segment": null,
+      "status": {
         "kind": "tooOld"
+      }
+    },
+    {
+      "case": "a gap exactly the window wide, withheld: forked",
+      "anchor": 0,
+      "current": "near",
+      "segment": null,
+      "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a segment that starts elsewhere: forked",
+      "anchor": 0,
+      "current": "2",
+      "segment": [
+        "forked",
+        "1",
+        "2"
+      ],
+      "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a spliced segment: forked",
+      "anchor": 0,
+      "current": "2",
+      "segment": [
+        "0",
+        "forked",
+        "2"
+      ],
+      "status": {
+        "kind": "fork"
       }
     }
   ],
@@ -167,7 +214,9 @@
       "sequence": 1,
       "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
     },
-    "reason": "rollback",
+    "status": {
+      "kind": "rollback"
+    },
     "atMs": 1791000000000
   }
 }
