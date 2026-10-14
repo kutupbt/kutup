@@ -7,9 +7,12 @@
 //!   checked next, at full cost even when there is none (an unknown name, a
 //!   voided temporary password); only a right secret learns anything about
 //!   the account (disabled, awaiting setup, 2FA).
-//! - **Lockout per account and client.** Five wrong secrets in a row from one
-//!   client IP lock that account for that IP only (`LOGIN_LOCKOUT_*`), so a
-//!   stranger elsewhere cannot lock a person out by knowing their name.
+//! - **Lockout per name and client.** Five wrong secrets in a row from one
+//!   client IP lock that canonical name for that IP only (`LOGIN_LOCKOUT_*`),
+//!   so a stranger elsewhere cannot lock a person out by knowing their name.
+//!   The key is the canonical name whether or not it is an account, so a
+//!   name's window carries on when an account takes it, and every spelling
+//!   of one name shares it.
 //! - **A ceiling per account for clients it does not know.** Attempts from
 //!   all unknown clients together are capped (`LOGIN_ACCOUNT_CEILING`, 20 in
 //!   the lockout's window; `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day), which
@@ -22,7 +25,7 @@
 //! - Every attempt takes its slots before the check, so parallel attempts
 //!   get no more than the limits; a right secret gives them back.
 //!
-//! Names that are no account get the same lockout and ceiling, keyed on the
+//! Names that are no account get the same lockout and a ceiling keyed on the
 //! canonical name, so a 429 tells nothing about whether one exists.
 
 use std::net::SocketAddr;
@@ -77,6 +80,12 @@ pub(crate) struct Client {
 }
 
 impl Client {
+    /// Where the attempt comes from, as a key (its IP, or IPv6 /64), for
+    /// per-source caps.
+    pub(crate) fn source(&self) -> String {
+        ratelimit::hash_token(&format!("ip:{}", self.ip))
+    }
+
     pub(crate) async fn from_headers(
         state: &AppState,
         headers: &HeaderMap,
@@ -115,9 +124,9 @@ impl Client {
 }
 
 /// What a known-client mark is bound to besides the account: its current
-/// password hash, so a new password (or a recovery) retires every mark.
-pub(crate) fn credential_epoch(login_key_hash: &str) -> [u8; 16] {
-    let digest = sha2::Sha256::digest(login_key_hash.as_bytes());
+/// OPAQUE record, so a new password (or a recovery) retires every mark.
+pub(crate) fn credential_epoch(opaque_record: &[u8]) -> [u8; 16] {
+    let digest = sha2::Sha256::digest(opaque_record);
     let mut epoch = [0u8; 16];
     epoch.copy_from_slice(&digest[..16]);
     epoch
@@ -171,11 +180,13 @@ pub(crate) fn guard(
     canonical_name: &str,
     epoch: Option<&[u8]>,
 ) -> AppResult<Guard> {
+    // The ceiling is the account's (a rename does not reset it); the lockout
+    // is the name's, for real and unknown names alike.
     let subject = match account {
         Some(id) => format!("account:{id}"),
         None => format!("name:{canonical_name}"),
     };
-    let lockout = format!("{subject}\0ip:{}", client.ip);
+    let lockout = format!("name:{canonical_name}\0ip:{}", client.ip);
     let known = match (account, epoch) {
         (Some(id), Some(epoch)) => client.knows(id, epoch),
         _ => false,
@@ -206,23 +217,28 @@ pub(crate) fn guard(
 }
 
 impl Guard {
-    /// Checks `secret` against `hash` at full cost, `None` for either paying
-    /// the same cost. A right secret gives the attempt's slots back.
-    pub(crate) fn verify(&self, secret: Option<&[u8]>, hash: Option<&str>) -> bool {
-        let ok = match (secret, hash) {
-            (Some(secret), Some(hash)) => verify_hash(secret, hash),
-            _ => {
-                let _ = bcrypt::verify("kutup-timing-only-not", &FAKE_BCRYPT_HASH);
-                false
+    /// The slots this attempt took, to keep with an OPAQUE sign-in between
+    /// its start and its finish: the lockout key, and the ceiling's two.
+    pub(crate) fn slots(&self) -> (String, Option<(String, String)>) {
+        (
+            self.lockout.clone(),
+            self.ceiling
+                .as_ref()
+                .map(|c| (c.account.clone(), c.source.clone())),
+        )
+    }
+
+    /// A right password, proved after the attempt that took these slots:
+    /// they are given back, as [`Guard::verify`] gives them back.
+    pub(crate) fn succeeded(lockout: &str, ceiling: Option<(&str, &str)>) {
+        ratelimit::LOGIN_LOCKOUT.succeeded(lockout);
+        if let Some((account, source)) = ceiling {
+            Ceiling {
+                account: account.to_owned(),
+                source: source.to_owned(),
             }
-        };
-        if ok {
-            ratelimit::LOGIN_LOCKOUT.succeeded(&self.lockout);
-            if let Some(ceiling) = &self.ceiling {
-                ceiling.give_back();
-            }
+            .give_back();
         }
-        ok
     }
 }
 
@@ -304,8 +320,8 @@ fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
 /// from: HttpOnly, sent only to `/api`, `Secure` in production; bound to the
 /// account's current password.
 pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppResult<String> {
-    let login_key_hash: String =
-        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1")
+    let opaque_record: Vec<u8> =
+        sqlx::query_scalar("SELECT COALESCE(opaque_record, ''::bytea) FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
@@ -313,7 +329,7 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
         &known_client_key(state).await?,
         user_id,
         time::OffsetDateTime::now_utc().unix_timestamp(),
-        &credential_epoch(&login_key_hash),
+        &credential_epoch(&opaque_record),
     );
     let mut cookie = format!(
         "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api; HttpOnly; SameSite=Strict",
@@ -401,9 +417,7 @@ mod tests {
         let epoch = Some(&EPOCH[..]);
         let attacker = client("198.51.100.1", None);
         for _ in 0..5 {
-            assert!(!guard(&attacker, account, "ada", epoch)
-                .unwrap()
-                .verify(None, None));
+            guard(&attacker, account, "ada", epoch).unwrap(); // a miss: its slots stay taken
         }
         // Locked for that client only.
         assert!(guard(&attacker, account, "ada", epoch).is_err());
@@ -411,7 +425,7 @@ mod tests {
         // Unknown clients together reach the ceiling...
         for i in 0..30u32 {
             let ip = format!("10.9.{}.1", i);
-            let _ = guard(&client(&ip, None), account, "ada", epoch).map(|g| g.verify(None, None));
+            let _ = guard(&client(&ip, None), account, "ada", epoch).map(drop);
         }
         assert!(guard(&client("192.0.2.77", None), account, "ada", epoch).is_err());
         // ...but the account's own known device still gets to try,
@@ -448,6 +462,25 @@ mod tests {
     }
 
     #[test]
+    fn the_lockout_is_the_names_whether_or_not_it_is_an_account() {
+        // Misses on a name nobody holds yet...
+        let guesser = client("198.51.100.44", None);
+        for _ in 0..5 {
+            guard(&guesser, None, "eve", None).unwrap();
+        }
+        // ...still count once an account takes it.
+        let id = Uuid::new_v4();
+        assert!(guard(&guesser, Some(id), "eve", Some(&EPOCH[..])).is_err());
+        assert!(guard(
+            &client("198.51.100.45", None),
+            Some(id),
+            "eve",
+            Some(&EPOCH[..])
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn a_ceiling_refusal_takes_nothing_from_the_clients_lockout() {
         let id = Uuid::new_v4();
         let account = Some(id);
@@ -455,7 +488,7 @@ mod tests {
         // Spread misses fill the ceiling.
         for i in 0..25u32 {
             let ip = format!("10.33.{i}.1");
-            let _ = guard(&client(&ip, None), account, "cyd", epoch).map(|g| g.verify(None, None));
+            let _ = guard(&client(&ip, None), account, "cyd", epoch).map(drop);
         }
         // The person retries from home, refused by the ceiling each time...
         let home = client("203.0.113.50", None);
@@ -477,12 +510,15 @@ mod tests {
     fn a_right_secret_gives_its_slots_back() {
         let account = Some(Uuid::new_v4());
         let epoch = Some(&EPOCH[..]);
-        let hash = bcrypt::hash("right", 4).unwrap();
         // Far more right answers than any limit: none of them count.
         for _ in 0..40 {
-            assert!(guard(&client("198.51.100.5", None), account, "bea", epoch)
+            let (lockout, ceiling) = guard(&client("198.51.100.5", None), account, "bea", epoch)
                 .unwrap()
-                .verify(Some(b"right"), Some(&hash)));
+                .slots();
+            Guard::succeeded(
+                &lockout,
+                ceiling.as_ref().map(|(a, s)| (a.as_str(), s.as_str())),
+            );
         }
     }
 
@@ -490,9 +526,7 @@ mod tests {
     fn unknown_names_meet_the_same_lockout() {
         let attacker = client("198.51.100.2", None);
         for _ in 0..5 {
-            assert!(!guard(&attacker, None, "nobody-here", None)
-                .unwrap()
-                .verify(None, None));
+            guard(&attacker, None, "nobody-here", None).unwrap(); // a miss: its slots stay taken
         }
         assert!(guard(&attacker, None, "nobody-here", None).is_err());
     }

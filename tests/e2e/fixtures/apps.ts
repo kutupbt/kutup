@@ -125,7 +125,7 @@ export async function finishNewKeys(page: Page, password: string): Promise<strin
  */
 export const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME ?? 'admin'
 const ADMIN_BOOTSTRAP_PASSWORD = process.env.E2E_BOOTSTRAP_PASSWORD ?? 'Bootstrap*Temporary123'
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'Deneme123*AdminLongPassword'
+export const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'Deneme123*AdminLongPassword'
 
 /** Signs the context in as the administrator, finishing its setup once. */
 export async function signInAsAdmin(context: BrowserContext): Promise<void> {
@@ -170,13 +170,20 @@ const BROKEN = /Your keys could not be created on this device/
  * several accounts meets that limit the way a person would, with "Too many
  * attempts", and waits for it to refill before trying again.
  */
-export async function submitThroughRateLimit(page: Page, button: string, done: Locator): Promise<void> {
+export async function submitThroughRateLimit(
+  page: Page,
+  button: string,
+  done: Locator,
+  /** Fills in again what the form cleared after a refused attempt (a password). */
+  refill?: () => Promise<void>,
+): Promise<void> {
   const limited = page.getByRole('alert').filter({ hasText: 'Too many attempts' })
   // A failure the page reports ends the wait at once, with its own words,
   // rather than after the timeout.
   const broken = page.getByRole('alert').filter({ hasText: BROKEN })
   for (let attempt = 1; ; attempt++) {
     const retrying = await limited.isVisible()
+    if (refill) await refill()
     await page.getByRole('button', { name: button, exact: true }).click()
     // The previous attempt's message stays until this one is under way.
     if (retrying) await expect(limited).toBeHidden({ timeout: 30_000 })

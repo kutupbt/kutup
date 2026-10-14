@@ -5,35 +5,29 @@
 
 import {
   ACCOUNT_ENVELOPE_PURPOSE,
-  ACCOUNT_PROTECTION_DEFAULTS,
-  decryptMasterKey,
   decryptPrivateKey,
-  deriveRecoveryAuthProof,
-  generateAccountProtectionSalt,
+  generateAccountKeySet,
   openAccountEnvelope,
-  sealAccountEnvelope,
+  rebindAccountKeySet,
   toBase64,
-  type RegistrationKeys,
+  deriveRecoveryAuthProof,
+  type AccountKeySet,
 } from '@kutup/crypto'
-import {
-  deriveAccountProtectionInWorker,
-  generateRegistrationInWorker,
-} from '@kutup/crypto/accountProtectionWorker'
+import { startOpaqueRegistration, type OpaqueRegistrar, type OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
 import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
-import type { AccountProtectionConfig } from '@kutup/crypto/kdf'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import type { SessionKeys } from '@kutup/session/keys'
+import {
+  conflictCode,
+  opaqueLogin,
+  opaqueReregister,
+  registerWith,
+  reregisterWith,
+  type RegistrationAuth,
+} from '@kutup/session/opaque'
 import { persistKeys } from '@kutup/session/persist'
 import { activateSession } from '@kutup/session/profile'
-
-interface Preflight {
-  accountProtectionSuite: number
-  accountProtectionSalt: string
-  argonMemoryKib: number
-  argonIterations: number
-  argonParallelism: number
-}
 
 interface LoginResponse {
   accessToken: string
@@ -44,18 +38,25 @@ interface LoginResponse {
   drivePrivateKeyEnvelope: string
   publicKey: string
   /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
-  envelopeBinding?: string
+  keyBinding?: string
   requiresTotp?: boolean
   preAuthToken?: string
   requiresSetup?: boolean
   setupToken?: string
+  /** The server moved to a new OPAQUE setup: re-register with this grant (purpose `rotate`). */
+  rotate?: boolean
+  grant?: string
 }
 
-/** A second factor is due. Holds the derived key-encryption key, never the password. */
+/**
+ * A second factor is due. Holds the open sign-in (its worker holds the
+ * password and the export key), never the password itself. End it with
+ * {@link abandonTotp} when it is not completed.
+ */
 export interface TotpChallenge {
   name: string
   preAuthToken: string
-  keyEncryptionKey: Uint8Array
+  signIn: OpaqueSignIn
 }
 
 /** An administrator-created account signing in for the first time. */
@@ -70,34 +71,6 @@ export type SignInResult =
   | { kind: 'signedIn' }
   | { kind: 'totp'; challenge: TotpChallenge }
   | { kind: 'setup'; setup: PendingSetup }
-
-function protectionFrom(preflight: Preflight): AccountProtectionConfig {
-  return {
-    suite: preflight.accountProtectionSuite,
-    salt: preflight.accountProtectionSalt,
-    memoryKib: preflight.argonMemoryKib,
-    iterations: preflight.argonIterations,
-    parallelism: preflight.argonParallelism,
-  }
-}
-
-async function unlockAndActivate(
-  response: LoginResponse,
-  binding: string,
-  keyEncryptionKey: Uint8Array,
-): Promise<void> {
-  // The master envelope opens only under its own binding (suite 2 derives
-  // the key from it), so once it has opened the binding is verified.
-  const masterKey = await decryptMasterKey(response.masterKeyEnvelope, keyEncryptionKey, binding)
-  const privateKey = await decryptPrivateKey(response.drivePrivateKeyEnvelope, masterKey, binding)
-  await activate(response, {
-    userId: response.userId,
-    masterKey,
-    privateKey,
-    publicKey: response.publicKey,
-    keyBinding: binding,
-  })
-}
 
 async function activate(
   response: Pick<LoginResponse, 'accessToken' | 'sessionId'>,
@@ -125,42 +98,39 @@ async function driveKeyBindingFor(keys: AccountKeys, username: string): Promise<
 }
 
 /**
- * Username (or Kutup address) + password, derived under the salt preflight
- * answers, for every account: one an administrator created too (its
- * temporary password was derived in the administrator's browser), which the
- * server answers with `requiresSetup`. The keys' binding comes only with the
- * session.
+ * Username (or Kutup address) + password, through OPAQUE: the password never
+ * leaves this browser, and the master key's envelope comes only after the
+ * server accepted the proof. An administrator-created account answers
+ * `requiresSetup`; one with a second factor, `requiresTotp`.
  */
 export async function signIn(name: string, password: string): Promise<SignInResult> {
-  const { data: preflight } = await api.get<Preflight>('/auth/login/preflight', {
-    params: { name },
-  })
-  const derived = await deriveAccountProtectionInWorker(password, protectionFrom(preflight))
-  const keyEncryptionKey = derived.keyEncryptionKey
-  const loginKey = toBase64(derived.loginKey)
-
-  const { data } = await api.post<LoginResponse>('/auth/login', { name, loginKey })
+  const { data, signIn: opened } = await opaqueLogin<LoginResponse>(name, password, { purpose: 'session' })
   if (data.requiresSetup && data.setupToken) {
-    keyEncryptionKey.fill(0)
+    opened.close()
     return { kind: 'setup', setup: { name, username: data.username, setupToken: data.setupToken } }
   }
   if (data.requiresTotp && data.preAuthToken) {
-    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, keyEncryptionKey } }
+    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened } }
   }
-  return finishSignIn(data, keyEncryptionKey)
+  return finishSignIn(data, opened)
 }
 
-/** Unlocks and activates. */
-async function finishSignIn(data: LoginResponse, keyEncryptionKey: Uint8Array): Promise<SignInResult> {
-  const binding = data.envelopeBinding
-  if (!binding) {
-    keyEncryptionKey.fill(0)
-    throw new Error('the server did not say what the keys are bound to')
-  }
+/** Opens the master key with the sign-in's export key, activates, and re-registers if the server asks. */
+async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<SignInResult> {
   try {
-    await unlockAndActivate(data, binding, keyEncryptionKey)
+    const binding = data.keyBinding
+    if (!binding) throw new Error('the server did not say what the keys are bound to')
+    // The master envelope opens only under its own binding, so once it has
+    // opened the binding is verified.
+    const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
+    const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, binding)
+    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey: data.publicKey, keyBinding: binding })
+    // A new server setup: the password just used (held by the sign-in's
+    // worker) is registered again under it, without asking. A failure leaves
+    // the old record, and the next sign-in asks again.
+    if (data.rotate && data.grant) await reregisterWith(opened, binding, masterKey, data.grant).catch(() => undefined)
   } finally {
-    keyEncryptionKey.fill(0)
+    opened.close()
   }
   return { kind: 'signedIn' }
 }
@@ -170,24 +140,113 @@ export async function completeTotp(challenge: TotpChallenge, code: string): Prom
     preAuthToken: challenge.preAuthToken,
     code,
   })
-  return finishSignIn(data, challenge.keyEncryptionKey)
+  return finishSignIn(data, challenge.signIn)
 }
 
-/** Fresh account keys bound to a key binding drawn here (Argon2id in a worker). */
-export interface AccountKeys extends RegistrationKeys {
+/** Ends a sign-in waiting for its second factor (the user went back, or left). Safe to call again. */
+export function abandonTotp(challenge: TotpChallenge): void {
+  challenge.signIn.close()
+}
+
+/**
+ * Fresh account keys bound to a key binding drawn here, with the password
+ * registered. `registrar` holds the password in its worker until
+ * {@link releaseAccountKeys}, so a refused registration can be made again
+ * without asking for it.
+ */
+export interface AccountKeys extends AccountKeySet {
   keyBinding: string
+  opaqueRecord: string
+  opaqueServerKeyId: number
+  masterKeyEnvelope: string
+  registrar: OpaqueRegistrar
+  auth: RegistrationAuth
 }
 
-/** Fresh account keys: master key, recovery phrase, envelopes, all bound to a new key binding. */
-export async function generateAccountKeys(password: string): Promise<AccountKeys> {
+/** The registration was refused twice for the same reason; the person can try again or start over. */
+export class RegistrationConflictError extends Error {
+  constructor(readonly code: 'opaqueKeyStale' | 'keyBindingTaken') {
+    super(`registration refused: ${code}`)
+    this.name = 'RegistrationConflictError'
+  }
+}
+
+/**
+ * Fresh account keys (master key, recovery phrase, envelopes, all bound to a
+ * new key binding) and the password registered for them (OPAQUE; Argon2id in
+ * a worker). `setupToken`: an administrator-created account's first sign-in.
+ * A binding that turns out taken is drawn again, once.
+ */
+export async function generateAccountKeys(password: string, setupToken?: string): Promise<AccountKeys> {
+  const auth: RegistrationAuth = setupToken ? { setupToken } : null
+  const registrar = await startOpaqueRegistration(password)
+  try {
+    const draw = async () => {
+      const keyBinding = crypto.randomUUID()
+      const keys = await generateAccountKeySet(keyBinding)
+      const registered = await registerWith(registrar, keyBinding, keys.masterKey, auth)
+      return { ...keys, keyBinding, ...registered, registrar, auth }
+    }
+    try {
+      return await draw()
+    } catch (error) {
+      if (conflictCode(error) !== 'keyBindingTaken') throw error
+      return await draw()
+    }
+  } catch (error) {
+    registrar.close()
+    throw error
+  }
+}
+
+/** Ends the worker holding the password of keys no longer needed (stored, or given up). */
+export function releaseAccountKeys(keys: AccountKeys): void {
+  keys.registrar.close()
+}
+
+/**
+ * The same keys, ready to send again after the server refused them: a record
+ * made under a server key that has since changed is made again; a key
+ * binding someone else has meanwhile is drawn again (the records bound to it
+ * sealed again; the recovery phrase stays).
+ */
+async function remade(keys: AccountKeys, code: string): Promise<AccountKeys> {
+  if (code === 'opaqueKeyStale') {
+    return { ...keys, ...(await registerWith(keys.registrar, keys.keyBinding, keys.masterKey, keys.auth)) }
+  }
   const keyBinding = crypto.randomUUID()
-  return { ...(await generateRegistrationInWorker(password, keyBinding)), keyBinding }
+  const resealed = await rebindAccountKeySet(keys, keyBinding)
+  const registered = await registerWith(keys.registrar, keyBinding, keys.masterKey, keys.auth)
+  return { ...keys, ...resealed, keyBinding, ...registered }
+}
+
+/**
+ * Sends `keys` with `send`; refused as stale or for a taken binding, remakes
+ * them and sends once more. The keys that were accepted come back with the
+ * answer.
+ */
+async function sendKeys(keys: AccountKeys, send: (keys: AccountKeys) => Promise<LoginResponse>): Promise<{ data: LoginResponse; keys: AccountKeys }> {
+  try {
+    return { data: await send(keys), keys }
+  } catch (error) {
+    const code = conflictCode(error)
+    if (code !== 'opaqueKeyStale' && code !== 'keyBindingTaken') throw error
+    const again = await remade(keys, code)
+    try {
+      return { data: await send(again), keys: again }
+    } catch (second) {
+      const repeated = conflictCode(second)
+      if (repeated === 'opaqueKeyStale' || repeated === 'keyBindingTaken') throw new RegistrationConflictError(repeated)
+      throw second
+    }
+  }
 }
 
 function registrationBody(keys: AccountKeys) {
   return {
     keyBinding: keys.keyBinding,
-    loginKey: keys.loginKey,
+    opaqueRecord: keys.opaqueRecord,
+    opaqueServerKeyId: keys.opaqueServerKeyId,
     masterKeyEnvelope: keys.masterKeyEnvelope,
     recoveryKeyEnvelope: keys.recoveryKeyEnvelope,
     drivePrivateKeyEnvelope: keys.drivePrivateKeyEnvelope,
@@ -196,55 +255,69 @@ function registrationBody(keys: AccountKeys) {
     accountAuthorityKeyId: keys.accountAuthorityKeyId,
     accountIncarnationId: keys.accountIncarnationId,
     driveSigningPublicKey: keys.driveSigningPublicKey,
-    accountProtectionSuite: keys.accountProtectionSuite,
-    accountProtectionSalt: keys.accountProtectionSalt,
-    argonMemoryKib: keys.argonMemoryKib,
-    argonIterations: keys.argonIterations,
-    argonParallelism: keys.argonParallelism,
     recoveryProof: keys.recoveryProof,
   }
 }
 
-/** Key sets whose account the server has already created. */
-const registered = new WeakSet<AccountKeys>()
-
-/**
- * Create the account, then sign in with the login key already in memory — no
- * second Argon2id run and no retyped password. Safe to call again with the
- * same keys when the sign-in half failed (a rate limit, a lost connection):
- * the account is created once, and a retry only signs in.
- */
-export async function registerAndSignIn(username: string, keys: AccountKeys): Promise<void> {
-  if (!registered.has(keys)) {
-    const driveKeyBinding = await driveKeyBindingFor(keys, username)
-    await api.post('/auth/register', { username, ...registrationBody(keys), driveKeyBinding })
-    registered.add(keys)
-  }
-  const { data } = await api.post<LoginResponse>('/auth/login', { name: username, loginKey: keys.loginKey })
-  await activate(data, {
-    userId: data.userId,
+function sessionKeys(keys: AccountKeys): SessionKeys {
+  return {
+    userId: '',
     masterKey: keys.masterKey,
     privateKey: keys.privateKey,
     publicKey: keys.publicKey,
     keyBinding: keys.keyBinding,
-  })
+  }
 }
 
-/** First sign-in of an administrator-created account: store its new keys. */
+/** Sessions the server gave for key sets it has already made an account of, with the keys it took. */
+const registered = new WeakMap<AccountKeys, { data: LoginResponse; keys: AccountKeys }>()
+
+/**
+ * Create the account: the server answers with its session (the password was
+ * registered with the keys, so no second sign-in). Safe to call again with
+ * the same keys when activating failed: the account is created once.
+ */
+export async function registerAndSignIn(username: string, keys: AccountKeys, registrationCode?: string): Promise<void> {
+  let done = registered.get(keys)
+  if (!done) {
+    const driveKeyBinding = await driveKeyBindingFor(keys, username)
+    done = await sendKeys(keys, async (sent) =>
+      (
+        await api.post<LoginResponse>('/auth/register', {
+          username,
+          ...(registrationCode ? { registrationCode } : {}),
+          ...registrationBody(sent),
+          driveKeyBinding,
+        })
+      ).data,
+    )
+    registered.set(keys, done)
+  }
+  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  releaseAccountKeys(keys)
+}
+
+/**
+ * First sign-in of an administrator-created account: store its new keys.
+ * Safe to call again with the same keys, as {@link registerAndSignIn}.
+ */
 export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Promise<void> {
-  const driveKeyBinding = await driveKeyBindingFor(keys, setup.username)
-  const { data } = await api.post<LoginResponse>(
-    '/auth/complete-setup',
-    { ...registrationBody(keys), driveKeyBinding },
-    { headers: { Authorization: `Bearer ${setup.setupToken}` } },
-  )
-  await activate(data, {
-    userId: data.userId,
-    masterKey: keys.masterKey,
-    privateKey: keys.privateKey,
-    publicKey: keys.publicKey,
-    keyBinding: keys.keyBinding,
-  })
+  let done = registered.get(keys)
+  if (!done) {
+    const driveKeyBinding = await driveKeyBindingFor(keys, setup.username)
+    done = await sendKeys(keys, async (sent) =>
+      (
+        await api.post<LoginResponse>(
+          '/auth/complete-setup',
+          { ...registrationBody(sent), driveKeyBinding },
+          { headers: { Authorization: `Bearer ${setup.setupToken}` } },
+        )
+      ).data,
+    )
+    registered.set(keys, done)
+  }
+  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  releaseAccountKeys(keys)
 }
 
 /** Normalise a typed recovery phrase: numbering, case and spacing do not matter. */
@@ -259,15 +332,11 @@ export function normalizeMnemonic(value: string): string {
 
 /**
  * Reset the password with the 24-word recovery phrase. The phrase unwraps the
- * master key locally; the server only receives a proof derived from it and a
- * new password wrapping. Every existing session of the account ends.
- * (The phrase is the second factor, so 2FA is not asked.)
+ * master key locally; the server receives a proof derived from it, which buys
+ * a one-time grant to register the new password. Every session of the
+ * account ends. (The phrase is the second factor, so 2FA is not asked.)
  */
-export async function recoverAccount(
-  name: string,
-  mnemonic: string,
-  newPassword: string,
-): Promise<void> {
+export async function recoverAccount(name: string, mnemonic: string, newPassword: string): Promise<void> {
   const { data } = await api.get<{ recoveryKeyEnvelope: string; envelopeBinding: string }>('/auth/recover/preflight', {
     params: { name },
   })
@@ -280,35 +349,12 @@ export async function recoverAccount(
     ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
     binding,
   )
-  const protection = {
-    ...ACCOUNT_PROTECTION_DEFAULTS,
-    salt: toBase64(generateAccountProtectionSalt()),
-  }
-  const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(newPassword, protection)
   try {
-    const newMasterKeyEnvelope = await sealAccountEnvelope(
-      masterKey,
-      keyEncryptionKey,
-      ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
-      binding,
-    )
     const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKey), binding)
-    await api.post('/auth/recover', {
-      name,
-      newLoginKey: toBase64(loginKey),
-      newMasterKeyEnvelope,
-      newAccountProtectionSuite: protection.suite,
-      newAccountProtectionSalt: protection.salt,
-      newArgonMemoryKib: protection.memoryKib,
-      newArgonIterations: protection.iterations,
-      newArgonParallelism: protection.parallelism,
-      recoveryProof,
-    })
+    const { data: granted } = await api.post<{ grant: string }>('/auth/recover/grant', { name, recoveryProof })
+    await opaqueReregister(newPassword, binding, masterKey, granted.grant)
   } finally {
     masterKey.fill(0)
     recoveryKey.fill(0)
-    keyEncryptionKey.fill(0)
-    loginKey.fill(0)
   }
 }
-

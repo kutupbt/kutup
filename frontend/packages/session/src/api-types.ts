@@ -142,8 +142,47 @@ export interface AdminStats {
   storageBackendUsedBytes: number
 }
 
+/** Who may register (docs/plans/registration-codes.md). */
+export type RegistrationMode = 'on' | 'code' | 'off'
+
+/** A referral code as an administrator sees it: its hint, never the code. */
+export interface RegistrationCode {
+  id: string
+  /** The code's last four characters. */
+  hint: string
+  note: string
+  createdBy: string | null
+  createdAt: string
+  expiresAt: string | null
+  /** `null`: unlimited. */
+  maxUses: number | null
+  uses: number
+  revokedAt: string | null
+  state: 'active' | 'expired' | 'usedUp' | 'revoked'
+}
+
+/** A code just made: the only time its text comes back. */
+export interface CreatedRegistrationCode extends RegistrationCode {
+  code: string
+}
+
+export interface RegistrationCodeUse {
+  userId: string
+  username: string
+  usedAt: string
+}
+
+/** The code an account signed up with. */
+export interface SignedUpWith {
+  codeId: string
+  hint: string
+  note: string
+  createdBy: string | null
+  usedAt: string
+}
+
 export interface AdminSettings {
-  registrationEnabled: boolean
+  registrationMode: RegistrationMode
   /** The storage quota new accounts get; existing accounts keep theirs. */
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number

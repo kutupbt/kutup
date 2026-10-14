@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 kutup-crypto = { path = "../kutup-crypto" }
+kutup-collab = { path = "../kutup-collab" }
+ed25519-dalek.workspace = true
 clap.workspace = true
 reqwest.workspace = true
 serde.workspace = true

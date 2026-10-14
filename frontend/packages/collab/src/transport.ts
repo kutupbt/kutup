@@ -74,6 +74,14 @@ export interface CollabTransportOpts {
    * handled strictly in order, so every frame before a position is applied.
    */
   onPosition?: (message: PositionMsg) => void | Promise<void>
+  /**
+   * Connections keep closing before they open (twice in a row): the server
+   * may no longer take this device. Resolves when the caller has checked
+   * (and replaced it if need be); the next connect asks `url` again.
+   */
+  onRefused?: () => Promise<void>
+  /** A shared file's server asks these devices to renew their statement. */
+  onRenewDevice?: (deviceIds: number[]) => void
 }
 
 export type PositionMsg =
@@ -89,6 +97,8 @@ export class CollabTransport {
   private inbox: Promise<void> = Promise.resolve()
   /** The position this connection resumed from. */
   private resumedFrom = 0
+  /** Connections in a row that closed before they opened. */
+  private refusedInARow = 0
 
   private readonly untrack: () => void
 
@@ -182,6 +192,10 @@ export class CollabTransport {
               return // ignore non-JSON text
             }
             if (obj.type === 'hello') this.opts.onHello(obj as HelloMsg)
+            else if (obj.type === 'renewDevice') {
+              const ids = (obj as { deviceIds?: unknown }).deviceIds
+              if (Array.isArray(ids)) this.opts.onRenewDevice?.(ids.filter((id): id is number => typeof id === 'number'))
+            }
             else if (obj.type === 'peers') this.opts.onPeers?.(obj as PeersMsg)
             else if (obj.type === 'base') this.opts.onBase?.(obj as BaseMsg)
             else if (obj.type === 'stored' && typeof obj.seq === 'number') {
@@ -207,6 +221,13 @@ export class CollabTransport {
     ws.addEventListener('close', () => {
       // Closed before it ever opened: the network (or the server) refused it.
       if (!opened && !this.closed) reportCollabSocket(false)
+      this.refusedInARow = opened ? 0 : this.refusedInARow + 1
+      if (!this.closed && this.refusedInARow >= 2 && this.opts.onRefused) {
+        this.refusedInARow = 0
+        // Reconnect once the device is checked, whatever the answer.
+        void this.opts.onRefused().catch((e: unknown) => this.opts.onError(e)).finally(() => this.scheduleReconnect())
+        return
+      }
       if (!this.closed) this.scheduleReconnect()
     })
     ws.addEventListener('error', (e) => this.opts.onError(e))

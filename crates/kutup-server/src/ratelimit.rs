@@ -28,9 +28,13 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_FORK_PER_MIN", 120),
     ("RATE_LIMIT_CALL_LINK_PER_MIN", 60),
     ("RATE_LIMIT_CALL_LINK_POLL_PER_MIN", 600),
+    // Retired with the login preflight (OPAQUE has none): still accepted, so
+    // a server whose environment sets it starts; it limits nothing.
     ("RATE_LIMIT_PREFLIGHT_PER_MIN", 20),
     ("RATE_LIMIT_USER_LOOKUP_PER_MIN", 30),
     ("RATE_LIMIT_REGISTER_PER_HOUR", 10),
+    ("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30),
+    ("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20),
     ("RATE_LIMIT_REPORT_PER_HOUR", 20),
     ("RATE_LIMIT_FEEDBACK_PER_HOUR", 10),
     ("RATE_LIMIT_ADMIN_PER_MIN", 120),
@@ -38,6 +42,10 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_CHAT_KEYS_IP_PER_MIN", 120),
     ("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60),
     ("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120),
+    ("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN", 600),
+    ("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20),
+    ("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300),
+    ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
     ("LOGIN_ACCOUNT_CEILING", 20),
@@ -182,13 +190,6 @@ pub static CALL_LINK_POLL: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
-/// Login preflight: 20 / minute / IP (`RATE_LIMIT_PREFLIGHT_PER_MIN`).
-pub static PREFLIGHT: LazyLock<RateLimiter> = LazyLock::new(|| {
-    RateLimiter::new(
-        env_limit("RATE_LIMIT_PREFLIGHT_PER_MIN", 20) as usize,
-        Duration::from_secs(60),
-    )
-});
 /// Looking a user up by email: 30 / minute / IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`).
 /// Sharing needs a handful; a higher rate is someone enumerating accounts.
 pub static USER_LOOKUP: LazyLock<RateLimiter> = LazyLock::new(|| {
@@ -202,6 +203,23 @@ pub static USER_LOOKUP: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static REGISTER: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_REGISTER_PER_HOUR", 10) as usize,
+        Duration::from_secs(3600),
+    )
+});
+/// Checking a referral code before signing up: 30 / hour / IP, valid or not
+/// (`RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR`).
+pub static REGISTRATION_CODE_CHECK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30) as usize,
+        Duration::from_secs(3600),
+    )
+});
+/// Referral codes that admitted no one, from checks and sign-ups together:
+/// 20 / hour / IP (`RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR`), so a
+/// code cannot be guessed (100 bits would hold anyway).
+pub static REGISTRATION_CODE_FAILURES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20) as usize,
         Duration::from_secs(3600),
     )
 });
@@ -458,6 +476,42 @@ pub static AVAILABLE_HASHES: LazyLock<RateLimiter> = LazyLock::new(|| {
     )
 });
 
+/// Collaboration frames sent over HTTP (`POST …/collab/frames`, the CLI's
+/// way in): 600 a minute per device, as many as a busy editing tab keeps.
+pub static COLLAB_FRAME_POSTS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN", 600) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Device registration challenges: 20 a minute per account (a tab or the
+/// CLI asks for one each time it registers a device).
+pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Account head reads (the head, its chain, a scope's index): 300 a minute
+/// per account, far above what a device checking before each listed write
+/// needs.
+pub static ACCOUNT_HEAD_READS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Device announces from another server: 60 a minute per (server, share).
+pub static COLLAB_DEVICE_ANNOUNCES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
+
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
 const MAX_TOTP_ATTEMPTS: u32 = 5;
@@ -536,7 +590,8 @@ pub fn spawn_cleanup() {
             RECOVERY.cleanup();
             FED_USERS.cleanup();
             LOGIN.cleanup();
-            PREFLIGHT.cleanup();
+            REGISTRATION_CODE_CHECK.cleanup();
+            REGISTRATION_CODE_FAILURES.cleanup();
             FORK.cleanup();
             CALL_LINK.cleanup();
             CALL_LINK_POLL.cleanup();
@@ -548,6 +603,9 @@ pub fn spawn_cleanup() {
             LOGIN_LOCKOUT.cleanup();
             LOGIN_CEILING.cleanup();
             AVAILABLE_HASHES.cleanup();
+            COLLAB_FRAME_POSTS.cleanup();
+            DEVICE_CHALLENGES.cleanup();
+            COLLAB_DEVICE_ANNOUNCES.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();

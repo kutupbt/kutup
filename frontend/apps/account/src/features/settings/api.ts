@@ -1,7 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@kutup/session/client'
+import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
-import { updateSession } from '@kutup/session/store'
+import { getSession, updateSession } from '@kutup/session/store'
+import { toBase64 } from '@kutup/crypto/base64'
+import { signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
 
 // --- profile ------------------------------------------------------------
 
@@ -57,11 +60,18 @@ export function useStartTotp() {
   })
 }
 
+/** A code, and the account password that allows the change (a `totp` grant, made at the last moment). */
+export interface TotpChange {
+  code: string
+  password: OneUseSecret
+}
+
 export function useVerifyTotp() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (code: string) => {
-      await api.post('/user/2fa/verify', { code })
+    mutationFn: async ({ code, password }: TotpChange) => {
+      const grant = await accountGrant(password.take(), 'totp')
+      await api.post('/user/2fa/verify', { code, grant })
     },
     onSuccess: async () => {
       updateSession({ totpEnabled: true })
@@ -73,8 +83,9 @@ export function useVerifyTotp() {
 export function useDisableTotp() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (code: string) => {
-      await api.delete('/user/2fa', { data: { code } })
+    mutationFn: async ({ code, password }: TotpChange) => {
+      const grant = await accountGrant(password.take(), 'totp')
+      await api.delete('/user/2fa', { data: { code, grant } })
     },
     onSuccess: async () => {
       updateSession({ totpEnabled: false })
@@ -133,10 +144,20 @@ export const devicesKey = ['devices'] as const
 export interface EditorDevice {
   deviceId: number
   label: string
+  /** Its Ed25519 public key, base64: what a revocation names. */
+  publicSigning: string
+  /** Not revoked. */
   isActive: boolean
+  /** Not revoked, and its sign-in is live: edits from it are taken. */
+  trusted: boolean
+  /** Trusted and renewed within 30 days: one of the at most 20 in use. */
+  inUse: boolean
   createdAt: string
   lastSeenAt: string | null
 }
+
+/** The most devices an account has in use (docs/plans/device-registration.md). */
+export const MAX_DEVICES_IN_USE = 20
 
 export function useDevices() {
   return useQuery({
@@ -148,11 +169,72 @@ export function useDevices() {
 export function useRevokeDevice() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (id: number) => {
-      await api.delete(`/devices/${id}`)
+    // Revoking is the account's act: its key signs it, so a session alone
+    // cannot revoke the account's devices.
+    mutationFn: async (device: EditorDevice) => {
+      const session = getSession()
+      if (!session) throw new Error('not signed in')
+      const revokedAtMs = Date.now()
+      const signature = await signDeviceRevocation(
+        toBase64(session.masterKey),
+        serverOfAddress(session.address),
+        device.publicSigning,
+        revokedAtMs,
+      )
+      await api.delete(`/devices/${device.deviceId}`, { data: { revokedAtMs, signature } })
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: devicesKey })
     },
+  })
+}
+
+/** The server part of a Kutup address (`username@server`): what device revocations name. */
+function serverOfAddress(address: string): string {
+  const at = address.lastIndexOf('@')
+  if (at < 0 || at === address.length - 1) throw new Error('the account address has no server')
+  return address.slice(at + 1)
+}
+
+// --- security events (the account's own sign-in history) ------------------
+
+/** What happened to the way the account signs in. Later kinds are shown generically. */
+export type SecurityEventKind = 'passwordChange' | 'recovery' | 'rotate' | 'adminReset' | 'accountReset' | (string & {})
+
+export interface SecurityEvent {
+  id: string
+  kind: SecurityEventKind
+  /** RFC 3339. */
+  at: string
+  /** Made by the session asking (this device). */
+  thisSession: boolean
+  /** The kind of session that made it (`web-account`, `cli`, …), as the session list has it; null for a recovery or an administrator's reset. */
+  client: string | null
+  /** That session's User-Agent; null as `client` is. */
+  userAgent: string | null
+  /** Done by an administrator. */
+  byAdmin: boolean
+}
+
+interface SecurityEventsPage {
+  events: SecurityEvent[]
+  /** Older events; null when there are none. */
+  next: string | null
+}
+
+export const securityEventsKey = ['security-events'] as const
+
+/** The account's security events, newest first, a page at a time. */
+export function useSecurityEvents() {
+  return useInfiniteQuery({
+    queryKey: securityEventsKey,
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) =>
+      (
+        await api.get<SecurityEventsPage>('/user/security-events', {
+          params: { limit: 50, ...(pageParam ? { cursor: pageParam } : {}) },
+        })
+      ).data,
+    getNextPageParam: (last) => last.next ?? undefined,
   })
 }

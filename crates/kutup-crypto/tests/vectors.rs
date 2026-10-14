@@ -985,10 +985,14 @@ fn print_drive_names_vectors() {
         // Turkish dotless ı stays itself; capital I folds to i: different names.
         "ılık.txt",
         "ILIK.txt",
-        // Capital sigma at the end of a word folds to final ς, elsewhere to σ.
+        // Capital sigma folds to final ς at the true end of a word, and to σ
+        // where a letter follows (".txt" counts: the dot is case-ignorable).
         "ΟΔΟΣ.txt",
         "οδος.txt",
         "οδοσ.txt",
+        "ΟΔΟΣ",
+        "οδος",
+        "οδοσ",
     ]
     .iter()
     .map(|name| {
@@ -1097,6 +1101,93 @@ fn print_drive_envelope_negatives() {
     println!(
         "{}",
         serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
+    );
+}
+
+/// Collaboration devices (kutup-crypto/src/device_registration.rs): the
+/// account authority's statement for a device key (over a server challenge
+/// and a time) and its revocation, kept together.
+#[test]
+fn device_registration_vector() {
+    use kutup_crypto::device_registration as dr;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["deviceRegistration"];
+    let key32 = |field: &str| -> [u8; 32] { b64(v[field].as_str().unwrap()).try_into().unwrap() };
+    let identity =
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&key32("masterKey")).unwrap();
+    let authority = identity.authority_public_key();
+    let (device, challenge) = (key32("devicePublicKey"), key32("challenge"));
+    let server = v["server"].as_str().unwrap();
+    let statement = dr::DeviceStatement {
+        server,
+        user_id: v["userId"].as_str().unwrap(),
+        device_public: &device,
+        purpose: dr::PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: v["issuedAtMs"].as_i64().unwrap(),
+    };
+    let signature = dr::sign(&identity, &statement).unwrap();
+    assert_eq!(signature, v["signature"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
+        v["signingBytes"].as_str().unwrap()
+    );
+    dr::verify(&authority, &statement, &signature).unwrap();
+    let other = key32("otherAuthorityPublicKey");
+    assert!(dr::verify(&other, &statement, &signature).is_err());
+    let later = dr::DeviceStatement {
+        issued_at_ms: statement.issued_at_ms + 1,
+        ..statement
+    };
+    assert!(dr::verify(&authority, &later, &signature).is_err());
+    let r = &v["revocation"];
+    let revoked_at = r["revokedAtMs"].as_i64().unwrap();
+    let revocation = dr::sign_revocation(&identity, server, &device, revoked_at).unwrap();
+    assert_eq!(revocation, r["signature"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(
+            dr::revocation_bytes(&identity.incarnation_id(), server, &device, revoked_at).unwrap()
+        ),
+        r["signingBytes"].as_str().unwrap()
+    );
+    dr::verify_revocation(&authority, server, &device, revoked_at, &revocation).unwrap();
+    assert!(dr::verify_revocation(&other, server, &device, revoked_at, &revocation).is_err());
+}
+
+#[test]
+#[ignore]
+fn print_device_registration_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::device_registration as dr;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x44; 32]).unwrap();
+    let (server, user) = ("kutup.dev", "11111111-1111-4111-8111-111111111111");
+    let (device, challenge, at) = ([0x55u8; 32], [0x66u8; 32], 1_790_000_000_000i64);
+    let statement = dr::DeviceStatement {
+        server,
+        user_id: user,
+        device_public: &device,
+        purpose: dr::PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: at,
+    };
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Collaboration devices signed by their account (kutup-crypto/src/device_registration.rs): the authority signs the incarnation, the server, the account, the device key, its purpose (1: collaboration frames), the server's one-time challenge and the time; and, to revoke it, the incarnation, server, key and time.",
+            "masterKey": e(&[0x33; 32]),
+            "otherAuthorityPublicKey": e(&other.authority_public_key()),
+            "server": server, "userId": user,
+            "devicePublicKey": e(&device), "challenge": e(&challenge), "issuedAtMs": at,
+            "signingBytes": hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
+            "signature": dr::sign(&identity, &statement).unwrap(),
+            "revocation": {
+                "revokedAtMs": at + 1000,
+                "signingBytes": hex::encode(dr::revocation_bytes(&identity.incarnation_id(), server, &device, at + 1000).unwrap()),
+                "signature": dr::sign_revocation(&identity, server, &device, at + 1000).unwrap(),
+            },
+        })
     );
 }
 

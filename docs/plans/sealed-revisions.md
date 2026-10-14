@@ -87,6 +87,9 @@ These are the same limits identity pins always had:
 
 ## Follow-up: protection across devices
 
+Now designed in docs/plans/rollback-protection.md (the account head). What
+follows is the original sketch.
+
 Each device knows only what it has seen. A server could still show a device
 that has never seen a newer value an older one, or show two devices
 different histories, as long as it stays consistent towards each device.

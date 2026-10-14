@@ -84,6 +84,30 @@ export function setUnauthenticatedHandler(handler: () => void): void {
   onUnauthenticated = handler
 }
 
+/**
+ * The server-side session is gone (a refresh failed): every tab of this
+ * origin clears its local state, then the app decides where to go (login or
+ * a new fork).
+ */
+export function endSession(): void {
+  broadcastLogout()
+  clearPersisted()
+  clearSession()
+  onUnauthenticated()
+}
+
+/** A new access token for this session, or the session ends (and this throws). */
+export async function refreshOrEnd(): Promise<string> {
+  try {
+    const { accessToken } = await refreshAccessToken()
+    setAccessToken(accessToken)
+    return accessToken
+  } catch (error) {
+    endSession()
+    throw error
+  }
+}
+
 const api = axios.create({
   withCredentials: true,
 })
@@ -92,11 +116,22 @@ const api = axios.create({
 api.interceptors.request.use(async (config) => {
   config.baseURL = await resolveApiBase()
   const token = getAccessToken()
-  if (token) {
+  // A request that names its own credential (an administrator-made account's
+  // setup token) keeps it.
+  if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
+
+/**
+ * The sign-in calls, matched on the whole path (with or without the `/api`
+ * base): their 401 never means this session's token ran out. The fork
+ * consume is here because it carries no token at all (its link and the
+ * Origin are its credential).
+ */
+const SIGN_IN_CALL =
+  /(?:^|\/api)\/auth\/(?:login\/(?:start|finish|2fa)|register|opaque\/register\/(?:start|finish)|complete-setup|recover\/(?:preflight|grant)|refresh|logout|registration-code\/check|settings|forks\/consume)$/
 
 // Auto-refresh on 401
 let isRefreshing = false
@@ -145,16 +180,18 @@ api.interceptors.response.use(
       }
     }
 
-    // A 401 from these means "wrong credentials / invalid fork", not an expired
-    // access token. The signed-in password re-checks (Kutup Pass's lock) say
-    // so in the body; any other 401 there is an expired token, refreshed as
-    // usual. Retrying a wrong password would count it twice toward the
-    // sign-in lockout.
-    const wrongPassword =
-      Boolean(originalRequest.url?.match(/\/user\/reauth|\/pass\/pin/)) &&
-      (error.response?.data as { code?: unknown } | undefined)?.code === 'invalidCredentials'
+    // A 401 from a sign-in call is about its own credential (a password, a
+    // pre-auth or setup token, a fork link), not this session's token:
+    // refreshing would end this origin's other tabs when there is no
+    // session, or retry with another account's token when there is one.
+    // Signed-in password checks restart themselves (reauth.ts). Every other
+    // call, /api/auth/sessions and /api/auth/forks included, refreshes.
+    const code = (error.response?.data as { code?: unknown } | undefined)?.code
     const skipRefresh =
-      wrongPassword || originalRequest.url?.match(/\/auth\/(login|register|recover|complete-setup|refresh|forks\/consume)/)
+      SIGN_IN_CALL.test((originalRequest.url ?? '').split('?')[0]!) ||
+      code === 'invalidCredentials' ||
+      code === 'setupTokenInvalid' ||
+      code === 'preAuthInvalid'
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
@@ -176,13 +213,7 @@ api.interceptors.response.use(
         return api(originalRequest)
       } catch (refreshError) {
         processQueue(refreshError, null)
-        // Refresh failed → the server-side session is gone. Tell every tab of
-        // this origin to clear local state, then let the app decide where to
-        // go (login or a new fork).
-        broadcastLogout()
-        clearPersisted()
-        clearSession()
-        onUnauthenticated()
+        endSession()
         return Promise.reject(refreshError)
       } finally {
         isRefreshing = false

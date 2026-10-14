@@ -4,7 +4,7 @@ import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { sealedAt } from '@kutup/drive-core/keyring'
 import { contentPath, fileLocation, remoteStatePath, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { fromBase64 } from '@kutup/crypto'
-import { parseListJson, stateToListJson, type Place } from '@kutup/map/list'
+import { parseListJson, stateToListJson, uploadPlaceId, type Place } from '@kutup/map/list'
 import api from '@kutup/session/client'
 import type { ListEntry } from './lists'
 
@@ -13,7 +13,11 @@ export async function uploadedPlaces(file: DriveFile, folder?: Pick<Folder, 'sou
   const path = folder ? contentPath(fileLocation(folder), file.id) : `/files/${file.id}/download`
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
   const sealed = await sealedAt(file, file.contentKeyGeneration)
-  return parseListJson(await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context))
+  // A list's first content: places without an id get the same one on every
+  // peer (and in the CLI), so seeds made at once are one.
+  return parseListJson(await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context), (index) =>
+    uploadPlaceId(file.id, index),
+  )
 }
 
 /**

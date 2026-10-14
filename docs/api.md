@@ -37,19 +37,35 @@ Specific codes, where an app does something particular (a test in
 
 | Code | Status | Meaning |
 |---|---|---|
-| `invalidCredentials` | 401 | A wrong password or login key (not an expired session) |
+| `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
+| `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
+| `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
+| `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
+| `opaqueKeyStale` | 409 | An OPAQUE record made against a setup that is no longer the server's current one: register again |
+| `opaqueKeyMissing` | 500 | The account's record names an OPAQUE setup whose key is not in `OPAQUE_SETUP_KEYS`: the operator restores the key (the account can recover with its phrase meanwhile) |
+| `keyBindingTaken` | 409 | The key binding drawn for a new record is another account's: draw another |
 | `rateLimited` | 429 | This address asked too often (a minute); nginx's own 429 too |
 | `peerUnsupported` | 503 | The recipient's server lacks this Chat wire; the message waits |
 | `peerRefused` | 502 | The recipient's server refused this message for good |
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
+| `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
+| `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write waits for setup |
+| `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
+| `frameRefused` | 409 | A collaboration frame sent over HTTP was not kept (stale key or document key, not this device's, a replay): read the log again |
+| `deviceNotAuthorized` | 403 | A collaboration device the account has not vouched for (an unanswered, used or expired challenge, a statement that does not verify, a revoked device or one of an earlier incarnation): register one again, do not sign out |
+| `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
+| `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
+| `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
+| `registrationCodeInvalid` | 403 | The referral code admits no one: one answer whether it is unknown, expired, revoked or used up |
 | `newKeyNeeded` | 409 | A new key must be made first |
 | `noAddressKey` | 409 | The address has no key yet |
 | `sharesNeeded` | 409 | Shares must be updated first |
@@ -86,7 +102,7 @@ client type, sent by the client in the `X-Kutup-Client` header:
 
 | Client type | Who | Signs in | Refresh token |
 |---|---|---|---|
-| `web-account` | the account web app (`account.<domain>`) | password (`/login`, `/login/2fa`, `/complete-setup`) | HttpOnly cookie on that origin |
+| `web-account` | the account web app (`account.<domain>`) | password (`/login/start` and `/login/finish`, `/login/2fa`, `/complete-setup`, `/register`) | HttpOnly cookie on that origin |
 | `web-drive`, `web-chat` | the Drive and Chat web apps | **forked** from a `web-account` session (`/api/auth/forks`) | HttpOnly cookie on their own origin |
 | `cli` | the `kutup` CLI | password | JSON body |
 
@@ -94,13 +110,30 @@ Access tokens are 15-minute JWTs carrying the session id (`sid`); every
 authenticated request (and each collab / chat WebSocket upgrade) checks that
 the session is still live, so revoking a session takes effect immediately.
 Refresh tokens are opaque 32-byte secrets that **rotate on every refresh**;
-see `/api/auth/refresh`. Resetting the password (`/api/auth/recover`), an admin
-disabling the account and an admin wipe end every session of the account.
+see `/api/auth/refresh`. A new password ends the account's other sessions, a
+recovery all of them; an admin disabling the account and an admin wipe end
+every session of the account.
+
+**Passwords are OPAQUE** (RFC 9807, docs/plans/opaque.md): the server keeps a
+record per account that is useless without an online exchange, and never sees
+the password or anything to test a guess against offline. Sign-in is
+`login/start` then `login/finish`; a new password is `opaque/register/start`
+then `opaque/register/finish` (or the request that creates the account). Every
+binary value is canonical base64 of the `opaque-ke` messages; suite 1 is
+ristretto255, Triple-DH and Argon2id (64 MiB, t = 3, p = 1).
+
+**Grants** (`kg1_…`) prove a fresh password, or the recovery phrase, for one
+action: `pass` (the Pass PIN), `passwordChange`, `totp` (turning two-step
+sign-in on or off, with a current code), `adminReset`, `recovery`, `rotate`. Each is bound to one account and, except a recovery's, to
+the session it was issued to; it is used once and expires in five minutes (a
+`rotate` one in two). It is never a session. A grant that does not fit is
+`403 grantInvalid`, whatever the reason.
 Design: `docs/plans/multi-app-web-rewrite.md`.
 
 ### GET /api/auth/settings
 
-Returns public server settings: whether registration is open, the Chat
+Returns public server settings: who may register (`registrationMode`:
+`on`, `code` with a referral code, or `off`), the Chat
 capability advertisement, and where each web app lives (`apps`, from
 `KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
@@ -109,7 +142,7 @@ capability advertisement, and where each web app lives (`apps`, from
 **Response:**
 ```jsonc
 {
-  "registrationEnabled": true,
+  "registrationMode": "code",
   "chat": {
     "enabled": true,
     "protocolVersion": 1,
@@ -144,6 +177,15 @@ federated path is enabled.
 ### POST /api/auth/register
 
 Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE_LIMIT_REGISTER_PER_HOUR`).
+Who may register is the registration mode (docs/plans/registration-codes.md),
+checked before anything else: `off` refuses everyone (`registrationClosed`),
+`code` needs `registrationCode` (`registrationCodeRequired` without one), `on`
+admits anyone and records a code if one is given. A code that admits no one
+gets `403 registrationCodeInvalid`, the same answer for every reason, and
+counts against the address (20 an hour together with code checks,
+`RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR`; then `429 rateLimited`). A
+code is used up in the transaction that creates the account, so a code with N
+uses admits exactly N accounts however many sign up at once.
 
 **Auth:** None
 
@@ -151,8 +193,10 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
 ```json
 {
   "username": "alice",
+  "registrationCode": "7KQ2M-9XD4T-PAV3W-8HCNR",
   "keyBinding": "<lowercase UUID v4 drawn by the client>",
-  "loginKey": "<base64>",
+  "opaqueRecord": "<base64 OPAQUE RegistrationUpload>",
+  "opaqueServerKeyId": 1,
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
@@ -161,20 +205,19 @@ Create a new account with an encrypted key bundle. Rate-limited (10/hr/IP, `RATE
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
   "driveSigningPublicKey": "<base64 32 bytes>",
-  "accountProtectionSuite": 1,
-  "accountProtectionSalt": "<base64 16 bytes>",
-  "argonMemoryKib": 65536,
-  "argonIterations": 3,
-  "argonParallelism": 1,
   "recoveryProof": "<base64>",
   "driveKeyBinding": "<canonical base64, 64 bytes>"
 }
 ```
 
-All key material is encrypted client-side before being sent. One parameterized
-Argon2id invocation derives an account-protection root; HKDF purpose subkeys
-produce the master-key KEK and `loginKey`. The server bcrypts only `loginKey`.
-`recoveryProof` is a distinct HKDF output bound to the key binding;
+All key material is encrypted client-side before being sent. The password is
+registered first (`POST /api/auth/opaque/register/start` for the new key
+binding, then the client's half), and its OPAQUE export key seals the master
+key (`masterKeyEnvelope`). `opaqueServerKeyId` is the setup register/start
+answered under; a record made against a setup that is no longer the current
+one is refused (`409 opaqueKeyStale`: start again). The key binding is checked
+unused in the transaction that creates the account (`409 keyBindingTaken`:
+draw another). `recoveryProof` is a distinct HKDF output bound to the key binding;
 the raw recovery entropy that opens `recoveryKeyEnvelope` is never sent. Each
 envelope authenticates its suite, purpose, key binding, nonce and
 exact ciphertext length as AEAD associated data. The three purposes cannot be
@@ -188,47 +231,104 @@ self-signed first manifest cannot select a replacement authority.
 `username@<server name>` and the Drive keys (`kutup_crypto::drive_key_binding`,
 docs/plans/drive-identity-pins.md); `400` when missing or not matching.
 
-**Response:** `201 Created`
+**Header:** `X-Kutup-Client` as for sign-in.
 
-**Errors:** `403` if registration is disabled, `409` if the username is already taken.
+**Response:** `200`, the session, as `POST /api/auth/login/finish` answers it:
+the client made the keys and holds the export key, so there is no second
+exchange.
 
----
-
-### GET /api/auth/login/preflight
-
-Fetch the complete account-protection suite and parameters before submitting credentials. Rate-limited. Every account answers with a salt of its own, one an administrator created too (its temporary password was derived in the administrator's browser); a name that is no account gets a salt that stays the same and that no one without the server's secret can tell from a real one (an HMAC under a key derived from `JWT_SECRET`). What the account's keys are bound to is not told here: it comes with the session (`envelopeBinding` below). Docs: `docs/plans/account-identity.md`.
-
-**Auth:** None
-**Query:** `?name=alice` (the username, or the Kutup address `alice@<domain>`)
-
-**Response:**
-```json
-{
-  "accountProtectionSuite": 1,
-  "accountProtectionSalt": "<base64 16 bytes>",
-  "argonMemoryKib": 65536,
-  "argonIterations": 3,
-  "argonParallelism": 1
-}
-```
+**Errors:** `403` with `registrationClosed`, `registrationCodeRequired` or
+`registrationCodeInvalid` (above), `409` if the username is already taken,
+`409 keyBindingTaken`, `409 opaqueKeyStale`.
 
 ---
 
-### POST /api/auth/login
+### POST /api/auth/registration-code/check
 
-Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RATE_LIMIT_LOGIN_PER_MIN`). On top of the per-IP limit, 5 wrong passwords in a row for one account from one client IP (`LOGIN_LOCKOUT_THRESHOLD`) lock that account for that IP: further attempts return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`). Wrong passwords from clients the account does not know are also capped per account, all together (`LOGIN_ACCOUNT_CEILING`, 20 in the same window; `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day; an IPv6 client counts by its /64); a client that signed in to the account before carries the HttpOnly `kutup_known` cookie (set here and by `POST /api/auth/forks/consume`) and is not held by that cap. Both apply to unknown names too, so a `429` does not reveal whether the account exists. A malformed `loginKey` is a `400` before the name is looked up; a disabled account is said only after a right password. A `429` from the lockout or the ceiling carries `code: accountLocked` (a while); one from a per-address route limiter carries `code: rateLimited` (a minute).
+Whether a referral code can admit a sign-up now, so the sign-up page can say
+so before it derives the account's keys. It uses nothing up; the account's
+own registration takes the use.
 
-**Auth:** None · **Header:** `X-Kutup-Client: web-account` or `cli` (required; `400` otherwise)
+**Auth:** None. Rate-limited per address (30 an hour,
+`RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR`), and a code that admits no one
+counts with sign-ups' wrong codes (above).
+
+**Request body:** `{ "code": "7kq2m 9xd4t pav3w 8hcnr" }`: case, spaces and
+dashes do not matter, and I/L read as 1, O as 0.
+
+**Response:** `204`; `403 registrationCodeInvalid` (the same answer for every
+reason), `403 registrationClosed` when registration is off, `429 rateLimited`.
+
+---
+
+### POST /api/auth/login/start
+
+The server's half of an OPAQUE sign-in's first message. Rate-limited (10/min/IP,
+`RATE_LIMIT_LOGIN_PER_MIN`).
+
+**Every start counts as a failed attempt, before any OPAQUE work.** A client
+checks the password itself and needs no finish to learn a guess was wrong, so
+the start is the attempt. A right finish gives it back.
+- **Lockout:** 5 attempts in a row for one account from one client IP
+  (`LOGIN_LOCKOUT_THRESHOLD`) lock that account for that IP: further starts
+  return `429` for 15 minutes (`LOGIN_LOCKOUT_MINUTES`).
+- **Ceiling:** attempts from clients the account does not know are also capped
+  per account, all together (`LOGIN_ACCOUNT_CEILING`, 20 in the same window;
+  `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day; an IPv6 client counts by its /64).
+  A client that signed in to the account before carries the HttpOnly
+  `kutup_known` cookie (set at a session's finish and by
+  `POST /api/auth/forks/consume`) and is not held by that cap.
+- **Unknown names:** both apply to them too, keyed by the canonical name, so a
+  `429` does not reveal whether the account exists.
+- **Codes:** a `429` from the lockout or the ceiling carries `code:
+  accountLocked` (a while); one from a per-address route limiter carries
+  `code: rateLimited` (a minute).
+
+**What an answer reveals:** a name that is no account (a held name after a
+rename, another server's address, a name never taken) gets OPAQUE's fake
+answer, of the same shape and size, the same each time for that name; it can
+never be finished. A malformed request is a `400` before the name is looked
+up. At most 5 sign-ins are under way per name and 20 per address; past
+either, the oldest is dropped. A sign-in waits at most two minutes for its
+finish.
+
+**Auth:** None (`purpose: "reauth"`: Bearer JWT, and the name must be the
+caller's account) · **Header:** `X-Kutup-Client: web-account` or `cli` for a
+session (`400` otherwise)
 
 **Request body:**
 ```json
 {
   "name": "alice",
-  "loginKey": "<base64>"
+  "credentialRequest": "<base64 KE1>",
+  "purpose": "session",
+  "for": null
 }
 ```
 
-**Response (no 2FA):**
+`purpose` is `session` (sign-in, the default) or `reauth`: a signed-in person
+proving the password again for a grant, `for` one of `pass`, `passwordChange`,
+`totp`, `adminReset`; or `for: "verify"`, the password checked and nothing
+kept (`login/finish` answers `{"ok": true}` and stores no grant; Pass unlock
+uses it). A reauth counts against the account's lockout and ceiling as a
+sign-in does.
+
+**Response:** `{ "loginId": "<uuid>", "credentialResponse": "<base64 KE2>", "suite": 1 }`.
+
+---
+
+### POST /api/auth/login/finish
+
+Checks the client's KE3. Every miss is the same `401 invalidCredentials`: a
+wrong password, a name that is no account, a used or expired login id. A
+malformed finalization is a `400`.
+
+**Auth:** None (a reauth: the Bearer JWT of the session that started it) ·
+**Header:** `X-Kutup-Client` as for the start
+
+**Request body:** `{ "loginId": "<uuid>", "credentialFinalization": "<base64 KE3>" }`
+
+**Response (a session, no 2FA):**
 ```json
 {
   "accessToken": "<jwt>",
@@ -238,18 +338,28 @@ Exchange the Argon2id-derived login key for tokens. Rate-limited (10/min/IP, `RA
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
-  "envelopeBinding": "<the account's key binding (a UUID v4)>",
+  "keyBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,
   "storageQuotaBytes": 5368709120,
   "storageUsedBytes": 104857600
 }
 ```
 
-For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+The export key the client got from the exchange opens `masterKeyEnvelope`
+(`kutup_crypto::opaque::ExportKey::open_master_key`). For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+
+When the account's record is under a setup that is no longer the server's
+current one (`OPAQUE_SETUP_KEYS` rotated), the session also carries
+`"rotate": true` and a `grant` (purpose `rotate`, this session, two minutes):
+the client registers the password it just used again
+(`opaque/register/start` and `/finish` for the account's own key binding),
+silently. Nobody's sign-in ends for that.
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
-**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (the username is what the new keys' `driveKeyBinding` names). Its temporary password is derived under the preflight salt as any password is; the server never had it.
+**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (the username is what the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
+
+**Response (a reauth):** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
 
 ---
 
@@ -257,7 +367,7 @@ For `web-account` the refresh token is an HttpOnly, host-only cookie named `refr
 
 Complete login when 2FA is enabled. Locked after 5 failed attempts.
 
-**Auth:** None (uses `preAuthToken` from the login response) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
+**Auth:** None (uses `preAuthToken` from the sign-in's answer) · **Header:** `X-Kutup-Client` as for `/api/auth/login/start`
 
 **Request body:**
 ```json
@@ -267,7 +377,9 @@ Complete login when 2FA is enabled. Locked after 5 failed attempts.
 }
 ```
 
-**Response:** Same full token response as `/api/auth/login` (no 2FA branch).
+**Response:** the same session as `/api/auth/login/finish` answers (with
+`rotate` and `grant` when due). The client keeps the export key across this
+step.
 
 ---
 
@@ -288,31 +400,79 @@ Fetch the encrypted recovery key bundle so the client can decrypt the master key
 
 ---
 
-### POST /api/auth/recover
+### POST /api/auth/recover/grant
 
-Recover an account using a mnemonic-derived recovery key. The client proves possession of the mnemonic with `recoveryProof` and submits a fresh key bundle derived from a new password. Rate-limited (5/hr/IP).
+The recovery phrase's proof, for a `recovery` grant (no session): with it the
+client registers a new password (`opaque/register/start` and `/finish` for the
+account's key binding), which ends every session of the account. Rate-limited
+(5/hr/IP).
 
 **Auth:** None
+
+**Request body:** `{ "name": "alice", "recoveryProof": "<base64>" }`
+
+`recoveryProof` is the 32-byte HKDF-derived authorization proof. The server
+bcrypt-compares it to the verifier stored at registration; it never receives
+the recovery entropy used for decryption. An unknown name, an account without
+a verifier and a wrong phrase are the same `401`, checked at full cost.
+
+**Response:** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
+
+---
+
+### POST /api/auth/opaque/register/start
+
+The server's answer to a registration request for a key binding: stateless,
+derived from the current setup and the key binding. Each answer is one query
+of that key binding's OPRF key, so it is limited as a sign-in start is
+(`RATE_LIMIT_LOGIN_PER_MIN`) and needs one of:
+- `grant`: `passwordChange`, `recovery` or `rotate` for the account's own key
+  binding (a new password), or an admin reset's grant (`adminReset` with a
+  target, from `reset-grant`) for a new key binding of that account;
+- Bearer the setup token, at first sign-in, for the account's own new key
+  binding;
+- Bearer an administrator's session, for a new account's key binding;
+- nothing, for a sign-up's new key binding, while sign-ups are open
+  (`403 registrationClosed` otherwise).
+
+A new key binding must be unused (`409 keyBindingTaken`: draw another). The
+grant is checked here and used at the request that stores the record.
+
+**Request body:** `{ "keyBinding": "<uuid v4>", "registrationRequest": "<base64>", "grant": null }`
+
+**Response:** `{ "registrationResponse": "<base64>", "serverKeyId": 1 }`.
+
+---
+
+### POST /api/auth/opaque/register/finish
+
+A new password for an existing account. The grant must be
+`passwordChange` (used by the session it was issued to), `recovery`, or
+`rotate` (the session it was issued to). In one transaction:
+- the record and the password envelope change together (the master key is
+  sealed under the new password's export key);
+- every outstanding grant and sign-in under way for the account ends.
+
+In the same transaction, a password change ends the account's other sessions
+and a recovery all of them; a rotation ends none. Each is recorded as a
+security event (`GET /api/user/security-events`). A `rotate` grant is good
+only while the account's record is under a retired setup: once moved, a
+second one is refused (`403`), so it never serves as a password change.
+
+**Auth:** None, or the Bearer JWT of the grant's session
 
 **Request body:**
 ```json
 {
-  "name": "alice",
-  "recoveryProof": "<base64>",
-  "newLoginKey": "<base64>",
-  "newMasterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
-  "newAccountProtectionSuite": 1,
-  "newAccountProtectionSalt": "<base64 16 bytes>",
-  "newArgonMemoryKib": 65536,
-  "newArgonIterations": 3,
-  "newArgonParallelism": 1
+  "grant": "kg1_…",
+  "keyBinding": "<the account's>",
+  "opaqueRecord": "<base64>",
+  "opaqueServerKeyId": 1,
+  "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>"
 }
 ```
 
-`recoveryProof` is the 32-byte HKDF-derived authorization proof. The server
-bcrypt-compares it to the verifier stored at registration; it never receives
-the recovery entropy used for decryption. A successful recovery **ends every
-session** of the account (web apps and CLIs alike).
+**Response:** `204`; `403 grantInvalid`; `409 opaqueKeyStale`.
 
 ---
 
@@ -352,11 +512,15 @@ session** and everything forked from it. A failed web refresh clears the cookie.
 
 Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't yet generated a recovery phrase. The client derives a full key bundle (mnemonic, master key, recovery entropy, account Drive keys and typed account envelopes) and submits it here.
 
-**Auth:** Bearer `setupToken` (returned by `/api/auth/login` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for `/api/auth/login`
+**Auth:** Bearer `setupToken` (returned by `/api/auth/login/finish` when `requiresSetup` is true) · **Header:** `X-Kutup-Client` as for sign-in
 
-**Request body:** Same shape as `POST /api/auth/register` (encrypted key bundle, salts, public key, and the required `driveKeyBinding` for the account's address; `username` is ignored).
+**Request body:** Same shape as `POST /api/auth/register` (the key bundle, the
+OPAQUE record of the person's own password under a key binding they drew now,
+registered with the setup token as Bearer, and the required `driveKeyBinding`
+for the account's address; `username` is ignored). The temporary password's
+record goes with it.
 
-**Response:** creates a session and issues tokens exactly as `/api/auth/login` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
+**Response:** creates a session and issues tokens exactly as `/api/auth/login/finish` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
 ```json
 {
   "accessToken": "<jwt>",
@@ -599,20 +763,22 @@ Generate a TOTP secret and return a QR code URI.
 }
 ```
 
-The secret is stored as *pending* and only becomes active after `POST /api/user/2fa/verify` succeeds.
+The secret is stored as *pending* and only becomes active after `POST /api/user/2fa/verify` succeeds. While two-step sign-in is on, this is `409`: the secret in use changes only by turning it off and on again.
 
 ---
 
 ### POST /api/user/2fa/verify
 
-Confirm TOTP setup by providing the first valid code.
+Confirm TOTP setup by providing the first valid code, with the password proved
+again: a `totp` grant from a reauth of this session.
 
 **Auth:** Bearer JWT
 
 **Request body:**
 ```json
 {
-  "code": "123456"
+  "code": "123456",
+  "grant": "kg1_…"
 }
 ```
 
@@ -620,16 +786,57 @@ Confirm TOTP setup by providing the first valid code.
 
 ### DELETE /api/user/2fa
 
-Disable TOTP for the current user. Requires a valid TOTP code to prevent a stolen session from silently removing 2FA.
+Disable TOTP for the current user. Requires a valid TOTP code and a `totp`
+grant from a reauth of this session, so a stolen session cannot remove 2FA.
 
 **Auth:** Bearer JWT
 
 **Request body:**
 ```json
 {
-  "code": "123456"
+  "code": "123456",
+  "grant": "kg1_…"
 }
 ```
+
+---
+
+### GET /api/user/security-events
+
+What changed the caller's sign-in, newest first: a new password, a recovery, a
+move to the server's current sign-in setup, an administrator's reset. Kept a
+year, or the newest 500. No IP addresses. An account reset keeps the earlier
+events.
+
+**Auth:** Bearer JWT
+
+**Query:** `limit` (1–100, default 50), `cursor` (the previous page's `next`;
+one that is not one of the caller's events is `400`: start from the first page)
+
+**Response:**
+```json
+{
+  "events": [
+    {
+      "id": "<uuid>",
+      "kind": "passwordChange",
+      "at": "2026-10-14T09:00:00Z",
+      "thisSession": true,
+      "client": "web-account",
+      "userAgent": "Mozilla/5.0 …",
+      "byAdmin": false
+    }
+  ],
+  "next": "<uuid or null>"
+}
+```
+
+- `kind`: `passwordChange`, `recovery`, `rotate`, `adminReset`,
+  `accountReset`. More kinds will come; show an unknown one generally.
+- `thisSession`: made from the caller's own sign-in.
+- `client`, `userAgent`: what made it, as the session list shows it (absent
+  for a recovery or an administrator's reset).
+- `byAdmin`: an administrator's reset.
 
 ---
 
@@ -715,6 +922,91 @@ saves a change made in its theme or language control
 (`useAccountUiPreferences`, `frontend/packages/session/src/uiPreferences.ts`).
 The first app to load for an account that never chose saves its own choice.
 Public pages (shared links, public albums) keep only the local choice.
+---
+
+## The account head
+
+Rollback protection across devices (docs/plans/rollback-protection.md): one
+small sealed head per account, numbered and hash-chained, saying for each kind
+of listed value how many there are and a digest of their `(id, revision)`
+pairs. The server never opens it; it reads the sequence in clear and keeps the
+newest 1,001 (a device anchored 1,000 heads back still gets its whole segment,
+anchor included).
+
+**Listed writes** carry the next head as `head` (base64) in their JSON body:
+contacts (create, update, delete, `delete` many, import: one head per batch),
+mail folder, label and filter names (create, rename, delete), the identity pin
+list, Pass vault secrets (keep, forget). A delete takes a JSON body
+`{ "head": "…" }`. The head's sequence must be the current one plus one, else
+`409 head_conflict`; the check runs last in the write's own transaction, after
+the account row is locked and the session found live under the lock (a write
+that began before a wipe is refused). Before the chain is started a listed
+write needs none (and a head with it is `409 head_conflict`: start the chain
+first); after, one without a head is `409 head_required`.
+
+**Starting the chain** is its own call, on the `basis` an index answers with
+before the first head (`POST /api/account/head`): a listed write landing
+between the client's read and its start moves the basis, and the start is
+refused, so the first head always covers every value. A head sent with a change that is no listed write (a
+folder's colour, parent, position or folding; a filter switched on or off, or
+what it matches or does: these are not sealed and not rollback-protected) is
+`400`.
+
+**A folder delete** removes the folders inside it too, so it names them all:
+`DELETE /api/mail/folders/:id` with `{ "removes": ["<id>", …], "head": "…" }`.
+If they are not exactly the folders it removes (one was added inside since),
+`409 head_conflict`.
+
+### GET /api/account/head
+
+**Auth:** Bearer JWT. **Response:** `{ "head": "<base64>" | null }` (null
+before the account's first).
+
+### POST /api/account/head
+
+Starts the chain: `{ "head": "<base64, sequence 1>", "basis": "<from an
+index>" }` → `201`. `409 head_conflict` when the account has a head already or
+the basis moved (read the index again and remake the head). **Auth:** Bearer
+JWT.
+
+### GET /api/account/heads?from=n
+
+The chain from sequence `n` toward the newest, oldest first, at most 200 at a
+time: `{ "heads": ["<base64>", …], "next": <sequence> | null }` (ask again from
+`next` until it is null); empty when `n` is above the newest. `410 tooOld` when
+`n` is more than 1,000 behind the newest. `400` for `n` below 1. **Auth:**
+Bearer JWT.
+
+The three reads are limited to 300 a minute per account
+(`RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN`; `429 rateLimited`).
+
+### GET /api/account/index/:scope
+
+A scope's values and the head they go with, read in one snapshot (check the
+index against this head, not one fetched separately):
+`{ "head": "<base64>" | null, "values": [["<id>", <revision>], …], "basis":
+"<hex>" | null }`, sorted by id; `basis` (before the first head only) is what a
+chain start names. **Auth:** Bearer JWT. Scopes and their ids:
+- `contacts`: the contact id;
+- `mailNames`: `folder:<id>`, `label:<id>`, `filter:<id>`, with the revision in
+  the sealed name's header (a folder without a name, kept through an account
+  reset, is left out until it is named again);
+- `pins`: one value, `pins`;
+- `passSecrets`: the vault's file id, for every secret the account keeps, the
+  vault trashed, purged or out of reach included ("unreachable but listed":
+  the secret stays until its owner forgets it, `POST
+  /api/pass/vault-secrets/forget`).
+
+Any other scope is `404`: a client treats it as one with no index yet
+(`IndexCheck::Uncovered`).
+
+**An account reset** (an administrator's wipe) deletes the head chain with the
+old incarnation, and every listed value sealed under the old keys: contacts,
+labels, filters and Pass secrets. Custom folders keep their mail and lose their
+names (`name: null` in `GET /api/mail/places`; "Unnamed folder" until renamed
+with `baseNameRevision: 0`). The new incarnation's first write makes its first
+head.
+
 ---
 
 ## Collections
@@ -1515,15 +1807,10 @@ served instead when there is one).
 
 ## Kutup Pass
 
-### POST /api/user/reauth
-
-Checks the signed-in account's password again (Kutup Pass's lock) exactly as
-sign-in does. **Body:** `{loginKey}`, derived from the typed password with the
-public `GET /api/auth/login/preflight` parameters. Verified against the stored
-hash under the sign-in lockout (`LOGIN_LOCKOUT_*`: misses here and at sign-in
-count together) and the sign-in rate limit; failures are logged. Nothing
-secret is returned. **Auth:** Bearer JWT. **Response:** `204`, `401` for
-another password, `429` during the lockout.
+A re-authentication (Kutup Pass's lock, a new password, turning 2FA off,
+deleting the account, an admin reset) is a sign-in exchange with `purpose:
+"reauth"` (`POST /api/auth/login/start`, above), whose answer is a one-time
+grant for that action.
 
 Vault secrets (docs/plans/pass.md, "Vault secrets"). A vault is a KeePass
 file in Drive with its own key; each person may keep, per vault they can
@@ -1559,8 +1846,18 @@ kept a key first.
 
 ### DELETE /api/pass/vault-secrets/:fileId
 
-Forgets the caller's secret for the vault (the vault is untouched).
-**Response:** `204`.
+Forgets the caller's secret for the vault (the vault is untouched). Body
+`{ "head": "…" }` once the account keeps a head. **Response:** `204`.
+
+A secret goes only this way, never with its vault: a purged or unreachable
+vault's secret stays in the account's `passSecrets` index ("unreachable but
+listed") until the owner's client forgets it, which it does on its next Pass
+write or unlock, all such secrets under one head:
+
+### POST /api/pass/vault-secrets/forget
+
+`{ "fileIds": ["<id>", …], "head": "…" }` (1 to 1,000). **Response:** `204`
+(those there were).
 
 The PIN lock (docs/plans/pass.md, "The PIN"): six digits per account, kept
 as a bcrypt hash and checked only here. It releases no key; the server's part
@@ -1572,15 +1869,15 @@ is the limit of three tries per sign-in. **Auth:** Bearer JWT for all four.
 
 ### PUT /api/pass/pin
 
-**Body:** `{loginKey, pin}`. Sets or changes the PIN; `loginKey` is checked
-as for `POST /api/user/reauth` (same lockout and rate limit). Resets the
-wrong-PIN count of every sign-in. **Response:** `204`, `400` unless `pin` is six digits, `401`
-for another password, `429` during the lockout.
+**Body:** `{grant, pin}`. Sets or changes the PIN; `grant` is a `pass` grant
+from a reauth of this session, used once. Resets the wrong-PIN count of every
+sign-in. **Response:** `204`, `400` unless `pin` is six digits (checked first:
+no grant is spent on a typo), `403 grantInvalid`.
 
 ### DELETE /api/pass/pin
 
-**Body:** `{loginKey}`, checked as above. **Response:** `204` (also when
-there was none), `401`, `429`.
+**Body:** `{grant}`, as above. **Response:** `204` (also when there was
+none), `403 grantInvalid`.
 
 ### POST /api/pass/pin/verify
 
@@ -3281,10 +3578,29 @@ base64 sealed collab frames.
 - **`POST push`** (home → bridge) `{ subscriptionId, fileId, frames: [{ seq,
   frame }], ephemeral: [frame], throughSeq, floor, close }`: frames in log
   order, never the bridge's own. `404` for an unknown subscription.
-- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions }`
-  (null for relayed-only or refused frames). Checked as local frames are,
-  against the file's current keys and the share's edit permission; the
-  sender is kept as `(domain, device)`.
+- **`POST devices`** `{ fileId, devices: [{ deviceId, userId,
+  authorityPublicKey, publicSigning, challenge, issuedAtMs, signature }],
+  revocations: [{ seq, authorityPublicKey, publicSigning, revokedAtMs,
+  signature }] }` → `{ accepted: [deviceId], refused: [{ deviceId, code }],
+  revocationsThrough }`. `seq` is the bridge's own order of its revocations
+  (never a clock), and `revocationsThrough` the highest `seq` home has
+  processed for the account: the bridge sends what comes after it. The bridge announces the editing account's
+  collaboration devices (docs/plans/device-registration.md) and forwards its
+  signed revocations, at most 50 entries in all. A device is kept only when
+  its `DeviceRegistrationV1` names the bridge and verifies under the share
+  recipient's authority. Refusal codes are `doesNotVerify`, `notRecipient`,
+  `expired` (older than the 30-day lease, or dated ahead), `revoked`,
+  `keyInUse` and `tooManyDevices` (20 in use per account: not revoked, within
+the lease). Rate limit:
+  `RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN` per (domain, capability).
+- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions,
+  unknownDevices, expiredDevices }` (positions are null for relayed-only or
+  refused frames). Checked as local frames are, against the file's current
+  keys and the share's edit permission, and also signed by an announced,
+  unrevoked, unexpired device of the share's recipient; the sender is kept
+  as `(domain, device)`. Frames from devices listed in `unknownDevices` or
+  `expiredDevices` are not kept: the bridge announces the unknown ones and
+  sends again, and asks its clients to renew the expired ones.
 - **`POST log`** `{ fileId, since }` → `{ frames, throughSeq, floor }`:
   catching up.
 - **`POST versions/list`** `{ fileId }`; **`GET files/:fileId/versions/:vid`**
@@ -3415,7 +3731,14 @@ List all registered users.
 
 ### POST /api/admin/users
 
-Create a user account (admin-initiated, bypasses registration settings). The administrator's browser makes a temporary password and derives it as any password is (`setup`: the login key with the salt and Argon2id parameters it came from); the server stores only the login key's hash and never sees the password. The user signs in with their username and the temporary password, and is then forced through the first-login setup flow to generate their own key bundle and recovery phrase. No email is asked: an account signs in with its username.
+Create a user account (admin-initiated, bypasses registration settings). The
+administrator's client makes a temporary password and registers it with OPAQUE
+under a key binding it draws (`opaque/register/start` with the
+administrator's session as Bearer); the server never sees the password. The
+user signs in with their username and the temporary password, and is then
+forced through the first-login setup flow to generate their own key bundle,
+recovery phrase and password, under a key binding of their own. No email is
+asked: an account signs in with its username.
 
 **Auth:** Bearer JWT (admin)
 
@@ -3423,19 +3746,14 @@ Create a user account (admin-initiated, bypasses registration settings). The adm
 ```json
 {
   "username": "newuser",
-  "setup": {
-    "loginKey": "<base64 32 bytes>",
-    "accountProtectionSuite": 1,
-    "accountProtectionSalt": "<base64 16 bytes>",
-    "argonMemoryKib": 65536,
-    "argonIterations": 3,
-    "argonParallelism": 1
-  },
+  "keyBinding": "<uuid v4>",
+  "opaqueRecord": "<base64>",
+  "opaqueServerKeyId": 1,
   "storageQuotaBytes": 10737418240
 }
 ```
 
-`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `400` for a `setup` that is not one (a password sent as it is included). `409` if the username is already taken.
+`storageQuotaBytes` is optional and defaults to 10 GB. Returns `201 Created` `{"message": "user created"}`. `400` for a record that is not one (a password sent as it is included), `409` if the username is already taken, `409 keyBindingTaken`, `409 opaqueKeyStale`.
 
 ---
 
@@ -3482,13 +3800,26 @@ Force-disable a user's TOTP two-factor authentication — an admin override for 
 
 ### POST /api/admin/users/:id/rotate-temp-password
 
-Replace the temporary password of an account still in first-login state (`isFirstLogin: true`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves via `POST /api/auth/recover` (recovery phrase), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
+Replace the temporary password of an account still in first-login state (`isFirstLogin: true`). Such an account has no E2EE key material yet, so nothing is destroyed. For an established account this returns `409` — under E2EE the server cannot reset a password without destroying the user's data; the user self-serves with the recovery phrase (`POST /api/auth/recover/grant`), or the admin wipes (below). Design: `docs/research/10-admin-password-reset.md`.
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:** `{"setup": { … }}` — the new temporary password derived in the administrator's browser, as for creating a user.
+**Request body:** `{"grant": "kg1_…", "keyBinding": …, "opaqueRecord": …, "opaqueServerKeyId": …}` — the administrator's reset grant for this account (`reset-grant`, below), and the new temporary password registered with it under a new key binding.
 
-**Response:** `200 OK` `{"message": "temp password rotated"}` · `409` when the user has completed setup.
+**Response:** `200 OK` `{"message": "temp password rotated"}` · `403 grantInvalid` · `409` when the user has completed setup.
+
+---
+
+### POST /api/admin/users/:id/reset-grant
+
+The administrator's fresh password proof (a reauth grant `for: "adminReset"`,
+from this admin session) exchanged for a grant bound to this account: what
+registering its temporary password and the rotation or wipe itself take.
+Single use, five minutes, this admin session only.
+
+**Auth:** Bearer JWT (admin) · **Request body:** `{"grant": "kg1_…"}`
+
+**Response:** `{"grant": "kg1_…", "expiresAt": "<RFC 3339>"}` · `403 grantInvalid` · `404`.
 
 ---
 
@@ -3498,7 +3829,7 @@ Destructive account reset for a user who lost both their password and their reco
 
 **Auth:** Bearer JWT (admin)
 
-**Request body:** `{"setup": { … }}` — the temporary password it starts again with, derived in the administrator's browser, as for creating a user (checked before anything is purged).
+**Request body:** `{"grant": "kg1_…", "keyBinding": …, "opaqueRecord": …, "opaqueServerKeyId": …}` — the administrator's reset grant for this account (`reset-grant`), used before anything is purged, and the temporary password it starts again with, registered with that grant under a new key binding.
 
 **Response:** `200 OK` `{"message": "account wiped"}`.
 
@@ -3608,7 +3939,7 @@ Return current global server settings.
 **Response:**
 ```json
 {
-  "registrationEnabled": true,
+  "registrationMode": "code",
   "defaultStorageQuotaBytes": 10737418240,
   "chatMailboxRetentionDays": 30,
   "chatMediaDeliveryRetentionDays": 45
@@ -3630,14 +3961,45 @@ Update global server settings.
 **Request body:** any of the fields, at least one.
 ```json
 {
-  "registrationEnabled": false,
+  "registrationMode": "code",
   "defaultStorageQuotaBytes": 21474836480
 }
 ```
 
+`registrationMode`: `on` (anyone), `code` (with a referral code) or `off`
+(nobody). A fresh database starts in `REGISTRATION_MODE` (default `off`).
+
 `defaultStorageQuotaBytes` must be positive (`400` otherwise).
 
 **Response:** Same shape as `GET /api/admin/settings`.
+
+---
+
+### Referral codes (admin)
+
+Codes that admit a sign-up when the registration mode asks for one
+(docs/plans/registration-codes.md). A code is 20 Crockford base32 characters
+(100 random bits) shown once, when it is made; the server keeps only its HMAC
+under a key of its own, so a database dump gives no usable code. Each change is
+in the audit log (`registration_code.created`, `registration_code.revoked`).
+
+- `POST /api/admin/registration-codes` with `{ "note": "beta testers",
+  "expiresAt": "2026-11-01T00:00:00Z" | null, "maxUses": 5 | null }` (a note of
+  at most 200 characters; an expiry in the future or none; 1 to 100000 uses or
+  unlimited) → `201` with the code's row and `code`, the text, never returned
+  again.
+- `GET /api/admin/registration-codes` → every code, newest first: `{ id, hint
+  (its last 4 characters), note, createdBy, createdAt, expiresAt, maxUses,
+  uses, revokedAt, state }`, `state` one of `active`, `expired`, `usedUp`,
+  `revoked`.
+- `POST /api/admin/registration-codes/{id}/revoke` → the row, revoked at once
+  (also "expire now").
+- `GET /api/admin/registration-codes/{id}/uses` → `[{ userId, username,
+  usedAt }]`, the accounts that signed up with it.
+- `GET /api/admin/users/{id}/registration-code` → `{ codeId, hint, note,
+  createdBy, usedAt }`, the code an account signed up with, or `null`.
+
+**Auth:** Bearer JWT (admin)
 
 ---
 
@@ -3814,21 +4176,58 @@ is not an automatic fallback for failed rotation.
 
 ## Devices
 
-Per-device Ed25519 signing keys for collaborative-edit frame signing. Each browser tab session creates one device row; CLI sessions persist across runs.
+Collaboration devices: the Ed25519 keys that sign collaborative-edit frames,
+each registered with the account's signed statement
+(docs/plans/device-registration.md). On the web, one device per sign-in per
+app origin, shared by its tabs; the CLI keeps one per profile. A device is
+trusted while it is not revoked, its incarnation is the account's current
+one and the sign-in session that registered (or last renewed) it is live.
+Refusals on the device routes and the collaboration routes answer `403
+deviceNotAuthorized`: the client registers again, it does not sign out.
+
+### POST /api/devices/challenge
+A one-time challenge for registering or renewing a device: 32 random bytes,
+valid five minutes, used up by any answer. At most five stay open per account
+(a sixth evicts the oldest). Rate limit:
+`RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN` (default 20) per account.
+**Auth:** Bearer JWT. **Response:** `{challenge}` (base64).
 
 ### POST /api/devices
-Register a device signing key. Required before opening any collaborative-edit WebSocket.
+Register a device key. Required before opening a collaborative-edit socket
+or using the HTTP frame routes.
 **Auth:** Bearer JWT.
-**Body:** `{publicSigning: <base64-32>, label?: string, authSig: <base64>, timestamp: <unix-seconds>}`. AuthSig is recorded but not validated in v1; the JWT is the trust anchor.
-**Response 201:** `{deviceId, label, createdAt}`
+**Body:** `{publicSigning, label?, challenge, issuedAtMs, signature}`: the
+account authority's `DeviceRegistrationV1` signature over its incarnation,
+this server, the user id, the key, the purpose, the challenge and
+`issuedAtMs` (within ±24 hours of the server clock). The device is bound to
+the caller's session.
+**Response 201:** `{deviceId, label, createdAt}`. **403**
+`deviceNotAuthorized`: the statement does not verify or the challenge is not
+the caller's to answer. **409**: the key was ever registered (any account,
+revoked or not), or `tooManyDevices`: the account has 20 devices in use
+(trusted, with a statement within 30 days). Devices of ended sign-ins, or
+unused for 30 days, do not count.
+
+### POST /api/devices/:id/renew
+A newer statement for the same key (body `{challenge, issuedAtMs,
+signature}`), which other servers need within 30 days. It also binds the
+device to the caller's session, so a device whose sign-in ended is taken up
+again; it then counts against the cap like a new one.
+**Response:** `204`, or `403 deviceNotAuthorized`, or `409 tooManyDevices`.
 
 ### GET /api/devices
-List the user's devices.
-**Response:** array of `{deviceId, label, isActive, createdAt, lastSeenAt}`.
+The account's devices, newest first: `{deviceId, label, publicSigning,
+isActive, trusted, inUse, thisSession, statementIssuedAtMs, createdAt,
+lastSeenAt}`. `isActive`: not revoked. `trusted`: as above. `inUse`: counted
+by the cap. `thisSession`: registered or renewed by the caller's session.
 
 ### DELETE /api/devices/:id
-Revoke a device. Closes any open WebSocket connections from that device. Returns 404 if the device is already inactive (idempotent state-transition semantics).
-**Response:** `204`.
+Revoke a device for good, with the account authority's `DeviceRevocationV1`
+signature (body `{revokedAtMs, signature}`): a session alone cannot revoke
+the account's devices. Its open sockets close, its key never registers
+again, and other servers are told through the account's announces.
+**Response:** `204`; `403 deviceNotAuthorized` when the revocation does not
+verify; `404` for a device already revoked.
 
 ---
 
@@ -3849,7 +4248,30 @@ sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
 frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch. On a file shared from another server, the bridge sends `{type: "renewDevice", deviceIds}` when the file's server reports a device's statement past its 30-day lease; the named devices sign a fresh statement (`POST /api/devices/:id/renew`) and the bridge announces it.
+
+### GET /api/files/:fileId/collab/frames and POST /api/files/:fileId/collab/frames
+
+The collaboration log over HTTP, for a peer that does not hold a socket open:
+the CLI editing notes, code files and place lists as a Yjs peer
+(docs/plans/cli-yjs-sync.md). **Auth:** as the socket: Bearer JWT and
+`?deviceId=` (the caller's active registered device).
+
+- `GET …?deviceId=&after=K&limit=` (a reader of the file) → `{ frames: [{ seq,
+  frame }], headSeq, floor, currentDocKeyId, mySenderSeqHigh, more }`: the
+  sealed frames after position `K`, oldest first, at most 500 (`more` when
+  others follow), the log's head, how far saved versions have trimmed it (a
+  reader below `floor` starts from the latest saved version), the current
+  document key, and this device's highest sender sequence (its next frame goes
+  above it).
+- `POST …?deviceId=` (an editor) with one sealed frame as
+  `application/octet-stream` → `{ seq }`. It passes the same gate as a socket's
+  frame (this device's signature, the exact file, its current key generation
+  and document key, write access, a key the folder still holds) and is kept and
+  sent to everyone with the file open, who merge it like any peer's edit. Only
+  kept kinds: presence and scene frames are refused. `409 frameRefused` when
+  the gate drops it (read the log again and rebuild), `403` without write
+  access, `429` past `RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN` (600) per device.
 
 ### PUT /api/files/:fileId/assets/:assetId
 

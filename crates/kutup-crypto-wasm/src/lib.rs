@@ -1818,10 +1818,16 @@ struct MailAddressKeyView {
     sha256_fingerprint: String,
 }
 
-fn master_key_32(master_key_base64: &str) -> Result<[u8; 32], JsValue> {
-    decode_canonical_base64(master_key_base64, "master key")?
+/// A 32-byte key from canonical base64, wiped when dropped (as is the decoded
+/// copy).
+fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
+    let decoded =
+        zeroize::Zeroizing::new(decode_canonical_base64(master_key_base64, "master key")?);
+    let key: [u8; 32] = decoded
+        .as_slice()
         .try_into()
-        .map_err(|_| js_error("master key must be 32 bytes"))
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    Ok(zeroize::Zeroizing::new(key))
 }
 
 /// Generates an address key and seals its secret part under the master key.
@@ -1835,9 +1841,13 @@ pub fn generate_mail_address_key(
     let master_key = master_key_32(master_key_base64)?;
     let key = kutup_crypto::mail_key::generate_address_key(address, created_at_secs)
         .map_err(|error| js_error(&error.to_string()))?;
-    let envelope =
-        kutup_crypto::mail_key::seal_address_key(&master_key, binding, address, &key.secret_key)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        &master_key[..],
+        binding,
+        address,
+        &key.secret_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&MailAddressKeyView {
         public_key: STANDARD.encode(&key.public_key),
         envelope: STANDARD.encode(envelope),
@@ -1887,9 +1897,13 @@ pub fn import_mail_address_key(
             kutup_crypto::CryptoError::AuthFailed => js_error("wrong passphrase"),
             error => js_error(&error.to_string()),
         })?;
-    let envelope =
-        kutup_crypto::mail_key::seal_address_key(&master_key, binding, address, &key.secret_key)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        &master_key[..],
+        binding,
+        address,
+        &key.secret_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&MailAddressKeyView {
         public_key: STANDARD.encode(&key.public_key),
         envelope: STANDARD.encode(envelope),
@@ -1937,8 +1951,14 @@ fn open_mail_secret(
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| js_error("fingerprint must be 40 hex digits"))?;
-    kutup_crypto::mail_key::open_address_key(&envelope, &master_key, binding, address, &fingerprint)
-        .map_err(|error| js_error(&error.to_string()))
+    kutup_crypto::mail_key::open_address_key(
+        &envelope,
+        &master_key[..],
+        binding,
+        address,
+        &fingerprint,
+    )
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 /// A message opened with an address key (docs/plans/mail.md).
@@ -3212,6 +3232,557 @@ impl RevisionGuardKeys {
         }
         Ok(revision as f64)
     }
+}
+
+// --- OPAQUE sign-in (docs/plans/opaque.md) -----------------------------------
+// The client's state, the password and the export key stay inside these
+// objects: JavaScript passes messages in and out, and gets the master key
+// once the account's envelope opens.
+
+fn opaque_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    match error {
+        kutup_crypto::error::CryptoError::AuthFailed => js_error("opaque: authentication failed"),
+        other => js_error(&other.to_string()),
+    }
+}
+
+/// A registration (sign-up, password change, recovery) in progress.
+#[wasm_bindgen]
+pub struct OpaqueRegistration {
+    state: Option<kutup_crypto::opaque::ClientRegistering>,
+    request: String,
+    export: Option<kutup_crypto::opaque::ExportKey>,
+}
+
+#[wasm_bindgen]
+impl OpaqueRegistration {
+    /// Starts registering `password`; send `request` to the server.
+    pub fn start(password: &str) -> Result<OpaqueRegistration, JsValue> {
+        let (state, request) =
+            kutup_crypto::opaque::client_registration_start(password).map_err(opaque_error)?;
+        Ok(Self {
+            state: Some(state),
+            request: STANDARD.encode(request),
+            export: None,
+        })
+    }
+
+    /// The registration request (canonical base64).
+    #[wasm_bindgen(getter)]
+    pub fn request(&self) -> String {
+        self.request.clone()
+    }
+
+    /// Finishes with the server's response: the record to upload. Once.
+    pub fn finish(&mut self, response_base64: &str) -> Result<String, JsValue> {
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| js_error("opaque: the registration is already finished"))?;
+        let response = decode_canonical_base64(response_base64, "registration response")?;
+        let done = state.finish(&response).map_err(opaque_error)?;
+        self.export = Some(done.export_key);
+        Ok(STANDARD.encode(done.record))
+    }
+
+    /// Seals the account's master key for this password: the password envelope.
+    #[wasm_bindgen(js_name = sealMasterKey)]
+    pub fn seal_master_key(
+        &mut self,
+        master_key_base64: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
+        // Once: the export key is wiped afterwards, sealed or not.
+        let export = self
+            .export
+            .take()
+            .ok_or_else(|| js_error("opaque: the registration is not finished"))?;
+        export
+            .seal_master_key(&*master_key_32(master_key_base64)?, key_binding)
+            .map_err(opaque_error)
+    }
+
+    /// Ends the registration: its state and export key are wiped.
+    pub fn close(&mut self) {
+        self.state = None;
+        self.export = None;
+    }
+}
+
+/// A sign-in (or reauthentication) in progress.
+#[wasm_bindgen]
+pub struct OpaqueLogin {
+    state: Option<kutup_crypto::opaque::ClientSigningIn>,
+    request: String,
+    export: Option<kutup_crypto::opaque::ExportKey>,
+}
+
+#[wasm_bindgen]
+impl OpaqueLogin {
+    /// Starts signing in with `password`; send `request` to the server.
+    pub fn start(password: &str) -> Result<OpaqueLogin, JsValue> {
+        let (state, request) =
+            kutup_crypto::opaque::client_login_start(password).map_err(opaque_error)?;
+        Ok(Self {
+            state: Some(state),
+            request: STANDARD.encode(request),
+            export: None,
+        })
+    }
+
+    /// The credential request (canonical base64).
+    #[wasm_bindgen(getter)]
+    pub fn request(&self) -> String {
+        self.request.clone()
+    }
+
+    /// Finishes with the server's response: the finalization to send. Throws
+    /// "opaque: authentication failed" for a wrong password (or an unknown
+    /// name, or a server other than the one registered with). Once.
+    pub fn finish(&mut self, response_base64: &str) -> Result<String, JsValue> {
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| js_error("opaque: the sign-in is already finished"))?;
+        let response = decode_canonical_base64(response_base64, "credential response")?;
+        let done = state.finish(&response).map_err(opaque_error)?;
+        self.export = Some(done.export_key);
+        Ok(STANDARD.encode(done.finalization))
+    }
+
+    /// Opens the account's password envelope (sent once the server accepted
+    /// the finalization): the master key, canonical base64, as the session
+    /// layer holds it. Once it opens, the export key is wiped.
+    #[wasm_bindgen(js_name = openMasterKey)]
+    pub fn open_master_key(
+        &mut self,
+        envelope: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
+        let export = self
+            .export
+            .as_ref()
+            .ok_or_else(|| js_error("opaque: the sign-in is not finished"))?;
+        let master_key = export
+            .open_master_key(envelope, key_binding)
+            .map_err(opaque_error)?;
+        // Opened: the export key is no longer needed.
+        self.export = None;
+        Ok(STANDARD.encode(master_key.as_slice()))
+    }
+
+    /// Ends the sign-in: its state and export key are wiped (a reauth, which
+    /// opens nothing, or a sign-in given up).
+    pub fn close(&mut self) {
+        self.state = None;
+        self.export = None;
+    }
+}
+
+/// The server's half, for tests and tools (servers use kutup-crypto directly):
+/// a sealed setup opened under its key.
+#[wasm_bindgen]
+pub struct OpaqueServer {
+    secrets: kutup_crypto::opaque::ServerSecrets,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpaqueServerLoginJs {
+    state: String,
+    response: String,
+}
+
+#[wasm_bindgen]
+impl OpaqueServer {
+    /// Opens a setup sealed under `key` (canonical base64) for `key_id`.
+    pub fn open(
+        sealed_base64: &str,
+        key_base64: &str,
+        key_id: u16,
+    ) -> Result<OpaqueServer, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "sealed setup")?;
+        let secrets =
+            kutup_crypto::opaque::open_server_setup(&sealed, &*master_key_32(key_base64)?, key_id)
+                .map_err(opaque_error)?;
+        Ok(Self { secrets })
+    }
+
+    #[wasm_bindgen(js_name = registrationResponse)]
+    pub fn registration_response(
+        &self,
+        request_base64: &str,
+        key_binding: &str,
+    ) -> Result<String, JsValue> {
+        let request = decode_canonical_base64(request_base64, "registration request")?;
+        kutup_crypto::opaque::server_registration_response(&self.secrets, &request, key_binding)
+            .map(|response| STANDARD.encode(response))
+            .map_err(opaque_error)
+    }
+
+    /// The record to store from a client's upload.
+    pub fn record(upload_base64: &str) -> Result<String, JsValue> {
+        let upload = decode_canonical_base64(upload_base64, "registration upload")?;
+        kutup_crypto::opaque::server_registration_record(&upload)
+            .map(|record| STANDARD.encode(record))
+            .map_err(opaque_error)
+    }
+
+    /// Answers a sign-in request for the account with `key_binding` (its
+    /// `record`), or, with no record, for the unknown `name`.
+    #[wasm_bindgen(js_name = loginStart)]
+    pub fn login_start(
+        &self,
+        record_base64: Option<String>,
+        request_base64: &str,
+        key_binding_or_name: &str,
+    ) -> Result<JsValue, JsValue> {
+        let request = decode_canonical_base64(request_base64, "credential request")?;
+        let record = record_base64
+            .map(|record| decode_canonical_base64(&record, "record"))
+            .transpose()?;
+        let credential = if record.is_some() {
+            kutup_crypto::opaque::credential_identifier(key_binding_or_name)
+                .map_err(opaque_error)?
+        } else {
+            kutup_crypto::opaque::unknown_credential_identifier(
+                &kutup_crypto::opaque::CanonicalName::parse(key_binding_or_name)
+                    .map_err(opaque_error)?,
+            )
+        };
+        let started = kutup_crypto::opaque::server_login_start(
+            &self.secrets,
+            record.as_deref(),
+            &request,
+            &credential,
+        )
+        .map_err(opaque_error)?;
+        serde_wasm_bindgen::to_value(&OpaqueServerLoginJs {
+            state: STANDARD.encode(started.state),
+            response: STANDARD.encode(started.response),
+        })
+        .map_err(|error| js_error(&format!("encode: {error}")))
+    }
+
+    /// Checks a client's finalization against the kept state.
+    #[wasm_bindgen(js_name = loginFinish)]
+    pub fn login_finish(state_base64: &str, finalization_base64: &str) -> Result<(), JsValue> {
+        let state = decode_canonical_base64(state_base64, "login state")?;
+        let finalization = decode_canonical_base64(finalization_base64, "finalization")?;
+        kutup_crypto::opaque::server_login_finish(&state, &finalization).map_err(opaque_error)
+    }
+}
+
+// --- the account head (docs/plans/rollback-protection.md) ---------------------
+
+fn head_err(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
+}
+
+fn index_arg(index_json: &str) -> Result<Vec<(String, u64)>, JsValue> {
+    serde_json::from_str(index_json).map_err(|_| js_error("account head: invalid index"))
+}
+
+fn sealed_head(sealed_base64: &str) -> Result<Vec<u8>, JsValue> {
+    decode_canonical_base64(sealed_base64, "account head")
+}
+
+fn anchor_arg(
+    anchor_json: Option<String>,
+) -> Result<Option<kutup_crypto::account_head::Anchor>, JsValue> {
+    anchor_json
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|_| js_error("account head: invalid anchor"))
+        })
+        .transpose()
+}
+
+fn segment_arg(segment_json: Option<String>) -> Result<Option<Vec<Vec<u8>>>, JsValue> {
+    segment_json
+        .map(|json| {
+            let list: Vec<String> = serde_json::from_str(&json)
+                .map_err(|_| js_error("account head: invalid segment"))?;
+            list.iter()
+                .map(|sealed| sealed_head(sealed))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()
+}
+
+fn js_json<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeadCheckJs<'a> {
+    status: &'a kutup_crypto::account_head::HeadStatus,
+    /// What to remember now (a trusted head).
+    anchor: Option<&'a kutup_crypto::account_head::Anchor>,
+}
+
+/// The account's head keys and the head this page has verified, for one
+/// account (master key, key binding, incarnation), made once per session. The
+/// keys never leave WASM; an index is checked, and a next head written, only
+/// against the head a check (or a re-anchoring) verified here.
+#[wasm_bindgen]
+pub struct AccountHeadKeys {
+    keys: kutup_crypto::account_head::HeadKeys,
+    binding: String,
+    incarnation_id: String,
+    verified: Option<kutup_crypto::account_head::VerifiedHead>,
+}
+
+#[wasm_bindgen]
+impl AccountHeadKeys {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        master_key_base64: &str,
+        binding: &str,
+        incarnation_id: &str,
+    ) -> Result<AccountHeadKeys, JsValue> {
+        let master_key = master_key_32(master_key_base64)?;
+        Ok(Self {
+            keys: kutup_crypto::account_head::HeadKeys::derive(&master_key).map_err(head_err)?,
+            binding: binding.to_owned(),
+            incarnation_id: incarnation_id.to_owned(),
+            verified: None,
+        })
+    }
+
+    /// This device's writer tag in the heads it writes (hex).
+    pub fn writer(&self, device_id: &str) -> Result<String, JsValue> {
+        self.keys.writer(device_id).map_err(head_err)
+    }
+
+    /// A scope's entry for its whole index, `[[id, revision], …]` (JSON).
+    pub fn scope(&self, scope: &str, index_json: &str) -> Result<JsValue, JsValue> {
+        js_json(
+            &self
+                .keys
+                .scope_digest(scope, &index_arg(index_json)?)
+                .map_err(head_err)?,
+        )
+    }
+
+    /// Checks the current head against `anchor_json` (absent: nothing
+    /// remembered), given the chain segment from the anchor to it (JSON list
+    /// of sealed heads; absent: the server did not show it):
+    /// `{ status: { kind }, anchor? }`. A trusted head (`fresh`, `current`,
+    /// `extends`) becomes this page's verified head, and `anchor` is what to
+    /// remember; the others leave none verified.
+    pub fn check(
+        &mut self,
+        anchor_json: Option<String>,
+        current_base64: &str,
+        segment_json: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let segment = segment_arg(segment_json)?;
+        let checked = kutup_crypto::account_head::check(
+            &self.keys,
+            &self.binding,
+            &self.incarnation_id,
+            anchor_arg(anchor_json)?.as_ref(),
+            &sealed_head(current_base64)?,
+            segment.as_deref(),
+        )
+        .map_err(head_err)?;
+        self.verified = checked.verified;
+        js_json(&HeadCheckJs {
+            status: &checked.status,
+            anchor: self.verified.as_ref().map(|verified| verified.anchor()),
+        })
+    }
+
+    /// Re-anchors after a check did not trust the head: `tooOld` always,
+    /// `rollback` and `fork` only when the person `confirmed` it. Runs the
+    /// check again itself. Returns the record to log; the head becomes this
+    /// page's verified one.
+    pub fn reanchor(
+        &mut self,
+        anchor_json: &str,
+        current_base64: &str,
+        segment_json: Option<String>,
+        confirmed: bool,
+        at_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let anchor = anchor_arg(Some(anchor_json.to_owned()))?.expect("given");
+        let segment = segment_arg(segment_json)?;
+        let (record, verified) = kutup_crypto::account_head::reanchor(
+            &self.keys,
+            &self.binding,
+            &self.incarnation_id,
+            &anchor,
+            &sealed_head(current_base64)?,
+            segment.as_deref(),
+            confirmed,
+            at_ms as u64,
+        )
+        .map_err(head_err)?;
+        self.verified = Some(verified);
+        js_json(&record)
+    }
+
+    /// Whether a scope's index (`[[id, revision], …]`) matches the verified
+    /// head: `"matches"`, or `"uncovered"` (the head does not cover the scope
+    /// yet); throws if it differs, or if no head is verified.
+    #[wasm_bindgen(js_name = checkIndex)]
+    pub fn check_index(&self, scope: &str, index_json: &str) -> Result<JsValue, JsValue> {
+        let verified = self
+            .verified
+            .as_ref()
+            .ok_or_else(|| js_error("account head: no verified head"))?;
+        let checked = kutup_crypto::account_head::check_index(
+            &self.keys,
+            verified,
+            scope,
+            &index_arg(index_json)?,
+        )
+        .map_err(head_err)?;
+        js_json(&checked)
+    }
+
+    /// The next head, sealed, on top of the verified one (or the account's
+    /// first when none exists yet: `first`), written by `writer`, with the
+    /// scope entries in `scopes_json` replaced.
+    pub fn next(&self, writer: &str, scopes_json: &str) -> Result<String, JsValue> {
+        let verified = self
+            .verified
+            .as_ref()
+            .ok_or_else(|| js_error("account head: no verified head"))?;
+        let scopes = serde_json::from_str(scopes_json)
+            .map_err(|_| js_error("account head: invalid scopes"))?;
+        let head = verified.next(writer, scopes).map_err(head_err)?;
+        kutup_crypto::account_head::seal(&self.keys, &self.binding, &head)
+            .map(|sealed| STANDARD.encode(sealed))
+            .map_err(head_err)
+    }
+
+    /// The account's first head (the server has none), sealed; it becomes the
+    /// verified head once the server stores it (`committed`).
+    pub fn first(&mut self, writer: &str, scopes_json: &str) -> Result<String, JsValue> {
+        let scopes = serde_json::from_str(scopes_json)
+            .map_err(|_| js_error("account head: invalid scopes"))?;
+        let (sealed, _) = kutup_crypto::account_head::first(
+            &self.keys,
+            &self.binding,
+            &self.incarnation_id,
+            writer,
+            scopes,
+        )
+        .map_err(head_err)?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// After the server stored `sealed` (this page's next or first head): it
+    /// becomes the verified head; returns what to remember.
+    pub fn committed(&mut self, sealed_base64: &str) -> Result<JsValue, JsValue> {
+        let sealed = sealed_head(sealed_base64)?;
+        let verified = match &self.verified {
+            Some(verified) => verified
+                .committed(&self.keys, &self.binding, &sealed)
+                .map_err(head_err)?,
+            None => {
+                let checked = kutup_crypto::account_head::check(
+                    &self.keys,
+                    &self.binding,
+                    &self.incarnation_id,
+                    None,
+                    &sealed,
+                    None,
+                )
+                .map_err(head_err)?;
+                let head = checked.verified.expect("a fresh head is verified");
+                if head.head().sequence != 1 {
+                    return Err(js_error("account head: not the account's first head"));
+                }
+                head
+            }
+        };
+        let anchor = js_json(verified.anchor())?;
+        self.verified = Some(verified);
+        Ok(anchor)
+    }
+
+    /// The verified head (JSON), for reading which scopes it covers.
+    #[wasm_bindgen(js_name = verifiedHead)]
+    pub fn verified_head(&self) -> Result<JsValue, JsValue> {
+        match &self.verified {
+            Some(verified) => js_json(verified.head()),
+            None => Ok(JsValue::NULL),
+        }
+    }
+}
+
+/// The account's statement for a collaboration device key
+/// (docs/plans/device-registration.md): the authority (from the master key)
+/// signs the incarnation, the server, the account, the device key, its
+/// purpose, the server's one-time challenge and the time. Returns the
+/// canonical base64 signature.
+#[wasm_bindgen(js_name = signDeviceRegistration)]
+pub fn sign_device_registration(
+    master_key_base64: &str,
+    server: &str,
+    user_id: &str,
+    device_public_base64: &str,
+    challenge_base64: &str,
+    issued_at_ms: f64,
+) -> Result<String, JsValue> {
+    let master = master_key_32(master_key_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let device = public_key_32(device_public_base64, "device key")?;
+    let challenge = public_key_32(challenge_base64, "challenge")?;
+    let statement = kutup_crypto::device_registration::DeviceStatement {
+        server,
+        user_id,
+        device_public: &device,
+        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: millis(issued_at_ms)?,
+    };
+    kutup_crypto::device_registration::sign(&identity, &statement)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// The account's revocation of a device key, signed with its authority.
+/// Returns the canonical base64 signature.
+#[wasm_bindgen(js_name = signDeviceRevocation)]
+pub fn sign_device_revocation(
+    master_key_base64: &str,
+    server: &str,
+    device_public_base64: &str,
+    revoked_at_ms: f64,
+) -> Result<String, JsValue> {
+    let master = master_key_32(master_key_base64)?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let device = public_key_32(device_public_base64, "device key")?;
+    kutup_crypto::device_registration::sign_revocation(
+        &identity,
+        server,
+        &device,
+        millis(revoked_at_ms)?,
+    )
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// A time from JavaScript: positive whole milliseconds.
+fn millis(value: f64) -> Result<i64, JsValue> {
+    if value.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&value) {
+        return Err(js_error("time must be positive whole milliseconds"));
+    }
+    Ok(value as i64)
+}
+
+/// The Yjs client id a file's first content is made under, from the file id
+/// and that content's update made under client id 0
+/// (`kutup_crypto::yjs_seed`). A whole number below 2^53.
+#[wasm_bindgen(js_name = yjsSeedClientId)]
+pub fn yjs_seed_client_id(file_id: &str, content: &[u8]) -> f64 {
+    kutup_crypto::yjs_seed::seed_client_id(file_id, content) as f64
 }
 
 #[derive(Serialize)]

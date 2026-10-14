@@ -92,11 +92,41 @@ Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 | Native Android upload key, Play App Signing/Console, and release metadata | external + each native app's repository (Android) |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
 
+### Dependency supply-chain checks
+
+Crypto dependencies are pinned exactly (`=x.y.z`, docs/cryptographic-dependencies.md)
+and locked in `Cargo.lock`, but nothing checks advisories, licences or duplicate
+versions automatically. Add `cargo deny` (advisories, bans, licences, sources) to
+the static gate, and consider `cargo vet` audits for the crypto crates
+(`opaque-ke`, `voprf`, `hpke-rs`, `pgp`, `dryoc`, `ed25519-dalek`). Raised in the
+OPAQUE review (2026-10-13).
+
+Also from that review: the crypto WASM module carries `OpaqueServer` (the
+server half of OPAQUE) for the vector tests. A second build with a test
+feature would keep it out of the production bundle.
+
 ---
+
+### Account-level device linking (QR)
+
+A new browser or CLI profile signing in with only the password trusts the
+first account head it reads (docs/plans/rollback-protection.md). Linking it
+from an existing device by QR, as Chat links its devices, would carry the
+current head across and anchor it from the start. Until then a device that
+has Chat's link uses it.
 
 ## Important (should-have, can ship after v1)
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
+
+### Security log: sign-ins and 2FA events (Proton parity)
+
+`account_security_events` (`GET /api/user/security-events`) records what
+changes an account's sign-in: password changes, recoveries, setup rotations
+and admin resets. Proton's security log also lists sign-ins (successful and
+failed) and two-step changes. Next kinds: `signIn`, `totpOn`, `totpOff`,
+`deviceRevoked`. IP addresses only behind an opt-in "advanced logs" setting,
+as Proton keeps them, if at all.
 
 ### SMTP integration
 
@@ -1117,6 +1147,15 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).
+- **Web: seeding after a lost claim.** An editor that loses `claim-seed`
+  waits for the winner's seed; if the winner never sends it, the document
+  opens empty. The seed is the same Yjs item wherever it is made, so the
+  editor could send it whenever the log is empty and no version exists, as
+  the CLI does (docs/plans/cli-yjs-sync.md, *As built*).
+- **Place lists: shared JSON vector.** The CLI writes `.kutupmap` files in the
+  web's layout (`encodeListJson`), but no checked-in vector pins the bytes
+  between the two. Places added in the same millisecond are ordered by
+  locale on the web and by code point in Rust.
 - **Sync engine: whiteboard assets.** `kutup sync` pushes/pulls `.excalidraw`
   files as opaque bytes; the extract/hydrate steps only run in
   `upload`/`download`. Wire `crate::whiteboard` into the engine's

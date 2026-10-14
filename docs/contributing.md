@@ -53,6 +53,7 @@ root Cargo workspace. It shares the E2EE primitives with the CLI via `crates/kut
 # Export env vars (or use a tool like direnv)
 export DATABASE_URL="postgres://kutup:<POSTGRES_PASSWORD>@localhost:5432/kutup?sslmode=disable"
 export JWT_SECRET="<your-jwt-secret-32+chars>"
+export OPAQUE_SETUP_KEYS="1:$(openssl rand -base64 32)"   # keep it: it signs everyone in
 export S3_ENDPOINT="http://localhost:8333"
 export S3_ACCESS_KEY="kutup"
 export S3_SECRET_KEY="<your-s3-secret>"
@@ -126,12 +127,14 @@ The rules:
   it and start empty.
 
 `scripts/check-migrations.sh [base]` enforces the first two rules against a
-base revision (default `origin/master`; CI uses the pull request's base, and on
-master the commit before): every migration on the base is byte-for-byte
+base revision (default `origin/master`, which CI uses for every branch, since
+what has shipped on master is what is applied anywhere; on master itself, the
+commit before): every migration on the base is byte-for-byte
 unchanged, and every new one is a timestamped `.up.sql`/`.down.sql` pair newer
 than the base's newest. A squash, where every base migration is replaced by one
-newer `_baseline` pair, is the one exception it recognizes. `scripts/gate.sh
-static` runs it.
+newer `_baseline` pair, is the one exception it recognizes; new migrations
+after the squash are ordinary new pairs and must be newer than the baseline.
+`scripts/gate.sh static` runs it.
 
 ```sh
 cargo install sqlx-cli --no-default-features --features postgres   # one-time

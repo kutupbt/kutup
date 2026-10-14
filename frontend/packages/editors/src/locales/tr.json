@@ -215,7 +215,12 @@
         "trademark": "ONLYOFFICE, Ascensio System SIA'nın ticari markasıdır. Kutup, ONLYOFFICE ile bağlantılı değildir ve onun tarafından onaylanmamıştır."
       }
     },
-    "viewOnly": "Yalnızca görüntüleme"
+    "viewOnly": "Yalnızca görüntüleme",
+    "devices": {
+      "tooMany": "Kullanımda 20 cihazınız var. Burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın.",
+      "removed": "Bu tarayıcının düzenleme cihazı kaldırıldı. Düzenlemeye devam etmek için belgeyi yeniden açın.",
+      "manage": "Cihazları yönet"
+    }
   },
   "file": {
     "opening": "Açılıyor…",

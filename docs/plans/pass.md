@@ -227,7 +227,7 @@ one database, plus a report of what happened.
   for a click before its kept key opens it again, also after a reload of the
   tab. **What opens it again** is a setting on the device, as Proton Pass's
   lock modes: the account password (the default; checked by the server as
-  at sign-in, `POST /api/user/reauth` with the login key, under the sign-in
+  at sign-in, a reauth (an OPAQUE sign-in exchange for a `pass` grant, docs/plans/opaque.md), under the sign-in
   lockout, so a stolen access token gives no way to guess the password
   offline), the account's PIN, or one click. A vault without a
   kept key always asks for its own key. Signing out also deletes the vaults
@@ -407,7 +407,7 @@ one database, plus a report of what happened.
   `randomVaultKey`), used as the KeePass password. Nothing to choose or
   remember; the vault opens with the sign-in. For KeePassXC on a computer,
   the vault's menu → "Show vault key…" shows it after the account password is
-  given again (`/api/user/reauth`), with copy (cleared from the clipboard
+  given again (a reauth), with copy (cleared from the clipboard
   after 30 seconds); `kutup pass show-key <file-id>` prints it. "A password I
   choose" stays offered for vaults opened by typing in KeePass apps. The key
   is lowercase and case-sensitive: typed as shown, with its dashes. If the

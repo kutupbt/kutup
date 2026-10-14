@@ -18,6 +18,10 @@ pub(crate) enum GeneratedKey {
     /// (docs/plans/account-identity.md): its own, so rotating any other
     /// secret changes none of them.
     FakeAccounts,
+    /// The HMAC key referral codes are stored under
+    /// (docs/plans/registration-codes.md): its own, so rotating any other
+    /// secret voids no open code.
+    RegistrationCodes,
 }
 
 impl GeneratedKey {
@@ -27,6 +31,7 @@ impl GeneratedKey {
             Self::MlsControl => "mls-control",
             Self::MailGroupAuthority => "mail-group-authority",
             Self::FakeAccounts => "fake-accounts",
+            Self::RegistrationCodes => "registration-codes",
         }
     }
 }

@@ -22,6 +22,7 @@ export POSTGRES_DB="kutup_mail_test"
 export POSTGRES_USER="kutup_mail_test"
 export POSTGRES_PASSWORD="MailIntegrationDatabase123!"
 export JWT_SECRET="mail-integration-jwt-secret-at-least-32-bytes"
+export OPAQUE_SETUP_KEYS="1:wcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcE="
 export KUTUP_BASE_DOMAIN="${KUTUP_BASE_DOMAIN:-mail.test}"
 export CHAT_SERVER_NAME="kutup.test"
 export MAIL_HOSTNAME="mail.kutup.test"
@@ -30,6 +31,8 @@ MAIL_INBOUND_TOKEN="$(openssl rand -hex 32)"
 export MAIL_INBOUND_TOKEN
 export STALWART_ADMIN_SECRET="mail-integration-stalwart-admin-secret"
 export RATE_LIMIT_REGISTER_PER_HOUR=100
+# The live tests register their own accounts.
+export REGISTRATION_MODE=on
 # Every test signs accounts in; the default per-minute limit trips.
 export RATE_LIMIT_LOGIN_PER_MIN=1000
 # Key lookups go to the gate's WKD stand-in (only on a test stack).

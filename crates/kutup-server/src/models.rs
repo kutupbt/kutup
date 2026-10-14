@@ -48,7 +48,8 @@ pub struct MessageResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
-    pub registration_enabled: bool,
+    /// Who may register: `on`, `code` (with a referral code) or `off`.
+    pub registration_mode: crate::registration::RegistrationMode,
     /// Chat feature advertisement (docs/chat-protocol.md §10). A client
     /// feature-gates chat on this and must not show chat UI when absent/disabled.
     pub chat: kutup_chat_proto::ChatCapabilities,
@@ -69,26 +70,14 @@ pub struct FeedbackSettings {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsResponse {
-    pub registration_enabled: bool,
+    /// Who may register: `on`, `code` (with a referral code) or `off`.
+    pub registration_mode: crate::registration::RegistrationMode,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
     /// Retention for unread Direct and MLS mailbox ciphertext. Zero disables expiry.
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
     pub chat_media_delivery_retention_days: i64,
-}
-
-/// `GET /api/auth/login/preflight` — mirrors `handlers.PreflightLoginResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PreflightLoginResponse {
-    // No envelope binding here: it comes with the session, once the password
-    // is proved (docs/plans/account-identity.md).
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -448,8 +437,9 @@ pub struct PublicShareResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreateAdminUserRequest {
     pub username: String,
-    /// The temporary password, derived in the administrator's browser.
-    pub setup: crate::handlers::auth::SetupKey,
+    /// The temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    pub setup: crate::handlers::admin::TempRegistration,
     pub storage_quota_bytes: i64,
 }
 
@@ -466,7 +456,7 @@ pub struct UpdateAdminUserRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
-    pub registration_enabled: Option<bool>,
+    pub registration_mode: Option<crate::registration::RegistrationMode>,
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,

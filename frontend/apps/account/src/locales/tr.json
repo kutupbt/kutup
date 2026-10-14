@@ -31,7 +31,8 @@
     "keys": "Şifreleme anahtarları",
     "mailSending": "Posta gönderimi",
     "mailGroups": "Posta grupları",
-    "feedback": "Geri bildirim"
+    "feedback": "Geri bildirim",
+    "referralCodes": "Davet kodları"
   },
   "auth": {
     "fields": {
@@ -56,7 +57,11 @@
       "usernameTaken": "Bu kullanıcı adı alınmış. Geri dönüp başka bir ad seçin.",
       "generic": "Bir şeyler ters gitti. Yeniden deneyin.",
       "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
-      "keysChanged": "Bu hesabın anahtarları sunucunun söyledikleriyle eşleşmedi. Yeniden oturum açın; tekrar ederse sunucu yöneticisine bildirin."
+      "keysChanged": "Bu hesabın anahtarları sunucunun söyledikleriyle eşleşmedi. Yeniden oturum açın; tekrar ederse sunucu yöneticisine bildirin.",
+      "signInAgain": "Oturum açma tamamlanmadan sona erdi. Yeniden oturum açın.",
+      "setupExpired": "İlk oturum açmanızın süresi doldu ya da geçici parolanız değiştirildi. Elinizdeki geçici parolayla yeniden oturum açın.",
+      "serverKeyChanged": "Hesabınız oluşturulurken sunucunun oturum açma anahtarı değişti. Yeniden deneyin; tekrar ederse sunucu yöneticisine bildirin.",
+      "keyBindingTaken": "Hesabınızın anahtarları kaydedilemedi. Yeniden deneyin; tekrar ederse sunucu yöneticisine bildirin."
     },
     "strength": {
       "label": "Güç: {{strength}}",
@@ -110,7 +115,15 @@
     "closedTitle": "Kayıt kapalı",
     "closedDescription": "Bu sunucu yeni hesap kabul etmiyor. Yöneticisinden bir hesap isteyin.",
     "backToSignIn": "Girişe dön",
-    "settingsUnavailable": "Sunucunun kayıt ayarları okunamadı; hesap reddedilebilir."
+    "settingsUnavailable": "Sunucunun kayıt ayarları okunamadı; hesap reddedilebilir.",
+    "code": "Davet kodu",
+    "codeHint": "Bu sunucu yeni hesapları yöneticilerinin verdiği bir davet koduyla kabul eder.",
+    "codeOptionalHint": "Size bir kod verildiyse buraya girin.",
+    "haveCode": "Davet kodunuz var mı?",
+    "codeRequired": "Davet kodunuzu girin.",
+    "codeInvalid": "Bu davet kodu kullanılamıyor. Kontrol edin ya da yeni bir kod isteyin.",
+    "codeRateLimited": "Buradan çok fazla deneme yapıldı. Bir süre bekleyip yeniden deneyin.",
+    "codeCheckFailed": "Kod kontrol edilemedi. Yeniden deneyin."
   },
   "firstLogin": {
     "title": "Hesabınızın kurulumunu tamamlayın",
@@ -185,6 +198,34 @@
       "disableWarning": "Bundan sonra giriş için yalnızca parolanız yeterli olur.",
       "disableFailed": "İki adımlı doğrulama kapatılamadı.",
       "disabled": "İki adımlı doğrulama kapatıldı",
+      "password": "Parola",
+      "passwordDescription": "Giriş yaptığınız parolayı değiştirin. Dosyalarınız, e-postalarınız ve sohbetleriniz olduğu gibi kalır: yalnızca onları açan anahtar yeniden mühürlenir.",
+      "currentPassword": "Geçerli parola",
+      "changePassword": "Parolayı değiştir",
+      "passwordChanged": "Parola değiştirildi. Diğer cihazlarınızın oturumu kapatıldı.",
+      "wrongCurrentPassword": "Geçerli parolanız doğru değil.",
+      "yourPassword": "Kutup parolanız",
+      "wrongPassword": "Bu, Kutup parolanız değil.",
+      "passwordChangeFailed": "Parola değiştirilemedi. Yeniden deneyin.",
+      "passwordSignsOutOthers": "Hesabınıza giriş yapmış diğer tüm cihazların oturumu kapatılır. Bu cihaz oturumda kalır.",
+      "events": {
+        "title": "Güvenlik olayları",
+        "description": "Giriş yönteminizdeki değişiklikler, en yenisi önce. Tanımadığınız bir olay görürseniz parolanızı değiştirin ve Cihazlar ve oturumlar'a bakın.",
+        "none": "Hesabınız oluşturulduğundan beri hiçbir şey değişmedi.",
+        "failed": "Güvenlik olayları yüklenemedi.",
+        "older": "Daha eski olayları göster",
+        "byAdmin": "Bir yönetici tarafından",
+        "thisDevice": "Bu cihaz",
+        "device": "{{device}}",
+        "kind": {
+          "passwordChange": "Parola değiştirildi",
+          "recovery": "Parola kurtarma ifadesiyle sıfırlandı",
+          "rotate": "Girişiniz yenilendi",
+          "adminReset": "Parola bir yönetici tarafından sıfırlandı",
+          "accountReset": "Hesap bir yönetici tarafından sıfırlandı",
+          "other": "Girişinizde bir değişiklik"
+        }
+      },
       "recovery": "Kurtarma ifadesi",
       "recoveryDescription": "Hesabınız oluşturulurken gösterilen 24 sözcük.",
       "recoveryNote": "Unutulan bir parolayı sıfırlamanın tek yolu kurtarma ifadenizdir. Kutup onu saklamaz ve yeniden gösteremez — kaydettiğiniz kopyayı güvenli ve çevrimdışı bir yerde tutun."
@@ -226,7 +267,9 @@
       "revokeFailed": "Cihaz iptal edilemedi.",
       "revokedToast": "Cihaz iptal edildi",
       "emptyTitle": "Henüz düzenleme cihazı yok",
-      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür."
+      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür.",
+      "inUseCount": "{{max}} cihazdan {{count}} tanesi kullanımda. Oturumu kapanmış ya da 30 gündür kullanılmayan cihazlar sayılmaz.",
+      "notInUse": "Kullanımda değil"
     },
     "profile": {
       "title": "Profil",
@@ -508,6 +551,10 @@
       "twoFactorDone": "İki adımlı doğrulama kapatıldı",
       "rotate": "Yeni geçici parola",
       "rotateHint": "Bu hesap henüz giriş yapmadı; geçici parolasını değiştirmek hiçbir şey kaybettirmez.",
+      "yourPassword": "Siz olduğunuzu doğrulamak için kendi parolanız",
+      "wrongAdminPassword": "Parolanız doğru değil.",
+      "adminLocked": "Parolanızla çok fazla deneme yapıldı. Bir süre bekleyip yeniden deneyin.",
+      "adminSlowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
       "rotateTitle": "Geçici parola değiştirilsin mi?",
       "rotateDescription": "{{name}} için mevcut geçici parola geçersiz olur.",
       "wipe": "Hesabı sıfırla",
@@ -522,7 +569,10 @@
       "deleteDescription": "{{name}} ve sahip olduğu her şey bu sunucudan kaldırılır.",
       "deleteWarning": "Bu geri alınamaz.",
       "deleted": "{{name}} silindi",
-      "actionFailed": "İşlem başarısız oldu."
+      "actionFailed": "İşlem başarısız oldu.",
+      "signedUpWith": "Kayıt olduğu kod",
+      "signedUpWithBy": "Kodu {{name}} oluşturdu; {{when}} kullanıldı",
+      "noReferralCode": "Davet kodu yok"
     },
     "reports": {
       "title": "Bildirimler",
@@ -595,15 +645,17 @@
         "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",
-        "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı"
+        "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı",
+        "registrationCodeCreated": "{{admin}} bir davet kodu oluşturdu (…{{hint}})",
+        "registrationCodeRevoked": "{{admin}} …{{hint}} davet kodunu iptal etti"
       }
     },
     "settings": {
       "title": "Sunucu ayarları",
       "description": "Bu sunucudaki herkes için varsayılanlar ve sınırlar.",
       "accounts": "Hesaplar",
-      "registration": "Açık kayıt",
-      "registrationHint": "Bu sunucuya erişebilen herkes hesap oluşturabilir. Kapalıyken hesapları yalnızca yöneticiler oluşturur.",
+      "registration": "Kayıt",
+      "registrationHint": "Bu sunucuda kimlerin hesap açabileceği. Yöneticiler her zaman hesap açabilir.",
       "chat": "İleti",
       "chatHint": "Bu sunucuda şifreli mesaj ve medya teslimi.",
       "mailboxDays": "Teslim edilmemiş mesajlar (gün)",
@@ -615,7 +667,12 @@
       "saved": "Ayarlar kaydedildi",
       "saveFailed": "Ayarlar kaydedilemedi.",
       "defaultQuota": "Varsayılan depolama kotası (GiB)",
-      "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin."
+      "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin.",
+      "registrationMode": {
+        "on": "Herkese açık",
+        "code": "Davet koduyla",
+        "off": "Kapalı"
+      }
     },
     "federation": {
       "title": "Federasyon",
@@ -894,6 +951,70 @@
       "issueBodyHint": "Geri bildirimi kimin gönderdiği eklenmez. Kişisel olan başka her şeyi çıkarın.",
       "checkedPersonal": "Kişisel ayrıntıları çıkardım, bu herkese açık olabilir",
       "openIssue": "Konuyu GitHub'da aç"
+    },
+    "codes": {
+      "title": "Davet kodları",
+      "description": "Kayıt için kod gerektiğinde insanların hesap açmasını sağlayan kodlar. Bir kod yalnızca oluşturulduğunda bir kez gösterilir.",
+      "new": "Yeni kod",
+      "emptyTitle": "Henüz davet kodu yok",
+      "emptyDescription": "Kayıt için kod gerektiğinde birinin hesap açabilmesi için bir kod oluşturun.",
+      "columns": {
+        "code": "Kod",
+        "note": "Not",
+        "uses": "Kullanım",
+        "expires": "Bitiş",
+        "state": "Durum",
+        "actions": "İşlemler"
+      },
+      "madeBy": "{{name}} oluşturdu, {{when}}",
+      "usesOf": "{{uses}} / {{max}}",
+      "usesUnlimited": "{{uses}} (sınırsız)",
+      "never": "Hiçbir zaman",
+      "state": {
+        "active": "Etkin",
+        "expired": "Süresi doldu",
+        "usedUp": "Tükendi",
+        "revoked": "İptal edildi"
+      },
+      "usedBy": "Kullananlar",
+      "usedByFor": "…{{hint}} kodunu kullananlar",
+      "revoke": "İptal et",
+      "revokeFor": "…{{hint}} kodunu iptal et",
+      "revokeTitle": "Bu davet kodu iptal edilsin mi?",
+      "revokeDescription": "…{{hint}} kodu hemen çalışmaz olur. Onunla açılmış hesaplar kalır.",
+      "revokeFailed": "Kod iptal edilemedi.",
+      "revoked": "Davet kodu iptal edildi",
+      "newTitle": "Yeni davet kodu",
+      "newDescription": "Ne kadar süre çalışacağını ve kaç hesap açabileceğini seçin.",
+      "note": "Not",
+      "noteHint": "Kodun kimin ya da ne için olduğu. Yalnızca yöneticiler görür.",
+      "noteTooLong": "Not en fazla 200 karakter olabilir.",
+      "expires": "Geçerlilik",
+      "expiry": {
+        "day": "1 gün",
+        "week": "7 gün",
+        "month": "30 gün",
+        "never": "Süresiz"
+      },
+      "usesLabel": "Açabileceği hesap sayısı",
+      "usesHint": "Kodla yapılan her kayıt bir hak kullanır.",
+      "limit": {
+        "one": "Bir",
+        "number": "Bir sayı",
+        "unlimited": "Sınırsız"
+      },
+      "howMany": "Kaç tane",
+      "howManyRange": "1 ile {{max}} arasında.",
+      "createFailed": "Kod oluşturulamadı.",
+      "make": "Kodu oluştur",
+      "madeTitle": "Davet kodunuz",
+      "madeDescription": "Şimdi kopyalayın: bir daha gösterilmez. Sonrasında yalnızca son dört karakterini görürsünüz.",
+      "theCode": "Davet kodu",
+      "copyCode": "Kodu kopyala",
+      "copyLink": "Kayıt bağlantısını kopyala",
+      "done": "Tamam",
+      "usesTitle": "…{{hint}} ile açılan hesaplar",
+      "noNote": "Not yok"
     }
   }
 }

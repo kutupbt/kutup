@@ -78,7 +78,11 @@ export function VaultKeyDialog({
       if (value) setKey(value)
       else setError(t('vaultKey.none'))
     } catch (failure) {
-      setError(failure instanceof ReauthLockedError ? t('unlock.paused') : t('unlock.checkUnreachable'))
+      setError(
+        failure instanceof ReauthLockedError
+          ? t(failure.reason === 'rateLimited' ? 'unlock.slowDown' : 'unlock.paused')
+          : t('unlock.checkUnreachable'),
+      )
     } finally {
       setPassword('')
       setPending(false)

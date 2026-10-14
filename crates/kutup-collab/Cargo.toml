@@ -1,0 +1,19 @@
+[package]
+name = "kutup-collab"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Kutup's collaboration content in Rust (Yjs, via yrs): the deterministic seed, text edits as Yjs operations, place lists"
+
+[dependencies]
+kutup-crypto = { path = "../kutup-crypto" }
+yrs.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+uuid.workspace = true
+time = { workspace = true, features = ["parsing"] }
+
+[dev-dependencies]

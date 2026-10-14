@@ -86,7 +86,7 @@ describe('produceFork', () => {
   it('sends the child to the origin the server names, key only in the fragment', async () => {
     setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, isAdmin: false,
       storageQuotaBytes: 0, storageUsedBytes: 0, totpEnabled: false, color: null,
-      currentDeviceId: null }, 'token')
+      currentDeviceId: null, device: null }, 'token')
     post.mockResolvedValue({ data: { selector: 'SEL', childOrigin: 'https://drive.example.org' } })
     const url = new URL(await produceFork('drive', 'st_1'))
     expect(post).toHaveBeenCalledWith('/auth/forks', { childClientType: 'web-drive', payload: 'ENVELOPE' })
@@ -102,7 +102,7 @@ describe('produceFork', () => {
   it('refuses a malformed state', async () => {
     setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, isAdmin: false,
       storageQuotaBytes: 0, storageUsedBytes: 0, totpEnabled: false, color: null,
-      currentDeviceId: null }, 'token')
+      currentDeviceId: null, device: null }, 'token')
     await expect(produceFork('drive', 'bad state/..')).rejects.toThrow(/state/)
   })
 })

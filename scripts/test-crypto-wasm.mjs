@@ -951,4 +951,82 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   assert.throws(() => crypto.verifyAccountRenameChain(v.otherAuthorityPublicKey, JSON.stringify(v.chain)))
 }
 
+// OPAQUE sign-in (kutup-crypto opaque, suite 1): the browser's client against
+// the vectors' sealed setup and stored record gives the vectors' export key,
+// which opens the master key envelope; what must fail, fails.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/opaque-v1.json`, 'utf8'))
+  const server = crypto.OpaqueServer.open(v.sealedSetup, v.setupKey, v.setupKeyId)
+  assert.throws(() => crypto.OpaqueServer.open(v.sealedSetup, v.setupKey, v.setupKeyId + 1))
+  const signIn = (record, password, keyBinding = v.keyBinding) => {
+    const login = crypto.OpaqueLogin.start(password)
+    const started = server.loginStart(record, login.request, keyBinding)
+    const finalization = login.finish(started.response)
+    crypto.OpaqueServer.loginFinish(started.state, finalization)
+    return login
+  }
+  const login = signIn(v.storedRecord, v.password)
+  assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, '9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0'))
+  assert.equal(login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), v.masterKey)
+  // Opened once: the export key is gone.
+  assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), /not finished/)
+  assert.throws(() => login.finish('AAAA'), /already finished/)
+  assert.throws(() => signIn(v.storedRecord, 'wrong'), /authentication failed/)
+  assert.throws(() => signIn(undefined, v.password, 'nobody'), /authentication failed/)
+  // The password change: the new record, the new password, the new envelope only.
+  const changed = signIn(v.newStoredRecord, v.newPassword)
+  assert.equal(changed.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding), v.masterKey)
+  // The old export key does not open the new envelope.
+  const old = signIn(v.storedRecord, v.password)
+  assert.throws(() => old.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding))
+  old.close()
+  assert.throws(() => old.openMasterKey(v.masterKeyEnvelope, v.keyBinding), /not finished/)
+  assert.throws(() => signIn(v.newStoredRecord, v.password), /authentication failed/)
+  // A registration made in the browser signs in, and its envelope opens.
+  const registration = crypto.OpaqueRegistration.start('browser password')
+  const record = crypto.OpaqueServer.record(registration.finish(server.registrationResponse(registration.request, v.keyBinding)))
+  const envelope = registration.sealMasterKey(v.masterKey, v.keyBinding)
+  assert.throws(() => registration.sealMasterKey(v.masterKey, v.keyBinding), /not finished/)
+  assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
+}
+
+// The account head (kutup-crypto account_head, docs/plans/rollback-protection.md):
+// the browser computes the same scope digests and heads, tells the same
+// outcomes apart, and checks indexes only against a head it verified.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-head-v1.json`, 'utf8'))
+  const head = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId)
+  assert.equal(head.writer(v.device), v.writer)
+  for (const [i, index] of v.indexes.entries()) {
+    assert.deepEqual(head.scope('contacts', JSON.stringify(index)), JSON.parse(v.heads[i]).scopes[0])
+  }
+  // No verified head yet: no index check, no next head.
+  assert.throws(() => head.checkIndex('contacts', '[]'), /no verified head/)
+  assert.throws(() => head.next(v.writer, '[]'), /no verified head/)
+  const named = (name) => ({ forked: v.forked, far: v.far, near: v.near })[name] ?? v.sealed[Number(name)]
+  for (const check of v.checks) {
+    const result = head.check(
+      check.anchor === null || check.anchor === undefined ? undefined : JSON.stringify(v.anchors[check.anchor]),
+      named(check.current),
+      check.segment ? JSON.stringify(check.segment.map(named)) : undefined,
+    )
+    assert.deepEqual(result.status, check.status, check.case)
+  }
+  // A verified head checks its index and refuses the others.
+  const verified = head.check(undefined, v.sealed[2], undefined)
+  assert.deepEqual(verified.anchor, v.anchors[2])
+  assert.equal(head.checkIndex('contacts', JSON.stringify(v.indexes[2])), 'matches')
+  assert.equal(head.checkIndex('mailNames', '[]'), 'uncovered')
+  for (const refused of v.refusedIndexes) {
+    assert.throws(() => head.checkIndex('contacts', JSON.stringify(refused.index)), undefined, refused.case)
+  }
+  // A head written here follows it, and is committed.
+  const next = head.next(v.writer, JSON.stringify([head.scope('contacts', JSON.stringify(v.indexes[2]))]))
+  assert.equal(head.committed(next).sequence, 4)
+  // A rollback re-anchors only when the person confirms; the record matches Rust's.
+  assert.throws(() => head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, false, v.reanchored.atMs))
+  assert.deepEqual(head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, true, v.reanchored.atMs), v.reanchored)
+  head.free()
+}
+
 console.log('crypto WASM canonical vectors passed')

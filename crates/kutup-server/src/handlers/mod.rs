@@ -1,5 +1,6 @@
 //! HTTP handlers — each module mirrors the matching `backend/handlers/*.go` file.
 
+pub mod account_heads;
 pub mod admin;
 pub mod auth;
 pub mod chat;
@@ -36,8 +37,11 @@ pub mod mail_sender_rules;
 pub mod mail_sending;
 pub mod mail_settings;
 pub mod name_hashes;
+pub mod opaque;
 pub mod pass;
 pub mod pass_icons;
+pub mod registration_codes;
+pub mod security_events;
 pub mod sessions;
 pub mod shares;
 pub mod storage;

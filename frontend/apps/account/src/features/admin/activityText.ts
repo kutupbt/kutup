@@ -16,6 +16,8 @@ const ACTION_KEYS: Record<string, string> = {
   'report.dismiss': 'reportDismiss',
   'share.remove': 'shareRemove',
   'settings.update': 'settingsUpdate',
+  'registration_code.created': 'registrationCodeCreated',
+  'registration_code.revoked': 'registrationCodeRevoked',
   'maps.settings.update': 'mapsSettingsUpdate',
   'mail.sending.update': 'mailSendingUpdate',
   'mail.outside_sending.update': 'mailOutsideSendingUpdate',
@@ -53,6 +55,8 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     domain: text(e.payload.domain),
     feature: text(e.payload.feature),
     mode: text(e.payload.mode),
+    // A referral code's last characters (its text is never logged).
+    hint: text(e.payload.hint),
     // Outside sending's policy, as the page names it.
     from: text(e.payload.from) ? t(`admin.mailSending.policy.${text(e.payload.from)}`) : '',
     to: text(e.payload.to) ? t(`admin.mailSending.policy.${text(e.payload.to)}`) : '',

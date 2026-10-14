@@ -51,7 +51,10 @@ jobs:
           shared-key: security-static
       - name: Static checks
         env:
-          KUTUP_MIGRATION_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'origin/master' }}
+          # What is applied anywhere is what master has shipped, so every
+          # branch (stacked ones included) is checked against master; on
+          # master itself the script compares with the commit before.
+          KUTUP_MIGRATION_BASE: origin/master
         run: scripts/gate.sh static
 
   rust-workspace:
@@ -127,7 +130,9 @@ jobs:
     # run when it reaches master.
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # A cold-cache build of the server plus the live tests (a new crypto
+    # dependency invalidates the cache).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Install protobuf compiler
@@ -157,10 +162,13 @@ jobs:
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dE="
       APP_ENV: test
       # A test stack (APP_ENV=test): every per-address limit raised, as one
       # browser batch registers and signs in far more than a person does.
       RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443
@@ -262,10 +270,13 @@ jobs:
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
       POSTGRES_PASSWORD: mail-browser-ci-postgres
       JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
       APP_ENV: test
       # A test stack (APP_ENV=test): every per-address limit raised, as one
       # browser batch registers and signs in far more than a person does.
       RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
       # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
       # and outside sending on for spec 58's pause notice; spec 59 turns it
       # off in Administration and back on (tests/e2e/README.md).
@@ -348,6 +359,8 @@ jobs:
         run: scripts/gate.sh browser contacts
       - name: Run the Pass browser specs
         run: scripts/gate.sh browser pass
+      - name: Run the Account browser specs
+        run: scripts/gate.sh browser account
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single

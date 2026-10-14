@@ -121,7 +121,7 @@ git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cp .env.example .env
 # Edit .env — set strong values for POSTGRES_PASSWORD, JWT_SECRET,
-# S3_SECRET_KEY, ADMIN_ACCOUNT.
+# OPAQUE_SETUP_KEYS, S3_SECRET_KEY, ADMIN_ACCOUNT.
 mkdir -p nginx/certs
 openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout nginx/certs/privkey.pem -out nginx/certs/fullchain.pem \
@@ -163,10 +163,12 @@ Silicon, and Windows x86-64 and published on GitHub Releases (see
 
 ```sh
 # Create an account (client-side crypto; prints a 24-word recovery phrase once).
-kutup register --server https://your.kutup.host --email you@example.com --username you
+# When the server takes sign-ups only with a referral code, it is asked for
+# (hidden); KUTUP_REGISTRATION_CODE gives it non-interactively.
+kutup register --server https://your.kutup.host --username you
 
 # Login (interactive password prompt; password can also come from KUTUP_PASSWORD).
-kutup login --server https://your.kutup.host --email you@example.com
+kutup login --server https://your.kutup.host --username you
 
 # Against the local Compose stack and its self-signed certificate (which is
 # its own CA, so the CLI's TLS stack refuses it as a server certificate):

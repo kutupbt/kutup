@@ -32,6 +32,9 @@ zeroize.workspace = true
 hex.workspace = true
 hpke-rs = { version = "=0.6.1" }
 hpke-rs-rust-crypto = { version = "=0.6.1" }
+# OPAQUE sign-in (docs/plans/opaque.md): RFC 9807, ristretto255 + 3DH. The KSF
+# is ours (Argon2id at the V1 cost, through dryoc), so no `argon2` feature.
+opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristretto255"] }
 # OpenPGP for mail (docs/cryptographic-dependencies.md). No bzip2: it needs C.
 pgp = { version = "=0.21.0", default-features = false, optional = true }
 rand = { workspace = true, optional = true }
@@ -43,6 +46,7 @@ rsa = { version = "=0.9.10", default-features = false, optional = true }
 pgp = { version = "=0.21.0", default-features = false, features = ["wasm"], optional = true }
 
 [dev-dependencies]
+rand_chacha = "0.3"
 kutup-crypto = { path = ".", features = ["test-vectors"] }
 serde.workspace = true
 hex.workspace = true

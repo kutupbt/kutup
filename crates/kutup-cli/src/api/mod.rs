@@ -11,10 +11,12 @@
 #![allow(dead_code)]
 
 pub mod assets;
+pub mod collab;
 pub mod devices;
 pub mod federation;
 pub mod files;
 pub mod identity;
+pub mod opaque;
 pub mod pass;
 pub mod public;
 pub mod sessions;
@@ -254,24 +256,19 @@ impl Client {
 
     // --- Auth ---
 
-    pub fn register(&self, req: &RegisterRequest) -> Result<()> {
+    /// Creates the account; sign-up answers the session, as a sign-in does.
+    pub fn register(&self, req: &RegisterRequest) -> Result<LoginResponse> {
         let resp = self.post_json("/auth/register", req)?;
+        decode_json(resp)
+    }
+
+    /// Whether a referral code can admit a sign-up now (uses nothing up).
+    pub fn check_registration_code(&self, code: &str) -> Result<()> {
+        let resp = self.post_json(
+            "/auth/registration-code/check",
+            &serde_json::json!({ "code": code }),
+        )?;
         check_ok(resp)
-    }
-
-    pub fn login_preflight(&self, name: &str) -> Result<PreflightResponse> {
-        // .query() form-encodes the value — a raw `+` in a name would
-        // otherwise decode server-side as a space.
-        let resp = self
-            .request(Method::GET, "/auth/login/preflight")
-            .query(&[("name", name)])
-            .send()?;
-        decode_json(resp)
-    }
-
-    pub fn login(&self, req: &LoginRequest) -> Result<LoginResponse> {
-        let resp = self.post_json("/auth/login", req)?;
-        decode_json(resp)
     }
 
     pub fn login_totp(&self, req: &TotpRequest) -> Result<LoginResponse> {
@@ -285,11 +282,6 @@ impl Client {
             .query(&[("name", name)])
             .send()?;
         decode_json(resp)
-    }
-
-    pub fn recover(&self, req: &RecoverRequest) -> Result<()> {
-        let resp = self.post_json("/auth/recover", req)?;
-        check_ok(resp)
     }
 
     pub fn refresh_token(&self, refresh_token: &str) -> Result<RefreshResponse> {
@@ -314,18 +306,22 @@ impl Client {
         decode_json(resp)
     }
 
-    pub fn verify_totp(&self, code: &str) -> Result<()> {
-        let resp = self.post_json("/user/2fa/verify", &serde_json::json!({ "code": code }))?;
+    /// `grant`: a `totp` grant from a reauth of this session.
+    pub fn verify_totp(&self, code: &str, grant: &str) -> Result<()> {
+        let resp = self.post_json(
+            "/user/2fa/verify",
+            &serde_json::json!({ "code": code, "grant": grant }),
+        )?;
         check_ok(resp)
     }
 
-    /// DELETE-with-body: the backend requires a current code to disable 2FA (so a stolen
-    /// session can't silently remove it). Mirrors the Go `DisableTOTP`.
-    pub fn disable_totp(&self, code: &str) -> Result<()> {
+    /// DELETE-with-body: turning 2FA off takes a current code and a `totp`
+    /// grant (the password proved again), so a stolen session cannot.
+    pub fn disable_totp(&self, code: &str, grant: &str) -> Result<()> {
         let resp = self
             .request(Method::DELETE, "/user/2fa")
             .header(CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!({ "code": code }))
+            .json(&serde_json::json!({ "code": code, "grant": grant }))
             .send()?;
         check_ok(resp)
     }

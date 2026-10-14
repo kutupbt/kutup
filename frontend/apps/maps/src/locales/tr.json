@@ -121,7 +121,8 @@
     "importFailed": "Dosya içe aktarılamadı.",
     "placeCount_one": "{{count}} yer",
     "placeCount_other": "{{count}} yer",
-    "rightClickHint": "Ya da yerin olduğu noktaya haritada sağ tıklayın."
+    "rightClickHint": "Ya da yerin olduğu noktaya haritada sağ tıklayın.",
+    "tooManyDevices": "Kullanımda 20 cihazınız var. Listeleri burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın."
   },
   "place": {
     "addTitle": "Yer ekle",

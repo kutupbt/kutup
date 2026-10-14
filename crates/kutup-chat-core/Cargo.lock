@@ -1263,6 +1263,7 @@ dependencies = [
  "hmac",
  "hpke-rs",
  "hpke-rs-rust-crypto",
+ "opaque-ke",
  "serde",
  "serde_json",
  "sha2",
@@ -1732,6 +1733,26 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
+name = "opaque-ke"
+version = "4.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ded22991b43cd15561b62b2e1cf9ace1344a8534eebec96202d5c96a77a6616a"
+dependencies = [
+ "curve25519-dalek",
+ "derive-where",
+ "digest",
+ "displaydoc",
+ "elliptic-curve",
+ "generic-array",
+ "hkdf",
+ "hmac",
+ "rand 0.8.7",
+ "subtle",
+ "voprf",
+ "zeroize",
+]
 
 [[package]]
 name = "openmls"
@@ -2789,6 +2810,24 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "voprf"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28f59c30c76e2fea54cdece6a054e2662feffa7ab19658a7887524265ee39470"
+dependencies = [
+ "curve25519-dalek",
+ "derive-where",
+ "digest",
+ "displaydoc",
+ "elliptic-curve",
+ "generic-array",
+ "rand_core 0.6.4",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "walkdir"

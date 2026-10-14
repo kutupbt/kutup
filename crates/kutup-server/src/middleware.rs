@@ -136,6 +136,8 @@ pub async fn session_version_header(mut req: Request, next: Next) -> Response {
 #[allow(dead_code)]
 pub struct AdminUser {
     pub user_id: String,
+    /// The admin's own sign-in (what their reauth grants are bound to).
+    pub session_id: uuid::Uuid,
 }
 
 #[axum::async_trait]
@@ -152,6 +154,7 @@ impl FromRequestParts<AppState> for AdminUser {
         }
         Ok(AdminUser {
             user_id: user.user_id,
+            session_id: user.session.session_id,
         })
     }
 }
@@ -159,7 +162,12 @@ impl FromRequestParts<AppState> for AdminUser {
 /// Extracts the `Bearer <token>` value from the `Authorization` header — mirrors
 /// `extractToken`.
 fn bearer_token(parts: &Parts) -> Option<String> {
-    let auth = parts.headers.get(AUTHORIZATION)?.to_str().ok()?;
+    bearer_from_headers(&parts.headers)
+}
+
+/// The `Bearer <token>` value of a request's headers.
+pub(crate) fn bearer_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    let auth = headers.get(AUTHORIZATION)?.to_str().ok()?;
     auth.strip_prefix("Bearer ").map(|t| t.to_string())
 }
 
@@ -250,6 +258,15 @@ async fn limit(
     next.run(req).await
 }
 
+/// 30/hour/IP — checking a referral code before signing up.
+pub async fn rate_limit_registration_code_check(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(addr, &ratelimit::REGISTRATION_CODE_CHECK, None, req, next).await
+}
+
 /// 10/min/IP — mirrors `LoginRateLimit`.
 pub async fn rate_limit_login(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -285,15 +302,6 @@ pub async fn rate_limit_call_link_poll(
     next: Next,
 ) -> Response {
     limit(addr, &ratelimit::CALL_LINK_POLL, None, req, next).await
-}
-
-/// 20/min/IP — mirrors `PreflightRateLimit`.
-pub async fn rate_limit_preflight(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    req: Request,
-    next: Next,
-) -> Response {
-    limit(addr, &ratelimit::PREFLIGHT, None, req, next).await
 }
 
 /// Coarse 120/min/IP outer wall. The handler additionally applies the primary

@@ -7,15 +7,17 @@ import { z } from 'zod'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Card, CardContent } from '@kutup/ui/components/card'
-import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
-import { Label } from '@kutup/ui/components/label'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import type { RegistrationMode } from '@kutup/session/api-types'
 import { useAdminSettings, useUpdateAdminSettings } from './api'
+import { Choice } from './federation/Choice'
 import { bytesToGib, gibToBytes } from './helpers'
+
+const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
@@ -27,7 +29,7 @@ export function ServerSettingsPage() {
 
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
   const schema = z.object({
-    registrationEnabled: z.boolean(),
+    registrationMode: z.enum(['on', 'code', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
@@ -38,7 +40,7 @@ export function ServerSettingsPage() {
   useEffect(() => {
     if (!settings.data) return
     reset({
-      registrationEnabled: settings.data.registrationEnabled,
+      registrationMode: settings.data.registrationMode,
       quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
@@ -53,7 +55,7 @@ export function ServerSettingsPage() {
   const onSubmit = handleSubmit((v) =>
     update.mutate(
       {
-        registrationEnabled: v.registrationEnabled,
+        registrationMode: v.registrationMode,
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
@@ -69,18 +71,18 @@ export function ServerSettingsPage() {
         <Section title={t('admin.settings.accounts')}>
           <Card>
             <CardContent className="p-5">
-              <div className="flex items-start gap-3">
-                <Controller
-                  control={control}
-                  name="registrationEnabled"
-                  render={({ field }) => (
-                    <Checkbox id="registration" checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} />
+              <div className="max-w-sm">
+                <Field label={t('admin.settings.registration')} description={t('admin.settings.registrationHint')}>
+                  {() => (
+                    <Controller
+                      control={control}
+                      name="registrationMode"
+                      render={({ field }) => (
+                        <Choice value={field.value} options={MODES} labelPrefix="admin.settings.registrationMode" onChange={field.onChange} ariaLabel={t('admin.settings.registration')} />
+                      )}
+                    />
                   )}
-                />
-                <div className="space-y-1">
-                  <Label htmlFor="registration">{t('admin.settings.registration')}</Label>
-                  <p className="text-sm text-muted-foreground">{t('admin.settings.registrationHint')}</p>
-                </div>
+                </Field>
               </div>
               <div className="mt-5 max-w-xs">
                 <Field label={t('admin.settings.defaultQuota')} error={errors.quotaGib?.message} description={t('admin.settings.defaultQuotaHint')} required>

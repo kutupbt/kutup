@@ -11,6 +11,7 @@ pub mod ls;
 pub mod mkdir;
 pub mod mv;
 pub mod pass;
+pub mod password;
 pub mod pubshare;
 pub mod recover;
 pub mod register;

@@ -1,7 +1,9 @@
 //! `kutup devices` — list and revoke account devices. Mirrors `cmd/devices.go`.
 
 use anyhow::Result;
+use base64::Engine;
 use clap::Subcommand;
+use kutup_crypto::device_registration;
 
 use crate::commands::confirm;
 use crate::context::require_session;
@@ -52,7 +54,13 @@ fn list(profile: &str, json: bool) -> Result<()> {
             .as_deref()
             .map(crate::output::format_time)
             .unwrap_or_else(|| "(never)".to_string());
-        let status = if d.is_active { "active" } else { "revoked" };
+        let status = if !d.is_active {
+            "revoked"
+        } else if d.trusted {
+            "active"
+        } else {
+            "untrusted"
+        };
         println!(
             "{:<12}  {:<30}  {:<16}  {:<16}  {}",
             d.device_id,
@@ -73,7 +81,31 @@ fn revoke(profile: &str, json: bool, device_id: i64, yes: bool) -> Result<()> {
         yes,
     )?;
 
-    ctx.client.revoke_user_device(device_id)?;
+    // Revoking is the account's act: its authority signs the revocation, so
+    // a session alone cannot revoke devices (docs/plans/device-registration.md).
+    if ctx.session.master_key.is_empty() {
+        return Err(anyhow::anyhow!(
+            "this session holds no account keys; sign in again to revoke a device"
+        ));
+    }
+    let device = ctx
+        .client
+        .list_user_devices()?
+        .into_iter()
+        .find(|d| d.device_id == device_id && d.is_active)
+        .ok_or_else(|| anyhow::anyhow!("no active device {device_id}"))?;
+    let key: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(&device.public_signing)
+        .ok()
+        .and_then(|k| k.try_into().ok())
+        .ok_or_else(|| anyhow::anyhow!("the server sent a malformed device key"))?;
+    let me = crate::identity::Me::of(&ctx, profile)?;
+    let server = ctx.client.settings()?.chat.server_name;
+    let revoked_at_ms = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
+    let signature =
+        device_registration::sign_revocation(&me.identity, &server, &key, revoked_at_ms)?;
+    ctx.client
+        .revoke_user_device(device_id, revoked_at_ms, &signature)?;
     if json {
         crate::output::print_json(&serde_json::json!({ "deviceId": device_id, "revoked": true }))?;
     } else {

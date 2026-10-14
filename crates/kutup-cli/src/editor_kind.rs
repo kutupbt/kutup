@@ -1,7 +1,8 @@
 //! Which files a Kutup editor keeps as collaboration state (Yjs) rather than
 //! as whole-file versions: the text editor's kinds and Maps' place lists.
 //! Their editors read the newest version as Yjs, so new content for them is
-//! never stored as a `file` version (a sync uploads a new file instead).
+//! never stored as a `file` version: sync leaves them alone until the CLI
+//! edits them as a Yjs peer (docs/plans/cli-yjs-sync.md).
 
 /// Mirrors `TEXT_EXT` in `frontend/packages/drive-core/src/editorKind.ts`
 /// exactly; change both together.
@@ -74,10 +75,15 @@ fn extension_of(name: &str) -> String {
     }
 }
 
+/// Whether `name` is a place list, as `isListName` in `map/src/list.ts`
+/// reads it: ending in `.kutupmap` (a name that is only "kutupmap" is not).
+pub(crate) fn is_place_list(name: &str) -> bool {
+    name.to_lowercase().ends_with(&format!(".{PLACE_LIST_EXT}"))
+}
+
 /// Whether `name`'s content lives as Yjs state, never as `file` versions.
 pub(crate) fn edits_as_yjs(name: &str) -> bool {
-    let ext = extension_of(name);
-    ext == PLACE_LIST_EXT || TEXT_EXT.contains(&ext.as_str())
+    is_place_list(name) || TEXT_EXT.contains(&extension_of(name).as_str())
 }
 
 #[cfg(test)]
@@ -103,6 +109,8 @@ mod tests {
             "board.excalidraw",
             "report.docx",
             "x.svg",
+            // Not a list without its dot (`isListName`), nor a text kind.
+            "kutupmap",
         ] {
             assert!(!edits_as_yjs(name), "{name}");
         }

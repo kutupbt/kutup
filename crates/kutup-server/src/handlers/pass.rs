@@ -9,8 +9,8 @@
 //! its owner forgets it. It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
@@ -51,6 +51,19 @@ pub struct PutVaultSecretRequest {
     envelope: String,
     /// The revision of the secret this change started from; 0 for none.
     base_revision: i64,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    head: Option<String>,
+}
+
+/// Secrets to forget at once (vaults that are gone), under one head.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForgetVaultSecretsRequest {
+    file_ids: Vec<String>,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    head: Option<String>,
 }
 
 /// `GET /api/pass/vault-secrets` — the caller's vault secrets, for vaults
@@ -138,8 +151,10 @@ pub async fn put_vault_secret(
     if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
     }
+    let head = crate::account_heads::NextHead::parse(req.head.as_deref())?;
     // What the account's keys are bound to (docs/plans/account-identity.md).
     let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let binding: String =
         sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
             .bind(user_id)
@@ -205,13 +220,14 @@ pub async fn put_vault_secret(
             current,
         ));
     }
+    crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// The revision of a stored vault secret (0 for one without, which a stored
 /// one never is).
-fn revision_of(envelope: &[u8]) -> AppResult<i64> {
+pub(crate) fn revision_of(envelope: &[u8]) -> AppResult<i64> {
     account_envelope::inspect(envelope)
         .ok()
         .and_then(|header| header.revision)
@@ -257,20 +273,84 @@ fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<(Vec<u
     tag = "pass",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "The vault's file id")),
+    request_body(content = crate::account_heads::HeadOnly, description = "The next head, once the account keeps one"),
     responses((status = 204, description = "Forgotten (or there was none)"))
 )]
 pub async fn delete_vault_secret(
     State(state): State<AppState>,
     user: AuthUser,
     Path(file_id): Path<String>,
+    body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
+    let head = body.and_then(|Json(body)| body.head);
+    forget(
+        &state,
+        user_id,
+        user.session.session_id,
+        &[file_id],
+        head.as_deref(),
+    )
+    .await
+}
+
+/// The most secrets one forget takes.
+const MAX_FORGET: usize = 1000;
+
+/// `POST /api/pass/vault-secrets/forget` — forget several secrets at once
+/// (the vaults are gone: purged, or out of reach for good), under one head.
+/// A secret stays listed in the account's `passSecrets` index, whatever
+/// becomes of its vault, until its owner forgets it.
+#[utoipa::path(
+    post,
+    path = "/api/pass/vault-secrets/forget",
+    tag = "pass",
+    security(("BearerAuth" = [])),
+    request_body = ForgetVaultSecretsRequest,
+    responses((status = 204, description = "Forgotten (those there were)"))
+)]
+pub async fn forget_vault_secrets(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<ForgetVaultSecretsRequest>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    if req.file_ids.is_empty() || req.file_ids.len() > MAX_FORGET {
+        return Err(AppError::bad_request("forget 1 to 1000 secrets at once"));
+    }
+    let ids = req
+        .file_ids
+        .iter()
+        .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("fileIds holds a bad id")))
+        .collect::<AppResult<Vec<_>>>()?;
+    forget(
+        &state,
+        user_id,
+        user.session.session_id,
+        &ids,
+        req.head.as_deref(),
+    )
+    .await
+}
+
+async fn forget(
+    state: &AppState,
+    user_id: Uuid,
+    session: Uuid,
+    file_ids: &[Uuid],
+    head: Option<&str>,
+) -> AppResult<Response> {
+    let head = crate::account_heads::NextHead::parse(head)?;
+    let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, user_id, session).await?;
+    sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = ANY($2)")
         .bind(user_id)
-        .bind(file_id)
-        .execute(&state.pool)
+        .bind(file_ids)
+        .execute(&mut *tx)
         .await?;
+    crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -302,20 +382,23 @@ pub struct PinStatus {
     set: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetPinRequest {
-    /// The account password's login key, as for `/api/user/reauth`.
-    login_key: String,
+    /// A `pass` grant from a reauth of this session (the account password,
+    /// docs/plans/opaque.md).
+    grant: String,
     /// Six digits.
     pin: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RemovePinRequest {
-    /// The account password's login key, as for `/api/user/reauth`.
-    login_key: String,
+    /// A `pass` grant from a reauth of this session.
+    grant: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -378,14 +461,11 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
     responses(
         (status = 204, description = "Set"),
         (status = 400, description = "Not six digits"),
-        (status = 401, description = "Wrong account password"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+        (status = 403, description = "grantInvalid: no fresh pass grant of this session")
     )
 )]
 pub async fn set_pin(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<SetPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
@@ -393,12 +473,12 @@ pub async fn set_pin(
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
-        .await?;
     let user_id = trusted_uuid(&user.user_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
     let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
+        .await?;
     sqlx::query(
         "INSERT INTO pass_pins (user_id, pin_hash) VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
@@ -425,25 +505,24 @@ pub async fn set_pin(
     request_body = RemovePinRequest,
     responses(
         (status = 204, description = "Removed (or there was none)"),
-        (status = 401, description = "Wrong account password"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+        (status = 403, description = "grantInvalid: no fresh pass grant of this session")
     )
 )]
 pub async fn remove_pin(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
-        .await?;
     let user_id = trusted_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
+        .await?;
     sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")
         .bind(user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

@@ -30,6 +30,7 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type Ref,
 } from 'react'
 import {
@@ -49,16 +50,15 @@ import type {
   FileId,
 } from '@excalidraw/excalidraw/element/types'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
-import { updateSession, useRequiredSession } from '@kutup/session/store'
-import { hasLocalChanges } from './unsaved'
+import { useRequiredSession } from '@kutup/session/store'
+import { SaveTracker, hasLocalChanges } from './unsaved'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
-import {
-  generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
-} from '@kutup/collab/devices'
+import { currentDevice, deviceRefused, renewRequested, TooManyDevicesError } from '@kutup/collab/currentDevice'
 import { randomSenderSeqPrefix, buildAwarenessName } from '@kutup/collab/identity'
-import { registerDevice } from '@kutup/collab/api'
+import { listDevices } from '@kutup/collab/api'
+import { DeviceLimitNotice } from '../DeviceLimitNotice'
 import { uploadAsset, fetchAsset, QuotaExceededError } from '@kutup/collab/whiteboardAssets'
 import { useResolvedTheme } from '../useResolvedTheme'
 import { toast } from 'sonner'
@@ -71,7 +71,11 @@ const Excalidraw = lazy(() =>
 )
 
 export interface WhiteboardEditorHandle {
-  save: () => Promise<{ bytes: Uint8Array }>
+  /**
+   * The scene to store. Call `settle` with whether it was stored: until then
+   * the drawing counts as unsaved, and a failed save leaves it unsaved.
+   */
+  save: () => Promise<{ bytes: Uint8Array; settle: (stored: boolean) => void }>
   /** Something was drawn here since the last save (or since it opened). */
   hasUnsavedChanges: () => boolean
 }
@@ -94,19 +98,6 @@ interface Props {
   onOutdated?: (base?: undefined, reset?: boolean) => void
 }
 
-// Module-level cache of registerDevice promises — same pattern as
-// OfficeEditor. Prevents duplicate device rows when two tabs of the
-// same file load concurrently.
-const _devicePromiseCache = new Map<string, Promise<number>>()
-function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
-  let p = _devicePromiseCache.get(pubKeyB64)
-  if (!p) {
-    p = registerDevice(pubKeyB64, label).then(r => r.deviceId)
-    _devicePromiseCache.set(pubKeyB64, p)
-  }
-  return p
-}
-
 interface CursorPayload {
   color: string | null
   username: string | null
@@ -123,7 +114,8 @@ function WhiteboardEditorBase(
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const { t } = useTranslation()
   const session = useRequiredSession()
-  const storedDeviceId = session.currentDeviceId
+  /** The account has 20 devices in use: drawing stays local until one is removed. */
+  const [deviceLimit, setDeviceLimit] = useState(false)
   const userColor = session.color
   const username = session.username
   const userId = session.userId
@@ -158,7 +150,7 @@ function WhiteboardEditorBase(
   const lastBroadcastRef = useRef<Map<string, number>>(new Map())
   // Drawn here since the last save: a Replace or a restore elsewhere drops
   // it, and the page says so (replacedNotice).
-  const unsavedRef = useRef(false)
+  const saves = useRef(new SaveTracker())
 
   // Set during applyRemote → updateScene; suppresses the onChange echo
   // that would otherwise re-broadcast the remote elements right back.
@@ -257,10 +249,11 @@ function WhiteboardEditorBase(
         const files = api.getFiles()
         const json = serializeAsJSON(elements, appState, files, 'local')
         const bytes = new TextEncoder().encode(json)
-        unsavedRef.current = false
-        return Promise.resolve({ bytes })
+        // What is in `bytes` counts as unsaved until it is stored; drawing
+        // after this point marks the scene changed again (onChange).
+        return Promise.resolve({ bytes, settle: saves.current.beginSave() })
       },
-      hasUnsavedChanges: () => unsavedRef.current,
+      hasUnsavedChanges: () => saves.current.unsaved,
     }),
     [],
   )
@@ -270,17 +263,21 @@ function WhiteboardEditorBase(
     let alive = true
 
     void (async () => {
-      let kp = loadKeypair()
-      if (!kp) { kp = await generateDeviceKeypair(); saveKeypair(kp) }
-      keypairRef.current = kp
-
-      let did = storedDeviceId
-      if (!did) {
-        const pubB64 = encodePubKeyB64(kp.publicKey)
-        did = await ensureRegistered(pubB64, 'kutup-whiteboard:' + navigator.userAgent.slice(0, 60))
-        if (!alive) return
-        updateSession({ currentDeviceId: did })
+      // This sign-in's collaboration device; replaced below if the server
+      // stops taking it (frames read the refs, the socket URL `did`).
+      let current
+      try {
+        current = await currentDevice()
+      } catch (error) {
+        if (error instanceof TooManyDevicesError) {
+          if (alive) setDeviceLimit(true)
+          return
+        }
+        throw error
       }
+      if (!alive) return
+      keypairRef.current = current.keypair
+      let did = current.deviceId
       deviceIdRef.current = did
 
       const wsUrl = () => collabSocketUrl(fileId, did)
@@ -394,6 +391,20 @@ function WhiteboardEditorBase(
           }
         },
         onError: (e: unknown) => console.warn('whiteboard: ws error', e),
+        onRefused: async () => {
+          const id = did
+          const trusted = await listDevices()
+            .then((rows) => rows.some((row) => row.deviceId === id && row.trusted))
+            .catch(() => null)
+          if (trusted !== false || !(await deviceRefused())) return
+          const next = await currentDevice()
+          keypairRef.current = next.keypair
+          did = next.deviceId
+          deviceIdRef.current = did
+        },
+        onRenewDevice: (deviceIds) => {
+          void renewRequested(deviceIds).catch(() => undefined)
+        },
       })
       if (!alive) { transport.close(); return }
       transportRef.current = transport
@@ -619,7 +630,9 @@ function WhiteboardEditorBase(
   }
 
   return (
-    <div className="h-full w-full">
+    <div className="flex h-full w-full flex-col">
+      {deviceLimit ? <DeviceLimitNotice /> : null}
+      <div className="min-h-0 flex-1">
       <Suspense
         fallback={<div className="p-4 text-sm text-muted-foreground">{t('editor.whiteboard.loading')}</div>}
       >
@@ -641,8 +654,8 @@ function WhiteboardEditorBase(
             if (!readOnly) {
               // Before the broadcast records it as sent.
               const api = apiRef.current
-              if (!unsavedRef.current && api) {
-                unsavedRef.current = hasLocalChanges(api.getSceneElementsIncludingDeleted(), lastBroadcastRef.current)
+              if (!saves.current.hasChanges && api && hasLocalChanges(api.getSceneElementsIncludingDeleted(), lastBroadcastRef.current)) {
+                saves.current.markChanged()
               }
               scheduleBroadcast()
               maybeUploadDirtyAssets()
@@ -673,6 +686,7 @@ function WhiteboardEditorBase(
           }}
         />
       </Suspense>
+      </div>
     </div>
   )
 }

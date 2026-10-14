@@ -36,6 +36,7 @@
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
 pub mod account_envelope;
+pub mod account_head;
 pub mod account_rename;
 pub mod asset;
 pub mod chat_attachment_ledger;
@@ -45,6 +46,7 @@ pub mod chat_media;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
+pub mod device_registration;
 pub mod drive_envelope;
 pub mod drive_key_binding;
 pub mod drive_names;
@@ -66,6 +68,8 @@ pub mod mail_search;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod opaque;
+pub mod opaque_login_state;
 pub mod padding;
 pub mod pass_vault;
 pub mod photos_library;
@@ -74,5 +78,6 @@ pub mod revision_guard;
 pub mod safety_number;
 pub mod stream;
 pub mod thumbnail;
+pub mod yjs_seed;
 
 pub use error::{CryptoError, Result};

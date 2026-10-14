@@ -1,9 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
+import { OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { useSession } from '@kutup/session/store'
 import { sanitizeNext } from '@kutup/session/sessionSync'
 import { Alert } from '@kutup/ui/components/alert'
@@ -12,8 +13,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
-import { authErrorMessage } from './errors'
-import { completeTotp, signIn, type TotpChallenge } from './flows'
+import { authErrorMessage, bodyCode } from './errors'
+import { abandonTotp, completeTotp, signIn, type TotpChallenge } from './flows'
 import { setPendingSetup } from './pendingSetup'
 
 /**
@@ -30,7 +31,16 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<TotpChallenge | null>(null)
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(
+    // Sent back from a first sign-in whose setup token ran out.
+    () => (params.get('setup') === 'expired' ? t('auth.errors.setupExpired') : null),
+  )
+
+  // A sign-in waiting for its code ends with this page, or when another
+  // replaces it: its worker holds the password and the export key.
+  useEffect(() => () => {
+    if (challenge) abandonTotp(challenge)
+  }, [challenge])
 
   const schema = z.object({
     name: z.string().trim().min(1, t('auth.validation.usernameRequired')),
@@ -80,7 +90,15 @@ export function LoginPage() {
       const result = await completeTotp(challenge, code.trim())
       if (result.kind === 'signedIn') signedIn()
     } catch (err) {
-      setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
+      if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'preAuthInvalid') {
+        // The sign-in itself ended (it failed after the code, its first step
+        // expired, or the password changed meanwhile): start over.
+        setChallenge(null)
+        setCode('')
+        setError(t('auth.errors.signInAgain'))
+      } else {
+        setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
+      }
     } finally {
       setPending(false)
     }
@@ -113,7 +131,7 @@ export function LoginPage() {
             variant="link"
             className="w-full"
             onClick={() => {
-              challenge.keyEncryptionKey.fill(0)
+              abandonTotp(challenge)
               setChallenge(null)
               setCode('')
               setError(null)

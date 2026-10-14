@@ -50,6 +50,8 @@ import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useRequiredSession } from '@kutup/session/store'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { TooManyDevicesError } from '@kutup/collab/currentDevice'
+import { DeviceLimitNotice } from '../DeviceLimitNotice'
 import { buildAwarenessName, withAlpha } from '@kutup/collab/identity'
 import type { Awareness } from 'y-protocols/awareness'
 import VersionHistoryPanel from '../versions/VersionHistoryPanel'
@@ -93,7 +95,7 @@ interface Props {
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
-function seedUpdate(fileId: string, text: string): Uint8Array {
+function seedUpdate(fileId: string, text: string): Promise<Uint8Array> {
   return deterministicSeed(fileId, (doc) => doc.getText('content').insert(0, text))
 }
 
@@ -195,7 +197,8 @@ export default function TextCollabEditor({
   // and stashes it locally so the cursor is never invisible.
   const session = useRequiredSession()
   const username = session.username
-  const storedDeviceId = session.currentDeviceId
+  /** The account has 20 devices in use: no live editing until one is removed. */
+  const [deviceLimit, setDeviceLimit] = useState(false)
   const [cursorColor, changeCursorColor] = useCursorColor()
   // Stable awareness ref so the color-picker callback can mutate the live
   // awareness state without re-mounting the editor.
@@ -392,7 +395,6 @@ export default function TextCollabEditor({
         fileKeyAt,
         readOnly,
         username,
-        storedDeviceId,
         cursorColor,
         seed: initialContent
           ? {
@@ -424,6 +426,13 @@ export default function TextCollabEditor({
         onStatus: setStatus,
         onCollaborators: setCollaboratorCount,
         signal: controller.signal,
+      }).catch((error: unknown) => {
+        if (!(error instanceof TooManyDevicesError)) throw error
+        if (!controller.signal.aborted) {
+          setDeviceLimit(true)
+          setStatus('error')
+        }
+        return null
       })
       if (!session) {
         thumbnails?.flush()
@@ -674,11 +683,9 @@ export default function TextCollabEditor({
       controller.abort()
       cleanup?.()
     }
-    // storedDeviceId is intentionally NOT a dep: the first render reads it
-    // (often null), the registration flow sets it via dispatch, and React's
-    // re-render would otherwise tear down + recreate the WS for no reason —
-    // and on second mount the claimSeed call would lose, leaving the seed
-    // un-inserted. Same pattern as OfficeEditor.tsx.
+    // Not every value read here is a dep: re-running would tear down and
+    // recreate the socket for no reason, and on a second mount the
+    // claimSeed call would lose, leaving the seed un-inserted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId, filename, fileKey, username])
 
@@ -862,6 +869,7 @@ export default function TextCollabEditor({
           <Minimize2 />
         </Button>
       ) : null}
+      {deviceLimit ? <DeviceLimitNotice /> : null}
       <div className={'flex h-12 items-center gap-3 border-b border-border bg-background/95 px-4' + (focus ? ' hidden' : '')}>
         <div className="flex min-w-0 items-center gap-2">
           <span className={`inline-block h-2 w-2 rounded-full ${statusDot}`} aria-hidden />

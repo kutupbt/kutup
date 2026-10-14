@@ -31,7 +31,8 @@
     "keys": "Encryption keys",
     "mailSending": "Mail sending",
     "mailGroups": "Mail groups",
-    "feedback": "Feedback"
+    "feedback": "Feedback",
+    "referralCodes": "Referral codes"
   },
   "auth": {
     "fields": {
@@ -56,7 +57,11 @@
       "usernameTaken": "That username is taken. Go back and choose another.",
       "generic": "Something went wrong. Try again.",
       "slowDown": "Too many attempts from here. Wait a minute, then try again.",
-      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator."
+      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator.",
+      "signInAgain": "The sign-in ended before it finished. Sign in again.",
+      "setupExpired": "Your first sign-in ran out of time, or your temporary password was replaced. Sign in again with the temporary password you have now.",
+      "serverKeyChanged": "The server's sign-in key changed while your account was being made. Try again; if it keeps happening, tell the server's administrator.",
+      "keyBindingTaken": "Your account's keys could not be stored. Try again; if it keeps happening, tell the server's administrator."
     },
     "strength": {
       "label": "Strength: {{strength}}",
@@ -110,7 +115,15 @@
     "closedTitle": "Registration is closed",
     "closedDescription": "This server does not accept new accounts. Ask its administrator for one.",
     "backToSignIn": "Back to sign-in",
-    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account."
+    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account.",
+    "code": "Referral code",
+    "codeHint": "This server admits new accounts with a referral code from its administrators.",
+    "codeOptionalHint": "If someone gave you a code, enter it here.",
+    "haveCode": "Have a referral code?",
+    "codeRequired": "Enter your referral code.",
+    "codeInvalid": "This referral code cannot be used. Check it, or ask for a new one.",
+    "codeRateLimited": "Too many tries from here. Wait a while and try again.",
+    "codeCheckFailed": "The code could not be checked. Try again."
   },
   "firstLogin": {
     "title": "Finish setting up your account",
@@ -185,6 +198,34 @@
       "disableWarning": "Your password alone will then be enough to sign in.",
       "disableFailed": "Two-factor authentication could not be turned off.",
       "disabled": "Two-factor authentication turned off",
+      "password": "Password",
+      "passwordDescription": "Change the password you sign in with. Your files, mail and chats stay as they are: only the key that opens them is sealed again.",
+      "currentPassword": "Current password",
+      "changePassword": "Change password",
+      "passwordChanged": "Password changed. Your other devices are signed out.",
+      "wrongCurrentPassword": "Your current password is not right.",
+      "yourPassword": "Your Kutup password",
+      "wrongPassword": "That is not your Kutup password.",
+      "passwordChangeFailed": "The password could not be changed. Try again.",
+      "passwordSignsOutOthers": "Every other device signed in to your account is signed out. This one stays signed in.",
+      "events": {
+        "title": "Security events",
+        "description": "Changes to how you sign in, newest first. If you do not recognise one, change your password and check Devices & sessions.",
+        "none": "Nothing has changed since your account was made.",
+        "failed": "Security events could not be loaded.",
+        "older": "Show older events",
+        "byAdmin": "By an administrator",
+        "thisDevice": "This device",
+        "device": "{{device}}",
+        "kind": {
+          "passwordChange": "Password changed",
+          "recovery": "Password reset with the recovery phrase",
+          "rotate": "Your sign-in was refreshed",
+          "adminReset": "Password reset by an administrator",
+          "accountReset": "Account reset by an administrator",
+          "other": "A change to your sign-in"
+        }
+      },
       "recovery": "Recovery phrase",
       "recoveryDescription": "The 24 words shown when your account was created.",
       "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline."
@@ -226,7 +267,9 @@
       "revokeFailed": "The device could not be revoked.",
       "revokedToast": "Device revoked",
       "emptyTitle": "No editor devices yet",
-      "emptyDescription": "A device appears here the first time it opens a shared document."
+      "emptyDescription": "A device appears here the first time it opens a shared document.",
+      "inUseCount": "{{count}} of {{max}} devices in use. Devices of ended sign-ins, or unused for 30 days, don't count.",
+      "notInUse": "Not in use"
     },
     "profile": {
       "title": "Profile",
@@ -508,6 +551,10 @@
       "twoFactorDone": "Two-factor authentication turned off",
       "rotate": "New temporary password",
       "rotateHint": "This account has not signed in yet; replacing its temporary password loses nothing.",
+      "yourPassword": "Your own password, to confirm it is you",
+      "wrongAdminPassword": "Your password is not right.",
+      "adminLocked": "Too many attempts with your password. Wait a while and try again.",
+      "adminSlowDown": "Too many attempts from here. Wait a minute, then try again.",
       "rotateTitle": "Replace the temporary password?",
       "rotateDescription": "The current temporary password for {{name}} stops working.",
       "wipe": "Wipe account",
@@ -522,7 +569,10 @@
       "deleteDescription": "{{name}} and everything it owns are removed from this server.",
       "deleteWarning": "This cannot be undone.",
       "deleted": "{{name}} deleted",
-      "actionFailed": "The action failed."
+      "actionFailed": "The action failed.",
+      "signedUpWith": "Signed up with",
+      "signedUpWithBy": "Code made by {{name}}; used {{when}}",
+      "noReferralCode": "No referral code"
     },
     "reports": {
       "title": "Reports",
@@ -595,15 +645,17 @@
         "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
         "shareRemove": "{{admin}} took down a public link of {{target}}",
-        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}"
+        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}",
+        "registrationCodeCreated": "{{admin}} made a referral code (…{{hint}})",
+        "registrationCodeRevoked": "{{admin}} revoked the referral code …{{hint}}"
       }
     },
     "settings": {
       "title": "Server settings",
       "description": "Defaults and limits for everyone on this server.",
       "accounts": "Accounts",
-      "registration": "Open registration",
-      "registrationHint": "Anyone who can reach this server can create an account. Off: only administrators create accounts.",
+      "registration": "Registration",
+      "registrationHint": "Who may create an account on this server. Administrators can always create accounts.",
       "chat": "Chat",
       "chatHint": "Encrypted message and media delivery on this server.",
       "mailboxDays": "Undelivered messages (days)",
@@ -615,7 +667,12 @@
       "saved": "Settings saved",
       "saveFailed": "The settings could not be saved.",
       "defaultQuota": "Default storage quota (GiB)",
-      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page."
+      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page.",
+      "registrationMode": {
+        "on": "Open to anyone",
+        "code": "With a referral code",
+        "off": "Closed"
+      }
     },
     "federation": {
       "title": "Federation",
@@ -894,6 +951,70 @@
       "issueBodyHint": "Who sent the feedback is not included. Edit out anything else personal.",
       "checkedPersonal": "I've removed personal details, and this can be public",
       "openIssue": "Open the issue on GitHub"
+    },
+    "codes": {
+      "title": "Referral codes",
+      "description": "Codes that let people sign up when registration needs one. A code is shown once, when you make it.",
+      "new": "New code",
+      "emptyTitle": "No referral codes yet",
+      "emptyDescription": "Make one to let someone sign up while registration needs a code.",
+      "columns": {
+        "code": "Code",
+        "note": "Note",
+        "uses": "Uses",
+        "expires": "Expires",
+        "state": "State",
+        "actions": "Actions"
+      },
+      "madeBy": "Made by {{name}}, {{when}}",
+      "usesOf": "{{uses}} of {{max}}",
+      "usesUnlimited": "{{uses}} (no limit)",
+      "never": "Never",
+      "state": {
+        "active": "Active",
+        "expired": "Expired",
+        "usedUp": "Used up",
+        "revoked": "Revoked"
+      },
+      "usedBy": "Used by",
+      "usedByFor": "Who used the code …{{hint}}",
+      "revoke": "Revoke",
+      "revokeFor": "Revoke the code …{{hint}}",
+      "revokeTitle": "Revoke this referral code?",
+      "revokeDescription": "The code …{{hint}} stops working at once. Accounts already made with it stay.",
+      "revokeFailed": "The code could not be revoked.",
+      "revoked": "Referral code revoked",
+      "newTitle": "New referral code",
+      "newDescription": "Choose how long it works and how many accounts it may create.",
+      "note": "Note",
+      "noteHint": "Who or what the code is for. Only administrators see it.",
+      "noteTooLong": "A note is at most 200 characters.",
+      "expires": "Works for",
+      "expiry": {
+        "day": "1 day",
+        "week": "7 days",
+        "month": "30 days",
+        "never": "No expiry"
+      },
+      "usesLabel": "Accounts it may create",
+      "usesHint": "Each sign-up with the code uses one.",
+      "limit": {
+        "one": "One",
+        "number": "A number",
+        "unlimited": "No limit"
+      },
+      "howMany": "How many",
+      "howManyRange": "From 1 to {{max}}.",
+      "createFailed": "The code could not be made.",
+      "make": "Make code",
+      "madeTitle": "Your referral code",
+      "madeDescription": "Copy it now: it is not shown again. Afterwards you see only its last four characters.",
+      "theCode": "The referral code",
+      "copyCode": "Copy code",
+      "copyLink": "Copy sign-up link",
+      "done": "Done",
+      "usesTitle": "Accounts made with …{{hint}}",
+      "noNote": "No note"
     }
   }
 }

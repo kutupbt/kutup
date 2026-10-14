@@ -26,14 +26,6 @@ export interface CryptoWasmModule {
     purpose: number,
     profile: string,
   ): string
-  deriveAccountProtectionKeys(
-    password: string,
-    saltBase64: string,
-    suite: number,
-    memoryKib: number,
-    iterations: number,
-    parallelism: number,
-  ): { keyEncryptionKey: string; loginKey: string }
   deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
   deriveAccountIdentityKeys(masterKeyBase64: string): {
     authorityPublicKey: string
@@ -44,6 +36,20 @@ export interface CryptoWasmModule {
     driveSigningPublicKey: string
   }
   signDriveKeyBinding(masterKeyBase64: string, account: string): string
+  signDeviceRegistration(
+    masterKeyBase64: string,
+    server: string,
+    userId: string,
+    devicePublicBase64: string,
+    challengeBase64: string,
+    issuedAtMs: number,
+  ): string
+  signDeviceRevocation(
+    masterKeyBase64: string,
+    server: string,
+    devicePublicBase64: string,
+    revokedAtMs: number,
+  ): string
   deriveSafetyNumber(localAuthorityBase64: string, peerAuthorityBase64: string): { fingerprint: string; qrPayload: string }
   safetyQrMatches(localAuthorityBase64: string, peerAuthorityBase64: string, scanned: string): boolean
   signAccountRename(masterKeyBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
@@ -79,6 +85,9 @@ export interface CryptoWasmModule {
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountEnvelope(envelopeBase64: string): number
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
+  AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
+  OpaqueLogin: { start(password: string): OpaqueLoginHandle }
+  OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
   generateMailGroupKey(
     groupAddress: string,
     createdAtSecs: number,
@@ -523,6 +532,7 @@ export interface CryptoWasmModule {
   driveNameHash(hashKeyBase64: string, name: string): string
   driveContentHash(hashKeyBase64: string, contentSha256Base64: string): string
   driveCanonicalName(name: string): string
+  yjsSeedClientId(fileId: string, content: Uint8Array): number
   photosLibraryKey(masterKeyBase64: string): string
   sealPhotosLibrary(
     libraryJson: string,
@@ -572,6 +582,40 @@ export interface LiveLocationUpdate {
 }
 
 let modulePromise: Promise<CryptoWasmModule> | null = null
+
+/** The account head's keys and verified head (Rust `kutup_crypto::account_head`); kept in WASM. */
+export interface AccountHeadKeysHandle {
+  writer(deviceId: string): string
+  scope(scope: string, indexJson: string): unknown
+  check(anchorJson: string | undefined, currentBase64: string, segmentJson: string | undefined): unknown
+  reanchor(anchorJson: string, currentBase64: string, segmentJson: string | undefined, confirmed: boolean, atMs: number): unknown
+  checkIndex(scope: string, indexJson: string): unknown
+  next(writer: string, scopesJson: string): string
+  first(writer: string, scopesJson: string): string
+  committed(sealedBase64: string): unknown
+  verifiedHead(): unknown
+  free(): void
+}
+
+/** OPAQUE sign-in in progress (Rust `kutup_crypto::opaque`); the state stays in WASM. */
+export interface OpaqueLoginHandle {
+  readonly request: string
+  finish(responseBase64: string): string
+  openMasterKey(envelope: string, keyBinding: string): string
+  /** Wipes the state and the export key. */
+  close(): void
+  free(): void
+}
+
+/** OPAQUE registration in progress (Rust `kutup_crypto::opaque`); the state stays in WASM. */
+export interface OpaqueRegistrationHandle {
+  readonly request: string
+  finish(responseBase64: string): string
+  sealMasterKey(masterKeyBase64: string, keyBinding: string): string
+  /** Wipes the state and the export key. */
+  close(): void
+  free(): void
+}
 
 export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {

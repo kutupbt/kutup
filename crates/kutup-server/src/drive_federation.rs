@@ -514,8 +514,8 @@ pub async fn create_federated_share(
         "INSERT INTO federated_outgoing_shares
             (collection_id, sharer_user_id, recipient_username,
              recipient_domain, named_share_envelope, capability_hash,
-             can_upload, can_delete, upload_quota_bytes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+             can_upload, can_delete, upload_quota_bytes, recipient_incarnation_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(collection_id)
     .bind(owner)
@@ -526,6 +526,9 @@ pub async fn create_federated_share(
     .bind(request.can_upload)
     .bind(request.can_delete)
     .bind(request.upload_quota_bytes)
+    // Whose collaboration devices may write through this share (the
+    // envelope, verified above, names it: docs/plans/device-registration.md).
+    .bind(hex::encode(named_share.recipient_incarnation_id))
     .execute(&state.pool)
     .await?;
 

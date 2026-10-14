@@ -41,6 +41,11 @@ POSTGRES_PASSWORD=<strong-random-password>
 #   openssl rand -hex 64
 JWT_SECRET=<64-byte-hex-string>
 
+# The keys the sign-in (OPAQUE) setups are sealed under — generate with:
+#   echo "1:$(openssl rand -base64 32)"
+# Back it up apart from the database (see "Database backups").
+OPAQUE_SETUP_KEYS=1:<base64 of 32 random bytes>
+
 # Object storage credentials — the bundled SeaweedFS's by default, injected
 # into every bundled service by Compose. For another S3 store see "Using
 # another S3 store" below.
@@ -138,6 +143,12 @@ CHAT_WEB_PUSH=true
 # demoted, disabled, or deleted. Promote further admins inside the app.
 ADMIN_ACCOUNT=admin:<strong-admin-password>
 
+# Who may register on a fresh database: on (anyone), code (only with a
+# referral code an administrator made) or off (nobody; the default). Used only
+# while the database holds no choice yet: from then on the administrators set
+# it under Account → Admin → Server settings, and this is not read again.
+# REGISTRATION_MODE=off
+
 # SeaweedFS master — the admin dashboard probes it for real storage
 # capacity + usage. Default works for the bundled compose.
 SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
@@ -173,10 +184,16 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_PREFLIGHT_PER_MIN=20
 # RATE_LIMIT_FORK_PER_MIN=120           # each app opened redeems one session hand-off
 # RATE_LIMIT_AVAILABLE_HASHES_PER_MIN=120 # Drive asking which "name (n)" is free, per account
+# RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN=600 # edits sent over HTTP (the CLI editing notes), per device
+# RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=20 # collaboration device registrations, per account
+# RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN=300 # account head, chain and index reads, per account
+# RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN=60 # devices another server announces, per server and share
 # RATE_LIMIT_CALL_LINK_PER_MIN=60       # opening and joining a meeting link need no account
 # RATE_LIMIT_CALL_LINK_POLL_PER_MIN=600 # a meeting's waiting room, asked about every few seconds
 # RATE_LIMIT_USER_LOOKUP_PER_MIN=30
 # RATE_LIMIT_REGISTER_PER_HOUR=10
+# RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR=30    # checking a referral code before signing up
+# RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR=20 # wrong referral codes, checks and sign-ups together
 # RATE_LIMIT_RECOVERY_PER_HOUR=5
 # RATE_LIMIT_REPORT_PER_HOUR=20        # reporting a public link needs no account
 # RATE_LIMIT_FEEDBACK_PER_HOUR=10      # per account: feedback from the apps' sidebar
@@ -731,6 +748,10 @@ durable operator backups.
 
 ## Database backups
 
+The database backups below do not hold `OPAQUE_SETUP_KEYS` (it is in `.env`),
+and must not: back that key up on its own, somewhere else. A database restored
+without it signs no one in (see the security notes).
+
 `scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
 machine, and stores it in the object store Kutup already uses (`S3_*` in
 `.env`), under `database-backups/`. It works with the bundled SeaweedFS and
@@ -1107,6 +1128,29 @@ publishing new DKIM records.
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
 - **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
+- **OPAQUE_SETUP_KEYS:** the keys sign-in's OPAQUE setups are sealed under
+  (docs/plans/opaque.md). The server keeps each account's OPAQUE record, which
+  is useless for guessing passwords offline as long as the setup's secrets are
+  out of reach; they are stored sealed under this key, so a database dump or
+  backup alone gives nothing to attack.
+  - **Format:** `id:base64(32 bytes)`, comma-separated. The highest id is the
+    current one. The server refuses to start on a malformed list, and on a key
+    that does not open a stored setup.
+  - **As a file:** the server also takes `OPAQUE_SETUP_KEYS_FILE`, a file
+    holding the list (a mounted secret), never both. The bundled
+    `docker-compose.yml` passes the variable; to use a file, set it in your
+    own compose override or service unit instead.
+  - **Back it up apart from the database,** never in the same place. Losing it
+    signs no one in: every account then recovers with its recovery phrase and
+    sets a new password.
+  - **To rotate,** add a key with a higher id. Each account moves to the new
+    setup at its next sign-in, silently. A setup no account uses any more is
+    dropped. If the old key leaked, the accounts still on it stay open to
+    offline guessing until they sign in again; ending their sessions hastens
+    that.
+  - **Never derived from `JWT_SECRET`:** rotating that one leaves passwords
+    alone.
+- **Referral codes:** stored only as HMACs under a key the server makes once and keeps in its database (`server_generated_keys`), so rotating `JWT_SECRET` leaves open codes working and a database restore keeps them; a new, empty database voids them.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
 - **Quotas:** Set each account's storage quota (one pool for every app) in the admin dashboard to prevent abuse.
 - **Updates:** Keep Docker images and the application updated.
