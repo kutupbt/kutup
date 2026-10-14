@@ -139,6 +139,20 @@ pub fn opaque_register(
     grant: Option<&str>,
     bearer_token: Option<&str>,
 ) -> (String, u16, kutup_crypto::opaque::ExportKey) {
+    try_opaque_register(c, base, password, key_binding, grant, bearer_token)
+        .unwrap_or_else(|(status, body)| panic!("register/start: {status} {body}"))
+}
+
+/// [`opaque_register`], with a refusal (`register/start` said no: sign-ups
+/// closed, a grant that does not fit) as its status and body.
+pub fn try_opaque_register(
+    c: &Client,
+    base: &str,
+    password: &str,
+    key_binding: &str,
+    grant: Option<&str>,
+    bearer_token: Option<&str>,
+) -> Result<(String, u16, kutup_crypto::opaque::ExportKey), (StatusCode, Value)> {
     let (registering, request) = kutup_crypto::opaque::client_registration_start(password).unwrap();
     let mut req = c
         .post(format!("{base}/api/auth/opaque/register/start"))
@@ -149,16 +163,18 @@ pub fn opaque_register(
     let r = req.send().unwrap();
     let status = r.status();
     let body: Value = r.json().unwrap_or(Value::Null);
-    assert_eq!(status, StatusCode::OK, "register/start: {body}");
+    if status != StatusCode::OK {
+        return Err((status, body));
+    }
     let response = STANDARD
         .decode(body["registrationResponse"].as_str().unwrap())
         .unwrap();
     let registered = registering.finish(&response).unwrap();
-    (
+    Ok((
         b64(&registered.record),
         body["serverKeyId"].as_u64().unwrap() as u16,
         registered.export_key,
-    )
+    ))
 }
 
 /// One OPAQUE sign-in (`login/start`, the client's half, `login/finish`):
@@ -257,8 +273,9 @@ fn register_full(
     let mut recovery_entropy = [0u8; 32];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
+    // Sign-ups closed refuse already here (registrationClosed).
     let (opaque_record, server_key_id, export_key) =
-        opaque_register(c, base, password, &key_binding, None, None);
+        try_opaque_register(c, base, password, &key_binding, None, None)?;
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
