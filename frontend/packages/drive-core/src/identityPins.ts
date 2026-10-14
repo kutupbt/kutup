@@ -13,15 +13,19 @@
 // callers show the status next to the person and ask before sharing to them.
 
 import { isAxiosError } from 'axios'
+import { foldAddress, verifyAccountRenameChain, type AccountRenameV1 } from '@kutup/crypto/accountRename'
 import {
+  applyAccountRenameToPins,
   deriveSafetyNumber,
   incarnationIdOfAuthority,
+  lookupIdentityPin,
   openIdentityPins,
   EMPTY_PINS,
   recordIdentityPin,
   safetyQrMatches,
   sealIdentityPins,
   verifyDriveKeyBinding,
+  type IdentityPin,
   type PinsText,
   type PinUpdate,
   type Recorded,
@@ -47,10 +51,16 @@ import type { DriveIdentity } from './identity'
  * - `changed`: a valid binding by another authority than the pinned one —
  *   a new account under the same address (after an administrator's wipe), or
  *   a server handing out keys of its own. Warned until the user accepts it.
+ * - `renamed`: the address is a name this person left (a verified rename
+ *   chain says so, docs/plans/username-renames.md): they are `now` there.
  * - `unknown`: could not be checked (no connection, the lookup failed).
+ *
+ * `formerly` (on `ok`): the address the person was known by before their
+ * newest rename, when they have one.
  */
 export type IdentityStatus =
-  | { kind: 'ok'; verified: boolean }
+  | { kind: 'ok'; verified: boolean; formerly?: string }
+  | { kind: 'renamed'; now: string; verified: boolean }
   | { kind: 'unproven' }
   | { kind: 'invalid' }
   | { kind: 'changed' }
@@ -305,6 +315,100 @@ async function recordPin(me: DriveIdentity, account: string, authority: string, 
   return outcome
 }
 
+// ------------------------------------------------------------- renames
+
+/** One account's rename chain, as `GET /api/users/renames/:address` and `409 renamed` give it. */
+export interface RenameChainEntry {
+  incarnationId: string
+  authorityPublicKey: string
+  current: string
+  state: 'current' | 'held' | 'gone'
+  chain: AccountRenameV1[]
+}
+
+/** Every chain naming an address, newest first; `unavailable`: its server could not say. */
+export interface RenameChains {
+  version: number
+  chains: RenameChainEntry[]
+  unavailable?: boolean
+}
+
+/** The chains a `409 renamed` carries (a lookup of a name its account left), or null for another error. */
+export function renamesOf(error: unknown): RenameChains | null {
+  if (!isAxiosError(error) || error.response?.status !== 409) return null
+  const data = error.response.data as { code?: string; renames?: RenameChains } | undefined
+  return data?.code === 'renamed' && data.renames && Array.isArray(data.renames.chains) ? data.renames : null
+}
+
+/** The rename chains that name `address`. */
+async function fetchRenames(address: string): Promise<RenameChains> {
+  return (await api.get<RenameChains>(`/users/renames/${encodeURIComponent(address)}`)).data
+}
+
+/** Where a person known at an address they left is now. */
+export interface FollowedRename {
+  now: string
+  formerly: string
+  verified: boolean
+}
+
+/**
+ * Follows `renames` for `address`: the chain of the authority pinned there
+ * (its pin moves to the chain's current address, with its trust and
+ * history), or, for someone never met, the newest chain whose account goes
+ * by another name now (trusted on first use, nothing pinned). Null when
+ * nothing can be followed: an unknown format (`version`), a server that
+ * could not say, a pinned authority with no chain or one that does not
+ * verify, an account that is gone. A pin is never moved on doubt.
+ */
+export async function followRename(me: DriveIdentity, address: string, renames: RenameChains): Promise<FollowedRename | null> {
+  if (renames.version !== 1 || renames.unavailable) return null
+  const pins = await pinStore(me)
+  const match = await lookupIdentityPin(pins.pins, address, null)
+  const pin = match.kind === 'pinned' || match.kind === 'returned' ? match.pin : null
+  if (pin) {
+    const entry = renames.chains.find((chain) => chain.authorityPublicKey === pin.authorityPublicKey && chain.state === 'current')
+    if (!entry) return null
+    let moved: { from: string; to: string } | null = null
+    try {
+      await updatePins(me, async (list) => {
+        const applied = await applyAccountRenameToPins(list, entry.authorityPublicKey, entry.chain)
+        moved = applied.applied
+        return applied.applied.changed ? applied.pins : null
+      })
+    } catch {
+      return null
+    }
+    const done = moved as { from: string; to: string } | null
+    return done ? { now: done.to, formerly: address, verified: pin.state === 'verified' } : null
+  }
+  const asked = await foldAddress(address)
+  for (const entry of renames.chains) {
+    if (entry.state !== 'current') continue
+    try {
+      const view = await verifyAccountRenameChain(entry.authorityPublicKey, entry.chain)
+      const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
+      if (asked !== null && folded.includes(asked) && (await foldAddress(view.current)) !== asked) {
+        return { now: view.current, formerly: address, verified: false }
+      }
+    } catch {
+      // Not a chain to follow.
+    }
+  }
+  return null
+}
+
+/** Two addresses of one account: equal once folded. */
+async function sameAddress(a: string, b: string): Promise<boolean> {
+  const [x, y] = await Promise.all([foldAddress(a), foldAddress(b)])
+  return x !== null && x === y
+}
+
+/** The newest address a pin had before its current one. */
+function formerOf(pin: IdentityPin): string | undefined {
+  return pin.formerly?.at(-1)
+}
+
 // -------------------------------------------------------------- checks
 
 /**
@@ -312,12 +416,12 @@ async function recordPin(me: DriveIdentity, account: string, authority: string, 
  * authority the first time it is met with a valid binding.
  */
 export async function checkIdentity(me: DriveIdentity, account: string, claimed: ClaimedKeys = {}): Promise<IdentityStatus> {
-  if (account === me.account) return { kind: 'ok', verified: true }
+  if (await sameAddress(account, me.account)) return { kind: 'ok', verified: true }
   let person: PublishedIdentity
   try {
     person = await publishedIdentity(me, account)
-  } catch {
-    return { kind: 'unknown' }
+  } catch (error) {
+    return (await renamedStatus(me, account, error)) ?? { kind: 'unknown' }
   }
   // The keys in use must be the ones the person's server publishes...
   if (
@@ -335,7 +439,9 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   } catch {
     return { kind: 'unknown' }
   }
-  const pin = pins.pins.list.pins.find((known) => known.account === account)
+  // Compared folded, in Rust: any spelling of a pinned address finds its pin.
+  const match = await lookupIdentityPin(pins.pins, account, person.accountAuthorityPublicKey)
+  const pin = match.kind === 'pinned' ? match.pin : null
   // ...and those its authority vouches for. A binding is never withdrawn: a
   // pinned account without one is a server leaving it out.
   if (!person.driveKeyBinding) return pin ? { kind: 'invalid' } : { kind: 'unproven' }
@@ -348,8 +454,18 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   ).catch(() => false)
   if (!bound) return { kind: 'invalid' }
   if (pin) {
-    if (pin.authorityPublicKey === person.accountAuthorityPublicKey) return { kind: 'ok', verified: pin.state === 'verified' }
+    if (pin.authorityPublicKey === person.accountAuthorityPublicKey) return okStatus(pin)
     return { kind: 'changed' }
+  }
+  // Someone known under an earlier name of theirs: follow their chain, which
+  // moves the pin here (formerly the address it was at).
+  if (match.kind === 'renamed') {
+    const followed = await fetchRenames(account)
+      .then((renames) => followRename(me, match.pin.account, renames))
+      .catch(() => null)
+    if (followed && (await sameAddress(followed.now, account))) {
+      return { kind: 'ok', verified: followed.verified, formerly: followed.formerly }
+    }
   }
   // First met: trusted from now on, unless the list knows better.
   const recorded = await recordPin(me, account, person.accountAuthorityPublicKey, 'firstSeen').catch((): Recorded => ({ kind: 'unchanged' }))
@@ -362,13 +478,66 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   return { kind: 'ok', verified: false }
 }
 
+function okStatus(pin: IdentityPin): IdentityStatus {
+  const formerly = formerOf(pin)
+  return { kind: 'ok', verified: pin.state === 'verified', ...(formerly ? { formerly } : {}) }
+}
+
+/**
+ * When a lookup of `account` failed: whether it is a name its person left.
+ * Their server says so (`409 renamed`, with the chains); one of this server's
+ * names that is not found is asked about only when it is pinned.
+ */
+async function renamedStatus(me: DriveIdentity, account: string, error: unknown): Promise<IdentityStatus | null> {
+  try {
+    let renames = renamesOf(error)
+    if (!renames && error instanceof IdentityNotFound) {
+      const pins = await pinStore(me)
+      const match = await lookupIdentityPin(pins.pins, account, null)
+      if (match.kind !== 'pinned') return null
+      renames = await fetchRenames(account)
+    }
+    if (!renames) return null
+    const followed = await followRename(me, account, renames)
+    return followed ? { kind: 'renamed', now: followed.now, verified: followed.verified } : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Whether `account` is in the list (met before in Drive, Chat or the CLI).
  * Tells a Kutup account on another server from an ordinary email address
  * without asking that server: only a listed one is worth looking up.
  */
 export async function isPinned(me: DriveIdentity, account: string): Promise<boolean> {
-  return (await pinStore(me)).pins.list.pins.some((pin) => pin.account === account)
+  const match = await lookupIdentityPin((await pinStore(me)).pins, account, null)
+  return match.kind === 'pinned'
+}
+
+/**
+ * Sharing to an address its person left: they are `now` there (a verified
+ * rename chain says so). Share with them there instead.
+ */
+export class RecipientRenamed extends Error {
+  constructor(
+    readonly account: string,
+    readonly now: string,
+  ) {
+    super(`${account} is now ${now}`)
+  }
+}
+
+/**
+ * For a recipient lookup that failed: `RecipientRenamed` when the address
+ * is a name its person left and their chain can be followed; the error
+ * itself otherwise.
+ */
+export async function recipientError(me: DriveIdentity, account: string, error: unknown): Promise<unknown> {
+  const renames = renamesOf(error)
+  if (!renames) return error
+  const followed = await followRename(me, account, renames).catch(() => null)
+  return followed ? new RecipientRenamed(account, followed.now) : error
 }
 
 /** Sharing to someone whose identity is in doubt, before the user said to go on. */

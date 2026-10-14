@@ -2,7 +2,7 @@ import { Shield, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAcceptIdentity, useIdentityStatus, usePersonSafetyNumber, useVerifyPerson } from '@kutup/drive-core/identityStatus'
-import { IdentityKnownElsewhere, IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
+import { IdentityKnownElsewhere, IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed, type RecipientRenamed } from '@kutup/drive-core/identityPins'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -116,7 +116,12 @@ export function VerifyPersonButton({ account, claimed }: { account: string; clai
   const kind = status.data?.kind
   const verified = kind === 'ok' && status.data?.kind === 'ok' && status.data.verified
   const doubt = kind === 'changed' || kind === 'invalid'
-  const label = doubt ? t(`identityCheck.${kind}.title`, { name }) : verified ? t('identityCheck.verified', { name }) : t('identityCheck.verify', { name })
+  const formerly = status.data?.kind === 'ok' ? status.data.formerly : undefined
+  const label = formerlyLabel(
+    t,
+    doubt ? t(`identityCheck.${kind}.title`, { name }) : verified ? t('identityCheck.verified', { name }) : t('identityCheck.verify', { name }),
+    formerly,
+  )
   return (
     <>
       <Button
@@ -136,6 +141,11 @@ export function VerifyPersonButton({ account, claimed }: { account: string; clai
   )
 }
 
+/** `label`, with the address the person had before their newest rename. */
+export function formerlyLabel(t: (key: string, values?: Record<string, string>) => string, label: string, formerly: string | undefined): string {
+  return formerly ? `${label} (${t('identityCheck.renamed.formerly', { formerly })})` : label
+}
+
 /** Above a file or folder someone shared: why it may not be from who it says, and what to do. */
 export function IdentityBanner({ account, claimed }: { account: string | null | undefined; claimed?: ClaimedKeys }) {
   const { t } = useTranslation()
@@ -144,6 +154,16 @@ export function IdentityBanner({ account, claimed }: { account: string | null | 
   const people = usePeople()
   const [verifying, setVerifying] = useState(false)
   const kind = status.data?.kind
+  if (account && status.data?.kind === 'renamed') {
+    // Shared under a name its person has left: who they are now.
+    const now = status.data.now
+    return (
+      <div role="status" data-testid="identity-renamed" className="flex shrink-0 items-start gap-3 border-b border-border bg-muted px-3 py-2 text-sm">
+        <Shield className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <p className="min-w-0 flex-1">{t('identityCheck.renamed.banner', { name: personOf(people.data, now).name, now, account })}</p>
+      </div>
+    )
+  }
   if (!account || (kind !== 'changed' && kind !== 'invalid')) return null
   const name = personOf(people.data, account).name
   return (
@@ -188,5 +208,24 @@ export function IdentityShareWarning({ error, onShareAnyway }: { error: Identity
         {t('identityCheck.shareAnyway')}
       </Button>
     </Alert>
+  )
+}
+
+/**
+ * In a share dialog, when the address typed is a name its person left
+ * (docs/plans/username-renames.md): where they are now, and the choice to
+ * share with them there.
+ */
+export function RecipientRenamedNotice({ error, onUseNow }: { error: RecipientRenamed; onUseNow: (now: string) => void }) {
+  const { t } = useTranslation()
+  return (
+    <div data-testid="recipient-renamed">
+      <Alert variant="info">
+        <p>{t('identityCheck.renamed.share', { account: error.account, now: error.now })}</p>
+        <Button className="mt-2" size="sm" variant="outline" onClick={() => onUseNow(error.now)}>
+          {t('identityCheck.renamed.useNow', { now: error.now })}
+        </Button>
+      </Alert>
+    </div>
   )
 }

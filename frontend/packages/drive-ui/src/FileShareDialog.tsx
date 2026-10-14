@@ -22,8 +22,8 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
-import { IdentityShareWarning, VerifyPersonButton } from './IdentityWarning'
+import { IdentityNotConfirmed, RecipientRenamed } from '@kutup/drive-core/identityPins'
+import { IdentityShareWarning, RecipientRenamedNotice, VerifyPersonButton } from './IdentityWarning'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
 
@@ -72,7 +72,7 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
     )
   }
 
-  const errorText = share.error && !(share.error instanceof IdentityNotConfirmed)
+  const errorText = share.error && !(share.error instanceof IdentityNotConfirmed) && !(share.error instanceof RecipientRenamed)
     ? isAxiosError(share.error) && share.error.response?.status === 409 && target?.role === 'editor'
       ? t('fileShare.alreadyHas')
       : share.error instanceof RecipientNotFound
@@ -135,6 +135,15 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
           ) : null}
           {errorText ? <Alert variant="error">{errorText}</Alert> : null}
           {share.error instanceof IdentityNotConfirmed ? <IdentityShareWarning error={share.error} onShareAnyway={() => send(true)} /> : null}
+          {share.error instanceof RecipientRenamed ? (
+            <RecipientRenamedNotice
+              error={share.error}
+              onUseNow={(now) => {
+                setRecipient(now)
+                share.reset()
+              }}
+            />
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>{t('common.close')}</Button>
             <Button type="submit" loading={share.isPending} disabled={!recipient.trim()}>

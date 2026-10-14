@@ -318,6 +318,12 @@
       "body": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış. Bu ondan gelmiyor olabilir: içeriğine, bağlantılarına ya da isteklerine güvenmeyin.",
       "shareBody": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış; sunucu paylaştığınızı okuyabilir."
     },
+    "renamed": {
+      "banner": "{{name}} artık {{now}} (önceden {{account}}).",
+      "share": "{{account}} bu kişinin bıraktığı bir ad: artık {{now}}.",
+      "useNow": "{{now}} ile paylaş",
+      "formerly": "önceden {{formerly}}"
+    },
     "accept": "Yeni kimliğe güven",
     "acceptFailed": "Kaydedilemedi. Yeniden deneyin.",
     "knownElsewhere": "Bu kimlik, {{other}} olarak tanıdığınız biri. Adresi değişmiş; adını değiştirdiği doğrulanınca izlenecek.",

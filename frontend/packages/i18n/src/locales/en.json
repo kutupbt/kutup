@@ -318,6 +318,12 @@
       "body": "The keys the server gave for {{account}} are not signed by their account. This may not be from them: don't trust its contents, links or requests.",
       "shareBody": "The keys the server gave for {{account}} are not signed by their account, so the server might be able to read what you share."
     },
+    "renamed": {
+      "banner": "{{name}} is now {{now}} (formerly {{account}}).",
+      "share": "{{account}} is a name this person has left: they are now {{now}}.",
+      "useNow": "Share with {{now}}",
+      "formerly": "formerly {{formerly}}"
+    },
     "accept": "Trust the new identity",
     "acceptFailed": "It could not be saved. Try again.",
     "knownElsewhere": "This identity is someone you already know as {{other}}. Their address changed; it is followed once their renaming is confirmed.",

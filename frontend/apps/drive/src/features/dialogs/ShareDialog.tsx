@@ -16,8 +16,8 @@ import type { Folder } from '@kutup/drive-core/model'
 import { AccessList } from './AccessList'
 import { accessKey } from '@kutup/drive-core/access'
 import { RecipientNotFound, useShareFolder } from '@kutup/drive-core/mutations'
-import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
-import { IdentityShareWarning } from '@kutup/drive-ui/IdentityWarning'
+import { IdentityNotConfirmed, RecipientRenamed } from '@kutup/drive-core/identityPins'
+import { IdentityShareWarning, RecipientRenamedNotice } from '@kutup/drive-ui/IdentityWarning'
 
 const GIB = 1024 ** 3
 
@@ -86,7 +86,7 @@ export function ShareDialog({
     )
   }
 
-  const errorText = share.error && !(share.error instanceof IdentityNotConfirmed)
+  const errorText = share.error && !(share.error instanceof IdentityNotConfirmed) && !(share.error instanceof RecipientRenamed)
     ? share.error instanceof RecipientNotFound || apiErrorCode(share.error) === 'not_found'
       ? t('dialogs.share.notFound')
       : apiErrorMessage(share.error, t('dialogs.share.failed'))
@@ -129,6 +129,15 @@ export function ShareDialog({
           <Alert>{t('dialogs.share.note')}</Alert>
           {errorText ? <Alert variant="error">{errorText}</Alert> : null}
           {share.error instanceof IdentityNotConfirmed ? <IdentityShareWarning error={share.error} onShareAnyway={() => send(true)} /> : null}
+          {share.error instanceof RecipientRenamed ? (
+            <RecipientRenamedNotice
+              error={share.error}
+              onUseNow={(now) => {
+                setRecipient(now)
+                share.reset()
+              }}
+            />
+          ) : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
             <Button type="submit" loading={share.isPending} disabled={!recipient.trim() || quotaInvalid}>
