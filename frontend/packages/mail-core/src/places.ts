@@ -179,7 +179,7 @@ export function usePlaces() {
 type NameSession = { masterKey: Uint8Array; envelopeBinding: string; userId: string }
 
 /** The account's folders and labels, read now, with their names opened and held to the account head. */
-async function loadPlaces(session: NameSession): Promise<MailPlaces> {
+export async function loadPlaces(session: NameSession): Promise<MailPlaces> {
   return readGuarded(session, (index) => openPlaces(session, index))
 }
 

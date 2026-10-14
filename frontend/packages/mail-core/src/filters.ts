@@ -74,7 +74,7 @@ interface FilterTools {
 }
 
 /** The account's filters, read now, with their names opened and held to the account head. */
-async function loadFilters(session: FilterSession): Promise<MailFilter[]> {
+export async function loadFilters(session: FilterSession): Promise<MailFilter[]> {
   return readGuarded(session, async (index) => {
     const { data } = await api.get<Omit<MailFilter, 'nameRevision'>[]>('/mail/filters')
     index?.expectListing(
