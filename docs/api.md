@@ -277,7 +277,9 @@ the start is the attempt. A right finish gives it back.
   `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day; an IPv6 client counts by its /64).
   A client that signed in to the account before carries the HttpOnly
   `kutup_known` cookie (set at a session's finish and by
-  `POST /api/auth/forks/consume`) and is not held by that cap.
+  `POST /api/auth/forks/consume`, `Path=/api/auth`: no route outside sign-in
+  sees it; the same answers clear one a browser may hold at `Path=/api`) and
+  is not held by that cap.
 - **Unknown names:** both apply to them too, keyed by the canonical name, so a
   `429` does not reveal whether the account exists.
 - **Codes:** a `429` from the lockout or the ceiling carries `code:

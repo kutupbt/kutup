@@ -136,7 +136,8 @@ PIN's set and remove) and recovery:
   key an IPv6 client by its /64. Every attempt takes its slots first
   (parallel attempts get no more); a right secret gives them back.
 - **Known clients:** a successful sign-in sets `kutup_known`, an HttpOnly
-  cookie (`Path=/api`, `SameSite=Strict`, 90 days) holding the user id, the
+  cookie (`Path=/api/auth`, `SameSite=Strict`, 90 days; sign-in alone reads it, and no
+  other route, above all the anonymous Chat routes that refuse any cookie, gets it) holding the user id, the
   time and an HMAC under a key derived from the server's stored sign-in key.
   It is host-only, set on the account app's origin at sign-in and on each
   app's origin when it takes its session (fork consume), so reauth and the
