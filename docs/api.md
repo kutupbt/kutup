@@ -1410,8 +1410,10 @@ encrypted, `8` mail not expected to be signed.
 
 ### GET /api/mail/addresses
 
-The caller's addresses; the address row is created on first use. An account
-without a username has none.
+The caller's addresses, the current one first: after a rename the old ones
+follow, newest first, with their keys, which open the mail they received.
+`state` is `active` (the current address, the only one that sends),
+`receiving`, `closed` or `freed`. An account without a username has none.
 
 **Auth:** Bearer JWT
 
@@ -1420,6 +1422,7 @@ without a username has none.
 [{
   "id": "uuid",
   "address": "alice@kutup.dev",
+  "state": "active",
   "keys": [{
     "id": "uuid", "fingerprint": "40 hex", "sha256Fingerprint": "64 hex",
     "publicKey": "base64 binary OpenPGP certificate",
