@@ -630,8 +630,10 @@ async fn public_keys(
     state: &AppState,
     address: &str,
 ) -> AppResult<Option<(Uuid, String, Vec<PublicMailKey>)>> {
-    let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
-        "SELECT a.id, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
+    // The address as stored (the spelling its key lists and keys name),
+    // whatever spelling was asked.
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT a.id, a.address FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
@@ -640,7 +642,7 @@ async fn public_keys(
     .bind(address)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((address_id, Some(username))) = row else {
+    let Some((address_id, stored)) = row else {
         return Ok(None);
     };
     let keys: Vec<(String, String, Vec<u8>, bool, i32)> = sqlx::query_as(
@@ -655,7 +657,7 @@ async fn public_keys(
     }
     Ok(Some((
         address_id,
-        format!("{username}@{}", state.config.chat_server_name),
+        stored,
         keys.into_iter()
             .map(
                 |(fingerprint, sha256, public_key, primary, flags)| PublicMailKey {
@@ -715,7 +717,7 @@ pub(crate) async fn lookup_address(
     state: &AppState,
     address: &str,
 ) -> AppResult<Option<MailKeyLookup>> {
-    let Some((address_id, account, keys)) = public_keys(state, address).await? else {
+    let Some((address_id, stored, keys)) = public_keys(state, address).await? else {
         return Ok(None);
     };
     let authority: String = sqlx::query_scalar(
@@ -731,8 +733,25 @@ pub(crate) async fn lookup_address(
     .bind(address_id)
     .fetch_all(&state.pool)
     .await?;
+    // The account the address's newest key list names: the account as it
+    // was called when the address got its keys (an old address keeps its old
+    // name; the authority is the same, and the rename chain links the two).
+    let account = match lists.last() {
+        Some((data, signature)) => {
+            let authority: [u8; 32] = STANDARD
+                .decode(&authority)
+                .ok()
+                .and_then(|bytes| bytes.try_into().ok())
+                .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
+            SignedMailKeyListV1::verify(data, signature, &authority)
+                .map_err(|_| AppError::internal("stored key list does not verify"))?
+                .list
+                .account
+        }
+        None => stored.clone(),
+    };
     Ok(Some(MailKeyLookup {
-        address: address.to_string(),
+        address: stored,
         account,
         account_authority_public_key: authority,
         keys,
@@ -789,9 +808,8 @@ pub async fn wkd_key(
     if wkd_hash(&local) != hash {
         return Err(AppError::not_found("not found"));
     }
-    let address =
-        mail_key::canonical_address(&format!("{local}@{}", state.config.chat_server_name))
-            .map_err(|_| AppError::not_found("not found"))?;
+    let address = crate::mail::typed_address(&format!("{local}@{}", state.config.chat_server_name))
+        .ok_or_else(|| AppError::not_found("not found"))?;
     let mut body = Vec::new();
     match public_keys(&state, &address).await? {
         Some((_, _, keys)) => {

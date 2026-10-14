@@ -190,6 +190,21 @@ async fn group_sender(
     ))
 }
 
+/// Whether `key_id` is the encryption key of one of the account's old
+/// addresses (receiving, closed or freed after a rename).
+async fn from_old_address(state: &AppState, user_id: Uuid, key_id: [u8; 8]) -> AppResult<bool> {
+    let keys: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
+          WHERE a.user_id = $1 AND a.state <> 'active'",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(keys
+        .iter()
+        .any(|key| mail_key::encryption_key_id(key).ok() == Some(key_id)))
+}
+
 async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
     let row: Option<(Uuid, String, Vec<u8>)> = sqlx::query_as(
         "SELECT a.id, a.address, k.public_key
@@ -1028,7 +1043,19 @@ pub(crate) async fn deliver(
 
     // The sender's own copy.
     let own_packet = key_packet("self")?;
-    if mail_key::key_packet_key_id(&own_packet).ok() != Some(sender.key_id) {
+    let own_key_id = mail_key::key_packet_key_id(&own_packet).ok();
+    if own_key_id != Some(sender.key_id) {
+        // Written as an old address (a send scheduled before a rename): it
+        // receives only, and the message is not sent from it.
+        if let Some(key_id) = own_key_id {
+            if from_old_address(&state, user_id, key_id).await? {
+                return Err(
+                    AppError::forbidden("an old address receives only").with_details(
+                        json!({ "code": "addressReceiveOnly", "address": sender.address }),
+                    ),
+                );
+            }
+        }
         return Err(AppError::conflict("your address key changed; reload")
             .with_details(json!({ "code": "keyChanged", "address": sender.address })));
     }

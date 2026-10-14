@@ -91,6 +91,9 @@ pub struct Config {
     /// the name holds administrators set (`site_settings::name_holds`).
     pub name_hold_days: i64,
     pub old_address_receive_days: i64,
+    /// `NAME_SWEEP_SECONDS`: how often old addresses are closed and held
+    /// names freed on their dates (an hour; seconds on test stacks).
+    pub name_sweep_seconds: i64,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
@@ -459,6 +462,7 @@ impl Config {
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
             name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
             old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),
+            name_sweep_seconds: get_env_i64("NAME_SWEEP_SECONDS", 3600).clamp(1, 86_400),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),

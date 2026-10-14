@@ -529,8 +529,18 @@ above:
   members, administrators and group keys use the active address; a group or
   account found by address is found folded.
 - **Taking a held name back** locks its row (the sweep or an administrator
-  freeing it meanwhile is a `409 renameConflict`) and restores the spelling
-  chosen now, on the name and on its address.
+  freeing it meanwhile waits, and a name gone meanwhile is a `409
+  renameConflict`). It is taken back as it was spelled: its address, keys and
+  key lists name that spelling, so another one is refused (`renameInvalid`,
+  with the `spelling` the check also gives).
+- **Key lookups** answer the address as stored and the account its newest key
+  list names (an old address: the name it had then). Clients compare the
+  address asked folded.
+- **A message written as an old address** (sealed to that address's key for
+  the sender's copy, such as one scheduled before the rename) is refused with
+  `403 addressReceiveOnly`, not sent from the current address.
+- **The sweep** runs every `NAME_SWEEP_SECONDS` (an hour; seconds on the test
+  stack, where a live test watches it free a name).
 - **Dropping a held name** is limited like a rename: one per 30 days
   (`429 dropTooSoon`).
 - **The chain digest is stored** with each statement (`account_renames.digest`,

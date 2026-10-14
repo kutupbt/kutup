@@ -320,7 +320,9 @@ pub async fn lookup(
 pub async fn wkd_keys(pool: &PgPool, address: &str) -> sqlx::Result<Vec<Vec<u8>>> {
     sqlx::query_scalar(
         "SELECT k.public_key FROM mail_group_keys k JOIN mail_groups g ON g.id = k.group_id
-          WHERE g.address = $1 AND g.kind = 'shared' AND (k.flags & $2) <> 0
+          WHERE kutup_fold(split_part(g.address, '@', 1)) || '@' || lower(split_part(g.address, '@', 2))
+              = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND g.kind = 'shared' AND (k.flags & $2) <> 0
           ORDER BY k.is_primary DESC, k.created_at DESC",
     )
     .bind(address)

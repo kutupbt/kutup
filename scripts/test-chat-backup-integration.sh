@@ -22,6 +22,8 @@ export RATE_LIMIT_RECOVERY_PER_HOUR=1000
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
 export RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=1000
+# Held names freed within seconds of their date, for the renames test.
+export NAME_SWEEP_SECONDS=2
 export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
@@ -129,6 +131,7 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 # name's fake answer and shared lockout, 409 renamed, holds and freeing.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test renames_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_names::tests::live_ -- --nocapture

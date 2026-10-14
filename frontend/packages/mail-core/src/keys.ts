@@ -1,4 +1,4 @@
-import { fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
+import { foldAddress, fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
 import api from '@kutup/session/client'
 
 // A Kutup address's public keys (docs/plans/mail-address-keys.md), checked
@@ -82,8 +82,15 @@ async function load(address: string): Promise<AddressKeys> {
   return verified(address, lookup)
 }
 
-/** A lookup's keys, kept only when the account's signed key lists name them. */
-async function verified(address: string, lookup: KeyLookup): Promise<AddressKeys> {
+/**
+ * A lookup's keys, kept only when the account's signed key lists name them.
+ * The answer names the address as stored and the account its newest list
+ * names: another spelling of the address asked (one account per folded name),
+ * or, for an old address of a renamed account, its name then.
+ */
+export async function verified(address: string, lookup: KeyLookup): Promise<AddressKeys> {
+  const asked = await foldAddress(address)
+  if (!asked || asked !== (await foldAddress(lookup.address))) throw new UnverifiedKeys(address)
   let previous: { data: string; signature: string } | undefined
   let newest: SignedMailKeyList | null = null
   for (const list of lookup.keyLists) {

@@ -194,6 +194,7 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # administrators set under Administration (docs/plans/username-renames.md).
 # NAME_HOLD_DAYS=180
 # OLD_ADDRESS_RECEIVE_DAYS=90
+# NAME_SWEEP_SECONDS=3600 # how often those dates are acted on
 # RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN=60 # devices another server announces, per server and share
 # RATE_LIMIT_CALL_LINK_PER_MIN=60       # opening and joining a meeting link need no account
 # RATE_LIMIT_CALL_LINK_POLL_PER_MIN=600 # a meeting's waiting room, asked about every few seconds

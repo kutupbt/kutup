@@ -5094,6 +5094,89 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         .expect("in Sent");
     assert_eq!(sent["from"]["address"], new.address.as_str(), "{sent}");
 
+    // The keys of each, checked as the apps check them (mail-core keys.ts):
+    // the answer is the address asked (folded), and the newest signed list
+    // names its address and account as the answer does. The old address's
+    // list names the account as it was called then.
+    for (asked, stored, account) in [
+        (
+            old.address.clone(),
+            old.address.clone(),
+            old.address.clone(),
+        ),
+        (variant.clone(), new.address.clone(), new.address.clone()),
+        (
+            new.address.clone(),
+            new.address.clone(),
+            new.address.clone(),
+        ),
+    ] {
+        let lookup: Value = bearer(
+            c.get(format!("{base}/api/mail/keys?email={asked}")),
+            &bob.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        assert_eq!(lookup["address"], stored.as_str(), "{asked}: {lookup}");
+        assert_eq!(lookup["account"], account.as_str(), "{asked}: {lookup}");
+        assert_eq!(
+            kutup_crypto::names::fold_address(lookup["address"].as_str().unwrap()),
+            kutup_crypto::names::fold_address(&asked)
+        );
+        let authority: [u8; 32] =
+            common::b64_decode(lookup["accountAuthorityPublicKey"].as_str().unwrap())
+                .try_into()
+                .unwrap();
+        let newest = lookup["keyLists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|list| {
+                mail_key::SignedMailKeyListV1::verify(
+                    &common::b64_decode(list["data"].as_str().unwrap()),
+                    &common::b64_decode(list["signature"].as_str().unwrap()),
+                    &authority,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+            .pop()
+            .unwrap();
+        assert_eq!(newest.list.address, stored, "{asked}");
+        assert_eq!(newest.list.account, account, "{asked}");
+    }
+
+    // A message written as the old address (sealed to its own key for the
+    // sender's copy: one scheduled before the rename) is not sent from it.
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {0}\r\nTo: {1}\r\nSubject: Eskiden\r\nMessage-ID: <{message_id}>\r\n\r\nmerhaba\r\n",
+        old.address, bob_address.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&bob_address.public_key, &old.public_key],
+        &old.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": bob_address.address }],
+        "subject": "Eskiden",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[1]), bob_address.address.clone(): b64(&split.key_packets[0]) },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "addressReceiveOnly");
+
     // Closed: mail to the old address bounces, and it publishes no key.
     let r = bearer(
         c.post(format!("{base}/api/admin/names/{old_name}/close")),

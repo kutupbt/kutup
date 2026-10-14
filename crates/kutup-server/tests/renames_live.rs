@@ -452,3 +452,107 @@ fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
     assert_eq!(missing.body["code"], "renameInvalid");
     purge_accounts(&c, &base, &[&fresh]);
 }
+
+/// Dates acted on by the server's own sweep (`NAME_SWEEP_SECONDS`, seconds on
+/// the test stack): a held name past its date is freed, then anyone's.
+#[test]
+fn the_sweep_frees_a_held_name_on_its_date() {
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_DATABASE_URL not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut user = register(&c, &base);
+    let old = user.username.clone();
+    let new = name("swept_");
+    let renamed = rename_account(&c, &base, &user, &new, false);
+    assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.body);
+    user.username = new.clone();
+    // Its dates brought forward, as if the hold had run.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    runtime
+        .block_on(
+            sqlx::query(
+                "UPDATE account_names SET receive_until = now() - interval '1 second',
+                        free_at = now() - interval '1 second'
+                  WHERE name = $1",
+            )
+            .bind(&old)
+            .execute(&pool),
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let names: Value = get(&c, &base, &user.token, "/api/user/names")
+            .json()
+            .unwrap();
+        if names.as_array().unwrap().len() == 1 {
+            assert_eq!(names[0]["name"], json!(new));
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "never swept: {names}");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    // Freed: someone else takes it, a new incarnation.
+    let taker = register_as(&c, &base, &old).unwrap();
+    assert_ne!(
+        taker.identity.incarnation_id(),
+        user.identity.incarnation_id()
+    );
+    purge_accounts(&c, &base, &[&user, &taker]);
+}
+
+#[test]
+fn dropping_names_is_limited_and_a_name_is_taken_back_as_spelled() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut user = register_as(&c, &base, &name("spelt_a")).unwrap();
+    let first = user.username.clone();
+    let second = name("away_");
+    assert_eq!(rename(&c, &base, &user, &second).0, StatusCode::OK);
+    // Back in another spelling: refused, with the spelling to use.
+    let respelled = first.replace('_', "-");
+    let check: Value = get(
+        &c,
+        &base,
+        &user.token,
+        &format!("/api/user/rename/check?name={respelled}"),
+    )
+    .json()
+    .unwrap();
+    assert_eq!(check["takeBack"], true, "{check}");
+    assert_eq!(check["spelling"], json!(first), "{check}");
+    let refused = rename_account(&c, &base, &user, &respelled, check["needsKey"] != true);
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.body);
+    assert_eq!(refused.body["spelling"], json!(first));
+    // As spelled: the free undo.
+    assert_eq!(rename(&c, &base, &user, &first).0, StatusCode::OK);
+    user.username = first.clone();
+    // One drop per 30 days.
+    let drop = |held: &str| {
+        let grant = reauth_grant(&c, &base, &user, "rename");
+        bearer(
+            c.delete(format!("{base}/api/user/names/{held}")),
+            &user.token,
+        )
+        .json(&json!({ "grant": grant }))
+        .send()
+        .unwrap()
+    };
+    assert_eq!(drop(&second).status(), StatusCode::NO_CONTENT);
+    let again = drop(&second);
+    assert_eq!(again.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body: Value = again.json().unwrap();
+    assert_eq!(body["code"], "dropTooSoon");
+    assert!(body["retryAt"].as_str().is_some_and(|at| !at.is_empty()));
+    purge_accounts(&c, &base, &[&user]);
+}

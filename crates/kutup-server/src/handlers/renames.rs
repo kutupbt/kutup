@@ -55,6 +55,10 @@ pub struct CheckView {
     /// none.
     #[serde(skip_serializing_if = "Option::is_none")]
     needs_key: Option<bool>,
+    /// For a name taken back: its spelling, the one a rename must use (its
+    /// address and keys name it so).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spelling: Option<String>,
     /// Why not: `taken`, `held`, `reserved` or `invalid`.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
@@ -107,10 +111,19 @@ pub async fn check(
             .bind(&state.config.chat_server_name)
             .fetch_one(&mut *conn)
             .await?;
+            let spelling = if found == Available::TakeBack {
+                sqlx::query_scalar("SELECT name FROM account_names WHERE folded = kutup_fold($1)")
+                    .bind(&query.name)
+                    .fetch_optional(&mut *conn)
+                    .await?
+            } else {
+                None
+            };
             CheckView {
                 available: true,
                 take_back: found == Available::TakeBack,
                 needs_key: Some(found == Available::Free || !keyed),
+                spelling,
                 reason: None,
             }
         }
@@ -118,6 +131,7 @@ pub async fn check(
             available: false,
             take_back: false,
             needs_key: None,
+            spelling: None,
             reason: Some(unavailable.reason()),
         },
     };
@@ -305,6 +319,19 @@ pub async fn rename(
         Ok(found) => found,
         Err(unavailable) => return Err(unavailable.error()),
     };
+    if found == Available::TakeBack {
+        let spelled: String =
+            sqlx::query_scalar("SELECT name FROM account_names WHERE folded = kutup_fold($1)")
+                .bind(&new_name)
+                .fetch_one(&mut *tx)
+                .await?;
+        if spelled != new_name {
+            return Err(
+                rename_invalid("a held name is taken back as it was spelled")
+                    .with_details(json!({ "code": "renameInvalid", "spelling": spelled })),
+            );
+        }
+    }
     let held: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM account_names WHERE user_id = $1 AND state = 'held'",
     )
@@ -342,10 +369,10 @@ pub async fn rename(
     .await?;
     match found {
         Available::TakeBack => {
+            // As it was spelled: its address, keys and key lists name it so.
             let taken = sqlx::query(
-                "UPDATE account_names SET state = 'current', receive_until = NULL, free_at = NULL,
-                        name = $2
-                  WHERE folded = kutup_fold($2) AND user_id = $1 AND state = 'held'",
+                "UPDATE account_names SET state = 'current', receive_until = NULL, free_at = NULL
+                  WHERE folded = kutup_fold($2) AND name = $2 AND user_id = $1 AND state = 'held'",
             )
             .bind(user_id)
             .bind(&new_name)
@@ -399,7 +426,7 @@ pub async fn rename(
     .execute(&mut *tx)
     .await?;
     let reused: u64 = sqlx::query(
-        "UPDATE mail_addresses SET state = 'active', receive_until = NULL, address = $2 || '@' || $3
+        "UPDATE mail_addresses SET state = 'active', receive_until = NULL
           WHERE user_id = $1 AND folded = kutup_fold($2) || '@' || $3 AND state <> 'freed'",
     )
     .bind(user_id)
@@ -707,7 +734,7 @@ async fn admin_name(
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
-    responses((status = 204), (status = 409, description = "notHeld"), (status = 429, description = "dropTooSoon"))
+    responses((status = 204), (status = 409, description = "notHeld"))
 )]
 pub async fn admin_close(
     State(state): State<AppState>,
@@ -725,7 +752,7 @@ pub async fn admin_close(
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
-    responses((status = 204), (status = 409, description = "notHeld"), (status = 429, description = "dropTooSoon"))
+    responses((status = 204), (status = 409, description = "notHeld"))
 )]
 pub async fn admin_free(
     State(state): State<AppState>,

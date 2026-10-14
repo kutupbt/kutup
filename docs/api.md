@@ -829,10 +829,12 @@ another incarnation, so pins warn). Both are in `GET /api/auth/settings`
 receiving nothing.
 
 - `GET /api/user/rename/check?name=` → `{ "available": true, "takeBack"?,
-  "needsKey" }` or `{ "available": false, "reason": "taken" | "held" |
-  "reserved" | "invalid" }` (30 per 15 minutes per account). `needsKey`: the
-  rename sends the address's first key (`mailAddress`); false only for a held
-  name whose address kept its keys.
+  "needsKey", "spelling"? }` or `{ "available": false, "reason": "taken" |
+  "held" | "reserved" | "invalid" }` (30 per 15 minutes per account).
+  `needsKey`: the rename sends the address's first key (`mailAddress`); false
+  only for a held name whose address kept its keys. `spelling`: for a name
+  taken back, the spelling it is taken back as (its address, keys and key
+  lists name it so; another spelling is `renameInvalid` with `spelling`).
 - `POST /api/user/rename` → `{ "grant": "<a rename grant from a reauth>",
   "rename": <AccountRenameV1>, "driveKeyBinding": "<re-signed for the new
   address>", "mailAddress": { "publicKey", "privateKeyEnvelope", "keyList" }
@@ -1479,7 +1481,11 @@ follow the current one.
 
 A Kutup address's public keys (primary first) and every signed key list, oldest
 first. Clients verify the chain against the authority of `account`'s verified
-manifest. Rate-limited like user lookup.
+manifest. Rate-limited like user lookup. `email` may be any spelling of the
+address (`.`, `_`, `-` and case ignored); the answer names it as stored, and
+`account` as its newest key list does: for an old address of a renamed
+account, the name it had then (the same authority; the rename chain links the
+two). Clients check that `address` is the one asked, compared folded.
 
 **Auth:** Bearer JWT
 

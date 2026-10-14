@@ -305,6 +305,21 @@ pub async fn sweep(pool: &sqlx::PgPool) -> AppResult<(u64, u64)> {
     Ok((closed, freed.len() as u64))
 }
 
+/// Runs [`sweep`] every `seconds`, for as long as the server runs.
+pub fn spawn_sweep(pool: sqlx::PgPool, seconds: i64) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(seconds as u64));
+        loop {
+            tick.tick().await;
+            match sweep(&pool).await {
+                Ok((0, 0)) => {}
+                Ok((closed, freed)) => tracing::info!(closed, freed, "account names swept"),
+                Err(error) => tracing::warn!("account name sweep failed: {error:?}"),
+            }
+        }
+    });
+}
+
 /// `otherwise` for a lookup that found no current account, unless the name
 /// is someone's old name: then `409 renamed` with the chains.
 pub async fn renamed_or(
@@ -441,6 +456,90 @@ mod tests {
             .unwrap();
         sqlx::query("DELETE FROM users WHERE id = ANY($1)")
             .bind(vec![a, b])
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// A held name being taken back is locked from the answer on: the sweep
+    /// or an administrator freeing it waits for the rename to end, so the
+    /// take-back never writes a name that is gone.
+    #[tokio::test]
+    async fn live_a_held_name_being_taken_back_is_locked() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(3)
+            .connect(&url)
+            .await
+            .unwrap();
+        let user_id = Uuid::new_v4();
+        let tag = &user_id.simple().to_string()[..10];
+        let (current, held) = (format!("now{tag}"), format!("was{tag}"));
+        let incarnation = "a".repeat(64);
+        sqlx::query(
+            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                drive_private_key_envelope, public_key, account_authority_public_key,
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+             VALUES ($1, $2, '', '', '', '', '', '', $3, '')",
+        )
+        .bind(user_id)
+        .bind(&current)
+        .bind(&incarnation)
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (name, state, free) in [
+            (&current, "current", None),
+            (&held, "held", Some("+30 days")),
+        ] {
+            sqlx::query(
+                "INSERT INTO account_names (folded, name, user_id, incarnation_id, state, free_at)
+                 VALUES (kutup_fold($1), $1, $2, $3, $4, now() + $5::interval)",
+            )
+            .bind(name)
+            .bind(user_id)
+            .bind(&incarnation)
+            .bind(state)
+            .bind(free)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let mut renaming = pool.begin().await.unwrap();
+        let found = available(
+            &mut renaming,
+            "kutup.test",
+            "",
+            &held,
+            Some((user_id, &incarnation)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(found, Ok(Available::TakeBack));
+        // Freeing it meanwhile waits (here: gives up after a moment).
+        let mut freeing = pool.begin().await.unwrap();
+        sqlx::query("SET LOCAL lock_timeout = '300ms'")
+            .execute(&mut *freeing)
+            .await
+            .unwrap();
+        let blocked = sqlx::query("DELETE FROM account_names WHERE folded = kutup_fold($1)")
+            .bind(&held)
+            .execute(&mut *freeing)
+            .await;
+        assert!(blocked.is_err(), "the held name was not locked");
+        drop(freeing);
+        renaming.rollback().await.unwrap();
+        // Once the rename is over, it can be freed.
+        sqlx::query("DELETE FROM account_names WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
             .execute(&pool)
             .await
             .unwrap();

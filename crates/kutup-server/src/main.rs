@@ -440,6 +440,8 @@ async fn main() -> anyhow::Result<()> {
             sealed_sender.spawn_maintenance(state.pool.clone(), Arc::clone(federation));
         }
     }
+    // Old addresses past their receiving, names past their hold.
+    account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
