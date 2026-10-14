@@ -19,7 +19,7 @@ const rows: OwnAddressRow[] = [
 
 describe('the mail account after a rename', () => {
   it('sends from the current address, wherever the server lists it', () => {
-    const account = mailAccountOf([rows[1]!, rows[0]!, rows[2]!], null, session, fold)
+    const account = mailAccountOf([rows[1], rows[0], rows[2]], null, session, fold)
     expect(account.address).toBe('ada.lovelace@kutup.test')
     expect(account.key).toMatchObject({ address: 'ada.lovelace@kutup.test', fingerprint: 'fp-new' })
     expect(account.publicKey).toBe('pk-new')
@@ -49,6 +49,6 @@ describe('the mail account after a rename', () => {
 
   it('has no account without a current address and its primary key', () => {
     expect(() => mailAccountOf(rows.slice(1), null, session, fold)).toThrow(NoAddressKey)
-    expect(() => mailAccountOf([{ ...rows[0]!, keys: [] }], null, session, fold)).toThrow(NoAddressKey)
+    expect(() => mailAccountOf([{ ...rows[0], keys: [] }], null, session, fold)).toThrow(NoAddressKey)
   })
 })

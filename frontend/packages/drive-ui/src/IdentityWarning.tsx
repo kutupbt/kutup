@@ -9,6 +9,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { SafetyVerificationDialog } from '@kutup/ui/components/safety-verification'
+import { formerlyLabel } from './formerly'
 
 // What Drive says when it cannot vouch for who someone is
 // (docs/plans/drive-identity-pins.md): their keys are not signed by their
@@ -139,11 +140,6 @@ export function VerifyPersonButton({ account, claimed }: { account: string; clai
       <VerifyPersonDialog account={account} claimed={claimed} open={open} onOpenChange={setOpen} />
     </>
   )
-}
-
-/** `label`, with the address the person had before their newest rename. */
-export function formerlyLabel(t: (key: string, values?: Record<string, string>) => string, label: string, formerly: string | undefined): string {
-  return formerly ? `${label} (${t('identityCheck.renamed.formerly', { formerly })})` : label
 }
 
 /** Above a file or folder someone shared: why it may not be from who it says, and what to do. */

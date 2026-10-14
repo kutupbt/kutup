@@ -210,7 +210,7 @@
         "errors": {
           "tooSoon": "You can change your username once every 30 days. You can change it again on {{date}}.",
           "tooSoonNoDate": "You can change your username once every 30 days.",
-          "tooManyHeld": "You hold as many earlier names as an account can. You can change your username again when one of them is freed.",
+          "tooManyHeld": "You hold as many earlier names as an account can while they receive mail. Stop one of them from receiving below, then change your username.",
           "breakGlass": "This server's emergency administrator account keeps its name.",
           "setupRequired": "Finish setting up your account first.",
           "conflict": "Your username changed on another device meanwhile. Close this and try again."

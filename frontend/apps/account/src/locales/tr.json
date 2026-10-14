@@ -210,7 +210,7 @@
         "errors": {
           "tooSoon": "Kullanıcı adınızı 30 günde bir değiştirebilirsiniz. Yeniden değiştirebileceğiniz tarih: {{date}}.",
           "tooSoonNoDate": "Kullanıcı adınızı 30 günde bir değiştirebilirsiniz.",
-          "tooManyHeld": "Bir hesabın tutabileceği kadar önceki adınız var. Bunlardan biri serbest kaldığında kullanıcı adınızı yeniden değiştirebilirsiniz.",
+          "tooManyHeld": "Bir hesabın posta alırken tutabileceği kadar önceki adınız var. Aşağıdan birinin posta alımını durdurun, ardından kullanıcı adınızı değiştirin.",
           "breakGlass": "Bu sunucunun acil durum yönetici hesabının adı değişmez.",
           "setupRequired": "Önce hesabınızın kurulumunu tamamlayın.",
           "conflict": "Kullanıcı adınız bu arada başka bir cihazda değişti. Bunu kapatıp yeniden deneyin."

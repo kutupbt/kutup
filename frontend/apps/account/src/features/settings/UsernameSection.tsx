@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { foldName } from '@kutup/crypto/accountRename'
-import { OneUseSecret, ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
+import { OneUseSecret } from '@kutup/session/reauth'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -19,7 +19,6 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { formatInstant, isFuture } from '@kutup/ui/lib/format'
 import {
   checkName,
-  NameRefusedError,
   USERNAME,
   useAccountNames,
   useDropName,
@@ -28,38 +27,7 @@ import {
   type AccountName,
   type NameCheck,
 } from './rename'
-
-type TFunction = ReturnType<typeof useTranslation>['t']
-
-/** What to say about an error of a rename or a drop. */
-export function nameErrorMessage(t: TFunction, error: unknown, locale: string, fallback: string): string {
-  if (error instanceof WrongPasswordError) return t('settings.security.wrongCurrentPassword')
-  if (error instanceof ReauthLockedError) return t(error.reason === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked')
-  if (!(error instanceof NameRefusedError)) return fallback
-  const date = formatInstant(error.retryAt, locale)
-  switch (error.code) {
-    case 'renameTooSoon':
-      return date ? t('settings.account.rename.errors.tooSoon', { date }) : t('settings.account.rename.errors.tooSoonNoDate')
-    case 'dropTooSoon':
-      return date ? t('settings.account.names.errors.tooSoon', { date }) : t('settings.account.names.errors.tooSoonNoDate')
-    case 'nameTaken':
-      return t('settings.account.rename.reason.taken')
-    case 'nameReserved':
-      return t('settings.account.rename.reason.reserved')
-    case 'tooManyHeldNames':
-      return t('settings.account.rename.errors.tooManyHeld')
-    case 'breakGlassAccount':
-      return t('settings.account.rename.errors.breakGlass')
-    case 'setupRequired':
-      return t('settings.account.rename.errors.setupRequired')
-    case 'renameConflict':
-      return t('settings.account.rename.errors.conflict')
-    case 'notHeld':
-      return t('settings.account.names.errors.notHeld')
-    default:
-      return fallback
-  }
-}
+import { nameErrorMessage } from './nameErrors'
 
 /** The account's username, how to change it, and the names it holds. */
 export function UsernameSection() {
@@ -163,7 +131,8 @@ function RenameDialog({ initialName, current, address, onClose }: { initialName:
     const secret = new OneUseSecret(password)
     setPassword('')
     rename.mutate(
-      { name: typed, needsKey: available.needsKey, password: secret },
+      // A held name comes back as it was spelled, signed so.
+      { name: available.takeBack && available.spelling ? available.spelling : typed, needsKey: available.needsKey, password: secret },
       {
         onSuccess: (renamed) => {
           toast.success(t('settings.account.rename.done', { name: renamed.username }))
@@ -206,7 +175,7 @@ function RenameDialog({ initialName, current, address, onClose }: { initialName:
               {available ? (
                 <>
                   {' '}
-                  {t('settings.account.rename.newAddress')} <Mono>{`${typed}@${domain}`}</Mono>
+                  {t('settings.account.rename.newAddress')} <Mono>{`${available.takeBack && available.spelling ? available.spelling : typed}@${domain}`}</Mono>
                 </>
               ) : null}
             </p>

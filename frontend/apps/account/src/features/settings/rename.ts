@@ -22,7 +22,13 @@ import { meKey, securityEventsKey } from './api'
 export const USERNAME = /^[a-z0-9_-]{3,32}$/
 
 export type NameCheck =
-  | { available: true; takeBack?: boolean; needsKey: boolean }
+  | {
+      available: true
+      /** One of the account's own held names: taken back only as it was spelled (`spelling`). */
+      takeBack?: boolean
+      needsKey: boolean
+      spelling?: string
+    }
   | { available: false; reason: 'taken' | 'held' | 'reserved' | 'invalid' | (string & {}) }
 
 /** Whether the account could rename to `name` (`GET /api/user/rename/check`). */

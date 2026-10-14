@@ -118,9 +118,9 @@ describe('the rename dialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
-  it('sends no key for a name taken back whose address kept its keys', async () => {
-    check = { available: true, takeBack: true, needsKey: false }
-    post.mockResolvedValue({ data: { username: 'ada', address: 'ada@kutup.test', sequence: 2, oldAddressReceivesUntil: '', oldNameFreeAt: '' } })
+  it('takes a held name back as it was spelled, with no key when its address kept its keys', async () => {
+    check = { available: true, takeBack: true, needsKey: false, spelling: 'a-da' }
+    post.mockResolvedValue({ data: { username: 'a-da', address: 'a-da@kutup.test', sequence: 2, oldAddressReceivesUntil: '', oldNameFreeAt: '' } })
     show()
     const dialog = await openAndType('ada')
     await said(dialog, 'One of your earlier names: you can take it back.')
@@ -129,6 +129,8 @@ describe('the rename dialog', () => {
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
     expect(firstAddressKey).not.toHaveBeenCalled()
     expect((post.mock.calls[0] as [string, object])[1]).not.toHaveProperty('mailAddress')
+    // Taken back as it was spelled, whatever was typed.
+    expect((post.mock.calls[0] as [string, object])[1]).toMatchObject({ rename: { current: 'a-da@kutup.test' } })
   })
 
   it('signs once more on the chain another device moved, with the same grant', async () => {
@@ -177,9 +179,9 @@ describe('the held names', () => {
     const list = await screen.findByRole('list', { name: 'Earlier names' })
     const items = within(list).getAllByRole('listitem')
     expect(items).toHaveLength(2)
-    expect(within(items[1]!).getByText('No longer receives mail')).toBeTruthy()
-    expect(within(items[1]!).queryByRole('button', { name: 'Stop receiving' })).toBeNull()
-    fireEvent.click(within(items[0]!).getByRole('button', { name: 'Stop receiving' }))
+    expect(within(items[1]).getByText('No longer receives mail')).toBeTruthy()
+    expect(within(items[1]).queryByRole('button', { name: 'Stop receiving' })).toBeNull()
+    fireEvent.click(within(items[0]).getByRole('button', { name: 'Stop receiving' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Stop receiving' }))

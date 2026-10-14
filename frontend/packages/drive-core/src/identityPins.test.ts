@@ -37,10 +37,10 @@ function verifyChain(authority: string, chain: Rename[]) {
   if (chain.length === 0) throw new Error('empty chain')
   chain.forEach((statement, i) => {
     if (statement.signature !== `signed-by-${authority}` || statement.sequence !== i + 1) throw new Error('chain does not verify')
-    if (i > 0 && statement.previous !== chain[i - 1]!.current) throw new Error('chain does not verify')
+    if (i > 0 && statement.previous !== chain[i - 1].current) throw new Error('chain does not verify')
   })
-  const addresses = [chain[0]!.previous, ...chain.map((statement) => statement.current)]
-  return { incarnationId: `inc-${authority}`, first: addresses[0]!, current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
+  const addresses = [chain[0].previous, ...chain.map((statement) => statement.current)]
+  return { incarnationId: `inc-${authority}`, first: addresses[0], current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
 }
 
 vi.mock('@kutup/crypto/accountRename', () => ({
@@ -108,7 +108,7 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     const pins = current.list.pins.map((pin) => ({ ...pin }))
     const at = pins.findIndex((pin) => pin.authorityPublicKey === authority)
     if (at < 0) return Promise.reject(new Error('concerns no pinned account'))
-    const pin = pins[at]!
+    const pin = pins[at]
     const from = pin.account
     if (fold(from) === fold(view.current)) {
       return Promise.resolve({ pins: { text: JSON.stringify(current.list), list: current.list }, applied: { from, to: view.current, changed: false, displaced: null } })
@@ -490,7 +490,7 @@ function chainOf(authority: string, addresses: string[], by = authority): Rename
   return addresses.slice(1).map((current, i) => ({
     incarnationId: `inc-${authority}`,
     sequence: i + 1,
-    previous: addresses[i]!,
+    previous: addresses[i],
     current,
     issuedAtMs: 1000 + i,
     signature: `signed-by-${by}`,

@@ -3,7 +3,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useIdentityStatus, useIsKutupAccount } from '@kutup/drive-core/identityStatus'
 import { cn } from '@kutup/ui/lib/cn'
-import { formerlyLabel, VerifyPersonDialog } from './IdentityWarning'
+import { formerlyLabel } from './formerly'
+import { VerifyPersonDialog } from './IdentityWarning'
 
 /**
  * The shield beside a person's Kutup address in Contacts (and Mail's person
