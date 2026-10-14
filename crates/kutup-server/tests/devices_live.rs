@@ -420,23 +420,31 @@ fn times_challenges_and_a_wipe() {
     // The administrator wipes the account; it is set up again.
     let (admin_name, admin_password) = admin.split_once(':').expect("username:password");
     let admin_token = admin_token(&c, &base, admin_password, admin_name);
-    let setup = setup_key("Temporary*Password123");
+    let grant = admin_reset_grant(
+        &c,
+        &base,
+        &admin_token,
+        admin_name,
+        admin_password,
+        &alice.id,
+    );
+    let mut setup = temp_registration(
+        &c,
+        &base,
+        "Temporary*Password123",
+        &admin_token,
+        Some(&grant),
+    );
+    setup["grant"] = json!(grant);
     let r = bearer(
         c.post(format!("{base}/api/admin/users/{}/wipe", alice.id)),
         &admin_token,
     )
-    .json(&json!({ "setup": setup }))
+    .json(&setup)
     .send()
     .unwrap();
     assert!(r.status().is_success(), "wipe: {}", r.status());
-    let first: Value = c
-        .post(format!("{base}/api/auth/login"))
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "name": alice.username, "loginKey": setup["loginKey"] }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let first = sign_in(&c, &base, &alice.username, "Temporary*Password123");
     let (token, identity) = complete_setup(
         &c,
         &base,
@@ -447,6 +455,7 @@ fn times_challenges_and_a_wipe() {
     let again = User {
         token,
         identity,
+        password: "Another*Password456".into(),
         ..alice
     };
     let register_key = |key: &[u8; 32]| {
