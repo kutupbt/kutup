@@ -2798,6 +2798,104 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     assert_content_once(&mailbox(c, b, &bob_token, 2), follow_up);
 }
 
+/// Renames across servers (docs/plans/username-renames.md, R2): an account
+/// on A renames; B, which knew it by its old name, learns where it went from
+/// A's chain (announced, or fetched), verified; and a lookup of the old name
+/// through B is `409 renamed` with that chain, never A's 502. (The script
+/// then checks A's announce outbox emptied and B kept the chain.)
+fn renames_phase(c: &Client, a: &str, b: &str) {
+    let email = "renames-alice@example.test";
+    let old = "ren_alice";
+    let new = "ren_alicia";
+    let (token_a, _) = register_account(c, a, email, old);
+    let (token_b, _) = register_account(c, b, "renames-bob@example.test", "ren_bob");
+    let domain_a = server_name(c, a);
+    let drive_user = |name: &str| {
+        c.get(format!(
+            "{b}/api/drive/federation/users/{name}?server={domain_a}"
+        ))
+        .bearer_auth(&token_b)
+        .send()
+        .unwrap()
+    };
+    // B finds Alice by her name, and in another spelling as stored.
+    let found = json_response(drive_user(old), "drive user before");
+    assert_eq!(found["account"], format!("{old}@{domain_a}"));
+    let found = json_response(drive_user("renalice"), "drive user, another spelling");
+    assert_eq!(found["account"], format!("{old}@{domain_a}"));
+
+    // Alice renames on A, her new address's key with it.
+    let master_key = test_master_key(email);
+    let me = json_response(
+        c.get(format!("{a}/api/user/me"))
+            .bearer_auth(&token_a)
+            .send()
+            .unwrap(),
+        "me",
+    );
+    let alice = common::User {
+        id: me["id"].as_str().unwrap_or_default().to_owned(),
+        binding: test_binding(email),
+        username: old.into(),
+        password: PASSWORD.into(),
+        recovery_entropy: [0; 32],
+        token: token_a.clone(),
+        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
+        master_key,
+        account: format!("{old}@{domain_a}"),
+    };
+    let renamed = common::rename_account(c, a, &alice, new, false);
+    assert!(renamed.status.is_success(), "rename: {}", renamed.body);
+
+    // B learns the chain: verified, the current address A's, every address on A.
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    let chains = loop {
+        let chains = json_response(
+            c.get(format!("{b}/api/users/renames/{old}@{domain_a}"))
+                .bearer_auth(&token_b)
+                .send()
+                .unwrap(),
+            "renames on B",
+        );
+        if chains["chains"].as_array().is_some_and(|c| !c.is_empty()) {
+            break chains;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "B never learned: {chains}"
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    };
+    assert_eq!(chains["version"], 1);
+    let entry = &chains["chains"][0];
+    assert_eq!(entry["current"], format!("{new}@{domain_a}"));
+    assert_eq!(
+        entry["incarnationId"],
+        json!(alice.identity.incarnation_id())
+    );
+    let statements: Vec<kutup_crypto::account_rename::AccountRenameV1> =
+        serde_json::from_value(entry["chain"].clone()).unwrap();
+    let view = kutup_crypto::account_rename::verify_chain(
+        &alice.identity.authority_public_key(),
+        &statements,
+    )
+    .unwrap();
+    assert_eq!(view.current, format!("{new}@{domain_a}"));
+
+    // Looking up the old name through B: where the account went, relayed.
+    let r = drive_user(old);
+    assert_eq!(r.status().as_u16(), 409);
+    let relayed: Value = r.json().unwrap();
+    assert_eq!(relayed["code"], "renamed", "{relayed}");
+    assert_eq!(
+        relayed["renames"]["chains"][0]["current"],
+        format!("{new}@{domain_a}")
+    );
+    // And the new name is found.
+    let found = json_response(drive_user(new), "drive user after");
+    assert_eq!(found["account"], format!("{new}@{domain_a}"));
+}
+
 #[test]
 fn chat_federation_live() {
     let Ok(phase) = std::env::var("KUTUP_FEDERATION_PHASE") else {
@@ -2814,6 +2912,7 @@ fn chat_federation_live() {
         "queue" => queue_phase(&c, &a),
         "verify-retry" => verify_retry_phase(&c, &a, &b),
         "calls" => calls_phase(&c, &a, &b),
+        "renames" => renames_phase(&c, &a, &b),
         _ => panic!("unknown KUTUP_FEDERATION_PHASE: {phase}"),
     }
 }

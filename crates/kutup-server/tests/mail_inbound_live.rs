@@ -5250,3 +5250,98 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     assert_eq!(enrolled["userId"], json!(carol.id), "{enrolled}");
     common::purge_accounts(&c, &base, &[&alice, &bob, &carol]);
 }
+
+/// A send held (undo send, as a scheduled one is) from before a rename is
+/// not sent from the old address when its time comes: it fails as
+/// `addressReceiveOnly`, and its draft is back in Drafts to write again.
+#[test]
+fn a_send_held_from_before_a_rename_fails_as_receive_only() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut user = register(&c, &base);
+    let address = set_up_address(&c, &base, &user);
+    let domain = address.address.split_once('@').unwrap().1.to_string();
+    let r = bearer(c.patch(format!("{base}/api/mail/settings")), &user.token)
+        .json(&json!({ "delaySendSeconds": 20 }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "settings: {}", r.status());
+    // A draft to herself, written as the address she has now, and its send.
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let own =
+        mail_key::encrypt_split(&[&address.public_key], &address.secret_key, b"draft").unwrap();
+    let r = bearer(c.post(format!("{base}/api/mail/drafts")), &user.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&json!({ "subject": "Eski", "to": [{ "address": address.address }], "messageId": message_id })).unwrap()),
+            ("body", [own.key_packets[0].as_slice(), &own.data_packet].concat()),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let draft = r.json::<Value>().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mime = format!(
+        "From: {0}\r\nTo: {0}\r\nSubject: Eski\r\nMessage-ID: <{message_id}>\r\n\r\nbody\r\n",
+        address.address
+    );
+    let split =
+        mail_key::encrypt_split(&[&address.public_key], &address.secret_key, mime.as_bytes())
+            .unwrap();
+    let packet = b64(&split.key_packets[0]);
+    let meta = json!({
+        "to": [{ "address": address.address }],
+        "subject": "Eski",
+        "messageId": message_id,
+        "draftId": draft,
+        "keyPackets": { "self": packet, address.address.clone(): packet },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 202, "{}", r.text().unwrap_or_default());
+    let outbox = r.json::<Value>().unwrap()["outboxId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Renamed while it waits.
+    let new = format!("held_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let renamed = common::rename_account(&c, &base, &user, &new, false);
+    assert!(renamed.status.is_success(), "rename: {}", renamed.body);
+    user.username = new;
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let done = loop {
+        let done: Value = bearer(
+            c.get(format!("{base}/api/mail/outbox/{outbox}")),
+            &user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        if done["state"] == "sent" || done["state"] == "failed" {
+            break done;
+        }
+        assert!(Instant::now() < deadline, "never dispatched: {done}");
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(done["result"]["code"], "addressReceiveOnly", "{done}");
+    assert!(
+        folder(&c, &base, &user.token, "drafts")
+            .iter()
+            .any(|m| m["id"] == draft.as_str()),
+        "the draft is back in Drafts"
+    );
+    common::purge_accounts(&c, &base, &[&user]);
+}

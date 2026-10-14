@@ -858,7 +858,17 @@ receiving nothing.
   "chains": [{ "incarnationId", "authorityPublicKey", "current", "state":
   "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`, newest
   first; a reused name appears in several. Clients verify every chain against
-  their pins (`version` other than 1: unverifiable, warn).
+  their pins (`version` other than 1: unverifiable, warn). For another
+  server's address: the chains this server keeps of it (from announces, earlier
+  lookups and relayed `409 renamed`), asked of that server when none is fresh
+  (a day). The server unreachable and nothing kept: `{ "version": 1, "chains":
+  [], "unavailable": true }`, which says nothing either way (`429 rateLimited`
+  past 60 such lookups in 15 minutes per account).
+- A peer's `409 renamed` to this server's lookup (Chat keys, manifests and
+  profiles, the federated Drive user) reaches the client as the same `409
+  renamed`, its chains verified (each signed by its authority, every address on
+  that peer, naming the address asked) and kept; a peer's answer that does not
+  check out is `502`.
 - **Lookups of an old name** (the address lookup, Chat manifests, keys and
   profiles, the federated Drive user and their `/api/fed/` twins) answer
   `409 renamed` with that list.
@@ -3372,6 +3382,26 @@ Authenticated proxy lookup for an opaque encrypted profile. The server-to-
 server signature authenticates and destination-binds the originating
 homeserver; the separate profile access-key header remains the end-to-end
 capability. Wrong capabilities return `404`.
+
+### GET /api/fed/accounts/{username}/renames
+
+Signed (under `chat.v2` or `drive.v1`, whichever the asker sends). Every
+rename chain naming `username@<this server>`, in any spelling, as `GET
+/api/users/renames/:address` answers them; `?incarnationId=` narrows them.
+
+### POST /api/fed/accounts/renames
+
+Signed (under `chat.v2` or `drive.v1`). A peer announces one of its accounts'
+renames: `{ "version": 1, "username", "incarnationId", "authorityPublicKey",
+"chain": [<AccountRenameV1>, …] }`, the whole chain, `username` its last
+current. Kept when it verifies (the incarnation is its authority's hash, every
+address is on the sending server) and extends the one kept (`204`); then this
+server's rows about that incarnation (incoming and outgoing federated shares,
+profile keys, collaboration devices) move to the new address, by incarnation
+only. `400` for a chain that does not check out, `409` for one that does not
+extend the one kept, `429` past 50,000 chains of that server or 600 announces
+a minute. Announces are sent after a rename commits to every pinned peer not
+quarantined, retried with backoff for 7 days.
 
 ### POST /api/fed/chat/messages
 

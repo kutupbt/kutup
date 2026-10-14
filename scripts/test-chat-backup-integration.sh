@@ -135,6 +135,8 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test renames_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server account_names::tests::live_ -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server remote_renames::tests::live_ -- --nocapture
 
 # A rotation of the OPAQUE setup: an account made under key 1, the server
 # restarted with a newer key 2, the account moved at its next sign-in.

@@ -159,6 +159,12 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
             check["reason"].as_str().unwrap_or("unavailable")
         );
     }
+    // One of this account's old names is taken back as it was spelled.
+    if let Some(spelling) = check["spelling"].as_str().filter(|s| *s != name) {
+        bail!(
+            "{name} is your old name {spelling}: take it back as `kutup account rename {spelling}`"
+        );
+    }
     let settings: Value = decode_json(ctx.client.request(Method::GET, "/auth/settings").send()?)?;
     let receive = settings["oldAddressReceiveDays"].as_i64().unwrap_or(90);
     let hold = settings["nameHoldDays"].as_i64().unwrap_or(180);
