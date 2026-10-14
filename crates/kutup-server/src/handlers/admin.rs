@@ -767,11 +767,15 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     )
     .await?;
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
+    let (name_hold_days, old_address_receive_days) =
+        crate::site_settings::name_holds(&state.pool, &state.config).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
+        "nameHoldDays": name_hold_days,
+        "oldAddressReceiveDays": old_address_receive_days,
     }))
     .into_response())
 }
@@ -783,6 +787,8 @@ pub struct UpdateSettingsRequest {
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
+    name_hold_days: Option<i64>,
+    old_address_receive_days: Option<i64>,
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -803,6 +809,8 @@ pub async fn update_settings(
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
+        && req.name_hold_days.is_none()
+        && req.old_address_receive_days.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -825,6 +833,16 @@ pub async fn update_settings(
             .map_err(AppError::bad_request)?;
     }
 
+    // The two holds are checked together, each against the other's new or
+    // current value.
+    if req.name_hold_days.is_some() || req.old_address_receive_days.is_some() {
+        let (hold, receive) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
+        crate::site_settings::validate_name_holds(
+            req.name_hold_days.unwrap_or(hold),
+            req.old_address_receive_days.unwrap_or(receive),
+        )
+        .map_err(AppError::bad_request)?;
+    }
     let mut transaction = state.pool.begin().await?;
     if let Some(mode) = req.registration_mode {
         crate::registration::set_mode(&mut transaction, mode).await?;
@@ -841,6 +859,11 @@ pub async fn update_settings(
         (
             crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
             req.chat_media_delivery_retention_days,
+        ),
+        (crate::site_settings::NAME_HOLD_DAYS, req.name_hold_days),
+        (
+            crate::site_settings::OLD_ADDRESS_RECEIVE_DAYS,
+            req.old_address_receive_days,
         ),
     ] {
         let Some(value) = value else { continue };
@@ -865,6 +888,8 @@ pub async fn update_settings(
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
+            "nameHoldDays": req.name_hold_days,
+            "oldAddressReceiveDays": req.old_address_receive_days,
         }),
     )
     .await;

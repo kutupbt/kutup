@@ -87,6 +87,10 @@ pub struct Config {
     /// Authentication-Results it writes, the only one trusted for DMARC.
     pub mail_hostname: String,
     pub mail_folders_per_account: i64,
+    /// `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS`: the first values of
+    /// the name holds administrators set (`site_settings::name_holds`).
+    pub name_hold_days: i64,
+    pub old_address_receive_days: i64,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
@@ -453,6 +457,8 @@ impl Config {
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
+            name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
+            old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),

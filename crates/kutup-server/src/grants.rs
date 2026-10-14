@@ -35,6 +35,8 @@ pub enum Purpose {
     Recovery,
     /// Re-registering under the current setup at sign-in, silently.
     Rotate,
+    /// A new username, or dropping a held one (docs/plans/username-renames.md).
+    Rename,
 }
 
 impl Purpose {
@@ -46,6 +48,7 @@ impl Purpose {
             Purpose::AdminReset => "adminReset",
             Purpose::Recovery => "recovery",
             Purpose::Rotate => "rotate",
+            Purpose::Rename => "rename",
         }
     }
 
@@ -56,6 +59,7 @@ impl Purpose {
             "passwordChange" => Purpose::PasswordChange,
             "totp" => Purpose::Totp,
             "adminReset" => Purpose::AdminReset,
+            "rename" => Purpose::Rename,
             _ => return None,
         })
     }
@@ -240,7 +244,7 @@ mod tests {
 
     #[test]
     fn reauth_may_ask_for_these_only() {
-        for name in ["pass", "passwordChange", "totp", "adminReset"] {
+        for name in ["pass", "passwordChange", "totp", "adminReset", "rename"] {
             assert_eq!(Purpose::for_reauth(name).unwrap().as_str(), name);
         }
         assert_eq!(Purpose::for_reauth("recovery"), None);

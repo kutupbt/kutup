@@ -78,6 +78,10 @@ pub struct AdminSettingsResponse {
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
     pub chat_media_delivery_retention_days: i64,
+    /// Days a name an account left stays held before anyone may take it.
+    pub name_hold_days: i64,
+    /// Days a renamed account's old address still receives (at most the hold).
+    pub old_address_receive_days: i64,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -460,6 +464,8 @@ pub struct UpdateAdminSettingsRequest {
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
+    pub name_hold_days: Option<i64>,
+    pub old_address_receive_days: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.

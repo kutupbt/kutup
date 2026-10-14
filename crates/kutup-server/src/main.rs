@@ -780,6 +780,13 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route("/api/user/rename/check", get(handlers::renames::check))
+        .route("/api/user/rename", post(handlers::renames::rename))
+        .route("/api/user/names", get(handlers::renames::names))
+        .route(
+            "/api/user/names/:name",
+            axum::routing::delete(handlers::renames::drop_name),
+        )
         .route(
             "/api/account/head",
             get(handlers::account_heads::head).post(handlers::account_heads::start),
