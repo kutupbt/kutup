@@ -222,11 +222,7 @@ pub async fn create_folder(
     check_color(&request.color)?;
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
-    // One writer per account at a time, so the count and the tree hold.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_folders WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
@@ -266,7 +262,7 @@ pub async fn create_folder(
     if inserted == 0 {
         return Err(AppError::conflict("that id is taken"));
     }
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -328,11 +324,7 @@ pub async fn update_folder(
     }
     let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
     let mut tx = state.pool.begin().await?;
-    // Every change to the account's folders waits for this lock.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let (_, below) = depth_of(&mut tx, user_id, id).await?;
     if let Some(name) = &request.name {
         let stored: Option<String> = sqlx::query_scalar(
@@ -395,7 +387,7 @@ pub async fn update_folder(
     .execute(&mut *tx)
     .await?;
     if request.name.is_some() {
-        account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+        account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -465,11 +457,7 @@ pub async fn delete_folder(
         ));
     }
     let mut tx = state.pool.begin().await?;
-    // Every change to the account's folders waits for this lock.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let folders = subtree(&mut tx, user_id, id).await?;
     if folders.is_empty() {
         return Err(AppError::not_found("no such folder"));
@@ -516,7 +504,7 @@ pub async fn delete_folder(
         .execute(&mut *tx)
         .await?
         .rows_affected();
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(DeletedMailFolder {
         folders: if removed == 0 {
@@ -564,10 +552,7 @@ pub async fn create_label(
     check_color(&request.color)?;
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_labels WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
@@ -590,7 +575,7 @@ pub async fn create_label(
     if inserted == 0 {
         return Err(AppError::conflict("that id is taken"));
     }
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -632,6 +617,7 @@ pub async fn update_label(
     }
     let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let stored: Option<String> =
         sqlx::query_scalar("SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2")
             .bind(user_id)
@@ -669,7 +655,7 @@ pub async fn update_label(
         return Err(crate::revisions::rename_lost(now, "no such label"));
     }
     if request.name.is_some() {
-        account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+        account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -696,6 +682,7 @@ pub async fn delete_label(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let removed = sqlx::query("DELETE FROM mail_labels WHERE user_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
@@ -722,7 +709,7 @@ pub async fn delete_label(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

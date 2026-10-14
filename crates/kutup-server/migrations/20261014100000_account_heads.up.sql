@@ -1,11 +1,14 @@
 -- The account head chain (docs/plans/rollback-protection.md): each head
 -- sealed by the account's clients, kept by sequence; the server reads only
 -- the sequence (kutup_crypto::account_head::inspect) and keeps the newest
--- RETENTION (1,000). A new incarnation (a wipe) starts a new chain.
+-- RETENTION + 1 (1,001). A new incarnation (a wipe) starts a new chain.
 CREATE TABLE account_heads (
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     sequence bigint NOT NULL CHECK (sequence >= 1),
     sealed bytea NOT NULL CHECK (octet_length(sealed) BETWEEN 1 AND 16384),
+    -- The account's incarnation when the head was stored (the server's, from
+    -- users.account_incarnation_id under the write's lock).
+    incarnation_id text NOT NULL CHECK (incarnation_id <> ''),
     written_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, sequence)
 );

@@ -929,16 +929,24 @@ Rollback protection across devices (docs/plans/rollback-protection.md): one
 small sealed head per account, numbered and hash-chained, saying for each kind
 of listed value how many there are and a digest of their `(id, revision)`
 pairs. The server never opens it; it reads the sequence in clear and keeps the
-newest 1,000.
+newest 1,001 (a device anchored 1,000 heads back still gets its whole segment,
+anchor included).
 
 **Listed writes** carry the next head as `head` (base64) in their JSON body:
 contacts (create, update, delete, `delete` many, import: one head per batch),
 mail folder, label and filter names (create, rename, delete), the identity pin
 list, Pass vault secrets (keep, forget). A delete takes a JSON body
-`{ "head": "…" }`. The head's sequence must be the current one plus one (1 for
-the first), in the write's own transaction, else `409 head_conflict`. Before an
-account's first head a listed write needs none; after it, one without a head is
-`409 head_required`. A head sent with a change that is no listed write (a
+`{ "head": "…" }`. The head's sequence must be the current one plus one, else
+`409 head_conflict`; the check runs last in the write's own transaction, after
+the account row is locked and the session found live under the lock (a write
+that began before a wipe is refused). Before the chain is started a listed
+write needs none (and a head with it is `409 head_conflict`: start the chain
+first); after, one without a head is `409 head_required`.
+
+**Starting the chain** is its own call, on the `basis` an index answers with
+before the first head (`POST /api/account/head`): a listed write landing
+between the client's read and its start moves the basis, and the start is
+refused, so the first head always covers every value. A head sent with a change that is no listed write (a
 folder's colour, parent, position or folding; a filter switched on or off, or
 what it matches or does: these are not sealed and not rollback-protected) is
 `400`.
@@ -953,18 +961,31 @@ If they are not exactly the folders it removes (one was added inside since),
 **Auth:** Bearer JWT. **Response:** `{ "head": "<base64>" | null }` (null
 before the account's first).
 
+### POST /api/account/head
+
+Starts the chain: `{ "head": "<base64, sequence 1>", "basis": "<from an
+index>" }` → `201`. `409 head_conflict` when the account has a head already or
+the basis moved (read the index again and remake the head). **Auth:** Bearer
+JWT.
+
 ### GET /api/account/heads?from=n
 
-The chain from sequence `n` to the newest, oldest first: `{ "heads":
-["<base64>", …] }`, empty when `n` is above the newest. `410 tooOld` when `n` is
-past the kept window. `400` for `n` below 1. **Auth:** Bearer JWT.
+The chain from sequence `n` toward the newest, oldest first, at most 200 at a
+time: `{ "heads": ["<base64>", …], "next": <sequence> | null }` (ask again from
+`next` until it is null); empty when `n` is above the newest. `410 tooOld` when
+`n` is more than 1,000 behind the newest. `400` for `n` below 1. **Auth:**
+Bearer JWT.
+
+The three reads are limited to 300 a minute per account
+(`RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN`; `429 rateLimited`).
 
 ### GET /api/account/index/:scope
 
 A scope's values and the head they go with, read in one snapshot (check the
 index against this head, not one fetched separately):
-`{ "head": "<base64>" | null, "values": [["<id>", <revision>], …] }`, sorted by
-id. **Auth:** Bearer JWT. Scopes and their ids:
+`{ "head": "<base64>" | null, "values": [["<id>", <revision>], …], "basis":
+"<hex>" | null }`, sorted by id; `basis` (before the first head only) is what a
+chain start names. **Auth:** Bearer JWT. Scopes and their ids:
 - `contacts`: the contact id;
 - `mailNames`: `folder:<id>`, `label:<id>`, `filter:<id>`, with the revision in
   the sealed name's header (a folder without a name, kept through an account

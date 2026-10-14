@@ -203,6 +203,7 @@ pub async fn create(
     }
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let inserted = sqlx::query(
         "INSERT INTO mail_filters (id, user_id, name_sealed, enabled, position, match, conditions, actions, source)
          SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0), $5, $6, $7, $8
@@ -223,7 +224,7 @@ pub async fn create(
     if inserted == 0 {
         return Err(AppError::conflict("that id is taken"));
     }
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -298,6 +299,7 @@ pub async fn update(
     }
     let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let updated = sqlx::query(
         "UPDATE mail_filters SET
              name_sealed = COALESCE($3, name_sealed),
@@ -333,7 +335,7 @@ pub async fn update(
         return Err(crate::revisions::rename_lost(now, "no such filter"));
     }
     if request.name.is_some() {
-        account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+        account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -359,6 +361,7 @@ pub async fn delete(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
     let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let removed = sqlx::query("DELETE FROM mail_filters WHERE user_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
@@ -368,7 +371,7 @@ pub async fn delete(
     if removed == 0 {
         return Err(AppError::not_found("no such filter"));
     }
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

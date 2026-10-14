@@ -102,6 +102,7 @@ pub async fn put_identity_pins(
     let revision = revisions::check_follows(revision, req.base_revision)?;
     let head = crate::account_heads::NextHead::parse(req.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, id, user.session.session_id).await?;
     let stored = if req.base_revision == 0 {
         sqlx::query(
             "INSERT INTO identity_pins (user_id, revision, envelope) VALUES ($1, $2, $3)
@@ -125,7 +126,7 @@ pub async fn put_identity_pins(
         .await?
     };
     if stored.rows_affected() == 1 {
-        crate::account_heads::advance(&mut tx, id, head.as_ref()).await?;
+        crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
         tx.commit().await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }

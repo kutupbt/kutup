@@ -770,7 +770,10 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
-        .route("/api/account/head", get(handlers::account_heads::head))
+        .route(
+            "/api/account/head",
+            get(handlers::account_heads::head).post(handlers::account_heads::start),
+        )
         .route("/api/account/heads", get(handlers::account_heads::heads))
         .route(
             "/api/account/index/:scope",

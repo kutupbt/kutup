@@ -154,6 +154,7 @@ pub async fn put_vault_secret(
     let head = crate::account_heads::NextHead::parse(req.head.as_deref())?;
     // What the account's keys are bound to (docs/plans/account-identity.md).
     let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let binding: String =
         sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
             .bind(user_id)
@@ -219,7 +220,7 @@ pub async fn put_vault_secret(
             current,
         ));
     }
-    crate::account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
@@ -284,7 +285,14 @@ pub async fn delete_vault_secret(
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let head = body.and_then(|Json(body)| body.head);
-    forget(&state, user_id, &[file_id], head.as_deref()).await
+    forget(
+        &state,
+        user_id,
+        user.session.session_id,
+        &[file_id],
+        head.as_deref(),
+    )
+    .await
 }
 
 /// The most secrets one forget takes.
@@ -316,23 +324,32 @@ pub async fn forget_vault_secrets(
         .iter()
         .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("fileIds holds a bad id")))
         .collect::<AppResult<Vec<_>>>()?;
-    forget(&state, user_id, &ids, req.head.as_deref()).await
+    forget(
+        &state,
+        user_id,
+        user.session.session_id,
+        &ids,
+        req.head.as_deref(),
+    )
+    .await
 }
 
 async fn forget(
     state: &AppState,
     user_id: Uuid,
+    session: Uuid,
     file_ids: &[Uuid],
     head: Option<&str>,
 ) -> AppResult<Response> {
     let head = crate::account_heads::NextHead::parse(head)?;
     let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, user_id, session).await?;
     sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = ANY($2)")
         .bind(user_id)
         .bind(file_ids)
         .execute(&mut *tx)
         .await?;
-    crate::account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }

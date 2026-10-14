@@ -4,7 +4,9 @@
 //! Each person keeps, per vault they can open, the vault's key sealed under
 //! their master key. The server checks the envelope is that account's vault
 //! secret and that the vault is theirs to open; a trashed vault's secret is
-//! kept but unlisted, and a purged vault takes its secrets with it.
+//! kept but unlisted, and a purged vault's secret stays (unreachable but
+//! listed in the account head's index) until its owner forgets it
+//! (docs/plans/rollback-protection.md §9).
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
@@ -765,8 +767,20 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     assert_eq!(back.len(), 1);
     assert_eq!(back[0]["fileId"], vault.id.as_str());
 
-    // Purged, the vault takes every kept key with it, and nothing stays stored.
+    // Purged, the vault leaves the kept key for its owner to forget (never
+    // dropped by the server, which could not write a head for it): hidden
+    // from the list, gone once forgotten.
     purge_file(&c, &base, &owner, &vault.id);
-    assert_eq!(held(), 0, "a purged vault keeps no secrets");
+    assert_eq!(held(), 1, "kept until forgotten");
+    assert_eq!(list(&c, &base, &member).len(), 0);
+    let forgot = bearer(
+        c.post(format!("{base}/api/pass/vault-secrets/forget")),
+        &member.token,
+    )
+    .json(&json!({ "fileIds": [vault.id] }))
+    .send()
+    .unwrap();
+    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    assert_eq!(held(), 0, "forgotten");
     assert_eq!(used(&c, &base, &owner.token), 0);
 }

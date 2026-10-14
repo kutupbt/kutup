@@ -2043,9 +2043,11 @@ pub async fn wipe_user(
     // listed value sealed under the old keys stays to be listed in it
     // (docs/plans/rollback-protection.md, "Account reset"): contacts, labels,
     // filters and Pass secrets go; custom folders keep their mail and lose
-    // their names, until their owner names them again.
+    // their names, until their owner names them again. The identity pins
+    // were sealed under the old master key too: nothing can open them now.
     for statement in [
         "DELETE FROM account_heads WHERE user_id = $1",
+        "DELETE FROM identity_pins WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM mail_labels WHERE user_id = $1",
         "DELETE FROM mail_filters WHERE user_id = $1",
@@ -2090,12 +2092,6 @@ pub async fn wipe_user(
     )
     .await?;
     tx.commit().await?;
-
-    // Its pins were sealed under the old master key: nothing can open them now.
-    sqlx::query("DELETE FROM identity_pins WHERE user_id = $1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
 
     // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
     //    folder-owner's data view) and still count against this user.

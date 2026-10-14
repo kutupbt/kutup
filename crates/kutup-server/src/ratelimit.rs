@@ -493,6 +493,16 @@ pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> = LazyLock::new(|| {
     )
 });
 
+/// Account head reads (the head, its chain, a scope's index): 300 a minute
+/// per account, far above what a device checking before each listed write
+/// needs.
+pub static ACCOUNT_HEAD_READS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300) as usize,
+        Duration::from_secs(60),
+    )
+});
+
 /// Device announces from another server: 60 a minute per (server, share).
 pub static COLLAB_DEVICE_ANNOUNCES: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(

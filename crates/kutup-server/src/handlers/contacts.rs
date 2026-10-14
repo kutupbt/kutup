@@ -333,10 +333,11 @@ pub async fn create(
         &authority,
     )?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     charge(&mut tx, user_id, checked.charge()).await?;
     room_for(&mut tx, user_id, 1).await?;
     let id = insert(&mut tx, user_id, &checked).await?;
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(fetch(&state, user_id, id).await?)).into_response())
 }
@@ -403,6 +404,7 @@ pub async fn update(
         &authority,
     )?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let current: Option<(String, i64, i64)> = sqlx::query_as(
         "SELECT uid, revision, (octet_length(summary) + octet_length(card))::bigint FROM contacts
           WHERE id = $1 AND user_id = $2 FOR UPDATE",
@@ -439,7 +441,7 @@ pub async fn update(
     .execute(&mut *tx)
     .await?;
     write_index(&mut tx, user_id, id, &checked.summary).await?;
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(fetch(&state, user_id, id).await?))
 }
@@ -447,11 +449,13 @@ pub async fn update(
 async fn delete_ids(
     state: &AppState,
     user_id: Uuid,
+    session: Uuid,
     ids: &[Uuid],
     head: Option<&str>,
 ) -> AppResult<u64> {
     let head = NextHead::parse(head)?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, session).await?;
     let freed: Option<i64> = sqlx::query_scalar(
         "WITH gone AS (DELETE FROM contacts WHERE user_id = $1 AND id = ANY($2)
                        RETURNING (octet_length(summary) + octet_length(card))::bigint AS bytes)
@@ -465,7 +469,7 @@ async fn delete_ids(
     if freed > 0 {
         charge(&mut tx, user_id, -freed).await?;
     }
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(freed as u64)
 }
@@ -489,7 +493,14 @@ pub async fn delete(
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
     let head = body.and_then(|Json(body)| body.head);
-    delete_ids(&state, user_id, &[id], head.as_deref()).await?;
+    delete_ids(
+        &state,
+        user_id,
+        user.session.session_id,
+        &[id],
+        head.as_deref(),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -525,7 +536,14 @@ pub async fn delete_many(
         .iter()
         .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("contact id is invalid")))
         .collect::<AppResult<Vec<_>>>()?;
-    delete_ids(&state, user_id, &ids, input.head.as_deref()).await?;
+    delete_ids(
+        &state,
+        user_id,
+        user.session.session_id,
+        &ids,
+        input.head.as_deref(),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -574,12 +592,13 @@ pub async fn import(
         .collect::<AppResult<Vec<_>>>()?;
     let total: i64 = checked.iter().map(Checked::charge).sum();
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     charge(&mut tx, user_id, total).await?;
     room_for(&mut tx, user_id, checked.len()).await?;
     for contact in &checked {
         insert(&mut tx, user_id, contact).await?;
     }
-    account_heads::advance(&mut tx, user_id, head.as_ref()).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(ImportResult {
         imported: checked.len(),
