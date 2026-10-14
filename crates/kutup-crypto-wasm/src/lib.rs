@@ -3579,6 +3579,9 @@ impl AccountHeadKeys {
         current_base64: &str,
         segment_json: Option<String>,
     ) -> Result<JsValue, JsValue> {
+        // Whatever this check finds, the head verified before it no longer
+        // counts: a check that fails or does not trust leaves none.
+        self.verified = None;
         let segment = segment_arg(segment_json)?;
         let checked = kutup_crypto::account_head::check(
             &self.keys,
@@ -3608,6 +3611,8 @@ impl AccountHeadKeys {
         confirmed: bool,
         at_ms: f64,
     ) -> Result<JsValue, JsValue> {
+        // As in `check`: a re-anchoring that fails leaves no verified head.
+        self.verified = None;
         let anchor = anchor_arg(Some(anchor_json.to_owned()))?.expect("given");
         let segment = segment_arg(segment_json)?;
         let (record, verified) = kutup_crypto::account_head::reanchor(

@@ -1020,11 +1020,22 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   for (const refused of v.refusedIndexes) {
     assert.throws(() => head.checkIndex('contacts', JSON.stringify(refused.index)), undefined, refused.case)
   }
+  // A check that does not trust, or fails, leaves no verified head behind.
+  head.check(undefined, v.sealed[2], undefined)
+  const untrusted = head.check(JSON.stringify(v.anchors[2]), v.sealed[0], undefined)
+  assert.notDeepEqual(untrusted.status.kind, 'current')
+  assert.equal(untrusted.anchor ?? null, null)
+  assert.throws(() => head.checkIndex('contacts', JSON.stringify(v.indexes[2])), /no verified head/)
+  head.check(undefined, v.sealed[2], undefined)
+  assert.throws(() => head.check(undefined, 'AAAA', undefined))
+  assert.throws(() => head.next(v.writer, '[]'), /no verified head/)
+  head.check(undefined, v.sealed[2], undefined)
   // A head written here follows it, and is committed.
   const next = head.next(v.writer, JSON.stringify([head.scope('contacts', JSON.stringify(v.indexes[2]))]))
   assert.equal(head.committed(next).sequence, 4)
   // A rollback re-anchors only when the person confirms; the record matches Rust's.
   assert.throws(() => head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, false, v.reanchored.atMs))
+  assert.throws(() => head.checkIndex('contacts', '[]'), /no verified head/)
   assert.deepEqual(head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, true, v.reanchored.atMs), v.reanchored)
   head.free()
 }
