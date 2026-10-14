@@ -41,6 +41,9 @@ pub struct IdentityPinsWrite {
     /// Base64 of the sealed list; its header's revision must be above
     /// `baseRevision`.
     envelope: String,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    head: Option<String>,
 }
 
 /// `GET /api/user/identity-pins` — the latest list, or `404` before the first.
@@ -97,6 +100,8 @@ pub async fn put_identity_pins(
     let revision = kutup_crypto::identity_pins::inspect(&envelope)
         .map_err(|_| AppError::bad_request("not an identity pin list"))?;
     let revision = revisions::check_follows(revision, req.base_revision)?;
+    let head = crate::account_heads::NextHead::parse(req.head.as_deref())?;
+    let mut tx = state.pool.begin().await?;
     let stored = if req.base_revision == 0 {
         sqlx::query(
             "INSERT INTO identity_pins (user_id, revision, envelope) VALUES ($1, $2, $3)
@@ -105,7 +110,7 @@ pub async fn put_identity_pins(
         .bind(id)
         .bind(revision)
         .bind(&envelope)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
     } else {
         sqlx::query(
@@ -116,12 +121,15 @@ pub async fn put_identity_pins(
         .bind(revision)
         .bind(&envelope)
         .bind(req.base_revision)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
     };
     if stored.rows_affected() == 1 {
+        crate::account_heads::advance(&mut tx, id, head.as_ref()).await?;
+        tx.commit().await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
+    drop(tx);
     let current: Option<i64> =
         sqlx::query_scalar("SELECT revision FROM identity_pins WHERE user_id = $1")
             .bind(id)
