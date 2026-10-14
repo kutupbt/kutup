@@ -806,7 +806,8 @@ events.
 
 **Auth:** Bearer JWT
 
-**Query:** `limit` (1–100, default 50), `cursor` (the previous page's `next`)
+**Query:** `limit` (1–100, default 50), `cursor` (the previous page's `next`;
+one that is not one of the caller's events is `400`: start from the first page)
 
 **Response:**
 ```json

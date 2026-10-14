@@ -131,6 +131,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_ROTATION_PHASE=after KUTUP_ROTATION_FILE="$rotation_file" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test opaque_rotation_live -- --nocapture
 rm -f "$rotation_file"
 

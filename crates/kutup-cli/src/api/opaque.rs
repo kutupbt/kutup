@@ -41,7 +41,8 @@ impl RegisterStarted {
     }
 }
 
-#[derive(Debug, Deserialize)]
+// No Debug: it carries a one-time grant.
+#[derive(Deserialize)]
 struct Granted {
     grant: String,
 }

@@ -72,6 +72,21 @@ pub async fn list(
     if !(1..=MAX_LIMIT).contains(&limit) {
         return Err(AppError::bad_request("limit is 1 to 100"));
     }
+    // A cursor is one of the caller's own events, as a page handed it out.
+    if let Some(cursor) = query.cursor {
+        let known: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM account_security_events WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(cursor)
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        if !known {
+            return Err(AppError::bad_request(
+                "unknown cursor: start from the first page",
+            ));
+        }
+    }
     // One more than asked: whether there is a next page.
     let mut events =
         crate::security_events::list(&state.pool, user_id, query.cursor, limit + 1).await?;

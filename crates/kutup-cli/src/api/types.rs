@@ -49,7 +49,8 @@ pub struct RegisterRequest {
     pub drive_key_binding: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+// No Debug: it carries tokens, envelopes and grants.
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     #[serde(default)]

@@ -987,8 +987,23 @@ pub async fn recover_grant(
     if !auth_check::verify_hash(&proof, &stored_verifier) {
         return Err(AppError::unauthorized("invalid recovery proof"));
     }
+    // Only while the phrase checked is still the account's: a wipe (or a new
+    // setup) in between replaces the verifier, and leaves no grant behind.
+    let mut tx = state.pool.begin().await?;
+    let still: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users
+         WHERE id = $1 AND is_active AND recovery_key_verifier = $2
+         FOR SHARE",
+    )
+    .bind(user_id)
+    .bind(&stored_verifier)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if still.is_none() {
+        return Err(AppError::unauthorized("invalid recovery proof"));
+    }
     let grant = crate::grants::issue(
-        &state.pool,
+        &mut *tx,
         crate::grants::Purpose::Recovery,
         user_id,
         None,
@@ -996,6 +1011,7 @@ pub async fn recover_grant(
         crate::grants::GRANT_MINUTES,
     )
     .await?;
+    tx.commit().await?;
     Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
 }
 
@@ -1506,9 +1522,10 @@ pub async fn complete_setup(
         Err(err) if matches!(&err, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")) => {
             return Err(map_insert_conflict(err))
         }
+        Err(err) => return Err(err.into()),
         // Done already, or the temporary password changed since this
         // token's sign-in (an admin reset): sign in again.
-        _ => return Err(setup_token_invalid()),
+        Ok(_) => return Err(setup_token_invalid()),
     }
     crate::grants::end_all(&mut tx, uid).await?;
     tx.commit().await?;

@@ -1815,7 +1815,7 @@ pub async fn rotate_temp_password(
 
     let mut tx = state.pool.begin().await?;
     take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
-    sqlx::query(
+    let rotated = sqlx::query(
         "UPDATE users SET key_binding = $2, opaque_record = $3, opaque_suite = $4,
                 opaque_server_key_id = $5, updated_at = NOW()
           WHERE id = $1 AND is_first_login",
@@ -1828,6 +1828,14 @@ pub async fn rotate_temp_password(
     .execute(&mut *tx)
     .await
     .map_err(map_insert_conflict)?;
+    // Set up in between: nothing changes (the grant stays unused with the
+    // rolled-back transaction).
+    if rotated.rows_affected() != 1 {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "user has completed setup; only the user can reset their password (recovery phrase), or wipe the account",
+        ));
+    }
     crate::grants::end_all(&mut tx, target).await?;
     crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
     crate::security_events::record(
@@ -1964,6 +1972,14 @@ pub async fn wipe_user(
     if is_break_glass(&state, username.as_deref().unwrap_or_default()) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
+
+    // 0. Nobody signed in to it watches the purges below, nor acts on a grant
+    //    meanwhile: its sign-ins and grants end first (and again, with the
+    //    reset, for any sign-in made in between).
+    let mut tx = state.pool.begin().await?;
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    tx.commit().await?;
 
     // The replacement recovery setup must never inherit ciphertext encrypted
     // under the lost account master key.

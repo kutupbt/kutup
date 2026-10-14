@@ -617,6 +617,19 @@ pub fn complete_setup(
     username: &str,
     password: &str,
 ) -> (String, AccountIdentityKeysV1) {
+    let (status, body, identity) = try_complete_setup(c, base, setup_token, username, password);
+    assert_eq!(status, StatusCode::OK, "setup: {body}");
+    (body["accessToken"].as_str().unwrap().to_string(), identity)
+}
+
+/// [`complete_setup`], its answer as it comes (status and body).
+pub fn try_complete_setup(
+    c: &Client,
+    base: &str,
+    setup_token: &str,
+    username: &str,
+    password: &str,
+) -> (StatusCode, Value, AccountIdentityKeysV1) {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -656,9 +669,8 @@ pub fn complete_setup(
         .send()
         .unwrap();
     let status = completed.status();
-    let body: Value = completed.json().unwrap();
-    assert_eq!(status, StatusCode::OK, "setup: {body}");
-    (body["accessToken"].as_str().unwrap().to_string(), identity)
+    let body: Value = completed.json().unwrap_or(Value::Null);
+    (status, body, identity)
 }
 
 /// A temporary password as an administrator's client registers it (the

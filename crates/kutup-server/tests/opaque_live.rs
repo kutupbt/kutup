@@ -480,8 +480,16 @@ fn security_events_record_changes_for_their_owner_only() {
         security_events(&c, &base, &other.token, "")["events"],
         json!([])
     );
-    let foreign = security_events(&c, &base, &other.token, &format!("?cursor={next}"));
-    assert_eq!(foreign["events"], json!([]));
+    // A cursor is one of the caller's own events: another's, or none, is 400.
+    for cursor in [next.to_owned(), uuid::Uuid::new_v4().to_string()] {
+        let r = bearer(
+            c.get(format!("{base}/api/user/security-events?cursor={cursor}")),
+            &other.token,
+        )
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    }
     purge_accounts(&c, &base, &[&user, &other]);
 }
 
@@ -615,6 +623,40 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
         Some(&user.token),
     );
     assert_eq!((status, body), (StatusCode::OK, json!({ "ok": true })));
+    // A wrong password (a finalization that does not fit its start) is a
+    // 401, and counts: four more starts from that address lock the name.
+    let reauth_start = |password: &str| {
+        let (signing_in, ke1) = kutup_crypto::opaque::client_login_start(password).unwrap();
+        let r = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
+            .header("x-kutup-client", "cli")
+            .header("x-real-ip", "192.0.2.140")
+            .json(
+                &json!({ "name": user.username, "credentialRequest": b64(&ke1),
+                           "purpose": "reauth", "for": "verify" }),
+            )
+            .send()
+            .unwrap();
+        let status = r.status();
+        (status, r.json::<Value>().unwrap_or(Value::Null), signing_in)
+    };
+    let (_, right, signing_in) = reauth_start(&user.password);
+    let ke2 = b64_decode(right["credentialResponse"].as_str().unwrap());
+    let other_ke3 = signing_in.finish(&ke2).unwrap().finalization;
+    let (_, wrong, _) = reauth_start("not-the-password-1");
+    let r = bearer(c.post(format!("{base}/api/auth/login/finish")), &user.token)
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "loginId": wrong["loginId"], "credentialFinalization": b64(&other_ke3) }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "invalidCredentials");
+    for _ in 0..3 {
+        assert_eq!(reauth_start("not-the-password-1").0, StatusCode::OK);
+    }
+    assert_eq!(
+        reauth_start(&user.password).0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     // Nor is a setup token anything but one.
     let r = c
         .post(format!("{base}/api/auth/complete-setup"))

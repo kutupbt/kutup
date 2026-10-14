@@ -193,7 +193,10 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
                     'UTF8')), 'hex')
          FROM auth_sessions s JOIN users u ON u.id = s.user_id
          WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
-           AND s.expires_at > now() AND u.is_active",
+           AND s.expires_at > now() AND u.is_active
+           -- A forked session lives only while its sign-in does.
+           AND NOT EXISTS (SELECT 1 FROM auth_sessions p
+                           WHERE p.id = s.parent_session_id AND p.revoked_at IS NOT NULL)",
     )
     .bind(session_id)
     .bind(user_id)
@@ -537,7 +540,8 @@ pub async fn consume_fork(
     }
     let parent: Option<(Uuid, bool)> = sqlx::query_as(
         "SELECT s.user_id, u.is_admin FROM auth_sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active",
+         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active
+         FOR UPDATE OF s",
     )
     .bind(parent_id)
     .fetch_optional(&mut *tx)

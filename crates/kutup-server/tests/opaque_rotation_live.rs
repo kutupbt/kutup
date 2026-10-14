@@ -7,8 +7,9 @@
 //!   and the master key, is a security event, and happens once. A second
 //!   `rotate` grant, or one used as a password change, is refused.
 //!
-//! Needs `KUTUP_LIVE_SERVER`, the two variables above, and
-//! `KUTUP_LIVE_ADMIN` to purge the account.
+//! Needs `KUTUP_LIVE_SERVER`, the two variables above,
+//! `KUTUP_LIVE_DATABASE_URL` (after) and `KUTUP_LIVE_ADMIN` to purge the
+//! account.
 
 mod common;
 
@@ -111,6 +112,39 @@ fn a_rotation_moves_the_record_once_and_shows() {
     assert_eq!(second["rotate"], true);
     let second_grant = second["grant"].as_str().unwrap().to_owned();
     let second_token = second["accessToken"].as_str().unwrap().to_owned();
+    // The guard itself: an account already on the current setup is moved by
+    // no rotate grant (here the account is put there behind the server's
+    // back, and back again: the refused move leaves the grant unused).
+    let database_url = std::env::var("KUTUP_LIVE_DATABASE_URL").expect("KUTUP_LIVE_DATABASE_URL");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    let set_key = |sql: &str| {
+        runtime
+            .block_on(sqlx::query(sql).bind(&user.id).execute(&pool))
+            .unwrap();
+    };
+    set_key(
+        "UPDATE users SET opaque_server_key_id = (SELECT max(key_id) FROM opaque_server_setups)
+         WHERE id = $1::uuid",
+    );
+    assert_eq!(
+        rotate(
+            &c,
+            &base,
+            &user,
+            &user.password.clone(),
+            &grant,
+            &user.token
+        ),
+        StatusCode::FORBIDDEN,
+        "already on the current setup"
+    );
+    set_key(
+        "UPDATE users SET opaque_server_key_id = (SELECT min(key_id) FROM opaque_server_setups)
+         WHERE id = $1::uuid",
+    );
     // A rotate grant is no password change.
     assert_eq!(
         rotate(
