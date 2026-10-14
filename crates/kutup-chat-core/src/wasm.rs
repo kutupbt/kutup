@@ -246,6 +246,13 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchOwnProfile)]
     async fn js_fetch_own_profile(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(method, catch, js_name = fetchRenames)]
+    async fn js_fetch_renames(
+        this: &JsChatTransport,
+        address: &str,
+        incarnation_id: Option<String>,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = fetchIdentityPins)]
     async fn js_fetch_identity_pins(
         this: &JsChatTransport,
@@ -480,6 +487,19 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_publish_manifest(to_transport(manifest)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_renames(
+        &self,
+        address: &str,
+        incarnation_id: Option<&str>,
+    ) -> Result<crate::RenameChainsV1> {
+        from_transport(
+            self.js
+                .js_fetch_renames(address, incarnation_id.map(str::to_string))
                 .await
                 .map_err(transport_error)?,
         )
@@ -4780,6 +4800,16 @@ fn to_output<T: Serialize + ?Sized>(value: &T) -> std::result::Result<JsValue, J
 }
 
 fn transport_error(value: JsValue) -> ChatError {
+    // A lookup of a name its account left: the JavaScript transport passes
+    // the server's `409 renamed` chains on as `renames` (transport.ts).
+    if let Ok(renames) = js_sys::Reflect::get(&value, &JsValue::from_str("renames")) {
+        if !renames.is_undefined() && !renames.is_null() {
+            return match serde_wasm_bindgen::from_value::<crate::RenameChainsV1>(renames) {
+                Ok(chains) => ChatError::Renamed(Box::new(chains)),
+                Err(error) => ChatError::Transport(format!("malformed rename chains: {error}")),
+            };
+        }
+    }
     ChatError::Transport(js_value_message(&value))
 }
 

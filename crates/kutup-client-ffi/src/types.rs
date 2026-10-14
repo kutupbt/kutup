@@ -57,6 +57,9 @@ impl From<ChatError> for KutupChatError {
             ChatError::Trust(message) => Self::Trust { message },
             ChatError::SendNotConverged(attempts) => Self::SendNotConverged { attempts },
             ChatError::MissingBundle(device_id) => Self::MissingBundle { device_id },
+            ChatError::Renamed(_) => Self::Trust {
+                message: "the address is a name its account left".into(),
+            },
         }
     }
 }

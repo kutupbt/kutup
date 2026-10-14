@@ -54,6 +54,10 @@ pub enum ChatError {
     /// A 409 named a device the served bundles didn't include (server inconsistency).
     #[error("no bundle for device {0}")]
     MissingBundle(u32),
+    /// The address is a name its account left (`409 renamed`): every rename
+    /// chain naming it, to verify and follow (docs/plans/username-renames.md).
+    #[error("the address is a name its account left")]
+    Renamed(Box<crate::renames::RenameChainsV1>),
 }
 
 impl From<libsignal_protocol::SignalProtocolError> for ChatError {
@@ -124,7 +128,8 @@ impl ChatError {
             | Self::Transport(_)
             | Self::Trust(_)
             | Self::SendNotConverged(_)
-            | Self::MissingBundle(_) => Kind::Unknown,
+            | Self::MissingBundle(_)
+            | Self::Renamed(_) => Kind::Unknown,
         }
     }
 }

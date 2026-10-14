@@ -310,3 +310,44 @@ describe('ApiChatTransport', () => {
     )
   })
 })
+
+describe('a name its account left (409 renamed)', () => {
+  const renames = { version: 1, chains: [{ incarnationId: 'i', authorityPublicKey: 'A', current: 'ada.lovelace@kutup.test', state: 'current', chain: [] }] }
+  const refused = (status: number, data: object) =>
+    new axios.AxiosError('refused', String(status), undefined, undefined, {
+      status,
+      data,
+      headers: {},
+      config: { headers: new axios.AxiosHeaders() },
+      statusText: '',
+    })
+
+  it('hands the chains to Rust on every lookup by address', async () => {
+    vi.spyOn(api, 'get').mockRejectedValue(refused(409, { error: 'renamed', code: 'renamed', renames }))
+    const transport = new ApiChatTransport()
+    for (const lookup of [
+      () => transport.fetchBundles('ada.l@kutup.test'),
+      () => transport.fetchManifest('ada.l@kutup.test'),
+      () => transport.fetchProfile('ada.l@kutup.test', '1', 'key'),
+    ]) {
+      await expect(lookup()).rejects.toMatchObject({ renames })
+    }
+  })
+
+  it('keeps a device mismatch a mismatch, and other errors as they are', async () => {
+    const mismatch = { missingDevices: [2] }
+    vi.spyOn(api, 'post').mockRejectedValueOnce(refused(409, mismatch))
+    const transport = new ApiChatTransport()
+    await expect(transport.sendMessage('bob@kutup.test', {})).resolves.toEqual({ kind: 'mismatch', mismatch })
+    const other = refused(409, { code: 'somethingElse' })
+    vi.spyOn(api, 'get').mockRejectedValue(other)
+    await expect(transport.fetchBundles('bob@kutup.test')).rejects.toBe(other)
+  })
+
+  it('asks for the chains of an address, one incarnation when given', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: renames } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.fetchRenames('ada.l@kutup.test', 'inc')).resolves.toEqual(renames)
+    expect(get).toHaveBeenCalledWith('/users/renames/ada.l%40kutup.test', { params: { incarnationId: 'inc' } })
+  })
+})

@@ -1069,6 +1069,32 @@ late. The cause is inside the vendored editor build
 (`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office
 editing spec (`tests/e2e/specs/03-office-editing.spec.ts`) exercises reloads.
 
+### Chat · peer records keyed by a stable identity
+
+Chat core keys a peer's records by their address: direct conversation ids
+(`ConversationId::Direct { address }`, on the wire and in backups), contacts,
+peer profiles, manifest trust and history, and the libsignal sessions and
+identities (the `ProtocolAddress` name). A username rename
+(docs/plans/username-renames.md) therefore moves every record from the old
+address to the new one in one store transaction (`follow_rename`), guarded by
+a test that every peer-keyed store is classified as moved or not, with a
+rename alias log that maps backups made before a rename.
+
+The cleaner long-term shape keys them by the account's incarnation id, with
+the address a mutable routing and display attribute and an address →
+incarnation index (decided against for now, 2026-10-15: about 8–10 days
+against 4–5). What it needs:
+- inbound sealed-sender decryption must know the sender's incarnation before
+  the session lookup: an unknown address means a manifest fetch inside the
+  drain, which today never touches the network before decrypting;
+- the proto and backup `ConversationId::Direct` change, and every public
+  engine method taking a `peer` address resolves through the index;
+- an administrator's reset is a new incarnation: today the thread continues
+  with "safety number changed" (Signal's model); keyed by incarnation it
+  would split unless the accepted reset links the two;
+- local stores are client data, so the move is a client-side migration, not
+  a server wipe.
+
 ### Chat · MLS changes built on a stale epoch
 
 When an administrator or owner changes a group moments after another

@@ -23,6 +23,19 @@ function signedIn() {
   return session
 }
 
+/**
+ * A lookup of a name its account left answers `409 renamed` with every rename
+ * chain naming it (docs/plans/username-renames.md). Rust reads them from the
+ * error's `renames` (wasm.rs `transport_error`) and verifies them; any other
+ * error passes as it is.
+ */
+export function renamedError(error: unknown): unknown {
+  if (!axios.isAxiosError(error) || error.response?.status !== 409) return error
+  const data = error.response.data as { code?: unknown; renames?: unknown } | undefined
+  if (data?.code !== 'renamed' || typeof data.renames !== 'object' || data.renames === null) return error
+  return Object.assign(new Error('the address is a name its account left'), { renames: data.renames })
+}
+
 /** Authenticated REST adapter consumed by the Rust engine. */
 /** Extra waits for an ordering quorum, after the API client's own retries. */
 const QUORUM_RETRY_DELAYS_MS = [3_000, 6_000]
@@ -50,6 +63,9 @@ export class ApiChatTransport implements ChatTransportPort {
     return api
       .get(`/chat/users/${encodeURIComponent(username)}/keys`)
       .then((response) => response.data)
+      .catch((error: unknown) => {
+        throw renamedError(error)
+      })
   }
 
   async fetchSyncBundles(
@@ -61,6 +77,9 @@ export class ApiChatTransport implements ChatTransportPort {
         params: { syncDeviceId: currentDeviceId },
       })
       .then((response) => response.data)
+      .catch((error: unknown) => {
+        throw renamedError(error)
+      })
   }
 
   async fetchMlsOrderingPolicy(domain: string): Promise<unknown> {
@@ -76,7 +95,7 @@ export class ApiChatTransport implements ChatTransportPort {
         .then((response) => response.data)
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 404) return null
-      throw error
+      throw renamedError(error)
     }
   }
 
@@ -95,6 +114,9 @@ export class ApiChatTransport implements ChatTransportPort {
         },
       })
       .then((response) => response.data)
+      .catch((error: unknown) => {
+        throw renamedError(error)
+      })
   }
 
   async fetchSealedSenderPolicy(domain: string): Promise<unknown> {
@@ -120,10 +142,20 @@ export class ApiChatTransport implements ChatTransportPort {
         { withCredentials: false, headers: { Authorization: undefined } },
       )
       .then((response) => response.data)
+      .catch((error: unknown) => {
+        throw renamedError(error)
+      })
   }
 
   async publishManifest(manifest: unknown): Promise<unknown> {
     return api.post('/chat/manifest', manifest).then((response) => response.data)
+  }
+
+  /** Every rename chain naming `address` (docs/plans/username-renames.md); one incarnation's when given. */
+  async fetchRenames(address: string, incarnationId?: string | null): Promise<unknown> {
+    return api
+      .get(`/users/renames/${encodeURIComponent(address)}`, { params: incarnationId ? { incarnationId } : undefined })
+      .then((response) => response.data)
   }
 
   /**
@@ -210,7 +242,7 @@ export class ApiChatTransport implements ChatTransportPort {
         .then((response) => response.data)
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 404) return null
-      throw error
+      throw renamedError(error)
     }
   }
 
@@ -430,6 +462,8 @@ export class ApiChatTransport implements ChatTransportPort {
         deduplicated: response.data?.deduplicated === true,
       }
     } catch (error) {
+      const renamed = renamedError(error)
+      if (renamed !== error) throw renamed
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }
       }
@@ -453,6 +487,8 @@ export class ApiChatTransport implements ChatTransportPort {
       )
       return { kind: 'delivered', deduplicated: response.data?.deduplicated === true }
     } catch (error) {
+      const renamed = renamedError(error)
+      if (renamed !== error) throw renamed
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }
       }
@@ -483,6 +519,8 @@ export class ApiChatTransport implements ChatTransportPort {
         deduplicated: response.data?.deduplicated === true,
       }
     } catch (error) {
+      const renamed = renamedError(error)
+      if (renamed !== error) throw renamed
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }
       }

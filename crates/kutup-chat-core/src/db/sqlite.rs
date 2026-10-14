@@ -170,7 +170,8 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     trust_state        INTEGER NOT NULL,
     continuity_gap     INTEGER NOT NULL,
     quarantine_reason  TEXT,
-    pending_reset_json TEXT
+    pending_reset_json TEXT,
+    renames_json       TEXT
 );
 CREATE TABLE IF NOT EXISTS manifest_history (
     peer          TEXT    NOT NULL,
@@ -581,7 +582,7 @@ impl ChatDb for SqliteChatDb {
                         self_authority_key, drive_hpke_public_key,
                         drive_share_signing_public_key, highest_sequence,
                         manifest_hash, trust_state, continuity_gap,
-                        quarantine_reason, pending_reset_json
+                        quarantine_reason, pending_reset_json, renames_json
                  FROM manifest_trust WHERE peer = ?1",
                 [peer],
                 |row| {
@@ -613,6 +614,17 @@ impl ChatDb for SqliteChatDb {
                             .map_err(|error| {
                                 rusqlite::Error::FromSqlConversionFailure(
                                     12,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(error),
+                                )
+                            })?,
+                        renames: row
+                            .get::<_, Option<String>>(13)?
+                            .map(|value| serde_json::from_str(&value))
+                            .transpose()
+                            .map_err(|error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    13,
                                     rusqlite::types::Type::Text,
                                     Box::new(error),
                                 )
@@ -1061,8 +1073,8 @@ impl ChatDb for SqliteChatDb {
                       self_authority_key, drive_hpke_public_key,
                       drive_share_signing_public_key, highest_sequence,
                       manifest_hash, trust_state, continuity_gap,
-                      quarantine_reason, pending_reset_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                      quarantine_reason, pending_reset_json, renames_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(peer) DO UPDATE SET
                      account = excluded.account,
                      incarnation_id = excluded.incarnation_id,
@@ -1075,7 +1087,8 @@ impl ChatDb for SqliteChatDb {
                      trust_state = excluded.trust_state,
                      continuity_gap = excluded.continuity_gap,
                      quarantine_reason = excluded.quarantine_reason,
-                     pending_reset_json = excluded.pending_reset_json",
+                     pending_reset_json = excluded.pending_reset_json,
+                     renames_json = excluded.renames_json",
                 rusqlite::params![
                     peer,
                     trust.account,
@@ -1091,6 +1104,12 @@ impl ChatDb for SqliteChatDb {
                     trust.quarantine_reason,
                     trust
                         .pending_reset
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|error| ChatError::Db(error.to_string()))?,
+                    trust
+                        .renames
                         .as_ref()
                         .map(serde_json::to_string)
                         .transpose()
@@ -1582,6 +1601,7 @@ mod tests {
                 continuity_gap: false,
                 quarantine_reason: None,
                 pending_reset: None,
+                renames: None,
             }
         }
 

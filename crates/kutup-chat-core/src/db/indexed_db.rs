@@ -1172,6 +1172,7 @@ mod tests {
                 continuity_gap: false,
                 quarantine_reason: None,
                 pending_reset: None,
+                renames: None,
             },
         );
         pending.prekey_upload = Some(Some(vec![15]));

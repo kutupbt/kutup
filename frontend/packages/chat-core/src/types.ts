@@ -1362,6 +1362,8 @@ export interface ChatTransportPort {
     capability: string,
   ): Promise<unknown>
   publishManifest(manifest: unknown): Promise<unknown>
+  /** Every rename chain naming `address`, one incarnation's when given (docs/plans/username-renames.md). */
+  fetchRenames(address: string, incarnationId?: string | null): Promise<unknown>
   /** The account's synced identity pins (docs/plans/drive-identity-pins.md); null before the first. */
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>
   /** Stores a new list if the server still holds `baseRevision` (0: none yet); false when another app wrote first. */

@@ -27,6 +27,8 @@ mod mls_policy;
 mod padding;
 mod prekey_rotation;
 mod profile;
+mod renames;
+pub use renames::{RenameChainEntryV1, RenameChainsV1};
 mod sealed_sender;
 // The query side is called from the browser bindings (and tests) only.
 mod identity_sync;

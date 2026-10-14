@@ -177,6 +177,22 @@ pub trait ChatTransport {
         ))
     }
 
+    /// Every rename chain naming `address` (`GET /api/users/renames/:address`,
+    /// one incarnation's when `incarnation_id` is given): what a client
+    /// verifies before following a peer to another address
+    /// (docs/plans/username-renames.md). A transport without it knows none.
+    async fn fetch_renames(
+        &self,
+        _address: &str,
+        _incarnation_id: Option<&str>,
+    ) -> Result<crate::RenameChainsV1> {
+        Ok(crate::RenameChainsV1 {
+            version: crate::renames::RENAME_CHAINS_VERSION,
+            chains: Vec::new(),
+            unavailable: true,
+        })
+    }
+
     /// The account's synced identity pins, shared with Drive and its other
     /// apps; `None` before the first list. A transport without them answers
     /// `None`, and Chat keeps to its own pins.

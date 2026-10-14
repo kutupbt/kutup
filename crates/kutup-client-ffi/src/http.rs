@@ -86,6 +86,23 @@ impl ChatTransport for NativeTransport {
         decode(&response.body_json).map(Some)
     }
 
+    async fn fetch_renames(
+        &self,
+        address: &str,
+        incarnation_id: Option<&str>,
+    ) -> CoreResult<kutup_chat_core::RenameChainsV1> {
+        let mut path = format!("/users/renames/{}", urlencoding::encode(address));
+        if let Some(incarnation_id) = incarnation_id {
+            path.push_str(&format!(
+                "?incarnationId={}",
+                urlencoding::encode(incarnation_id)
+            ));
+        }
+        let response = self.request(ChatHttpMethod::Get, path, None).await?;
+        ensure_success(&response)?;
+        decode(&response.body_json)
+    }
+
     async fn fetch_identity_pins(&self) -> CoreResult<Option<IdentityPinsRecord>> {
         let response = self
             .request(ChatHttpMethod::Get, "/user/identity-pins".into(), None)
@@ -307,12 +324,32 @@ impl NativeTransport {
 fn ensure_success(response: &ChatHttpResponse) -> CoreResult<()> {
     if (200..300).contains(&response.status) {
         Ok(())
+    } else if let Some(renames) = renamed(response) {
+        // A name its account left: the chains to verify and follow
+        // (docs/plans/username-renames.md).
+        Err(ChatError::Renamed(Box::new(renames)))
     } else {
         Err(ChatError::Transport(format!(
             "chat API returned HTTP {}",
             response.status
         )))
     }
+}
+
+/// The chains of a `409 renamed`, when this is one.
+fn renamed(response: &ChatHttpResponse) -> Option<kutup_chat_core::RenameChainsV1> {
+    if response.status != 409 {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct Body {
+        code: Option<String>,
+        renames: Option<kutup_chat_core::RenameChainsV1>,
+    }
+    let body: Body = serde_json::from_str(&response.body_json).ok()?;
+    (body.code.as_deref() == Some("renamed"))
+        .then_some(body.renames)
+        .flatten()
 }
 
 fn encode<T: Serialize + ?Sized>(value: &T) -> CoreResult<String> {

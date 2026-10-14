@@ -385,6 +385,11 @@ pub struct ManifestTrust {
     /// pin remains authoritative until the user verifies this candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_reset: Option<Box<PendingAccountIdentityResetV1>>,
+    /// The peer's rename chain as followed (docs/plans/username-renames.md):
+    /// `peer` is its newest address, `account` the one its newest manifest
+    /// names (any address of the chain until the peer re-publishes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renames: Option<crate::renames::KnownRenamesV1>,
 }
 
 /// One complete account-signed manifest. These records are

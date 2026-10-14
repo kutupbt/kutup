@@ -298,6 +298,7 @@ mod tests {
             continuity_gap: false,
             quarantine_reason: None,
             pending_reset: None,
+            renames: None,
         }
     }
 

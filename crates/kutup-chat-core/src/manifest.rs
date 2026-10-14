@@ -278,7 +278,10 @@ fn verify_manifest_trust(
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     manifest.verify().map_err(ChatError::Trust)?;
-    match_expected_account(expected_peer, &manifest.account)?;
+    // The manifest names the peer, in any spelling, or (after a rename the
+    // client followed) any address of the peer's verified chain: until the
+    // peer re-publishes, its manifest still names an address it left.
+    account_of_peer(expected_peer, prior, &manifest.account)?;
     let manifest_hash = manifest.manifest_hash().map_err(ChatError::Trust)?;
     let (trust, continuity_gap) = match prior {
         None => (AuthorityTrust::Tofu, manifest.sequence != 1),
@@ -288,7 +291,7 @@ fn verify_manifest_trust(
                     "peer account identity is quarantined pending explicit verification".into(),
                 ));
             }
-            if prior.peer != expected_peer {
+            if !crate::renames::same_address(&prior.peer, expected_peer) {
                 return Err(ChatError::Trust(
                     "account-manifest pin belongs to another peer".into(),
                 ));
@@ -302,7 +305,8 @@ fn verify_manifest_trust(
                         .into(),
                 ));
             }
-            if prior.account != manifest.account
+            // The address may move only along the followed rename chain.
+            if !crate::renames::known_address(prior, &manifest.account)
                 || prior.drive_hpke_public_key != manifest.drive.hpke_public_key
                 || prior.drive_share_signing_public_key != manifest.drive.share_signing_public_key
             {
@@ -351,6 +355,8 @@ fn verify_manifest_trust(
         continuity_gap,
         quarantine_reason: None,
         pending_reset: None,
+        // The chain followed for the peer stays with the pin.
+        renames: prior.and_then(|prior| prior.renames.clone()),
     })
 }
 
@@ -371,9 +377,10 @@ pub(crate) fn verify_manifest_history(
     let start = prior.map_or(1, |trust| trust.highest_sequence.saturating_add(1));
     let mut expected = start;
     let mut predecessor = prior.map(|trust| trust.manifest_hash.clone());
+    // The stable identity: not the address, which may move along a followed
+    // rename chain (checked for every manifest by `verify_manifest_trust`).
     let mut identity = prior.map(|trust| {
         (
-            trust.account.clone(),
             trust.incarnation_id.clone(),
             trust.authority_key_id.clone(),
             trust.self_authority_key.clone(),
@@ -384,7 +391,7 @@ pub(crate) fn verify_manifest_history(
     let mut records = Vec::new();
     for (page_index, page) in pages.iter().enumerate() {
         page.validate().map_err(ChatError::Trust)?;
-        match_expected_account(expected_peer, &page.account)?;
+        account_of_peer(expected_peer, prior, &page.account)?;
         if page.from_sequence != expected
             || (page_index + 1 < pages.len() && page.next_sequence.is_none())
         {
@@ -402,7 +409,6 @@ pub(crate) fn verify_manifest_history(
             }
             verify_manifest_trust(expected_peer, manifest, prior)?;
             let manifest_identity = (
-                manifest.account.clone(),
                 manifest.incarnation_id.clone(),
                 manifest.authority_key_id.clone(),
                 manifest.self_authority_key.clone(),
@@ -442,6 +448,20 @@ pub(crate) fn verify_manifest_history(
     Ok((trust, records))
 }
 
+/// The account a manifest names is the peer's: its address in any spelling,
+/// or an address of the rename chain followed for it (until the peer
+/// re-publishes, its manifest names an address it left).
+fn account_of_peer(
+    expected_peer: &str,
+    prior: Option<&ManifestTrust>,
+    account: &str,
+) -> Result<()> {
+    if prior.is_some_and(|prior| crate::renames::known_address(prior, account)) {
+        return Ok(());
+    }
+    match_expected_account(expected_peer, account)
+}
+
 fn match_expected_account(expected_peer: &str, authenticated_account: &str) -> Result<()> {
     let expected: AccountAddress = expected_peer
         .parse()
@@ -449,7 +469,8 @@ fn match_expected_account(expected_peer: &str, authenticated_account: &str) -> R
     let authenticated: AccountAddress = authenticated_account
         .parse()
         .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if expected != authenticated {
+    // One account per folded name: `ada_l` and `ada-l` are one address.
+    if !crate::renames::same_address(&expected.canonical(), &authenticated.canonical()) {
         return Err(ChatError::Trust(
             "account manifest belongs to another account".into(),
         ));
@@ -476,6 +497,7 @@ mod tests {
             continuity_gap: false,
             quarantine_reason: None,
             pending_reset: None,
+            renames: None,
         }
     }
 
