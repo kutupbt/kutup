@@ -378,18 +378,17 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
     );
     // Signed out: refused.
     assert_eq!(reauth(&user.password, None).0, StatusCode::UNAUTHORIZED);
-    // Another account's name: refused.
+    // A reauth names no account (it is the session's own): naming one,
+    // another account's or not, is refused.
     let other = register(&c, &base);
-    let (status, _, _) = opaque_login(
-        &c,
-        &base,
-        &other.username,
-        &other.password,
-        "reauth",
-        Some("pass"),
-        Some(&user.token),
-    );
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (_, ke1) = kutup_crypto::opaque::client_login_start(&other.password).unwrap();
+    let named = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "name": other.username, "credentialRequest": b64(&ke1),
+                       "purpose": "reauth", "for": "pass" }))
+        .send()
+        .unwrap();
+    assert_eq!(named.status(), StatusCode::BAD_REQUEST);
     // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): every
     // start counts, finished or not, and then even the right password waits.
     let mut locked = false;
