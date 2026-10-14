@@ -118,7 +118,11 @@ impl ChatTransport for NativeTransport {
             // wrote first", which pin sync would read again and retry.
             let code = serde_json::from_str::<serde_json::Value>(&response.body_json)
                 .ok()
-                .and_then(|body| body.get("code").and_then(|code| code.as_str()).map(str::to_owned));
+                .and_then(|body| {
+                    body.get("code")
+                        .and_then(|code| code.as_str())
+                        .map(str::to_owned)
+                });
             if code.as_deref() == Some("head_required") {
                 return Err(ChatError::Transport(
                     "this account's identity pins need the account head, which this client does not write yet".into(),
