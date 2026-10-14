@@ -18,6 +18,11 @@ export interface MeResponse {
   storageUsedBytes: number
   isAdmin: boolean
   color: string
+  /**
+   * Where the account's rename chain ends (docs/plans/username-renames.md):
+   * `sequence` 0 and no `digest` before a first rename.
+   */
+  renames: { sequence: number; digest?: string }
 }
 
 /** The signed-in account's profile, under `accessToken`. */

@@ -28,6 +28,24 @@ export interface RenameChainView {
   digests: string[]
 }
 
+/**
+ * The folded form of a name (`kutup_crypto::names::fold`): lowercase,
+ * without `.`, `_` and `-`. One account holds a folded name, so any spelling
+ * finds it: compare names folded, show them as stored.
+ */
+export async function foldName(name: string): Promise<string> {
+  return (await getCryptoWasm()).foldName(name)
+}
+
+/**
+ * The folded form of an address (`kutup_crypto::names::fold_address`): the
+ * local part folded, the domain lowercase; null for what is not an address.
+ * Every comparison of an address with a saved one uses it.
+ */
+export async function foldAddress(address: string): Promise<string | null> {
+  return (await getCryptoWasm()).foldAddress(address) ?? null
+}
+
 /** The next rename of this account, signed with its authority (from the master key). */
 export async function signAccountRename(
   masterKeyBase64: string,

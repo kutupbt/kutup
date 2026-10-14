@@ -177,7 +177,65 @@
       "colourAuto": "Otomatik",
       "colourFailed": "Renk kaydedilemedi.",
       "details": "Hesap bilgileri",
-      "address": "Kutup adresi"
+      "address": "Kutup adresi",
+      "username": {
+        "title": "Kullanıcı adı",
+        "description": "Kullanıcı adınız Kutup adresinizdir. Değiştirebilirsiniz: dosyalarınız, sohbetleriniz, postalarınız ve kişileriniz sizde kalır.",
+        "change": "Kullanıcı adını değiştir"
+      },
+      "rename": {
+        "title": "Kullanıcı adınızı değiştirin",
+        "description": "Yalnızca adınız ve adresiniz değişir. Sizi tanıyanlar yeni adı görür; eski adresiniz bir süre posta almaya devam eder.",
+        "newName": "Yeni kullanıcı adı",
+        "hint": "3 ile 32 karakter: a–z, 0–9, _ ve -.",
+        "checking": "Denetleniyor…",
+        "available": "Kullanılabilir.",
+        "takeBack": "Önceki adlarınızdan biri: geri alabilirsiniz.",
+        "newAddress": "Yeni adresiniz:",
+        "same": "Kullanıcı adınız zaten bu.",
+        "checkFailed": "Ad denetlenemedi. Birazdan yeniden deneyin.",
+        "reason": {
+          "taken": "Bu ad başka birinde.",
+          "held": "Bu ad önceki sahibi için ayrılmış.",
+          "reserved": "Bu ad ayrılmış.",
+          "invalid": "3 ile 32 karakter kullanın: a–z, 0–9, _ ve -."
+        },
+        "warning": "Eski adresiniz {{address}}, {{receive}} boyunca posta alır ve posta gönderemez. Ardından posta almayı bırakır; {{hold}} sonra ad başkası tarafından alınabilir. Eski adresi kullanan her hizmeti şimdi güncelleyin.",
+        "days_one": "{{count}} gün",
+        "days_other": "{{count}} gün",
+        "windowsFailed": "Kutup eski adresinizin ne kadar tutulacağını bildiremedi. Daha sonra yeniden deneyin.",
+        "submit": "Kullanıcı adını değiştir",
+        "done": "Kullanıcı adınız artık {{name}}.",
+        "failed": "Kullanıcı adınız değiştirilemedi.",
+        "errors": {
+          "tooSoon": "Kullanıcı adınızı 30 günde bir değiştirebilirsiniz. Yeniden değiştirebileceğiniz tarih: {{date}}.",
+          "tooSoonNoDate": "Kullanıcı adınızı 30 günde bir değiştirebilirsiniz.",
+          "tooManyHeld": "Bir hesabın tutabileceği kadar önceki adınız var. Bunlardan biri serbest kaldığında kullanıcı adınızı yeniden değiştirebilirsiniz.",
+          "breakGlass": "Bu sunucunun acil durum yönetici hesabının adı değişmez.",
+          "setupRequired": "Önce hesabınızın kurulumunu tamamlayın.",
+          "conflict": "Kullanıcı adınız bu arada başka bir cihazda değişti. Bunu kapatıp yeniden deneyin."
+        }
+      },
+      "names": {
+        "title": "Önceki adlar",
+        "description": "Bıraktığınız adlar sizin için ayrılır. Her biri bir süre posta alır ve gönderemez, ardından başkalarına açılır.",
+        "receivesUntil": "{{date}} tarihine kadar posta alır",
+        "notReceiving": "Artık posta almıyor",
+        "freeAt": "{{date}} tarihinden sonra başkalarına açık",
+        "takeBack": "Geri al",
+        "drop": "Posta almayı durdur",
+        "dropTitle": "{{address}} adresine posta alımı durdurulsun mu?",
+        "dropDescription": "Bu adrese gelen postalar bundan sonra geri döner. Ad {{date}} tarihine kadar sizde kalır, ardından herkes alabilir.",
+        "dropWarning": "Bu geri alınamaz. 30 günde bir adresin posta alımını durdurabilirsiniz.",
+        "dropped": "{{address}} artık posta almıyor.",
+        "failed": "Önceki adlarınız yüklenemedi.",
+        "errors": {
+          "tooSoon": "30 günde bir adresin posta alımını durdurabilirsiniz. Sonraki tarih: {{date}}.",
+          "tooSoonNoDate": "30 günde bir adresin posta alımını durdurabilirsiniz.",
+          "notHeld": "Bu ad artık sizin için ayrılmış değil.",
+          "failed": "Posta alımı durdurulamadı."
+        }
+      }
     },
     "security": {
       "title": "Güvenlik",
@@ -223,6 +281,10 @@
           "rotate": "Girişiniz yenilendi",
           "adminReset": "Parola bir yönetici tarafından sıfırlandı",
           "accountReset": "Hesap bir yönetici tarafından sıfırlandı",
+          "rename": "Kullanıcı adı {{oldName}} yerine {{newName}} oldu",
+          "nameDropped": "{{oldName}} adresine posta alımı durduruldu",
+          "nameClosed": "{{oldName}} adresine posta alımı bir yönetici tarafından durduruldu",
+          "nameFreed": "{{oldName}} başkalarına açıldı",
           "other": "Girişinizde bir değişiklik"
         }
       },

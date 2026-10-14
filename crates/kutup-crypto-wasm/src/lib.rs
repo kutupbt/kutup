@@ -4042,3 +4042,12 @@ pub fn verify_account_rename_chain(
 pub fn fold_name(name: &str) -> String {
     kutup_crypto::names::fold(name)
 }
+
+/// The folded form of `local@domain` (`kutup_crypto::names::fold_address`):
+/// the local part folded, the domain lowercase; `undefined` for a string
+/// that is not an address. Every comparison of an address with a saved one
+/// uses it.
+#[wasm_bindgen(js_name = foldAddress)]
+pub fn fold_address(address: &str) -> Option<String> {
+    kutup_crypto::names::fold_address(address)
+}
