@@ -13,6 +13,7 @@ import { Mono } from '@kutup/ui/components/mono'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useDisableTotp, useStartTotp, useVerifyTotp, type TotpEnrolment } from './api'
+import { ChangePasswordSection } from './ChangePasswordSection'
 
 function CodeField({
   label,
@@ -175,6 +176,8 @@ export function SecurityPage() {
           </CardContent>
         </Card>
       </Section>
+
+      <ChangePasswordSection />
 
       <Section title={t('settings.security.recovery')} description={t('settings.security.recoveryDescription')}>
         <Alert>{t('settings.security.recoveryNote')}</Alert>

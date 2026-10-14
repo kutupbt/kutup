@@ -92,7 +92,9 @@ const api = axios.create({
 api.interceptors.request.use(async (config) => {
   config.baseURL = await resolveApiBase()
   const token = getAccessToken()
-  if (token) {
+  // A request that names its own credential (an administrator-made account's
+  // setup token) keeps it.
+  if (token && !config.headers.Authorization) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config

@@ -34,6 +34,7 @@ import {
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
 import { MailSendingCard } from './MailSending'
 import { UserStatus } from './UsersPage'
+import { ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
 
 function ActionRow({ title, description, action }: { title: string; description: string; action: ReactNode }) {
   return (
@@ -145,6 +146,13 @@ function SignedUpWithFact({ userId }: { userId: string }) {
   )
 }
 
+/** What to say when proving the administrator's password failed, or the action itself. */
+function reauthFailure(error: unknown, t: ReturnType<typeof useTranslation>['t']): string {
+  if (error instanceof WrongPasswordError) return t('admin.user.wrongAdminPassword')
+  if (error instanceof ReauthLockedError) return t(error.reason === 'rateLimited' ? 'admin.user.adminSlowDown' : 'admin.user.adminLocked')
+  return t('admin.user.actionFailed')
+}
+
 export function UserPage() {
   const { t, i18n } = useTranslation()
   const { id = '' } = useParams()
@@ -223,8 +231,9 @@ export function UserPage() {
             title={t('admin.user.rotateTitle')}
             description={t('admin.user.rotateDescription', { name: user.username })}
             submit={t('admin.user.rotate')}
-            pending={rotate.isPending} error={rotate.error} errorFallback={t('admin.user.actionFailed')}
-            onConfirm={() => rotate.mutate({ id: user.id, tempPassword: pending.password }, {
+            passwordLabel={t('admin.user.yourPassword')}
+            pending={rotate.isPending} error={rotate.error} errorFallback={reauthFailure(rotate.error, t)}
+            onConfirm={(adminPassword) => rotate.mutate({ id: user.id, tempPassword: pending.password, adminPassword }, {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )
@@ -236,8 +245,9 @@ export function UserPage() {
             warning={t('admin.user.wipeWarning')}
             confirmPhrase={user.username}
             submit={t('admin.user.wipe')}
-            pending={wipe.isPending} error={wipe.error} errorFallback={t('admin.user.actionFailed')}
-            onConfirm={() => wipe.mutate({ id: user.id, tempPassword: pending.password }, {
+            passwordLabel={t('admin.user.yourPassword')}
+            pending={wipe.isPending} error={wipe.error} errorFallback={reauthFailure(wipe.error, t)}
+            onConfirm={(adminPassword) => wipe.mutate({ id: user.id, tempPassword: pending.password, adminPassword }, {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )

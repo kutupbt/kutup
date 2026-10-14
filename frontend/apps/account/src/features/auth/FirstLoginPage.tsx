@@ -23,6 +23,7 @@ export function FirstLoginPage() {
       title={t('firstLogin.title')}
       description={t('firstLogin.description', { name: setup.name })}
       account={() => setup.name}
+      setupToken={setup.setupToken}
       onKeysConfirmed={async (keys) => {
         await completeSetup(setup, keys)
         setPendingSetup(null)

@@ -220,6 +220,52 @@ pins, and the next setup starts a new incarnation. OPAQUE keeps that:
   the client half itself at startup: the only place the server ever sees a
   password. That is already true today.
 
+**Addendum: every flow, end to end** (the cases the table above leaves open):
+
+- **Second factor and setup:** `login/finish` (purpose `session`) answers one of three:
+  - the session: `{ …the session, keyBinding, masterKeyEnvelope, drivePrivateKeyEnvelope, publicKey }`;
+  - `{ requiresTotp: true, preAuthToken }`;
+  - `{ requiresSetup: true, setupToken, username }`.
+  `POST /api/auth/login/2fa { preAuthToken, code }` then answers the session with
+  the envelopes, as today. The client keeps the export key in its worker across
+  that step and never re-derives it.
+- **Sign-up returns the session.** `POST /api/auth/register` answers the same
+  session as `login/finish`. The client created the master key itself and holds
+  the export key, so a second OPAQUE run (another Argon2) after registering is
+  pointless.
+- **Admin-created accounts (first sign-in):** the user signs in with the temporary
+  password and gets `requiresSetup`. With the setup token as its grant
+  (`Authorization: Bearer <setupToken>`), the client runs `register/start` for the
+  new key binding it draws. Then `POST /api/auth/complete-setup` carries
+  `{ …the keys, keyBinding, opaqueRecord, opaqueServerKeyId, masterKeyEnvelope }`
+  and answers the session.
+- **Recovery:**
+  - `GET /api/auth/recover/preflight` (unchanged) gives the recovery envelope and
+    the key binding.
+  - `POST /api/auth/recover/grant { name, recoveryProof }` answers
+    `{ grant }` (purpose `recovery`, bound to that account, with no session).
+  - Then `register/start` and `register/finish` with that grant. `finish`
+    replaces the record and the password envelope, and ends every session of
+    the account.
+- **Pass:** the PIN set and remove endpoints take `{ grant }` (purpose `pass`)
+  instead of `loginKey`.
+- **Reauth:** `verifyAccountPassword` becomes login/start and login/finish with
+  `purpose: "reauth"`. A grant means right, `401` means wrong; lockout is as at
+  sign-in.
+- **Admin resets and temporary passwords:**
+  - The admin first reauthenticates (`purpose: "reauth"`, then a grant of purpose
+    `adminReset` for the target, `POST /api/admin/users/:id/reset-grant { grant }`
+    → `{ grant: adminResetGrant }`).
+  - The admin's client then draws the target's new key binding and runs
+    `register/start` with that grant.
+  - The reset or temporary-password endpoint takes `{ grant, keyBinding,
+    opaqueRecord, opaqueServerKeyId }`.
+
+**Why `register/start` needs a grant even though it returns no envelope:** each
+call is one oracle query on that account's OPRF key, so it is limited like
+`login/start`. A new key binding (sign-up) is the only grant-free case, limited
+by the sign-up limits.
+
 **Renames:**
 - **Signing in by an old name during the hold** is refused: the old name is only a
   mail alias then. The answer is the same fake as an unknown name.

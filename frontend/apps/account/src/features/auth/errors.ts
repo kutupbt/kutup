@@ -1,5 +1,6 @@
 import type { useTranslation } from 'react-i18next'
 import { isAxiosError } from 'axios'
+import { OpaqueAuthFailed } from '@kutup/crypto/opaqueWorker'
 import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
 
@@ -13,6 +14,8 @@ type TFunction = ReturnType<typeof useTranslation>['t']
  */
 export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: string): string {
   if (error instanceof KeyBindingMismatchError) return t('auth.errors.keysChanged')
+  // A wrong password fails in this browser (OPAQUE), before the server answers.
+  if (error instanceof OpaqueAuthFailed) return t(fallbackKey)
   const code = apiErrorCode(error)
   if (code === 'too_many_requests') {
     // The address's limiter (a minute) or the account's lockout (a while).

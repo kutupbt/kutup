@@ -26,14 +26,6 @@ export interface CryptoWasmModule {
     purpose: number,
     profile: string,
   ): string
-  deriveAccountProtectionKeys(
-    password: string,
-    saltBase64: string,
-    suite: number,
-    memoryKib: number,
-    iterations: number,
-    parallelism: number,
-  ): { keyEncryptionKey: string; loginKey: string }
   deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
   deriveAccountIdentityKeys(masterKeyBase64: string): {
     authorityPublicKey: string
@@ -96,6 +88,8 @@ export interface CryptoWasmModule {
   inspectAccountEnvelope(envelopeBase64: string): number
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
   AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
+  OpaqueLogin: { start(password: string): OpaqueLoginHandle }
+  OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
   generateMailGroupKey(
     groupAddress: string,
     createdAtSecs: number,
@@ -602,6 +596,22 @@ export interface AccountHeadKeysHandle {
   first(writer: string, scopesJson: string): string
   committed(sealedBase64: string): unknown
   verifiedHead(): unknown
+  free(): void
+}
+
+/** OPAQUE sign-in in progress (Rust `kutup_crypto::opaque`); the state stays in WASM. */
+export interface OpaqueLoginHandle {
+  readonly request: string
+  finish(responseBase64: string): string
+  openMasterKey(envelope: string, keyBinding: string): string
+  free(): void
+}
+
+/** OPAQUE registration in progress (Rust `kutup_crypto::opaque`); the state stays in WASM. */
+export interface OpaqueRegistrationHandle {
+  readonly request: string
+  finish(responseBase64: string): string
+  sealMasterKey(masterKeyBase64: string, keyBinding: string): string
   free(): void
 }
 

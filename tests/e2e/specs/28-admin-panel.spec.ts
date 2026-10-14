@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { ADMIN_USERNAME, appUrl, newAccount, registerAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
+import { ADMIN_PASSWORD, ADMIN_USERNAME, appUrl, newAccount, registerAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 
 test.describe.serial('administration', () => {
   let context: BrowserContext
@@ -37,7 +37,7 @@ test.describe.serial('administration', () => {
     const dialog = page.getByRole('alertdialog')
     if (phrase) {
       await expect(dialog.getByRole('button', { name: submit, exact: true })).toBeDisabled()
-      await dialog.getByRole('textbox').fill(phrase)
+      await dialog.getByLabel(`Type ${phrase} to confirm`).fill(phrase)
     }
     await dialog.getByRole('button', { name: submit, exact: true }).click()
     await expect(dialog).toBeHidden({ timeout: 15_000 })
@@ -82,7 +82,12 @@ test.describe.serial('administration', () => {
     const name = await createUser('e2erotate')
     await openUser(name)
     await page.getByRole('button', { name: 'New temporary password', exact: true }).click()
-    await confirm('New temporary password')
+    // The administrator proves their own password first: a wrong one is refused.
+    const dialog = page.getByRole('alertdialog')
+    await dialog.getByLabel('Your own password, to confirm it is you').fill('not-the-admin-password')
+    await submitThroughRateLimit(page, 'New temporary password', dialog.getByText('Your password is not right.'))
+    await dialog.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD)
+    await submitThroughRateLimit(page, 'New temporary password', page.getByRole('button', { name: 'Copy' }).first())
     await expect(page.getByRole('button', { name: 'Copy' }).first()).toBeVisible({ timeout: 15_000 })
     await page.goto(appUrl('account', '/admin/activity'))
     await expect(page.getByText(/replaced the temporary password of/).first()).toBeVisible({ timeout: 15_000 })
@@ -102,9 +107,12 @@ test.describe.serial('administration', () => {
 
     await openUser(person.username)
     await page.getByRole('button', { name: 'Wipe account', exact: true }).click()
-    await confirm('Wipe account', person.username)
+    const dialog = page.getByRole('alertdialog')
+    await dialog.getByLabel(`Type ${person.username} to confirm`).fill(person.username)
+    await dialog.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD)
     const copy = page.getByRole('button', { name: 'Copy' }).first()
-    await expect(copy).toBeVisible({ timeout: 15_000 })
+    // Through the edge's sign-in limit: proving the password is an attempt.
+    await submitThroughRateLimit(page, 'Wipe account', copy)
     const temporary = (await copy.locator('xpath=preceding-sibling::*[1]').textContent())?.trim()
     expect(temporary).toBeTruthy()
     await page.goto(appUrl('account', '/admin/activity'))
@@ -138,7 +146,8 @@ test.describe.serial('administration', () => {
   test('server settings open for the administrator', async () => {
     await page.goto(appUrl('account', '/admin/settings'))
     await expect(page.getByRole('heading', { name: 'Server settings' })).toBeVisible()
-    await expect(page.getByText('Open registration').first()).toBeVisible()
+    // Who may register: a mode, not a switch (docs/plans/registration-codes.md).
+    await expect(page.getByRole('combobox', { name: 'Registration' })).toBeVisible()
   })
 
   test('the default storage quota is what new accounts get', async ({ browser }) => {

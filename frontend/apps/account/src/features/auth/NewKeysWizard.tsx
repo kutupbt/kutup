@@ -30,6 +30,7 @@ export function NewKeysWizard({
   account,
   leadingFields,
   validateLeading,
+  setupToken,
   onKeysConfirmed,
 }: {
   title: string
@@ -40,6 +41,8 @@ export function NewKeysWizard({
   leadingFields?: ReactNode
   /** Validate the leading fields; false keeps the user on the first step. */
   validateLeading?: () => Promise<boolean>
+  /** An administrator-created account's first sign-in: what allows registering its password. */
+  setupToken?: string
   onKeysConfirmed: (keys: AccountKeys) => Promise<void>
 }) {
   const { t } = useTranslation()
@@ -78,7 +81,7 @@ export function NewKeysWizard({
     setError(null)
     setStep('generating')
     try {
-      setKeys(await generateAccountKeys(password))
+      setKeys(await generateAccountKeys(password, setupToken))
       setStep('phrase')
     } catch {
       setError(t('auth.errors.keyGenerationFailed'))

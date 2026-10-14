@@ -13,7 +13,7 @@ import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
 import { authErrorMessage } from './errors'
-import { completeTotp, signIn, type TotpChallenge } from './flows'
+import { abandonTotp, completeTotp, signIn, type TotpChallenge } from './flows'
 import { setPendingSetup } from './pendingSetup'
 
 /**
@@ -113,7 +113,7 @@ export function LoginPage() {
             variant="link"
             className="w-full"
             onClick={() => {
-              challenge.keyEncryptionKey.fill(0)
+              abandonTotp(challenge)
               setChallenge(null)
               setCode('')
               setError(null)

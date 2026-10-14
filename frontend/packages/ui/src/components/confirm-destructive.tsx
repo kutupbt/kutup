@@ -28,6 +28,8 @@ import { apiErrorMessage } from '../lib/apiError'
  * - `blocked` renders the obstacle and disables the submit from one prop.
  * - `confirmPhrase` (for what cannot be undone: wiping or deleting an
  *   account) asks for that exact text to be typed before the submit enables.
+ * - `passwordLabel` asks for the signed-in person's own password (an act the
+ *   server allows only after proving it again); `onConfirm` receives it.
  *
  * If success unmounts the caller, confirm with `mutateAsync` so the
  * continuation (a redirect, a toast) survives the unmount.
@@ -50,7 +52,9 @@ export interface ConfirmDestructiveProps {
   errorFallback: string
   /** When set, this exact text must be typed to enable the submit. */
   confirmPhrase?: string
-  onConfirm: () => void
+  /** When set, the person's own password is asked for (labelled so) and passed to `onConfirm`. */
+  passwordLabel?: string
+  onConfirm: (password: string) => void
 }
 
 export function ConfirmDestructive({
@@ -66,19 +70,26 @@ export function ConfirmDestructive({
   error,
   errorFallback,
   confirmPhrase,
+  passwordLabel,
   onConfirm,
 }: ConfirmDestructiveProps) {
   const { t } = useTranslation()
   const phraseId = useId()
+  const passwordId = useId()
   const [typed, setTyped] = useState('')
+  const [password, setPassword] = useState('')
   useEffect(() => {
-    if (!open) setTyped('')
+    if (!open) {
+      setTyped('')
+      setPassword('')
+    }
   }, [open])
   const phraseMissing = confirmPhrase !== undefined && typed.trim() !== confirmPhrase
+  const passwordMissing = passwordLabel !== undefined && password === ''
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!blocked && !pending && !phraseMissing) onConfirm()
+    if (!blocked && !pending && !phraseMissing && !passwordMissing) onConfirm(password)
   }
 
   return (
@@ -115,9 +126,21 @@ export function ConfirmDestructive({
               />
             </div>
           ) : null}
+          {passwordLabel !== undefined ? (
+            <div className="space-y-1.5">
+              <Label htmlFor={passwordId}>{passwordLabel}</Label>
+              <Input
+                id={passwordId}
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
-            <Button type="submit" variant="destructive" loading={pending} disabled={!!blocked || phraseMissing}>
+            <Button type="submit" variant="destructive" loading={pending} disabled={!!blocked || phraseMissing || passwordMissing}>
               {submit}
             </Button>
           </AlertDialogFooter>

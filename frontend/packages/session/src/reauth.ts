@@ -1,22 +1,14 @@
 // Checking the account password in a signed-in app (Kutup Pass's lock,
-// docs/plans/pass.md), the way sign-in checks it: the login key derived from
-// the typed password (Argon2id in a worker, with the account's public
-// preflight parameters) is verified by the server against its hash, under
-// the sign-in lockout and rate limit. Nothing secret comes back.
+// docs/plans/pass.md; a password change; an administrator's reset), the way
+// sign-in checks it: OPAQUE (docs/plans/opaque.md), under the sign-in lockout
+// and rate limit. A right password earns a grant: one use, a few minutes,
+// bound to this session and to what it was asked for. The password never
+// leaves the browser.
 
 import { isAxiosError } from 'axios'
-import { toBase64 } from '@kutup/crypto/base64'
-import { deriveAccountProtectionInWorker } from '@kutup/crypto/accountProtectionWorker'
-import api from './client'
+import { OpaqueAuthFailed } from '@kutup/crypto/opaqueWorker'
+import { opaqueLogin, type GrantPurpose } from './opaque'
 import { getSession } from './store'
-
-interface Preflight {
-  accountProtectionSuite: number
-  accountProtectionSalt: string
-  argonMemoryKib: number
-  argonIterations: number
-  argonParallelism: number
-}
 
 /**
  * The server holds the check back: `accountLocked` after too many wrong
@@ -37,27 +29,33 @@ export function lockedErrorFrom(error: unknown): ReauthLockedError | null {
   return new ReauthLockedError(code === 'rateLimited' ? 'rateLimited' : 'accountLocked')
 }
 
+/** The password is not the account's. */
+export class WrongPasswordError extends Error {
+  constructor() {
+    super('the password is not right')
+    this.name = 'WrongPasswordError'
+  }
+}
+
 /**
- * The signed-in account's login key for `password` (base64), derived as
- * sign-in derives it, for the server to check: the re-check below, and
- * setting or removing Kutup Pass's PIN.
+ * A grant for `purpose`, for the signed-in account's `password`. Throws
+ * {@link WrongPasswordError} for a wrong password, {@link ReauthLockedError}
+ * during the lockout, and the request's error when Kutup cannot be reached.
  */
-export async function accountLoginKey(password: string): Promise<string> {
+export async function accountGrant(password: string, purpose: GrantPurpose): Promise<string> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  const { data } = await api.get<Preflight>('/auth/login/preflight', { params: { name: session.username ?? session.address } })
-  const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(password, {
-    suite: data.accountProtectionSuite,
-    salt: data.accountProtectionSalt,
-    memoryKib: data.argonMemoryKib,
-    iterations: data.argonIterations,
-    parallelism: data.argonParallelism,
-  })
-  keyEncryptionKey.fill(0)
   try {
-    return toBase64(loginKey)
-  } finally {
-    loginKey.fill(0)
+    const { data, signIn } = await opaqueLogin<{ grant: string }>(session.username ?? session.address, password, {
+      purpose: 'reauth',
+      for: purpose,
+    })
+    signIn.close()
+    return data.grant
+  } catch (error) {
+    if (error instanceof OpaqueAuthFailed) throw new WrongPasswordError()
+    if (isAxiosError(error) && error.response?.status === 401) throw new WrongPasswordError()
+    throw lockedErrorFrom(error) ?? error
   }
 }
 
@@ -68,12 +66,11 @@ export async function accountLoginKey(password: string): Promise<string> {
  */
 export async function verifyAccountPassword(password: string): Promise<boolean> {
   if (!getSession() || !password) return false
-  const loginKey = await accountLoginKey(password)
   try {
-    await api.post('/user/reauth', { loginKey })
+    await accountGrant(password, 'pass')
     return true
   } catch (error) {
-    if (isAxiosError(error) && error.response?.status === 401) return false
-    throw lockedErrorFrom(error) ?? error
+    if (error instanceof WrongPasswordError) return false
+    throw error
   }
 }

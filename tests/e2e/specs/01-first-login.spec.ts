@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ADMIN_USERNAME, appUrl, finishNewKeys, newAccount, signInAsAdmin } from '../fixtures/apps'
+import { ADMIN_USERNAME, appUrl, finishNewKeys, newAccount, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*FirstLoginPassword'
 
@@ -25,8 +25,8 @@ test('an account an administrator created finishes setup at its first sign-in', 
   await page.goto(appUrl('account', '/login'))
   await page.getByLabel('Username', { exact: true }).fill(person.username)
   await page.getByLabel('Password', { exact: true }).fill(temporary!)
-  await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Finish setting up your account' })).toBeVisible({ timeout: 60_000 })
+  // Through the edge's sign-in limit, as every sign-in of the suite.
+  await submitThroughRateLimit(page, 'Sign in', page.getByRole('heading', { name: 'Finish setting up your account' }))
   await finishNewKeys(page, PASSWORD)
 
   // The temporary password is spent; their own password signs them in.
@@ -39,9 +39,9 @@ test('an account an administrator created finishes setup at its first sign-in', 
     await page.goto(appUrl('account', '/login'))
     await page.getByLabel('Username', { exact: true }).fill(person.username)
     await page.getByLabel('Password', { exact: true }).fill(password)
-    await page.getByRole('button', { name: 'Sign in' }).click()
-    if (outcome === 'Welcome') await expect(page.getByRole('heading', { name: /^Welcome/ })).toBeVisible({ timeout: 60_000 })
-    else await expect(page.getByRole('alert').filter({ hasText: outcome })).toBeVisible({ timeout: 60_000 })
+    const done =
+      outcome === 'Welcome' ? page.getByRole('heading', { name: /^Welcome/ }) : page.getByRole('alert').filter({ hasText: outcome })
+    await submitThroughRateLimit(page, 'Sign in', done)
   }
 
   // Drive opens as the person, with an empty My files.
@@ -57,9 +57,8 @@ test('sign-in refuses a wrong password and an unknown name alike', async ({ brow
     await page.goto(appUrl('account', '/login'))
     await page.getByLabel('Username', { exact: true }).fill(name)
     await page.getByLabel('Password', { exact: true }).fill('Not*TheRightPassword123')
-    await page.getByRole('button', { name: 'Sign in' }).click()
     // The same message either way: sign-in does not reveal which accounts exist.
-    await expect(page.getByRole('alert').filter({ hasText: 'Sign-in failed. Check your username and password.' })).toBeVisible({ timeout: 60_000 })
+    await submitThroughRateLimit(page, 'Sign in', page.getByRole('alert').filter({ hasText: 'Sign-in failed. Check your username and password.' }))
     await expect(page).toHaveURL(/\/login/)
   }
   await context.close()
