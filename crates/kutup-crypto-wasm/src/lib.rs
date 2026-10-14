@@ -3653,6 +3653,15 @@ impl AccountHeadKeys {
         js_json(&state)
     }
 
+    /// The server has no head at all and the person confirmed going on with
+    /// its data: the state's anchor is dropped, and logged.
+    #[wasm_bindgen(js_name = forgottenLocalState)]
+    pub fn forgotten_local_state(&self, state_json: &str, at_ms: f64) -> Result<JsValue, JsValue> {
+        let mut state = local_state_arg(state_json, &self.incarnation_id)?;
+        state.forgotten(at_ms as u64);
+        js_json(&state)
+    }
+
     /// This device's writer tag in the heads it writes (hex).
     pub fn writer(&self, device_id: &str) -> Result<String, JsValue> {
         self.keys.writer(device_id).map_err(head_err)

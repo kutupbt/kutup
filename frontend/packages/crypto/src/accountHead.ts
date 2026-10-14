@@ -46,6 +46,25 @@ export interface Reanchored {
   atMs: number
 }
 
+/** Something a device notes about its anchor, newest last. */
+export type LocalHeadEvent =
+  | { kind: 'startedFresh'; anchor: HeadAnchor; atMs: number }
+  | { kind: 'reanchored'; record: Reanchored }
+  | { kind: 'forgotten'; from: HeadAnchor; atMs: number }
+
+/**
+ * What this device keeps for the account's current incarnation (Rust
+ * `LocalHeadStateV1`): its anchor, its device id, and its log.
+ */
+export interface LocalHeadState {
+  incarnationId: string
+  deviceId: string
+  anchor: HeadAnchor | null
+  /** When the anchor last changed (Unix ms; 0: never). */
+  anchoredAtMs: number
+  log: LocalHeadEvent[]
+}
+
 /** A scope's index, as the server lists it: value ids and their revisions. */
 export type HeadIndex = ReadonlyArray<readonly [string, number]>
 
@@ -105,6 +124,40 @@ export class AccountHead {
 
   verifiedHead(): AccountHeadValue | null {
     return this.handle.verifiedHead() as AccountHeadValue | null
+  }
+
+  /** The name this device stores its state under: one per account and incarnation. */
+  localStateName(): string {
+    return this.handle.localStateName()
+  }
+
+  /** A device's state before it has seen any head, with a new random device id. */
+  newLocalState(): LocalHeadState {
+    return this.handle.newLocalState() as LocalHeadState
+  }
+
+  /** Opens this device's stored state; throws when it does not open (then start fresh). */
+  openLocalState(sealed: string): LocalHeadState {
+    return this.handle.openLocalState(sealed) as LocalHeadState
+  }
+
+  sealLocalState(state: LocalHeadState): string {
+    return this.handle.sealLocalState(JSON.stringify(state))
+  }
+
+  /** Moves the anchor to this page's verified head, never back. */
+  advanceLocalState(state: LocalHeadState, atMs: number): { state: LocalHeadState; changed: boolean } {
+    return this.handle.advanceLocalState(JSON.stringify(state), atMs) as { state: LocalHeadState; changed: boolean }
+  }
+
+  /** After `reanchor`: the anchor moves to its head, and the record is logged. */
+  reanchoredLocalState(state: LocalHeadState, record: Reanchored): LocalHeadState {
+    return this.handle.reanchoredLocalState(JSON.stringify(state), JSON.stringify(record)) as LocalHeadState
+  }
+
+  /** The server has no head at all and the person confirmed going on: the anchor is dropped, logged. */
+  forgottenLocalState(state: LocalHeadState, atMs: number): LocalHeadState {
+    return this.handle.forgottenLocalState(JSON.stringify(state), atMs) as LocalHeadState
   }
 
   close(): void {

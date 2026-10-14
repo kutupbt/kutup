@@ -594,6 +594,13 @@ export interface AccountHeadKeysHandle {
   first(writer: string, scopesJson: string): string
   committed(sealedBase64: string): unknown
   verifiedHead(): unknown
+  localStateName(): string
+  newLocalState(): unknown
+  openLocalState(sealedBase64: string): unknown
+  sealLocalState(stateJson: string): string
+  advanceLocalState(stateJson: string, atMs: number): unknown
+  reanchoredLocalState(stateJson: string, recordJson: string): unknown
+  forgottenLocalState(stateJson: string, atMs: number): unknown
   free(): void
 }
 

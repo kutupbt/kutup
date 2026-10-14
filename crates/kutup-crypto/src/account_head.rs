@@ -701,6 +701,11 @@ pub enum LocalHeadEvent {
     /// The device moved to another history ([`reanchor`]).
     #[serde(rename_all = "camelCase")]
     Reanchored { record: Reanchored },
+    /// The server showed no head at all though the device remembered one (a
+    /// restore from before the first head), and the person chose to go on
+    /// with the server's data: the anchor was dropped.
+    #[serde(rename_all = "camelCase")]
+    Forgotten { from: Anchor, at_ms: u64 },
 }
 
 /// What one device keeps for one account incarnation: its anchor (the
@@ -785,6 +790,19 @@ impl LocalHeadStateV1 {
                 true
             }
         }
+    }
+
+    /// The server has no head at all, this device remembered one, and the
+    /// person confirmed going on with the server's data: the anchor is
+    /// dropped and logged, and the next head is trusted on first use. Returns
+    /// whether there was an anchor to drop.
+    pub fn forgotten(&mut self, at_ms: u64) -> bool {
+        let Some(from) = self.anchor.take() else {
+            return false;
+        };
+        self.anchored_at_ms = at_ms;
+        self.note(LocalHeadEvent::Forgotten { from, at_ms });
+        true
     }
 
     /// After [`reanchor`]: the anchor moves to the new head, back or sideways
@@ -1290,6 +1308,15 @@ mod tests {
         assert!(
             matches!(state.log.last(), Some(LocalHeadEvent::Reanchored { record }) if record.at_ms == 100 + LOCAL_LOG_LEN as u64 + 4)
         );
+        // A server with no head at all: dropped only on the person's word, logged.
+        let mut gone = state.clone();
+        assert!(gone.forgotten(50));
+        assert_eq!(gone.anchor, None);
+        assert!(matches!(
+            gone.log.last(),
+            Some(LocalHeadEvent::Forgotten { at_ms: 50, .. })
+        ));
+        assert!(!gone.forgotten(60));
         let sealed_state = seal_local_state(&keys, BINDING, &state).unwrap();
         assert_eq!(
             open_local_state(&keys, BINDING, INCARNATION, &sealed_state).unwrap(),
