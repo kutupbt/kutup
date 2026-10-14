@@ -7,6 +7,7 @@
 
 import { isAxiosError } from 'axios'
 import { OpaqueAuthFailed } from '@kutup/crypto/opaqueWorker'
+import { endSession, freshAccessToken, refreshOrEnd } from './client'
 import { opaqueLogin, type GrantPurpose } from './opaque'
 import { getSession } from './store'
 
@@ -68,21 +69,46 @@ export class OneUseSecret {
 async function reauthenticate<T>(password: string, purpose: GrantPurpose | 'verify'): Promise<T> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  try {
+  const once = async () => {
     const { data, signIn } = await opaqueLogin<T>(session.username ?? session.address, password, {
       purpose: 'reauth',
       for: purpose,
     })
     signIn.close()
     return data
+  }
+  try {
+    // The check spans two requests and the server keeps its state between
+    // them: start with a token that will last (auth calls are never
+    // refreshed and retried, client.ts).
+    await freshTokenOrEnd()
+    try {
+      return await once()
+    } catch (error) {
+      // The token ran out anyway (not a refused password): a new one, and the
+      // whole check again from its start; a finish is never sent twice.
+      if (!isAxiosError(error) || error.response?.status !== 401 || bodyCode(error) === 'invalidCredentials') throw error
+      await refreshOrEnd()
+      return await once()
+    }
   } catch (error) {
     if (error instanceof OpaqueAuthFailed) throw new WrongPasswordError()
     // Only a refused password is a wrong one; any other 401 is the sign-in
-    // ending (the client has sent it to sign in again), thrown as it is.
+    // ending (the session was ended above), thrown as it is.
     if (isAxiosError(error) && error.response?.status === 401 && bodyCode(error) === 'invalidCredentials') {
       throw new WrongPasswordError()
     }
     throw lockedErrorFrom(error) ?? error
+  }
+}
+
+/** The access token, rotated first when it is about to run out; the session ends if it cannot be. */
+async function freshTokenOrEnd(): Promise<void> {
+  try {
+    await freshAccessToken()
+  } catch (error) {
+    endSession()
+    throw error
   }
 }
 

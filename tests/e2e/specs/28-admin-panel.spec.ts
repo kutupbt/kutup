@@ -84,10 +84,11 @@ test.describe.serial('administration', () => {
     await page.getByRole('button', { name: 'New temporary password', exact: true }).click()
     // The administrator proves their own password first: a wrong one is refused.
     const dialog = page.getByRole('alertdialog')
-    await dialog.getByLabel('Your own password, to confirm it is you').fill('not-the-admin-password')
-    await submitThroughRateLimit(page, 'New temporary password', dialog.getByText('Your password is not right.'))
-    await dialog.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD)
-    await submitThroughRateLimit(page, 'New temporary password', page.getByRole('button', { name: 'Copy' }).first())
+    // The password is cleared after each attempt, so each try types it.
+    const ownPassword = (value: string) => () => dialog.getByLabel('Your own password, to confirm it is you').fill(value)
+    await submitThroughRateLimit(page, 'New temporary password', dialog.getByText('Your password is not right.'), ownPassword('not-the-admin-password'))
+    await expect(dialog.getByLabel('Your own password, to confirm it is you')).toHaveValue('')
+    await submitThroughRateLimit(page, 'New temporary password', page.getByRole('button', { name: 'Copy' }).first(), ownPassword(ADMIN_PASSWORD))
     await expect(page.getByRole('button', { name: 'Copy' }).first()).toBeVisible({ timeout: 15_000 })
     await page.goto(appUrl('account', '/admin/activity'))
     await expect(page.getByText(/replaced the temporary password of/).first()).toBeVisible({ timeout: 15_000 })
@@ -109,10 +110,11 @@ test.describe.serial('administration', () => {
     await page.getByRole('button', { name: 'Wipe account', exact: true }).click()
     const dialog = page.getByRole('alertdialog')
     await dialog.getByLabel(`Type ${person.username} to confirm`).fill(person.username)
-    await dialog.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD)
     const copy = page.getByRole('button', { name: 'Copy' }).first()
     // Through the edge's sign-in limit: proving the password is an attempt.
-    await submitThroughRateLimit(page, 'Wipe account', copy)
+    await submitThroughRateLimit(page, 'Wipe account', copy, () =>
+      dialog.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD),
+    )
     const temporary = (await copy.locator('xpath=preceding-sibling::*[1]').textContent())?.trim()
     expect(temporary).toBeTruthy()
     await page.goto(appUrl('account', '/admin/activity'))

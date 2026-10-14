@@ -26,6 +26,7 @@ export type OpaqueWorkerResponse =
   | { type: 'finished'; message: string }
   | { type: 'masterKey'; masterKey: string }
   | { type: 'sealed'; envelope: string }
+  | { type: 'ready' }
   | { type: 'closed' }
   | { type: 'error'; message: string; authFailed: boolean }
 
@@ -97,3 +98,6 @@ self.onmessage = async (event: MessageEvent<OpaqueWorkerRequest>) => {
   }
   if (event.data.type === 'close') self.close()
 }
+
+// Loaded (this module and its imports): the page may start sending.
+self.postMessage({ type: 'ready' } satisfies OpaqueWorkerResponse)

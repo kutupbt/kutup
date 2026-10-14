@@ -89,7 +89,11 @@ export function ConfirmDestructive({
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
-    if (!blocked && !pending && !phraseMissing && !passwordMissing) onConfirm(password)
+    if (blocked || pending || phraseMissing || passwordMissing) return
+    onConfirm(password)
+    // Handed over once: a failed attempt (or a retry) asks for it again, and
+    // the dialog does not keep it meanwhile.
+    setPassword('')
   }
 
   return (

@@ -3,6 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const opaqueLogin = vi.hoisted(() => vi.fn())
 vi.mock('./opaque', () => ({ opaqueLogin }))
+const client = vi.hoisted(() => ({
+  freshAccessToken: vi.fn(() => Promise.resolve('token')),
+  refreshOrEnd: vi.fn(() => Promise.resolve('fresh')),
+  endSession: vi.fn(),
+}))
+vi.mock('./client', () => client)
 vi.mock('./store', () => ({ getSession: () => ({ username: 'alice', address: 'alice@kutup.dev' }) }))
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ OpaqueAuthFailed: class OpaqueAuthFailed extends Error {} }))
 
@@ -14,7 +20,10 @@ function refused(status: number, code?: string): AxiosError {
   return new AxiosError('refused', String(status), undefined, undefined, response)
 }
 
-beforeEach(() => opaqueLogin.mockReset())
+beforeEach(() => {
+  opaqueLogin.mockReset()
+  for (const fn of Object.values(client)) fn.mockClear()
+})
 
 describe('accountGrant', () => {
   it('returns the grant and closes the sign-in', async () => {
@@ -32,10 +41,42 @@ describe('accountGrant', () => {
     await expect(accountGrant('pw', 'pass')).rejects.toBeInstanceOf(WrongPasswordError)
   })
 
-  it('an ended sign-in is not a wrong password', async () => {
+  it('starts with a token that will last', async () => {
+    opaqueLogin.mockResolvedValue({ data: { grant: 'g' }, signIn: { close: vi.fn() } })
+    await accountGrant('pw', 'pass')
+    expect(client.freshAccessToken.mock.invocationCallOrder[0]).toBeLessThan(opaqueLogin.mock.invocationCallOrder[0]!)
+  })
+
+  it('a token that ran out midway: refreshed, and the whole check run again from its start', async () => {
+    opaqueLogin.mockRejectedValueOnce(refused(401)).mockResolvedValueOnce({ data: { grant: 'g' }, signIn: { close: vi.fn() } })
+    await expect(accountGrant('pw', 'pass')).resolves.toBe('g')
+    expect(client.refreshOrEnd).toHaveBeenCalledTimes(1)
+    expect(opaqueLogin).toHaveBeenCalledTimes(2)
+  })
+
+  it('an ended sign-in is not a wrong password, and is tried again only once', async () => {
     const expired = refused(401)
-    opaqueLogin.mockRejectedValueOnce(expired)
+    opaqueLogin.mockRejectedValue(expired)
     await expect(accountGrant('pw', 'pass')).rejects.toBe(expired)
+    expect(opaqueLogin).toHaveBeenCalledTimes(2)
+    client.refreshOrEnd.mockRejectedValueOnce(new Error('session gone'))
+    opaqueLogin.mockClear()
+    await expect(accountGrant('pw', 'pass')).rejects.toThrow('session gone')
+    expect(opaqueLogin).toHaveBeenCalledTimes(1)
+  })
+
+  it('a wrong password is not retried', async () => {
+    opaqueLogin.mockRejectedValue(refused(401, 'invalidCredentials'))
+    await expect(accountGrant('pw', 'pass')).rejects.toBeInstanceOf(WrongPasswordError)
+    expect(opaqueLogin).toHaveBeenCalledTimes(1)
+    expect(client.refreshOrEnd).not.toHaveBeenCalled()
+  })
+
+  it('no token to be had: the session ends before any attempt', async () => {
+    client.freshAccessToken.mockRejectedValueOnce(new Error('revoked'))
+    await expect(accountGrant('pw', 'pass')).rejects.toThrow('revoked')
+    expect(client.endSession).toHaveBeenCalled()
+    expect(opaqueLogin).not.toHaveBeenCalled()
   })
 
   it('the lockout and the rate limit', async () => {

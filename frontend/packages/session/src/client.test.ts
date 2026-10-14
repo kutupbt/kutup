@@ -156,6 +156,36 @@ describe('api/client — 401 refresh chain', () => {
     expect(calls.filter((c) => c.url?.endsWith('/user/reauth'))).toHaveLength(1)
   })
 
+  it('never refreshes for an auth call, even with a session: a setup token that ran out', async () => {
+    seedAuth('another-accounts-token')
+    responses[route('POST /auth/opaque/register/start')] = [
+      { status: 401, data: { error: 'invalid token', code: 'setupTokenInvalid' } },
+    ]
+    let ended = 0
+    setUnauthenticatedHandler(() => { ended += 1 })
+    await expect(api.post('/auth/opaque/register/start', {}, { headers: { Authorization: 'Bearer setup' } })).rejects.toMatchObject({
+      response: { status: 401 },
+    })
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    expect(calls.filter((c) => c.url?.endsWith('/register/start'))).toHaveLength(1)
+    // Nothing of this origin's session was touched.
+    expect(ended).toBe(0)
+    expect(getAccessToken()).toBe('another-accounts-token')
+    setUnauthenticatedHandler(() => {})
+  })
+
+  it('never refreshes for a signed-in password check, nor for the codes that name a credential', async () => {
+    seedAuth('expired-token')
+    responses[route('POST /auth/login/finish')] = [{ status: 401, data: { error: 'unauthorized' } }]
+    responses[route('POST /auth/login/2fa')] = [{ status: 401, data: { error: 'expired', code: 'preAuthInvalid' } }]
+    responses[route('POST /user/thing')] = [{ status: 401, data: { error: 'expired', code: 'setupTokenInvalid' } }]
+    await expect(api.post('/auth/login/finish', {})).rejects.toBeTruthy()
+    await expect(api.post('/auth/login/2fa', {})).rejects.toBeTruthy()
+    await expect(api.post('/user/thing', {})).rejects.toBeTruthy()
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    expect(getAccessToken()).toBe('expired-token')
+  })
+
   it('refreshes an expired token at the re-checks and retries', async () => {
     seedAuth('expired-token')
     responses[route('POST /user/reauth')] = [

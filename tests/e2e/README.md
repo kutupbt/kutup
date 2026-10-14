@@ -111,6 +111,10 @@ API answers again. Otherwise it is skipped, as in CI. For a Compose stack:
 2. Run `docker compose up -d --no-build --wait backend` with the new list.
 3. Poll `/api/health` until it answers.
 
+The command's output is passed through to the test log, and the command handles
+setup keys. Don't run it (or the specs) under `set -x` or with any other command
+tracing: the keys would be printed into the log.
+
 ## Required Chat backup gates
 
 Use the repository scripts from the workspace root. They own disposable Compose

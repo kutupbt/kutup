@@ -25,7 +25,10 @@ class FakeWorker implements WorkerPort {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 describe('OpaqueWorker', () => {
   it('settles each call with its answer, and an error answer as an error', async () => {
@@ -107,5 +110,31 @@ describe('registrations from a held password', () => {
     await reply(port, { type: 'started', request: 'second' })
     expect((await second).request).toBe('second')
     expect(port.sent.map((m) => m.type)).toEqual(['registrationStart', 'registrationAgain'])
+  })
+})
+
+describe('OpaqueWorker.open', () => {
+  it('retries a worker that failed to load, and only a loaded one is used', async () => {
+    const made: FakeWorker[] = []
+    vi.stubGlobal(
+      'Worker',
+      class extends FakeWorker {
+        constructor() {
+          super()
+          made.push(this)
+          const first = made.length === 1
+          // The first one's script cannot be fetched (a stale chunk); the second loads.
+          queueMicrotask(() => (first ? this.crash('Failed to fetch') : this.answer({ type: 'ready' })))
+        }
+      },
+    )
+    const worker = await OpaqueWorker.open()
+    expect(made).toHaveLength(2)
+    expect(made[0]!.terminated).toBe(true)
+    // The loaded one now carries the lifetime handlers.
+    const call = worker.call({ type: 'loginFinish', response: 'r' })
+    await settle()
+    made[1]!.answer({ type: 'finished', message: 'ke3' })
+    await expect(call).resolves.toEqual({ type: 'finished', message: 'ke3' })
   })
 })

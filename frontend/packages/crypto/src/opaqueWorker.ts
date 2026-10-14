@@ -44,6 +44,7 @@ export class OpaqueWorker {
     // For the worker's whole life: an answer settles the call waiting for it;
     // a failure settles it too, and every call after.
     worker.onmessage = (event) => {
+      if (event.data.type === 'ready') return
       const pending = this.pending
       this.pending = null
       const response = event.data
@@ -62,11 +63,16 @@ export class OpaqueWorker {
       () =>
         new Promise<OpaqueWorker>((resolve, reject) => {
           const worker = new Worker(new URL('./workers/opaque.worker.ts', import.meta.url), { type: 'module' })
+          // Until the worker says it is ready (its script and imports loaded),
+          // a failure is a load failure, retried with a new worker (a stale
+          // chunk after a deploy). From then on, the lifetime handlers.
           worker.onerror = (event) => {
             worker.terminate()
             reject(new LoadFailure(event.message || 'OPAQUE worker could not start'))
           }
-          resolve(new OpaqueWorker(worker))
+          worker.onmessage = (event: MessageEvent<OpaqueWorkerResponse>) => {
+            if (event.data.type === 'ready') resolve(new OpaqueWorker(worker))
+          }
         }),
     )
   }
