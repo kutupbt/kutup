@@ -51,6 +51,10 @@ Specific codes, where an app does something particular (a test in
 | `peerRefused` | 502 | The recipient's server refused this message for good |
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
+| `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
+| `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write waits for setup |
+| `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
 | `versionUploading` | 409 | A new version of this file is already being uploaded (`idleSeconds`; `uploadId` and `yours` for its uploader or the folder's owner) |
@@ -920,6 +924,91 @@ The first app to load for an account that never chose saves its own choice.
 Public pages (shared links, public albums) keep only the local choice.
 ---
 
+## The account head
+
+Rollback protection across devices (docs/plans/rollback-protection.md): one
+small sealed head per account, numbered and hash-chained, saying for each kind
+of listed value how many there are and a digest of their `(id, revision)`
+pairs. The server never opens it; it reads the sequence in clear and keeps the
+newest 1,001 (a device anchored 1,000 heads back still gets its whole segment,
+anchor included).
+
+**Listed writes** carry the next head as `head` (base64) in their JSON body:
+contacts (create, update, delete, `delete` many, import: one head per batch),
+mail folder, label and filter names (create, rename, delete), the identity pin
+list, Pass vault secrets (keep, forget). A delete takes a JSON body
+`{ "head": "…" }`. The head's sequence must be the current one plus one, else
+`409 head_conflict`; the check runs last in the write's own transaction, after
+the account row is locked and the session found live under the lock (a write
+that began before a wipe is refused). Before the chain is started a listed
+write needs none (and a head with it is `409 head_conflict`: start the chain
+first); after, one without a head is `409 head_required`.
+
+**Starting the chain** is its own call, on the `basis` an index answers with
+before the first head (`POST /api/account/head`): a listed write landing
+between the client's read and its start moves the basis, and the start is
+refused, so the first head always covers every value. A head sent with a change that is no listed write (a
+folder's colour, parent, position or folding; a filter switched on or off, or
+what it matches or does: these are not sealed and not rollback-protected) is
+`400`.
+
+**A folder delete** removes the folders inside it too, so it names them all:
+`DELETE /api/mail/folders/:id` with `{ "removes": ["<id>", …], "head": "…" }`.
+If they are not exactly the folders it removes (one was added inside since),
+`409 head_conflict`.
+
+### GET /api/account/head
+
+**Auth:** Bearer JWT. **Response:** `{ "head": "<base64>" | null }` (null
+before the account's first).
+
+### POST /api/account/head
+
+Starts the chain: `{ "head": "<base64, sequence 1>", "basis": "<from an
+index>" }` → `201`. `409 head_conflict` when the account has a head already or
+the basis moved (read the index again and remake the head). **Auth:** Bearer
+JWT.
+
+### GET /api/account/heads?from=n
+
+The chain from sequence `n` toward the newest, oldest first, at most 200 at a
+time: `{ "heads": ["<base64>", …], "next": <sequence> | null }` (ask again from
+`next` until it is null); empty when `n` is above the newest. `410 tooOld` when
+`n` is more than 1,000 behind the newest. `400` for `n` below 1. **Auth:**
+Bearer JWT.
+
+The three reads are limited to 300 a minute per account
+(`RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN`; `429 rateLimited`).
+
+### GET /api/account/index/:scope
+
+A scope's values and the head they go with, read in one snapshot (check the
+index against this head, not one fetched separately):
+`{ "head": "<base64>" | null, "values": [["<id>", <revision>], …], "basis":
+"<hex>" | null }`, sorted by id; `basis` (before the first head only) is what a
+chain start names. **Auth:** Bearer JWT. Scopes and their ids:
+- `contacts`: the contact id;
+- `mailNames`: `folder:<id>`, `label:<id>`, `filter:<id>`, with the revision in
+  the sealed name's header (a folder without a name, kept through an account
+  reset, is left out until it is named again);
+- `pins`: one value, `pins`;
+- `passSecrets`: the vault's file id, for every secret the account keeps, the
+  vault trashed, purged or out of reach included ("unreachable but listed":
+  the secret stays until its owner forgets it, `POST
+  /api/pass/vault-secrets/forget`).
+
+Any other scope is `404`: a client treats it as one with no index yet
+(`IndexCheck::Uncovered`).
+
+**An account reset** (an administrator's wipe) deletes the head chain with the
+old incarnation, and every listed value sealed under the old keys: contacts,
+labels, filters and Pass secrets. Custom folders keep their mail and lose their
+names (`name: null` in `GET /api/mail/places`; "Unnamed folder" until renamed
+with `baseNameRevision: 0`). The new incarnation's first write makes its first
+head.
+
+---
+
 ## Collections
 
 ### GET /api/collections/
@@ -1757,8 +1846,18 @@ kept a key first.
 
 ### DELETE /api/pass/vault-secrets/:fileId
 
-Forgets the caller's secret for the vault (the vault is untouched).
-**Response:** `204`.
+Forgets the caller's secret for the vault (the vault is untouched). Body
+`{ "head": "…" }` once the account keeps a head. **Response:** `204`.
+
+A secret goes only this way, never with its vault: a purged or unreachable
+vault's secret stays in the account's `passSecrets` index ("unreachable but
+listed") until the owner's client forgets it, which it does on its next Pass
+write or unlock, all such secrets under one head:
+
+### POST /api/pass/vault-secrets/forget
+
+`{ "fileIds": ["<id>", …], "head": "…" }` (1 to 1,000). **Response:** `204`
+(those there were).
 
 The PIN lock (docs/plans/pass.md, "The PIN"): six digits per account, kept
 as a bcrypt hash and checked only here. It releases no key; the server's part

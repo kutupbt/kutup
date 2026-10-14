@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod account_heads;
 mod albums;
 mod auth_check;
 mod calls;
@@ -770,6 +771,15 @@ fn build_router(state: AppState) -> Router {
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route(
+            "/api/account/head",
+            get(handlers::account_heads::head).post(handlers::account_heads::start),
+        )
+        .route("/api/account/heads", get(handlers::account_heads::heads))
+        .route(
+            "/api/account/index/:scope",
+            get(handlers::account_heads::index),
+        )
+        .route(
             "/api/user/security-events",
             get(handlers::security_events::list),
         )
@@ -791,6 +801,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/pass/vault-secrets",
             get(handlers::pass::list_vault_secrets),
+        )
+        .route(
+            "/api/pass/vault-secrets/forget",
+            post(handlers::pass::forget_vault_secrets),
         )
         .route(
             "/api/pass/vault-secrets/:file_id",

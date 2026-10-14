@@ -44,6 +44,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120),
     ("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN", 600),
     ("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20),
+    ("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300),
     ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
@@ -489,6 +490,16 @@ pub static COLLAB_FRAME_POSTS: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Account head reads (the head, its chain, a scope's index): 300 a minute
+/// per account, far above what a device checking before each listed write
+/// needs.
+pub static ACCOUNT_HEAD_READS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300) as usize,
         Duration::from_secs(60),
     )
 });

@@ -174,6 +174,67 @@ Every write of a listed value also writes the next head, in the same request:
   it (and so to write). That is accepted: scopes are already an open list, so a
   new kind of value never needs a new field.
 
+### 9. The server, as built (settled with the main session, 2026-10-14)
+
+- **The chain:** `account_heads (user_id, sequence, sealed, incarnation_id,
+  written_at)`, primary key `(user_id, sequence)`, sealed heads up to 16 KiB
+  (`MAX_SEALED_BYTES`); the newest `RETENTION` + 1 (1,001) kept, so a device
+  anchored exactly `RETENTION` back still gets its whole segment, anchor
+  included; pruned in the write. `crates/kutup-server/src/account_heads.rs`.
+- **Every listed write first locks the account row** and checks, under the
+  lock, that its session is still live. That orders the account's listed
+  writes, and refuses one that began before a wipe (a wipe changes the
+  incarnation and revokes every session in one transaction on that row; a
+  session live under the lock is one of the current incarnation). The head
+  stores the incarnation the server read there.
+- **The compare-and-swap** runs last in each listed write's transaction: the
+  new head's sequence (read with `account_head::inspect`) must be the current
+  one plus one, else `409 head_conflict`, the whole write rolled back.
+- **Starting the chain** is its own call, `POST /api/account/head`, with the
+  first head and the `basis` an index answered with (a SHA-256 the server
+  computes over every listed `(scope, id, revision)`). Under the lock the
+  server recomputes it: a listed write without a head that landed between the
+  client's read and its start moves it, and the start is refused, so a first
+  head never leaves a value out. A listed write never starts the chain.
+- **Before the chain starts** a listed write needs no head (trust on first
+  use); after, `409 head_required`.
+- **Reads:** `GET /api/account/head`; `GET /api/account/heads?from=n`, 200
+  heads a page with `next` (`410 tooOld` only when `n` is more than
+  `RETENTION` behind the newest, exactly the client's "too old", so a gap the
+  server merely will not show is a fork); `GET /api/account/index/:scope`,
+  which answers the head with the index, from one snapshot, so a write between
+  two reads never looks like a rollback. An unknown scope is `404`, which the
+  client treats as `Uncovered`. All three are limited per account (300 a
+  minute).
+- **Value ids per scope:** a contact's id; `folder:`, `label:` or `filter:`
+  and the id for mail names; `pins`; a Pass secret's vault file id.
+
+**Audit: every write to a listed value, and its head.**
+
+| Write | Carries a head |
+|---|---|
+| Contact create, update, delete, delete many, import | yes (import and delete many: one per batch) |
+| Mail folder, label, filter: create, rename, delete | yes |
+| Mail folder delete (removes the folders inside it) | yes, with `removes`: every folder id it removes, compared in the transaction with what it does remove (`409 head_conflict` if they differ), since the server cannot read the head's digest |
+| Mail folder parent, colour, position, folding; label colour, position; filter on/off, match, conditions, actions | no: not sealed, not rollback-protected; a head sent with one is `400` |
+| Identity pin list put | yes |
+| Pass vault secret keep, forget, forget many | yes |
+| A vault's file purged | nothing: the secret is no longer deleted with it (its foreign key to `files` is gone); it stays listed, "unreachable but listed", until the owner's client forgets it, which it does on its next Pass write or unlock, all such under one head |
+| Account deletion | everything goes, heads included |
+| Account reset (an administrator's wipe) | the chain and every listed value sealed under the old keys go in the reset transaction: contacts, labels, filters, Pass secrets, identity pins. Custom folders keep their mail and lose their names (`name_sealed` null), left out of the index until their owner names them again from revision 0, under the new incarnation's first heads. So no verified head ever lists a value no key opens. |
+
+**Not covered yet:** `settings` (with #179); Drive metadata (decided out of
+this round).
+
+**Tests:** `tests/account_heads_live.rs` (the start on its basis, refused
+when a write moved it and when repeated; every kind of listed write with and
+without its head; `head_conflict` with the current sequence; a head with an
+unsealed change; the index with its head; a folder delete that names too
+few; two starts at once, one wins; a wipe, then a start, a write and a read),
+and `account_heads::tests` against a database: 1,005 heads, 1,001 kept; the
+client's own `check` says `extends` at a gap of exactly `RETENTION` over the
+paged segment, and `tooOld` at `RETENTION` + 1 where the server answers 410.
+
 ## Is it needed before the wipe?
 
 **No format of existing values changes.** The head is a new object, and no value
