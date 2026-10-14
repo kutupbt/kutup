@@ -264,3 +264,83 @@ pub struct HeadOnly {
     #[serde(default)]
     pub head: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kutup_crypto::account_head::{seal, AccountHeadV1, HeadKeys};
+
+    /// The window: past `RETENTION` heads the oldest go, and a segment from
+    /// before the window is too old, from inside it whole.
+    #[tokio::test]
+    async fn live_the_chain_keeps_the_window_and_says_too_old_past_it() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                drive_private_key_envelope, public_key, account_authority_public_key,
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+             VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+        )
+        .bind(user_id)
+        .bind(format!("heads{}", &user_id.simple().to_string()[..12]))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let keys = HeadKeys::derive(&[9; 32]).unwrap();
+        let writer = keys.writer("window").unwrap();
+        let binding = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        let total = RETENTION + 5;
+        let mut head = AccountHeadV1::first(&"cd".repeat(32), &writer, vec![]).unwrap();
+        for sequence in 1..=total {
+            if sequence > 1 {
+                let previous = seal(&keys, binding, &head).unwrap();
+                head = head.next(&previous, &writer, vec![]).unwrap();
+            }
+            let next =
+                NextHead::parse(Some(&STANDARD.encode(seal(&keys, binding, &head).unwrap())))
+                    .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            advance(&mut tx, user_id, next.as_ref()).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM account_heads WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(kept, RETENTION);
+        // The oldest kept is total - RETENTION + 1; anything at or below
+        // total - RETENTION is past the window.
+        assert!(segment(&pool, user_id, total - RETENTION)
+            .await
+            .unwrap()
+            .is_none());
+        let whole = segment(&pool, user_id, total - RETENTION + 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(whole.len() as i64, RETENTION);
+        assert_eq!(
+            segment(&pool, user_id, total + 1)
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
+            0
+        );
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}

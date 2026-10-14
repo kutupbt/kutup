@@ -117,6 +117,14 @@ for test in sessions_live thumbnails_live versions_live; do
     KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
     cargo test -p kutup-server --test "$test" -- --nocapture
 done
+# The account head chain (docs/plans/rollback-protection.md): every listed
+# write carries the next head; two first heads at once; a wipe starts again.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test account_heads_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server account_heads::tests::live_ -- --nocapture
+
 # A rotation of the OPAQUE setup: an account made under key 1, the server
 # restarted with a newer key 2, the account moved at its next sign-in.
 rotation_file="$(mktemp)"
