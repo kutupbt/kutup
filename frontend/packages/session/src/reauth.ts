@@ -60,20 +60,21 @@ export class OneUseSecret {
 }
 
 /**
- * A grant for `purpose`, for the signed-in account's `password`. Throws
- * {@link WrongPasswordError} for a wrong password, {@link ReauthLockedError}
- * during the lockout, and the request's error when Kutup cannot be reached.
+ * Proves `password` is the signed-in account's, for `purpose`: the server's
+ * answer. Throws {@link WrongPasswordError} for a wrong password,
+ * {@link ReauthLockedError} during the lockout, and the request's error when
+ * Kutup cannot be reached or the sign-in has ended.
  */
-export async function accountGrant(password: string, purpose: GrantPurpose): Promise<string> {
+async function reauthenticate<T>(password: string, purpose: GrantPurpose | 'verify'): Promise<T> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
   try {
-    const { data, signIn } = await opaqueLogin<{ grant: string }>(session.username ?? session.address, password, {
+    const { data, signIn } = await opaqueLogin<T>(session.username ?? session.address, password, {
       purpose: 'reauth',
       for: purpose,
     })
     signIn.close()
-    return data.grant
+    return data
   } catch (error) {
     if (error instanceof OpaqueAuthFailed) throw new WrongPasswordError()
     // Only a refused password is a wrong one; any other 401 is the sign-in
@@ -86,14 +87,24 @@ export async function accountGrant(password: string, purpose: GrantPurpose): Pro
 }
 
 /**
- * Whether `password` is the signed-in account's password. Throws
+ * A grant for `purpose`, for the signed-in account's `password`: one use, a
+ * few minutes, this session. Throws as {@link reauthenticate}.
+ */
+export async function accountGrant(password: string, purpose: GrantPurpose): Promise<string> {
+  return (await reauthenticate<{ grant: string }>(password, purpose)).grant
+}
+
+/**
+ * Whether `password` is the signed-in account's password (Kutup Pass's
+ * unlock). The check counts toward the sign-in lockout as any other, and
+ * leaves nothing behind: `verify` makes no grant. Throws
  * {@link ReauthLockedError} during the lockout, and when Kutup cannot be
  * reached.
  */
 export async function verifyAccountPassword(password: string): Promise<boolean> {
   if (!getSession() || !password) return false
   try {
-    await accountGrant(password, 'pass')
+    await reauthenticate<unknown>(password, 'verify')
     return true
   } catch (error) {
     if (error instanceof WrongPasswordError) return false

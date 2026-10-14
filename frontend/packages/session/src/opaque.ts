@@ -30,7 +30,7 @@ interface LoginStartResponse {
 export async function opaqueLogin<T>(
   name: string,
   password: string,
-  purpose: { purpose: 'session' } | { purpose: 'reauth'; for: GrantPurpose },
+  purpose: { purpose: 'session' } | { purpose: 'reauth'; for: GrantPurpose | 'verify' },
 ): Promise<{ data: T; signIn: OpaqueSignIn }> {
   const signIn = await startOpaqueSignIn(password)
   try {

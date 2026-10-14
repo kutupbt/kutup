@@ -249,9 +249,11 @@ pins, and the next setup starts a new incarnation. OPAQUE keeps that:
     the account.
 - **Pass:** the PIN set and remove endpoints take `{ grant }` (purpose `pass`)
   instead of `loginKey`.
-- **Reauth:** `verifyAccountPassword` becomes login/start and login/finish with
-  `purpose: "reauth"`. A grant means right, `401` means wrong; lockout is as at
-  sign-in.
+- **Reauth:** `verifyAccountPassword` (Kutup Pass's unlock) becomes login/start
+  and login/finish with `purpose: "reauth"`, `for: "verify"`. A success answer
+  means right; it stores no grant, so nothing usable is left behind.
+  `401 invalidCredentials` means wrong; any other 401 is an ended session.
+  The lockout works as at sign-in.
 - **Admin resets and temporary passwords:**
   - The admin first reauthenticates (`purpose: "reauth"`, then a grant of purpose
     `adminReset` for the target, `POST /api/admin/users/:id/reset-grant { grant }`

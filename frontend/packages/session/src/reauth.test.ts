@@ -7,7 +7,7 @@ vi.mock('./store', () => ({ getSession: () => ({ username: 'alice', address: 'al
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ OpaqueAuthFailed: class OpaqueAuthFailed extends Error {} }))
 
 import { OpaqueAuthFailed } from '@kutup/crypto/opaqueWorker'
-import { accountGrant, ReauthLockedError, WrongPasswordError } from './reauth'
+import { accountGrant, ReauthLockedError, verifyAccountPassword, WrongPasswordError } from './reauth'
 
 function refused(status: number, code?: string): AxiosError {
   const response = { status, data: code ? { error: 'x', code } : { error: 'x' }, headers: {}, config: { headers: new AxiosHeaders() }, statusText: '' } as AxiosResponse
@@ -43,5 +43,22 @@ describe('accountGrant', () => {
     await expect(accountGrant('pw', 'pass')).rejects.toMatchObject({ reason: 'rateLimited' })
     opaqueLogin.mockRejectedValueOnce(refused(429, 'accountLocked'))
     await expect(accountGrant('pw', 'pass')).rejects.toBeInstanceOf(ReauthLockedError)
+  })
+})
+
+describe('verifyAccountPassword', () => {
+  it('asks for no grant, and tells right from wrong', async () => {
+    const close = vi.fn()
+    opaqueLogin.mockResolvedValueOnce({ data: {}, signIn: { close } })
+    await expect(verifyAccountPassword('pw')).resolves.toBe(true)
+    expect(opaqueLogin).toHaveBeenCalledWith('alice', 'pw', { purpose: 'reauth', for: 'verify' })
+    expect(close).toHaveBeenCalled()
+    opaqueLogin.mockRejectedValueOnce(new OpaqueAuthFailed())
+    await expect(verifyAccountPassword('pw')).resolves.toBe(false)
+  })
+
+  it('the lockout is not a wrong password', async () => {
+    opaqueLogin.mockRejectedValueOnce(refused(429, 'accountLocked'))
+    await expect(verifyAccountPassword('pw')).rejects.toBeInstanceOf(ReauthLockedError)
   })
 })
