@@ -1,5 +1,5 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { opaqueRegister } from '@kutup/session/opaque'
+import { conflictCode, opaqueRegister } from '@kutup/session/opaque'
 import { accountGrant } from '@kutup/session/reauth'
 import api from '@kutup/session/client'
 import type {
@@ -66,8 +66,36 @@ export function useAdminUsers() {
  * and its own password, at its first sign-in.
  */
 async function temporaryPassword(tempPassword: string, auth: { grant: string } | null) {
-  const keyBinding = crypto.randomUUID()
-  return { keyBinding, ...(await opaqueRegister(tempPassword, keyBinding, null, auth)) }
+  const draw = async () => {
+    const keyBinding = crypto.randomUUID()
+    return { keyBinding, ...(await opaqueRegister(tempPassword, keyBinding, null, auth)) }
+  }
+  // A binding someone else has is drawn again, once.
+  try {
+    return await draw()
+  } catch (error) {
+    if (conflictCode(error) !== 'keyBindingTaken') throw error
+    return await draw()
+  }
+}
+
+/**
+ * A password handed to a mutation that is read once, then gone: react-query
+ * keeps a mutation's variables (`mutation.variables`) until it is reset.
+ */
+export class OneUseSecret {
+  #value: string | null
+
+  constructor(value: string) {
+    this.#value = value
+  }
+
+  take(): string {
+    const value = this.#value
+    this.#value = null
+    if (value === null) throw new Error('the password was already used')
+    return value
+  }
 }
 
 /**
@@ -114,13 +142,13 @@ export function useForceDisable2fa() {
 export interface ResetInput {
   id: string
   tempPassword: string
-  /** The administrator's own password, proven again first. */
-  adminPassword: string
+  /** The administrator's own password, proven again first; read once. */
+  adminPassword: OneUseSecret
 }
 
 export function useRotateTempPassword() {
   return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
-    const grant = await resetGrant(id, adminPassword)
+    const grant = await resetGrant(id, adminPassword.take())
     await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, {
       grant,
       ...(await temporaryPassword(tempPassword, { grant })),
@@ -130,7 +158,7 @@ export function useRotateTempPassword() {
 
 export function useWipeUser() {
   return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
-    const grant = await resetGrant(id, adminPassword)
+    const grant = await resetGrant(id, adminPassword.take())
     await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { grant, ...(await temporaryPassword(tempPassword, { grant })) })
   })
 }

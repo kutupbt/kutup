@@ -57,7 +57,10 @@
       "usernameTaken": "Bu kullanıcı adı alınmış. Geri dönüp başka bir ad seçin.",
       "generic": "Bir şeyler ters gitti. Yeniden deneyin.",
       "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
-      "keysChanged": "Bu hesabın anahtarları sunucunun söyledikleriyle eşleşmedi. Yeniden oturum açın; tekrar ederse sunucu yöneticisine bildirin."
+      "keysChanged": "Bu hesabın anahtarları sunucunun söyledikleriyle eşleşmedi. Yeniden oturum açın; tekrar ederse sunucu yöneticisine bildirin.",
+      "signInAgain": "Oturum açma tamamlanmadan sona erdi. Yeniden oturum açın.",
+      "serverKeyChanged": "Hesabınız oluşturulurken sunucunun oturum açma anahtarı değişti. Yeniden deneyin; tekrar ederse sunucu yöneticisine bildirin.",
+      "keyBindingTaken": "Hesabınızın anahtarları kaydedilemedi. Yeniden deneyin; tekrar ederse sunucu yöneticisine bildirin."
     },
     "strength": {
       "label": "Güç: {{strength}}",

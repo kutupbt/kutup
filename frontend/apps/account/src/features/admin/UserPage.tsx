@@ -23,6 +23,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import {
+  OneUseSecret,
   useAdminUsers,
   useDeleteUser,
   useForceDisable2fa,
@@ -233,7 +234,7 @@ export function UserPage() {
             submit={t('admin.user.rotate')}
             passwordLabel={t('admin.user.yourPassword')}
             pending={rotate.isPending} error={rotate.error} errorFallback={reauthFailure(rotate.error, t)}
-            onConfirm={(adminPassword) => rotate.mutate({ id: user.id, tempPassword: pending.password, adminPassword }, {
+            onConfirm={(adminPassword) => rotate.mutate({ id: user.id, tempPassword: pending.password, adminPassword: new OneUseSecret(adminPassword) }, {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )
@@ -247,7 +248,7 @@ export function UserPage() {
             submit={t('admin.user.wipe')}
             passwordLabel={t('admin.user.yourPassword')}
             pending={wipe.isPending} error={wipe.error} errorFallback={reauthFailure(wipe.error, t)}
-            onConfirm={(adminPassword) => wipe.mutate({ id: user.id, tempPassword: pending.password, adminPassword }, {
+            onConfirm={(adminPassword) => wipe.mutate({ id: user.id, tempPassword: pending.password, adminPassword: new OneUseSecret(adminPassword) }, {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )

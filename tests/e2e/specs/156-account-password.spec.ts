@@ -45,13 +45,16 @@ test('the password is changed, guarded by a second factor, and reset with the re
   const page = await own.newPage()
 
   // Account → Security: a new password; the current one must be right.
+  // A failed attempt clears every field, so each try types them all.
   await page.goto(appUrl('account', '/settings/security'))
-  await page.getByLabel('Current password').fill('Not*TheCurrentPassword1')
-  await page.getByLabel('New password', { exact: true }).fill(SECOND)
-  await page.getByLabel('Repeat password', { exact: true }).fill(SECOND)
-  await submitThroughRateLimit(page, 'Change password', page.getByText('Your current password is not right.'))
-  await page.getByLabel('Current password').fill(FIRST)
-  await submitThroughRateLimit(page, 'Change password', page.getByText('Password changed. Your other devices are signed out.').first())
+  const passwords = (current: string) => async () => {
+    await page.getByLabel('Current password').fill(current)
+    await page.getByLabel('New password', { exact: true }).fill(SECOND)
+    await page.getByLabel('Repeat password', { exact: true }).fill(SECOND)
+  }
+  await submitThroughRateLimit(page, 'Change password', page.getByText('Your current password is not right.'), passwords('Not*TheCurrentPassword1'))
+  await expect(page.getByLabel('New password', { exact: true })).toHaveValue('')
+  await submitThroughRateLimit(page, 'Change password', page.getByText('Password changed. Your other devices are signed out.').first(), passwords(FIRST))
 
   // A second factor, while signed in here.
   await page.getByRole('button', { name: 'Set up two-factor authentication' }).click()

@@ -176,10 +176,34 @@ export async function generateAccountKeySet(binding: string): Promise<AccountKey
   // the recovery key (256-bit random, the 24-word phrase shown once).
   const masterKey = sodium.randombytes_buf(32)
   const recoveryKeyEntropy = sodium.randombytes_buf(32)
+  try {
+    return await sealAccountKeySet(masterKey, recoveryKeyEntropy, binding)
+  } finally {
+    recoveryKeyEntropy.fill(0)
+  }
+}
+
+/**
+ * The same keys bound to another binding (the one drawn was taken): the
+ * recovery phrase and the master key stay, so nothing shown to the user
+ * changes; the records bound to the binding are sealed again.
+ */
+export async function rebindAccountKeySet(keys: AccountKeySet, binding: string): Promise<AccountKeySet> {
+  const { decodeMnemonic } = await import('./mnemonic')
+  const recoveryKeyEntropy = decodeMnemonic(keys.mnemonic)
+  try {
+    return await sealAccountKeySet(keys.masterKey, recoveryKeyEntropy, binding)
+  } finally {
+    recoveryKeyEntropy.fill(0)
+  }
+}
+
+async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint8Array, binding: string): Promise<AccountKeySet> {
   const { encodeMnemonic } = await import('./mnemonic')
   const mnemonic = encodeMnemonic(recoveryKeyEntropy)
   const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKeyEntropy), binding)
   // The purpose-separated account identity; Rust owns the keys and envelopes.
+  // It derives from the master key alone, so it does not change with the binding.
   const accountIdentity = await deriveAccountIdentityKeys(toBase64(masterKey))
   const driveHpkePublicKey = fromBase64(accountIdentity.driveHpkePublicKey)
   const driveHpkePrivateKey = fromBase64(accountIdentity.driveHpkePrivateKey)
@@ -195,7 +219,6 @@ export async function generateAccountKeySet(binding: string): Promise<AccountKey
     ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
     binding,
   )
-  recoveryKeyEntropy.fill(0)
   return {
     recoveryKeyEnvelope,
     drivePrivateKeyEnvelope,

@@ -604,6 +604,8 @@ export interface OpaqueLoginHandle {
   readonly request: string
   finish(responseBase64: string): string
   openMasterKey(envelope: string, keyBinding: string): string
+  /** Wipes the state and the export key. */
+  close(): void
   free(): void
 }
 
@@ -612,6 +614,8 @@ export interface OpaqueRegistrationHandle {
   readonly request: string
   finish(responseBase64: string): string
   sealMasterKey(masterKeyBase64: string, keyBinding: string): string
+  /** Wipes the state and the export key. */
+  close(): void
   free(): void
 }
 

@@ -8,16 +8,24 @@ import {
   decryptPrivateKey,
   generateAccountKeySet,
   openAccountEnvelope,
+  rebindAccountKeySet,
   toBase64,
   deriveRecoveryAuthProof,
   type AccountKeySet,
 } from '@kutup/crypto'
-import type { OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
+import { startOpaqueRegistration, type OpaqueRegistrar, type OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
 import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import type { SessionKeys } from '@kutup/session/keys'
-import { opaqueLogin, opaqueRegister, opaqueReregister, type RegistrationAuth } from '@kutup/session/opaque'
+import {
+  conflictCode,
+  opaqueLogin,
+  opaqueReregister,
+  registerWith,
+  reregisterWith,
+  type RegistrationAuth,
+} from '@kutup/session/opaque'
 import { persistKeys } from '@kutup/session/persist'
 import { activateSession } from '@kutup/session/profile'
 
@@ -40,13 +48,15 @@ interface LoginResponse {
   grant?: string
 }
 
-/** A second factor is due. Holds the open sign-in (its export key, in its worker), never the password. */
+/**
+ * A second factor is due. Holds the open sign-in (its worker holds the
+ * password and the export key), never the password itself. End it with
+ * {@link abandonTotp} when it is not completed.
+ */
 export interface TotpChallenge {
   name: string
   preAuthToken: string
   signIn: OpaqueSignIn
-  /** Re-registers the password when the server asks (a rotation); captured, not stored. */
-  rotate: (keyBinding: string, masterKey: Uint8Array, grant: string) => Promise<void>
 }
 
 /** An administrator-created account signing in for the first time. */
@@ -99,16 +109,14 @@ export async function signIn(name: string, password: string): Promise<SignInResu
     opened.close()
     return { kind: 'setup', setup: { name, username: data.username, setupToken: data.setupToken } }
   }
-  const rotate = (keyBinding: string, masterKey: Uint8Array, grant: string) =>
-    opaqueReregister(password, keyBinding, masterKey, grant)
   if (data.requiresTotp && data.preAuthToken) {
-    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened, rotate } }
+    return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened } }
   }
-  return finishSignIn(data, opened, rotate)
+  return finishSignIn(data, opened)
 }
 
 /** Opens the master key with the sign-in's export key, activates, and re-registers if the server asks. */
-async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn, rotate: TotpChallenge['rotate']): Promise<SignInResult> {
+async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<SignInResult> {
   try {
     const binding = data.keyBinding
     if (!binding) throw new Error('the server did not say what the keys are bound to')
@@ -117,10 +125,10 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn, rotate: T
     const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
     const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, binding)
     await activate(data, { userId: data.userId, masterKey, privateKey, publicKey: data.publicKey, keyBinding: binding })
-    // A new server setup: the password just used is registered again under it,
-    // without asking. A failure leaves the old record, and the next sign-in
-    // asks again.
-    if (data.rotate && data.grant) await rotate(binding, masterKey, data.grant).catch(() => undefined)
+    // A new server setup: the password just used (held by the sign-in's
+    // worker) is registered again under it, without asking. A failure leaves
+    // the old record, and the next sign-in asks again.
+    if (data.rotate && data.grant) await reregisterWith(opened, binding, masterKey, data.grant).catch(() => undefined)
   } finally {
     opened.close()
   }
@@ -132,33 +140,106 @@ export async function completeTotp(challenge: TotpChallenge, code: string): Prom
     preAuthToken: challenge.preAuthToken,
     code,
   })
-  return finishSignIn(data, challenge.signIn, challenge.rotate)
+  return finishSignIn(data, challenge.signIn)
 }
 
-/** Ends a sign-in waiting for its second factor (the user went back). */
+/** Ends a sign-in waiting for its second factor (the user went back, or left). Safe to call again. */
 export function abandonTotp(challenge: TotpChallenge): void {
   challenge.signIn.close()
 }
 
-/** Fresh account keys bound to a key binding drawn here, with the password registered. */
+/**
+ * Fresh account keys bound to a key binding drawn here, with the password
+ * registered. `registrar` holds the password in its worker until
+ * {@link releaseAccountKeys}, so a refused registration can be made again
+ * without asking for it.
+ */
 export interface AccountKeys extends AccountKeySet {
   keyBinding: string
   opaqueRecord: string
   opaqueServerKeyId: number
   masterKeyEnvelope: string
+  registrar: OpaqueRegistrar
+  auth: RegistrationAuth
+}
+
+/** The registration was refused twice for the same reason; the person can try again or start over. */
+export class RegistrationConflictError extends Error {
+  constructor(readonly code: 'opaqueKeyStale' | 'keyBindingTaken') {
+    super(`registration refused: ${code}`)
+    this.name = 'RegistrationConflictError'
+  }
 }
 
 /**
  * Fresh account keys (master key, recovery phrase, envelopes, all bound to a
  * new key binding) and the password registered for them (OPAQUE; Argon2id in
  * a worker). `setupToken`: an administrator-created account's first sign-in.
+ * A binding that turns out taken is drawn again, once.
  */
 export async function generateAccountKeys(password: string, setupToken?: string): Promise<AccountKeys> {
-  const keyBinding = crypto.randomUUID()
-  const keys = await generateAccountKeySet(keyBinding)
   const auth: RegistrationAuth = setupToken ? { setupToken } : null
-  const registered = await opaqueRegister(password, keyBinding, keys.masterKey, auth)
-  return { ...keys, keyBinding, ...registered }
+  const registrar = await startOpaqueRegistration(password)
+  try {
+    const draw = async () => {
+      const keyBinding = crypto.randomUUID()
+      const keys = await generateAccountKeySet(keyBinding)
+      const registered = await registerWith(registrar, keyBinding, keys.masterKey, auth)
+      return { ...keys, keyBinding, ...registered, registrar, auth }
+    }
+    try {
+      return await draw()
+    } catch (error) {
+      if (conflictCode(error) !== 'keyBindingTaken') throw error
+      return await draw()
+    }
+  } catch (error) {
+    registrar.close()
+    throw error
+  }
+}
+
+/** Ends the worker holding the password of keys no longer needed (stored, or given up). */
+export function releaseAccountKeys(keys: AccountKeys): void {
+  keys.registrar.close()
+}
+
+/**
+ * The same keys, ready to send again after the server refused them: a record
+ * made under a server key that has since changed is made again; a key
+ * binding someone else has meanwhile is drawn again (the records bound to it
+ * sealed again; the recovery phrase stays).
+ */
+async function remade(keys: AccountKeys, code: string): Promise<AccountKeys> {
+  if (code === 'opaqueKeyStale') {
+    return { ...keys, ...(await registerWith(keys.registrar, keys.keyBinding, keys.masterKey, keys.auth)) }
+  }
+  const keyBinding = crypto.randomUUID()
+  const resealed = await rebindAccountKeySet(keys, keyBinding)
+  const registered = await registerWith(keys.registrar, keyBinding, keys.masterKey, keys.auth)
+  return { ...keys, ...resealed, keyBinding, ...registered }
+}
+
+/**
+ * Sends `keys` with `send`; refused as stale or for a taken binding, remakes
+ * them and sends once more. The keys that were accepted come back with the
+ * answer.
+ */
+async function sendKeys(keys: AccountKeys, send: (keys: AccountKeys) => Promise<LoginResponse>): Promise<{ data: LoginResponse; keys: AccountKeys }> {
+  try {
+    return { data: await send(keys), keys }
+  } catch (error) {
+    const code = conflictCode(error)
+    if (code !== 'opaqueKeyStale' && code !== 'keyBindingTaken') throw error
+    const again = await remade(keys, code)
+    try {
+      return { data: await send(again), keys: again }
+    } catch (second) {
+      const repeated = conflictCode(second)
+      if (repeated === 'opaqueKeyStale' || repeated === 'keyBindingTaken') throw new RegistrationConflictError(repeated)
+      throw second
+    }
+  }
 }
 
 function registrationBody(keys: AccountKeys) {
@@ -188,8 +269,8 @@ function sessionKeys(keys: AccountKeys): SessionKeys {
   }
 }
 
-/** Sessions the server gave for key sets it has already made an account of. */
-const registered = new WeakMap<AccountKeys, LoginResponse>()
+/** Sessions the server gave for key sets it has already made an account of, with the keys it took. */
+const registered = new WeakMap<AccountKeys, { data: LoginResponse; keys: AccountKeys }>()
 
 /**
  * Create the account: the server answers with its session (the password was
@@ -197,31 +278,46 @@ const registered = new WeakMap<AccountKeys, LoginResponse>()
  * the same keys when activating failed: the account is created once.
  */
 export async function registerAndSignIn(username: string, keys: AccountKeys, registrationCode?: string): Promise<void> {
-  let data = registered.get(keys)
-  if (!data) {
+  let done = registered.get(keys)
+  if (!done) {
     const driveKeyBinding = await driveKeyBindingFor(keys, username)
-    data = (
-      await api.post<LoginResponse>('/auth/register', {
-        username,
-        ...(registrationCode ? { registrationCode } : {}),
-        ...registrationBody(keys),
-        driveKeyBinding,
-      })
-    ).data
-    registered.set(keys, data)
+    done = await sendKeys(keys, async (sent) =>
+      (
+        await api.post<LoginResponse>('/auth/register', {
+          username,
+          ...(registrationCode ? { registrationCode } : {}),
+          ...registrationBody(sent),
+          driveKeyBinding,
+        })
+      ).data,
+    )
+    registered.set(keys, done)
   }
-  await activate(data, { ...sessionKeys(keys), userId: data.userId })
+  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  releaseAccountKeys(keys)
 }
 
-/** First sign-in of an administrator-created account: store its new keys. */
+/**
+ * First sign-in of an administrator-created account: store its new keys.
+ * Safe to call again with the same keys, as {@link registerAndSignIn}.
+ */
 export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Promise<void> {
-  const driveKeyBinding = await driveKeyBindingFor(keys, setup.username)
-  const { data } = await api.post<LoginResponse>(
-    '/auth/complete-setup',
-    { ...registrationBody(keys), driveKeyBinding },
-    { headers: { Authorization: `Bearer ${setup.setupToken}` } },
-  )
-  await activate(data, { ...sessionKeys(keys), userId: data.userId })
+  let done = registered.get(keys)
+  if (!done) {
+    const driveKeyBinding = await driveKeyBindingFor(keys, setup.username)
+    done = await sendKeys(keys, async (sent) =>
+      (
+        await api.post<LoginResponse>(
+          '/auth/complete-setup',
+          { ...registrationBody(sent), driveKeyBinding },
+          { headers: { Authorization: `Bearer ${setup.setupToken}` } },
+        )
+      ).data,
+    )
+    registered.set(keys, done)
+  }
+  await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
+  releaseAccountKeys(keys)
 }
 
 /** Normalise a typed recovery phrase: numbering, case and spacing do not matter. */

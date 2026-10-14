@@ -422,6 +422,27 @@ third sessions (2026-10-13). The wire is the one above, plus the addendum.
   recoveries, rotations and admin resets in the change's transaction (no IP
   addresses; a year, or the newest 500 per account). `GET
   /api/user/security-events` lists the caller's own.
+- **The web client's workers** (`@kutup/crypto/opaqueWorker`): one per sign-in
+  or registration.
+  - The worker holds the password, the OPAQUE state and the export key until
+    it is closed. The page never keeps the password: a rotation, or a record
+    made again after `opaqueKeyStale`, starts a new registration in the
+    worker from its own copy (`registrationAgain`).
+  - A sign-in waiting for its code is closed when the person goes back or
+    leaves the page. New account keys are closed once they are stored or
+    replaced.
+  - Closing asks the worker to wipe (WASM `close`/`free`), then ends it (after
+    one second at most). A worker that failed, or was closed, fails the call
+    waiting on it and every later one.
+- **Refused registrations, made again once:**
+  - `opaqueKeyStale`: the same keys, a new record from the held password,
+    sent again (sign-up, setup, and every `register/finish`; a grant is used
+    only when the record is stored).
+  - `keyBindingTaken`: a new binding. The records bound to it are sealed
+    again from the same master key and recovery phrase, so the phrase shown
+    stays valid.
+  - Refused a second time: the person is told (in English and Turkish) and
+    can try again without starting over.
 - **Admins:**
   - `reset-grant` exchanges the admin's own `adminReset` reauth grant for one
     bound to the target.

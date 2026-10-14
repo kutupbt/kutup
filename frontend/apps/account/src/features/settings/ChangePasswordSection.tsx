@@ -65,8 +65,10 @@ export function ChangePasswordSection() {
       reset()
       toast.success(t('settings.security.passwordChanged'))
     } catch (err) {
+      // The passwords go either way; the message says what to type again.
+      reset()
       if (err instanceof WrongPasswordError) setFieldError('current', { message: t('settings.security.wrongCurrentPassword') })
-      else if (err instanceof ReauthLockedError) setError(t('auth.errors.locked'))
+      else if (err instanceof ReauthLockedError) setError(t(err.reason === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked'))
       else setError(t('settings.security.passwordChangeFailed'))
     } finally {
       setPending(false)

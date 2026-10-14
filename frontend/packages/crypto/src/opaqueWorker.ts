@@ -15,10 +15,45 @@ export class OpaqueAuthFailed extends Error {
   }
 }
 
-class OpaqueWorker {
-  private queue: Promise<unknown> = Promise.resolve()
+/** The worker is gone: closed, or it failed. Every call after that throws this. */
+export class OpaqueWorkerClosed extends Error {
+  constructor(reason = 'the OPAQUE worker is closed') {
+    super(reason)
+    this.name = 'OpaqueWorkerClosed'
+  }
+}
 
-  constructor(private readonly worker: Worker) {}
+/** How long a closing worker gets to wipe its keys before it is ended anyway. */
+const CLOSE_GRACE_MS = 1_000
+
+/** What a worker does: requests in, responses out. Tests stand in for the real one. */
+export interface WorkerPort {
+  onmessage: ((event: MessageEvent<OpaqueWorkerResponse>) => void) | null
+  onerror: ((event: ErrorEvent) => void) | null
+  onmessageerror: ((event: MessageEvent) => void) | null
+  postMessage(request: OpaqueWorkerRequest): void
+  terminate(): void
+}
+
+export class OpaqueWorker {
+  private queue: Promise<unknown> = Promise.resolve()
+  private pending: { resolve: (response: OpaqueWorkerResponse) => void; reject: (error: Error) => void } | null = null
+  private dead: OpaqueWorkerClosed | null = null
+
+  constructor(private readonly worker: WorkerPort) {
+    // For the worker's whole life: an answer settles the call waiting for it;
+    // a failure settles it too, and every call after.
+    worker.onmessage = (event) => {
+      const pending = this.pending
+      this.pending = null
+      const response = event.data
+      if (!pending) return
+      if (response.type === 'error') pending.reject(response.authFailed ? new OpaqueAuthFailed() : new Error(response.message))
+      else pending.resolve(response)
+    }
+    worker.onerror = (event) => this.fail(new OpaqueWorkerClosed(event.message || 'the OPAQUE worker failed'))
+    worker.onmessageerror = () => this.fail(new OpaqueWorkerClosed('the OPAQUE worker sent a message that could not be read'))
+  }
 
   static open(): Promise<OpaqueWorker> {
     // A worker that could not start (its script not fetched) is retried with a
@@ -40,11 +75,11 @@ class OpaqueWorker {
   call(request: OpaqueWorkerRequest): Promise<OpaqueWorkerResponse> {
     const run = () =>
       new Promise<OpaqueWorkerResponse>((resolve, reject) => {
-        this.worker.onmessage = (event: MessageEvent<OpaqueWorkerResponse>) => {
-          const response = event.data
-          if (response.type === 'error') reject(response.authFailed ? new OpaqueAuthFailed() : new Error(response.message))
-          else resolve(response)
+        if (this.dead) {
+          reject(this.dead)
+          return
         }
+        this.pending = { resolve, reject }
         this.worker.postMessage(request)
       })
     const result = this.queue.then(run, run)
@@ -52,8 +87,32 @@ class OpaqueWorker {
     return result
   }
 
+  /**
+   * Ends the worker: it wipes its password, state and export key, then
+   * stops (or is stopped, if it does not answer in time). Calls waiting, and
+   * any made after, throw {@link OpaqueWorkerClosed}. Safe to call again.
+   */
   close(): void {
-    this.worker.terminate()
+    if (this.dead) return
+    this.fail(new OpaqueWorkerClosed())
+    const stop = setTimeout(() => this.worker.terminate(), CLOSE_GRACE_MS)
+    this.worker.onmessage = (event) => {
+      if (event.data.type !== 'closed') return
+      clearTimeout(stop)
+      this.worker.terminate()
+    }
+    this.worker.onerror = () => {
+      clearTimeout(stop)
+      this.worker.terminate()
+    }
+    this.worker.postMessage({ type: 'close' })
+  }
+
+  private fail(error: OpaqueWorkerClosed): void {
+    if (!this.dead) this.dead = error
+    const pending = this.pending
+    this.pending = null
+    pending?.reject(error)
   }
 }
 
@@ -62,8 +121,39 @@ function expect<T extends OpaqueWorkerResponse['type']>(response: OpaqueWorkerRe
   return response as Extract<OpaqueWorkerResponse, { type: T }>
 }
 
+/** One registration of the password the worker holds. */
+export interface OpaqueRegistration {
+  /** `registrationRequest` for `register/start`. */
+  readonly request: string
+  /** The record to upload, from the server's `registrationResponse`. Runs Argon2id. */
+  finish(registrationResponse: string): Promise<string>
+  /** The password envelope of `masterKey` for this password (after `finish`). */
+  sealMasterKey(masterKey: Uint8Array, keyBinding: string): Promise<string>
+}
+
+/** Something holding a password in its worker, that can register it (again). */
+export interface OpaqueRegistrar {
+  /** A new registration of the held password (the one before it is dropped). */
+  register(): Promise<OpaqueRegistration>
+  /** Ends the worker; the password and any export key go with it. */
+  close(): void
+}
+
+function registrationOn(worker: OpaqueWorker, request: string): OpaqueRegistration {
+  return {
+    request,
+    finish: async (response) => expect(await worker.call({ type: 'registrationFinish', response }), 'finished').message,
+    sealMasterKey: async (masterKey, keyBinding) =>
+      expect(await worker.call({ type: 'sealMasterKey', masterKey: toBase64(masterKey), keyBinding }), 'sealed').envelope,
+  }
+}
+
+async function registerAgain(worker: OpaqueWorker): Promise<OpaqueRegistration> {
+  return registrationOn(worker, expect(await worker.call({ type: 'registrationAgain' }), 'started').request)
+}
+
 /** A sign-in (or reauthentication) in progress. */
-export interface OpaqueSignIn {
+export interface OpaqueSignIn extends OpaqueRegistrar {
   /** `credentialRequest` for `login/start`. */
   readonly request: string
   /**
@@ -74,13 +164,14 @@ export interface OpaqueSignIn {
   finish(credentialResponse: string): Promise<string>
   /** The account's master key, from its password envelope (after the server accepted the finalization). */
   openMasterKey(envelope: string, keyBinding: string): Promise<Uint8Array>
-  /** Ends the worker; the export key goes with it. */
-  close(): void
 }
 
 /** Starts signing in with `password`. */
 export async function startOpaqueSignIn(password: string): Promise<OpaqueSignIn> {
-  const worker = await OpaqueWorker.open()
+  return signInOn(await OpaqueWorker.open(), password)
+}
+
+export async function signInOn(worker: OpaqueWorker, password: string): Promise<OpaqueSignIn> {
   try {
     const { request } = expect(await worker.call({ type: 'loginStart', password }), 'started')
     return {
@@ -88,6 +179,7 @@ export async function startOpaqueSignIn(password: string): Promise<OpaqueSignIn>
       finish: async (response) => expect(await worker.call({ type: 'loginFinish', response }), 'finished').message,
       openMasterKey: async (envelope, keyBinding) =>
         fromBase64(expect(await worker.call({ type: 'openMasterKey', envelope, keyBinding }), 'masterKey').masterKey),
+      register: () => registerAgain(worker),
       close: () => worker.close(),
     }
   } catch (error) {
@@ -96,27 +188,27 @@ export async function startOpaqueSignIn(password: string): Promise<OpaqueSignIn>
   }
 }
 
-/** A registration (sign-up, password change, recovery, a temporary password) in progress. */
-export interface OpaqueRegistering {
-  /** `registrationRequest` for `register/start`. */
-  readonly request: string
-  /** The record to upload, from the server's `registrationResponse`. Runs Argon2id. */
-  finish(registrationResponse: string): Promise<string>
-  /** The password envelope of `masterKey` for this password (after `finish`). */
-  sealMasterKey(masterKey: Uint8Array, keyBinding: string): Promise<string>
-  close(): void
+/**
+ * Starts registering `password` (sign-up, password change, recovery, a
+ * temporary password). The first `register()` uses the registration started
+ * here; a later one starts again from the held password.
+ */
+export async function startOpaqueRegistration(password: string): Promise<OpaqueRegistrar> {
+  return registrarOn(await OpaqueWorker.open(), password)
 }
 
-/** Starts registering `password`. */
-export async function startOpaqueRegistration(password: string): Promise<OpaqueRegistering> {
-  const worker = await OpaqueWorker.open()
+export async function registrarOn(worker: OpaqueWorker, password: string): Promise<OpaqueRegistrar> {
   try {
-    const { request } = expect(await worker.call({ type: 'registrationStart', password }), 'started')
+    let first: OpaqueRegistration | null = registrationOn(
+      worker,
+      expect(await worker.call({ type: 'registrationStart', password }), 'started').request,
+    )
     return {
-      request,
-      finish: async (response) => expect(await worker.call({ type: 'registrationFinish', response }), 'finished').message,
-      sealMasterKey: async (masterKey, keyBinding) =>
-        expect(await worker.call({ type: 'sealMasterKey', masterKey: toBase64(masterKey), keyBinding }), 'sealed').envelope,
+      register: async () => {
+        const started = first
+        first = null
+        return started ?? registerAgain(worker)
+      },
       close: () => worker.close(),
     }
   } catch (error) {

@@ -57,7 +57,10 @@
       "usernameTaken": "That username is taken. Go back and choose another.",
       "generic": "Something went wrong. Try again.",
       "slowDown": "Too many attempts from here. Wait a minute, then try again.",
-      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator."
+      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator.",
+      "signInAgain": "The sign-in ended before it finished. Sign in again.",
+      "serverKeyChanged": "The server's sign-in key changed while your account was being made. Try again; if it keeps happening, tell the server's administrator.",
+      "keyBindingTaken": "Your account's keys could not be stored. Try again; if it keeps happening, tell the server's administrator."
     },
     "strength": {
       "label": "Strength: {{strength}}",

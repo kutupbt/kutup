@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { z } from 'zod'
@@ -10,7 +10,7 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Spinner } from '@kutup/ui/components/states'
 import { AuthLayout } from './AuthLayout'
 import { authErrorMessage } from './errors'
-import { generateAccountKeys, type AccountKeys } from './flows'
+import { generateAccountKeys, releaseAccountKeys, type AccountKeys } from './flows'
 import { MIN_PASSWORD_SCORE, passwordScore, usePasswordStrength } from './passwordStrength'
 import { PasswordStrengthMeter } from './PasswordStrengthMeter'
 import { ConfirmRecoveryPhrase, ShowRecoveryPhrase } from './RecoveryPhrase'
@@ -64,6 +64,7 @@ export function NewKeysWizard({
     register,
     handleSubmit,
     watch,
+    reset,
     setError: setFieldError,
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
@@ -71,6 +72,12 @@ export function NewKeysWizard({
     defaultValues: { password: '', confirm: '' },
   })
   const score = usePasswordStrength(watch('password'))
+
+  // The password stays in the keys' worker (to register again if the server
+  // refuses the first record), ended when these keys are replaced or left.
+  useEffect(() => () => {
+    if (keys) releaseAccountKeys(keys)
+  }, [keys])
 
   const onPassword = handleSubmit(async ({ password }) => {
     if (validateLeading && !(await validateLeading())) return
@@ -82,6 +89,8 @@ export function NewKeysWizard({
     setStep('generating')
     try {
       setKeys(await generateAccountKeys(password, setupToken))
+      // The keys' worker has the password now; the form lets it go.
+      reset()
       setStep('phrase')
     } catch {
       setError(t('auth.errors.keyGenerationFailed'))

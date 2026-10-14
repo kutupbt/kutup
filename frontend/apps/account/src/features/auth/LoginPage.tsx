@@ -1,9 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
+import { OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { useSession } from '@kutup/session/store'
 import { sanitizeNext } from '@kutup/session/sessionSync'
 import { Alert } from '@kutup/ui/components/alert'
@@ -31,6 +32,12 @@ export function LoginPage() {
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // A sign-in waiting for its code ends with this page, or when another
+  // replaces it: its worker holds the password and the export key.
+  useEffect(() => () => {
+    if (challenge) abandonTotp(challenge)
+  }, [challenge])
 
   const schema = z.object({
     name: z.string().trim().min(1, t('auth.validation.usernameRequired')),
@@ -80,7 +87,14 @@ export function LoginPage() {
       const result = await completeTotp(challenge, code.trim())
       if (result.kind === 'signedIn') signedIn()
     } catch (err) {
-      setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
+      if (err instanceof OpaqueWorkerClosed) {
+        // The sign-in itself ended (it failed after the code): start over.
+        setChallenge(null)
+        setCode('')
+        setError(t('auth.errors.signInAgain'))
+      } else {
+        setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
+      }
     } finally {
       setPending(false)
     }

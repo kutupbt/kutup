@@ -22,11 +22,14 @@ export class ReauthLockedError extends Error {
   }
 }
 
+function bodyCode(error: unknown): string | undefined {
+  return isAxiosError(error) ? (error.response?.data as { code?: string } | undefined)?.code : undefined
+}
+
 /** The {@link ReauthLockedError} a 429 stands for, or null for anything else. */
 export function lockedErrorFrom(error: unknown): ReauthLockedError | null {
   if (!isAxiosError(error) || error.response?.status !== 429) return null
-  const code = (error.response.data as { code?: string } | undefined)?.code
-  return new ReauthLockedError(code === 'rateLimited' ? 'rateLimited' : 'accountLocked')
+  return new ReauthLockedError(bodyCode(error) === 'rateLimited' ? 'rateLimited' : 'accountLocked')
 }
 
 /** The password is not the account's. */
@@ -54,7 +57,11 @@ export async function accountGrant(password: string, purpose: GrantPurpose): Pro
     return data.grant
   } catch (error) {
     if (error instanceof OpaqueAuthFailed) throw new WrongPasswordError()
-    if (isAxiosError(error) && error.response?.status === 401) throw new WrongPasswordError()
+    // Only a refused password is a wrong one; any other 401 is the sign-in
+    // ending (the client has sent it to sign in again), thrown as it is.
+    if (isAxiosError(error) && error.response?.status === 401 && bodyCode(error) === 'invalidCredentials') {
+      throw new WrongPasswordError()
+    }
     throw lockedErrorFrom(error) ?? error
   }
 }
