@@ -138,10 +138,10 @@ describe('api/client — 401 refresh chain', () => {
 
   it('does not retry skipRefresh routes (login/register/recover) on 401', async () => {
     seedAuth('any-token')
-    responses[route('POST /auth/login')] = [{ status: 401, data: { error: 'bad pw' } }]
+    responses[route('POST /auth/login/start')] = [{ status: 401, data: { error: 'bad pw' } }]
     // No /auth/refresh handler — if it gets called the adapter would 0-status
     // and we'd see it in `calls`.
-    await expect(api.post('/auth/login', {})).rejects.toBeTruthy()
+    await expect(api.post('/auth/login/start', {})).rejects.toBeTruthy()
     const refreshCalls = calls.filter((c) => c.url === '/api/auth/refresh')
     expect(refreshCalls, 'refresh must NOT fire for /auth/login 401').toHaveLength(0)
   })
@@ -154,6 +154,65 @@ describe('api/client — 401 refresh chain', () => {
     await expect(api.put('/pass/pin', {})).rejects.toBeTruthy()
     expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
     expect(calls.filter((c) => c.url?.endsWith('/user/reauth'))).toHaveLength(1)
+  })
+
+  it('never refreshes for an auth call, even with a session: a setup token that ran out', async () => {
+    seedAuth('another-accounts-token')
+    responses[route('POST /auth/opaque/register/start')] = [
+      { status: 401, data: { error: 'invalid token', code: 'setupTokenInvalid' } },
+    ]
+    let ended = 0
+    setUnauthenticatedHandler(() => { ended += 1 })
+    await expect(api.post('/auth/opaque/register/start', {}, { headers: { Authorization: 'Bearer setup' } })).rejects.toMatchObject({
+      response: { status: 401 },
+    })
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    expect(calls.filter((c) => c.url?.endsWith('/register/start'))).toHaveLength(1)
+    // Nothing of this origin's session was touched.
+    expect(ended).toBe(0)
+    expect(getAccessToken()).toBe('another-accounts-token')
+    setUnauthenticatedHandler(() => {})
+  })
+
+  it('never refreshes for a signed-in password check, nor for the codes that name a credential', async () => {
+    seedAuth('expired-token')
+    responses[route('POST /auth/login/finish')] = [{ status: 401, data: { error: 'unauthorized' } }]
+    responses[route('POST /auth/login/2fa')] = [{ status: 401, data: { error: 'expired', code: 'preAuthInvalid' } }]
+    responses[route('POST /user/thing')] = [{ status: 401, data: { error: 'expired', code: 'setupTokenInvalid' } }]
+    await expect(api.post('/auth/login/finish', {})).rejects.toBeTruthy()
+    await expect(api.post('/auth/login/2fa', {})).rejects.toBeTruthy()
+    await expect(api.post('/user/thing', {})).rejects.toBeTruthy()
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
+    expect(getAccessToken()).toBe('expired-token')
+  })
+
+  it('refreshes an expired token on the Bearer calls under /auth (sessions, forks)', async () => {
+    seedAuth('expired-token')
+    responses[route('GET /auth/sessions/current/local-key')] = [
+      { status: 401, data: { error: 'expired' } },
+      { status: 200, data: { key: 'k' } },
+    ]
+    responses[route('POST /auth/forks')] = [
+      { status: 401, data: { error: 'expired' } },
+      { status: 200, data: { selector: 's' } },
+    ]
+    const axiosMod = (await import('axios')).default
+    axiosMod.defaults.adapter = api.defaults.adapter
+    responses['POST /api/auth/refresh'] = [
+      { status: 200, data: { accessToken: 'fresh-token' } },
+      { status: 200, data: { accessToken: 'fresher-token' } },
+    ]
+    await expect(api.get('/auth/sessions/current/local-key')).resolves.toMatchObject({ data: { key: 'k' } })
+    await expect(api.post('/auth/forks', {})).resolves.toMatchObject({ data: { selector: 's' } })
+    expect(calls.filter((c) => c.url === '/auth/sessions/current/local-key')).toHaveLength(2)
+    expect(calls.filter((c) => c.url === '/auth/forks')).toHaveLength(2)
+  })
+
+  it('does not refresh for a fork link (it carries no token)', async () => {
+    seedAuth('any-token')
+    responses[route('POST /auth/forks/consume')] = [{ status: 401, data: { error: 'unknown fork' } }]
+    await expect(api.post('/auth/forks/consume', {})).rejects.toBeTruthy()
+    expect(calls.filter((c) => c.url === '/api/auth/refresh')).toHaveLength(0)
   })
 
   it('refreshes an expired token at the re-checks and retries', async () => {

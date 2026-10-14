@@ -57,7 +57,11 @@
       "usernameTaken": "That username is taken. Go back and choose another.",
       "generic": "Something went wrong. Try again.",
       "slowDown": "Too many attempts from here. Wait a minute, then try again.",
-      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator."
+      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator.",
+      "signInAgain": "The sign-in ended before it finished. Sign in again.",
+      "setupExpired": "Your first sign-in ran out of time, or your temporary password was replaced. Sign in again with the temporary password you have now.",
+      "serverKeyChanged": "The server's sign-in key changed while your account was being made. Try again; if it keeps happening, tell the server's administrator.",
+      "keyBindingTaken": "Your account's keys could not be stored. Try again; if it keeps happening, tell the server's administrator."
     },
     "strength": {
       "label": "Strength: {{strength}}",
@@ -194,6 +198,34 @@
       "disableWarning": "Your password alone will then be enough to sign in.",
       "disableFailed": "Two-factor authentication could not be turned off.",
       "disabled": "Two-factor authentication turned off",
+      "password": "Password",
+      "passwordDescription": "Change the password you sign in with. Your files, mail and chats stay as they are: only the key that opens them is sealed again.",
+      "currentPassword": "Current password",
+      "changePassword": "Change password",
+      "passwordChanged": "Password changed. Your other devices are signed out.",
+      "wrongCurrentPassword": "Your current password is not right.",
+      "yourPassword": "Your Kutup password",
+      "wrongPassword": "That is not your Kutup password.",
+      "passwordChangeFailed": "The password could not be changed. Try again.",
+      "passwordSignsOutOthers": "Every other device signed in to your account is signed out. This one stays signed in.",
+      "events": {
+        "title": "Security events",
+        "description": "Changes to how you sign in, newest first. If you do not recognise one, change your password and check Devices & sessions.",
+        "none": "Nothing has changed since your account was made.",
+        "failed": "Security events could not be loaded.",
+        "older": "Show older events",
+        "byAdmin": "By an administrator",
+        "thisDevice": "This device",
+        "device": "{{device}}",
+        "kind": {
+          "passwordChange": "Password changed",
+          "recovery": "Password reset with the recovery phrase",
+          "rotate": "Your sign-in was refreshed",
+          "adminReset": "Password reset by an administrator",
+          "accountReset": "Account reset by an administrator",
+          "other": "A change to your sign-in"
+        }
+      },
       "recovery": "Recovery phrase",
       "recoveryDescription": "The 24 words shown when your account was created.",
       "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline."
@@ -519,6 +551,10 @@
       "twoFactorDone": "Two-factor authentication turned off",
       "rotate": "New temporary password",
       "rotateHint": "This account has not signed in yet; replacing its temporary password loses nothing.",
+      "yourPassword": "Your own password, to confirm it is you",
+      "wrongAdminPassword": "Your password is not right.",
+      "adminLocked": "Too many attempts with your password. Wait a while and try again.",
+      "adminSlowDown": "Too many attempts from here. Wait a minute, then try again.",
       "rotateTitle": "Replace the temporary password?",
       "rotateDescription": "The current temporary password for {{name}} stops working.",
       "wipe": "Wipe account",

@@ -220,6 +220,54 @@ pins, and the next setup starts a new incarnation. OPAQUE keeps that:
   the client half itself at startup: the only place the server ever sees a
   password. That is already true today.
 
+**Addendum: every flow, end to end** (the cases the table above leaves open):
+
+- **Second factor and setup:** `login/finish` (purpose `session`) answers one of three:
+  - the session: `{ …the session, keyBinding, masterKeyEnvelope, drivePrivateKeyEnvelope, publicKey }`;
+  - `{ requiresTotp: true, preAuthToken }`;
+  - `{ requiresSetup: true, setupToken, username }`.
+  `POST /api/auth/login/2fa { preAuthToken, code }` then answers the session with
+  the envelopes, as today. The client keeps the export key in its worker across
+  that step and never re-derives it.
+- **Sign-up returns the session.** `POST /api/auth/register` answers the same
+  session as `login/finish`. The client created the master key itself and holds
+  the export key, so a second OPAQUE run (another Argon2) after registering is
+  pointless.
+- **Admin-created accounts (first sign-in):** the user signs in with the temporary
+  password and gets `requiresSetup`. With the setup token as its grant
+  (`Authorization: Bearer <setupToken>`), the client runs `register/start` for the
+  new key binding it draws. Then `POST /api/auth/complete-setup` carries
+  `{ …the keys, keyBinding, opaqueRecord, opaqueServerKeyId, masterKeyEnvelope }`
+  and answers the session.
+- **Recovery:**
+  - `GET /api/auth/recover/preflight` (unchanged) gives the recovery envelope and
+    the key binding.
+  - `POST /api/auth/recover/grant { name, recoveryProof }` answers
+    `{ grant }` (purpose `recovery`, bound to that account, with no session).
+  - Then `register/start` and `register/finish` with that grant. `finish`
+    replaces the record and the password envelope, and ends every session of
+    the account.
+- **Pass:** the PIN set and remove endpoints take `{ grant }` (purpose `pass`)
+  instead of `loginKey`.
+- **Reauth:** `verifyAccountPassword` (Kutup Pass's unlock) becomes login/start
+  and login/finish with `purpose: "reauth"`, `for: "verify"`. A success answer
+  means right; it stores no grant, so nothing usable is left behind.
+  `401 invalidCredentials` means wrong; any other 401 is an ended session.
+  The lockout works as at sign-in.
+- **Admin resets and temporary passwords:**
+  - The admin first reauthenticates (`purpose: "reauth"`, then a grant of purpose
+    `adminReset` for the target, `POST /api/admin/users/:id/reset-grant { grant }`
+    → `{ grant: adminResetGrant }`).
+  - The admin's client then draws the target's new key binding and runs
+    `register/start` with that grant.
+  - The reset or temporary-password endpoint takes `{ grant, keyBinding,
+    opaqueRecord, opaqueServerKeyId }`.
+
+**Why `register/start` needs a grant even though it returns no envelope:** each
+call is one oracle query on that account's OPRF key, so it is limited like
+`login/start`. A new key binding (sign-up) is the only grant-free case, limited
+by the sign-up limits.
+
 **Renames:**
 - **Signing in by an old name during the hold** is refused: the old name is only a
   mail alias then. The answer is the same fake as an unknown name.
@@ -376,6 +424,27 @@ third sessions (2026-10-13). The wire is the one above, plus the addendum.
   recoveries, rotations and admin resets in the change's transaction (no IP
   addresses; a year, or the newest 500 per account). `GET
   /api/user/security-events` lists the caller's own.
+- **The web client's workers** (`@kutup/crypto/opaqueWorker`): one per sign-in
+  or registration.
+  - The worker holds the password, the OPAQUE state and the export key until
+    it is closed. The page never keeps the password: a rotation, or a record
+    made again after `opaqueKeyStale`, starts a new registration in the
+    worker from its own copy (`registrationAgain`).
+  - A sign-in waiting for its code is closed when the person goes back or
+    leaves the page. New account keys are closed once they are stored or
+    replaced.
+  - Closing asks the worker to wipe (WASM `close`/`free`), then ends it (after
+    one second at most). A worker that failed, or was closed, fails the call
+    waiting on it and every later one.
+- **Refused registrations, made again once:**
+  - `opaqueKeyStale`: the same keys, a new record from the held password,
+    sent again (sign-up, setup, and every `register/finish`; a grant is used
+    only when the record is stored).
+  - `keyBindingTaken`: a new binding. The records bound to it are sealed
+    again from the same master key and recovery phrase, so the phrase shown
+    stays valid.
+  - Refused a second time: the person is told (in English and Turkish) and
+    can try again without starting over.
 - **Admins:**
   - `reset-grant` exchanges the admin's own `adminReset` reauth grant for one
     bound to the target.

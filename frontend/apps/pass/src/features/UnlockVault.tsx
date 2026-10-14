@@ -2,6 +2,7 @@ import { LockKeyhole } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { appUrl } from '@kutup/session/apps'
 import { ReauthLockedError, verifyAccountPassword } from '@kutup/session/reauth'
 import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
@@ -204,7 +205,10 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
                   }
                   if (check.result === 'signedOut') {
                     toast.error(t('unlock.pinSignedOut'))
+                    // The server already ended the sign-in: this origin forgets
+                    // it too, and the person signs in again.
                     await signOut()
+                    window.location.assign(appUrl('account', '/login'))
                     return
                   }
                   if (check.result === 'noPin') {

@@ -23,6 +23,11 @@ export function FirstLoginPage() {
       title={t('firstLogin.title')}
       description={t('firstLogin.description', { name: setup.name })}
       account={() => setup.name}
+      setupToken={setup.setupToken}
+      onSetupExpired={() => {
+        setPendingSetup(null)
+        void navigate(`/login?setup=expired&next=${encodeURIComponent(next)}`, { replace: true })
+      }}
       onKeysConfirmed={async (keys) => {
         await completeSetup(setup, keys)
         setPendingSetup(null)
