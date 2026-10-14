@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Kutup's collaboration content in Rust (Yjs, via yrs): the deterministic seed, text edits as Yjs operations, place lists"
 
 [dependencies]
+kutup-crypto = { path = "../kutup-crypto" }
 yrs.workspace = true
 similar.workspace = true
 thiserror.workspace = true

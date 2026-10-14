@@ -540,6 +540,7 @@ export interface CryptoWasmModule {
   driveNameHash(hashKeyBase64: string, name: string): string
   driveContentHash(hashKeyBase64: string, contentSha256Base64: string): string
   driveCanonicalName(name: string): string
+  yjsSeedClientId(fileId: string, content: Uint8Array): number
   photosLibraryKey(masterKeyBase64: string): string
   sealPhotosLibrary(
     libraryJson: string,

@@ -95,7 +95,7 @@ interface Props {
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
-function seedUpdate(fileId: string, text: string): Uint8Array {
+function seedUpdate(fileId: string, text: string): Promise<Uint8Array> {
   return deterministicSeed(fileId, (doc) => doc.getText('content').insert(0, text))
 }
 

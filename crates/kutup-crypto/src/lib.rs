@@ -76,5 +76,6 @@ pub mod revision_guard;
 pub mod safety_number;
 pub mod stream;
 pub mod thumbnail;
+pub mod yjs_seed;
 
 pub use error::{CryptoError, Result};

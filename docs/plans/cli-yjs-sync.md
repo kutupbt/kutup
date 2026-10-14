@@ -121,13 +121,22 @@ upload, which the first editor turns into a deterministic seed
   fields).
   - It is applied locally, and sent only in front of the CLI's first edit, so
     a pull writes nothing to the server.
-  - Unlike a tab, the CLI sends it whether or not its `claim-seed` won. The
-    seed is deterministic (same items, same client and clock for every peer),
-    so a second copy merges into the first and adds nothing, while holding it
-    back would leave a journaled edit made on top of it that could only be
-    sent without it. The seed and the edit are journaled first, so a later
-    run resends the same bytes; the claim is still made, best effort, so tabs
-    keep their order.
+  - The seed's Yjs client id is bound to its content as well as to the file
+    (`kutup_crypto::yjs_seed`): the first 53 bits of SHA-256 over
+    `"kutup/yjs-seed/v1\0"`, the file id, a zero byte, and SHA-256 of the
+    seed's own update made under client id 0. The web (through the crypto
+    module) and `kutup-collab` derive it alike, and the seed vectors pin it.
+    Peers seeding from the same content make the same items; peers seeding
+    from different content (say an older and a newer upload, before any
+    frame exists) make different ones, so at worst both texts land side by
+    side, and no peer ever keeps different content under the same id.
+  - Unlike a tab, the CLI sends it whether or not its `claim-seed` won. A
+    seed the same as the winner's merges into it and adds nothing; one from
+    different content is a separate item, as above. Holding it back instead
+    would leave a journaled edit made on top of it that could only be sent
+    without it. The seed and the edit are journaled first, so a later run
+    resends the same bytes; the claim is still made, best effort, and stays
+    the normal path for tabs.
 - **Crash safety.** No run ever makes the same edit twice as new operations:
   - **Before sending,** a local edit is recorded: the base becomes the state
     the file held, and the update bytes are kept as pending. A later run sends

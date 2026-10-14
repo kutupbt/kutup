@@ -14,6 +14,7 @@
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { yjsSeedClientId } from '@kutup/crypto/yjsSeed'
 import api from '@kutup/session/client'
 import { claimSeed, listDevices, listVersions, localBase, newestYjsVersion } from './api'
 import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from './cryptoFrame'
@@ -26,20 +27,23 @@ import { CollabTransport, type HelloMsg, type PositionMsg } from './transport'
 
 /**
  * The first content of a file no one has edited yet, as one Yjs update by a
- * client id derived from the file: every tab builds the same bytes, so an
+ * client id derived from the file and that content (`yjsSeedClientId`):
+ * every peer seeding from the same content builds the same bytes, so an
  * editor's seed and a viewer's local copy are the same item and merge
- * instead of doubling. `fill` writes the content into the fresh document.
+ * instead of doubling, while seeds from different content (an older and a
+ * newer upload) are different items and never overwrite each other. `fill`
+ * writes the content into the fresh document.
  */
-export function deterministicSeed(fileId: string, fill: (doc: Y.Doc) => void): Uint8Array {
-  const doc = new Y.Doc()
-  // FNV-1a over the id: a stable uint32, as Yjs client ids are.
-  let id = 0x811c9dc5
-  for (let i = 0; i < fileId.length; i++) id = Math.imul(id ^ fileId.charCodeAt(i), 0x01000193) >>> 0
-  doc.clientID = id
-  fill(doc)
-  const update = Y.encodeStateAsUpdate(doc)
-  doc.destroy()
-  return update
+export async function deterministicSeed(fileId: string, fill: (doc: Y.Doc) => void): Promise<Uint8Array> {
+  const encode = (clientID: number) => {
+    const doc = new Y.Doc()
+    doc.clientID = clientID
+    fill(doc)
+    const update = Y.encodeStateAsUpdate(doc)
+    doc.destroy()
+    return update
+  }
+  return encode(await yjsSeedClientId(fileId, encode(0)))
 }
 
 export type RestoreChoice = 'save-and-restore' | 'restore-only'
@@ -67,7 +71,7 @@ export interface CollabSessionOptions {
    * update (see `deterministicSeed`) and whether the document is still
    * empty (so a late seed never lands on top of edits).
    */
-  seed?: { update: () => Uint8Array; isEmpty: (doc: Y.Doc) => boolean }
+  seed?: { update: () => Promise<Uint8Array>; isEmpty: (doc: Y.Doc) => boolean }
   /** Replace the live document's content with an old state's (restore). */
   replaceContent: (live: Y.Doc, old: Y.Doc) => void
   /** Labels for the versions a restore saves. */
@@ -266,6 +270,17 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   } catch (error) {
     console.warn('collab: failed to load initial content, starting empty', error)
   }
+  // The first content, made now (it is derived through the crypto module)
+  // and applied when the relay says hello.
+  let seedUpdate: Uint8Array | null = null
+  if (options.seed && (maySeed || (readOnly && neverSaved))) {
+    try {
+      seedUpdate = await options.seed.update()
+    } catch (error) {
+      console.warn('collab: could not make the first content, opening without it', error)
+      maySeed = false
+    }
+  }
 
   const close = () => {
     trigger?.destroy()
@@ -331,14 +346,14 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       }
       const seed = options.seed
       // The seed claim was ours: insert the first content now, once.
-      if (seed && maySeed && seed.isEmpty(doc)) {
-        Y.applyUpdate(doc, seed.update(), 'seed')
+      if (seed && seedUpdate && maySeed && seed.isEmpty(doc)) {
+        Y.applyUpdate(doc, seedUpdate, 'seed')
         maySeed = false
       }
       // A viewer of a file no editor has opened yet shows the first content
       // locally (not sent); an editor's seed, when it comes, is the same item.
-      if (seed && readOnly && neverSaved && hello.headSeq === 0 && seed.isEmpty(doc)) {
-        Y.applyUpdate(doc, seed.update(), 'remote')
+      if (seed && seedUpdate && readOnly && neverSaved && hello.headSeq === 0 && seed.isEmpty(doc)) {
+        Y.applyUpdate(doc, seedUpdate, 'remote')
       }
       options.onStatus('ready')
     },

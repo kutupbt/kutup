@@ -37,15 +37,21 @@ pub enum CollabError {
 
 pub type Result<T> = std::result::Result<T, CollabError>;
 
-/// The Yjs client id a seed is made under: FNV-1a over the file id's UTF-16
-/// code units, as the web computes it (`deterministicSeed`). Every peer
-/// seeding the same file makes the same item.
-pub fn seed_client_id(file_id: &str) -> u64 {
-    let mut id: u32 = 0x811c_9dc5;
-    for unit in file_id.encode_utf16() {
-        id = (id ^ u32::from(unit)).wrapping_mul(0x0100_0193);
-    }
-    u64::from(id)
+/// A seed: `fill` makes the first content once under client id 0, and that
+/// update fixes the client id the seed is made under
+/// (`kutup_crypto::yjs_seed`), as the web's `deterministicSeed` does. Every
+/// peer seeding the same file from the same content makes the same items;
+/// different content makes different ones.
+fn seeded(file_id: &str, fill: impl Fn(&Doc)) -> Vec<u8> {
+    let encode = |client_id| {
+        let doc = Doc::with_options(options(client_id));
+        fill(&doc);
+        let update = doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        update
+    };
+    encode(kutup_crypto::yjs_seed::seed_client_id(file_id, &encode(0)))
 }
 
 fn options(client_id: u64) -> Options {
@@ -59,16 +65,11 @@ fn options(client_id: u64) -> Options {
 /// The seed of a text file: its text inserted once, under the file's seed
 /// client id, as a Yjs V1 update (what the web's seed applies).
 pub fn seed_text(file_id: &str, text: &str) -> Vec<u8> {
-    let doc = Doc::with_options(options(seed_client_id(file_id)));
-    let content = doc.get_or_insert_text(TEXT_NAME);
-    {
+    seeded(file_id, |doc| {
+        let content = doc.get_or_insert_text(TEXT_NAME);
         let mut txn = doc.transact_mut();
         content.insert(&mut txn, 0, text);
-    }
-    let update = doc
-        .transact()
-        .encode_state_as_update_v1(&StateVector::default());
-    update
+    })
 }
 
 /// The map of a place list (`doc.getMap('places')` in `map/src/list.ts`).
@@ -116,18 +117,13 @@ fn insert_place<T: Map>(places: &T, txn: &mut yrs::TransactionMut, place: &Place
 /// The seed of a place list: its places written once, under the file's
 /// seed client id, as a Yjs V1 update (what the web's seed applies).
 pub fn seed_list(file_id: &str, places: &[Place]) -> Vec<u8> {
-    let doc = Doc::with_options(options(seed_client_id(file_id)));
-    let map = doc.get_or_insert_map(PLACES_NAME);
-    {
+    seeded(file_id, |doc| {
+        let map = doc.get_or_insert_map(PLACES_NAME);
         let mut txn = doc.transact_mut();
         for place in places {
             insert_place(&map, &mut txn, place);
         }
-    }
-    let update = doc
-        .transact()
-        .encode_state_as_update_v1(&StateVector::default());
-    update
+    })
 }
 
 /// A text document, as a peer holds it.
@@ -752,6 +748,40 @@ mod tests {
         // Two peers seeding at once insert one item: applying both is one text.
         let seed = seed_text(id, "hello");
         assert_eq!(merged(&seed, &[&seed]), "hello");
+    }
+
+    #[test]
+    fn seeds_from_different_content_never_share_items() {
+        // A peer seeding from an older upload and one from a newer: the two
+        // seeds are different items, so every peer ends with the same
+        // document whichever came first (both texts, side by side).
+        let id = "11111111-1111-4111-8111-111111111111";
+        let (old, new) = (seed_text(id, "version one"), seed_text(id, "version two"));
+        let first = merged(&old, &[&new]);
+        assert_eq!(first, merged(&new, &[&old]));
+        assert!(first.contains("version one") && first.contains("version two"));
+        // The same for place lists.
+        let place = |id: &str, lat: f64| Place {
+            id: id.into(),
+            name: "P".into(),
+            lat,
+            lon: 0.0,
+            note: String::new(),
+            added_by: "a@b".into(),
+            added_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let (a, b) = (
+            seed_list(id, &[place("p", 1.0)]),
+            seed_list(id, &[place("p", 2.0)]),
+        );
+        let state = |updates: [&[u8]; 2]| {
+            let doc = ListDoc::new(99);
+            for update in updates {
+                doc.apply_v1(update).unwrap();
+            }
+            doc.places()
+        };
+        assert_eq!(state([&a, &b]), state([&b, &a]));
     }
 
     #[test]

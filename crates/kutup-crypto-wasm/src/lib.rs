@@ -3672,3 +3672,11 @@ fn millis(value: f64) -> Result<i64, JsValue> {
     }
     Ok(value as i64)
 }
+
+/// The Yjs client id a file's first content is made under, from the file id
+/// and that content's update made under client id 0
+/// (`kutup_crypto::yjs_seed`). A whole number below 2^53.
+#[wasm_bindgen(js_name = yjsSeedClientId)]
+pub fn yjs_seed_client_id(file_id: &str, content: &[u8]) -> f64 {
+    kutup_crypto::yjs_seed::seed_client_id(file_id, content) as f64
+}

@@ -293,3 +293,4 @@ export async function decryptPrivateKey(
     binding,
   )
 }
+export { yjsSeedClientId } from './yjsSeed'
