@@ -7,9 +7,12 @@
 //!   checked next, at full cost even when there is none (an unknown name, a
 //!   voided temporary password); only a right secret learns anything about
 //!   the account (disabled, awaiting setup, 2FA).
-//! - **Lockout per account and client.** Five wrong secrets in a row from one
-//!   client IP lock that account for that IP only (`LOGIN_LOCKOUT_*`), so a
-//!   stranger elsewhere cannot lock a person out by knowing their name.
+//! - **Lockout per name and client.** Five wrong secrets in a row from one
+//!   client IP lock that canonical name for that IP only (`LOGIN_LOCKOUT_*`),
+//!   so a stranger elsewhere cannot lock a person out by knowing their name.
+//!   The key is the canonical name whether or not it is an account, so a
+//!   name's window carries on when an account takes it, and every spelling
+//!   of one name shares it.
 //! - **A ceiling per account for clients it does not know.** Attempts from
 //!   all unknown clients together are capped (`LOGIN_ACCOUNT_CEILING`, 20 in
 //!   the lockout's window; `LOGIN_ACCOUNT_DAILY_CEILING`, 200 a day), which
@@ -22,7 +25,7 @@
 //! - Every attempt takes its slots before the check, so parallel attempts
 //!   get no more than the limits; a right secret gives them back.
 //!
-//! Names that are no account get the same lockout and ceiling, keyed on the
+//! Names that are no account get the same lockout and a ceiling keyed on the
 //! canonical name, so a 429 tells nothing about whether one exists.
 
 use std::net::SocketAddr;
@@ -177,11 +180,13 @@ pub(crate) fn guard(
     canonical_name: &str,
     epoch: Option<&[u8]>,
 ) -> AppResult<Guard> {
+    // The ceiling is the account's (a rename does not reset it); the lockout
+    // is the name's, for real and unknown names alike.
     let subject = match account {
         Some(id) => format!("account:{id}"),
         None => format!("name:{canonical_name}"),
     };
-    let lockout = format!("{subject}\0ip:{}", client.ip);
+    let lockout = format!("name:{canonical_name}\0ip:{}", client.ip);
     let known = match (account, epoch) {
         (Some(id), Some(epoch)) => client.knows(id, epoch),
         _ => false,
@@ -454,6 +459,25 @@ mod tests {
             epoch
         )
         .is_err());
+    }
+
+    #[test]
+    fn the_lockout_is_the_names_whether_or_not_it_is_an_account() {
+        // Misses on a name nobody holds yet...
+        let guesser = client("198.51.100.44", None);
+        for _ in 0..5 {
+            guard(&guesser, None, "eve", None).unwrap();
+        }
+        // ...still count once an account takes it.
+        let id = Uuid::new_v4();
+        assert!(guard(&guesser, Some(id), "eve", Some(&EPOCH[..])).is_err());
+        assert!(guard(
+            &client("198.51.100.45", None),
+            Some(id),
+            "eve",
+            Some(&EPOCH[..])
+        )
+        .is_ok());
     }
 
     #[test]

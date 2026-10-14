@@ -1135,6 +1135,10 @@ publishing new DKIM records.
   - **Format:** `id:base64(32 bytes)`, comma-separated. The highest id is the
     current one. The server refuses to start on a malformed list, and on a key
     that does not open a stored setup.
+  - **As a file:** the server also takes `OPAQUE_SETUP_KEYS_FILE`, a file
+    holding the list (a mounted secret), never both. The bundled
+    `docker-compose.yml` passes the variable; to use a file, set it in your
+    own compose override or service unit instead.
   - **Back it up apart from the database,** never in the same place. Losing it
     signs no one in: every account then recovers with its recovery phrase and
     sets a new password.

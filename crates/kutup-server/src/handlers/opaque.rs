@@ -31,6 +31,7 @@ use crate::auth_check;
 use crate::error::{AppError, AppResult};
 use crate::grants::{self, Purpose};
 use crate::handlers::auth::{canonical_name, direct_sign_in_client, signed_in_answer};
+use crate::security_events;
 use crate::AppState;
 
 /// How long a sign-in may wait between its start and its finish.
@@ -65,7 +66,7 @@ pub struct LoginStartRequest {
     #[serde(default = "session_purpose")]
     purpose: String,
     /// Reauth only: what the grant is for (`pass`, `passwordChange`, `totp`,
-    /// `deleteAccount`, `adminReset`).
+    /// `adminReset`).
     #[serde(default, rename = "for")]
     grant_for: Option<String>,
 }
@@ -226,9 +227,9 @@ pub async fn login_start(
     sqlx::query(
         "INSERT INTO opaque_login_states (login_id, canonical_name, user_id, purpose, session_id,
              grant_for, source, lockout_key, ceiling_account, ceiling_source, server_key_id,
-             sealed_state, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 now() + make_interval(mins => $13))",
+             sealed_state, credential_epoch, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                 now() + make_interval(mins => $14))",
     )
     .bind(login_id)
     .bind(&canonical)
@@ -246,6 +247,7 @@ pub async fn login_start(
     .bind(ceiling.as_ref().map(|c| c.1.as_str()))
     .bind(server_key_id as i16)
     .bind(&sealed)
+    .bind(epoch.as_ref().map(|e| &e[..]))
     .bind(LOGIN_MINUTES)
     .execute(&mut *tx)
     .await?;
@@ -267,7 +269,8 @@ pub struct LoginFinishRequest {
     credential_finalization: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GrantResponse {
     /// A one-time grant (`kg1_…`), for the action it was asked for.
@@ -320,11 +323,12 @@ pub async fn login_finish(
         Option<String>,
         i16,
         Vec<u8>,
+        Option<Vec<u8>>,
     );
     let pending: Option<Pending> = sqlx::query_as(
         "DELETE FROM opaque_login_states WHERE login_id = $1 AND expires_at > now()
          RETURNING user_id, purpose, session_id, grant_for, lockout_key, ceiling_account,
-                   ceiling_source, server_key_id, sealed_state",
+                   ceiling_source, server_key_id, sealed_state, credential_epoch",
     )
     .bind(req.login_id)
     .fetch_optional(&state.pool)
@@ -339,6 +343,7 @@ pub async fn login_finish(
         ceiling_source,
         server_key_id,
         sealed,
+        epoch,
     )) = pending
     else {
         return Err(AppError::invalid_credentials());
@@ -360,7 +365,7 @@ pub async fn login_finish(
         Err(_) => return Err(AppError::invalid_credentials()),
     }
     // A fake answer cannot be finished; this is a guard, not a path.
-    let Some(user_id) = user_id else {
+    let (Some(user_id), Some(epoch)) = (user_id, epoch) else {
         return Err(AppError::invalid_credentials());
     };
     let lockout = String::from_utf8(lockout).map_err(|_| AppError::internal("lockout key"))?;
@@ -381,8 +386,16 @@ pub async fn login_finish(
             .as_deref()
             .and_then(Purpose::for_reauth)
             .ok_or_else(|| AppError::internal("reauth purpose"))?;
+        // Only while the password proved is still the account's.
+        let mut tx = state.pool.begin().await?;
+        if crate::handlers::auth::credential_held(&mut tx, user_id, &epoch)
+            .await?
+            .is_none()
+        {
+            return Err(AppError::invalid_credentials());
+        }
         let grant = grants::issue(
-            &state.pool,
+            &mut *tx,
             purpose,
             user_id,
             session_id,
@@ -390,10 +403,11 @@ pub async fn login_finish(
             grants::GRANT_MINUTES,
         )
         .await?;
+        tx.commit().await?;
         return Ok(Json(GrantResponse::new(grant)).into_response());
     }
     let client = direct_sign_in_client(&headers)?;
-    signed_in_answer(&state, &headers, client, user_id).await
+    signed_in_answer(&state, &headers, client, user_id, &epoch).await
 }
 
 // --- registration --------------------------------------------------------------
@@ -429,7 +443,8 @@ impl RecordUpload {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegisterStartRequest {
     /// The key binding the record is for: the account's own (a new password),
@@ -562,7 +577,8 @@ pub async fn register_start(
     .into_response())
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RegisterFinishRequest {
     grant: String,
@@ -623,10 +639,14 @@ pub async fn register_finish(
     {
         return Err(grants::invalid());
     }
+    // A rotation only moves an account off a retired setup: once per setup,
+    // and never a password change in disguise for an account already on the
+    // current one.
     let updated = sqlx::query(
         "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
                           master_key_envelope = $6
-         WHERE id = $1 AND key_binding = $2 AND is_active",
+         WHERE id = $1 AND key_binding = $2 AND is_active
+           AND (NOT $7 OR opaque_server_key_id IS DISTINCT FROM $5)",
     )
     .bind(grant.user_id)
     .bind(&req.key_binding)
@@ -634,26 +654,32 @@ pub async fn register_finish(
     .bind(kutup_crypto::opaque::SUITE as i16)
     .bind(server_key_id)
     .bind(&req.master_key_envelope)
+    .bind(purpose == Purpose::Rotate)
     .execute(&mut *tx)
     .await?;
     if updated.rows_affected() != 1 {
         return Err(grants::invalid());
     }
     grants::end_all(&mut tx, grant.user_id).await?;
-    tx.commit().await?;
-    match purpose {
+    // The sign-ins it ends end with it, in this transaction.
+    let kind = match purpose {
+        // This sign-in goes on; the account's others end.
         Purpose::PasswordChange => {
-            tracing::info!(user_id = %grant.user_id, "password changed");
-            crate::sessions::revoke_all_for_user(&state.pool, grant.user_id, grant.session_id)
+            crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, grant.session_id)
                 .await?;
+            security_events::Kind::PasswordChange
         }
         Purpose::Recovery => {
-            tracing::info!(user_id = %grant.user_id, "password set again with the recovery phrase");
-            crate::sessions::revoke_all_for_user(&state.pool, grant.user_id, None).await?;
+            crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, None).await?;
+            security_events::Kind::Recovery
         }
-        // The same password, registered under the current setup: nobody's
-        // sign-in ends, and it is no password change.
-        _ => tracing::info!(user_id = %grant.user_id, "OPAQUE record moved to the current setup"),
-    }
+        // The same password under the current setup: nobody's sign-in ends,
+        // but the owner sees it (a stolen password could otherwise set a new
+        // one here unseen).
+        _ => security_events::Kind::Rotate,
+    };
+    security_events::record(&mut tx, grant.user_id, kind, grant.session_id, None).await?;
+    tx.commit().await?;
+    tracing::info!(user_id = %grant.user_id, kind = kind.as_str(), "account credential changed");
     Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }

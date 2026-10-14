@@ -302,7 +302,8 @@ pub struct PinStatus {
     set: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetPinRequest {
     /// A `pass` grant from a reauth of this session (the account password,
@@ -312,7 +313,8 @@ pub struct SetPinRequest {
     pin: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RemovePinRequest {
     /// A `pass` grant from a reauth of this session.

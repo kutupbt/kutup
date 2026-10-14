@@ -46,6 +46,7 @@ mod remote_devices;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
+mod security_events;
 mod server_keys;
 mod sessions;
 mod site_settings;
@@ -768,6 +769,10 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route(
+            "/api/user/security-events",
+            get(handlers::security_events::list),
+        )
         .route(
             "/api/feedback",
             post(feedback::send_feedback)

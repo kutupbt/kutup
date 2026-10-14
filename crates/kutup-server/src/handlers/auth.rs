@@ -68,7 +68,8 @@ pub struct RegisterRequest {
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
 /// the setup/2FA branches); the four omitempty fields are skipped at their defaults.
-#[derive(Debug, Default, Serialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     access_token: String,
@@ -139,10 +140,14 @@ pub struct UpdateMeRequest {
     version_retention_days: Option<i32>,
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct CodeRequest {
     code: String,
+    /// Turning two-step sign-in on or off: a `totp` grant from a reauth of
+    /// this session (the password proved again).
+    grant: String,
 }
 
 /// `?name=` query for the preflight endpoints.
@@ -674,7 +679,8 @@ pub async fn register(
     tx.commit().await?;
     // The client made the keys and holds the export key: no second OPAQUE
     // run, the session comes now (docs/plans/opaque.md, "every flow").
-    signed_in_answer(&state, &headers, client, user_id).await
+    let epoch = auth_check::credential_epoch(&opaque_record);
+    signed_in_answer(&state, &headers, client, user_id, &epoch).await
 }
 
 /// What a sign-in whose password was right answers (docs/plans/opaque.md,
@@ -685,6 +691,7 @@ pub(crate) async fn signed_in_answer(
     headers: &HeaderMap,
     client: ClientType,
     user_id: Uuid,
+    epoch: &[u8],
 ) -> AppResult<Response> {
     type Row = (
         String,
@@ -699,15 +706,18 @@ pub(crate) async fn signed_in_answer(
         String,
         String,
         String,
+        bool,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT master_key_envelope, drive_private_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   is_first_login,
-                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, '')
+                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
+                  COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
            FROM users WHERE id = $1"#,
     )
     .bind(user_id)
+    .bind(epoch)
     .fetch_optional(&state.pool)
     .await?;
     let Some((
@@ -723,10 +733,16 @@ pub(crate) async fn signed_in_answer(
         username,
         color,
         envelope_binding,
+        same_credential,
     )) = row
     else {
         return Err(AppError::invalid_credentials());
     };
+    // The password was proved against a record the account no longer holds
+    // (changed or recovered since the sign-in started).
+    if !same_credential {
+        return Err(AppError::invalid_credentials());
+    }
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
@@ -735,7 +751,7 @@ pub(crate) async fn signed_in_answer(
     // First-login account — no key material yet. Its username comes along:
     // the new keys' Drive key binding names the account's address.
     if is_first_login {
-        let setup_token = jwt::generate_setup_token(&user_id, &state.config.jwt_secret)
+        let setup_token = jwt::generate_setup_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_setup: true,
@@ -748,7 +764,7 @@ pub(crate) async fn signed_in_answer(
 
     // TOTP enabled — return a pre-auth token instead of a full session.
     if totp_enabled {
-        let pre_auth = jwt::generate_pre_auth_token(&user_id, &state.config.jwt_secret)
+        let pre_auth = jwt::generate_pre_auth_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_totp: true,
@@ -772,6 +788,7 @@ pub(crate) async fn signed_in_answer(
         used_bytes,
         &color,
         &envelope_binding,
+        epoch,
     )
     .await
 }
@@ -798,8 +815,9 @@ pub async fn login_two_fa(
         ));
     }
 
-    let user_id = jwt::validate_pre_auth_token(&req.pre_auth_token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid pre-auth token"))?;
+    let (user_id, epoch) =
+        jwt::validate_pre_auth_token(&req.pre_auth_token, &state.config.jwt_secret)
+            .map_err(|_| AppError::unauthorized("invalid pre-auth token"))?;
 
     type Row = (
         Option<String>,
@@ -875,6 +893,7 @@ pub async fn login_two_fa(
         used_bytes,
         &color,
         &envelope_binding,
+        &epoch,
     )
     .await
 }
@@ -1261,11 +1280,16 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
     let (secret, qr_uri) =
         totp::generate_totp(&label, "Kutup").map_err(|_| AppError::internal("totp"))?;
 
-    sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2")
+    // Never while it is on: the secret in use is replaced only by turning it
+    // off (with the password) and on again.
+    let set = sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2 AND NOT totp_enabled")
         .bind(&secret)
         .bind(parse_uuid(&user.user_id)?)
         .execute(&state.pool)
         .await?;
+    if set.rows_affected() != 1 {
+        return Err(AppError::conflict("two-step sign-in is already on"));
+    }
 
     Ok(Json(TotpSetupResponse { secret, qr_uri }).into_response())
 }
@@ -1299,10 +1323,16 @@ pub async fn verify_totp(
         return Err(AppError::bad_request("invalid code"));
     }
 
-    sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1")
-        .bind(parse_uuid(&user.user_id)?)
-        .execute(&state.pool)
+    // The password proved again, for this session: used with the change.
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
+    sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
+        .bind(parse_uuid(&user.user_id)?)
+        .bind(&secret)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
 
     Ok(Json(MessageResponse {
         message: "TOTP enabled".to_string(),
@@ -1324,9 +1354,9 @@ pub async fn disable_totp(
     user: AuthUser,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
-    let code = match body {
-        Ok(Json(b)) => b.code,
-        Err(_) => String::new(),
+    let (code, grant) = match body {
+        Ok(Json(b)) => (b.code, b.grant),
+        Err(_) => (String::new(), String::new()),
     };
     if code.is_empty() {
         return Err(AppError::bad_request("totp code required"));
@@ -1346,10 +1376,14 @@ pub async fn disable_totp(
         return Err(AppError::bad_request("invalid code"));
     }
 
+    // The code and the password: a stolen session alone cannot turn it off.
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &grant, crate::grants::Purpose::Totp, &user).await?;
     sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
         .bind(parse_uuid(&user.user_id)?)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(Json(MessageResponse {
         message: "TOTP disabled".to_string(),
@@ -1378,7 +1412,7 @@ pub async fn complete_setup(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
-    let user_id = jwt::validate_setup_token(token, &state.config.jwt_secret)
+    let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| AppError::unauthorized("invalid setup token"))?;
 
     let account: Option<(bool, String)> =
@@ -1440,7 +1474,8 @@ pub async fn complete_setup(
               drive_key_binding = $14,
               key_binding = $15,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $13 AND is_first_login"#,
+           WHERE id = $13 AND is_first_login
+             AND substring(sha256(opaque_record) from 1 for 16) = $16"#,
     )
     .bind(&opaque_record)
     .bind(&req.master_key_envelope)
@@ -1457,6 +1492,7 @@ pub async fn complete_setup(
     .bind(uid)
     .bind(&drive_key_binding)
     .bind(&account_binding)
+    .bind(&setup_epoch)
     .execute(&mut *tx)
     .await;
     match res {
@@ -1483,6 +1519,14 @@ pub async fn complete_setup(
     .await?;
 
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(&headers)).await?;
+    // An admin reset may land between the setup and its session.
+    let mut tx = state.pool.begin().await?;
+    let held = credential_held(&mut tx, uid, &auth_check::credential_epoch(&opaque_record)).await?;
+    tx.commit().await?;
+    if held.is_none() {
+        sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
+        return Err(AppError::invalid_credentials());
+    }
     let access = jwt::generate_access_token(
         &user_id,
         is_admin,
@@ -1512,6 +1556,28 @@ pub async fn complete_setup(
 }
 
 // --- helpers ---
+
+/// Inside `tx`: whether the account still holds the credential whose epoch
+/// (`auth_check::credential_epoch`) a sign-in proved, and if so its record's
+/// setup id. The row is locked for share until `tx` ends, so a credential
+/// change (which updates the row first, then ends sessions and grants in the
+/// same transaction) either is seen here or ends what this one makes.
+pub(crate) async fn credential_held(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    epoch: &[u8],
+) -> AppResult<Option<Option<i16>>> {
+    Ok(sqlx::query_scalar(
+        "SELECT opaque_server_key_id FROM users
+         WHERE id = $1 AND is_active
+           AND substring(sha256(opaque_record) from 1 for 16) = $2
+         FOR SHARE",
+    )
+    .bind(user_id)
+    .bind(epoch)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
 
 /// The client a password sign-in comes from (`X-Kutup-Client`). Only clients that
 /// sign in directly are accepted here; drive and chat get forked sessions.
@@ -1552,20 +1618,24 @@ async fn issue_tokens_and_respond(
     used: i64,
     color: &str,
     envelope_binding: &str,
+    epoch: &[u8],
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
+    let mut tx = state.pool.begin().await?;
+    // Still the password that was proved: a change or recovery that landed
+    // since ends this session here, or (landing after) with the rest.
+    let Some(record_key) = credential_held(&mut tx, uid, epoch).await? else {
+        drop(tx);
+        sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
+        return Err(AppError::invalid_credentials());
+    };
     // Registered under a setup that is no longer the current one: moved by
     // the client now, while it holds the password (docs/plans/opaque.md §5).
-    let record_key: Option<i16> =
-        sqlx::query_scalar("SELECT opaque_server_key_id FROM users WHERE id = $1")
-            .bind(uid)
-            .fetch_one(&state.pool)
-            .await?;
     let rotate_grant = match record_key {
         Some(id) if id != state.opaque.current().0 as i16 => Some(
             crate::grants::issue(
-                &state.pool,
+                &mut *tx,
                 crate::grants::Purpose::Rotate,
                 uid,
                 Some(issued.session_id),
@@ -1576,6 +1646,7 @@ async fn issue_tokens_and_respond(
         ),
         _ => None,
     };
+    tx.commit().await?;
     let access = jwt::generate_access_token(
         user_id,
         is_admin,

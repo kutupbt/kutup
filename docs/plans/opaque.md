@@ -178,7 +178,9 @@ start and finish.
 **Grants** (`auth_check`): an opaque token, `kg1_` followed by
 base64url of 32 random bytes, stored as its SHA-256.
 - Each is bound to the session id, the account and one purpose: `pass`,
-  `passwordChange`, `totp`, `deleteAccount`, `recovery`, `adminReset`.
+  `passwordChange`, `totp`, `recovery`, `adminReset`, `rotate`. A purpose
+  exists only with the action that takes it (account deletion, when it
+  comes, adds its own).
 - Single use: consumed by the action it was issued for.
 - It expires in 5 minutes or less.
 - It is never accepted as a session or a bearer token.
@@ -308,24 +310,36 @@ third sessions (2026-10-13). The wire is the one above, plus the addendum.
   - `auth_grants`: kept as their SHA-256, used by an atomic `UPDATE …
     RETURNING`.
 - **Keys:**
-  - `OPAQUE_SETUP_KEYS` is parsed strictly (ids 1–32767, no duplicates, exactly
-    32 bytes in canonical base64, never printed). A stored setup that does not
-    open under its key stops the server.
+  - `OPAQUE_SETUP_KEYS` (or `OPAQUE_SETUP_KEYS_FILE`, a file holding it; one
+    of the two) is parsed strictly: ids 1–32767 written plainly (no sign, no
+    leading zero), no duplicates, no empty entries, exactly 32 bytes in
+    canonical base64, never printed. A stored setup that does not open under
+    its key stops the server.
   - A record whose key is missing gets `500 opaqueKeyMissing`, and a warning
     with the count of such accounts at startup.
   - Setups older than the current one that no account uses are dropped at
     startup.
 - **One canonical name:** this server's address is cut to its username, then
   `CanonicalName::parse`. It is used for the lookup, the fake answer, the
-  lockout and the caps. Lookup is by username only, so a held or foreign name
+  lockout and the caps. The per-address lockout is keyed by it for real and
+  unknown names alike, so a name's window carries on when an account takes it
+  and every spelling shares it; the per-account ceiling stays the account's. Lookup is by username only, so a held or foreign name
   gets the fake answer.
 - **Lockout at the start:** each `login/start` takes the attempt's lockout and
   ceiling slots before any OPAQUE work. The state row keeps them, and only a
   right finish gives them back, so starts without a finish cost as wrong
   passwords do.
 - **Caps:** 5 sign-ins under way per name and 20 per address; the oldest goes.
+- **The credential at the finish:** the login state keeps the account's
+  credential epoch at the start (16 bytes of SHA-256 of its record), and so do
+  the 2FA and setup tokens a finish answers with. A session or grant is made
+  only while the record is still that one: checked under a share lock of the
+  account row, in the transaction that issues the grant, and right after a
+  session is created (a mismatch revokes it, `401`). A credential change
+  updates the row first and ends sessions and grants in the same
+  transaction, so a sign-in that straddles it never outlives it.
 - **Reauth:** `for` is one of `pass`, `passwordChange`, `totp`,
-  `deleteAccount`, `adminReset`. The account is compared by user id, and the
+  `adminReset`. The account is compared by user id, and the
   finish must come from the session that started it.
 - **Registration:**
   - `register/start` checks a grant without using it, and needs a grant, the
@@ -336,14 +350,32 @@ third sessions (2026-10-13). The wire is the one above, plus the addendum.
 - **New passwords:**
   - `register/finish` takes `passwordChange` (that session), `recovery` or
     `rotate` (that session).
-  - Every outstanding grant and pending sign-in of the account ends in the
-    same transaction.
-  - A password change ends the other sessions, a recovery all of them, a
-    rotation none.
-  - A rotation is logged apart from password changes.
+  - In one transaction: the record and envelope, the end of every
+    outstanding grant and pending sign-in, the sessions it ends (a password
+    change the others, a recovery all, a rotation none), and the account's
+    security event (`account_security_events`).
+  - A rotation only moves an account off a retired setup: the update needs
+    the stored setup id to differ from the current one, so at most one per
+    account per setup, and never a password change in disguise. It is a
+    security event the owner sees ("your sign-in was refreshed"); with that,
+    it is no stronger than the reauth and `passwordChange` path a password
+    holder already has.
 - **Rotation:** a session answer carries `rotate` and a `rotate` grant (two
   minutes) when the record's setup is not the current one. The CLI moves the
   record at once; the web client does too.
+- **Enumeration across a rotation (accepted):** a fake answer is made under
+  the current setup, while a real record keeps its retired one until the
+  account next signs in. Someone who sent the same blinded request before and
+  after a rotation could tell a real name (the same OPRF output) from a fake
+  (a changed one). Rotations are rare and real accounts move off at their next
+  sign-in, so this is accepted, not mitigated.
+- **Two-step sign-in:** turning it on (`2fa/verify`) or off (`DELETE
+  /api/user/2fa`) takes a `totp` grant of this session as well as a code; the
+  secret is never replaced while it is on.
+- **Security events:** `account_security_events` records password changes,
+  recoveries, rotations and admin resets in the change's transaction (no IP
+  addresses; a year, or the newest 500 per account). `GET
+  /api/user/security-events` lists the caller's own.
 - **Admins:**
   - `reset-grant` exchanges the admin's own `adminReset` reauth grant for one
     bound to the target.

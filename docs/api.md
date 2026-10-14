@@ -117,8 +117,8 @@ binary value is canonical base64 of the `opaque-ke` messages; suite 1 is
 ristretto255, Triple-DH and Argon2id (64 MiB, t = 3, p = 1).
 
 **Grants** (`kg1_…`) prove a fresh password, or the recovery phrase, for one
-action: `pass`, `passwordChange`, `totp`, `deleteAccount`, `adminReset`,
-`recovery`, `rotate`. Each is bound to one account and, except a recovery's, to
+action: `pass` (the Pass PIN), `passwordChange`, `totp` (turning two-step
+sign-in on or off, with a current code), `adminReset`, `recovery`, `rotate`. Each is bound to one account and, except a recovery's, to
 the session it was issued to; it is used once and expires in five minutes (a
 `rotate` one in two). It is never a session. A grant that does not fit is
 `403 grantInvalid`, whatever the reason.
@@ -302,7 +302,7 @@ session (`400` otherwise)
 
 `purpose` is `session` (sign-in, the default) or `reauth`: a signed-in person
 proving the password again for a grant, `for` one of `pass`, `passwordChange`,
-`totp`, `deleteAccount`, `adminReset`. A reauth counts against the account's
+`totp`, `adminReset`. A reauth counts against the account's
 lockout and ceiling as a sign-in does.
 
 **Response:** `{ "loginId": "<uuid>", "credentialResponse": "<base64 KE2>", "suite": 1 }`.
@@ -445,8 +445,11 @@ A new password for an existing account. The grant must be
   sealed under the new password's export key);
 - every outstanding grant and sign-in under way for the account ends.
 
-Afterwards, a password change ends the account's other sessions and a recovery
-all of them; a rotation ends none.
+In the same transaction, a password change ends the account's other sessions
+and a recovery all of them; a rotation ends none. Each is recorded as a
+security event (`GET /api/user/security-events`). A `rotate` grant is good
+only while the account's record is under a retired setup: once moved, a
+second one is refused (`403`), so it never serves as a password change.
 
 **Auth:** None, or the Bearer JWT of the grant's session
 
@@ -752,20 +755,22 @@ Generate a TOTP secret and return a QR code URI.
 }
 ```
 
-The secret is stored as *pending* and only becomes active after `POST /api/user/2fa/verify` succeeds.
+The secret is stored as *pending* and only becomes active after `POST /api/user/2fa/verify` succeeds. While two-step sign-in is on, this is `409`: the secret in use changes only by turning it off and on again.
 
 ---
 
 ### POST /api/user/2fa/verify
 
-Confirm TOTP setup by providing the first valid code.
+Confirm TOTP setup by providing the first valid code, with the password proved
+again: a `totp` grant from a reauth of this session.
 
 **Auth:** Bearer JWT
 
 **Request body:**
 ```json
 {
-  "code": "123456"
+  "code": "123456",
+  "grant": "kg1_…"
 }
 ```
 
@@ -773,16 +778,56 @@ Confirm TOTP setup by providing the first valid code.
 
 ### DELETE /api/user/2fa
 
-Disable TOTP for the current user. Requires a valid TOTP code to prevent a stolen session from silently removing 2FA.
+Disable TOTP for the current user. Requires a valid TOTP code and a `totp`
+grant from a reauth of this session, so a stolen session cannot remove 2FA.
 
 **Auth:** Bearer JWT
 
 **Request body:**
 ```json
 {
-  "code": "123456"
+  "code": "123456",
+  "grant": "kg1_…"
 }
 ```
+
+---
+
+### GET /api/user/security-events
+
+What changed the caller's sign-in, newest first: a new password, a recovery, a
+move to the server's current sign-in setup, an administrator's reset. Kept a
+year, or the newest 500. No IP addresses. An account reset keeps the earlier
+events.
+
+**Auth:** Bearer JWT
+
+**Query:** `limit` (1–100, default 50), `cursor` (the previous page's `next`)
+
+**Response:**
+```json
+{
+  "events": [
+    {
+      "id": "<uuid>",
+      "kind": "passwordChange",
+      "at": "2026-10-14T09:00:00Z",
+      "thisSession": true,
+      "client": "web-account",
+      "userAgent": "Mozilla/5.0 …",
+      "byAdmin": false
+    }
+  ],
+  "next": "<uuid or null>"
+}
+```
+
+- `kind`: `passwordChange`, `recovery`, `rotate`, `adminReset`,
+  `accountReset`. More kinds will come; show an unknown one generally.
+- `thisSession`: made from the caller's own sign-in.
+- `client`, `userAgent`: what made it, as the session list shows it (absent
+  for a recovery or an administrator's reset).
+- `byAdmin`: an administrator's reset.
 
 ---
 

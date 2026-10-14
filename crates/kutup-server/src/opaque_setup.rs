@@ -27,21 +27,26 @@ impl std::fmt::Debug for OpaqueSetupKeys {
 }
 
 impl OpaqueSetupKeys {
-    /// Parses `id:base64,id:base64,…` (spaces around entries allowed). Every
-    /// problem is named, never the key itself.
+    /// Parses `id:base64,id:base64,…` (spaces around entries allowed; no
+    /// empty entry). An id is written plainly: digits, no sign, no leading
+    /// zero, so one id has one spelling. Every problem is named, never the
+    /// key itself.
     pub fn parse(value: &str) -> Result<Self, String> {
         let mut keys: Vec<(u16, Zeroizing<[u8; 32]>)> = Vec::new();
         for (index, entry) in value.split(',').enumerate() {
             let entry = entry.trim();
-            if entry.is_empty() {
-                continue;
-            }
             let place = index + 1;
+            if entry.is_empty() {
+                return Err(format!("entry {place} is empty"));
+            }
             let Some((id, key)) = entry.split_once(':') else {
                 return Err(format!("entry {place} is not id:base64"));
             };
-            let id: u16 = match id.trim().parse() {
-                Ok(id) if (1..=MAX_KEY_ID).contains(&id) => id,
+            let id = id.trim();
+            let plain =
+                !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && !id.starts_with('0');
+            let id: u16 = match id.parse().ok().filter(|_| plain) {
+                Some(id) if (1..=MAX_KEY_ID).contains(&id) => id,
                 _ => {
                     return Err(format!(
                         "entry {place}: the id must be a whole number from 1 to {MAX_KEY_ID}"
@@ -265,6 +270,12 @@ mod tests {
             "1:not base64!".into(),
             format!("1:{}", secret.trim_end_matches('=')),
             format!("1:{secret},1:{}", key(8)),
+            // One spelling per id, and no empty entries.
+            format!("+1:{secret}"),
+            format!("01:{secret}"),
+            format!("1:{secret},,"),
+            format!("1:{secret},"),
+            format!(",1:{secret}"),
         ];
         for case in cases {
             let error = OpaqueSetupKeys::parse(&case).unwrap_err();

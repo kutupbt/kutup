@@ -84,6 +84,34 @@ pub(crate) fn set_password(
     Ok(envelope)
 }
 
+/// The account's password proved again for a one-time grant `for` one
+/// action (`passwordChange`, `totp`, …): a reauth of `client`'s session.
+pub(crate) fn reauth_grant(
+    client: &Client,
+    username: &str,
+    password: &str,
+    grant_for: &str,
+) -> Result<String> {
+    let (signing_in, request) = opaque::client_login_start(password).context("OPAQUE")?;
+    let started = client
+        .login_start(username, &request, "reauth", Some(grant_for))
+        .context("reauth")?;
+    let signed_in = signing_in
+        .finish(&started.response()?)
+        .map_err(|_| anyhow::anyhow!("the password is wrong"))?;
+    client
+        .reauth_finish(&started.login_id, &signed_in.finalization)
+        .context("reauth")
+}
+
+/// The account password for a reauth: `KUTUP_PASSWORD`, else a prompt.
+pub(crate) fn current_password() -> Result<String> {
+    match std::env::var("KUTUP_PASSWORD") {
+        Ok(p) if !p.is_empty() => Ok(p),
+        _ => Ok(rpassword::prompt_password("Password: ")?),
+    }
+}
+
 /// The full login flow: the OPAQUE exchange → the second factor when the
 /// account has one → open the vault with the export key → persist the
 /// session. Shared by `login` and `recover`.

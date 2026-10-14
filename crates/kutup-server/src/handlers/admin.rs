@@ -1760,7 +1760,8 @@ async fn wake_federation_outbox(pool: &PgPool, domain: Option<&str>) -> AppResul
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RotateTempPasswordRequest {
     /// An admin-reset grant for this account (`reset-grant`).
@@ -1828,6 +1829,15 @@ pub async fn rotate_temp_password(
     .await
     .map_err(map_insert_conflict)?;
     crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::AdminReset,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
+    .await?;
     tx.commit().await?;
 
     audit(
@@ -1841,7 +1851,8 @@ pub async fn rotate_temp_password(
     Ok(Json(json!({"message": "temp password rotated"})).into_response())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ResetGrantRequest {
     /// The admin's own grant from a reauth with `for: "adminReset"`.
@@ -1901,7 +1912,8 @@ pub async fn reset_grant(
     Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WipeUserRequest {
     /// An admin-reset grant for this account (`reset-grant`).
@@ -2003,7 +2015,9 @@ pub async fn wipe_user(
     //    devices stay, as tombstones: their keys never register again. Their
     //    revocations are not told to other servers any more (those take only the
     //    current incarnation's), nor need be: a server elsewhere stops taking the
-    //    old incarnation's devices once the share is issued to the new one.
+    //    old incarnation's devices once the share is issued to the new one. Every
+    //    grant and sign-in it ends ends with it, and the owner sees it happened
+    //    (the event outlives the incarnation).
     let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM user_devices WHERE user_id = $1 AND revoked_at_ms IS NULL")
         .bind(target)
@@ -2032,6 +2046,15 @@ pub async fn wipe_user(
     .await
     .map_err(map_insert_conflict)?;
     crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::AccountReset,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
+    .await?;
     tx.commit().await?;
 
     // Its pins were sealed under the old master key: nothing can open them now.
@@ -2039,9 +2062,6 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
-
-    // The wiped keys are gone; so is every session that held them.
-    crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
 
     // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
     //    folder-owner's data view) and still count against this user.

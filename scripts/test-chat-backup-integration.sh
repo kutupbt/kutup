@@ -117,6 +117,23 @@ for test in sessions_live thumbnails_live versions_live; do
     KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
     cargo test -p kutup-server --test "$test" -- --nocapture
 done
+# A rotation of the OPAQUE setup: an account made under key 1, the server
+# restarted with a newer key 2, the account moved at its next sign-in.
+rotation_file="$(mktemp)"
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_ROTATION_PHASE=before KUTUP_ROTATION_FILE="$rotation_file" \
+  cargo test -p kutup-server --test opaque_rotation_live -- --nocapture
+OPAQUE_SETUP_KEYS="$OPAQUE_SETUP_KEYS,2:0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tI=" \
+  compose up --detach --wait --force-recreate backend
+curl --fail --silent --show-error --retry 30 --retry-delay 1 \
+  --retry-connrefused --retry-all-errors \
+  "http://127.0.0.1:$port/api/health" >/dev/null
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_ROTATION_PHASE=after KUTUP_ROTATION_FILE="$rotation_file" \
+  cargo test -p kutup-server --test opaque_rotation_live -- --nocapture
+rm -f "$rotation_file"
+
 # A wrong OPAQUE_SETUP_KEYS key for a stored setup stops the server.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server opaque_setup::tests::live_ -- --nocapture

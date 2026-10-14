@@ -406,13 +406,26 @@ pub async fn revoke_all_for_user(
     user_id: Uuid,
     keep: Option<Uuid>,
 ) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    revoke_all_for_user_in(&mut tx, user_id, keep).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`revoke_all_for_user`] inside `tx`, so a credential change and the end
+/// of the sign-ins it ends commit together.
+pub async fn revoke_all_for_user_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    keep: Option<Uuid>,
+) -> AppResult<()> {
     let keep_root: Option<Uuid> = match keep {
         Some(id) => {
             sqlx::query_scalar(
                 "SELECT COALESCE(parent_session_id, id) FROM auth_sessions WHERE id = $1",
             )
             .bind(id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await?
         }
         None => None,
@@ -424,7 +437,7 @@ pub async fn revoke_all_for_user(
     )
     .bind(user_id)
     .bind(keep_root)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }

@@ -41,7 +41,7 @@ CREATE TABLE opaque_login_states (
     purpose text NOT NULL CHECK (purpose IN ('session', 'reauth')),
     -- Reauth only: the signed-in session asking, and what its grant is for.
     session_id uuid REFERENCES auth_sessions(id) ON DELETE CASCADE,
-    grant_for text CHECK (grant_for IN ('pass', 'passwordChange', 'totp', 'deleteAccount', 'adminReset')),
+    grant_for text CHECK (grant_for IN ('pass', 'passwordChange', 'totp', 'adminReset')),
     source text NOT NULL,
     -- The lockout key as auth_check makes it (it holds a NUL: bytes, not text).
     lockout_key bytea NOT NULL,
@@ -49,6 +49,11 @@ CREATE TABLE opaque_login_states (
     ceiling_source text,
     server_key_id smallint NOT NULL,
     sealed_state bytea NOT NULL,
+    -- The account's credential epoch at the start (auth_check::credential_epoch,
+    -- the first 16 bytes of SHA-256 of its record): the session or grant is
+    -- made only while the record is still that one. None for a name that is
+    -- no account.
+    credential_epoch bytea CHECK (credential_epoch IS NULL OR length(credential_epoch) = 16),
     expires_at timestamptz NOT NULL,
     CHECK ((purpose = 'reauth') = (session_id IS NOT NULL AND grant_for IS NOT NULL AND user_id IS NOT NULL)),
     CHECK ((ceiling_account IS NULL) = (ceiling_source IS NULL))
@@ -64,7 +69,7 @@ CREATE TABLE auth_grants (
     token_hash bytea PRIMARY KEY CHECK (octet_length(token_hash) = 32),
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     purpose text NOT NULL CHECK (purpose IN (
-        'pass', 'passwordChange', 'totp', 'deleteAccount', 'adminReset', 'recovery', 'rotate')),
+        'pass', 'passwordChange', 'totp', 'adminReset', 'recovery', 'rotate')),
     -- The session it was issued to (none for recovery, which has no session).
     session_id uuid REFERENCES auth_sessions(id) ON DELETE CASCADE,
     -- adminReset: the account the admin may reset (none on the admin's own
@@ -77,3 +82,24 @@ CREATE TABLE auth_grants (
 );
 CREATE INDEX auth_grants_user ON auth_grants (user_id);
 CREATE INDEX auth_grants_expiry ON auth_grants (expires_at);
+
+-- What changed an account's sign-in, for its owner to see (GET
+-- /api/user/security-events). No IP addresses. Kept a year, or the newest
+-- 500 per account, pruned on write; gone with the account. An account reset
+-- (a new incarnation) keeps them: the owner sees that it happened.
+CREATE TABLE account_security_events (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind text NOT NULL CHECK (kind IN
+        ('passwordChange', 'recovery', 'rotate', 'adminReset', 'accountReset')),
+    at timestamptz NOT NULL DEFAULT now(),
+    -- The session that made the change (none for a recovery or an admin's),
+    -- and what it was, copied: sessions do not last as long as events.
+    acting_session_id uuid,
+    acting_client text,
+    acting_user_agent text,
+    -- The administrator, for adminReset and accountReset.
+    admin_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+    CHECK ((kind IN ('adminReset', 'accountReset')) OR admin_user_id IS NULL)
+);
+CREATE INDEX account_security_events_user ON account_security_events (user_id, at DESC, id DESC);

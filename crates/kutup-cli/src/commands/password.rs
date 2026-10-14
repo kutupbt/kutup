@@ -39,24 +39,13 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
 
     // The current password, proved again: a reauth, whose answer is a grant.
     eprintln!("Checking the current password…");
-    let (signing_in, request) =
-        kutup_crypto::opaque::client_login_start(&current).context("OPAQUE")?;
-    let started = ctx
-        .client
-        .login_start(
-            &ctx.session.username,
-            &request,
-            "reauth",
-            Some("passwordChange"),
-        )
-        .context("reauth")?;
-    let signed_in = signing_in
-        .finish(&started.response()?)
-        .map_err(|_| anyhow::anyhow!("the current password is wrong"))?;
-    let grant = ctx
-        .client
-        .reauth_finish(&started.login_id, &signed_in.finalization)
-        .context("reauth")?;
+    let grant = super::login::reauth_grant(
+        &ctx.client,
+        &ctx.session.username,
+        &current,
+        "passwordChange",
+    )
+    .map_err(|e| anyhow::anyhow!("the current password: {e:#}"))?;
 
     eprintln!("Setting the new password…");
     let envelope = super::login::set_password(

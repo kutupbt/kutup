@@ -1,3 +1,4 @@
+DROP TABLE account_security_events;
 DROP TABLE auth_grants;
 DROP TABLE opaque_login_states;
 DROP TABLE opaque_server_setups;

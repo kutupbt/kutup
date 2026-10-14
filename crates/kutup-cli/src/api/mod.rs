@@ -306,18 +306,22 @@ impl Client {
         decode_json(resp)
     }
 
-    pub fn verify_totp(&self, code: &str) -> Result<()> {
-        let resp = self.post_json("/user/2fa/verify", &serde_json::json!({ "code": code }))?;
+    /// `grant`: a `totp` grant from a reauth of this session.
+    pub fn verify_totp(&self, code: &str, grant: &str) -> Result<()> {
+        let resp = self.post_json(
+            "/user/2fa/verify",
+            &serde_json::json!({ "code": code, "grant": grant }),
+        )?;
         check_ok(resp)
     }
 
-    /// DELETE-with-body: the backend requires a current code to disable 2FA (so a stolen
-    /// session can't silently remove it). Mirrors the Go `DisableTOTP`.
-    pub fn disable_totp(&self, code: &str) -> Result<()> {
+    /// DELETE-with-body: turning 2FA off takes a current code and a `totp`
+    /// grant (the password proved again), so a stolen session cannot.
+    pub fn disable_totp(&self, code: &str, grant: &str) -> Result<()> {
         let resp = self
             .request(Method::DELETE, "/user/2fa")
             .header(CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!({ "code": code }))
+            .json(&serde_json::json!({ "code": code, "grant": grant }))
             .send()?;
         check_ok(resp)
     }

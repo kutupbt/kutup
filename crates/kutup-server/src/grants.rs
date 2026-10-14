@@ -29,7 +29,6 @@ pub enum Purpose {
     PasswordChange,
     /// Turning two-step sign-in off or on.
     Totp,
-    DeleteAccount,
     /// An admin resetting another account (`target`).
     AdminReset,
     /// A new password after the recovery phrase (no session).
@@ -44,7 +43,6 @@ impl Purpose {
             Purpose::Pass => "pass",
             Purpose::PasswordChange => "passwordChange",
             Purpose::Totp => "totp",
-            Purpose::DeleteAccount => "deleteAccount",
             Purpose::AdminReset => "adminReset",
             Purpose::Recovery => "recovery",
             Purpose::Rotate => "rotate",
@@ -57,7 +55,6 @@ impl Purpose {
             "pass" => Purpose::Pass,
             "passwordChange" => Purpose::PasswordChange,
             "totp" => Purpose::Totp,
-            "deleteAccount" => Purpose::DeleteAccount,
             "adminReset" => Purpose::AdminReset,
             _ => return None,
         })
@@ -243,13 +240,7 @@ mod tests {
 
     #[test]
     fn reauth_may_ask_for_these_only() {
-        for name in [
-            "pass",
-            "passwordChange",
-            "totp",
-            "deleteAccount",
-            "adminReset",
-        ] {
+        for name in ["pass", "passwordChange", "totp", "adminReset"] {
             assert_eq!(Purpose::for_reauth(name).unwrap().as_str(), name);
         }
         assert_eq!(Purpose::for_reauth("recovery"), None);
