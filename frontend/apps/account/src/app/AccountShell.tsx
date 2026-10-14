@@ -11,6 +11,8 @@ import { useEnsureMailKeys } from '../features/keys/mailKeys'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 function SectionLabel({ children }: { children: string }) {
   return (
@@ -24,12 +26,15 @@ export function AccountShell() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   // Every address gets its encryption key right after sign-in.
   useEnsureMailKeys()
 
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.account')}
       switcher={
         <AppSwitcher
