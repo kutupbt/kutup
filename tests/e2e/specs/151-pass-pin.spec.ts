@@ -36,9 +36,11 @@ test('pass: a PIN set with the account password opens locked vaults; three wrong
   await expect(dialog.getByText('The two PINs differ.')).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Set PIN' })).toBeDisabled()
   await dialog.getByLabel('The PIN again').fill('246802')
-  await dialog.getByRole('button', { name: 'Set PIN' }).click()
-  await expect(dialog).toBeHidden({ timeout: 30_000 })
-  await expect(page.getByText('Your account has a PIN.')).toBeVisible()
+  // Proving the password is a sign-in attempt: through the edge's limit.
+  await submitThroughRateLimit(page, 'Set PIN', page.getByText('Your account has a PIN.'), () =>
+    dialog.getByLabel('Your Kutup password').fill(PASSWORD),
+  )
+  await expect(dialog).toBeHidden()
   await expect(page.getByRole('combobox', { name: 'After a lock, open vaults with' })).toHaveText('My PIN')
 
   // Locked: the PIN opens it; the sixth digit sends it.
