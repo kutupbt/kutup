@@ -30,6 +30,7 @@ import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { indexedDbRevisionStore, type RevisionStore } from '@kutup/crypto/revisionGuard'
 import api from './client'
+import { getSession, subscribe } from './store'
 
 /** What this module needs of the Rust head (an `AccountHead`; tests use a fake). */
 export interface HeadEngine {
@@ -463,6 +464,7 @@ export function accountHead(session: { userId: string; masterKey: Uint8Array; en
   const known = clients.get(session.userId)
   if (known?.masterKey === masterKey) return known.client
   if (known) void known.client.then((client) => client.close(), () => undefined)
+  watchSignOut()
   shared ??= indexedDbRevisionStore()
   const store = shared
   const client = lazyEngine(session.masterKey, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
@@ -478,4 +480,15 @@ export function accountHead(session: { userId: string; masterKey: Uint8Array; en
 export function closeAccountHeads(): void {
   for (const { client } of clients.values()) void client.then((c) => c.close(), () => undefined)
   clients.clear()
+}
+
+// Signed out (any path: a sign-out, a refused refresh, another tab's): the
+// head keys go with the session.
+let watching = false
+function watchSignOut(): void {
+  if (watching) return
+  watching = true
+  subscribe(() => {
+    if (!getSession() && clients.size > 0) closeAccountHeads()
+  })
 }

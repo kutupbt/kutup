@@ -395,5 +395,31 @@
     "description": "Something with this name is where it comes back. Restore it as “{{name}}”, or leave it in the trash.",
     "restore": "Restore as “{{name}}”",
     "leave": "Leave in trash"
+  },
+  "accountHead": {
+    "blockedTitle": "Your data in this app and on the server disagree",
+    "blockedBody": "Another device may have been shown a different history, or your server was restored from a backup and recent changes may be lost. Changes to contacts, labels, saved keys and vault passwords are paused here until you decide.",
+    "continue": "Continue with the server's data",
+    "confirmTitle": "Continue with the server's data?",
+    "confirmBody": "This app will follow what the server shows from now on. Review your contacts, labels and saved keys afterwards: changes made elsewhere may be missing.",
+    "rollbackDetail": "The server shows an older state than this app has already seen.",
+    "forkDetail": "The server shows a history that does not include changes this app has seen.",
+    "continueFailed": "Could not continue. Check your connection and try again.",
+    "tooOld": "This app hadn't been used for a long time; it now follows the server's current data.",
+    "dismiss": "Dismiss",
+    "dataState": "Data state",
+    "dataStateDescription": "A number that goes up with every change to contacts, labels, saved keys and vault passwords. Compare it between your devices if you ever doubt the server.",
+    "dataStateNone": "No changes yet.",
+    "dataStateLine": "#{{sequence}}",
+    "lastByThisApp": "Last changed here",
+    "lastByAnother": "Last changed on another device or app",
+    "since": "Seen here {{when}}",
+    "history": "This app's history",
+    "historyEmpty": "Nothing to show.",
+    "startedFresh": "Started following #{{sequence}}",
+    "reanchoredRollback": "Continued with the server's older data (#{{from}} → #{{to}})",
+    "reanchoredFork": "Continued with the server's other history (#{{from}} → #{{to}})",
+    "reanchoredTooOld": "Caught up after a long time (#{{from}} → #{{to}})",
+    "forgotten": "Continued after the server lost its history (was #{{from}})"
   }
 }
