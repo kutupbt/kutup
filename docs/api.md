@@ -58,7 +58,7 @@ Specific codes, where an app does something particular (a test in
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
 | `renameInvalid` | 400 | A rename statement or its re-signed Drive key binding does not check out |
 | `renameConflict` | 409 | The rename chain moved (`sequence`): read `/user/me` and sign anew |
-| `tooManyHeldNames` | 409 | The account holds its most names (5): drop one first |
+| `tooManyHeldNames` | 409 | Five of the account's old names still receive: drop one first (a dropped name stays held until freed, but no longer counts) |
 | `renameTooSoon` | 429 | One rename per 30 days (`retryAt`); going back to the name just left within 7 days is free, once |
 | `dropTooSoon` | 429 | One dropped name per 30 days (`retryAt`) |
 | `addressReceiveOnly` | 403 | An account's old address receives only; mail is sent from its current one |

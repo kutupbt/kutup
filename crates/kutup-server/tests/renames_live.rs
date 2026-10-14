@@ -556,3 +556,66 @@ fn dropping_names_is_limited_and_a_name_is_taken_back_as_spelled() {
     assert!(body["retryAt"].as_str().is_some_and(|at| !at.is_empty()));
     purge_accounts(&c, &base, &[&user]);
 }
+
+/// Old names that still receive are limited to five; a dropped one (held
+/// until freed, receiving no more) makes room for another rename.
+#[test]
+fn five_old_names_receive_and_a_drop_makes_room() {
+    let (Ok(base), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_DATABASE_URL not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut user = register(&c, &base);
+    // Five old names, receiving, as five renames would have left them.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    let held: Vec<String> = (0..5).map(|i| name(&format!("old{i}_"))).collect();
+    for old in &held {
+        runtime
+            .block_on(
+                sqlx::query(
+                    "INSERT INTO account_names
+                         (folded, name, user_id, incarnation_id, state, receive_until, free_at)
+                     SELECT kutup_fold($1), $1, id, account_incarnation_id, 'held',
+                            now() + interval '90 days', now() + interval '180 days'
+                       FROM users WHERE id = $2::uuid",
+                )
+                .bind(old)
+                .bind(&user.id)
+                .execute(&pool),
+            )
+            .unwrap();
+    }
+    let (status, body) = rename(&c, &base, &user, &name("sixth_"));
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "tooManyHeldNames");
+    // One dropped: it stays held, and no longer counts.
+    let grant = reauth_grant(&c, &base, &user, "rename");
+    let r = bearer(
+        c.delete(format!("{base}/api/user/names/{}", held[0])),
+        &user.token,
+    )
+    .json(&json!({ "grant": grant }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    let names: Value = get(&c, &base, &user.token, "/api/user/names")
+        .json()
+        .unwrap();
+    assert!(names
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["name"] == json!(held[0]) && n["state"] == "held"));
+    let new = name("sixth_");
+    let (status, body) = rename(&c, &base, &user, &new);
+    assert_eq!(status, StatusCode::OK, "{body}");
+    user.username = new;
+    purge_accounts(&c, &base, &[&user]);
+}

@@ -447,7 +447,10 @@ warning; held names listed with their dates and Drop. en/tr.
   within 7 days of that rename, is not counted, and restarts the 30-day clock.
   A second undo is a counted rename. So A→B→A→B is two counted renames 30 days
   apart, and the chain (at most 1,000) cannot be run up.
-- **At most 5 held names** per account (`409 tooManyHeldNames`).
+- **At most 5 held names that still receive** per account (`409
+  tooManyHeldNames`). A dropped name stays held until freed but no longer
+  counts, so dropping one makes room; squatting stays bounded by one rename
+  per 30 days and the hold (decided 2026-10-15).
 - Name checks: 30 per 15 minutes per account (registration already says
   whether a name is taken).
 - A freed name can be taken by anyone; that is the user's choice. Pins warn on

@@ -33,7 +33,8 @@ const RENAME_EVERY_DAYS: i64 = 30;
 /// Going back to the name just left within this many days is not counted
 /// (once per counted rename), and restarts the clock.
 const FREE_UNDO_DAYS: i64 = 7;
-/// The most names one account may hold at once.
+/// The most held names of one account that still receive: a dropped name
+/// (receiving ended) stays held until freed but no longer counts.
 const MAX_HELD: i64 = 5;
 /// How far a statement's time may be from the server's.
 const CLOCK_SKEW_MS: i64 = 10 * 60 * 1000;
@@ -333,16 +334,17 @@ pub async fn rename(
         }
     }
     let held: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM account_names WHERE user_id = $1 AND state = 'held'",
+        "SELECT COUNT(*) FROM account_names
+          WHERE user_id = $1 AND state = 'held' AND receive_until > now()",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
     if found == Available::Free && held >= MAX_HELD {
-        return Err(
-            AppError::conflict("this account holds its most names: drop one first")
-                .with_details(json!({ "code": "tooManyHeldNames" })),
-        );
+        return Err(AppError::conflict(
+            "this account's old names receive the most they may: drop one first",
+        )
+        .with_details(json!({ "code": "tooManyHeldNames" })));
     }
     crate::handlers::auth::verify_drive_key_binding(
         &statement.current,
