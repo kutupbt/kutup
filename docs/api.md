@@ -53,6 +53,7 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write waits for setup |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
