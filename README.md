@@ -121,7 +121,7 @@ git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cp .env.example .env
 # Edit .env — set strong values for POSTGRES_PASSWORD, JWT_SECRET,
-# S3_SECRET_KEY, ADMIN_ACCOUNT.
+# OPAQUE_SETUP_KEYS, S3_SECRET_KEY, ADMIN_ACCOUNT.
 mkdir -p nginx/certs
 openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout nginx/certs/privkey.pem -out nginx/certs/fullchain.pem \

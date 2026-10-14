@@ -9,8 +9,8 @@
 //! its owner forgets it. It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
@@ -302,20 +302,23 @@ pub struct PinStatus {
     set: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetPinRequest {
-    /// The account password's login key, as for `/api/user/reauth`.
-    login_key: String,
+    /// A `pass` grant from a reauth of this session (the account password,
+    /// docs/plans/opaque.md).
+    grant: String,
     /// Six digits.
     pin: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RemovePinRequest {
-    /// The account password's login key, as for `/api/user/reauth`.
-    login_key: String,
+    /// A `pass` grant from a reauth of this session.
+    grant: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -378,14 +381,11 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
     responses(
         (status = 204, description = "Set"),
         (status = 400, description = "Not six digits"),
-        (status = 401, description = "Wrong account password"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+        (status = 403, description = "grantInvalid: no fresh pass grant of this session")
     )
 )]
 pub async fn set_pin(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<SetPinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
@@ -393,12 +393,12 @@ pub async fn set_pin(
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
-        .await?;
     let user_id = trusted_uuid(&user.user_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
     let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
+        .await?;
     sqlx::query(
         "INSERT INTO pass_pins (user_id, pin_hash) VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
@@ -425,25 +425,24 @@ pub async fn set_pin(
     request_body = RemovePinRequest,
     responses(
         (status = 204, description = "Removed (or there was none)"),
-        (status = 401, description = "Wrong account password"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+        (status = 403, description = "grantInvalid: no fresh pass grant of this session")
     )
 )]
 pub async fn remove_pin(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
     user: AuthUser,
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    crate::handlers::auth::verify_account_login_key(&state, peer, &headers, &user, &req.login_key)
-        .await?;
     let user_id = trusted_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
+        .await?;
     sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")
         .bind(user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

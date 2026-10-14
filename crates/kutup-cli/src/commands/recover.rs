@@ -2,16 +2,16 @@
 //! phrase, then log in with the new password.
 //!
 //! Mirrors the web `Recovery` page exactly: the phrase decodes to the 32-byte
-//! recovery entropy, which unwraps the master key from the preflight response.
-//! Only the KEK wrap and account-protection revision rotate server-side;
-//! the master key value, private key, and recovery wrap are unchanged — so all
-//! existing data stays decryptable and the same phrase keeps working.
+//! recovery entropy, which unwraps the master key from the preflight response;
+//! its proof buys a recovery grant, with which the new password is registered
+//! (OPAQUE) and the master key sealed under it. The master key, private key
+//! and recovery wrap are unchanged — so all existing data stays decryptable
+//! and the same phrase keeps working.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use rand::RngCore;
 
-use crate::api::{Client, RecoverRequest};
+use crate::api::Client;
 use crate::commands::prompt_line;
 use kutup_crypto::{
     account_envelope::{self, AccountEnvelopePurpose},
@@ -84,40 +84,19 @@ pub fn run(
         anyhow::anyhow!("recovery phrase does not match this account (wrong phrase or username)")
     })?;
 
-    eprintln!("Deriving new keys…");
-    let mut account_protection_salt = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut account_protection_salt);
-
-    let account_keys = kdf::derive_account_protection_keys(
-        &password,
-        &account_protection_salt,
-        kdf::AccountProtectionParameters::V1,
-    )
-    .context("derive account-protection keys")?;
+    // The phrase's proof, for a recovery grant; then the new password,
+    // registered with it (every sign-in of the account ends).
+    eprintln!("Setting the new password…");
     let recovery_proof = kdf::derive_recovery_auth_proof(&entropy, &binding)
         .context("derive recovery authorization proof")?;
-    let new_master_key_envelope = account_envelope::seal_b64(
-        &master_key,
-        account_keys.key_encryption_key.as_slice(),
-        AccountEnvelopePurpose::PasswordMasterKey,
-        &binding,
-    )
-    .context("seal master-key envelope")?;
-
-    client
-        .recover(&RecoverRequest {
-            name: name.clone(),
-            new_login_key: b64.encode(account_keys.login_key.as_slice()),
-            new_master_key_envelope,
-            new_account_protection_suite: kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1
-                .as_u16(),
-            new_account_protection_salt: b64.encode(account_protection_salt),
-            new_argon_memory_kib: kdf::AccountProtectionParameters::V1.memory_kib,
-            new_argon_iterations: kdf::AccountProtectionParameters::V1.iterations,
-            new_argon_parallelism: kdf::AccountProtectionParameters::V1.parallelism,
-            recovery_proof: b64.encode(recovery_proof.as_slice()),
-        })
+    let grant = client
+        .recover_grant(&name, &b64.encode(recovery_proof.as_slice()))
         .context("recover")?;
+    let master_key: [u8; 32] = master_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("the master key has the wrong length"))?;
+    super::login::set_password(&client, &grant, &binding, &password, &master_key)?;
 
     // Log straight in with the new password so the user ends up ready to work.
     let sess = super::login::login_with_password(profile, &server, &name, &password)?;

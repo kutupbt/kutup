@@ -22,8 +22,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::models::{
-    MeResponse, MessageResponse, OkResponse, PreflightLoginResponse, PreflightRecoverResponse,
-    RefreshResponse, SettingsResponse, TotpSetupResponse, UserLookupResponse,
+    MeResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
+    SettingsResponse, TotpSetupResponse, UserLookupResponse,
 };
 use crate::sessions::{self, ClientType};
 use crate::{jwt, ratelimit, totp, AppState};
@@ -47,7 +47,10 @@ pub struct RegisterRequest {
     /// The account's key binding, drawn by the browser (a UUID v4): what its
     /// envelopes are bound to, for good (docs/plans/account-identity.md).
     key_binding: String,
-    login_key: String,
+    /// The OPAQUE record for the password, under the key binding
+    /// (docs/plans/opaque.md §6).
+    #[serde(flatten)]
+    record: crate::handlers::opaque::RecordUpload,
     master_key_envelope: String,
     recovery_key_envelope: String,
     drive_private_key_envelope: String,
@@ -56,11 +59,6 @@ pub struct RegisterRequest {
     account_authority_key_id: String,
     account_incarnation_id: String,
     drive_signing_public_key: String,
-    account_protection_suite: u16,
-    account_protection_salt: String,
-    argon_memory_kib: u32,
-    argon_iterations: u32,
-    argon_parallelism: u32,
     #[serde(default)]
     recovery_proof: String,
     /// The account authority's signature over the Drive keys
@@ -68,17 +66,10 @@ pub struct RegisterRequest {
     drive_key_binding: String,
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", default)]
-pub struct LoginRequest {
-    /// The username or the Kutup address.
-    name: String,
-    login_key: String,
-}
-
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
 /// the setup/2FA branches); the four omitempty fields are skipped at their defaults.
-#[derive(Debug, Default, Serialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     access_token: String,
@@ -99,8 +90,15 @@ pub struct LoginResponse {
     color: String,
     /// The account's key binding, what its envelopes carry; given only with
     /// the session.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(skip_serializing_if = "String::is_empty", rename = "keyBinding")]
     envelope_binding: String,
+    /// The account's OPAQUE record is under a retired setup: the client
+    /// re-registers the password it just used, silently, with `grant`
+    /// (purpose `rotate`, this session, two minutes).
+    #[serde(skip_serializing_if = "is_false")]
+    rotate: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grant: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     requires_totp: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,14 +121,7 @@ pub struct TwoFALoginRequest {
 pub struct RecoverRequest {
     /// As at sign-in.
     name: String,
-    new_login_key: String,
-    new_master_key_envelope: String,
-    new_account_protection_suite: u16,
-    new_account_protection_salt: String,
-    new_argon_memory_kib: u32,
-    new_argon_iterations: u32,
-    new_argon_parallelism: u32,
-    #[serde(default)]
+    /// The proof the recovery phrase gives (never the phrase).
     recovery_proof: String,
 }
 
@@ -149,10 +140,14 @@ pub struct UpdateMeRequest {
     version_retention_days: Option<i32>,
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(default)]
 pub struct CodeRequest {
     code: String,
+    /// Turning two-step sign-in on or off: a `totp` grant from a reauth of
+    /// this session (the password proved again).
+    grant: String,
 }
 
 /// `?name=` query for the preflight endpoints.
@@ -197,7 +192,7 @@ pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<O
 /// address on this server reduced to its username, so `ada` and
 /// `ada@<this server>` get the same fake answers and lockout as a real
 /// account's do.
-fn canonical_name(state: &AppState, name: &str) -> String {
+pub(crate) fn canonical_name(state: &AppState, name: &str) -> String {
     let name = name.trim().to_ascii_lowercase();
     let server = state.config.chat_server_name.to_ascii_lowercase();
     match name.rsplit_once('@') {
@@ -274,80 +269,6 @@ pub(crate) fn decode_canonical_base64_exact(
         )));
     }
     Ok(decoded)
-}
-
-fn validate_account_protection(
-    suite: u16,
-    salt: &str,
-    memory_kib: u32,
-    iterations: u32,
-    parallelism: u32,
-) -> AppResult<()> {
-    use kutup_crypto::kdf::{
-        AccountProtectionParameters, AccountProtectionSuiteId, ACCOUNT_PROTECTION_SALT_LEN,
-    };
-    AccountProtectionSuiteId::try_from(suite)
-        .map_err(|_| AppError::bad_request("unsupported accountProtectionSuite"))?;
-    decode_canonical_base64_exact(salt, ACCOUNT_PROTECTION_SALT_LEN, "accountProtectionSalt")?;
-    AccountProtectionParameters {
-        memory_kib,
-        iterations,
-        parallelism,
-    }
-    .validate_v1()
-    .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
-}
-
-/// A first-login account's temporary password as the administrator's browser
-/// derived it (docs/plans/account-identity.md): the login key, with the
-/// salt and parameters it came from. The server never sees the password,
-/// as for any other account; sign-in derives the same way, and setup then
-/// replaces all of it with the account's own.
-#[derive(Debug, Default, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SetupKey {
-    pub login_key: String,
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
-}
-
-impl SetupKey {
-    /// Checked as an account's own protection is; the login key's hash to store.
-    pub(crate) fn checked_hash(&self) -> AppResult<String> {
-        validate_account_protection(
-            self.account_protection_suite,
-            &self.account_protection_salt,
-            self.argon_memory_kib,
-            self.argon_iterations,
-            self.argon_parallelism,
-        )?;
-        let login_key = decode_canonical_base64_exact(&self.login_key, 32, "setup.loginKey")?;
-        bcrypt::hash(login_key, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))
-    }
-
-    /// Derived here, once, from a password the server was given (the
-    /// break-glass administrator in ADMIN_ACCOUNT).
-    pub(crate) fn derive(password: &str) -> anyhow::Result<Self> {
-        use kutup_crypto::kdf::{
-            derive_account_protection_keys, AccountProtectionParameters, AccountProtectionSuiteId,
-            ACCOUNT_PROTECTION_SALT_LEN,
-        };
-        let mut salt = [0u8; ACCOUNT_PROTECTION_SALT_LEN];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-        let parameters = AccountProtectionParameters::V1;
-        let keys = derive_account_protection_keys(password, &salt, parameters)?;
-        Ok(SetupKey {
-            login_key: STANDARD.encode(keys.login_key.as_slice()),
-            account_protection_suite: AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16(),
-            account_protection_salt: STANDARD.encode(salt),
-            argon_memory_kib: parameters.memory_kib,
-            argon_iterations: parameters.iterations,
-            argon_parallelism: parameters.parallelism,
-        })
-    }
 }
 
 /// A key binding as drawn: a UUID v4, lowercase and hyphenated.
@@ -644,10 +565,9 @@ pub async fn register(
     // Who may register, before anything costly or visible
     // (docs/plans/registration-codes.md).
     let code_hash = admitted(&state, peer, &headers, req.registration_code.as_deref()).await?;
+    // Sign-up answers the session, as a sign-in would.
+    let client = direct_sign_in_client(&headers)?;
 
-    if req.login_key.is_empty() {
-        return Err(AppError::bad_request("missing required fields"));
-    }
     if !is_key_binding(&req.key_binding) {
         return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
     }
@@ -670,13 +590,7 @@ pub async fn register(
     {
         return Err(AppError::conflict("this username is taken"));
     }
-    validate_account_protection(
-        req.account_protection_suite,
-        &req.account_protection_salt,
-        req.argon_memory_kib,
-        req.argon_iterations,
-        req.argon_parallelism,
-    )?;
+    let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
     use kutup_crypto::account_envelope::AccountEnvelopePurpose;
     validate_account_envelope(
         &req.master_key_envelope,
@@ -702,10 +616,6 @@ pub async fn register(
         &format!("{}@{}", req.username, state.config.chat_server_name),
     )?;
 
-    let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
-    let hash =
-        bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
-
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
@@ -717,11 +627,10 @@ pub async fn register(
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
-            account_protection_suite, account_protection_salt,
-            argon_memory_kib, argon_iterations, argon_parallelism,
-            login_key_hash, recovery_key_verifier, storage_quota_bytes, drive_key_binding,
+            opaque_record, opaque_suite, opaque_server_key_id,
+            recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$1)
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -734,12 +643,9 @@ pub async fn register(
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
     .bind(&req.drive_signing_public_key)
-    .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.account_protection_salt)
-    .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
-    .bind(&hash)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .bind(&recovery_verifier)
     .bind(storage_quota_bytes)
     .bind(&drive_key_binding)
@@ -771,169 +677,23 @@ pub async fn register(
         return Err(AppError::conflict("username already taken"));
     }
     tx.commit().await?;
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(MessageResponse {
-            message: "registered".to_string(),
-        }),
-    )
-        .into_response())
+    // The client made the keys and holds the export key: no second OPAQUE
+    // run, the session comes now (docs/plans/opaque.md, "every flow").
+    let epoch = auth_check::credential_epoch(&opaque_record);
+    signed_in_answer(&state, &headers, client, user_id, &epoch).await
 }
 
-/// `GET /api/auth/login/preflight` — mirrors `GetLoginPreflight`. Returns deterministic
-/// fake salts for unknown emails to defeat enumeration.
-#[utoipa::path(
-    get,
-    path = "/api/auth/login/preflight",
-    tag = "auth",
-    params(("name" = String, Query, description = "The username or the Kutup address")),
-    responses((status = 200, description = "Account-protection suite, parameters and envelope binding", body = PreflightLoginResponse))
-)]
-pub async fn get_login_preflight(
-    State(state): State<AppState>,
-    Query(q): Query<NameQuery>,
-) -> AppResult<Response> {
-    let name = q.name()?;
-    let account = account_by_name(&state, &name).await?;
-    // Every account has a salt, one an administrator made too (its
-    // temporary password is derived as any other), so nothing here tells
-    // a new account, an unknown name or a real one apart.
-    let row: Option<(i16, String, i32, i32, i32)> = match account {
-        Some(id) => sqlx::query_as(
-            "SELECT account_protection_suite, account_protection_salt, argon_memory_kib, argon_iterations, argon_parallelism FROM users WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?,
-        None => None,
-    };
-
-    let (suite, salt, memory_kib, iterations, parallelism) = match row {
-        Some(row) => row,
-        None => (
-            kutup_crypto::kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16() as i16,
-            deterministic_fake_bytes(
-                &fake_accounts_key(&state).await?,
-                &canonical_name(&state, &name),
-                "account-protection",
-                16,
-            ),
-            kutup_crypto::kdf::AccountProtectionParameters::V1.memory_kib as i32,
-            kutup_crypto::kdf::AccountProtectionParameters::V1.iterations as i32,
-            kutup_crypto::kdf::AccountProtectionParameters::V1.parallelism as i32,
-        ),
-    };
-
-    Ok(Json(PreflightLoginResponse {
-        account_protection_suite: u16::try_from(suite).unwrap_or(0),
-        account_protection_salt: salt,
-        argon_memory_kib: u32::try_from(memory_kib).unwrap_or(0),
-        argon_iterations: u32::try_from(iterations).unwrap_or(0),
-        argon_parallelism: u32::try_from(parallelism).unwrap_or(0),
-    })
-    .into_response())
-}
-
-/// `POST /api/user/reauth` body: the login key derived from the typed
-/// password, as for sign-in.
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ReauthRequest {
-    pub login_key: String,
-}
-
-/// `POST /api/user/reauth` — checks the signed-in account's password again
-/// (Kutup Pass's lock, docs/plans/pass.md) exactly as sign-in checks it: the
-/// login key against `login_key_hash`, under the same per-account lockout and
-/// per-address rate limit. Nothing comes back but yes or no; the session
-/// already holds what the password would unlock.
-#[utoipa::path(
-    post,
-    path = "/api/user/reauth",
-    tag = "auth",
-    security(("BearerAuth" = [])),
-    request_body = ReauthRequest,
-    responses(
-        (status = 204, description = "The password is the account's"),
-        (status = 401, description = "It is not"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
-    )
-)]
-pub async fn reauth(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    user: AuthUser,
-    body: Result<Json<ReauthRequest>, JsonRejection>,
-) -> AppResult<Response> {
-    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    verify_account_login_key(&state, peer, &headers, &user, &req.login_key).await?;
-    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
-}
-
-/// Checks a signed-in account's password (as the login key the client
-/// derived from it) the way sign-in does (`auth_check`): against
-/// `login_key_hash`, under the same lockout and ceiling, misses here and at
-/// sign-in counting together. The caller is signed in to the account, so it
-/// is never held by the unknown-client ceiling. `Err` is 401 for a wrong
-/// password, 429 while held.
-pub async fn verify_account_login_key(
+/// What a sign-in whose password was right answers (docs/plans/opaque.md,
+/// "every flow"): first-login setup, the second factor, or the session with
+/// the account's envelopes. Said only to someone who proved the password.
+pub(crate) async fn signed_in_answer(
     state: &AppState,
-    peer: SocketAddr,
     headers: &HeaderMap,
-    user: &AuthUser,
-    login_key: &str,
-) -> AppResult<()> {
-    let user_id = crate::handlers::trusted_uuid(&user.user_id)?;
-    let login_key = STANDARD
-        .decode(login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    let login_key_hash: Option<String> =
-        sqlx::query_scalar("SELECT login_key_hash FROM users WHERE id = $1 AND is_active")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let client = auth_check::Client::from_headers(state, headers, peer)
-        .await?
-        .signed_in_as(user_id);
-    let epoch = login_key_hash.as_deref().map(auth_check::credential_epoch);
-    let guard = auth_check::guard(&client, Some(user_id), "", epoch.as_ref().map(|e| &e[..]))?;
-    if !guard.verify(Some(&login_key), login_key_hash.as_deref()) {
-        tracing::warn!(user_id = %user_id, "account password re-check failed");
-        return Err(AppError::invalid_credentials());
-    }
-    Ok(())
-}
-
-/// `POST /api/auth/login` — mirrors `Login`.
-#[utoipa::path(
-    post,
-    path = "/api/auth/login",
-    tag = "auth",
-    request_body = LoginRequest,
-    responses((status = 200, description = "Session, 2FA challenge, or first-login setup token", body = LoginResponse))
-)]
-pub async fn login(
-    State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    body: Result<Json<LoginRequest>, JsonRejection>,
+    client: ClientType,
+    user_id: Uuid,
+    epoch: &[u8],
 ) -> AppResult<Response> {
-    let client = direct_sign_in_client(&headers)?;
-    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-
-    // The order of `auth_check`: the secret is read before the name is looked
-    // up, the hash checked (at full cost for a name that is no account) before
-    // anything about the account is said, and every miss is the same 401.
-    let login_key_bytes = STANDARD
-        .decode(&req.login_key)
-        .map_err(|_| AppError::bad_request("invalid loginKey"))?;
-    let name = req.name.trim().to_ascii_lowercase();
-    let account = account_by_name(&state, &name).await?;
-
     type Row = (
-        Uuid,
-        String,
         String,
         String,
         String,
@@ -946,34 +706,21 @@ pub async fn login(
         String,
         String,
         String,
+        bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT id, login_key_hash, master_key_envelope,
-                  drive_private_key_envelope, public_key,
+        r#"SELECT master_key_envelope, drive_private_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   is_first_login,
-                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, '')
+                  COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
+                  COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
            FROM users WHERE id = $1"#,
     )
-    .bind(account)
+    .bind(user_id)
+    .bind(epoch)
     .fetch_optional(&state.pool)
     .await?;
-
-    let hash = row.as_ref().map(|row| row.1.as_str());
-    let asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
-    let epoch = hash.map(auth_check::credential_epoch);
-    let guard = auth_check::guard(
-        &asker,
-        account,
-        &canonical_name(&state, &name),
-        epoch.as_ref().map(|e| &e[..]),
-    )?;
-    if !guard.verify(Some(&login_key_bytes), hash) {
-        return Err(AppError::invalid_credentials());
-    }
     let Some((
-        id,
-        _,
         master_key_envelope,
         drive_private_key_envelope,
         pub_key,
@@ -986,21 +733,25 @@ pub async fn login(
         username,
         color,
         envelope_binding,
+        same_credential,
     )) = row
     else {
         return Err(AppError::invalid_credentials());
     };
-    // Said only to someone who knows the password.
+    // The password was proved against a record the account no longer holds
+    // (changed or recovered since the sign-in started).
+    if !same_credential {
+        return Err(AppError::invalid_credentials());
+    }
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
-
-    let user_id = id.to_string();
+    let user_id = user_id.to_string();
 
     // First-login account — no key material yet. Its username comes along:
     // the new keys' Drive key binding names the account's address.
     if is_first_login {
-        let setup_token = jwt::generate_setup_token(&user_id, &state.config.jwt_secret)
+        let setup_token = jwt::generate_setup_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_setup: true,
@@ -1013,7 +764,7 @@ pub async fn login(
 
     // TOTP enabled — return a pre-auth token instead of a full session.
     if totp_enabled {
-        let pre_auth = jwt::generate_pre_auth_token(&user_id, &state.config.jwt_secret)
+        let pre_auth = jwt::generate_pre_auth_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_totp: true,
@@ -1024,8 +775,8 @@ pub async fn login(
     }
 
     issue_tokens_and_respond(
-        &state,
-        &headers,
+        state,
+        headers,
         client,
         &user_id,
         &username,
@@ -1037,6 +788,8 @@ pub async fn login(
         used_bytes,
         &color,
         &envelope_binding,
+        epoch,
+        AppError::invalid_credentials,
     )
     .await
 }
@@ -1063,8 +816,9 @@ pub async fn login_two_fa(
         ));
     }
 
-    let user_id = jwt::validate_pre_auth_token(&req.pre_auth_token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid pre-auth token"))?;
+    let (user_id, epoch) =
+        jwt::validate_pre_auth_token(&req.pre_auth_token, &state.config.jwt_secret)
+            .map_err(|_| pre_auth_invalid())?;
 
     type Row = (
         Option<String>,
@@ -1122,7 +876,9 @@ pub async fn login_two_fa(
                 "too many failed attempts, please log in again",
             ));
         }
-        return Err(AppError::unauthorized("invalid TOTP code"));
+        // A wrong code: try the code again (the token still holds).
+        return Err(AppError::unauthorized("invalid TOTP code")
+            .with_details(serde_json::json!({ "code": "invalidCredentials" })));
     }
     ratelimit::record_totp_attempt(&req.pre_auth_token, true);
 
@@ -1140,6 +896,8 @@ pub async fn login_two_fa(
         used_bytes,
         &color,
         &envelope_binding,
+        &epoch,
+        pre_auth_invalid,
     )
     .await
 }
@@ -1187,97 +945,74 @@ pub async fn get_recovery_preflight(
     Ok(Json(resp).into_response())
 }
 
-/// `POST /api/auth/recover` — mirrors `Recover`.
+/// `POST /api/auth/recover/grant` — the recovery phrase's proof, for a
+/// `recovery` grant (no session): with it the client registers a new password
+/// (register/start, register/finish), which ends every sign-in of the
+/// account. An unknown name, an account without a verifier and a wrong
+/// phrase are the same `401`, checked at full cost.
 #[utoipa::path(
     post,
-    path = "/api/auth/recover",
+    path = "/api/auth/recover/grant",
     tag = "auth",
     request_body = RecoverRequest,
-    responses((status = 200, description = "Password reset via recovery phrase", body = MessageResponse))
+    responses(
+        (status = 200, description = "A recovery grant", body = crate::handlers::opaque::GrantResponse),
+        (status = 401, description = "invalid recovery proof")
+    )
 )]
-pub async fn recover(
+pub async fn recover_grant(
     State(state): State<AppState>,
     body: Result<Json<RecoverRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-
-    if req.recovery_proof.is_empty() {
-        return Err(AppError::bad_request("recoveryProof is required"));
-    }
-    validate_account_protection(
-        req.new_account_protection_suite,
-        &req.new_account_protection_salt,
-        req.new_argon_memory_kib,
-        req.new_argon_iterations,
-        req.new_argon_parallelism,
-    )?;
     // The proof is read before the name is looked up, and checked first, at
-    // full cost: an unknown name, an account without a verifier and a wrong
-    // phrase are all the same 401, and nothing about the account (its
-    // binding) is checked before it.
+    // full cost.
     let proof = decode_canonical_base64_exact(&req.recovery_proof, 32, "recoveryProof")?;
     let account = account_by_name(&state, &req.name).await?;
-    let stored: Option<(String, String)> =
-        match account {
-            Some(id) => sqlx::query_as(
-                "SELECT recovery_key_verifier, COALESCE(key_binding, '') FROM users WHERE id = $1",
+    let stored: Option<String> = match account {
+        Some(id) => {
+            sqlx::query_scalar(
+                "SELECT recovery_key_verifier FROM users WHERE id = $1 AND is_active",
             )
             .bind(id)
             .fetch_optional(&state.pool)
-            .await?,
-            None => None,
-        };
-    let (Some(user_id), Some((stored_verifier, binding))) = (account, stored) else {
+            .await?
+        }
+        None => None,
+    };
+    let (Some(user_id), Some(stored_verifier)) = (account, stored) else {
         let _ = bcrypt::verify(&proof, &FAKE_BCRYPT_HASH);
         return Err(AppError::unauthorized("invalid recovery proof"));
     };
     if !auth_check::verify_hash(&proof, &stored_verifier) {
         return Err(AppError::unauthorized("invalid recovery proof"));
     }
-    validate_account_envelope(
-        &req.new_master_key_envelope,
-        kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
-        &binding,
-        "newMasterKeyEnvelope",
-    )?;
-
-    let login_key_bytes = decode_canonical_base64_exact(&req.new_login_key, 32, "newLoginKey")?;
-    let hash =
-        bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
-
-    let res = sqlx::query(
-        r#"UPDATE users SET
-              login_key_hash = $1,
-              master_key_envelope = $2,
-              account_protection_suite = $3,
-              account_protection_salt = $4,
-              argon_memory_kib = $5,
-              argon_iterations = $6,
-              argon_parallelism = $7,
-              is_first_login = false,
-              updated_at = NOW()
-           WHERE id = $8"#,
+    // Only while the phrase checked is still the account's: a wipe (or a new
+    // setup) in between replaces the verifier, and leaves no grant behind.
+    let mut tx = state.pool.begin().await?;
+    let still: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users
+         WHERE id = $1 AND is_active AND recovery_key_verifier = $2
+         FOR SHARE",
     )
-    .bind(&hash)
-    .bind(&req.new_master_key_envelope)
-    .bind(i16::try_from(req.new_account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.new_account_protection_salt)
-    .bind(i32::try_from(req.new_argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.new_argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.new_argon_parallelism).unwrap_or(i32::MAX))
     .bind(user_id)
-    .execute(&state.pool)
+    .bind(&stored_verifier)
+    .fetch_optional(&mut *tx)
     .await?;
-
-    if res.rows_affected() == 0 {
+    if still.is_none() {
         return Err(AppError::unauthorized("invalid recovery proof"));
     }
-    // New password, new key wrapping: every existing sign-in ends.
-    sessions::revoke_all_for_user(&state.pool, user_id, None).await?;
-    Ok(Json(MessageResponse {
-        message: "password reset".to_string(),
-    })
-    .into_response())
+    let grant = crate::grants::issue(
+        &mut *tx,
+        crate::grants::Purpose::Recovery,
+        user_id,
+        None,
+        None,
+        crate::grants::GRANT_MINUTES,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
 }
 
 /// `POST /api/auth/refresh` — rotates the session's refresh token. Web clients present
@@ -1565,11 +1300,16 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
     let (secret, qr_uri) =
         totp::generate_totp(&label, "Kutup").map_err(|_| AppError::internal("totp"))?;
 
-    sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2")
+    // Never while it is on: the secret in use is replaced only by turning it
+    // off (with the password) and on again.
+    let set = sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2 AND NOT totp_enabled")
         .bind(&secret)
         .bind(parse_uuid(&user.user_id)?)
         .execute(&state.pool)
         .await?;
+    if set.rows_affected() != 1 {
+        return Err(AppError::conflict("two-step sign-in is already on"));
+    }
 
     Ok(Json(TotpSetupResponse { secret, qr_uri }).into_response())
 }
@@ -1603,10 +1343,16 @@ pub async fn verify_totp(
         return Err(AppError::bad_request("invalid code"));
     }
 
-    sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1")
-        .bind(parse_uuid(&user.user_id)?)
-        .execute(&state.pool)
+    // The password proved again, for this session: used with the change.
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
+    sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
+        .bind(parse_uuid(&user.user_id)?)
+        .bind(&secret)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
 
     Ok(Json(MessageResponse {
         message: "TOTP enabled".to_string(),
@@ -1628,9 +1374,9 @@ pub async fn disable_totp(
     user: AuthUser,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
-    let code = match body {
-        Ok(Json(b)) => b.code,
-        Err(_) => String::new(),
+    let (code, grant) = match body {
+        Ok(Json(b)) => (b.code, b.grant),
+        Err(_) => (String::new(), String::new()),
     };
     if code.is_empty() {
         return Err(AppError::bad_request("totp code required"));
@@ -1650,10 +1396,14 @@ pub async fn disable_totp(
         return Err(AppError::bad_request("invalid code"));
     }
 
+    // The code and the password: a stolen session alone cannot turn it off.
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &grant, crate::grants::Purpose::Totp, &user).await?;
     sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
         .bind(parse_uuid(&user.user_id)?)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(Json(MessageResponse {
         message: "TOTP disabled".to_string(),
@@ -1682,8 +1432,8 @@ pub async fn complete_setup(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
-    let user_id = jwt::validate_setup_token(token, &state.config.jwt_secret)
-        .map_err(|_| AppError::unauthorized("invalid setup token"))?;
+    let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
+        .map_err(|_| setup_token_invalid())?;
 
     let account: Option<(bool, String)> =
         sqlx::query_as("SELECT is_active, COALESCE(username, '') FROM users WHERE id = $1")
@@ -1700,14 +1450,9 @@ pub async fn complete_setup(
         return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
     }
     let account_binding = req.key_binding.clone();
-
-    validate_account_protection(
-        req.account_protection_suite,
-        &req.account_protection_salt,
-        req.argon_memory_kib,
-        req.argon_iterations,
-        req.argon_parallelism,
-    )?;
+    // The new password's record, under the key binding drawn now (the
+    // temporary password's record goes with this).
+    let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
     use kutup_crypto::account_envelope::AccountEnvelopePurpose;
     validate_account_envelope(
         &req.master_key_envelope,
@@ -1732,30 +1477,27 @@ pub async fn complete_setup(
         &req,
         &format!("{account_username}@{}", state.config.chat_server_name),
     )?;
-    let login_key_bytes = decode_canonical_base64_exact(&req.login_key, 32, "loginKey")?;
-    let hash =
-        bcrypt::hash(login_key_bytes, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))?;
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
     let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     // Only while the account is still a first-login one — prevents replay
     // after setup completes.
+    let mut tx = state.pool.begin().await?;
     let res = sqlx::query(
         r#"UPDATE users SET
-              login_key_hash = $1,
+              opaque_record = $1, opaque_suite = $10, opaque_server_key_id = $11,
               master_key_envelope = $2, recovery_key_envelope = $3,
               drive_private_key_envelope = $4, public_key = $5,
               account_authority_public_key = $6, account_authority_key_id = $7,
               account_incarnation_id = $8, drive_signing_public_key = $9,
-              account_protection_suite = $10, account_protection_salt = $11,
-              argon_memory_kib = $12, argon_iterations = $13,
-              argon_parallelism = $14, recovery_key_verifier = $15,
-              drive_key_binding = $17,
-              key_binding = $18,
+              recovery_key_verifier = $12,
+              drive_key_binding = $14,
+              key_binding = $15,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $16 AND is_first_login"#,
+           WHERE id = $13 AND is_first_login
+             AND substring(sha256(opaque_record) from 1 for 16) = $16"#,
     )
-    .bind(&hash)
+    .bind(&opaque_record)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
     .bind(&req.drive_private_key_envelope)
@@ -1764,25 +1506,29 @@ pub async fn complete_setup(
     .bind(&req.account_authority_key_id)
     .bind(&req.account_incarnation_id)
     .bind(&req.drive_signing_public_key)
-    .bind(i16::try_from(req.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.account_protection_salt)
-    .bind(i32::try_from(req.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.argon_parallelism).unwrap_or(i32::MAX))
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .bind(&recovery_verifier)
     .bind(uid)
     .bind(&drive_key_binding)
     .bind(&account_binding)
-    .execute(&state.pool)
+    .bind(&setup_epoch)
+    .execute(&mut *tx)
     .await;
     match res {
         Ok(r) if r.rows_affected() > 0 => {}
-        _ => {
-            return Err(AppError::bad_request(
-                "setup already completed or user not found",
-            ))
+        // Two setups at once, both with fresh key bindings, or a binding
+        // another account drew: one wins.
+        Err(err) if matches!(&err, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")) => {
+            return Err(map_insert_conflict(err))
         }
+        Err(err) => return Err(err.into()),
+        // Done already, or the temporary password changed since this
+        // token's sign-in (an admin reset): sign in again.
+        Ok(_) => return Err(setup_token_invalid()),
     }
+    crate::grants::end_all(&mut tx, uid).await?;
+    tx.commit().await?;
 
     let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
         "SELECT is_admin, storage_quota_bytes, storage_used_bytes, COALESCE(username, '') FROM users WHERE id = $1",
@@ -1792,6 +1538,14 @@ pub async fn complete_setup(
     .await?;
 
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(&headers)).await?;
+    // An admin reset may land between the setup and its session.
+    let mut tx = state.pool.begin().await?;
+    let held = credential_held(&mut tx, uid, &auth_check::credential_epoch(&opaque_record)).await?;
+    tx.commit().await?;
+    if held.is_none() {
+        sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
+        return Err(setup_token_invalid());
+    }
     let access = jwt::generate_access_token(
         &user_id,
         is_admin,
@@ -1821,6 +1575,43 @@ pub async fn complete_setup(
 }
 
 // --- helpers ---
+
+/// The 2FA step's token is expired, not one, or from a password the account
+/// no longer has: back to the password step (a wrong code is
+/// `invalidCredentials`, and the token still holds).
+fn pre_auth_invalid() -> AppError {
+    AppError::unauthorized("sign in again")
+        .with_details(serde_json::json!({ "code": "preAuthInvalid" }))
+}
+
+/// The first sign-in's setup token is expired, not one, already used, or from
+/// a temporary password since replaced: sign in again.
+pub(crate) fn setup_token_invalid() -> AppError {
+    AppError::unauthorized("sign in again")
+        .with_details(serde_json::json!({ "code": "setupTokenInvalid" }))
+}
+
+/// Inside `tx`: whether the account still holds the credential whose epoch
+/// (`auth_check::credential_epoch`) a sign-in proved, and if so its record's
+/// setup id. The row is locked for share until `tx` ends, so a credential
+/// change (which updates the row first, then ends sessions and grants in the
+/// same transaction) either is seen here or ends what this one makes.
+pub(crate) async fn credential_held(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    epoch: &[u8],
+) -> AppResult<Option<Option<i16>>> {
+    Ok(sqlx::query_scalar(
+        "SELECT opaque_server_key_id FROM users
+         WHERE id = $1 AND is_active
+           AND substring(sha256(opaque_record) from 1 for 16) = $2
+         FOR SHARE",
+    )
+    .bind(user_id)
+    .bind(epoch)
+    .fetch_optional(&mut **tx)
+    .await?)
+}
 
 /// The client a password sign-in comes from (`X-Kutup-Client`). Only clients that
 /// sign in directly are accepted here; drive and chat get forked sessions.
@@ -1861,9 +1652,36 @@ async fn issue_tokens_and_respond(
     used: i64,
     color: &str,
     envelope_binding: &str,
+    epoch: &[u8],
+    stale: fn() -> AppError,
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
+    let mut tx = state.pool.begin().await?;
+    // Still the password that was proved: a change or recovery that landed
+    // since ends this session here, or (landing after) with the rest.
+    let Some(record_key) = credential_held(&mut tx, uid, epoch).await? else {
+        drop(tx);
+        sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
+        return Err(stale());
+    };
+    // Registered under a setup that is no longer the current one: moved by
+    // the client now, while it holds the password (docs/plans/opaque.md §5).
+    let rotate_grant = match record_key {
+        Some(id) if id != state.opaque.current().0 as i16 => Some(
+            crate::grants::issue(
+                &mut *tx,
+                crate::grants::Purpose::Rotate,
+                uid,
+                Some(issued.session_id),
+                None,
+                crate::grants::ROTATE_MINUTES,
+            )
+            .await?,
+        ),
+        _ => None,
+    };
+    tx.commit().await?;
     let access = jwt::generate_access_token(
         user_id,
         is_admin,
@@ -1885,6 +1703,8 @@ async fn issue_tokens_and_respond(
         storage_used_bytes: used,
         color: color.to_string(),
         envelope_binding: envelope_binding.to_string(),
+        rotate: rotate_grant.is_some(),
+        grant: rotate_grant,
         ..Default::default()
     };
     if client.uses_cookie() {
@@ -1952,7 +1772,8 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
                 return AppError::conflict("username already taken");
             }
             if constraint.contains("key_binding") {
-                return AppError::conflict("keyBinding is taken; draw another");
+                return AppError::conflict("keyBinding is taken; draw another")
+                    .with_details(serde_json::json!({ "code": "keyBindingTaken" }));
             }
             return AppError::conflict("already registered");
         }
@@ -2127,16 +1948,6 @@ mod tests {
             &[],
         )
         .unwrap();
-    }
-
-    #[test]
-    fn account_protection_rejects_unknown_or_modified_parameters() {
-        let salt = STANDARD.encode([0u8; 16]);
-        assert!(validate_account_protection(1, &salt, 65_536, 3, 1).is_ok());
-        assert!(validate_account_protection(0, &salt, 65_536, 3, 1).is_err());
-        assert!(validate_account_protection(1, &salt, 8_192, 3, 1).is_err());
-        assert!(validate_account_protection(1, &salt, 65_536, 3, 2).is_err());
-        assert!(validate_account_protection(1, &STANDARD.encode([0u8; 15]), 65_536, 3, 1).is_err());
     }
 
     #[test]

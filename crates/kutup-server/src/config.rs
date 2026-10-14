@@ -5,6 +5,9 @@
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
+    /// The keys the OPAQUE server setups are sealed under
+    /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
+    pub opaque_setup_keys: crate::opaque_setup::OpaqueSetupKeys,
     pub s3_endpoint: String,
     pub s3_access_key: String,
     pub s3_secret_key: String,
@@ -384,6 +387,17 @@ impl Config {
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
+            opaque_setup_keys: {
+                let value = env.opaque_setup_keys();
+                if value.is_empty() {
+                    Default::default()
+                } else {
+                    crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
+                        env.error(format!("OPAQUE_SETUP_KEYS: {error}"));
+                        Default::default()
+                    })
+                }
+            },
             s3_endpoint: must_env("S3_ENDPOINT"),
             s3_access_key: must_env("S3_ACCESS_KEY"),
             s3_secret_key: must_env("S3_SECRET_KEY"),
@@ -613,6 +627,36 @@ impl Env {
 
     pub(crate) fn string(&self, key: &str, fallback: &str) -> String {
         self.set(key).unwrap_or_else(|| fallback.to_string())
+    }
+
+    /// `OPAQUE_SETUP_KEYS`, or the file `OPAQUE_SETUP_KEYS_FILE` names (a
+    /// secret mounted as a file): exactly one of the two. Blank on an error.
+    fn opaque_setup_keys(&self) -> String {
+        match (
+            self.set("OPAQUE_SETUP_KEYS"),
+            self.set("OPAQUE_SETUP_KEYS_FILE"),
+        ) {
+            (Some(value), None) => value,
+            (None, Some(path)) => match std::fs::read_to_string(path.trim()) {
+                Ok(value) if !value.trim().is_empty() => value.trim().to_owned(),
+                Ok(_) => {
+                    self.error("OPAQUE_SETUP_KEYS_FILE names an empty file");
+                    String::new()
+                }
+                Err(error) => {
+                    self.error(format!("OPAQUE_SETUP_KEYS_FILE: {error}"));
+                    String::new()
+                }
+            },
+            (Some(_), Some(_)) => {
+                self.error("set OPAQUE_SETUP_KEYS or OPAQUE_SETUP_KEYS_FILE, not both");
+                String::new()
+            }
+            (None, None) => {
+                self.error("OPAQUE_SETUP_KEYS (or OPAQUE_SETUP_KEYS_FILE) is required");
+                String::new()
+            }
+        }
     }
 
     pub(crate) fn required(&self, key: &str) -> String {
@@ -907,6 +951,10 @@ mod env_tests {
     const REQUIRED: &[(&str, &str)] = &[
         ("DATABASE_URL", "postgres://x"),
         ("JWT_SECRET", "0123456789abcdef0123456789abcdef"),
+        (
+            "OPAQUE_SETUP_KEYS",
+            "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ),
         ("S3_ENDPOINT", "http://s3"),
         ("S3_ACCESS_KEY", "a"),
         ("S3_SECRET_KEY", "b"),
@@ -997,6 +1045,33 @@ mod env_tests {
         assert!(errors(&[("FEDERATION_TEST_ALLOW_PRIVATE", "true")])
             .iter()
             .any(|e| e.starts_with("FEDERATION_TEST_ALLOW_PRIVATE")));
+    }
+
+    #[test]
+    fn opaque_setup_keys_from_a_file_or_the_variable_not_both() {
+        let dir = std::env::temp_dir().join(format!("kutup-opaque-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("keys");
+        std::fs::write(&file, "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n").unwrap();
+        let path = file.to_str().unwrap();
+        let without: Vec<(&str, &str)> = REQUIRED
+            .iter()
+            .filter(|(k, _)| *k != "OPAQUE_SETUP_KEYS")
+            .copied()
+            .collect();
+        let env =
+            Env::from_pairs(&[without.as_slice(), &[("OPAQUE_SETUP_KEYS_FILE", path)]].concat());
+        assert_eq!(
+            env.opaque_setup_keys(),
+            "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+        assert!(env.errors.borrow().is_empty());
+        let both = Env::from_pairs(&[REQUIRED, &[("OPAQUE_SETUP_KEYS_FILE", path)]].concat());
+        assert_eq!(both.opaque_setup_keys(), "");
+        assert!(both.errors.borrow()[0].contains("not both"));
+        let neither = Env::from_pairs(&without);
+        assert_eq!(neither.opaque_setup_keys(), "");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
 

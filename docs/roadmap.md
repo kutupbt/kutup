@@ -119,6 +119,15 @@ has Chat's link uses it.
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
 
+### Security log: sign-ins and 2FA events (Proton parity)
+
+`account_security_events` (`GET /api/user/security-events`) records what
+changes an account's sign-in: password changes, recoveries, setup rotations
+and admin resets. Proton's security log also lists sign-ins (successful and
+failed) and two-step changes. Next kinds: `signIn`, `totpOn`, `totpOff`,
+`deviceRevoked`. IP addresses only behind an opt-in "advanced logs" setting,
+as Proton keeps them, if at all.
+
 ### SMTP integration
 
 Without SMTP, kutup can't:

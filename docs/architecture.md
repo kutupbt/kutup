@@ -26,10 +26,10 @@ are cut over. No mixed v1/v2 trust path or raw remote URL remains.
 ```mermaid
 flowchart TD
     P["password"]
-    APS["account-protection salt + parameters"]
-    APR["account-protection root<br/>Argon2id(password, salt, parameters)"]
-    KEK["key-encryption key<br/>HKDF purpose subkey"]
-    LK["server login key<br/>HKDF purpose subkey"]
+    OP["OPAQUE exchange (RFC 9807)<br/>Argon2id inside the suite"]
+    REC["server's OPAQUE record<br/>(useless offline)"]
+    EK["export key<br/>(client only)"]
+    KEK["key-encryption key<br/>HKDF(export key, key binding)"]
     RE["random recovery entropy<br/>(32 bytes)"]
     M["mnemonic<br/>(BIP39 encoding of recovery entropy)"]
     EMK["password master-key envelope<br/>(stored server-side)"]
@@ -42,11 +42,11 @@ flowchart TD
     FK["per-file key<br/>(random, per file)"]
     BLOB["typed Drive file blob<br/>context-bound XChaCha20 secretstream<br/>5 MB chunks → SeaweedFS"]
 
-    P --> APR
-    APS --> APR
-    APR --> KEK
-    APR --> LK
-    LK -->|sent to server; bcrypt verifier| AUTH["login authentication"]
+    P --> OP
+    REC --> OP
+    OP -->|proves the password| AUTH["sign-in"]
+    OP --> EK
+    EK --> KEK
     RE -->|encoded as| M
     KEK -->|encrypts| EMK
     RE -->|encrypts| ERK
@@ -84,11 +84,13 @@ remains a ciphertext relay.
 ## Registration Flow
 
 1. Client generates a random 32-byte **master key**.
-2. Client derives one account-protection root with the persisted suite,
-   Argon2id salt and parameters. Domain-separated HKDF expands that root into a
-   **key-encryption key** and a **login key**. Only the base64-encoded login key
-   is sent to the server, which bcrypts it into `login_key_hash`. The password,
-   root and key-encryption key never leave the client.
+2. Client registers the password with OPAQUE (RFC 9807,
+   [`plans/opaque.md`](plans/opaque.md)): `register/start` for the key binding
+   it drew, then its half of the protocol, which runs Argon2id inside the
+   suite. The server keeps the resulting record, useless for guessing the
+   password offline. The OPAQUE **export key**, which never leaves the client,
+   gives the **key-encryption key** (HKDF bound to the key binding). The
+   password, export key and key-encryption key never reach the server.
 3. Client derives the account authority, incarnation, Drive X25519 keypair and
    Drive Ed25519 share-signing key from the master key under independent fixed
    HKDF labels. Their public values are bound to the account at registration
@@ -129,26 +131,35 @@ sequenceDiagram
     participant B as Browser
     participant S as Backend
 
-    B->>S: GET /auth/login/preflight?email=...
-    S-->>B: { accountProtectionSuite, salt, parameters }
-    Note over B: Argon2id(password, suite params) → root<br/>HKDF(root, purpose) → loginKey + KEK
-    B->>S: POST /auth/login { loginKey }
-    S-->>B: { accessToken, masterKeyEnvelope, ... }<br/>+ refresh_token cookie (httpOnly)
-    Note over B: Open masterKeyEnvelope<br/>with KEK + expected email/purpose<br/>→ master key (browser memory only)
+    B->>S: POST /auth/login/start { name, KE1 }
+    Note over S: one attempt counted (lockout, ceiling)<br/>OPAQUE KE2 from the record<br/>(a fake one for an unknown name)
+    S-->>B: { loginId, KE2 }
+    Note over B: OPAQUE: checks the server and the password<br/>→ KE3 + export key
+    B->>S: POST /auth/login/finish { loginId, KE3 }
+    S-->>B: { accessToken, masterKeyEnvelope, keyBinding, ... }<br/>+ refresh_token cookie (httpOnly)
+    Note over B: export key → KEK → open masterKeyEnvelope<br/>→ master key (browser memory only)
 ```
 
-1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve the
-   account-protection suite, salt and complete Argon2id parameters.
-2. Client recomputes one root via Argon2id in a Web Worker, then derives the
-   login key and key-encryption key with distinct fixed HKDF purposes.
-3. Client POSTs the base64 `loginKey` to `POST /api/auth/login`. Server bcrypt-compares it against the stored `login_key_hash`.
-4. On success the server returns an **access token** (short-lived JWT) in the JSON body and sets the **refresh token** as an HTTP-only `refresh_token` cookie scoped to `/api/auth/refresh`.
-5. The login response carries `masterKeyEnvelope` and
-   `drivePrivateKeyEnvelope`; the client opens them locally with the expected
-   account and purpose bindings. The server-facing login key cannot decrypt
-   either. The master key lives only in client memory.
-6. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
-7. For accounts created via `ADMIN_ACCOUNT` that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle and submits it to `POST /api/auth/complete-setup`.
+1. The client starts the exchange with `POST /api/auth/login/start`. The
+   server counts the attempt against the name (the lockout and ceiling)
+   before any OPAQUE work, and answers from the account's record. A name that
+   is no account gets a fake answer of the same shape, which can never be
+   finished.
+2. The client runs its half (Argon2id in a Web Worker). A wrong password fails
+   here, on the client. A right one gives KE3 and the export key.
+3. `POST /api/auth/login/finish` checks KE3. On success the server returns an
+   **access token** (short-lived JWT) in the JSON body and sets the **refresh
+   token** as an HTTP-only `refresh_token` cookie scoped to
+   `/api/auth/refresh`.
+4. The answer carries `masterKeyEnvelope` and `drivePrivateKeyEnvelope`. The
+   client opens them locally with the key-encryption key from the export key,
+   with the expected key binding and purposes. The server never holds anything
+   that opens either. The master key lives only in client memory.
+5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
+6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/auth/complete-setup`.
+7. Re-authentication (the Pass PIN, a new password, an admin reset) is the
+   same exchange with `purpose: "reauth"`, answered by a one-time grant
+   instead of a session.
 
 ---
 

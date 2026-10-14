@@ -65,8 +65,9 @@ pub struct User {
     /// drawn at registration; docs/plans/account-identity.md).
     pub binding: String,
     pub username: String,
-    /// The password's login key (base64), for re-checks and a re-seal.
-    pub login_key: String,
+    /// The account's password (its OPAQUE record's), for sign-ins and
+    /// re-authentication.
+    pub password: String,
     pub recovery_entropy: [u8; 32],
     pub token: String,
     pub identity: AccountIdentityKeysV1,
@@ -122,6 +123,142 @@ pub fn register_coded(
     register_full(c, base, true, format!("ref{tag}"), code)
 }
 
+/// The password every helper-made account has.
+pub const PASSWORD: &str = "integrity-pw-123456";
+
+/// One OPAQUE registration of `password` for `key_binding`
+/// (docs/plans/opaque.md §6): `register/start` with `grant` (a new password
+/// for an account, an admin's reset) or `bearer` (a setup token, an admin
+/// making an account), then the client's half. The record (base64), the
+/// setup it was made against, and the export key.
+pub fn opaque_register(
+    c: &Client,
+    base: &str,
+    password: &str,
+    key_binding: &str,
+    grant: Option<&str>,
+    bearer_token: Option<&str>,
+) -> (String, u16, kutup_crypto::opaque::ExportKey) {
+    try_opaque_register(c, base, password, key_binding, grant, bearer_token)
+        .unwrap_or_else(|(status, body)| panic!("register/start: {status} {body}"))
+}
+
+/// [`opaque_register`], with a refusal (`register/start` said no: sign-ups
+/// closed, a grant that does not fit) as its status and body.
+pub fn try_opaque_register(
+    c: &Client,
+    base: &str,
+    password: &str,
+    key_binding: &str,
+    grant: Option<&str>,
+    bearer_token: Option<&str>,
+) -> Result<(String, u16, kutup_crypto::opaque::ExportKey), (StatusCode, Value)> {
+    let (registering, request) = kutup_crypto::opaque::client_registration_start(password).unwrap();
+    let mut req = c
+        .post(format!("{base}/api/auth/opaque/register/start"))
+        .json(&json!({ "keyBinding": key_binding, "registrationRequest": b64(&request), "grant": grant }));
+    if let Some(token) = bearer_token {
+        req = req.bearer_auth(token);
+    }
+    let r = req.send().unwrap();
+    let status = r.status();
+    let body: Value = r.json().unwrap_or(Value::Null);
+    if status != StatusCode::OK {
+        return Err((status, body));
+    }
+    let response = STANDARD
+        .decode(body["registrationResponse"].as_str().unwrap())
+        .unwrap();
+    let registered = registering.finish(&response).unwrap();
+    Ok((
+        b64(&registered.record),
+        body["serverKeyId"].as_u64().unwrap() as u16,
+        registered.export_key,
+    ))
+}
+
+/// One OPAQUE sign-in (`login/start`, the client's half, `login/finish`):
+/// the answer's status and body, and the export key once the password was
+/// right. `purpose` is `session` or `reauth` (with `grant_for` and the
+/// session's `bearer_token`). A wrong password fails in the client, which
+/// then never finishes: `401` without a body.
+pub fn opaque_login(
+    c: &Client,
+    base: &str,
+    name: &str,
+    password: &str,
+    purpose: &str,
+    grant_for: Option<&str>,
+    bearer_token: Option<&str>,
+) -> (StatusCode, Value, Option<kutup_crypto::opaque::ExportKey>) {
+    let (signing_in, request) = kutup_crypto::opaque::client_login_start(password).unwrap();
+    let with_bearer = |req: RequestBuilder| match bearer_token {
+        Some(token) => req.bearer_auth(token),
+        None => req,
+    };
+    let r = with_bearer(
+        c.post(format!("{base}/api/auth/login/start"))
+            .header("x-kutup-client", "cli")
+            .json(&json!({
+                "name": name, "credentialRequest": b64(&request),
+                "purpose": purpose, "for": grant_for,
+            })),
+    )
+    .send()
+    .unwrap();
+    let status = r.status();
+    let started: Value = r.json().unwrap_or(Value::Null);
+    if !status.is_success() {
+        return (status, started, None);
+    }
+    let response = STANDARD
+        .decode(started["credentialResponse"].as_str().unwrap())
+        .unwrap();
+    let Ok(signed_in) = signing_in.finish(&response) else {
+        return (StatusCode::UNAUTHORIZED, Value::Null, None);
+    };
+    let r = with_bearer(
+        c.post(format!("{base}/api/auth/login/finish"))
+            .header("x-kutup-client", "cli")
+            .json(&json!({
+                "loginId": started["loginId"],
+                "credentialFinalization": b64(&signed_in.finalization),
+            })),
+    )
+    .send()
+    .unwrap();
+    let status = r.status();
+    (
+        status,
+        r.json().unwrap_or(Value::Null),
+        Some(signed_in.export_key),
+    )
+}
+
+/// Signs `name` in with `password`: the session's answer (or the setup's,
+/// or the second factor's). Panics on any refusal.
+pub fn sign_in(c: &Client, base: &str, name: &str, password: &str) -> Value {
+    let (status, body, _) = opaque_login(c, base, name, password, "session", None, None);
+    assert_eq!(status, StatusCode::OK, "sign-in of {name}: {body}");
+    body
+}
+
+/// A one-time grant for `grant_for`, from re-proving `user`'s password in
+/// its session (`purpose: "reauth"`).
+pub fn reauth_grant(c: &Client, base: &str, user: &User, grant_for: &str) -> String {
+    let (status, body, _) = opaque_login(
+        c,
+        base,
+        &user.username,
+        &user.password,
+        "reauth",
+        Some(grant_for),
+        Some(&user.token),
+    );
+    assert_eq!(status, StatusCode::OK, "reauth: {body}");
+    body["grant"].as_str().unwrap().to_owned()
+}
+
 fn register_full(
     c: &Client,
     base: &str,
@@ -131,19 +268,14 @@ fn register_full(
 ) -> Result<User, (StatusCode, Value)> {
     let mut rng = rand::thread_rng();
     let key_binding = uuid::Uuid::new_v4().to_string();
-    let password = "integrity-pw-123456";
+    let password = PASSWORD;
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    let mut salt = [0u8; 16];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut salt);
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        password,
-        &salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
+    // Sign-ups closed refuse already here (registrationClosed).
+    let (opaque_record, server_key_id, export_key) =
+        try_opaque_register(c, base, password, &key_binding, None, None)?;
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
@@ -153,8 +285,8 @@ fn register_full(
     };
     let mut body = json!({
             "keyBinding": key_binding, "username": username,
-            "loginKey": b64(keys.login_key.as_slice()),
-            "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
+            "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
+            "masterKeyEnvelope": export_key.seal_master_key(&master_key, &key_binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
             "drivePrivateKeyEnvelope": seal(identity.drive_hpke_private_key(), &master_key, AccountEnvelopePurpose::DriveHpkePrivateKey),
             "publicKey": b64(&identity.drive_hpke_public_key()),
@@ -162,9 +294,6 @@ fn register_full(
             "accountAuthorityKeyId": identity.authority_key_id(),
             "accountIncarnationId": identity.incarnation_id(),
             "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-            "accountProtectionSuite": 1,
-            "accountProtectionSalt": b64(&salt),
-            "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
             "recoveryProof": b64(recovery_proof.as_slice()),
     });
     if let Some(code) = code {
@@ -177,8 +306,10 @@ fn register_full(
         )
         .unwrap()));
     }
+    // Sign-up answers the session, as a sign-in does.
     let r = c
         .post(format!("{base}/api/auth/register"))
+        .header("x-kutup-client", "cli")
         .json(&body)
         .send()
         .unwrap();
@@ -186,13 +317,6 @@ fn register_full(
         let status = r.status();
         return Err((status, r.json().unwrap_or(Value::Null)));
     }
-    let r = c
-        .post(format!("{base}/api/auth/login"))
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "name": username, "loginKey": b64(keys.login_key.as_slice()) }))
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "login: {}", r.status());
     let token = r.json::<Value>().unwrap()["accessToken"]
         .as_str()
         .unwrap()
@@ -209,7 +333,7 @@ fn register_full(
     Ok(User {
         id,
         binding: key_binding,
-        login_key: b64(keys.login_key.as_slice()),
+        password: password.to_owned(),
         recovery_entropy,
         username,
         account,
@@ -476,30 +600,7 @@ pub fn purge_accounts(c: &Client, base: &str, users: &[&User]) {
 }
 
 pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> String {
-    let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight?name={username}"))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let derived = kutup_crypto::kdf::derive_account_protection_keys_b64(
-        password,
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-        kutup_crypto::kdf::AccountProtectionParameters {
-            memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
-            iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
-            parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
-        },
-    )
-    .unwrap();
-    let response = c
-        .post(format!("{base}/api/auth/login"))
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "name": username, "loginKey": b64(derived.login_key.as_slice()) }))
-        .send()
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "admin login");
-    let login: Value = response.json().unwrap();
+    let login = sign_in(c, base, username, password);
     let Some(setup_token) = login["setupToken"].as_str() else {
         return login["accessToken"].as_str().unwrap().to_string();
     };
@@ -507,7 +608,8 @@ pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> St
 }
 
 /// Completes an account's first sign-in (an administrator made or wiped it):
-/// new keys, a new identity, the password. The session and the identity.
+/// new keys, a new identity, the password registered under a key binding of
+/// its own. The session and the identity.
 pub fn complete_setup(
     c: &Client,
     base: &str,
@@ -515,17 +617,27 @@ pub fn complete_setup(
     username: &str,
     password: &str,
 ) -> (String, AccountIdentityKeysV1) {
+    let (status, body, identity) = try_complete_setup(c, base, setup_token, username, password);
+    assert_eq!(status, StatusCode::OK, "setup: {body}");
+    (body["accessToken"].as_str().unwrap().to_string(), identity)
+}
+
+/// [`complete_setup`], its answer as it comes (status and body).
+pub fn try_complete_setup(
+    c: &Client,
+    base: &str,
+    setup_token: &str,
+    username: &str,
+    password: &str,
+) -> (StatusCode, Value, AccountIdentityKeysV1) {
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    let mut salt = [0u8; 16];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut salt);
-    let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
-    let keys =
-        kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
     let binding = uuid::Uuid::new_v4().to_string();
+    let (opaque_record, server_key_id, export_key) =
+        opaque_register(c, base, password, &binding, None, Some(setup_token));
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
@@ -539,8 +651,8 @@ pub fn complete_setup(
         .bearer_auth(setup_token)
         .json(&json!({
             "keyBinding": binding, "username": username,
-            "loginKey": b64(keys.login_key.as_slice()),
-            "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
+            "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
+            "masterKeyEnvelope": export_key.seal_master_key(&master_key, &binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
             "drivePrivateKeyEnvelope": seal(identity.drive_hpke_private_key(), &master_key, AccountEnvelopePurpose::DriveHpkePrivateKey),
             "publicKey": b64(&identity.drive_hpke_public_key()),
@@ -548,11 +660,6 @@ pub fn complete_setup(
             "accountAuthorityKeyId": identity.authority_key_id(),
             "accountIncarnationId": identity.incarnation_id(),
             "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-            "accountProtectionSuite": 1,
-            "accountProtectionSalt": b64(&salt),
-            "argonMemoryKib": parameters.memory_kib,
-            "argonIterations": parameters.iterations,
-            "argonParallelism": parameters.parallelism,
             "recoveryProof": b64(recovery_proof.as_slice()),
             "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(
                 &identity,
@@ -562,27 +669,60 @@ pub fn complete_setup(
         .send()
         .unwrap();
     let status = completed.status();
-    let body: Value = completed.json().unwrap();
-    assert_eq!(status, StatusCode::OK, "admin setup: {body}");
-    (body["accessToken"].as_str().unwrap().to_string(), identity)
+    let body: Value = completed.json().unwrap_or(Value::Null);
+    (status, body, identity)
 }
 
-/// A temporary password as an administrator's browser derives it (the
-/// `setup` of creating, rotating or wiping an account).
-pub fn setup_key(password: &str) -> Value {
-    let mut salt = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt);
-    let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
-    let keys =
-        kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
-    json!({
-        "loginKey": b64(keys.login_key.as_slice()),
-        "accountProtectionSuite": 1,
-        "accountProtectionSalt": b64(&salt),
-        "argonMemoryKib": parameters.memory_kib,
-        "argonIterations": parameters.iterations,
-        "argonParallelism": parameters.parallelism,
-    })
+/// A temporary password as an administrator's client registers it (the
+/// body fields of creating, rotating or wiping an account): an OPAQUE record
+/// under a key binding drawn now, with the admin's session (`admin`) for a
+/// new account, or `grant` (an admin reset of that account).
+pub fn temp_registration(
+    c: &Client,
+    base: &str,
+    password: &str,
+    admin: &str,
+    grant: Option<&str>,
+) -> Value {
+    let binding = uuid::Uuid::new_v4().to_string();
+    let (record, server_key_id, _) = match grant {
+        Some(grant) => opaque_register(c, base, password, &binding, Some(grant), None),
+        None => opaque_register(c, base, password, &binding, None, Some(admin)),
+    };
+    json!({ "keyBinding": binding, "opaqueRecord": record, "opaqueServerKeyId": server_key_id })
+}
+
+/// An admin's grant to reset `target` (its reauth, then `reset-grant`).
+pub fn admin_reset_grant(
+    c: &Client,
+    base: &str,
+    admin_token: &str,
+    admin_name: &str,
+    admin_password: &str,
+    target: &str,
+) -> String {
+    let (status, body, _) = opaque_login(
+        c,
+        base,
+        admin_name,
+        admin_password,
+        "reauth",
+        Some("adminReset"),
+        Some(admin_token),
+    );
+    assert_eq!(status, StatusCode::OK, "admin reauth: {body}");
+    let r = bearer(
+        c.post(format!("{base}/api/admin/users/{target}/reset-grant")),
+        admin_token,
+    )
+    .json(&json!({ "grant": body["grant"] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK, "reset-grant");
+    r.json::<Value>().unwrap()["grant"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 /// A collaboration device: its id and the seed of the key it signs frames with.
@@ -651,23 +791,16 @@ pub fn device_revocation_body(c: &Client, base: &str, user: &User, device_key: &
     json!({ "revokedAtMs": revoked_at_ms, "signature": signature })
 }
 
-/// A device registered the proper way: a fresh challenge, signed by the
-/// account's own authority.
 /// Signs `user` in again: a new session (token) of the same account.
 pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
-    let r = c
-        .post(format!("{base}/api/auth/login"))
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "name": user.username, "loginKey": user.login_key }))
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "login: {}", r.status());
-    r.json::<Value>().unwrap()["accessToken"]
+    sign_in(c, base, &user.username, &user.password)["accessToken"]
         .as_str()
         .unwrap()
         .to_string()
 }
 
+/// A device registered the proper way: a fresh challenge, signed by the
+/// account's own authority.
 pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
     let mut seed = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut seed);

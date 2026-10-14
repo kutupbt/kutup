@@ -1,6 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ACCOUNT_PROTECTION_DEFAULTS, generateAccountProtectionSalt, toBase64 } from '@kutup/crypto'
-import { deriveAccountProtectionInWorker } from '@kutup/crypto/accountProtectionWorker'
+import { conflictCode, opaqueRegister } from '@kutup/session/opaque'
+import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import api from '@kutup/session/client'
 import type {
   AdminActivityResponse,
@@ -60,22 +60,35 @@ export function useAdminUsers() {
 }
 
 /**
- * A temporary password as the server keeps it (docs/plans/account-identity.md):
- * derived here, under a salt of its own, as any password is; the server
- * never sees the password, and the account's first sign-in derives the same.
+ * A temporary password registered for a new key binding (OPAQUE,
+ * docs/plans/opaque.md): the server keeps a record it cannot test guesses
+ * against, and never sees the password. The account sets up its own keys,
+ * and its own password, at its first sign-in.
  */
-export async function setupKeyFor(tempPassword: string) {
-  const protection = { ...ACCOUNT_PROTECTION_DEFAULTS, salt: toBase64(generateAccountProtectionSalt()) }
-  const { keyEncryptionKey, loginKey } = await deriveAccountProtectionInWorker(tempPassword, protection)
-  keyEncryptionKey.fill(0)
-  return {
-    loginKey: toBase64(loginKey),
-    accountProtectionSuite: protection.suite,
-    accountProtectionSalt: protection.salt,
-    argonMemoryKib: protection.memoryKib,
-    argonIterations: protection.iterations,
-    argonParallelism: protection.parallelism,
+async function temporaryPassword(tempPassword: string, auth: { grant: string } | null) {
+  const draw = async () => {
+    const keyBinding = crypto.randomUUID()
+    return { keyBinding, ...(await opaqueRegister(tempPassword, keyBinding, null, auth)) }
   }
+  // A binding someone else has is drawn again, once.
+  try {
+    return await draw()
+  } catch (error) {
+    if (conflictCode(error) !== 'keyBindingTaken') throw error
+    return await draw()
+  }
+}
+
+
+/**
+ * A grant to reset `id`: the administrator proves their own password first
+ * (a reauth grant for `adminReset`), which the server exchanges for one bound
+ * to that account.
+ */
+async function resetGrant(id: string, adminPassword: string): Promise<string> {
+  const grant = await accountGrant(adminPassword, 'adminReset')
+  const { data } = await api.post<{ grant: string }>(`/admin/users/${encodeURIComponent(id)}/reset-grant`, { grant })
+  return data.grant
 }
 
 export interface CreateUserInput {
@@ -86,7 +99,7 @@ export interface CreateUserInput {
 
 export function useCreateUser() {
   return useAdminMutation(async ({ username, tempPassword, storageQuotaBytes }: CreateUserInput) => {
-    await api.post('/admin/users', { username, setup: await setupKeyFor(tempPassword), storageQuotaBytes })
+    await api.post('/admin/users', { username, ...(await temporaryPassword(tempPassword, null)), storageQuotaBytes })
   })
 }
 
@@ -108,15 +121,27 @@ export function useForceDisable2fa() {
   })
 }
 
+export interface ResetInput {
+  id: string
+  tempPassword: string
+  /** The administrator's own password, proven again first; read once. */
+  adminPassword: OneUseSecret
+}
+
 export function useRotateTempPassword() {
-  return useAdminMutation(async ({ id, tempPassword }: { id: string; tempPassword: string }) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, { setup: await setupKeyFor(tempPassword) })
+  return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
+    const grant = await resetGrant(id, adminPassword.take())
+    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, {
+      grant,
+      ...(await temporaryPassword(tempPassword, { grant })),
+    })
   })
 }
 
 export function useWipeUser() {
-  return useAdminMutation(async ({ id, tempPassword }: { id: string; tempPassword: string }) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { setup: await setupKeyFor(tempPassword) })
+  return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
+    const grant = await resetGrant(id, adminPassword.take())
+    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { grant, ...(await temporaryPassword(tempPassword, { grant })) })
   })
 }
 

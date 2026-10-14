@@ -28,6 +28,8 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_FORK_PER_MIN", 120),
     ("RATE_LIMIT_CALL_LINK_PER_MIN", 60),
     ("RATE_LIMIT_CALL_LINK_POLL_PER_MIN", 600),
+    // Retired with the login preflight (OPAQUE has none): still accepted, so
+    // a server whose environment sets it starts; it limits nothing.
     ("RATE_LIMIT_PREFLIGHT_PER_MIN", 20),
     ("RATE_LIMIT_USER_LOOKUP_PER_MIN", 30),
     ("RATE_LIMIT_REGISTER_PER_HOUR", 10),
@@ -184,13 +186,6 @@ pub static CALL_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static CALL_LINK_POLL: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_CALL_LINK_POLL_PER_MIN", 600) as usize,
-        Duration::from_secs(60),
-    )
-});
-/// Login preflight: 20 / minute / IP (`RATE_LIMIT_PREFLIGHT_PER_MIN`).
-pub static PREFLIGHT: LazyLock<RateLimiter> = LazyLock::new(|| {
-    RateLimiter::new(
-        env_limit("RATE_LIMIT_PREFLIGHT_PER_MIN", 20) as usize,
         Duration::from_secs(60),
     )
 });
@@ -586,7 +581,6 @@ pub fn spawn_cleanup() {
             LOGIN.cleanup();
             REGISTRATION_CODE_CHECK.cleanup();
             REGISTRATION_CODE_FAILURES.cleanup();
-            PREFLIGHT.cleanup();
             FORK.cleanup();
             CALL_LINK.cleanup();
             CALL_LINK_POLL.cleanup();

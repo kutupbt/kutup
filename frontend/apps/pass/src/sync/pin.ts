@@ -8,7 +8,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import api from '@kutup/session/client'
-import { accountLoginKey, lockedErrorFrom } from '@kutup/session/reauth'
+import { accountGrant, lockedErrorFrom, ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
 
 export const PIN_LENGTH = 6
 
@@ -33,15 +33,17 @@ export function useRefreshPinStatus(): () => Promise<void> {
 }
 
 /** Why setting or removing the PIN was refused. */
-export type PinChangeResult = 'ok' | 'wrongPassword' | 'paused'
+/** `paused`: the account's sign-in lockout; `slowDown`: too many attempts from this address. */
+export type PinChangeResult = 'ok' | 'wrongPassword' | 'paused' | 'slowDown'
 
-async function withPassword(password: string, send: (loginKey: string) => Promise<unknown>): Promise<PinChangeResult> {
-  const loginKey = await accountLoginKey(password)
+/** Proves the account password (a one-time `pass` grant), then sends the change with it. */
+async function withPassword(password: string, send: (grant: string) => Promise<unknown>): Promise<PinChangeResult> {
   try {
-    await send(loginKey)
+    await send(await accountGrant(password, 'pass'))
     return 'ok'
   } catch (error) {
-    if (isAxiosError(error) && error.response?.status === 401) return 'wrongPassword'
+    if (error instanceof WrongPasswordError) return 'wrongPassword'
+    if (error instanceof ReauthLockedError) return error.reason === 'rateLimited' ? 'slowDown' : 'paused'
     if (isAxiosError(error) && error.response?.status === 429) return 'paused'
     throw error
   }
@@ -49,12 +51,12 @@ async function withPassword(password: string, send: (loginKey: string) => Promis
 
 /** Sets or changes the account's PIN. */
 export function setPin(password: string, pin: string): Promise<PinChangeResult> {
-  return withPassword(password, (loginKey) => api.put('/pass/pin', { loginKey, pin }))
+  return withPassword(password, (grant) => api.put('/pass/pin', { grant, pin }))
 }
 
 /** Removes the account's PIN. */
 export function removePin(password: string): Promise<PinChangeResult> {
-  return withPassword(password, (loginKey) => api.delete('/pass/pin', { data: { loginKey } }))
+  return withPassword(password, (grant) => api.delete('/pass/pin', { data: { grant } }))
 }
 
 export type PinCheck =

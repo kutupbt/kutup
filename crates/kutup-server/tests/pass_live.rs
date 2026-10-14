@@ -348,85 +348,65 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
         .build()
         .unwrap();
     let user = register(&c, &base);
-    // The login key from the public preflight, as the app derives it.
-    let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight"))
-        .query(&[("name", &user.username)])
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let salt = account_envelope::decode_canonical_b64(
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-    )
-    .unwrap();
-    let derive = |password: &str| {
-        let keys = kutup_crypto::kdf::derive_account_protection_keys(
+    // A reauth is a sign-in exchange (docs/plans/opaque.md) whose answer is a
+    // one-time grant, not a session.
+    let reauth = |password: &str, token: Option<&str>| {
+        let (status, body, _) = opaque_login(
+            &c,
+            &base,
+            &user.username,
             password,
-            &salt,
-            kutup_crypto::kdf::AccountProtectionParameters::V1,
-        )
-        .unwrap();
-        b64(keys.login_key.as_slice())
+            "reauth",
+            Some("pass"),
+            token,
+        );
+        (status, body)
     };
-    let reauth = |login_key: &str| {
-        bearer(c.post(format!("{base}/api/user/reauth")), &user.token)
-            .json(&json!({ "loginKey": login_key }))
-            .send()
-            .unwrap()
-            .status()
-    };
-    let right = derive("integrity-pw-123456");
-    let wrong = derive("not-the-password");
-    assert_eq!(reauth(&right), StatusCode::NO_CONTENT);
-    assert_eq!(reauth(&wrong), StatusCode::UNAUTHORIZED);
-    // Signed out: refused.
+    let (status, body) = reauth(&user.password, Some(&user.token));
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["grant"].as_str().unwrap().starts_with("kg1_"));
+    assert!(
+        body.get("accessToken").is_none(),
+        "no session from a reauth"
+    );
+    // A wrong password fails in the client; the server never sees a finish.
     assert_eq!(
-        c.post(format!("{base}/api/user/reauth"))
-            .json(&json!({ "loginKey": right }))
-            .send()
-            .unwrap()
-            .status(),
+        reauth("not-the-password", Some(&user.token)).0,
         StatusCode::UNAUTHORIZED
     );
-    // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): misses
-    // here count, and then even the right password waits.
+    // Signed out: refused.
+    assert_eq!(reauth(&user.password, None).0, StatusCode::UNAUTHORIZED);
+    // Another account's name: refused.
+    let other = register(&c, &base);
+    let (status, _, _) = opaque_login(
+        &c,
+        &base,
+        &other.username,
+        &other.password,
+        "reauth",
+        Some("pass"),
+        Some(&user.token),
+    );
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): every
+    // start counts, finished or not, and then even the right password waits.
     let mut locked = false;
     for _ in 0..10 {
-        if reauth(&wrong) == StatusCode::TOO_MANY_REQUESTS {
+        if reauth("not-the-password", Some(&user.token)).0 == StatusCode::TOO_MANY_REQUESTS {
             locked = true;
             break;
         }
     }
     assert!(locked, "the lockout never came");
-    assert_eq!(reauth(&right), StatusCode::TOO_MANY_REQUESTS);
-}
-
-/// The login key for `password`, from the public preflight, as the app
-/// derives it.
-fn login_key(c: &Client, base: &str, user: &User, password: &str) -> String {
-    let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight"))
-        .query(&[("name", &user.username)])
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let salt = account_envelope::decode_canonical_b64(
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-    )
-    .unwrap();
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        password,
-        &salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    b64(keys.login_key.as_slice())
+    assert_eq!(
+        reauth(&user.password, Some(&user.token)).0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    purge_accounts(&c, &base, &[&user, &other]);
 }
 
 #[test]
-fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() {
+fn pin_is_set_with_a_fresh_grant_and_three_misses_end_the_sign_in() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         return;
     };
@@ -436,8 +416,6 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
         .build()
         .unwrap();
     let user = register(&c, &base);
-    let right = login_key(&c, &base, &user, "integrity-pw-123456");
-    let wrong = login_key(&c, &base, &user, "not-the-password");
     let status = || -> Value {
         bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
             .send()
@@ -445,12 +423,13 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
             .json()
             .unwrap()
     };
-    let set = |login_key: &str, pin: &str| {
-        bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
-            .json(&json!({ "loginKey": login_key, "pin": pin }))
+    let set = |grant: &str, pin: &str| {
+        let response = bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
+            .json(&json!({ "grant": grant, "pin": pin }))
             .send()
-            .unwrap()
-            .status()
+            .unwrap();
+        let code = response.status();
+        (code, response.json::<Value>().unwrap_or(Value::Null))
     };
     let verify = |pin: &str| {
         let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), &user.token)
@@ -464,11 +443,21 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
 
     assert_eq!(status()["set"], false);
     assert_eq!(verify("123456").1["error"], "noPin");
-    // Six digits, and the account password.
-    assert_eq!(set(&right, "12345"), StatusCode::BAD_REQUEST);
-    assert_eq!(set(&right, "12345a"), StatusCode::BAD_REQUEST);
-    assert_eq!(set(&wrong, "246802"), StatusCode::UNAUTHORIZED);
-    assert_eq!(set(&right, "246802"), StatusCode::NO_CONTENT);
+    // Six digits (checked first: no grant spent on a typo).
+    let grant = reauth_grant(&c, &base, &user, "pass");
+    assert_eq!(set(&grant, "12345").0, StatusCode::BAD_REQUEST);
+    assert_eq!(set(&grant, "12345a").0, StatusCode::BAD_REQUEST);
+    // A grant for something else, or none: refused.
+    let totp = reauth_grant(&c, &base, &user, "totp");
+    let (code, body) = set(&totp, "246802");
+    assert_eq!(
+        (code, &body["code"]),
+        (StatusCode::FORBIDDEN, &json!("grantInvalid"))
+    );
+    assert_eq!(set("kg1_not-a-grant", "246802").0, StatusCode::FORBIDDEN);
+    assert_eq!(set(&grant, "246802").0, StatusCode::NO_CONTENT);
+    // Used once.
+    assert_eq!(set(&grant, "246802").0, StatusCode::FORBIDDEN);
     assert_eq!(status()["set"], true);
 
     assert_eq!(verify("246802").0, StatusCode::NO_CONTENT);
@@ -496,10 +485,11 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
             .status(),
         StatusCode::UNAUTHORIZED
     );
+    purge_accounts(&c, &base, &[&user]);
 }
 
 #[test]
-fn pin_is_removed_only_with_the_password() {
+fn pin_is_removed_only_with_a_grant_of_this_sign_in() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         return;
     };
@@ -509,31 +499,36 @@ fn pin_is_removed_only_with_the_password() {
         .build()
         .unwrap();
     let user = register(&c, &base);
-    let right = login_key(&c, &base, &user, "integrity-pw-123456");
-    let wrong = login_key(&c, &base, &user, "not-the-password");
-    let pin = |method: reqwest::Method, body: Value| {
-        bearer(
-            c.request(method, format!("{base}/api/pass/pin")),
-            &user.token,
-        )
-        .json(&body)
-        .send()
-        .unwrap()
-        .status()
+    let pin = |method: reqwest::Method, token: &str, body: Value| {
+        bearer(c.request(method, format!("{base}/api/pass/pin")), token)
+            .json(&body)
+            .send()
+            .unwrap()
+            .status()
     };
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
         pin(
             reqwest::Method::PUT,
-            json!({ "loginKey": right, "pin": "135790" })
+            &user.token,
+            json!({ "grant": grant, "pin": "135790" })
         ),
         StatusCode::NO_CONTENT
     );
+    // Another sign-in of the account cannot use this one's grant.
+    let other = sign_in_token(&c, &base, &user);
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
-        pin(reqwest::Method::DELETE, json!({ "loginKey": wrong })),
-        StatusCode::UNAUTHORIZED
+        pin(reqwest::Method::DELETE, &other, json!({ "grant": grant })),
+        StatusCode::FORBIDDEN
     );
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
-        pin(reqwest::Method::DELETE, json!({ "loginKey": right })),
+        pin(
+            reqwest::Method::DELETE,
+            &user.token,
+            json!({ "grant": grant })
+        ),
         StatusCode::NO_CONTENT
     );
     let status: Value = bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
@@ -542,19 +537,12 @@ fn pin_is_removed_only_with_the_password() {
         .json()
         .unwrap();
     assert_eq!(status["set"], false);
+    purge_accounts(&c, &base, &[&user]);
 }
 
 /// A second sign-in of `user` (another device): its access token.
-fn sign_in(c: &Client, base: &str, user: &User) -> String {
-    let login_key = login_key(c, base, user, "integrity-pw-123456");
-    let r = c
-        .post(format!("{base}/api/auth/login"))
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "name": user.username, "loginKey": login_key }))
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "login: {}", r.status());
-    r.json::<Value>().unwrap()["accessToken"]
+fn sign_in_token(c: &Client, base: &str, user: &User) -> String {
+    sign_in(c, base, &user.username, &user.password)["accessToken"]
         .as_str()
         .unwrap()
         .to_owned()
@@ -571,16 +559,16 @@ fn pin_tries_are_counted_per_sign_in() {
         .build()
         .unwrap();
     let user = register(&c, &base);
-    let right = login_key(&c, &base, &user, "integrity-pw-123456");
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
         bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
-            .json(&json!({ "loginKey": right, "pin": "975310" }))
+            .json(&json!({ "grant": grant, "pin": "975310" }))
             .send()
             .unwrap()
             .status(),
         StatusCode::NO_CONTENT
     );
-    let other = sign_in(&c, &base, &user);
+    let other = sign_in_token(&c, &base, &user);
     let verify = |token: &str, pin: &str| -> Value {
         let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), token)
             .json(&json!({ "pin": pin }))

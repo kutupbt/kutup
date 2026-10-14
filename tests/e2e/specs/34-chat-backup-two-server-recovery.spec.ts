@@ -59,9 +59,9 @@ async function restartHomeservers(
     username: string
   }>,
 ): Promise<void> {
-  const expectedSalts = accounts.map(account => ({
+  const expectedBindings = accounts.map(account => ({
     ...account,
-    salt: accountProtectionSalt(account.postgres, account.username),
+    binding: keyBinding(account.postgres, account.username),
   }))
   // Docker reconnects simultaneously restarted containers to the network in
   // nondeterministic order. Starting nginx in that window can pin backend-a
@@ -75,15 +75,17 @@ async function restartHomeservers(
       try { return (await fetch(url)).ok } catch { return false }
     }, { timeout: 60_000, intervals: [500, 1_000, 2_000] }).toBe(true)
   }
-  for (const account of expectedSalts) {
+  // The recovery preflight answers an unknown name with a fake binding, so
+  // only the persisted account's real one shows the backend serves it.
+  for (const account of expectedBindings) {
     await expect.poll(async () => {
       try {
         const response = await fetch(
-          apiUrl(`/auth/login/preflight?name=${encodeURIComponent(account.username)}`, account.server),
+          apiUrl(`/auth/recover/preflight?name=${encodeURIComponent(account.username)}`, account.server),
         )
         if (!response.ok) return false
-        const preflight = await response.json() as { accountProtectionSalt?: string }
-        return preflight.accountProtectionSalt === account.salt
+        const preflight = await response.json() as { envelopeBinding?: string }
+        return preflight.envelopeBinding === account.binding
       } catch {
         return false
       }
@@ -101,14 +103,14 @@ function backupRows(postgres: 'postgres-a' | 'postgres-b', username: string): nu
   return Number(compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql]))
 }
 
-function accountProtectionSalt(
+function keyBinding(
   postgres: 'postgres-a' | 'postgres-b',
   username: string,
 ): string {
   const quoted = username.replaceAll("'", "''")
   return compose([
     'exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc',
-    `SELECT account_protection_salt FROM users WHERE username='${quoted}'`,
+    `SELECT key_binding FROM users WHERE username='${quoted}'`,
   ])
 }
 

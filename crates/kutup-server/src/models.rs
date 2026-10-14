@@ -80,19 +80,6 @@ pub struct AdminSettingsResponse {
     pub chat_media_delivery_retention_days: i64,
 }
 
-/// `GET /api/auth/login/preflight` — mirrors `handlers.PreflightLoginResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PreflightLoginResponse {
-    // No envelope binding here: it comes with the session, once the password
-    // is proved (docs/plans/account-identity.md).
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
-}
-
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -450,8 +437,9 @@ pub struct PublicShareResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CreateAdminUserRequest {
     pub username: String,
-    /// The temporary password, derived in the administrator's browser.
-    pub setup: crate::handlers::auth::SetupKey,
+    /// The temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    pub setup: crate::handlers::admin::TempRegistration,
     pub storage_quota_bytes: i64,
 }
 

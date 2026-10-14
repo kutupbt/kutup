@@ -178,7 +178,9 @@ start and finish.
 **Grants** (`auth_check`): an opaque token, `kg1_` followed by
 base64url of 32 random bytes, stored as its SHA-256.
 - Each is bound to the session id, the account and one purpose: `pass`,
-  `passwordChange`, `totp`, `deleteAccount`, `recovery`, `adminReset`.
+  `passwordChange`, `totp`, `recovery`, `adminReset`, `rotate`. A purpose
+  exists only with the action that takes it (account deletion, when it
+  comes, adds its own).
 - Single use: consumed by the action it was issued for.
 - It expires in 5 minutes or less.
 - It is never accepted as a session or a bearer token.
@@ -217,6 +219,54 @@ pins, and the next setup starts a new incarnation. OPAQUE keeps that:
 - **The bootstrap admin** from `ADMIN_ACCOUNT` is registered by the server running
   the client half itself at startup: the only place the server ever sees a
   password. That is already true today.
+
+**Addendum: every flow, end to end** (the cases the table above leaves open):
+
+- **Second factor and setup:** `login/finish` (purpose `session`) answers one of three:
+  - the session: `{ …the session, keyBinding, masterKeyEnvelope, drivePrivateKeyEnvelope, publicKey }`;
+  - `{ requiresTotp: true, preAuthToken }`;
+  - `{ requiresSetup: true, setupToken, username }`.
+  `POST /api/auth/login/2fa { preAuthToken, code }` then answers the session with
+  the envelopes, as today. The client keeps the export key in its worker across
+  that step and never re-derives it.
+- **Sign-up returns the session.** `POST /api/auth/register` answers the same
+  session as `login/finish`. The client created the master key itself and holds
+  the export key, so a second OPAQUE run (another Argon2) after registering is
+  pointless.
+- **Admin-created accounts (first sign-in):** the user signs in with the temporary
+  password and gets `requiresSetup`. With the setup token as its grant
+  (`Authorization: Bearer <setupToken>`), the client runs `register/start` for the
+  new key binding it draws. Then `POST /api/auth/complete-setup` carries
+  `{ …the keys, keyBinding, opaqueRecord, opaqueServerKeyId, masterKeyEnvelope }`
+  and answers the session.
+- **Recovery:**
+  - `GET /api/auth/recover/preflight` (unchanged) gives the recovery envelope and
+    the key binding.
+  - `POST /api/auth/recover/grant { name, recoveryProof }` answers
+    `{ grant }` (purpose `recovery`, bound to that account, with no session).
+  - Then `register/start` and `register/finish` with that grant. `finish`
+    replaces the record and the password envelope, and ends every session of
+    the account.
+- **Pass:** the PIN set and remove endpoints take `{ grant }` (purpose `pass`)
+  instead of `loginKey`.
+- **Reauth:** `verifyAccountPassword` (Kutup Pass's unlock) becomes login/start
+  and login/finish with `purpose: "reauth"`, `for: "verify"`. A success answer
+  means right; it stores no grant, so nothing usable is left behind.
+  `401 invalidCredentials` means wrong; any other 401 is an ended session.
+  The lockout works as at sign-in.
+- **Admin resets and temporary passwords:**
+  - The admin first reauthenticates (`purpose: "reauth"`, then a grant of purpose
+    `adminReset` for the target, `POST /api/admin/users/:id/reset-grant { grant }`
+    → `{ grant: adminResetGrant }`).
+  - The admin's client then draws the target's new key binding and runs
+    `register/start` with that grant.
+  - The reset or temporary-password endpoint takes `{ grant, keyBinding,
+    opaqueRecord, opaqueServerKeyId }`.
+
+**Why `register/start` needs a grant even though it returns no envelope:** each
+call is one oracle query on that account's OPRF key, so it is limited like
+`login/start`. A new key binding (sign-up) is the only grant-free case, limited
+by the sign-up limits.
 
 **Renames:**
 - **Signing in by an old name during the hold** is refused: the old name is only a
@@ -291,3 +341,121 @@ Rust module directly. `KUTUP_PASSWORD` still works. Profiles keep no OPAQUE stat
 
 **Native clients later:** 64 MiB Argon2id is fine on phones, and the suite table
 handles a later bump.
+
+## 10. The server, as built
+
+Built on `slate/opaque-server` from the server note agreed by the main and
+third sessions (2026-10-13). The wire is the one above, plus the addendum.
+
+- **Storage:**
+  - `users.opaque_record`, `opaque_suite` and `opaque_server_key_id` (all
+    three or none); the old login-key hash, salt and Argon2 columns are gone.
+  - `opaque_server_setups`: each setup sealed under its `OPAQUE_SETUP_KEYS`
+    key.
+  - `opaque_login_states`: a sign-in between start and finish, two minutes,
+    single use, its server state sealed under a subkey of the setup key
+    (`kutup_crypto::opaque_login_state`, AAD the login id).
+  - `auth_grants`: kept as their SHA-256, used by an atomic `UPDATE …
+    RETURNING`.
+- **Keys:**
+  - `OPAQUE_SETUP_KEYS` (or `OPAQUE_SETUP_KEYS_FILE`, a file holding it; one
+    of the two) is parsed strictly: ids 1–32767 written plainly (no sign, no
+    leading zero), no duplicates, no empty entries, exactly 32 bytes in
+    canonical base64, never printed. A stored setup that does not open under
+    its key stops the server.
+  - A record whose key is missing gets `500 opaqueKeyMissing`, and a warning
+    with the count of such accounts at startup.
+  - Setups older than the current one that no account uses are dropped at
+    startup.
+- **One canonical name:** this server's address is cut to its username, then
+  `CanonicalName::parse`. It is used for the lookup, the fake answer, the
+  lockout and the caps. The per-address lockout is keyed by it for real and
+  unknown names alike, so a name's window carries on when an account takes it
+  and every spelling shares it; the per-account ceiling stays the account's. Lookup is by username only, so a held or foreign name
+  gets the fake answer.
+- **Lockout at the start:** each `login/start` takes the attempt's lockout and
+  ceiling slots before any OPAQUE work. The state row keeps them, and only a
+  right finish gives them back, so starts without a finish cost as wrong
+  passwords do.
+- **Caps:** 5 sign-ins under way per name and 20 per address; the oldest goes.
+- **The credential at the finish:** the login state keeps the account's
+  credential epoch at the start (16 bytes of SHA-256 of its record), and so do
+  the 2FA and setup tokens a finish answers with. A session or grant is made
+  only while the record is still that one: checked under a share lock of the
+  account row, in the transaction that issues the grant, and right after a
+  session is created (a mismatch revokes it, `401`). A credential change
+  updates the row first and ends sessions and grants in the same
+  transaction, so a sign-in that straddles it never outlives it.
+- **Reauth:** `for` is one of `pass`, `passwordChange`, `totp`,
+  `adminReset`, or `verify` (the password checked, no grant kept: Pass unlock). The account is compared by user id, and the
+  finish must come from the session that started it.
+- **Registration:**
+  - `register/start` checks a grant without using it, and needs a grant, the
+    setup token, an admin session (a new account) or open sign-ups.
+  - Records are taken only against the current setup (`409 opaqueKeyStale`).
+  - Key binding uniqueness is enforced again in the transaction that stores
+    the record (`409 keyBindingTaken`).
+- **New passwords:**
+  - `register/finish` takes `passwordChange` (that session), `recovery` or
+    `rotate` (that session).
+  - In one transaction: the record and envelope, the end of every
+    outstanding grant and pending sign-in, the sessions it ends (a password
+    change the others, a recovery all, a rotation none), and the account's
+    security event (`account_security_events`).
+  - A rotation only moves an account off a retired setup: the update needs
+    the stored setup id to differ from the current one, so at most one per
+    account per setup, and never a password change in disguise. It is a
+    security event the owner sees ("your sign-in was refreshed"); with that,
+    it is no stronger than the reauth and `passwordChange` path a password
+    holder already has.
+- **Rotation:** a session answer carries `rotate` and a `rotate` grant (two
+  minutes) when the record's setup is not the current one. The CLI moves the
+  record at once; the web client does too.
+- **Enumeration across a rotation (accepted):** a fake answer is made under
+  the current setup, while a real record keeps its retired one until the
+  account next signs in. Someone who sent the same blinded request before and
+  after a rotation could tell a real name (the same OPRF output) from a fake
+  (a changed one). Rotations are rare and real accounts move off at their next
+  sign-in, so this is accepted, not mitigated.
+- **Two-step sign-in:** turning it on (`2fa/verify`) or off (`DELETE
+  /api/user/2fa`) takes a `totp` grant of this session as well as a code; the
+  secret is never replaced while it is on.
+- **Security events:** `account_security_events` records password changes,
+  recoveries, rotations and admin resets in the change's transaction (no IP
+  addresses; a year, or the newest 500 per account). `GET
+  /api/user/security-events` lists the caller's own.
+- **The web client's workers** (`@kutup/crypto/opaqueWorker`): one per sign-in
+  or registration.
+  - The worker holds the password, the OPAQUE state and the export key until
+    it is closed. The page never keeps the password: a rotation, or a record
+    made again after `opaqueKeyStale`, starts a new registration in the
+    worker from its own copy (`registrationAgain`).
+  - A sign-in waiting for its code is closed when the person goes back or
+    leaves the page. New account keys are closed once they are stored or
+    replaced.
+  - Closing asks the worker to wipe (WASM `close`/`free`), then ends it (after
+    one second at most). A worker that failed, or was closed, fails the call
+    waiting on it and every later one.
+- **Refused registrations, made again once:**
+  - `opaqueKeyStale`: the same keys, a new record from the held password,
+    sent again (sign-up, setup, and every `register/finish`; a grant is used
+    only when the record is stored).
+  - `keyBindingTaken`: a new binding. The records bound to it are sealed
+    again from the same master key and recovery phrase, so the phrase shown
+    stays valid.
+  - Refused a second time: the person is told (in English and Turkish) and
+    can try again without starting over.
+- **Admins:**
+  - `reset-grant` exchanges the admin's own `adminReset` reauth grant for one
+    bound to the target.
+  - Rotate-temp-password and wipe take it, used before anything is destroyed.
+  - Creating an account needs only the admin's session at `register/start`.
+  - The bootstrap admin is registered in process only when the account does
+    not exist yet.
+- **Tests:**
+  - `tests/opaque_live.rs`: a login id once, the per-name cap, password
+    change, recovery.
+  - `account_identity_live.rs`: fake answers, lockout from starts alone, the
+    known-client ceiling, admin temporary passwords.
+  - `pass_live.rs`: reauth and PIN grants.
+  - `opaque_setup` unit tests, and a live database test for a wrong key.

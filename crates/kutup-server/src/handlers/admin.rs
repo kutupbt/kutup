@@ -142,12 +142,58 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     Ok(Json(users).into_response())
 }
 
+/// A temporary password as the administrator's client registered it
+/// (docs/plans/opaque.md, "Admin temporary passwords"): an OPAQUE record
+/// under a key binding that client drew. The server never sees the password;
+/// at first sign-in the person registers their own under a key binding of
+/// their own.
+#[derive(Debug, Default, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TempRegistration {
+    key_binding: String,
+    #[serde(flatten)]
+    record: crate::handlers::opaque::RecordUpload,
+}
+
+impl TempRegistration {
+    /// The key binding, record and setup id to store.
+    fn checked(&self, state: &AppState) -> AppResult<(String, Vec<u8>, i16)> {
+        if !crate::handlers::auth::is_key_binding(&self.key_binding) {
+            return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
+        }
+        let (record, key_id) = self.record.checked(state)?;
+        Ok((self.key_binding.clone(), record, key_id))
+    }
+}
+
+/// Uses an admin-reset grant for `target`, issued to this admin's session
+/// (`reset-grant`), or refuses.
+async fn take_reset_grant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    token: &str,
+    admin: &AdminUser,
+    target: Uuid,
+) -> AppResult<()> {
+    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    match crate::grants::take(&mut **tx, token, &[crate::grants::Purpose::AdminReset]).await? {
+        Some((_, grant))
+            if grant.user_id == admin_id
+                && grant.target_user_id == Some(target)
+                && grant.session_id == Some(admin.session_id) =>
+        {
+            Ok(())
+        }
+        _ => Err(crate::grants::invalid()),
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateUserRequest {
     username: String,
-    /// The temporary password, derived in the administrator's browser.
-    setup: crate::handlers::auth::SetupKey,
+    /// The temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    setup: TempRegistration,
     storage_quota_bytes: i64,
 }
 
@@ -168,7 +214,7 @@ pub async fn create_user(
     admin: AdminUser,
     Json(mut req): Json<CreateUserRequest>,
 ) -> AppResult<Response> {
-    let hash = req.setup.checked_hash()?;
+    let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     if req.username.is_empty() {
         return Err(AppError::bad_request("username required"));
     }
@@ -202,24 +248,20 @@ pub async fn create_user(
     let mut tx = state.pool.begin().await?;
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
-               username, login_key_hash,
+               username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
                master_key_envelope, recovery_key_envelope,
                drive_private_key_envelope,
                public_key, account_authority_public_key, account_authority_key_id,
                account_incarnation_id, drive_signing_public_key,
-               account_protection_suite, account_protection_salt,
-               argon_memory_kib, argon_iterations, argon_parallelism,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,'','','','','','','','',$3,$4,$5,$6,$7,false,true,$8)
+           ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',false,true,$6)
            RETURNING id"#,
     )
     .bind(&req.username)
-    .bind(&hash)
-    .bind(i16::try_from(req.setup.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.setup.account_protection_salt)
-    .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
+    .bind(&key_binding)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .bind(req.storage_quota_bytes)
     .fetch_one(&mut *tx)
     .await;
@@ -1718,11 +1760,15 @@ async fn wake_federation_outbox(pool: &PgPool, domain: Option<&str>) -> AppResul
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RotateTempPasswordRequest {
-    /// The new temporary password, derived in the administrator's browser.
-    setup: crate::handlers::auth::SetupKey,
+    /// An admin-reset grant for this account (`reset-grant`).
+    grant: String,
+    /// The new temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    setup: TempRegistration,
 }
 
 /// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
@@ -1749,7 +1795,7 @@ pub async fn rotate_temp_password(
     Path(id): Path<String>,
     Json(req): Json<RotateTempPasswordRequest>,
 ) -> AppResult<Response> {
-    let hash = req.setup.checked_hash()?;
+    let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(String, bool)> =
@@ -1767,21 +1813,40 @@ pub async fn rotate_temp_password(
         ));
     }
 
-    sqlx::query(
-        "UPDATE users SET login_key_hash = $1, account_protection_suite = $3,
-                account_protection_salt = $4, argon_memory_kib = $5,
-                argon_iterations = $6, argon_parallelism = $7, updated_at = NOW()
-          WHERE id = $2 AND is_first_login",
+    let mut tx = state.pool.begin().await?;
+    take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
+    let rotated = sqlx::query(
+        "UPDATE users SET key_binding = $2, opaque_record = $3, opaque_suite = $4,
+                opaque_server_key_id = $5, updated_at = NOW()
+          WHERE id = $1 AND is_first_login",
     )
-    .bind(&hash)
     .bind(target)
-    .bind(i16::try_from(req.setup.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.setup.account_protection_salt)
-    .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
-    .execute(&state.pool)
+    .bind(&key_binding)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(map_insert_conflict)?;
+    // Set up in between: nothing changes (the grant stays unused with the
+    // rolled-back transaction).
+    if rotated.rows_affected() != 1 {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "user has completed setup; only the user can reset their password (recovery phrase), or wipe the account",
+        ));
+    }
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::AdminReset,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
     .await?;
+    tx.commit().await?;
 
     audit(
         &state.pool,
@@ -1794,12 +1859,77 @@ pub async fn rotate_temp_password(
     Ok(Json(json!({"message": "temp password rotated"})).into_response())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResetGrantRequest {
+    /// The admin's own grant from a reauth with `for: "adminReset"`.
+    grant: String,
+}
+
+/// `POST /api/admin/users/{id}/reset-grant` — the admin's fresh password
+/// proof (a reauth grant for `adminReset`), exchanged for one bound to this
+/// account: what its temporary password's registration and the reset itself
+/// take. Single use, five minutes, this admin session only.
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/reset-grant",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    request_body = ResetGrantRequest,
+    responses(
+        (status = 200, description = "A grant for this account", body = crate::handlers::opaque::GrantResponse),
+        (status = 403, description = "grantInvalid")
+    )
+)]
+pub async fn reset_grant(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(req): Json<ResetGrantRequest>,
+) -> AppResult<Response> {
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(AppError::not_found("not found"));
+    }
+    let mut tx = state.pool.begin().await?;
+    match crate::grants::take(&mut *tx, &req.grant, &[crate::grants::Purpose::AdminReset]).await? {
+        // The admin's own, untargeted, from this session.
+        Some((_, grant))
+            if grant.user_id == admin_id
+                && grant.target_user_id.is_none()
+                && grant.session_id == Some(admin.session_id) => {}
+        _ => return Err(crate::grants::invalid()),
+    }
+    let grant = crate::grants::issue(
+        &mut *tx,
+        crate::grants::Purpose::AdminReset,
+        admin_id,
+        Some(admin.session_id),
+        Some(target),
+        crate::grants::GRANT_MINUTES,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
+}
+
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WipeUserRequest {
-    /// The temporary password it starts again with, derived in the
-    /// administrator's browser.
-    setup: crate::handlers::auth::SetupKey,
+    /// An admin-reset grant for this account (`reset-grant`).
+    grant: String,
+    /// The temporary password it starts again with, registered by the
+    /// administrator's client.
+    #[serde(flatten)]
+    setup: TempRegistration,
 }
 
 /// `POST /api/admin/users/{id}/wipe` — the destructive "reset" for a user who lost both
@@ -1823,8 +1953,13 @@ pub async fn wipe_user(
     Path(id): Path<String>,
     Json(req): Json<WipeUserRequest>,
 ) -> AppResult<Response> {
-    let hash = req.setup.checked_hash()?;
+    let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    // The admin's fresh proof, for this account, used before anything is
+    // destroyed.
+    let mut tx = state.pool.begin().await?;
+    take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
+    tx.commit().await?;
 
     let row: Option<Option<String>> =
         sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
@@ -1837,6 +1972,14 @@ pub async fn wipe_user(
     if is_break_glass(&state, username.as_deref().unwrap_or_default()) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
+
+    // 0. Nobody signed in to it watches the purges below, nor acts on a grant
+    //    meanwhile: its sign-ins and grants end first (and again, with the
+    //    reset, for any sign-in made in between).
+    let mut tx = state.pool.begin().await?;
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    tx.commit().await?;
 
     // The replacement recovery setup must never inherit ciphertext encrypted
     // under the lost account master key.
@@ -1888,7 +2031,9 @@ pub async fn wipe_user(
     //    devices stay, as tombstones: their keys never register again. Their
     //    revocations are not told to other servers any more (those take only the
     //    current incarnation's), nor need be: a server elsewhere stops taking the
-    //    old incarnation's devices once the share is issued to the new one.
+    //    old incarnation's devices once the share is issued to the new one. Every
+    //    grant and sign-in it ends ends with it, and the owner sees it happened
+    //    (the event outlives the incarnation).
     let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM user_devices WHERE user_id = $1 AND revoked_at_ms IS NULL")
         .bind(target)
@@ -1900,23 +2045,31 @@ pub async fn wipe_user(
                drive_private_key_envelope = '',
                public_key = '', account_authority_public_key = '',
                account_authority_key_id = '', account_incarnation_id = '',
-               drive_signing_public_key = '', account_protection_suite = $3,
-               account_protection_salt = $4, argon_memory_kib = $5,
-               argon_iterations = $6, argon_parallelism = $7,
+               drive_signing_public_key = '',
                recovery_key_verifier = '', drive_key_binding = NULL,
-               key_binding = NULL,
-               login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
+               key_binding = $1, opaque_record = $3, opaque_suite = $4,
+               opaque_server_key_id = $5,
+               totp_secret = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
     )
-    .bind(&hash)
+    .bind(&key_binding)
     .bind(target)
-    .bind(i16::try_from(req.setup.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&req.setup.account_protection_salt)
-    .bind(i32::try_from(req.setup.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.setup.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(req.setup.argon_parallelism).unwrap_or(i32::MAX))
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .execute(&mut *tx)
+    .await
+    .map_err(map_insert_conflict)?;
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::AccountReset,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
     .await?;
     tx.commit().await?;
 
@@ -1925,9 +2078,6 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
-
-    // The wiped keys are gone; so is every session that held them.
-    crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
 
     // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
     //    folder-owner's data view) and still count against this user.

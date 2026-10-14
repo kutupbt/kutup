@@ -16,6 +16,8 @@ export ADMIN_ACCOUNT="$test_admin_username:$test_admin_password"
 export RATE_LIMIT_LOGIN_PER_MIN=1000
 export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
 export RATE_LIMIT_REGISTER_PER_HOUR=1000
+# Recovery grants and preflights, from several tests in an hour.
+export RATE_LIMIT_RECOVERY_PER_HOUR=1000
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
@@ -24,6 +26,7 @@ export POSTGRES_DB="kutup_backup_test"
 export POSTGRES_USER="kutup_backup_test"
 export POSTGRES_PASSWORD="BackupIntegrationDatabase123!"
 export JWT_SECRET="backup-integration-jwt-secret-at-least-32-bytes"
+export OPAQUE_SETUP_KEYS="1:0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dE="
 # A production server must know where its web apps live; this test only
 # talks to the API, so any domain will do.
 export KUTUP_BASE_DOMAIN="${KUTUP_BASE_DOMAIN:-backup.test}"
@@ -103,10 +106,43 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 # fresh, unrevoked devices; revocations page past one announce.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server remote_devices::tests -- --nocapture
+# OPAQUE sign-in (docs/plans/opaque.md): a login id once, the per-name cap,
+# new passwords and recoveries ending sessions, grants bound to their use.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test opaque_live -- --nocapture
+# Sessions, thumbnails and versions: run nowhere else.
+for test in sessions_live thumbnails_live versions_live; do
+  KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+    KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+    cargo test -p kutup-server --test "$test" -- --nocapture
+done
+# A rotation of the OPAQUE setup: an account made under key 1, the server
+# restarted with a newer key 2, the account moved at its next sign-in.
+rotation_file="$(mktemp)"
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_ROTATION_PHASE=before KUTUP_ROTATION_FILE="$rotation_file" \
+  cargo test -p kutup-server --test opaque_rotation_live -- --nocapture
+OPAQUE_SETUP_KEYS="$OPAQUE_SETUP_KEYS,2:0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tI=" \
+  compose up --detach --wait --force-recreate backend
+curl --fail --silent --show-error --retry 30 --retry-delay 1 \
+  --retry-connrefused --retry-all-errors \
+  "http://127.0.0.1:$port/api/health" >/dev/null
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_ROTATION_PHASE=after KUTUP_ROTATION_FILE="$rotation_file" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test opaque_rotation_live -- --nocapture
+rm -f "$rotation_file"
+
+# A wrong OPAQUE_SETUP_KEYS key for a stored setup stops the server.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server opaque_setup::tests::live_ -- --nocapture
 
 # Kutup Pass on the server: vault secrets, reauth under the sign-in check,
 # the PIN's three tries per sign-in.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test pass_live -- --nocapture
 
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \

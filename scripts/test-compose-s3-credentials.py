@@ -27,6 +27,7 @@ def render_compose(compose_file: str) -> dict:
             "JWT_SECRET": "compose-regression-jwt-secret-at-least-32-bytes",
             "S3_ACCESS_KEY": TEST_ACCESS_KEY,
             "S3_SECRET_KEY": TEST_SECRET_KEY,
+            "OPAQUE_SETUP_KEYS": "compose-regression:AAAA",
         }
     )
     result = subprocess.run(
