@@ -1845,16 +1845,6 @@ mod tests {
     }
 
     #[test]
-    fn account_protection_rejects_unknown_or_modified_parameters() {
-        let salt = STANDARD.encode([0u8; 16]);
-        assert!(validate_account_protection(1, &salt, 65_536, 3, 1).is_ok());
-        assert!(validate_account_protection(0, &salt, 65_536, 3, 1).is_err());
-        assert!(validate_account_protection(1, &salt, 8_192, 3, 1).is_err());
-        assert!(validate_account_protection(1, &salt, 65_536, 3, 2).is_err());
-        assert!(validate_account_protection(1, &STANDARD.encode([0u8; 15]), 65_536, 3, 1).is_err());
-    }
-
-    #[test]
     fn registered_account_identity_identifiers_are_key_bound() {
         let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
         let mut request = RegisterRequest {

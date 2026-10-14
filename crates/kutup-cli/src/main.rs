@@ -78,6 +78,9 @@ enum Commands {
         #[arg(long = "username")]
         username: Option<String>,
     },
+    /// Change your password (non-interactive: KUTUP_PASSWORD + KUTUP_NEW_PASSWORD env).
+    /// Your other sign-ins end.
+    Password,
     /// Clear stored session.
     Logout,
     /// Show current user info.
@@ -263,6 +266,7 @@ fn main() {
             server.as_deref(),
             username.as_deref(),
         ),
+        Commands::Password => commands::password::run(&cli.profile, cli.json),
         Commands::Logout => commands::logout::run(&cli.profile, cli.json),
         Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),
         Commands::Ls { tree, folder_id } => {

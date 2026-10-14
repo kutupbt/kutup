@@ -37,6 +37,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
       POSTGRES_PASSWORD: docs-check-postgres
       JWT_SECRET: docs-check-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eE="
     steps:
       - uses: actions/checkout@v7
         with:

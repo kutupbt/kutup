@@ -412,9 +412,7 @@ mod tests {
         let epoch = Some(&EPOCH[..]);
         let attacker = client("198.51.100.1", None);
         for _ in 0..5 {
-            assert!(!guard(&attacker, account, "ada", epoch)
-                .unwrap()
-                .verify(None, None));
+            guard(&attacker, account, "ada", epoch).unwrap(); // a miss: its slots stay taken
         }
         // Locked for that client only.
         assert!(guard(&attacker, account, "ada", epoch).is_err());
@@ -422,7 +420,7 @@ mod tests {
         // Unknown clients together reach the ceiling...
         for i in 0..30u32 {
             let ip = format!("10.9.{}.1", i);
-            let _ = guard(&client(&ip, None), account, "ada", epoch).map(|g| g.verify(None, None));
+            let _ = guard(&client(&ip, None), account, "ada", epoch).map(drop);
         }
         assert!(guard(&client("192.0.2.77", None), account, "ada", epoch).is_err());
         // ...but the account's own known device still gets to try,
@@ -466,7 +464,7 @@ mod tests {
         // Spread misses fill the ceiling.
         for i in 0..25u32 {
             let ip = format!("10.33.{i}.1");
-            let _ = guard(&client(&ip, None), account, "cyd", epoch).map(|g| g.verify(None, None));
+            let _ = guard(&client(&ip, None), account, "cyd", epoch).map(drop);
         }
         // The person retries from home, refused by the ceiling each time...
         let home = client("203.0.113.50", None);
@@ -488,12 +486,15 @@ mod tests {
     fn a_right_secret_gives_its_slots_back() {
         let account = Some(Uuid::new_v4());
         let epoch = Some(&EPOCH[..]);
-        let hash = bcrypt::hash("right", 4).unwrap();
         // Far more right answers than any limit: none of them count.
         for _ in 0..40 {
-            assert!(guard(&client("198.51.100.5", None), account, "bea", epoch)
+            let (lockout, ceiling) = guard(&client("198.51.100.5", None), account, "bea", epoch)
                 .unwrap()
-                .verify(Some(b"right"), Some(&hash)));
+                .slots();
+            Guard::succeeded(
+                &lockout,
+                ceiling.as_ref().map(|(a, s)| (a.as_str(), s.as_str())),
+            );
         }
     }
 
@@ -501,9 +502,7 @@ mod tests {
     fn unknown_names_meet_the_same_lockout() {
         let attacker = client("198.51.100.2", None);
         for _ in 0..5 {
-            assert!(!guard(&attacker, None, "nobody-here", None)
-                .unwrap()
-                .verify(None, None));
+            guard(&attacker, None, "nobody-here", None).unwrap(); // a miss: its slots stay taken
         }
         assert!(guard(&attacker, None, "nobody-here", None).is_err());
     }

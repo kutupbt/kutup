@@ -11,30 +11,14 @@
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test sessions_live -- --nocapture
 
+mod common;
+
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use rand::RngCore;
-use reqwest::blocking::{Client, RequestBuilder, Response};
+use common::{b64, bearer, register, User};
+use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-
-fn b64(b: &[u8]) -> String {
-    STANDARD.encode(b)
-}
-
-/// The name the live server gives its accounts' addresses (`user@name`).
-fn server_name(c: &Client, base: &str) -> String {
-    let settings: Value = c
-        .get(format!("{base}/api/auth/settings"))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    settings["chat"]["serverName"]
-        .as_str()
-        .expect("the server advertises its name")
-        .to_owned()
-}
 
 fn client() -> Client {
     Client::builder()
@@ -53,81 +37,38 @@ fn set_refresh_cookie(r: &Response) -> Option<String> {
         .map(|v| v.split(';').next().unwrap_or("").to_string())
 }
 
-struct Account {
-    /// The username it signs in with.
-    name: String,
-    login_key: String,
-}
-
-fn register(c: &Client, base: &str) -> Account {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let binding = uuid::Uuid::new_v4().to_string();
-    let username = format!("sess{}", ts % 1_000_000);
-    let password = "sessions-pw-123456";
-    let mut rng = rand::thread_rng();
-    let mut master_key = [0u8; 32];
-    let mut recovery_entropy = [0u8; 32];
-    let mut salt = [0u8; 16];
-    rng.fill_bytes(&mut master_key);
-    rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut salt);
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        password,
-        &salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
-    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-    let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(plain, key, purpose, &binding).unwrap()
+/// One OPAQUE sign-in of `a` as `client_type` (sent on both halves): the
+/// refusal of `login/start` when it refuses (an unknown or a forking client
+/// type), else the answer of `login/finish` with its cookies.
+fn login(c: &Client, base: &str, a: &User, client_type: Option<&str>) -> Response {
+    let with_client = |mut req: reqwest::blocking::RequestBuilder| {
+        if let Some(ct) = client_type {
+            req = req.header("x-kutup-client", ct);
+        }
+        req
     };
-    let reg = json!({
-        "keyBinding": binding, "username": username,
-        "loginKey": b64(keys.login_key.as_slice()),
-        "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
-        "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
-        "drivePrivateKeyEnvelope": seal(identity.drive_hpke_private_key(), &master_key, AccountEnvelopePurpose::DriveHpkePrivateKey),
-        "publicKey": b64(&identity.drive_hpke_public_key()),
-        "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
-        "accountAuthorityKeyId": identity.authority_key_id(),
-        "accountIncarnationId": identity.incarnation_id(),
-        "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-        "accountProtectionSuite": 1,
-        "accountProtectionSalt": b64(&salt),
-        "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
-        "recoveryProof": b64(recovery_proof.as_slice()),
-        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &format!("{}@{}", username, server_name(c, base))).unwrap()),
-    });
-    let r = c
-        .post(format!("{base}/api/auth/register"))
-        .json(&reg)
+    let (signing_in, request) = kutup_crypto::opaque::client_login_start(&a.password).unwrap();
+    let r = with_client(c.post(format!("{base}/api/auth/login/start")))
+        .json(&json!({
+            "name": a.username, "credentialRequest": b64(&request), "purpose": "session",
+        }))
         .send()
         .unwrap();
-    assert!(r.status().is_success(), "register: {}", r.status());
-    Account {
-        name: username.clone(),
-        login_key: b64(keys.login_key.as_slice()),
+    if !r.status().is_success() {
+        return r;
     }
-}
-
-fn login(c: &Client, base: &str, a: &Account, client_type: Option<&str>) -> Response {
-    let mut req = c
-        .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "name": a.name, "loginKey": a.login_key }));
-    if let Some(ct) = client_type {
-        req = req.header("x-kutup-client", ct);
-    }
-    req.send().unwrap()
-}
-
-fn bearer(req: RequestBuilder, token: &str) -> RequestBuilder {
-    req.header("authorization", format!("Bearer {token}"))
+    let started: Value = r.json().unwrap();
+    let response = STANDARD
+        .decode(started["credentialResponse"].as_str().unwrap())
+        .unwrap();
+    let signed_in = signing_in.finish(&response).expect("the password is right");
+    with_client(c.post(format!("{base}/api/auth/login/finish")))
+        .json(&json!({
+            "loginId": started["loginId"],
+            "credentialFinalization": b64(&signed_in.finalization),
+        }))
+        .send()
+        .unwrap()
 }
 
 fn me_status(c: &Client, base: &str, token: &str) -> StatusCode {

@@ -53,6 +53,7 @@ root Cargo workspace. It shares the E2EE primitives with the CLI via `crates/kut
 # Export env vars (or use a tool like direnv)
 export DATABASE_URL="postgres://kutup:<POSTGRES_PASSWORD>@localhost:5432/kutup?sslmode=disable"
 export JWT_SECRET="<your-jwt-secret-32+chars>"
+export OPAQUE_SETUP_KEYS="1:$(openssl rand -base64 32)"   # keep it: it signs everyone in
 export S3_ENDPOINT="http://localhost:8333"
 export S3_ACCESS_KEY="kutup"
 export S3_SECRET_KEY="<your-s3-secret>"

@@ -19,28 +19,9 @@ pub struct ChatSettings {
 
 // --- Auth ---
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreflightResponse {
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginRequest {
-    /// The username or the Kutup address.
-    pub name: String,
-    /// base64-encoded login key.
-    pub login_key: String,
-}
-
 /// Registration bundle — mirrors the backend `RegisterRequest` + the web client's
-/// `generateRegistrationKeys` output. All key material is base64; the server only bcrypts
-/// `login_key` + `recovery_proof` and stores the rest as-is (it never sees plaintext keys).
+/// `generateRegistrationKeys` output. All key material is base64; the password is
+/// an OPAQUE record (docs/plans/opaque.md), and the server never sees a key.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {
@@ -50,7 +31,10 @@ pub struct RegisterRequest {
     pub registration_code: Option<String>,
     /// The account's key binding, drawn here (a UUID v4).
     pub key_binding: String,
-    pub login_key: String,
+    /// The password's OPAQUE record (`RegistrationUpload`), base64, and the
+    /// setup register/start answered under.
+    pub opaque_record: String,
+    pub opaque_server_key_id: u16,
     pub master_key_envelope: String,
     pub recovery_key_envelope: String,
     pub drive_private_key_envelope: String,
@@ -59,11 +43,6 @@ pub struct RegisterRequest {
     pub account_authority_key_id: String,
     pub account_incarnation_id: String,
     pub drive_signing_public_key: String,
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
     pub recovery_proof: String,
     /// The account authority's signature over its Drive keys
     /// (docs/plans/drive-identity-pins.md).
@@ -94,8 +73,14 @@ pub struct LoginResponse {
     #[serde(default)]
     pub public_key: String,
     /// What the account's sealed keys are bound to; only with a session.
-    #[serde(default)]
+    #[serde(default, rename = "keyBinding")]
     pub envelope_binding: String,
+    /// The account's record is under a retired setup: re-register the
+    /// password just used, with `grant` (purpose `rotate`).
+    #[serde(default)]
+    pub rotate: bool,
+    #[serde(default)]
+    pub grant: Option<String>,
     #[serde(default)]
     pub requires_totp: bool,
     #[serde(default)]
@@ -121,22 +106,6 @@ pub struct RecoverPreflightResponse {
     pub envelope_binding: String,
     #[serde(default)]
     pub recovery_key_envelope: String,
-}
-
-/// `POST /auth/recover` — rotates the one-root account-protection revision.
-/// `recovery_proof` is HKDF-derived; raw mnemonic entropy never leaves client.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecoverRequest {
-    pub name: String,
-    pub new_login_key: String,
-    pub new_master_key_envelope: String,
-    pub new_account_protection_suite: u16,
-    pub new_account_protection_salt: String,
-    pub new_argon_memory_kib: u32,
-    pub new_argon_iterations: u32,
-    pub new_argon_parallelism: u32,
-    pub recovery_proof: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -495,40 +464,4 @@ pub struct IdentityPinsRecord {
 pub struct IdentityPinsWrite {
     pub base_revision: u64,
     pub envelope: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::RecoverRequest;
-
-    // Exact wire keys the server's RecoverRequest deserializes — the guard
-    // for the camelCase mapping of the complete replacement revision.
-    #[test]
-    fn recover_request_keys() {
-        let req = RecoverRequest {
-            name: "a@b.c".into(),
-            new_login_key: "lk".into(),
-            new_master_key_envelope: "envelope".into(),
-            new_account_protection_suite: 1,
-            new_account_protection_salt: "salt".into(),
-            new_argon_memory_kib: 65_536,
-            new_argon_iterations: 3,
-            new_argon_parallelism: 1,
-            recovery_proof: "rp".into(),
-        };
-        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
-        for key in [
-            "name",
-            "newLoginKey",
-            "newMasterKeyEnvelope",
-            "newAccountProtectionSuite",
-            "newAccountProtectionSalt",
-            "newArgonMemoryKib",
-            "newArgonIterations",
-            "newArgonParallelism",
-            "recoveryProof",
-        ] {
-            assert!(v.get(key).is_some(), "missing key {key}");
-        }
-    }
 }

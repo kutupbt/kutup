@@ -4,6 +4,8 @@
 //! isolated server URLs and drives three phases so it can take the destination
 //! edge offline and restart the origin between queueing and verification.
 
+mod common;
+
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD;
@@ -517,32 +519,30 @@ fn federation_peer<'a>(control_plane: &'a Value, domain: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("missing federation peer {domain}"))
 }
 
-fn registration_payload(c: &Client, base: &str, email: &str, username: &str) -> Value {
+/// The registration (or setup) body of the account seeded by `email`: its
+/// password registered with OPAQUE under the seeded key binding (with the
+/// setup token as `setup_bearer` when completing an admin-made account),
+/// the master key sealed under the OPAQUE export key.
+fn registration_payload(
+    c: &Client,
+    base: &str,
+    email: &str,
+    username: &str,
+    setup_bearer: Option<&str>,
+) -> Value {
     let mut rng = rand::thread_rng();
     let master_key = test_master_key(email);
     let binding = test_binding(email);
     let mut recovery_entropy = [0u8; 32];
-    let mut account_protection_salt = [0u8; 16];
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut account_protection_salt);
 
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        PASSWORD,
-        &account_protection_salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
+    let (opaque_record, opaque_server_key_id, export_key) =
+        common::opaque_register(c, base, PASSWORD, &binding, None, setup_bearer);
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-    let master_key_envelope = account_envelope::seal_b64(
-        &master_key,
-        keys.key_encryption_key.as_slice(),
-        AccountEnvelopePurpose::PasswordMasterKey,
-        &binding,
-    )
-    .unwrap();
+    let master_key_envelope = export_key.seal_master_key(&master_key, &binding).unwrap();
     let recovery_key_envelope = account_envelope::seal_b64(
         &master_key,
         &recovery_entropy,
@@ -561,7 +561,8 @@ fn registration_payload(c: &Client, base: &str, email: &str, username: &str) -> 
     json!({
         "keyBinding": binding,
         "username": username,
-        "loginKey": b64(keys.login_key.as_slice()),
+        "opaqueRecord": opaque_record,
+        "opaqueServerKeyId": opaque_server_key_id,
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
         "drivePrivateKeyEnvelope": drive_private_key_envelope,
@@ -570,11 +571,6 @@ fn registration_payload(c: &Client, base: &str, email: &str, username: &str) -> 
         "accountAuthorityKeyId": identity.authority_key_id(),
         "accountIncarnationId": identity.incarnation_id(),
         "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-        "accountProtectionSuite": 1,
-        "accountProtectionSalt": b64(&account_protection_salt),
-        "argonMemoryKib": 65536,
-        "argonIterations": 3,
-        "argonParallelism": 1,
         "recoveryProof": b64(recovery_proof.as_slice()),
         "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(
             &identity,
@@ -585,51 +581,41 @@ fn registration_payload(c: &Client, base: &str, email: &str, username: &str) -> 
 }
 
 fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (String, String) {
-    let payload = registration_payload(c, base, email, username);
+    let payload = registration_payload(c, base, email, username, None);
     let public_key = payload["publicKey"].as_str().unwrap().to_owned();
+    // Sign-up answers a session (the client sends `x-kutup-client: cli`);
+    // the account then signs in afresh, as it always did here.
     let response = c
         .post(format!("{base}/api/auth/register"))
         .json(&payload)
         .send()
         .unwrap();
-    json_response(response, &format!("register {username}"));
+    let registered = json_response(response, &format!("register {username}"));
+    assert!(
+        registered["accessToken"].is_string(),
+        "register {username} answers a session: {registered}"
+    );
     (login(c, base, username), public_key)
 }
 
 fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
-    let preflight = json_response(
-        c.get(format!("{base}/api/auth/login/preflight?name={username}"))
-            .send()
-            .unwrap(),
-        "bootstrap admin preflight",
-    );
-    // The bootstrap's temporary password is derived as any password, under
-    // the salt preflight answers; once set up, the account's own signs in.
-    let temporary = kutup_crypto::kdf::derive_account_protection_keys_b64(
+    // The bootstrap's temporary password signs in once, into setup; once
+    // set up (a wrong password then for this account), its own signs in.
+    let (status, first, _) = common::opaque_login(
+        c,
+        base,
+        username,
         ADMIN_TEMP_PASSWORD,
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-        kutup_crypto::kdf::AccountProtectionParameters {
-            memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
-            iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
-            parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
-        },
-    )
-    .unwrap();
-    let first = c
-        .post(format!("{base}/api/auth/login"))
-        .json(&json!({
-            "name": username,
-            "loginKey": b64(temporary.login_key.as_slice()),
-        }))
-        .send()
-        .unwrap();
-    if !first.status().is_success() {
+        "session",
+        None,
+        None,
+    );
+    if !status.is_success() {
         return login(c, base, username);
     }
-    let login: Value = first.json().unwrap();
-    assert_eq!(login["requiresSetup"], true);
-    let setup_token = login["setupToken"].as_str().unwrap();
-    let setup_payload = registration_payload(c, base, email, username);
+    assert_eq!(first["requiresSetup"], true, "bootstrap admin: {first}");
+    let setup_token = first["setupToken"].as_str().unwrap();
+    let setup_payload = registration_payload(c, base, email, username, Some(setup_token));
     let setup = json_response(
         c.post(format!("{base}/api/auth/complete-setup"))
             .bearer_auth(setup_token)
@@ -741,27 +727,12 @@ fn delete_feature_rule(c: &Client, base: &str, admin: &str, feature: &str, domai
     )
 }
 
+/// Signs `name` in with OPAQUE: its access token.
 fn login(c: &Client, base: &str, name: &str) -> String {
-    let preflight = json_response(
-        c.get(format!("{base}/api/auth/login/preflight?name={name}"))
-            .send()
-            .unwrap(),
-        "login preflight",
-    );
-    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
-        PASSWORD,
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    let response = json_response(
-        c.post(format!("{base}/api/auth/login"))
-            .json(&json!({"name": name, "loginKey": b64(keys.login_key.as_slice())}))
-            .send()
-            .unwrap(),
-        "login",
-    );
-    response["accessToken"].as_str().unwrap().to_string()
+    common::sign_in(c, base, name, PASSWORD)["accessToken"]
+        .as_str()
+        .unwrap_or_else(|| panic!("sign-in of {name} answers a session"))
+        .to_string()
 }
 
 fn register_device(c: &Client, base: &str, token: &str, registration_id: u32, seed: u8) -> u32 {

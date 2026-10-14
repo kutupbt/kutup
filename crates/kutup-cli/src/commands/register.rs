@@ -55,38 +55,35 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     };
 
     eprintln!("Generating keys…");
-    // Mirror generateRegistrationKeys: random master/recovery keys, one
-    // Argon2id root with HKDF-separated KEK/login keys, purpose-separated
-    // account identity keys and three encrypted key envelopes.
+    // Mirror generateRegistrationKeys: random master/recovery keys, the
+    // password registered with OPAQUE (its export key seals the master key),
+    // purpose-separated account identity keys and three encrypted envelopes.
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    let mut account_protection_salt = [0u8; 16];
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut account_protection_salt);
 
-    let account_keys = kdf::derive_account_protection_keys(
-        &password,
-        &account_protection_salt,
-        kdf::AccountProtectionParameters::V1,
-    )
-    .context("derive account-protection keys")?;
     // The account's key binding: drawn here, what its keys are bound to for
     // good (docs/plans/account-identity.md), never a name.
     let key_binding = uuid::Uuid::new_v4().to_string();
+    let (registering, request) =
+        kutup_crypto::opaque::client_registration_start(&password).context("OPAQUE")?;
+    let started = client
+        .register_start(&key_binding, &request, None)
+        .context("register")?;
+    let registered = registering
+        .finish(&started.response()?)
+        .context("the server's registration answer")?;
     let recovery_proof = kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding)
         .context("derive recovery authorization proof")?;
     let account_identity =
         AccountIdentityKeysV1::derive(&master_key).context("derive account identity")?;
 
-    let master_key_envelope = account_envelope::seal_b64(
-        &master_key,
-        account_keys.key_encryption_key.as_slice(),
-        AccountEnvelopePurpose::PasswordMasterKey,
-        &key_binding,
-    )
-    .context("seal master-key envelope")?;
+    let master_key_envelope = registered
+        .export_key
+        .seal_master_key(&master_key, &key_binding)
+        .context("seal master-key envelope")?;
     let recovery_key_envelope = account_envelope::seal_b64(
         &master_key,
         &recovery_entropy,
@@ -116,7 +113,8 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         username: username.clone(),
         registration_code,
         key_binding: key_binding.clone(),
-        login_key: b64.encode(account_keys.login_key.as_slice()),
+        opaque_record: b64.encode(&registered.record),
+        opaque_server_key_id: started.server_key_id,
         master_key_envelope,
         recovery_key_envelope,
         drive_private_key_envelope,
@@ -125,16 +123,14 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         account_authority_key_id: account_identity.authority_key_id(),
         account_incarnation_id: account_identity.incarnation_id(),
         drive_signing_public_key: b64.encode(account_identity.drive_signing_public_key()),
-        account_protection_suite: kdf::AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16(),
-        account_protection_salt: b64.encode(account_protection_salt),
-        argon_memory_kib: kdf::AccountProtectionParameters::V1.memory_kib,
-        argon_iterations: kdf::AccountProtectionParameters::V1.iterations,
-        argon_parallelism: kdf::AccountProtectionParameters::V1.parallelism,
         recovery_proof: b64.encode(recovery_proof.as_slice()),
         drive_key_binding: b64.encode(drive_key_binding),
     };
 
-    client.register(&req).context("register")?;
+    // Sign-up answers a session; this command does not keep one (`kutup
+    // login` does), so it ends it now.
+    let session = client.register(&req).context("register")?;
+    let _ = Client::new(&server, &session.access_token).logout();
 
     if json {
         // Machine-readable: include the phrase so automation can capture it once.

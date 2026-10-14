@@ -162,6 +162,7 @@ jobs:
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dE="
       APP_ENV: test
       # A test stack (APP_ENV=test): every per-address limit raised, as one
       # browser batch registers and signs in far more than a person does.
@@ -269,6 +270,7 @@ jobs:
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
       POSTGRES_PASSWORD: mail-browser-ci-postgres
       JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
       APP_ENV: test
       # A test stack (APP_ENV=test): every per-address limit raised, as one
       # browser batch registers and signs in far more than a person does.

@@ -787,7 +787,12 @@ mod tests {
         // Spot-check key paths (one per route group).
         for path in [
             "/api/health",
-            "/api/auth/login",
+            "/api/auth/login/start",
+            "/api/auth/login/finish",
+            "/api/auth/opaque/register/start",
+            "/api/auth/opaque/register/finish",
+            "/api/auth/recover/grant",
+            "/api/admin/users/{id}/reset-grant",
             "/api/collections/{id}/files",
             "/api/devices",
             "/api/uploads/{id}",

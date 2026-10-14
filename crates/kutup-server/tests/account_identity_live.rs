@@ -7,8 +7,8 @@
 
 mod common;
 
-use common::{b64, bearer, register};
-use reqwest::blocking::Client;
+use common::{b64, bearer, opaque_login, register, sign_in};
+use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
 
 fn client() -> Client {
@@ -16,6 +16,52 @@ fn client() -> Client {
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap()
+}
+
+/// One sign-in attempt from a given client (`x-real-ip`, a cookie), as the
+/// web account app makes it: `login/start`, then, if the password opens the
+/// answer, `login/finish`. The start's response when it is refused or the
+/// password is wrong (the client never finishes then), else the finish's.
+fn attempt(
+    c: &Client,
+    base: &str,
+    name: &str,
+    password: &str,
+    ip: &str,
+    cookie: Option<&str>,
+) -> Response {
+    let request = |path: &str, body: Value| {
+        let mut request = c
+            .post(format!("{base}/api/auth/{path}"))
+            .header("x-kutup-client", "web-account")
+            .header("x-real-ip", ip)
+            .json(&body);
+        if let Some(cookie) = cookie {
+            request = request.header("cookie", cookie);
+        }
+        request.send().unwrap()
+    };
+    let (signing_in, ke1) = kutup_crypto::opaque::client_login_start(password).unwrap();
+    let started = request(
+        "login/start",
+        json!({ "name": name, "credentialRequest": b64(&ke1) }),
+    );
+    if !started.status().is_success() {
+        return started;
+    }
+    let body: Value = started.json().unwrap();
+    let ke2 = common::b64_decode(body["credentialResponse"].as_str().unwrap());
+    let Ok(signed_in) = signing_in.finish(&ke2) else {
+        // A wrong password: the client stops; the start was the attempt.
+        return request(
+            "login/finish",
+            json!({ "loginId": body["loginId"], "credentialFinalization": b64(&[0u8; 64]) }),
+        );
+    };
+    request(
+        "login/finish",
+        json!({ "loginId": body["loginId"], "credentialFinalization": b64(&signed_in.finalization) }),
+    )
 }
 
 #[test]
@@ -27,38 +73,44 @@ fn an_account_signs_in_by_its_name_and_its_keys_carry_its_key_binding() {
     let base = base.trim_end_matches('/').to_string();
     let c = client();
     let user = register(&c, &base);
-    let sign_in = |name: &str| {
-        c.post(format!("{base}/api/auth/login"))
-            .header("x-kutup-client", "cli")
-            .json(&json!({ "name": name, "loginKey": user.login_key }))
-            .send()
-            .unwrap()
-    };
     // By username or by address; the binding comes with the session.
     for name in [user.username.clone(), user.account.clone()] {
-        let r = sign_in(&name);
-        assert_eq!(r.status(), 200, "{name}");
-        assert_eq!(
-            r.json::<Value>().unwrap()["envelopeBinding"],
-            user.binding.as_str()
-        );
+        let session = sign_in(&c, &base, &name, &user.password);
+        assert_eq!(session["keyBinding"], user.binding.as_str(), "{name}");
     }
     assert_eq!(
         common::me(&c, &base, &user.token)["envelopeBinding"],
         user.binding.as_str()
     );
-    // The same name at another domain is no one here.
+    // The same name at another domain is no one here: its answer cannot be
+    // finished with the account's password.
     let elsewhere = format!("{}@elsewhere.example", user.username);
-    assert_eq!(sign_in(&elsewhere).status(), 401);
-    // Preflight tells no binding.
-    let preflight: Value = c
+    let (status, _, _) = opaque_login(&c, &base, &elsewhere, &user.password, "session", None, None);
+    assert_eq!(status, 401);
+    // A wrong password: nothing to finish.
+    let (status, _, _) = opaque_login(
+        &c,
+        &base,
+        &user.username,
+        "wrong-password",
+        "session",
+        None,
+        None,
+    );
+    assert_eq!(status, 401);
+    // The login preflight is gone: OPAQUE gives out nothing before the
+    // exchange.
+    let gone = c
         .get(format!("{base}/api/auth/login/preflight"))
         .query(&[("name", &user.username)])
         .send()
-        .unwrap()
-        .json()
         .unwrap();
-    assert!(preflight.get("envelopeBinding").is_none(), "{preflight}");
+    assert!(
+        gone.status() == 404 || gone.status() == 405,
+        "{}",
+        gone.status()
+    );
+    common::purge_accounts(&c, &base, &[&user]);
 }
 
 #[test]
@@ -70,70 +122,70 @@ fn unknown_names_look_like_accounts() {
     let base = base.trim_end_matches('/').to_string();
     let c = client();
     let name = format!("nobody{}", uuid::Uuid::new_v4().simple());
-    let preflight = |name: &str, path: &str| -> Value {
-        c.get(format!("{base}/api/auth/{path}/preflight"))
+    let start = |name: &str| -> Value {
+        let (_, ke1) = kutup_crypto::opaque::client_login_start("any password").unwrap();
+        let r = c
+            .post(format!("{base}/api/auth/login/start"))
+            .header("x-kutup-client", "cli")
+            .json(&json!({ "name": name, "credentialRequest": b64(&ke1) }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), 200, "{name}");
+        r.json().unwrap()
+    };
+    // An answer of a real account's shape and size, nothing more.
+    let account = register(&c, &base);
+    let real = start(&account.username);
+    let fake = start(&name);
+    let keys = |v: &Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    assert_eq!(keys(&fake), keys(&real));
+    assert_eq!(
+        fake["credentialResponse"].as_str().unwrap().len(),
+        real["credentialResponse"].as_str().unwrap().len()
+    );
+    assert!(fake.get("keyBinding").is_none() && real.get("keyBinding").is_none());
+    // At this server's address, the same as by name; it never finishes.
+    let domain = account.account.split_once('@').unwrap().1.to_string();
+    let at_domain = format!("{name}@{domain}");
+    assert_eq!(keys(&start(&at_domain)), keys(&fake));
+    let (status, _, _) = opaque_login(&c, &base, &name, "any password", "session", None, None);
+    assert_eq!(status, 401);
+    // A recovery's preflight: a key binding's shape and an envelope, the same
+    // each time, and for the address as for the name.
+    let preflight = |name: &str| -> Value {
+        c.get(format!("{base}/api/auth/recover/preflight"))
             .query(&[("name", name)])
             .send()
             .unwrap()
             .json()
             .unwrap()
     };
-    // Sign-in's: a salt and parameters as any account's, the same each time,
-    // and no binding (that comes only with a session).
-    let first = preflight(&name, "login");
-    assert_eq!(first, preflight(&name, "login"));
-    assert_eq!(first["accountProtectionSuite"], 1);
-    assert_eq!(
-        common::b64_decode(first["accountProtectionSalt"].as_str().unwrap()).len(),
-        16
-    );
-    assert!(first.get("envelopeBinding").is_none(), "{first}");
-    let real = preflight(&register(&c, &base).username, "login");
-    let keys = |v: &Value| {
-        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
-        k.sort();
-        k
-    };
-    assert_eq!(keys(&first), keys(&real));
-    // The same name at this server's address gets the same answers, as a
-    // real account's username and address do.
-    let account = register(&c, &base);
-    let domain = account.account.split_once('@').unwrap().1.to_string();
-    let at_domain = format!("{name}@{domain}");
-    assert_eq!(preflight(&at_domain, "login"), first);
-    assert_eq!(
-        preflight(&at_domain, "recover"),
-        preflight(&name, "recover")
-    );
-    // A recovery's: a key binding's shape and an envelope, the same each time.
-    let recovery = preflight(&name, "recover");
-    assert_eq!(recovery, preflight(&name, "recover"));
+    let recovery = preflight(&name);
+    assert_eq!(recovery, preflight(&name));
+    assert_eq!(preflight(&at_domain), recovery);
     let binding = recovery["envelopeBinding"].as_str().unwrap();
     assert!(uuid::Uuid::parse_str(binding).is_ok_and(|id| id.get_version_num() == 4));
-    // A recovery for it is refused as a wrong phrase is.
+    // A recovery grant for it is refused as a wrong phrase is.
     let r = c
-        .post(format!("{base}/api/auth/recover"))
-        .json(&json!({
-            "name": name, "newLoginKey": b64(&[1u8; 32]), "newMasterKeyEnvelope": "x",
-            "newAccountProtectionSuite": 1, "newAccountProtectionSalt": b64(&[2u8; 16]),
-            "newArgonMemoryKib": 65536, "newArgonIterations": 3, "newArgonParallelism": 1,
-            "recoveryProof": b64(&[3u8; 32]),
-        }))
+        .post(format!("{base}/api/auth/recover/grant"))
+        .json(&json!({ "name": name, "recoveryProof": b64(&[3u8; 32]) }))
         .send()
         .unwrap();
     assert_eq!(r.status(), 401);
+    common::purge_accounts(&c, &base, &[&account]);
 }
 
 /// An administrator's temporary password never reaches the server (review
-/// H1): the browser derives it as any password, the server keeps only the
-/// login key's hash with its salt, and sign-in derives the same way. The
-/// break-glass administrator is known by its username.
-/// An administrator's temporary password never reaches the server (review
-/// H1): the browser derives it as any password, the server keeps only the
-/// login key's hash with its salt, and sign-in derives the same way. The
-/// break-glass administrator is known by its username.
+/// H1): the administrator's client registers it with OPAQUE under a key
+/// binding it draws, and sign-in is the same exchange as anyone's. Rotating
+/// or wiping takes the administrator's fresh proof for that account (a
+/// reset grant). The break-glass administrator is known by its username.
 #[test]
-fn temporary_passwords_are_derived_in_the_administrators_browser() {
+fn temporary_passwords_are_registered_by_the_administrators_client() {
     let (Ok(base), Ok(admin)) = (
         std::env::var("KUTUP_LIVE_SERVER"),
         std::env::var("KUTUP_LIVE_ADMIN"),
@@ -161,8 +213,24 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
         create(json!({ "username": username, "tempPassword": "Temporary*Password123" })),
         400
     );
-    let setup = common::setup_key("Temporary*Password123");
-    assert_eq!(create(json!({ "username": username, "setup": setup })), 201);
+    let mut body = common::temp_registration(&c, &base, "Temporary*Password123", &token, None);
+    body["username"] = json!(username);
+    assert_eq!(create(body), 201);
+    // Only an administrator registers for a new account that way.
+    let stranger = register(&c, &base);
+    let (registering, request) = kutup_crypto::opaque::client_registration_start("x").unwrap();
+    drop(registering);
+    let r = bearer(
+        c.post(format!("{base}/api/auth/opaque/register/start")),
+        &stranger.token,
+    )
+    .json(&json!({
+        "keyBinding": uuid::Uuid::new_v4().to_string(),
+        "registrationRequest": b64(&request),
+    }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 403);
     let users: Vec<Value> = bearer(c.get(format!("{base}/api/admin/users")), &token)
         .send()
         .unwrap()
@@ -178,44 +246,44 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
             .to_string()
     };
     let id = id_of(&username);
+    let login =
+        |password: &str| opaque_login(&c, &base, &username, password, "session", None, None);
+    // A wrong password fails; the right one asks for setup.
+    assert_eq!(login("Not*The*Password").0, 401);
+    let (status, first, _) = login("Temporary*Password123");
+    assert_eq!(status, 200);
+    assert!(first["setupToken"].is_string(), "{first}");
 
-    let salt = |name: &str| -> Value {
-        c.get(format!("{base}/api/auth/login/preflight"))
-            .query(&[("name", name)])
-            .send()
-            .unwrap()
-            .json::<Value>()
-            .unwrap()["accountProtectionSalt"]
-            .clone()
+    // Rotated, with the administrator's reset grant: the new one only.
+    let rotate = |grant: &str, password: &str| {
+        let mut body = common::temp_registration(&c, &base, password, &token, Some(grant));
+        body["grant"] = json!(grant);
+        bearer(
+            c.post(format!("{base}/api/admin/users/{id}/rotate-temp-password")),
+            &token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
+        .status()
     };
-    let login = |key: &Value| {
-        c.post(format!("{base}/api/auth/login"))
-            .header("x-kutup-client", "cli")
-            .json(&json!({ "name": username, "loginKey": key }))
-            .send()
-            .unwrap()
-    };
-    // Preflight answers its salt, as for any account; the password sent as
-    // it is fails; derived, the account asks for its setup.
-    assert_eq!(salt(&username), setup["accountProtectionSalt"]);
-    assert_eq!(login(&json!(b64(b"Temporary*Password123"))).status(), 401);
-    let first = login(&setup["loginKey"]);
-    assert_eq!(first.status(), 200);
-    assert!(first.json::<Value>().unwrap()["setupToken"].is_string());
-
-    // Rotated: the new one only.
-    let again = common::setup_key("Another*Temporary456");
-    let r = bearer(
+    let grant = common::admin_reset_grant(&c, &base, &token, admin_name, admin_password, &id);
+    assert_eq!(rotate(&grant, "Another*Temporary456"), 200);
+    assert_eq!(login("Temporary*Password123").0, 401);
+    assert_eq!(login("Another*Temporary456").0, 200);
+    // The grant was used up.
+    let mut body = json!({ "grant": grant, "keyBinding": uuid::Uuid::new_v4().to_string(),
+                          "opaqueRecord": "AA==", "opaqueServerKeyId": 1 });
+    body["grant"] = json!(grant);
+    let reused = bearer(
         c.post(format!("{base}/api/admin/users/{id}/rotate-temp-password")),
         &token,
     )
-    .json(&json!({ "setup": again }))
+    .json(&body)
     .send()
-    .unwrap();
-    assert_eq!(r.status(), 200);
-    assert_eq!(salt(&username), again["accountProtectionSalt"]);
-    assert_eq!(login(&setup["loginKey"]).status(), 401);
-    assert_eq!(login(&again["loginKey"]).status(), 200);
+    .unwrap()
+    .status();
+    assert!(reused == 403 || reused == 400, "{reused}");
 
     // The break-glass administrator, known by its username, is kept.
     let r = bearer(
@@ -229,6 +297,7 @@ fn temporary_passwords_are_derived_in_the_administrators_browser() {
         .send()
         .unwrap();
     assert!(r.status().is_success(), "delete: {}", r.status());
+    common::purge_accounts(&c, &base, &[&stranger]);
 }
 
 #[test]
@@ -240,20 +309,11 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     let base = base.trim_end_matches('/').to_string();
     let c = client();
     let user = register(&c, &base);
-    let wrong = b64(&[0u8; 32]);
-    let attempt = |ip: &str, login_key: &str, cookie: Option<&str>| {
-        let mut request = c
-            .post(format!("{base}/api/auth/login"))
-            .header("x-kutup-client", "web-account")
-            .header("x-real-ip", ip)
-            .json(&json!({ "name": user.username, "loginKey": login_key }));
-        if let Some(cookie) = cookie {
-            request = request.header("cookie", cookie);
-        }
-        request.send().unwrap()
+    let try_in = |ip: &str, password: &str, cookie: Option<&str>| {
+        attempt(&c, &base, &user.username, password, ip, cookie)
     };
     // A right sign-in marks the client as known (an HttpOnly cookie).
-    let signed_in = attempt("192.0.2.10", &user.login_key, None);
+    let signed_in = try_in("192.0.2.10", &user.password, None);
     assert_eq!(signed_in.status(), 200);
     let known = signed_in
         .headers()
@@ -271,36 +331,56 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
 
     // Five misses lock that client only; another address still gets in.
     for _ in 0..5 {
-        assert_eq!(attempt("198.51.100.20", &wrong, None).status(), 401);
+        assert_eq!(
+            try_in("198.51.100.20", "wrong-password", None).status(),
+            401
+        );
     }
-    assert_eq!(
-        attempt("198.51.100.20", &user.login_key, None).status(),
-        429
-    );
-    assert_eq!(
-        attempt("198.51.100.21", &user.login_key, None).status(),
-        200
-    );
+    assert_eq!(try_in("198.51.100.20", &user.password, None).status(), 429);
+    assert_eq!(try_in("198.51.100.21", &user.password, None).status(), 200);
+
+    // Starts alone count as wrong passwords do: a client sees a guess was
+    // wrong without finishing, so five starts lock it as five misses.
+    for _ in 0..5 {
+        let (_, ke1) = kutup_crypto::opaque::client_login_start("a guess").unwrap();
+        let r = c
+            .post(format!("{base}/api/auth/login/start"))
+            .header("x-kutup-client", "web-account")
+            .header("x-real-ip", "198.51.100.40")
+            .json(&json!({ "name": user.username, "credentialRequest": b64(&ke1) }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), 200);
+    }
+    assert_eq!(try_in("198.51.100.40", &user.password, None).status(), 429);
 
     // Misses spread over many unknown addresses meet the account's ceiling
     // (LOGIN_ACCOUNT_CEILING, 20)...
     let mut held = false;
     for i in 0..40u32 {
         let ip = format!("10.77.{}.{}", i / 250, i % 250 + 1);
-        if attempt(&ip, &wrong, None).status() == 429 {
+        if try_in(&ip, "wrong-password", None).status() == 429 {
             held = true;
             break;
         }
     }
     assert!(held, "the ceiling never came");
-    assert_eq!(attempt("203.0.113.30", &user.login_key, None).status(), 429);
+    assert_eq!(try_in("203.0.113.30", &user.password, None).status(), 429);
     // ...while the account's own known client still signs in.
     assert_eq!(
-        attempt("203.0.113.31", &user.login_key, Some(&known)).status(),
+        try_in("203.0.113.31", &user.password, Some(&known)).status(),
         200
     );
-    // A malformed login key is refused before the name is looked up.
-    assert_eq!(attempt("203.0.113.32", "not base64!", None).status(), 400);
+    // A malformed request is refused before the name is looked up.
+    let r = c
+        .post(format!("{base}/api/auth/login/start"))
+        .header("x-kutup-client", "web-account")
+        .header("x-real-ip", "203.0.113.32")
+        .json(&json!({ "name": user.username, "credentialRequest": "not base64!" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    common::purge_accounts(&c, &base, &[&user]);
 }
 
 #[test]

@@ -16,6 +16,7 @@ pub mod devices;
 pub mod federation;
 pub mod files;
 pub mod identity;
+pub mod opaque;
 pub mod pass;
 pub mod public;
 pub mod sessions;
@@ -255,9 +256,10 @@ impl Client {
 
     // --- Auth ---
 
-    pub fn register(&self, req: &RegisterRequest) -> Result<()> {
+    /// Creates the account; sign-up answers the session, as a sign-in does.
+    pub fn register(&self, req: &RegisterRequest) -> Result<LoginResponse> {
         let resp = self.post_json("/auth/register", req)?;
-        check_ok(resp)
+        decode_json(resp)
     }
 
     /// Whether a referral code can admit a sign-up now (uses nothing up).
@@ -267,21 +269,6 @@ impl Client {
             &serde_json::json!({ "code": code }),
         )?;
         check_ok(resp)
-    }
-
-    pub fn login_preflight(&self, name: &str) -> Result<PreflightResponse> {
-        // .query() form-encodes the value — a raw `+` in a name would
-        // otherwise decode server-side as a space.
-        let resp = self
-            .request(Method::GET, "/auth/login/preflight")
-            .query(&[("name", name)])
-            .send()?;
-        decode_json(resp)
-    }
-
-    pub fn login(&self, req: &LoginRequest) -> Result<LoginResponse> {
-        let resp = self.post_json("/auth/login", req)?;
-        decode_json(resp)
     }
 
     pub fn login_totp(&self, req: &TotpRequest) -> Result<LoginResponse> {
@@ -295,11 +282,6 @@ impl Client {
             .query(&[("name", name)])
             .send()?;
         decode_json(resp)
-    }
-
-    pub fn recover(&self, req: &RecoverRequest) -> Result<()> {
-        let resp = self.post_json("/auth/recover", req)?;
-        check_ok(resp)
     }
 
     pub fn refresh_token(&self, refresh_token: &str) -> Result<RefreshResponse> {
