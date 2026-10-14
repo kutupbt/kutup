@@ -536,6 +536,8 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         sealed_sender_policy,
         ..Default::default()
     };
+    let (name_hold_days, old_address_receive_days) =
+        crate::site_settings::name_holds(&state.pool, &state.config).await?;
     Ok(Json(SettingsResponse {
         registration_mode,
         chat,
@@ -543,6 +545,8 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         feedback: crate::models::FeedbackSettings {
             github_repository: state.config.feedback_github_repository.clone(),
         },
+        name_hold_days,
+        old_address_receive_days,
     })
     .into_response())
 }
@@ -1138,6 +1142,15 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     } else {
         format!("{username}@{}", state.config.chat_server_name)
     };
+    // The account's rename chain, of its current incarnation: where it ends.
+    let anchor: Option<(i32, String)> = sqlx::query_as(
+        "SELECT r.sequence, r.digest FROM account_renames r
+           JOIN users u ON u.account_incarnation_id = r.incarnation_id
+          WHERE u.id = $1 ORDER BY r.sequence DESC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
     Ok(Json(MeResponse {
         id: id.to_string(),
         address,
@@ -1150,6 +1163,10 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        renames: crate::models::RenameAnchor {
+            sequence: anchor.as_ref().map_or(0, |a| a.0),
+            digest: anchor.map(|a| a.1),
+        },
     })
     .into_response())
 }

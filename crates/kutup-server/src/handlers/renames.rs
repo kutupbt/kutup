@@ -337,8 +337,8 @@ pub async fn rename(
     sqlx::query(
         "INSERT INTO account_renames
              (incarnation_id, sequence, user_id, authority_public_key, previous, current,
-              counted, statement)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+              counted, statement, digest)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(&incarnation)
     .bind(statement.sequence as i32)
@@ -348,6 +348,7 @@ pub async fn rename(
     .bind(&statement.current)
     .bind(!undo)
     .bind(serde_json::to_value(statement).expect("serialisable"))
+    .bind(hex::encode(view.digests.last().expect("a verified chain has one")))
     .execute(&mut *tx)
     .await?;
     // The old address receives only, until its date; the new one is the

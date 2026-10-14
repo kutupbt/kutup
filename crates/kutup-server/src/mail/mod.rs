@@ -108,8 +108,11 @@ fn try_later() -> Reply {
     Reply::new(451, "4.3.0", "temporary failure, try again later")
 }
 
-/// Whether `recipient` can receive mail now: a Kutup address on this server
-/// with a primary key, on an active account with room in its pool.
+/// Whether `recipient` can receive mail now: a Kutup address on this server,
+/// in any spelling (`.`, `_`, `-` and case fold away), that receives (the
+/// account's current address, or an old one in its receiving window), with a
+/// primary key, on an active account with room in its pool. A closed or freed
+/// address is unknown (`5.1.1`).
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
     let row: Option<(Uuid, Uuid, Vec<u8>, i64, i64)> = sqlx::query_as(
@@ -117,7 +120,8 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.address = $1",
+          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND a.state IN ('active', 'receiving')",
     )
     .bind(&address)
     .fetch_optional(&state.pool)

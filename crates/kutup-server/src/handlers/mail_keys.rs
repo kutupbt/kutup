@@ -526,7 +526,8 @@ async fn public_keys(
 ) -> AppResult<Option<(Uuid, String, Vec<PublicMailKey>)>> {
     let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT a.id, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
-          WHERE a.address = $1 AND u.is_active",
+          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND a.state IN ('active', 'receiving') AND u.is_active",
     )
     .bind(address)
     .fetch_optional(&state.pool)

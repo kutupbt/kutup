@@ -625,6 +625,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::sessions::ConsumeForkResponse,
         crate::handlers::sessions::LocalKeyBody,
         models::MeResponse,
+        models::RenameAnchor,
         crate::handlers::storage::StorageUsageResponse,
         crate::handlers::storage::DriveUsage,
         crate::handlers::storage::ChatUsage,

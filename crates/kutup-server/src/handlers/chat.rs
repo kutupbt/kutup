@@ -572,8 +572,10 @@ pub async fn publish_manifest(
             } else if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
                 return Err(AppError::conflict("manifest previousHash mismatch"));
             }
-            if manifest.account != current_manifest.account
-                || manifest.incarnation_id != current_manifest.incarnation_id
+            // The account may move to its current address after a rename
+            // (checked above: a manifest names the caller's current address),
+            // nothing else of the identity (docs/plans/username-renames.md).
+            if manifest.incarnation_id != current_manifest.incarnation_id
                 || manifest.authority_key_id != current_manifest.authority_key_id
                 || manifest.self_authority_key != current_manifest.self_authority_key
                 || manifest.drive != current_manifest.drive

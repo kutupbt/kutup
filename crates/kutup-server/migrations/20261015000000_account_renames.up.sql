@@ -42,6 +42,9 @@ CREATE TABLE account_renames (
     -- false for the free undo (back to the name just left, within 7 days).
     counted              boolean NOT NULL,
     statement            jsonb NOT NULL,
+    -- The chain's digest through this statement (hex), as a verified chain
+    -- gives it: what /user/me tells the account's own devices to anchor.
+    digest               text NOT NULL CHECK (digest ~ '^[0-9a-f]{64}$'),
     accepted_at          timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (incarnation_id, sequence)
 );
