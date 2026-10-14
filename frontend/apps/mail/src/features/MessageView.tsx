@@ -47,14 +47,14 @@ function headerBlock(raw: Uint8Array): string {
 
 type Lookup = ReturnType<typeof useContactLookup>
 
-function Recipients({ label, list, contacts, own }: { label: string; list: Mailbox[]; contacts: Lookup; own: string }) {
+function Recipients({ label, list, contacts, own }: { label: string; list: Mailbox[]; contacts: Lookup; own: (address: string) => boolean }) {
   if (list.length === 0) return null
   return (
     <p className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-xs text-muted-foreground">
       <span className="font-medium">{label}</span>
       {list.map((m, i) => (
         <span key={`${m.address}-${i}`} className="min-w-0 max-w-full">
-          <Person mailbox={m} contact={contacts.find(m.address)} role="recipient" own={m.address.toLowerCase() === own} className="inline" />
+          <Person mailbox={m} contact={contacts.find(m.address)} role="recipient" own={own(m.address)} className="inline" />
           {i < list.length - 1 ? ',' : ''}
         </span>
       ))}
@@ -202,7 +202,8 @@ export function MessageView({
 }) {
   const { t, i18n } = useTranslation()
   const contacts = useContactLookup()
-  const own = account.address.toLowerCase()
+  // Any of the account's addresses, the earlier ones too, in any spelling.
+  const own = account.isOwnAddress
   const pinned = usePinnedKeys()
   const { group } = useMailboxScope()
   const scope = useGroupScope(account)
@@ -268,7 +269,7 @@ export function MessageView({
         <div className="min-w-0 flex-1">
           <p className="flex min-w-0 items-baseline gap-2 text-sm">
             {from ? (
-              <Person mailbox={from} contact={contacts.find(from.address)} role="sender" own={from.address.toLowerCase() === own} className="font-semibold" />
+              <Person mailbox={from} contact={contacts.find(from.address)} role="sender" own={own(from.address)} className="font-semibold" />
             ) : (
               <span className="font-semibold">{t('read.unknownSender')}</span>
             )}
@@ -360,7 +361,7 @@ export function MessageView({
             {draft ? null : (
               <NotInContacts
                 people={(message.direction === 'inbound' ? (from ? [from] : []) : [...(parsed?.to ?? message.to), ...(parsed?.cc ?? message.cc)]).filter(
-                  (m) => m.address.toLowerCase() !== own,
+                  (m) => !own(m.address),
                 )}
                 contacts={contacts}
               />

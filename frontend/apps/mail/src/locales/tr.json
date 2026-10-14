@@ -221,6 +221,7 @@
     "forwardedDate": "Tarih: {{date}}",
     "forwardedSubject": "Konu: {{subject}}",
     "sendingPaused": "Hesabınız için dış adreslere posta gönderimi duraklatıldı. Yöneticinize danışın.",
+    "addressReceiveOnly": "Bu ileti artık yalnızca posta alan eski adresinizden yazıldı. Güncel adresiniz yerleştirildi: yeniden gönderin.",
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
     "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
     "pinnedKeyUnusable": "{{address}} için güvendiğiniz anahtar artık kullanılamıyor. Kişiler'de değiştirin ya da kaldırın.",

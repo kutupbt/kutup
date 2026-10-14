@@ -46,6 +46,15 @@ export async function foldAddress(address: string): Promise<string | null> {
   return (await getCryptoWasm()).foldAddress(address) ?? null
 }
 
+/**
+ * {@link foldAddress} as a plain function, for code that compares many
+ * addresses as it renders: the WASM module is loaded once, here.
+ */
+export async function addressFolder(): Promise<(address: string) => string | null> {
+  const wasm = await getCryptoWasm()
+  return (address) => wasm.foldAddress(address) ?? null
+}
+
 /** The next rename of this account, signed with its authority (from the master key). */
 export async function signAccountRename(
   masterKeyBase64: string,

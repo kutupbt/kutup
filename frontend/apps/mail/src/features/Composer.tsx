@@ -89,10 +89,11 @@ function prefixed(prefix: string, subject: string): string {
   return new RegExp(`^${prefix}:`, 'i').test(subject.trim()) ? subject : `${prefix}: ${subject}`
 }
 
-function without(list: Mailbox[], addresses: Set<string>): Mailbox[] {
+/** `list` without the account's own addresses (`own`), `addresses`, and repeats. */
+function without(list: Mailbox[], own: (address: string) => boolean, addresses: Set<string> = new Set()): Mailbox[] {
   const seen = new Set(addresses)
   return list.filter((m) => {
-    if (seen.has(m.address)) return false
+    if (own(m.address) || seen.has(m.address)) return false
     seen.add(m.address)
     return true
   })
@@ -239,12 +240,13 @@ function initial(account: MailAccount, target: ComposerTarget, t: (key: string, 
       })),
     }
   }
-  const self = new Set([account.address])
+  // A reply goes from the current address, never to any of the account's own.
+  const self = account.isOwnAddress
   const replyTo = parsed.replyTo.length ? parsed.replyTo : from ? [from] : []
   const sentByMe = message.direction === 'outbound'
   const to = sentByMe ? without(parsed.to.length ? parsed.to : message.to, self) : without(replyTo, self)
   const cc =
-    target.kind === 'replyAll' ? without([...(sentByMe ? [] : parsed.to), ...parsed.cc], new Set([...self, ...to.map((m) => m.address)])) : []
+    target.kind === 'replyAll' ? without([...(sentByMe ? [] : parsed.to), ...parsed.cc], self, new Set(to.map((m) => m.address))) : []
   const parentId = parsed.messageId ?? message.messageId
   return {
     draft: emptyDraft(account, {
@@ -623,8 +625,14 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
+        // Written from an address the account has left (renamed meanwhile,
+        // perhaps in another tab): read the account again, so the next
+        // send goes from the current address.
+        if (data?.code === 'addressReceiveOnly') refresh()
         toast.error(
-          data?.code === 'notAllowed'
+          data?.code === 'addressReceiveOnly'
+            ? t('compose.addressReceiveOnly')
+            : data?.code === 'notAllowed'
             ? t('compose.groupNotAllowed', { address: (data as { address?: string }).address ?? '' })
             : data?.code === 'expiringOutside'
             ? t('expiry.outside')
