@@ -353,7 +353,20 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Seed the break-glass admin account from ADMIN_ACCOUNT — mirrors main.bootstrapAdmin.
-    bootstrap_admin(&pool, &config.admin_account, &config.chat_server_name).await;
+    // The OPAQUE setups: a wrong OPAQUE_SETUP_KEYS stops here, before any
+    // sign-in could fail for everyone.
+    let opaque = Arc::new(
+        opaque_setup::OpaqueServer::load(&pool, &config.opaque_setup_keys)
+            .await
+            .map_err(anyhow::Error::msg)?,
+    );
+    bootstrap_admin(
+        &pool,
+        &opaque,
+        &config.admin_account,
+        &config.chat_server_name,
+    )
+    .await;
 
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
@@ -403,13 +416,6 @@ async fn main() -> anyhow::Result<()> {
     chat_mls::call_link_waiting::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
-    // The OPAQUE setups: a wrong OPAQUE_SETUP_KEYS stops here, before any
-    // sign-in could fail for everyone.
-    let opaque = Arc::new(
-        opaque_setup::OpaqueServer::load(&pool, &config.opaque_setup_keys)
-            .await
-            .map_err(anyhow::Error::msg)?,
-    );
     let state = AppState {
         opaque,
         pool,
@@ -499,7 +505,12 @@ async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> any
 /// This account is the protected break-glass admin (never demotable/disableable/deletable; see
 /// the guards in `handlers/admin.rs`); other admins are promoted in-app. The admin must complete
 /// first-login setup to establish their E2EE key material — mirrors `main.bootstrapAdmin`.
-async fn bootstrap_admin(pool: &PgPool, account_env: &str, server_name: &str) {
+async fn bootstrap_admin(
+    pool: &PgPool,
+    opaque: &Arc<opaque_setup::OpaqueServer>,
+    account_env: &str,
+    server_name: &str,
+) {
     if account_env.is_empty() {
         return;
     }
@@ -529,27 +540,39 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str, server_name: &str) {
         return;
     }
 
-    // Derived as the administrator's browser derives any temporary password,
-    // so sign-in is the same for every account (Argon2id: off the runtime).
-    let secret = password.to_string();
-    let setup =
-        match tokio::task::spawn_blocking(move || crate::handlers::auth::SetupKey::derive(&secret))
-            .await
-        {
-            Ok(Ok(setup)) => setup,
-            Ok(Err(e)) => {
-                tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
-                return;
-            }
-            Err(e) => {
-                tracing::warn!("bootstrapAdmin: deriving the temporary password failed: {e}");
-                return;
-            }
-        };
-    let hash = match setup.checked_hash() {
-        Ok(h) => h,
+    // Registered as any temporary password is, by both halves of OPAQUE here
+    // (the one place the server holds a password: it was given this one),
+    // under a key binding drawn now. Only when the account does not exist:
+    // never again on a later start, which would end its sign-ins.
+    let key_binding = uuid::Uuid::new_v4().to_string();
+    let registered = {
+        let opaque = opaque.clone();
+        let (password, key_binding) = (password.to_string(), key_binding.clone());
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<u8>, u16)> {
+            let (key_id, secrets) = opaque.current();
+            let (registering, request) =
+                kutup_crypto::opaque::client_registration_start(&password)?;
+            let response = kutup_crypto::opaque::server_registration_response(
+                secrets,
+                &request,
+                &key_binding,
+            )?;
+            let upload = registering.finish(&response)?.record;
+            Ok((
+                kutup_crypto::opaque::server_registration_record(&upload)?,
+                key_id,
+            ))
+        })
+        .await
+    };
+    let (opaque_record, opaque_server_key_id) = match registered {
+        Ok(Ok(registered)) => registered,
+        Ok(Err(e)) => {
+            tracing::warn!("bootstrapAdmin: registering the password failed: {e}");
+            return;
+        }
         Err(e) => {
-            tracing::warn!("bootstrapAdmin: {e:?}");
+            tracing::warn!("bootstrapAdmin: registering the password failed: {e}");
             return;
         }
     };
@@ -570,24 +593,20 @@ async fn bootstrap_admin(pool: &PgPool, account_env: &str, server_name: &str) {
     };
     let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
-            username, login_key_hash,
+            username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
             master_key_envelope, recovery_key_envelope,
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
-            account_protection_suite, account_protection_salt,
-            argon_memory_kib, argon_iterations, argon_parallelism,
             is_admin, is_first_login, storage_quota_bytes
-        ) VALUES ($1,$2,'','','','','','','','',$3,$4,$5,$6,$7,true,true,$8)
+        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',true,true,$6)
         RETURNING id"#,
     )
     .bind(username)
-    .bind(&hash)
-    .bind(i16::try_from(setup.account_protection_suite).unwrap_or(i16::MAX))
-    .bind(&setup.account_protection_salt)
-    .bind(i32::try_from(setup.argon_memory_kib).unwrap_or(i32::MAX))
-    .bind(i32::try_from(setup.argon_iterations).unwrap_or(i32::MAX))
-    .bind(i32::try_from(setup.argon_parallelism).unwrap_or(i32::MAX))
+    .bind(&key_binding)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id as i16)
     .bind(storage_quota_bytes)
     .fetch_one(&mut *tx)
     .await;
@@ -2032,6 +2051,7 @@ fn build_router(state: AppState) -> Router {
                     post(admin::rotate_temp_password),
                 )
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
+                .route("/api/admin/users/:id/reset-grant", post(admin::reset_grant))
                 .route("/api/admin/reports", get(link_reports::list_reports))
                 .route(
                     "/api/admin/reports/:id/dismiss",

@@ -22,8 +22,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::models::{
-    MeResponse, MessageResponse, OkResponse, PreflightLoginResponse, PreflightRecoverResponse,
-    RefreshResponse, SettingsResponse, TotpSetupResponse, UserLookupResponse,
+    MeResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
+    SettingsResponse, TotpSetupResponse, UserLookupResponse,
 };
 use crate::sessions::{self, ClientType};
 use crate::{jwt, ratelimit, totp, AppState};
@@ -64,14 +64,6 @@ pub struct RegisterRequest {
     /// The account authority's signature over the Drive keys
     /// (`kutup_crypto::drive_key_binding`), for `username@<server name>`.
     drive_key_binding: String,
-}
-
-#[derive(Debug, Default, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", default)]
-pub struct LoginRequest {
-    /// The username or the Kutup address.
-    name: String,
-    login_key: String,
 }
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
@@ -272,80 +264,6 @@ pub(crate) fn decode_canonical_base64_exact(
         )));
     }
     Ok(decoded)
-}
-
-fn validate_account_protection(
-    suite: u16,
-    salt: &str,
-    memory_kib: u32,
-    iterations: u32,
-    parallelism: u32,
-) -> AppResult<()> {
-    use kutup_crypto::kdf::{
-        AccountProtectionParameters, AccountProtectionSuiteId, ACCOUNT_PROTECTION_SALT_LEN,
-    };
-    AccountProtectionSuiteId::try_from(suite)
-        .map_err(|_| AppError::bad_request("unsupported accountProtectionSuite"))?;
-    decode_canonical_base64_exact(salt, ACCOUNT_PROTECTION_SALT_LEN, "accountProtectionSalt")?;
-    AccountProtectionParameters {
-        memory_kib,
-        iterations,
-        parallelism,
-    }
-    .validate_v1()
-    .map_err(|_| AppError::bad_request("unsupported Argon2id parameters"))
-}
-
-/// A first-login account's temporary password as the administrator's browser
-/// derived it (docs/plans/account-identity.md): the login key, with the
-/// salt and parameters it came from. The server never sees the password,
-/// as for any other account; sign-in derives the same way, and setup then
-/// replaces all of it with the account's own.
-#[derive(Debug, Default, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase", default)]
-pub struct SetupKey {
-    pub login_key: String,
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
-}
-
-impl SetupKey {
-    /// Checked as an account's own protection is; the login key's hash to store.
-    pub(crate) fn checked_hash(&self) -> AppResult<String> {
-        validate_account_protection(
-            self.account_protection_suite,
-            &self.account_protection_salt,
-            self.argon_memory_kib,
-            self.argon_iterations,
-            self.argon_parallelism,
-        )?;
-        let login_key = decode_canonical_base64_exact(&self.login_key, 32, "setup.loginKey")?;
-        bcrypt::hash(login_key, BCRYPT_COST).map_err(|_| AppError::internal("bcrypt"))
-    }
-
-    /// Derived here, once, from a password the server was given (the
-    /// break-glass administrator in ADMIN_ACCOUNT).
-    pub(crate) fn derive(password: &str) -> anyhow::Result<Self> {
-        use kutup_crypto::kdf::{
-            derive_account_protection_keys, AccountProtectionParameters, AccountProtectionSuiteId,
-            ACCOUNT_PROTECTION_SALT_LEN,
-        };
-        let mut salt = [0u8; ACCOUNT_PROTECTION_SALT_LEN];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-        let parameters = AccountProtectionParameters::V1;
-        let keys = derive_account_protection_keys(password, &salt, parameters)?;
-        Ok(SetupKey {
-            login_key: STANDARD.encode(keys.login_key.as_slice()),
-            account_protection_suite: AccountProtectionSuiteId::Argon2idHkdfSha256V1.as_u16(),
-            account_protection_salt: STANDARD.encode(salt),
-            argon_memory_kib: parameters.memory_kib,
-            argon_iterations: parameters.iterations,
-            argon_parallelism: parameters.parallelism,
-        })
-    }
 }
 
 /// A key binding as drawn: a UUID v4, lowercase and hyphenated.

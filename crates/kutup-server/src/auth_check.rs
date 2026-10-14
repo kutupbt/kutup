@@ -235,25 +235,6 @@ impl Guard {
             .give_back();
         }
     }
-
-    /// Checks `secret` against `hash` at full cost, `None` for either paying
-    /// the same cost. A right secret gives the attempt's slots back.
-    pub(crate) fn verify(&self, secret: Option<&[u8]>, hash: Option<&str>) -> bool {
-        let ok = match (secret, hash) {
-            (Some(secret), Some(hash)) => verify_hash(secret, hash),
-            _ => {
-                let _ = bcrypt::verify("kutup-timing-only-not", &FAKE_BCRYPT_HASH);
-                false
-            }
-        };
-        if ok {
-            ratelimit::LOGIN_LOCKOUT.succeeded(&self.lockout);
-            if let Some(ceiling) = &self.ceiling {
-                ceiling.give_back();
-            }
-        }
-        ok
-    }
 }
 
 static KNOWN_CLIENT_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();

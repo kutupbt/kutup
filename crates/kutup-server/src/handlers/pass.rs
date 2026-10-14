@@ -9,8 +9,8 @@
 //! its owner forgets it. It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;

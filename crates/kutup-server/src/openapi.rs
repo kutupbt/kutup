@@ -306,6 +306,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::admin::force_disable_2fa,
         crate::handlers::admin::rotate_temp_password,
         crate::handlers::admin::wipe_user,
+        crate::handlers::admin::reset_grant,
         crate::handlers::admin::get_stats,
         crate::handlers::admin::activity,
         crate::handlers::admin::activity_export,

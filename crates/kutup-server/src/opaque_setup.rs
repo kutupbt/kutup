@@ -126,7 +126,7 @@ impl OpaqueServer {
                 })?;
             setups.insert(id, secrets);
         }
-        if !setups.contains_key(&current) {
+        if let std::collections::btree_map::Entry::Vacant(slot) = setups.entry(current) {
             let secrets = kutup_crypto::opaque::ServerSecrets::generate();
             let sealed = kutup_crypto::opaque::seal_server_setup(&secrets, current_key, current)
                 .map_err(|e| format!("seal the OPAQUE setup: {e}"))?;
@@ -152,7 +152,7 @@ impl OpaqueServer {
                     format!("the stored OPAQUE setup {current} does not open under its key")
                 })?;
             tracing::info!(key_id = current, "made a new OPAQUE setup");
-            setups.insert(current, secrets);
+            slot.insert(secrets);
         }
         // Older setups no account is registered with any more go.
         sqlx::query(

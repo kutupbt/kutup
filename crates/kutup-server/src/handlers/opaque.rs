@@ -137,7 +137,9 @@ pub async fn login_start(
     let canonical = canonical_name.as_str().to_owned();
     // Only a username of this server is an account; an address elsewhere,
     // or a name held after a rename, is not.
-    let account: Option<(Uuid, String, Option<Vec<u8>>, Option<i16>)> =
+    // id, key binding, record, the record's setup.
+    type Account = (Uuid, Option<String>, Option<Vec<u8>>, Option<i16>);
+    let account: Option<Account> =
         if canonical.is_empty() || canonical.contains('@') || canonical.len() > 64 {
             None
         } else {
@@ -158,9 +160,7 @@ pub async fn login_start(
         }
     }
     let user_id = account.as_ref().map(|a| a.0);
-    let record = account
-        .as_ref()
-        .and_then(|a| a.2.as_deref().zip(a.3).map(|(record, id)| (record, id)));
+    let record = account.as_ref().and_then(|a| a.2.as_deref().zip(a.3));
 
     // The attempt counts before any OPAQUE work.
     let mut asker = auth_check::Client::from_headers(&state, &headers, peer).await?;
@@ -173,7 +173,7 @@ pub async fn login_start(
     // A real record under its own setup; anything else the fake, under the
     // current one.
     let (server_key_id, secrets, record, credential) = match (record, account.as_ref()) {
-        (Some((record, key_id)), Some((_, key_binding, _, _))) => {
+        (Some((record, key_id)), Some((_, Some(key_binding), _, _))) => {
             let key_id = u16::try_from(key_id).map_err(|_| opaque_key_missing())?;
             let secrets = state.opaque.get(key_id).ok_or_else(opaque_key_missing)?;
             let credential = kutup_crypto::opaque::credential_identifier(key_binding)
@@ -525,10 +525,17 @@ pub async fn register_start(
         }
         None => match crate::middleware::bearer_from_headers(&headers) {
             // First sign-in of an account an admin made: its own new key
-            // binding, under the setup token.
+            // binding, under the setup token. Or an administrator making an
+            // account: its temporary password, under a new key binding.
             Some(token) => {
-                crate::jwt::validate_setup_token(&token, &state.config.jwt_secret)
-                    .map_err(|_| AppError::unauthorized("invalid setup token"))?;
+                if crate::jwt::validate_setup_token(&token, &state.config.jwt_secret).is_err() {
+                    let caller = crate::middleware::authenticate_access_token(&state, &token)
+                        .await
+                        .map_err(|_| AppError::unauthorized("invalid token"))?;
+                    if !caller.is_admin {
+                        return Err(grants::invalid());
+                    }
+                }
                 key_binding_unused(&state, &req.key_binding).await?;
             }
             // A sign-up: only while sign-ups are open.

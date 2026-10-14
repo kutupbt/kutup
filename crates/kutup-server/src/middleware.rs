@@ -136,6 +136,8 @@ pub async fn session_version_header(mut req: Request, next: Next) -> Response {
 #[allow(dead_code)]
 pub struct AdminUser {
     pub user_id: String,
+    /// The admin's own sign-in (what their reauth grants are bound to).
+    pub session_id: uuid::Uuid,
 }
 
 #[axum::async_trait]
@@ -152,6 +154,7 @@ impl FromRequestParts<AppState> for AdminUser {
         }
         Ok(AdminUser {
             user_id: user.user_id,
+            session_id: user.session.session_id,
         })
     }
 }
@@ -299,15 +302,6 @@ pub async fn rate_limit_call_link_poll(
     next: Next,
 ) -> Response {
     limit(addr, &ratelimit::CALL_LINK_POLL, None, req, next).await
-}
-
-/// 20/min/IP — mirrors `PreflightRateLimit`.
-pub async fn rate_limit_preflight(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    req: Request,
-    next: Next,
-) -> Response {
-    limit(addr, &ratelimit::PREFLIGHT, None, req, next).await
 }
 
 /// Coarse 120/min/IP outer wall. The handler additionally applies the primary

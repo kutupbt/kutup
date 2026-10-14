@@ -88,6 +88,10 @@ pub fn spawn_all(
                 Ok(rows) => tracing::info!(rows, "remote collaboration devices swept"),
                 Err(error) => tracing::warn!("remote device sweep failed: {error}"),
             }
+            // Used and expired grants, and sign-ins never finished.
+            if let Err(error) = crate::grants::sweep(&pool).await {
+                tracing::warn!(%error, "grant sweep failed");
+            }
         }
     });
 }
