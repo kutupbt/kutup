@@ -131,6 +131,7 @@ fn versions_v2_contract() {
     let form = reqwest::blocking::multipart::Form::new()
         .text("fileId", file_id.clone())
         .text("collectionId", collection_id.clone())
+        .text("nameHash", file_id.replace('-', "").repeat(2))
         .text(
             "fileKeyEnvelope",
             drive_envelope::seal_b64(
