@@ -124,6 +124,15 @@ api.interceptors.request.use(async (config) => {
   return config
 })
 
+/**
+ * The sign-in calls, matched on the whole path (with or without the `/api`
+ * base): their 401 never means this session's token ran out. The fork
+ * consume is here because it carries no token at all (its link and the
+ * Origin are its credential).
+ */
+const SIGN_IN_CALL =
+  /(?:^|\/api)\/auth\/(?:login\/(?:start|finish|2fa)|register|opaque\/register\/(?:start|finish)|complete-setup|recover\/(?:preflight|grant)|refresh|logout|registration-code\/check|settings|forks\/consume)$/
+
 // Auto-refresh on 401
 let isRefreshing = false
 let failedQueue: Array<{ resolve: (t: string) => void; reject: (e: unknown) => void }> = []
@@ -171,14 +180,15 @@ api.interceptors.response.use(
       }
     }
 
-    // Only a Bearer-authenticated, non-auth call refreshes on 401. An auth
-    // call's 401 is about its own credential (a password, a pre-auth or setup
-    // token, a fork code): refreshing would end this origin's other tabs when
-    // there is no session, or retry with another account's token when there
-    // is one. Signed-in password checks restart themselves (reauth.ts).
+    // A 401 from a sign-in call is about its own credential (a password, a
+    // pre-auth or setup token, a fork link), not this session's token:
+    // refreshing would end this origin's other tabs when there is no
+    // session, or retry with another account's token when there is one.
+    // Signed-in password checks restart themselves (reauth.ts). Every other
+    // call, /api/auth/sessions and /api/auth/forks included, refreshes.
     const code = (error.response?.data as { code?: unknown } | undefined)?.code
     const skipRefresh =
-      /\/auth\//.test(originalRequest.url ?? '') ||
+      SIGN_IN_CALL.test((originalRequest.url ?? '').split('?')[0]!) ||
       code === 'invalidCredentials' ||
       code === 'setupTokenInvalid' ||
       code === 'preAuthInvalid'
