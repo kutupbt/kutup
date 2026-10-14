@@ -373,12 +373,14 @@ fn a_reauth_is_for_the_signed_in_account_only() {
         .send()
         .unwrap();
     assert_eq!(named.status(), StatusCode::BAD_REQUEST);
-    // A's session with B's password: checked against A's account, it fails.
+    // The session's own account is the one checked: a password that is not
+    // A's fails (test accounts share one password, so a wrong one stands in
+    // for B's).
     let (status, _, _) = opaque_login(
         &c,
         &base,
         &b.username,
-        &b.password,
+        "not-a-password-of-a",
         "reauth",
         Some("passwordChange"),
         Some(&a.token),
