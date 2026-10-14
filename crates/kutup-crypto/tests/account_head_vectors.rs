@@ -9,7 +9,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use kutup_crypto::account_head::{self, AccountHeadV1, Anchor, HeadKeys, HeadStatus, IndexCheck};
+use kutup_crypto::account_head::{
+    self, AccountHeadV1, Anchor, HeadKeys, HeadStatus, IndexCheck, LocalHeadStateV1,
+};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -45,6 +47,12 @@ struct Vectors {
     /// Re-anchoring on head 1 after head 3 was remembered (a rollback the
     /// person confirmed).
     reanchored: account_head::Reanchored,
+    /// What a device keeps: the name it stores its state under, the state
+    /// (started fresh on head 1, advanced to head 3, then the re-anchoring
+    /// above), and that state sealed (a fixed nonce).
+    local_name: String,
+    local_state: LocalHeadStateV1,
+    local_sealed: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -257,6 +265,29 @@ fn derive() -> Vectors {
         1_791_000_000_000,
     )
     .unwrap();
+    let mut local_state = LocalHeadStateV1::with_device(INCARNATION, device).unwrap();
+    for (i, at_ms) in [(0, 1_790_500_000_000), (2, 1_790_600_000_000)] {
+        let verified = account_head::check(
+            &material.keys,
+            BINDING,
+            INCARNATION,
+            None,
+            &material.sealed[i],
+            None,
+        )
+        .unwrap()
+        .verified
+        .unwrap();
+        local_state.advance(&verified, at_ms);
+    }
+    local_state.reanchored(&reanchored);
+    let local_sealed = account_head::seal_local_state_for_vectors(
+        &material.keys,
+        BINDING,
+        &local_state,
+        &[0x42; 24],
+    )
+    .unwrap();
     Vectors {
         master_key: STANDARD.encode(master),
         binding: BINDING.into(),
@@ -277,6 +308,9 @@ fn derive() -> Vectors {
         checks,
         refused_indexes,
         reanchored,
+        local_name: material.keys.local_state_name(INCARNATION).unwrap(),
+        local_state,
+        local_sealed: STANDARD.encode(local_sealed),
     }
 }
 
@@ -299,6 +333,19 @@ fn checked_in_vectors_hold() {
     assert_eq!(v, derive());
     let master: [u8; 32] = STANDARD.decode(&v.master_key).unwrap().try_into().unwrap();
     let keys = HeadKeys::derive(&master).unwrap();
+    // A device's sealed state opens to the state, for its incarnation only.
+    let local = STANDARD.decode(&v.local_sealed).unwrap();
+    assert_eq!(
+        account_head::open_local_state(&keys, &v.binding, &v.incarnation_id, &local).unwrap(),
+        v.local_state
+    );
+    assert!(account_head::open_local_state(
+        &keys,
+        &v.binding,
+        "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+        &local
+    )
+    .is_err());
     // Every sealed head opens to its JSON; the last one, verified, checks its
     // index and refuses the others.
     for (sealed, json) in v.sealed.iter().zip(&v.heads) {

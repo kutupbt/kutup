@@ -3517,6 +3517,27 @@ fn js_json<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LocalAdvancedJs<'a> {
+    state: &'a kutup_crypto::account_head::LocalHeadStateV1,
+    changed: bool,
+}
+
+fn local_state_arg(
+    state_json: &str,
+    incarnation_id: &str,
+) -> Result<kutup_crypto::account_head::LocalHeadStateV1, JsValue> {
+    let state: kutup_crypto::account_head::LocalHeadStateV1 = serde_json::from_str(state_json)
+        .map_err(|_| js_error("account head: invalid local state"))?;
+    if state.incarnation_id != incarnation_id {
+        return Err(js_error(
+            "account head: the local state is another incarnation's",
+        ));
+    }
+    Ok(state)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct HeadCheckJs<'a> {
     status: &'a kutup_crypto::account_head::HeadStatus,
     /// What to remember now (a trusted head).
@@ -3550,6 +3571,86 @@ impl AccountHeadKeys {
             incarnation_id: incarnation_id.to_owned(),
             verified: None,
         })
+    }
+
+    /// The name this device stores its state under, for this account and
+    /// incarnation (hex).
+    #[wasm_bindgen(js_name = localStateName)]
+    pub fn local_state_name(&self) -> Result<String, JsValue> {
+        self.keys
+            .local_state_name(&self.incarnation_id)
+            .map_err(head_err)
+    }
+
+    /// A device's state before it has seen any head, with a new random device id.
+    #[wasm_bindgen(js_name = newLocalState)]
+    pub fn new_local_state(&self) -> Result<JsValue, JsValue> {
+        js_json(
+            &kutup_crypto::account_head::LocalHeadStateV1::new(&self.incarnation_id)
+                .map_err(head_err)?,
+        )
+    }
+
+    /// Opens this device's sealed state (canonical base64); throws when it
+    /// does not open (altered, another account's or incarnation's).
+    #[wasm_bindgen(js_name = openLocalState)]
+    pub fn open_local_state(&self, sealed_base64: &str) -> Result<JsValue, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "local head state")?;
+        js_json(
+            &kutup_crypto::account_head::open_local_state(
+                &self.keys,
+                &self.binding,
+                &self.incarnation_id,
+                &sealed,
+            )
+            .map_err(head_err)?,
+        )
+    }
+
+    /// Seals this device's state (JSON) for storing: canonical base64.
+    #[wasm_bindgen(js_name = sealLocalState)]
+    pub fn seal_local_state(&self, state_json: &str) -> Result<String, JsValue> {
+        let state = local_state_arg(state_json, &self.incarnation_id)?;
+        let sealed =
+            kutup_crypto::account_head::seal_local_state(&self.keys, &self.binding, &state)
+                .map_err(head_err)?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// Moves the state's anchor to this page's verified head (never back):
+    /// `{ state, changed }`. Throws when no head is verified.
+    #[wasm_bindgen(js_name = advanceLocalState)]
+    pub fn advance_local_state(&self, state_json: &str, at_ms: f64) -> Result<JsValue, JsValue> {
+        let verified = self
+            .verified
+            .as_ref()
+            .ok_or_else(|| js_error("account head: no verified head"))?;
+        let mut state = local_state_arg(state_json, &self.incarnation_id)?;
+        let changed = state.advance(verified, at_ms as u64);
+        js_json(&LocalAdvancedJs {
+            state: &state,
+            changed,
+        })
+    }
+
+    /// After `reanchor`: the state moves to its record's head, and logs it.
+    #[wasm_bindgen(js_name = reanchoredLocalState)]
+    pub fn reanchored_local_state(
+        &self,
+        state_json: &str,
+        record_json: &str,
+    ) -> Result<JsValue, JsValue> {
+        let mut state = local_state_arg(state_json, &self.incarnation_id)?;
+        let record: kutup_crypto::account_head::Reanchored = serde_json::from_str(record_json)
+            .map_err(|_| js_error("account head: invalid re-anchoring record"))?;
+        // Only onto the head this page verified by re-anchoring.
+        if self.verified.as_ref().map(|verified| verified.anchor()) != Some(&record.to) {
+            return Err(js_error(
+                "account head: the record is not this page's re-anchoring",
+            ));
+        }
+        state.reanchored(&record);
+        js_json(&state)
     }
 
     /// This device's writer tag in the heads it writes (hex).

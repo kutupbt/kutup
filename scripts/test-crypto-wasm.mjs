@@ -1038,6 +1038,30 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   assert.throws(() => head.checkIndex('contacts', '[]'), /no verified head/)
   assert.deepEqual(head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, true, v.reanchored.atMs), v.reanchored)
   head.free()
+
+  // What a device keeps: named per account and incarnation, sealed, opened
+  // only for its incarnation, advanced only from a verified head.
+  const local = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId)
+  assert.equal(local.localStateName(), v.localName)
+  assert.deepEqual(local.openLocalState(v.localSealed), v.localState)
+  const elsewhere = new crypto.AccountHeadKeys(v.masterKey, v.binding, '6'.repeat(64))
+  assert.notEqual(elsewhere.localStateName(), v.localName)
+  assert.throws(() => elsewhere.openLocalState(v.localSealed))
+  assert.throws(() => elsewhere.sealLocalState(JSON.stringify(v.localState)), /another incarnation/)
+  elsewhere.free()
+  const fresh = local.newLocalState()
+  assert.equal(fresh.anchor, null)
+  assert.match(fresh.deviceId, /^[0-9a-f]{32}$/)
+  assert.throws(() => local.advanceLocalState(JSON.stringify(fresh), 1), /no verified head/)
+  local.check(undefined, v.sealed[1], undefined)
+  const advanced = local.advanceLocalState(JSON.stringify(fresh), 5)
+  assert.equal(advanced.changed, true)
+  assert.deepEqual(advanced.state.anchor, v.anchors[1])
+  assert.equal(advanced.state.log[0].kind, 'startedFresh')
+  assert.deepEqual(local.openLocalState(local.sealLocalState(JSON.stringify(advanced.state))), advanced.state)
+  // A re-anchoring record is taken only for the head this page re-anchored on.
+  assert.throws(() => local.reanchoredLocalState(JSON.stringify(advanced.state), JSON.stringify(v.reanchored)), /not this page/)
+  local.free()
 }
 
 console.log('crypto WASM canonical vectors passed')
