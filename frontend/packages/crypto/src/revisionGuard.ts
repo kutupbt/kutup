@@ -104,7 +104,15 @@ export function indexedDbRevisionStore(): RevisionStore {
     async put(key, revision) {
       const database = await db()
       if (!database) return fallback.put(key, revision)
-      await request(database.transaction(STORE, 'readwrite').objectStore(STORE).put(revision, key))
+      // Done only once the transaction commits: a request's success comes
+      // first, and a page closed (or reloaded) in between loses the write.
+      const transaction = database.transaction(STORE, 'readwrite')
+      transaction.objectStore(STORE).put(revision, key)
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve()
+        transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB write failed'))
+        transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB write aborted'))
+      })
     },
   }
 }
