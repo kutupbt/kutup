@@ -290,14 +290,20 @@ impl<'a> CliHead<'a> {
                 .client
                 .get_account_heads(anchor.sequence)?
                 .map(|heads| {
-                    heads
+                    let mut heads = heads
                         .iter()
                         .map(|head| {
                             STANDARD
                                 .decode(head)
                                 .context("a head in the chain is not base64")
                         })
-                        .collect::<Result<Vec<_>>>()
+                        .collect::<Result<Vec<_>>>()?;
+                    // The chain up to the head being checked: one written
+                    // since does not belong (it would read as a fork).
+                    if let Some(at) = heads.iter().position(|head| *head == current) {
+                        heads.truncate(at + 1);
+                    }
+                    Ok::<_, anyhow::Error>(heads)
                 })
                 .transpose()?,
             _ => None,
@@ -351,8 +357,17 @@ impl<'a> CliHead<'a> {
         }
     }
 
-    /// A scope's index, checked against the head it was read with.
+    /// A scope's index, checked against the head it was read with. A
+    /// rollback or fork is read once more first: another device moving on
+    /// between two reads is not one.
     pub fn index(&mut self, scope: &str) -> Result<Index> {
+        match self.index_once(scope) {
+            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => self.index_once(scope),
+            other => other,
+        }
+    }
+
+    fn index_once(&mut self, scope: &str) -> Result<Index> {
         let Some(record) = self.client.get_account_index(scope)? else {
             let head = self.client.get_account_head()?;
             self.verify(head.as_deref())?;
@@ -448,7 +463,14 @@ impl<'a> CliHead<'a> {
 
     /// Where this device stands: checks the head now.
     pub fn report(&mut self) -> Result<HeadReport> {
-        let current = self.client.get_account_head()?;
+        // Read once more before a rollback or fork counts.
+        let first = self.client.get_account_head()?;
+        let current = match self.verify(first.as_deref()) {
+            Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => {
+                self.client.get_account_head()?
+            }
+            _ => first,
+        };
         let anchor = self.load()?.anchor.map(|anchor| anchor.sequence);
         let sequence = current
             .as_deref()
