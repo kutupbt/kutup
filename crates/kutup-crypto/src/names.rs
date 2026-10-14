@@ -47,7 +47,10 @@ mod tests {
         ] {
             assert_eq!(fold(name), folded, "{name}");
         }
-        assert_eq!(fold_address("Ada.L@Kutup.Dev").as_deref(), Some("adal@kutup.dev"));
+        assert_eq!(
+            fold_address("Ada.L@Kutup.Dev").as_deref(),
+            Some("adal@kutup.dev")
+        );
         assert_eq!(fold_address("_.-@kutup.dev"), None);
         assert_eq!(fold_address("ada"), None);
     }

@@ -83,7 +83,7 @@ impl MlsRepository {
             "SELECT u.id, m.version
              FROM users u
              JOIN chat_device_manifests m ON m.user_id = u.id
-             WHERE u.username = $1",
+             WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL)",
         )
         .bind(username)
         .fetch_optional(&mut *tx)
@@ -125,7 +125,7 @@ impl MlsRepository {
             "SELECT u.id, m.version
              FROM users u
              JOIN chat_device_manifests m ON m.user_id = u.id
-             WHERE u.username = $1",
+             WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL)",
         )
         .bind(username)
         .fetch_optional(&mut *tx)
@@ -214,7 +214,7 @@ impl MlsRepository {
         let presented_hash = capability_hash(capability);
         let mut tx = self.pool.begin().await?;
         let recipient_user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+            sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL)")
                 .bind(username)
                 .fetch_optional(&mut *tx)
                 .await?;

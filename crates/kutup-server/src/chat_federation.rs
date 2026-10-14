@@ -1533,11 +1533,14 @@ pub async fn get_manifest_history(
             .fetch_optional(&state.pool)
             .await?;
     let Some(target_id) = target_id else {
-        return signed_app_error(
-            federation,
-            &authenticated,
+        let error = crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &account.username,
             AppError::not_found("chat manifest history not found"),
-        );
+        )
+        .await;
+        return signed_app_error(federation, &authenticated, error);
     };
     let incarnation_id: Option<String> = match sqlx::query_scalar(
         "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
@@ -1639,11 +1642,14 @@ pub async fn get_manifest(
             .fetch_optional(&state.pool)
             .await?;
     let Some(target_id) = target_id else {
-        return signed_app_error(
-            federation,
-            &authenticated,
+        let error = crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &account.username,
             AppError::not_found("chat manifest not found"),
-        );
+        )
+        .await;
+        return signed_app_error(federation, &authenticated, error);
     };
     let value: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
@@ -1729,11 +1735,14 @@ pub async fn get_user_profile(
     {
         Ok(Some(profile)) => profile,
         Ok(None) => {
-            return signed_app_error(
-                federation,
-                &authenticated,
+            let error = crate::account_names::renamed_or(
+                &state.pool,
+                &state.config.chat_server_name,
+                &account.username,
                 AppError::not_found("chat profile not found"),
             )
+            .await;
+            return signed_app_error(federation, &authenticated, error);
         }
         Err(error) => return signed_app_error(federation, &authenticated, error),
     };
@@ -1881,7 +1890,7 @@ pub async fn deliver_messages(
                 AppError::bad_request(error.to_string())
             })?;
     let recipient_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE username = $1 AND is_active = true FOR SHARE",
+        "SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true FOR SHARE",
     )
     .bind(&recipient.username)
     .fetch_optional(&mut *tx)

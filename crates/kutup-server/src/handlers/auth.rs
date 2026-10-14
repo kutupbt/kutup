@@ -1261,7 +1261,21 @@ pub async fn get_user_by_address(
     let Some((id, username, public_key, incarnation_id, signing_public_key, authority, binding)) =
         row
     else {
-        return Err(AppError::not_found("user not found"));
+        // An old name: where the account went (the chains), never its keys.
+        return Err(
+            match local_account_username(&address, &state.config.chat_server_name) {
+                Some(username) => {
+                    crate::account_names::renamed_or(
+                        &state.pool,
+                        &state.config.chat_server_name,
+                        &username,
+                        AppError::not_found("user not found"),
+                    )
+                    .await
+                }
+                None => AppError::not_found("user not found"),
+            },
+        );
     };
     let username = username
         .filter(|value| !value.is_empty())

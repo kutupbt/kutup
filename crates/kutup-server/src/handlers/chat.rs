@@ -730,7 +730,15 @@ pub async fn get_user_manifest(
     .bind(&address.username)
     .fetch_optional(&state.pool)
     .await?;
-    let value = value.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let Some(value) = value else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &address.username,
+            AppError::not_found("chat manifest not found"),
+        )
+        .await);
+    };
     let manifest: AccountManifestV1 = serde_json::from_value(value)
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     manifest
@@ -795,7 +803,15 @@ pub async fn get_manifest_history(
             .bind(&address.username)
             .fetch_optional(&state.pool)
             .await?;
-    let target_id = target_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let Some(target_id) = target_id else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &address.username,
+            AppError::not_found("chat manifest not found"),
+        )
+        .await);
+    };
     let incarnation_id: Option<String> = sqlx::query_scalar(
         "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
     )
@@ -1055,9 +1071,17 @@ pub async fn get_user_profile(
                 .await?;
         return Ok(Json(profile).into_response());
     }
-    let profile = load_public_profile(&state, &address.username, &version, &access_key)
-        .await?
-        .ok_or_else(|| AppError::not_found("chat profile not found"))?;
+    let Some(profile) =
+        load_public_profile(&state, &address.username, &version, &access_key).await?
+    else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &address.username,
+            AppError::not_found("chat profile not found"),
+        )
+        .await);
+    };
     Ok(Json(profile).into_response())
 }
 
@@ -1686,11 +1710,18 @@ pub(crate) async fn load_user_bundles(
     .fetch_optional(&mut *tx)
     .await?;
     let Some((target_id, stored_capability)) = target else {
-        return Err(AppError::not_found(if delivery_capability.is_some() {
-            "sealed delivery unavailable"
-        } else {
-            "user not found"
-        }));
+        drop(tx);
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            username,
+            AppError::not_found(if delivery_capability.is_some() {
+                "sealed delivery unavailable"
+            } else {
+                "user not found"
+            }),
+        )
+        .await);
     };
     if let Some(capability) = delivery_capability {
         let Some(stored) = stored_capability.and_then(|value| <[u8; 32]>::try_from(value).ok())
@@ -1903,7 +1934,7 @@ pub async fn send_messages(
         };
     }
     let recipient: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM users WHERE username = $1 AND is_active = true")
+        sqlx::query_as("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true")
             .bind(&address.username)
             .fetch_optional(&state.pool)
             .await?;
@@ -2009,7 +2040,7 @@ pub(crate) async fn store_sealed_messages(
         "SELECT u.id, c.capability_hash
          FROM users u
          JOIN chat_delivery_capabilities c ON c.user_id = u.id
-         WHERE u.username = $1 AND u.is_active = true
+         WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true
          FOR SHARE OF u, c",
     )
     .bind(username)

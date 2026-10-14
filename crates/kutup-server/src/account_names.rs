@@ -156,9 +156,8 @@ impl Unavailable {
             Unavailable::Invalid => AppError::bad_request("a name has 3-32 of a-z, 0-9, _ and -"),
             Unavailable::Reserved => AppError::conflict("this name is reserved")
                 .with_details(json!({ "code": "nameReserved" })),
-            Unavailable::Taken | Unavailable::Held => {
-                AppError::conflict("this name is taken").with_details(json!({ "code": "nameTaken" }))
-            }
+            Unavailable::Taken | Unavailable::Held => AppError::conflict("this name is taken")
+                .with_details(json!({ "code": "nameTaken" })),
         }
     }
 }
@@ -205,9 +204,8 @@ pub async fn available(
     .fetch_optional(&mut *conn)
     .await?;
     if let Some((user_id, incarnation, state)) = held {
-        let own = asking.is_some_and(|(id, inc)| {
-            user_id == Some(id) && incarnation.as_deref() == Some(inc)
-        });
+        let own = asking
+            .is_some_and(|(id, inc)| user_id == Some(id) && incarnation.as_deref() == Some(inc));
         return Ok(match (state.as_str(), own) {
             ("held", true) => Ok(Available::TakeBack),
             ("held", false) => Err(Unavailable::Held),
@@ -304,4 +302,19 @@ pub async fn sweep(pool: &sqlx::PgPool) -> AppResult<(u64, u64)> {
     }
     tx.commit().await?;
     Ok((closed, freed.len() as u64))
+}
+
+/// `otherwise` for a lookup that found no current account, unless the name
+/// is someone's old name: then `409 renamed` with the chains.
+pub async fn renamed_or(
+    pool: &sqlx::PgPool,
+    server_name: &str,
+    name: &str,
+    otherwise: AppError,
+) -> AppError {
+    match renamed(pool, server_name, name).await {
+        Ok(Some(renamed)) => renamed,
+        Ok(None) => otherwise,
+        Err(error) => error,
+    }
 }

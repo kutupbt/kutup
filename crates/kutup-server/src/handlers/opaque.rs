@@ -186,10 +186,11 @@ pub async fn login_start(
                 .name
                 .as_deref()
                 .ok_or_else(|| AppError::bad_request("a sign-in names its account"))?;
-            let canonical = kutup_crypto::opaque::CanonicalName::parse(&canonical_name(&state, name))
-                .map_err(|_| AppError::bad_request("invalid name"))?
-                .as_str()
-                .to_owned();
+            let canonical =
+                kutup_crypto::opaque::CanonicalName::parse(&canonical_name(&state, name))
+                    .map_err(|_| AppError::bad_request("invalid name"))?
+                    .as_str()
+                    .to_owned();
             // Only a current username of this server is an account; an
             // address elsewhere, or a name held after a rename, is not.
             let account = if canonical.is_empty() || canonical.contains('@') || canonical.len() > 64

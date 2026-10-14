@@ -162,7 +162,7 @@ pub(super) async fn notify_mls_recipient_mailbox(state: &AppState, username: &st
         "SELECT DISTINCT m.recipient_user_id, m.recipient_device_id
          FROM chat_mls_mailbox m
          JOIN users u ON u.id = m.recipient_user_id
-         WHERE u.username = $1
+         WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL)
          ORDER BY m.recipient_user_id, m.recipient_device_id",
     )
     .bind(username)

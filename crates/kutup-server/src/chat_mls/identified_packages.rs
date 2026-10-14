@@ -245,7 +245,7 @@ async fn claim_local_identified_key_packages(
         "SELECT u.id, m.version
          FROM users u
          JOIN chat_device_manifests m ON m.user_id = u.id
-         WHERE u.username = $1 AND u.is_active = true",
+         WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true",
     )
     .bind(&request.recipient.username)
     .fetch_optional(&state.pool)

@@ -617,7 +617,7 @@ async fn reserve_inbound_offer(
         .and_then(|bytes| bytes.try_into().ok());
     let capability_digest = capability.as_ref().map(capability_hash).unwrap_or([0; 32]);
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username=$1 AND is_active=true")
+        sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active=true")
             .bind(&address.username)
             .fetch_optional(&mut *tx)
             .await?;

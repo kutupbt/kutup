@@ -177,8 +177,10 @@ pub async fn rename(
     if !break_glass.is_empty()
         && kutup_crypto::names::fold(break_glass) == kutup_crypto::names::fold(&username)
     {
-        return Err(AppError::forbidden("the break-glass account keeps its name")
-            .with_details(json!({ "code": "breakGlassAccount" })));
+        return Err(
+            AppError::forbidden("the break-glass account keeps its name")
+                .with_details(json!({ "code": "breakGlassAccount" })),
+        );
     }
 
     // The statement: this account's, from its current address to a new one
@@ -190,7 +192,9 @@ pub async fn rename(
         .rsplit_once('@')
         .ok_or_else(|| rename_invalid("no address"))?;
     if new_server != server || statement.previous != old_address {
-        return Err(rename_invalid("not from this account's address to this server"));
+        return Err(rename_invalid(
+            "not from this account's address to this server",
+        ));
     }
     let new_name = new_name.to_owned();
     if kutup_crypto::names::fold(&new_name) == kutup_crypto::names::fold(&username) {
@@ -216,8 +220,10 @@ pub async fn rename(
     .fetch_all(&mut *tx)
     .await?;
     if statement.sequence != stored.len() as u64 + 1 {
-        return Err(AppError::conflict("the chain moved: read it again and sign anew")
-            .with_details(json!({ "code": "renameConflict", "sequence": stored.len() })));
+        return Err(
+            AppError::conflict("the chain moved: read it again and sign anew")
+                .with_details(json!({ "code": "renameConflict", "sequence": stored.len() })),
+        );
     }
     let now = time::OffsetDateTime::now_utc();
     let now_ms = (now.unix_timestamp_nanos() / 1_000_000) as i64;
@@ -244,12 +250,13 @@ pub async fn rename(
         if let Some((_, _, at, _)) = stored.last() {
             let next = *at + time::Duration::days(RENAME_EVERY_DAYS);
             if now < next {
-                return Err(AppError::too_many_requests("one rename per 30 days")
-                    .with_details(json!({
+                return Err(
+                    AppError::too_many_requests("one rename per 30 days").with_details(json!({
                         "code": "renameTooSoon",
                         "retryAt": next.format(&time::format_description::well_known::Rfc3339)
                             .unwrap_or_default(),
-                    })));
+                    })),
+                );
             }
         }
     }
@@ -274,8 +281,10 @@ pub async fn rename(
     .fetch_one(&mut *tx)
     .await?;
     if found == Available::Free && held >= MAX_HELD {
-        return Err(AppError::conflict("this account holds its most names: drop one first")
-            .with_details(json!({ "code": "tooManyHeldNames" })));
+        return Err(
+            AppError::conflict("this account holds its most names: drop one first")
+                .with_details(json!({ "code": "tooManyHeldNames" })),
+        );
     }
     crate::handlers::auth::verify_drive_key_binding(
         &statement.current,
@@ -312,8 +321,9 @@ pub async fn rename(
             .execute(&mut *tx)
             .await?;
         }
-        Available::Free => account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation))
-            .await?,
+        Available::Free => {
+            account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation)).await?
+        }
     }
     sqlx::query(
         "UPDATE users SET username = $2, drive_key_binding = $3, updated_at = now() WHERE id = $1",
@@ -536,8 +546,9 @@ async fn admin_name(
     .fetch_optional(&mut *tx)
     .await?;
     let Some((held_name, owner)) = held else {
-        return Err(AppError::conflict("not a held name")
-            .with_details(json!({ "code": "notHeld" })));
+        return Err(
+            AppError::conflict("not a held name").with_details(json!({ "code": "notHeld" }))
+        );
     };
     let (kind, audit_action) = match action {
         AdminAction::Close => {
@@ -621,4 +632,41 @@ pub async fn admin_free(
     Path(name): Path<String>,
 ) -> AppResult<Response> {
     admin_name(&state, &admin, &name, AdminAction::Free).await
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainsQuery {
+    /// Only this incarnation's chain.
+    incarnation_id: Option<String>,
+}
+
+/// `GET /api/users/renames/{address}` — every rename chain that names the
+/// address (a reused name is in more than one), as `{ version: 1, chains }`,
+/// newest first. Clients verify each chain against their own pins.
+#[utoipa::path(
+    get,
+    path = "/api/users/renames/{address}",
+    tag = "user",
+    security(("BearerAuth" = [])),
+    params(("address" = String, Path, description = "username@server"), ChainsQuery),
+    responses((status = 200, description = "The chains (an empty list when none names it)"))
+)]
+pub async fn chains(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Path(address): Path<String>,
+    Query(query): Query<ChainsQuery>,
+) -> AppResult<Response> {
+    let address = address.trim().to_ascii_lowercase();
+    let Some((_, server)) = address.rsplit_once('@') else {
+        return Err(AppError::bad_request("an address is username@server"));
+    };
+    // Another server's chains come with federation (its announce and cache).
+    if server != state.config.chat_server_name.to_ascii_lowercase() {
+        return Ok(Json(json!({ "version": 1, "chains": [] })).into_response());
+    }
+    let found =
+        account_names::chains(&state.pool, &address, query.incarnation_id.as_deref()).await?;
+    Ok(Json(found).into_response())
 }

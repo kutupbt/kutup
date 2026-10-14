@@ -586,11 +586,14 @@ pub async fn get_user(
         .fetch_optional(&state.pool)
         .await?;
         let Some((hpke_key, incarnation_id, signing_key, authority_key, binding)) = identity else {
-            return signed_app_error(
-                federation,
-                &authenticated,
+            let error = crate::account_names::renamed_or(
+                &state.pool,
+                &state.config.chat_server_name,
+                username,
                 AppError::not_found("Drive user not found"),
-            );
+            )
+            .await;
+            return signed_app_error(federation, &authenticated, error);
         };
         signed_json(
             federation,

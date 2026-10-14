@@ -788,6 +788,10 @@ fn build_router(state: AppState) -> Router {
             "/api/admin/names/:name/free",
             post(handlers::renames::admin_free),
         )
+        .route(
+            "/api/users/renames/:address",
+            get(handlers::renames::chains).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
         .route("/api/user/rename/check", get(handlers::renames::check))
         .route("/api/user/rename", post(handlers::renames::rename))
         .route("/api/user/names", get(handlers::renames::names))
