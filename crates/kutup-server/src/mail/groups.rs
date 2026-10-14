@@ -59,13 +59,16 @@ pub enum Sender {
     Local(Uuid),
 }
 
-/// The group at `address` (canonical), if there is one.
+/// The group at `address` (canonical), if there is one, in any spelling of
+/// its name (one name per folded form, accounts and groups alike).
 pub async fn find<'e, E: PgExecutor<'e>>(
     executor: E,
     address: &str,
 ) -> sqlx::Result<Option<Group>> {
     sqlx::query_as(
-        "SELECT id, address, kind, post_policy, system_role FROM mail_groups WHERE address = $1",
+        "SELECT id, address, kind, post_policy, system_role FROM mail_groups
+          WHERE kutup_fold(split_part(address, '@', 1)) || '@' || lower(split_part(address, '@', 2))
+              = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))",
     )
     .bind(address)
     .fetch_optional(executor)
@@ -79,7 +82,7 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
         "SELECT u.id AS user_id, a.id AS address_id, a.address, k.public_key
            FROM mail_group_members m
            JOIN users u ON u.id = m.user_id AND u.is_active
-           JOIN mail_addresses a ON a.user_id = u.id
+           JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE m.group_id = $1
           ORDER BY a.address",
@@ -93,7 +96,7 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
     sqlx::query_as(
         "SELECT u.id AS user_id, a.id AS address_id, a.address, k.public_key
            FROM users u
-           JOIN mail_addresses a ON a.user_id = u.id
+           JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE u.is_admin AND u.is_active
           ORDER BY a.address",

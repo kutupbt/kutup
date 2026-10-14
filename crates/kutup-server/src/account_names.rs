@@ -113,6 +113,19 @@ pub async fn renamed(
     ))
 }
 
+/// Whether two addresses name one account here: equal once folded (one
+/// account per folded name). What a lookup answers may spell the name as the
+/// account stores it, not as it was asked.
+pub fn same_address(a: &str, b: &str) -> bool {
+    match (
+        kutup_crypto::names::fold_address(a),
+        kutup_crypto::names::fold_address(b),
+    ) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Why a name cannot be had.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unavailable {
@@ -183,8 +196,10 @@ pub async fn available(
     if reserved {
         return Ok(Err(Unavailable::Reserved));
     }
+    // Locked, so a held name taken back is not freed (the sweep, an
+    // administrator) between this answer and the write that relies on it.
     let held: Option<(Option<Uuid>, Option<String>, String)> = sqlx::query_as(
-        "SELECT user_id, incarnation_id, state FROM account_names WHERE folded = $1",
+        "SELECT user_id, incarnation_id, state FROM account_names WHERE folded = $1 FOR UPDATE",
     )
     .bind(&folded)
     .fetch_optional(&mut *conn)
@@ -308,6 +323,47 @@ pub async fn renamed_or(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every lookup of an account by name goes through `kutup_current_user`
+    /// (any spelling, current names only): a query comparing `username`
+    /// itself would miss a variant, or find a name the account left.
+    #[test]
+    fn no_query_compares_usernames_directly() {
+        fn walk(dir: &std::path::Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for (n, line) in text.lines().enumerate() {
+                        let squeezed: String = line.split_whitespace().collect();
+                        let compares = [
+                            "WHEREusername=",
+                            "ANDusername=",
+                            "ORusername=",
+                            ".username=",
+                        ]
+                        .iter()
+                        .any(|c| squeezed.contains(&format!("{c}$")))
+                            || squeezed.contains(concat!("username", "=ANY("));
+                        if compares {
+                            found.push(format!("{}:{}", path.display(), n + 1));
+                        }
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        assert!(
+            found.is_empty(),
+            "use kutup_current_user($n) instead: {found:?}"
+        );
+    }
 
     /// The sweep: an old address past its receiving is closed, a name past
     /// its hold is freed (gone from the names, its address row freed and no

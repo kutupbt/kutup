@@ -124,7 +124,8 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
            JOIN users u ON u.id = a.user_id AND u.is_active
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
-            AND a.state IN ('active', 'receiving')",
+            AND (a.state = 'active'
+                 OR (a.state = 'receiving' AND a.receive_until > now()))",
     )
     .bind(&address)
     .fetch_optional(&state.pool)

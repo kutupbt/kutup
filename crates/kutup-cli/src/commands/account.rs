@@ -193,6 +193,32 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
             .context("sign the rename")?;
     let binding = kutup_crypto::drive_key_binding::sign(&identity, &current)
         .context("sign the Drive key binding")?;
+    // The new address's key comes with the rename; a name taken back keeps
+    // the keys it had.
+    let mail_address = if check["takeBack"] == true {
+        Value::Null
+    } else {
+        let issued_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .context("the time")?;
+        let first = kutup_crypto::mail_key::first_address_key(
+            &identity,
+            &master_key,
+            ctx.session.binding(),
+            &current,
+            (now_ms / 1000) as u32,
+            &issued_at,
+        )
+        .context("the new address's mail key")?;
+        json!({
+            "publicKey": STANDARD.encode(&first.key.public_key),
+            "privateKeyEnvelope": STANDARD.encode(&first.private_key_envelope),
+            "keyList": {
+                "data": STANDARD.encode(&first.key_list.data),
+                "signature": STANDARD.encode(first.key_list.signature),
+            },
+        })
+    };
     let renamed: Value = decode_json(
         ctx.client
             .request(Method::POST, "/user/rename")
@@ -200,6 +226,7 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
                 "grant": grant,
                 "rename": statement,
                 "driveKeyBinding": STANDARD.encode(binding),
+                "mailAddress": mail_address,
             }))
             .send()?,
     )?;

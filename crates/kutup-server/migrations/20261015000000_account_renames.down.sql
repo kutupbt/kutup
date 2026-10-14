@@ -1,3 +1,7 @@
+-- Rows the old checks would refuse go first: the new event kinds, and
+-- the names' own columns with them.
+DELETE FROM account_security_events
+ WHERE kind IN ('rename', 'nameDropped', 'nameClosed', 'nameFreed');
 ALTER TABLE account_security_events
     DROP CONSTRAINT account_security_events_names_check,
     DROP COLUMN new_name,
@@ -25,6 +29,7 @@ ALTER TABLE mail_addresses
     DROP COLUMN receive_until,
     DROP COLUMN folded,
     DROP COLUMN state;
+DROP FUNCTION kutup_current_user(text);
 DROP TABLE account_renames;
 DROP TABLE account_names;
 DROP FUNCTION kutup_fold(text);

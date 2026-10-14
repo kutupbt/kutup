@@ -58,6 +58,9 @@ pub struct SignedKeyList {
 pub struct OwnMailAddress {
     pub id: String,
     pub address: String,
+    /// `active` (the current one, which sends), `receiving`, `closed` or
+    /// `freed`: an old address's keys open the mail it received.
+    pub state: String,
     pub keys: Vec<OwnMailKey>,
     /// The current signed key list; null until the first key is added.
     pub key_list: Option<SignedKeyList>,
@@ -133,9 +136,15 @@ async fn own_address(
     .bind(address_id)
     .fetch_optional(&state.pool)
     .await?;
+    let address_state: String =
+        sqlx::query_scalar("SELECT state FROM mail_addresses WHERE id = $1")
+            .bind(address_id)
+            .fetch_one(&state.pool)
+            .await?;
     Ok(OwnMailAddress {
         id: address_id.to_string(),
         address,
+        state: address_state,
         keys: keys
             .into_iter()
             .map(
@@ -174,20 +183,20 @@ pub async fn list_addresses(
     user: AuthUser,
 ) -> AppResult<Json<Vec<OwnMailAddress>>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let Some((_, address)) = account_and_address(&state, user_id).await? else {
-        return Ok(Json(Vec::new()));
-    };
-    // Read only: the row comes with the account.
-    let id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM mail_addresses WHERE address = $1 AND user_id = $2")
-            .bind(&address)
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(id) = id else {
-        return Ok(Json(Vec::new()));
-    };
-    Ok(Json(vec![own_address(&state, id, address).await?]))
+    // Read only: the rows come with the account and its renames. The current
+    // address first, then the old ones, newest first.
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, address FROM mail_addresses WHERE user_id = $1
+          ORDER BY state = 'active' DESC, created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mut addresses = Vec::with_capacity(rows.len());
+    for (id, address) in rows {
+        addresses.push(own_address(&state, id, address).await?);
+    }
+    Ok(Json(addresses))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -257,11 +266,13 @@ async fn begin_list_change(
     }
 
     let mut tx = state.pool.begin().await?;
-    let owner: Option<(Option<Uuid>, String)> =
-        sqlx::query_as("SELECT user_id, address FROM mail_addresses WHERE id = $1 FOR UPDATE")
-            .bind(address_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let owner: Option<(Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT user_id, address FROM mail_addresses
+              WHERE id = $1 AND state IN ('active', 'receiving') FOR UPDATE",
+    )
+    .bind(address_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     match owner {
         Some((Some(owner), stored)) if owner == user_id && stored == address => {}
         _ => return Err(AppError::not_found("not found")),
@@ -447,6 +458,102 @@ pub async fn add_key(
     Ok(Json(change.finish(&state).await?))
 }
 
+/// Gives a new address of the account (`address_id`, with no keys yet) its
+/// first key and key list, in the caller's transaction: what `add_key` checks
+/// for a first key, so a rename's new address has its key in the rename's
+/// transaction and mail to it is never deferred.
+pub(crate) async fn first_key(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    address_id: Uuid,
+    account: &str,
+    req: &AddMailKeyRequest,
+) -> AppResult<()> {
+    let address = mail_key::canonical_address(account)
+        .map_err(|_| AppError::bad_request("the username is not a valid mail address"))?;
+    let public_key = decode(&req.public_key, "publicKey")?;
+    let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
+    let info = mail_key::inspect_address_public_key(&public_key, &address)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let (authority, binding): (String, String) = sqlx::query_as(
+        "SELECT account_authority_public_key, COALESCE(key_binding, '') FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    if account_envelope::validate_for(
+        &envelope,
+        AccountEnvelopePurpose::MailAddressPrivateKey,
+        &binding,
+        &[],
+    )
+    .is_err()
+    {
+        return Err(AppError::bad_request(
+            "privateKeyEnvelope is not this account's mail key",
+        ));
+    }
+    let authority: [u8; 32] = STANDARD
+        .decode(&authority)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
+    let data = decode(&req.key_list.data, "keyList.data")?;
+    let signature = decode(&req.key_list.signature, "keyList.signature")?;
+    let signed = SignedMailKeyListV1::verify(&data, &signature, &authority)
+        .map_err(|error| AppError::bad_request(format!("keyList: {error}")))?;
+    let fingerprint = hex::encode(info.fingerprint);
+    let only = match signed.list.keys.as_slice() {
+        [only]
+            if hex::encode(only.fingerprint) == fingerprint
+                && only.sha256_fingerprint == info.sha256_fingerprint =>
+        {
+            only
+        }
+        _ => {
+            return Err(AppError::bad_request(
+                "keyList must list exactly the address's keys",
+            ))
+        }
+    };
+    if signed.list.account != account || signed.list.address != address {
+        return Err(AppError::bad_request(
+            "keyList is for another account or address",
+        ));
+    }
+    if signed.list.sequence != 1 || !only.primary {
+        return Err(AppError::bad_request(
+            "an address's first key list has sequence 1 and its key primary",
+        ));
+    }
+    let inserted = sqlx::query(
+        "INSERT INTO mail_address_keys
+           (address_id, fingerprint, sha256_fingerprint, public_key, private_key_envelope, is_primary, flags)
+         VALUES ($1, $2, $3, $4, $5, true, $6)
+         ON CONFLICT (fingerprint) DO NOTHING",
+    )
+    .bind(address_id)
+    .bind(&fingerprint)
+    .bind(hex::encode(info.sha256_fingerprint))
+    .bind(&public_key)
+    .bind(&envelope)
+    .bind(only.flags as i32)
+    .execute(&mut *conn)
+    .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(AppError::conflict("this key is already in use"));
+    }
+    sqlx::query(
+        "INSERT INTO mail_key_lists (address_id, sequence, data, signature) VALUES ($1, 1, $2, $3)",
+    )
+    .bind(address_id)
+    .bind(&signed.data)
+    .bind(signed.signature.as_slice())
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateKeyListRequest {
@@ -526,7 +633,9 @@ async fn public_keys(
     let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT a.id, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
-            AND a.state IN ('active', 'receiving') AND u.is_active",
+            AND (a.state = 'active'
+                 OR (a.state = 'receiving' AND a.receive_until > now()))
+            AND u.is_active",
     )
     .bind(address)
     .fetch_optional(&state.pool)

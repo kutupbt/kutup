@@ -1268,7 +1268,7 @@ pub async fn get_user_by_address(
             Some(username) => sqlx::query_as(
                 "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
                         account_authority_public_key, drive_key_binding
-                 FROM users WHERE username = $1 AND is_active = true",
+                 FROM users WHERE id = kutup_current_user($1) AND is_active = true",
             )
             .bind(&username)
             .fetch_optional(&state.pool)

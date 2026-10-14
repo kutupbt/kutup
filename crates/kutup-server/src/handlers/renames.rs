@@ -114,6 +114,12 @@ pub struct RenameRequest {
     rename: AccountRenameV1,
     /// The Drive key binding re-signed for the new address (canonical base64).
     drive_key_binding: String,
+    /// The new address's first key and key list (as `POST
+    /// /api/mail/addresses/{id}/keys` takes them), so mail to it is never
+    /// deferred. None only when taking back a held name whose address still
+    /// has its keys.
+    #[serde(default)]
+    mail_address: Option<crate::handlers::mail_keys::AddMailKeyRequest>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -128,6 +134,11 @@ pub struct RenameView {
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
     old_name_free_at: time::OffsetDateTime,
+}
+
+fn rename_conflict() -> AppError {
+    AppError::conflict("the account's names moved: read them again and sign anew")
+        .with_details(json!({ "code": "renameConflict" }))
 }
 
 fn rename_invalid(why: &str) -> AppError {
@@ -311,15 +322,19 @@ pub async fn rename(
     .await?;
     match found {
         Available::TakeBack => {
-            sqlx::query(
+            let taken = sqlx::query(
                 "UPDATE account_names SET state = 'current', receive_until = NULL, free_at = NULL,
                         name = $2
-                  WHERE folded = kutup_fold($2) AND user_id = $1",
+                  WHERE folded = kutup_fold($2) AND user_id = $1 AND state = 'held'",
             )
             .bind(user_id)
             .bind(&new_name)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
+            if taken != 1 {
+                return Err(rename_conflict());
+            }
         }
         Available::Free => {
             account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation)).await?
@@ -364,7 +379,7 @@ pub async fn rename(
     .execute(&mut *tx)
     .await?;
     let reused: u64 = sqlx::query(
-        "UPDATE mail_addresses SET state = 'active', receive_until = NULL
+        "UPDATE mail_addresses SET state = 'active', receive_until = NULL, address = $2 || '@' || $3
           WHERE user_id = $1 AND folded = kutup_fold($2) || '@' || $3 AND state <> 'freed'",
     )
     .bind(user_id)
@@ -379,6 +394,49 @@ pub async fn rename(
     {
         return Err(account_names::Unavailable::Taken.error());
     }
+    // Its key comes with the rename: a new address gets the one sent, a
+    // name taken back keeps its own.
+    let (address_id, keyed): (Uuid, bool) = sqlx::query_as(
+        "SELECT a.id, EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id)
+           FROM mail_addresses a WHERE a.user_id = $1 AND a.state = 'active'",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    match (keyed, &req.mail_address) {
+        (false, Some(first)) => {
+            crate::handlers::mail_keys::first_key(
+                &mut tx,
+                user_id,
+                address_id,
+                &statement.current,
+                first,
+            )
+            .await?
+        }
+        (true, None) => {}
+        (false, None) => return Err(rename_invalid("the new address needs its key")),
+        (true, Some(_)) => return Err(rename_invalid("the address has its keys already")),
+    }
+    // The display name and signature go with the account to its new
+    // address; the old one, receiving only, has no identity to send as.
+    sqlx::query(
+        "UPDATE mail_identities SET address_id = $2
+          WHERE address_id = (SELECT id FROM mail_addresses WHERE user_id = $1 AND state = 'receiving'
+                                ORDER BY receive_until DESC LIMIT 1)
+            AND NOT EXISTS (SELECT 1 FROM mail_identities WHERE address_id = $2)",
+    )
+    .bind(user_id)
+    .bind(address_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM mail_identities
+          WHERE address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1 AND state <> 'active')",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
     // Profile key shares this server holds about the account, by incarnation.
     sqlx::query(
         "UPDATE drive_profile_keys SET peer_account = $2
@@ -461,7 +519,7 @@ pub struct DropName {
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A name the account holds")),
     request_body = DropName,
-    responses((status = 204), (status = 409, description = "notHeld"))
+    responses((status = 204), (status = 409, description = "notHeld"), (status = 429, description = "dropTooSoon"))
 )]
 pub async fn drop_name(
     State(state): State<AppState>,
@@ -476,6 +534,26 @@ pub async fn drop_name(
         .execute(&mut *tx)
         .await?;
     grants::take_for_session(&mut *tx, &req.grant, Purpose::Rename, &user).await?;
+    // One drop per 30 days, as a rename: dropping is closing an address
+    // people may still write to, not something to repeat at will.
+    let last: Option<time::OffsetDateTime> = sqlx::query_scalar(
+        "SELECT max(at) FROM account_security_events
+          WHERE user_id = $1 AND kind = 'nameDropped' AND admin_user_id IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if let Some(next) = last.map(|at| at + time::Duration::days(RENAME_EVERY_DAYS)) {
+        if time::OffsetDateTime::now_utc() < next {
+            return Err(
+                AppError::too_many_requests("one dropped name per 30 days").with_details(json!({
+                    "code": "dropTooSoon",
+                    "retryAt": next.format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default(),
+                })),
+            );
+        }
+    }
     let dropped: Option<String> = sqlx::query_scalar(
         "UPDATE account_names SET receive_until = LEAST(COALESCE(receive_until, now()), now())
           WHERE user_id = $1 AND folded = kutup_fold($2) AND state = 'held'
@@ -609,7 +687,7 @@ async fn admin_name(
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
-    responses((status = 204), (status = 409, description = "notHeld"))
+    responses((status = 204), (status = 409, description = "notHeld"), (status = 429, description = "dropTooSoon"))
 )]
 pub async fn admin_close(
     State(state): State<AppState>,
@@ -627,7 +705,7 @@ pub async fn admin_close(
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("name" = String, Path, description = "A held name")),
-    responses((status = 204), (status = 409, description = "notHeld"))
+    responses((status = 204), (status = 409, description = "notHeld"), (status = 429, description = "dropTooSoon"))
 )]
 pub async fn admin_free(
     State(state): State<AppState>,

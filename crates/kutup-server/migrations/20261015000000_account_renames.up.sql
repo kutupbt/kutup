@@ -31,6 +31,14 @@ INSERT INTO account_names (folded, name, user_id, incarnation_id, state)
            NULLIF(account_incarnation_id, ''), 'current'
       FROM users WHERE username IS NOT NULL;
 
+-- The one resolver of a typed name: the account whose current name it is, in
+-- any spelling (null for a held, freed or unknown name). Every lookup of an
+-- account by name goes through it, never `users.username = …`.
+CREATE FUNCTION kutup_current_user(name text) RETURNS uuid
+    LANGUAGE sql STABLE STRICT PARALLEL SAFE
+    RETURN (SELECT user_id FROM account_names
+             WHERE folded = kutup_fold(name) AND state = 'current');
+
 -- The rename chain of each incarnation: AccountRenameV1 statements as signed.
 CREATE TABLE account_renames (
     incarnation_id       text NOT NULL CHECK (incarnation_id ~ '^[0-9a-f]{64}$'),

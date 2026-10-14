@@ -217,6 +217,10 @@ fn renames() -> RenameVectors {
         ("nobody@kutup.dev", Some(b64(&stranger))),
         // Erin, detached from david@, seen at a new address: renamed.
         ("erin@kutup.dev", Some(b64(&erin))),
+        // Another spelling of a pinned address is that pin (one account per
+        // folded name), and of a former one, that former address.
+        ("da-vid@kutup.dev", Some(b64(&dave))),
+        ("d.a.v.e@kutup.dev", Some(b64(&stranger))),
     ]
     .into_iter()
     .map(|(address, published)| LookupCase {

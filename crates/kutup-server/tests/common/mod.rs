@@ -254,6 +254,73 @@ pub fn sign_in(c: &Client, base: &str, name: &str, password: &str) -> Value {
 
 /// A one-time grant for `grant_for`, from re-proving `user`'s password in
 /// its session (`purpose: "reauth"`).
+/// What a rename answered, and the new address's key when one was sent.
+pub struct Renamed {
+    pub status: StatusCode,
+    pub body: Value,
+    pub key: Option<kutup_crypto::mail_key::FirstAddressKey>,
+}
+
+/// Renames `user` to `to` as the apps do: the signed statement, the Drive key
+/// binding for the new address and, unless `take_back` (a held name keeps
+/// its keys), the new address's first key.
+pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, take_back: bool) -> Renamed {
+    let me: Value = bearer(c.get(format!("{base}/api/user/me")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let address = me["address"].as_str().unwrap().to_owned();
+    let server = address.rsplit_once('@').unwrap().1.to_owned();
+    let sequence = me["renames"]["sequence"].as_u64().unwrap() + 1;
+    let current = format!("{to}@{server}");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let statement = kutup_crypto::account_rename::sign(
+        &user.identity,
+        sequence,
+        &address,
+        &current,
+        now.as_millis() as i64,
+    )
+    .unwrap();
+    let binding = kutup_crypto::drive_key_binding::sign(&user.identity, &current).unwrap();
+    let key = (!take_back).then(|| {
+        kutup_crypto::mail_key::first_address_key(
+            &user.identity,
+            &user.master_key,
+            &user.binding,
+            &current,
+            now.as_secs() as u32,
+            "2026-10-14T12:00:00Z",
+        )
+        .unwrap()
+    });
+    let mail_address = key.as_ref().map(|first| {
+        json!({
+            "publicKey": b64(&first.key.public_key),
+            "privateKeyEnvelope": b64(&first.private_key_envelope),
+            "keyList": {
+                "data": b64(&first.key_list.data),
+                "signature": b64(&first.key_list.signature),
+            },
+        })
+    });
+    let grant = reauth_grant(c, base, user, "rename");
+    let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
+        .json(&json!({ "grant": grant, "rename": statement,
+                       "driveKeyBinding": b64(&binding), "mailAddress": mail_address }))
+        .send()
+        .unwrap();
+    let status = r.status();
+    Renamed {
+        status,
+        body: r.json().unwrap_or(Value::Null),
+        key,
+    }
+}
+
 pub fn reauth_grant(c: &Client, base: &str, user: &User, grant_for: &str) -> String {
     let (status, body, _) = opaque_login(
         c,

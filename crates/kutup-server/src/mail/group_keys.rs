@@ -78,7 +78,7 @@ pub async fn check_shares(pool: &PgPool, shares: &[ShareInput]) -> AppResult<Vec
         let key: Option<(String, Vec<u8>)> = sqlx::query_as(
             "SELECT k.fingerprint, k.public_key FROM mail_addresses a
                JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-              WHERE a.user_id = $1",
+              WHERE a.user_id = $1 AND a.state = 'active'",
         )
         .bind(user_id)
         .fetch_optional(pool)

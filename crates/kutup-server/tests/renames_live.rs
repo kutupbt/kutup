@@ -8,8 +8,6 @@
 
 mod common;
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use common::*;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -36,27 +34,16 @@ fn get(c: &Client, base: &str, token: &str, path: &str) -> reqwest::blocking::Re
 
 /// Renames `user` to `to`: the server's answer (status, body).
 fn rename(c: &Client, base: &str, user: &User, to: &str) -> (StatusCode, Value) {
-    let me: Value = get(c, base, &user.token, "/api/user/me").json().unwrap();
-    let address = me["address"].as_str().unwrap().to_owned();
-    let server = address.rsplit_once('@').unwrap().1.to_owned();
-    let sequence = me["renames"]["sequence"].as_u64().unwrap() + 1;
-    let current = format!("{to}@{server}");
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let statement =
-        kutup_crypto::account_rename::sign(&user.identity, sequence, &address, &current, now)
-            .unwrap();
-    let binding = kutup_crypto::drive_key_binding::sign(&user.identity, &current).unwrap();
-    let grant = reauth_grant(c, base, user, "rename");
-    let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
-        .json(&json!({ "grant": grant, "rename": statement,
-                       "driveKeyBinding": STANDARD.encode(binding) }))
-        .send()
-        .unwrap();
-    let status = r.status();
-    (status, r.json().unwrap_or(Value::Null))
+    let check: Value = get(
+        c,
+        base,
+        &user.token,
+        &format!("/api/user/rename/check?name={to}"),
+    )
+    .json()
+    .unwrap();
+    let renamed = rename_account(c, base, user, to, check["takeBack"] == true);
+    (renamed.status, renamed.body)
 }
 
 /// A sign-in start for `name`: its answer, from `ip`.
@@ -302,4 +289,166 @@ fn a_deleted_accounts_name_is_held_until_freed() {
         gone.identity.incarnation_id()
     );
     purge_accounts(&c, &base, &[&taker]);
+}
+
+#[test]
+fn variant_spellings_find_the_current_account_as_stored() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let asker = register(&c, &base);
+    let mut user = register(&c, &base);
+    // A name with a separator, and its address's key (a rename gives one).
+    let stored = name("ada_l");
+    let renamed = rename_account(&c, &base, &user, &stored, false);
+    assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.body);
+    user.username = stored.clone();
+    let domain = server_domain(&c, &base);
+    let fingerprint = hex::encode(renamed.key.as_ref().unwrap().key.fingerprint);
+    for variant in [
+        stored.replace('_', "-"),
+        stored.replace('_', ""),
+        stored.replace('_', "."),
+    ] {
+        let at = format!("{variant}@{domain}");
+        // The address lookup: the account, named as stored.
+        let r = get(
+            &c,
+            &base,
+            &asker.token,
+            &format!("/api/users/by-address/{at}"),
+        );
+        assert_eq!(r.status(), StatusCode::OK, "{at}");
+        let found: Value = r.json().unwrap();
+        assert_eq!(found["userId"], json!(user.id), "{at}");
+        assert_eq!(
+            found["account"],
+            json!(format!("{stored}@{domain}")),
+            "{at}"
+        );
+        // Drive identities.
+        let identities: Value = bearer(
+            c.post(format!("{base}/api/users/drive-identities")),
+            &asker.token,
+        )
+        .json(&json!({ "accounts": [at] }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        assert_eq!(
+            identities[0]["account"],
+            json!(format!("{stored}@{domain}")),
+            "{at}"
+        );
+        // Mail: the account a group would enrol, and the address's keys.
+        let account: Value = get(
+            &c,
+            &base,
+            &asker.token,
+            &format!("/api/mail/accounts?address={at}"),
+        )
+        .json()
+        .unwrap();
+        assert_eq!(account["userId"], json!(user.id), "{at}: {account}");
+        let keys: Value = get(
+            &c,
+            &base,
+            &asker.token,
+            &format!("/api/mail/keys?email={at}"),
+        )
+        .json()
+        .unwrap();
+        assert_eq!(
+            keys["keys"][0]["fingerprint"],
+            json!(fingerprint),
+            "{at}: {keys}"
+        );
+    }
+    purge_accounts(&c, &base, &[&asker, &user]);
+}
+
+#[test]
+fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let token = admin_token(&c, &base, admin_password, admin_name);
+    let mut user = register(&c, &base);
+    let first = user.username.clone();
+    let domain = server_domain(&c, &base);
+    // x → y; x freed by an administrator; y → x again (the free undo), as a
+    // new address: its old row stays freed, the new one has the new key.
+    let away = name("away_");
+    let renamed = rename_account(&c, &base, &user, &away, false);
+    assert_eq!(renamed.status, StatusCode::OK, "{}", renamed.body);
+    let r = bearer(
+        c.post(format!("{base}/api/admin/names/{first}/free")),
+        &token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    let check: Value = get(
+        &c,
+        &base,
+        &user.token,
+        &format!("/api/user/rename/check?name={first}"),
+    )
+    .json()
+    .unwrap();
+    assert_eq!(check, json!({ "available": true, "takeBack": false }));
+    let back = rename_account(&c, &base, &user, &first, false);
+    assert_eq!(back.status, StatusCode::OK, "{}", back.body);
+    user.username = first.clone();
+    let keys: Value = get(
+        &c,
+        &base,
+        &user.token,
+        &format!("/api/mail/keys?email={first}@{domain}"),
+    )
+    .json()
+    .unwrap();
+    let listed: Vec<&str> = keys["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["fingerprint"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        listed,
+        vec![hex::encode(back.key.as_ref().unwrap().key.fingerprint)],
+        "only the new address's key: {keys}"
+    );
+    // The account's addresses: the current one first, then the old ones,
+    // whose keys open the mail they received (the freed first row among them).
+    let own: Value = get(&c, &base, &user.token, "/api/mail/addresses")
+        .json()
+        .unwrap();
+    let states: Vec<(&str, &str)> = own
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["address"].as_str().unwrap(), a["state"].as_str().unwrap()))
+        .collect();
+    let first_at = format!("{first}@{domain}");
+    let away_at = format!("{away}@{domain}");
+    assert_eq!(states[0], (first_at.as_str(), "active"), "{own}");
+    assert!(states.contains(&(away_at.as_str(), "receiving")), "{own}");
+    assert!(states.contains(&(first_at.as_str(), "freed")), "{own}");
+    purge_accounts(&c, &base, &[&user]);
+    // A new name without its key is refused.
+    let fresh = register(&c, &base);
+    let missing = rename_account(&c, &base, &fresh, &name("nokey_"), true);
+    assert_eq!(missing.status, StatusCode::BAD_REQUEST, "{}", missing.body);
+    assert_eq!(missing.body["code"], "renameInvalid");
+    purge_accounts(&c, &base, &[&fresh]);
 }

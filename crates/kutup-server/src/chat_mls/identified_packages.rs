@@ -85,7 +85,7 @@ pub(crate) async fn get_identified_key_packages(
                 FROM chat_mls_local_members m
                 JOIN users u ON u.id = m.user_id
                 WHERE m.conversation_id = $1 AND m.incarnation = $2
-                  AND u.username = $3 AND u.is_active = true
+                  AND u.id = kutup_current_user($3) AND u.is_active = true
                   AND m.removed_epoch IS NULL AND m.membership_status = 'active'
              )",
         )

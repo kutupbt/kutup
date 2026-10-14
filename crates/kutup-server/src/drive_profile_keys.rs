@@ -127,17 +127,18 @@ async fn local_user_by_id(pool: &PgPool, id: Uuid) -> AppResult<LocalUser> {
 }
 
 async fn local_user_by_name(pool: &PgPool, username: &str) -> AppResult<Option<LocalUser>> {
-    let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE username = $1 AND is_active = true",
+    // Any spelling finds the account; it goes by its name as stored.
+    let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, username, account_incarnation_id, drive_signing_public_key
+         FROM users WHERE id = kutup_current_user($1) AND is_active = true",
     )
     .bind(username)
     .fetch_optional(pool)
     .await?;
-    Ok(row.and_then(|(id, incarnation, signing)| {
+    Ok(row.and_then(|(id, username, incarnation, signing)| {
         signing.map(|signing_public_key| LocalUser {
             id,
-            username: username.to_owned(),
+            username,
             incarnation,
             signing_public_key,
         })

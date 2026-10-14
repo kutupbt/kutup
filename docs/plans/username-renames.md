@@ -508,22 +508,31 @@ publish endpoint, the announce and its outbox, `remote_account_renames`, and
 announce-driven updates of other servers' rows. Where R1 differs from the plan
 above:
 
-- **No mail keys in the rename request.** The rename makes the new address row
-  (`active`), as registration makes a new account's; the client uploads its
-  keys and key list through the existing mail key endpoint, the one path for
-  both. Mail to the new address waits for its keys as a new account's does.
-- **"Who" lookups match the exact current name.** Chat manifests, keys,
-  profiles, Drive identities and the address lookup answer only a current
-  username as stored (they echo it inside signed data, so a folded variant
-  must not come back under another spelling); any spelling of a held name
-  answers `409 renamed` with the chains, local and federated alike, never
-  keys. Folding applies where people type names: sign-in, availability and
-  mail delivery. Deliveries (Chat, MLS, media) reach held names through the
-  folded name, so nothing in flight is lost, and no path resolves a name to an
-  account other than the one the local path finds.
+- **Mail keys in the rename request, as planned** (after review): the new
+  address's first key and key list are stored in the rename's transaction, so
+  mail to it is never deferred. A name taken back keeps its own keys. The
+  display name and signature move to the new address.
+- **One resolver for every lookup by name:** `kutup_current_user(name)` (SQL)
+  finds the account whose current name it is, in any spelling; nothing
+  compares `users.username` directly (a server test greps for it). Lookups
+  answer with the name as stored, the spelling signed data holds; a remote
+  answer is accepted when its account folds to the name asked. Clients compare
+  addresses folded (`kutup_crypto::identity_pins` does, vectors included),
+  so `ada-l` finds the pin saved as `ada_l`. Any spelling of a held name
+  answers `409 renamed` with the chains, never keys. Deliveries (Chat, MLS,
+  media) reach held names, so nothing in flight is lost.
 - **Receive-only is enforced at the sender:** mail is sent only from the
-  account's `active` address; the old one has no way to send. Its
-  `mail_identities` row (a display name and signature) is kept.
+  account's `active` address (`403 addressReceiveOnly` should it have none);
+  an auto-reply to mail at an old address goes from the current one. Delivery
+  and key lookups check `receive_until` themselves, not only through the
+  hourly sweep. Every read of `mail_addresses` filters by state: group
+  members, administrators and group keys use the active address; a group or
+  account found by address is found folded.
+- **Taking a held name back** locks its row (the sweep or an administrator
+  freeing it meanwhile is a `409 renameConflict`) and restores the spelling
+  chosen now, on the name and on its address.
+- **Dropping a held name** is limited like a rename: one per 30 days
+  (`429 dropTooSoon`).
 - **The chain digest is stored** with each statement (`account_renames.digest`,
   from the verified chain), so `/user/me` answers the anchor without
   re-verifying.

@@ -201,10 +201,24 @@ async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (address_id, address, public_key) = row.ok_or_else(|| {
-        AppError::conflict("this account has no mail address key yet")
-            .with_details(json!({ "code": "noAddressKey" }))
-    })?;
+    let Some((address_id, address, public_key)) = row else {
+        // Old addresses receive only: an account with no current address to
+        // send from is refused as such, never sent from an old one.
+        let receive_only: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM mail_addresses WHERE user_id = $1 AND state = 'receiving')
+                AND NOT EXISTS (SELECT 1 FROM mail_addresses WHERE user_id = $1 AND state = 'active')",
+        )
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        return Err(if receive_only {
+            AppError::forbidden("an old address receives only")
+                .with_details(json!({ "code": "addressReceiveOnly" }))
+        } else {
+            AppError::conflict("this account has no mail address key yet")
+                .with_details(json!({ "code": "noAddressKey" }))
+        });
+    };
     let key_id = mail_key::encryption_key_id(&public_key)
         .map_err(|_| AppError::internal("stored address key does not parse"))?;
     Ok(Sender {

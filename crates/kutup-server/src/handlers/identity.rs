@@ -196,7 +196,8 @@ pub async fn drive_identities(
     let rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
         "SELECT username, account_authority_public_key, public_key, drive_signing_public_key, drive_key_binding
            FROM users
-          WHERE username = ANY($1) AND is_active AND NOT is_first_login",
+          WHERE id IN (SELECT kutup_current_user(name) FROM unnest($1::text[]) AS name)
+            AND is_active AND NOT is_first_login",
     )
     .bind(&usernames)
     .fetch_all(&state.pool)

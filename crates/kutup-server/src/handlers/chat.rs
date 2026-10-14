@@ -727,7 +727,7 @@ pub async fn get_user_manifest(
         "SELECT m.manifest
          FROM chat_device_manifests m
          JOIN users u ON u.id = m.user_id
-         WHERE u.username = $1 AND u.is_active = true",
+         WHERE u.id = kutup_current_user($1) AND u.is_active = true",
     )
     .bind(&address.username)
     .fetch_optional(&state.pool)
@@ -800,11 +800,12 @@ pub async fn get_manifest_history(
             crate::chat_federation::fetch_remote_manifest_history(&state, &address, &query).await?;
         return Ok(Json(page).into_response());
     }
-    let target_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&address.username)
-            .fetch_optional(&state.pool)
-            .await?;
+    let target_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
+    )
+    .bind(&address.username)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some(target_id) = target_id else {
         return Err(crate::account_names::renamed_or(
             &state.pool,
@@ -1112,7 +1113,7 @@ pub(crate) async fn load_public_profile(
                 p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
-         WHERE u.username = $1 AND u.is_active = true AND p.version = $2",
+         WHERE u.id = kutup_current_user($1) AND u.is_active = true AND p.version = $2",
     )
     .bind(username)
     .bind(version)
@@ -1587,11 +1588,12 @@ pub async fn get_user_bundles(
 
     if query.sync_device_id.is_some() {
         let caller_id = trusted_uuid(&auth.user_id)?;
-        let target_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-                .bind(&address.username)
-                .fetch_optional(&state.pool)
-                .await?;
+        let target_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
+        )
+        .bind(&address.username)
+        .fetch_optional(&state.pool)
+        .await?;
         if Some(caller_id) != target_id {
             return Err(AppError::forbidden(
                 "linked-device key fetch is limited to the caller's account",
@@ -1702,16 +1704,16 @@ pub(crate) async fn load_user_bundles(
     delivery_capability: Option<&[u8; 32]>,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let mut tx = state.pool.begin().await?;
-    let target: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT u.id, c.capability_hash
+    let target: Option<(Uuid, String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT u.id, u.username, c.capability_hash
          FROM users u
          LEFT JOIN chat_delivery_capabilities c ON c.user_id = u.id
-         WHERE u.username = $1 AND u.is_active = true",
+         WHERE u.id = kutup_current_user($1) AND u.is_active = true",
     )
     .bind(username)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((target_id, stored_capability)) = target else {
+    let Some((target_id, stored_name, stored_capability)) = target else {
         drop(tx);
         return Err(crate::account_names::renamed_or(
             &state.pool,
@@ -1736,6 +1738,12 @@ pub(crate) async fn load_user_bundles(
         consume_anonymous_rate(&mut tx, "capability_bundle", capability, 30, 60).await?;
     }
 
+    // Any spelling finds the account; the answer names it as stored.
+    let response_username = match response_username.rsplit_once('@') {
+        Some((_, server)) => format!("{stored_name}@{server}"),
+        None => stored_name,
+    };
+    let response_username = response_username.as_str();
     // Hold a stable account/device/manifest snapshot until the one-time keys
     // have been allocated. Writers take `FOR UPDATE` on this same row.
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")

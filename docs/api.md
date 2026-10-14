@@ -60,6 +60,8 @@ Specific codes, where an app does something particular (a test in
 | `renameConflict` | 409 | The rename chain moved (`sequence`): read `/user/me` and sign anew |
 | `tooManyHeldNames` | 409 | The account holds its most names (5): drop one first |
 | `renameTooSoon` | 429 | One rename per 30 days (`retryAt`); going back to the name just left within 7 days is free, once |
+| `dropTooSoon` | 429 | One dropped name per 30 days (`retryAt`) |
+| `addressReceiveOnly` | 403 | An account's old address receives only; mail is sent from its current one |
 | `notHeld` | 409 | Not a name the account (or, for an admin, anyone) holds |
 | `breakGlassAccount` | 403 | The break-glass account keeps its name |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
@@ -831,10 +833,14 @@ receiving nothing.
   "invalid" }` (30 per 15 minutes per account).
 - `POST /api/user/rename` → `{ "grant": "<a rename grant from a reauth>",
   "rename": <AccountRenameV1>, "driveKeyBinding": "<re-signed for the new
-  address>" }` → `200 { "username", "address", "sequence",
-  "oldAddressReceivesUntil", "oldNameFreeAt" }`. The new address's mail keys
-  come afterwards, through the mail key endpoint, as a new account's do.
-  Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
+  address>", "mailAddress": { "publicKey", "privateKeyEnvelope", "keyList" }
+  }` → `200 { "username", "address", "sequence", "oldAddressReceivesUntil",
+  "oldNameFreeAt" }`. `mailAddress` is the new address's first key and key
+  list (sequence 1, that key primary), as `POST /api/mail/addresses/{id}/keys`
+  takes them, stored in the rename's transaction so mail to the new address is
+  never deferred; it is left out only when taking back a held name whose
+  address still has its keys (either way wrong: `renameInvalid`). The display
+  name and signature move to the new address. Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
   `setupRequired`, `nameTaken`, `nameReserved`, `renameConflict`,
   `tooManyHeldNames`, `renameTooSoon`. One counted rename per 30 days; going
   back to the name just left within 7 days of that rename is free, once, and
@@ -842,7 +848,8 @@ receiving nothing.
 - `GET /api/user/names` → `[{ "name", "state": "current" | "held",
   "receiveUntil", "freeAt" }]`.
 - `DELETE /api/user/names/:name` (`{ "grant" }`, a rename grant) → `204`:
-  receiving there ends now; the name stays held until its date (`notHeld`).
+  receiving there ends now; the name stays held until its date (`notHeld`;
+  `dropTooSoon`: one drop per 30 days).
 - `GET /api/users/renames/:address[?incarnationId=]` → `{ "version": 1,
   "chains": [{ "incarnationId", "authorityPublicKey", "current", "state":
   "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`, newest
