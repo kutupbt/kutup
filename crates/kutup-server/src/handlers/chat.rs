@@ -117,6 +117,7 @@ type PublicProfileRow = (
     Option<String>,
     Option<String>,
     Vec<u8>,
+    String,
 );
 type OwnProfileRow = (
     i16,
@@ -1110,7 +1111,7 @@ pub(crate) async fn load_public_profile(
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
+                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier, u.username
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
          WHERE u.id = kutup_current_user($1) AND u.is_active = true AND p.version = $2",
@@ -1119,7 +1120,8 @@ pub(crate) async fn load_public_profile(
     .bind(version)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier)) = row
+    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier, stored)) =
+        row
     else {
         return Ok(None);
     };
@@ -1127,7 +1129,8 @@ pub(crate) async fn load_public_profile(
     if !constant_time_eq(&verifier, &presented) {
         return Ok(None);
     }
-    let account = local_chat_account(&state.config.chat_server_name, username);
+    // Any spelling finds the account; the answer names it as stored.
+    let account = local_chat_account(&state.config.chat_server_name, &stored);
     let suite = profile_suite_from_db(suite, "chat_profiles")?;
     let response = ChatProfileResponse {
         suite,

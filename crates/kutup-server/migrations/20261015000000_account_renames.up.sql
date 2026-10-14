@@ -34,10 +34,12 @@ INSERT INTO account_names (folded, name, user_id, incarnation_id, state)
 -- The one resolver of a typed name: the account whose current name it is, in
 -- any spelling (null for a held, freed or unknown name). Every lookup of an
 -- account by name goes through it, never `users.username = …`.
-CREATE FUNCTION kutup_current_user(name text) RETURNS uuid
+-- (The parameter is not called `name`: that is a column of account_names,
+-- and in the body a column wins over a parameter of the same name.)
+CREATE FUNCTION kutup_current_user(typed text) RETURNS uuid
     LANGUAGE sql STABLE STRICT PARALLEL SAFE
-    RETURN (SELECT user_id FROM account_names
-             WHERE folded = kutup_fold(name) AND state = 'current');
+    RETURN (SELECT n.user_id FROM account_names n
+             WHERE n.folded = kutup_fold(typed) AND n.state = 'current');
 
 -- The rename chain of each incarnation: AccountRenameV1 statements as signed.
 CREATE TABLE account_renames (
