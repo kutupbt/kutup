@@ -50,6 +50,11 @@ pub struct CheckView {
     /// One of the account's own held names: taking it back.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     take_back: bool,
+    /// Whether a rename to it sends the address's first key (`mailAddress`):
+    /// always for a new name; for one taken back, only when its address has
+    /// none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    needs_key: Option<bool>,
     /// Why not: `taken`, `held`, `reserved` or `invalid`.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
@@ -90,14 +95,29 @@ pub async fn check(
     )
     .await?
     {
-        Ok(found) => CheckView {
-            available: true,
-            take_back: found == Available::TakeBack,
-            reason: None,
-        },
+        Ok(found) => {
+            let keyed: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM mail_addresses a
+                                  JOIN mail_address_keys k ON k.address_id = a.id
+                                 WHERE a.user_id = $1 AND a.state <> 'freed'
+                                   AND a.folded = kutup_fold($2) || '@' || lower($3))",
+            )
+            .bind(user_id)
+            .bind(&query.name)
+            .bind(&state.config.chat_server_name)
+            .fetch_one(&mut *conn)
+            .await?;
+            CheckView {
+                available: true,
+                take_back: found == Available::TakeBack,
+                needs_key: Some(found == Available::Free || !keyed),
+                reason: None,
+            }
+        }
         Err(unavailable) => CheckView {
             available: false,
             take_back: false,
+            needs_key: None,
             reason: Some(unavailable.reason()),
         },
     };

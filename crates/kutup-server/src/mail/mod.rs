@@ -69,12 +69,27 @@ fn local_address(recipient: &str, server_name: &str) -> Option<String> {
         return None;
     }
     let local = local.split_once('+').map_or(local, |(base, _)| base);
-    kutup_crypto::mail_key::canonical_address(&format!(
-        "{}@{}",
-        local.to_ascii_lowercase(),
-        server_name.to_ascii_lowercase()
-    ))
-    .ok()
+    typed_address(&format!("{local}@{server_name}"))
+}
+
+/// An address as a person types one of this server's: lowercased, its local
+/// part any spelling of a name (`.`, `_` and `-` anywhere, which lookups
+/// fold away: one account or group per folded name), or `None`.
+pub(crate) fn typed_address(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    let (local, domain) = value.split_once('@')?;
+    let valid = !local.is_empty()
+        && local.len() <= 64
+        && local
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+        && !kutup_crypto::names::fold(local).is_empty()
+        && !domain.is_empty()
+        && !domain.contains('@')
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".-".contains(&b));
+    valid.then_some(value)
 }
 
 /// Role addresses (RFC 2142) no account may take. All but `mailer-daemon@`
@@ -680,6 +695,12 @@ mod tests {
             local_address("Alice+news@Kutup.Dev", "kutup.dev").as_deref(),
             Some("alice@kutup.dev")
         );
+        // Any spelling of a name: lookups fold it.
+        assert_eq!(
+            local_address("Ada.L@kutup.dev", "kutup.dev").as_deref(),
+            Some("ada.l@kutup.dev")
+        );
+        assert_eq!(local_address("...@kutup.dev", "kutup.dev"), None);
         assert_eq!(local_address("alice@kutup.dev.evil", "kutup.dev"), None);
         assert_eq!(local_address("alice@other.org", "kutup.dev"), None);
         assert_eq!(local_address("no-at-sign", "kutup.dev"), None);

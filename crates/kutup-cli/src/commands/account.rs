@@ -193,9 +193,9 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
             .context("sign the rename")?;
     let binding = kutup_crypto::drive_key_binding::sign(&identity, &current)
         .context("sign the Drive key binding")?;
-    // The new address's key comes with the rename; a name taken back keeps
-    // the keys it had.
-    let mail_address = if check["takeBack"] == true {
+    // The new address's key comes with the rename, unless the name is one
+    // taken back whose address kept its keys (the check says).
+    let mail_address = if check["needsKey"] == false {
         Value::Null
     } else {
         let issued_at = time::OffsetDateTime::now_utc()

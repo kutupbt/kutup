@@ -1239,9 +1239,8 @@ pub async fn resolve_account(
     _user: AuthUser,
     Query(query): Query<ResolveQuery>,
 ) -> AppResult<Json<MailAccountRef>> {
-    let address =
-        kutup_crypto::mail_key::canonical_address(query.address.trim().to_lowercase().as_str())
-            .map_err(|_| AppError::not_found("not found"))?;
+    let address = crate::mail::typed_address(&query.address)
+        .ok_or_else(|| AppError::not_found("not found"))?;
     sqlx::query_as(
         "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address
            FROM mail_addresses a

@@ -262,9 +262,9 @@ pub struct Renamed {
 }
 
 /// Renames `user` to `to` as the apps do: the signed statement, the Drive key
-/// binding for the new address and, unless `take_back` (a held name keeps
-/// its keys), the new address's first key.
-pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, take_back: bool) -> Renamed {
+/// binding for the new address and, unless `no_key` (a held name whose
+/// address kept its keys: the check's `needsKey` false), its first key.
+pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: bool) -> Renamed {
     let me: Value = bearer(c.get(format!("{base}/api/user/me")), &user.token)
         .send()
         .unwrap()
@@ -286,7 +286,7 @@ pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, take_back: 
     )
     .unwrap();
     let binding = kutup_crypto::drive_key_binding::sign(&user.identity, &current).unwrap();
-    let key = (!take_back).then(|| {
+    let key = (!no_key).then(|| {
         kutup_crypto::mail_key::first_address_key(
             &user.identity,
             &user.master_key,

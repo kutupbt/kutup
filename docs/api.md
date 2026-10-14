@@ -828,9 +828,11 @@ another incarnation, so pins warn). Both are in `GET /api/auth/settings`
 (`PUT /api/admin/settings`). A deleted account's names are held the same way,
 receiving nothing.
 
-- `GET /api/user/rename/check?name=` → `{ "available": true, "takeBack"? }`
-  or `{ "available": false, "reason": "taken" | "held" | "reserved" |
-  "invalid" }` (30 per 15 minutes per account).
+- `GET /api/user/rename/check?name=` → `{ "available": true, "takeBack"?,
+  "needsKey" }` or `{ "available": false, "reason": "taken" | "held" |
+  "reserved" | "invalid" }` (30 per 15 minutes per account). `needsKey`: the
+  rename sends the address's first key (`mailAddress`); false only for a held
+  name whose address kept its keys.
 - `POST /api/user/rename` → `{ "grant": "<a rename grant from a reauth>",
   "rename": <AccountRenameV1>, "driveKeyBinding": "<re-signed for the new
   address>", "mailAddress": { "publicKey", "privateKeyEnvelope", "keyList" }
@@ -838,8 +840,8 @@ receiving nothing.
   "oldNameFreeAt" }`. `mailAddress` is the new address's first key and key
   list (sequence 1, that key primary), as `POST /api/mail/addresses/{id}/keys`
   takes them, stored in the rename's transaction so mail to the new address is
-  never deferred; it is left out only when taking back a held name whose
-  address still has its keys (either way wrong: `renameInvalid`). The display
+  never deferred; sent exactly when the check says `needsKey` (otherwise
+  `renameInvalid`). The display
   name and signature move to the new address. Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
   `setupRequired`, `nameTaken`, `nameReserved`, `renameConflict`,
   `tooManyHeldNames`, `renameTooSoon`. One counted rename per 30 days; going

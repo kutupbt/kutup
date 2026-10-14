@@ -42,7 +42,7 @@ fn rename(c: &Client, base: &str, user: &User, to: &str) -> (StatusCode, Value) 
     )
     .json()
     .unwrap();
-    let renamed = rename_account(c, base, user, to, check["takeBack"] == true);
+    let renamed = rename_account(c, base, user, to, check["needsKey"] != true);
     (renamed.status, renamed.body)
 }
 
@@ -405,7 +405,7 @@ fn renaming_back_to_a_freed_name_gives_it_its_new_key() {
     )
     .json()
     .unwrap();
-    assert_eq!(check, json!({ "available": true, "takeBack": false }));
+    assert_eq!(check, json!({ "available": true, "needsKey": true }));
     let back = rename_account(&c, &base, &user, &first, false);
     assert_eq!(back.status, StatusCode::OK, "{}", back.body);
     user.username = first.clone();

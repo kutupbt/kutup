@@ -688,8 +688,8 @@ pub async fn lookup_keys(
     _user: AuthUser,
     Query(query): Query<KeyLookupQuery>,
 ) -> AppResult<Json<MailKeyLookup>> {
-    let address = mail_key::canonical_address(query.email.trim().to_lowercase().as_str())
-        .map_err(|_| AppError::not_found("not found"))?;
+    let address =
+        crate::mail::typed_address(&query.email).ok_or_else(|| AppError::not_found("not found"))?;
     if let Some(lookup) = lookup_address(&state, &address).await? {
         return Ok(Json(lookup));
     }
