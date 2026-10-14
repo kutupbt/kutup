@@ -202,6 +202,23 @@
       "wrongCurrentPassword": "Geçerli parolanız doğru değil.",
       "passwordChangeFailed": "Parola değiştirilemedi. Yeniden deneyin.",
       "passwordSignsOutOthers": "Hesabınıza giriş yapmış diğer tüm cihazların oturumu kapatılır. Bu cihaz oturumda kalır.",
+      "events": {
+        "title": "Güvenlik olayları",
+        "description": "Giriş yönteminizdeki değişiklikler, en yenisi önce. Tanımadığınız bir olay görürseniz parolanızı değiştirin ve Cihazlar ve oturumlar'a bakın.",
+        "none": "Hesabınız oluşturulduğundan beri hiçbir şey değişmedi.",
+        "failed": "Güvenlik olayları yüklenemedi.",
+        "older": "Daha eski olayları göster",
+        "byAdmin": "Bir yönetici tarafından",
+        "thisDevice": "Bu cihaz",
+        "kind": {
+          "passwordChange": "Parola değiştirildi",
+          "recovery": "Parola kurtarma ifadesiyle sıfırlandı",
+          "rotate": "Girişiniz yenilendi",
+          "adminReset": "Parola bir yönetici tarafından sıfırlandı",
+          "accountReset": "Hesap bir yönetici tarafından sıfırlandı",
+          "other": "Girişinizde bir değişiklik"
+        }
+      },
       "recovery": "Kurtarma ifadesi",
       "recoveryDescription": "Hesabınız oluşturulurken gösterilen 24 sözcük.",
       "recoveryNote": "Unutulan bir parolayı sıfırlamanın tek yolu kurtarma ifadenizdir. Kutup onu saklamaz ve yeniden gösteremez — kaydettiğiniz kopyayı güvenli ve çevrimdışı bir yerde tutun."

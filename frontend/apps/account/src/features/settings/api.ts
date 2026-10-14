@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@kutup/session/client'
 import { broadcastColor } from '@kutup/session/sessionSync'
 import { getSession, updateSession } from '@kutup/session/store'
@@ -185,4 +185,43 @@ function serverOfAddress(address: string): string {
   const at = address.lastIndexOf('@')
   if (at < 0 || at === address.length - 1) throw new Error('the account address has no server')
   return address.slice(at + 1)
+}
+
+// --- security events (the account's own sign-in history) ------------------
+
+/** What happened to the way the account signs in. Later kinds are shown generically. */
+export type SecurityEventKind = 'passwordChange' | 'recovery' | 'rotate' | 'adminReset' | 'accountReset' | (string & {})
+
+export interface SecurityEvent {
+  id: string
+  kind: SecurityEventKind
+  /** RFC 3339. */
+  at: string
+  /** Made by the session asking (this device). */
+  thisSession: boolean
+  /** Done by an administrator. */
+  byAdmin: boolean
+}
+
+interface SecurityEventsPage {
+  events: SecurityEvent[]
+  /** Older events; null when there are none. */
+  next: string | null
+}
+
+export const securityEventsKey = ['security-events'] as const
+
+/** The account's security events, newest first, a page at a time. */
+export function useSecurityEvents() {
+  return useInfiniteQuery({
+    queryKey: securityEventsKey,
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) =>
+      (
+        await api.get<SecurityEventsPage>('/user/security-events', {
+          params: { limit: 50, ...(pageParam ? { cursor: pageParam } : {}) },
+        })
+      ).data,
+    getNextPageParam: (last) => last.next ?? undefined,
+  })
 }

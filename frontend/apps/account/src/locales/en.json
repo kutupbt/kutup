@@ -202,6 +202,23 @@
       "wrongCurrentPassword": "Your current password is not right.",
       "passwordChangeFailed": "The password could not be changed. Try again.",
       "passwordSignsOutOthers": "Every other device signed in to your account is signed out. This one stays signed in.",
+      "events": {
+        "title": "Security events",
+        "description": "Changes to how you sign in, newest first. If you do not recognise one, change your password and check Devices & sessions.",
+        "none": "Nothing has changed since your account was made.",
+        "failed": "Security events could not be loaded.",
+        "older": "Show older events",
+        "byAdmin": "By an administrator",
+        "thisDevice": "This device",
+        "kind": {
+          "passwordChange": "Password changed",
+          "recovery": "Password reset with the recovery phrase",
+          "rotate": "Your sign-in was refreshed",
+          "adminReset": "Password reset by an administrator",
+          "accountReset": "Account reset by an administrator",
+          "other": "A change to your sign-in"
+        }
+      },
       "recovery": "Recovery phrase",
       "recoveryDescription": "The 24 words shown when your account was created.",
       "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline."
