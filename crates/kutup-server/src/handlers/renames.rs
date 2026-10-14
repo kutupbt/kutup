@@ -348,7 +348,9 @@ pub async fn rename(
     .bind(&statement.current)
     .bind(!undo)
     .bind(serde_json::to_value(statement).expect("serialisable"))
-    .bind(hex::encode(view.digests.last().expect("a verified chain has one")))
+    .bind(hex::encode(
+        view.digests.last().expect("a verified chain has one"),
+    ))
     .execute(&mut *tx)
     .await?;
     // The old address receives only, until its date; the new one is the

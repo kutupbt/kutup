@@ -85,16 +85,12 @@ pub(crate) fn set_password(
 }
 
 /// The account's password proved again for a one-time grant `for` one
-/// action (`passwordChange`, `totp`, …): a reauth of `client`'s session.
-pub(crate) fn reauth_grant(
-    client: &Client,
-    username: &str,
-    password: &str,
-    grant_for: &str,
-) -> Result<String> {
+/// action (`passwordChange`, `totp`, …): a reauth of `client`'s session, for
+/// the session's own account (no name: it cannot go stale across a rename).
+pub(crate) fn reauth_grant(client: &Client, password: &str, grant_for: &str) -> Result<String> {
     let (signing_in, request) = opaque::client_login_start(password).context("OPAQUE")?;
     let started = client
-        .login_start(username, &request, "reauth", Some(grant_for))
+        .login_start(None, &request, "reauth", Some(grant_for))
         .context("reauth")?;
     let signed_in = signing_in
         .finish(&started.response()?)
@@ -129,7 +125,7 @@ pub(crate) fn login_with_password(
     eprintln!("Deriving keys…");
     let (signing_in, request) = opaque::client_login_start(password).context("OPAQUE")?;
     let started = client
-        .login_start(name, &request, "session", None)
+        .login_start(Some(name), &request, "session", None)
         .context("login")?;
     let signed_in = signing_in
         .finish(&started.response()?)

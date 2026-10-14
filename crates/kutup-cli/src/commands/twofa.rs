@@ -64,7 +64,7 @@ fn enable(profile: &str, json: bool) -> Result<()> {
     if code.is_empty() {
         bail!("aborted (no code entered)");
     }
-    let grant = super::login::reauth_grant(&ctx.client, &ctx.session.username, &password, "totp")?;
+    let grant = super::login::reauth_grant(&ctx.client, &password, "totp")?;
     ctx.client.verify_totp(&code, &grant)?;
 
     if json {
@@ -85,7 +85,7 @@ fn disable(profile: &str, json: bool) -> Result<()> {
     if code.is_empty() {
         bail!("aborted (no code entered)");
     }
-    let grant = super::login::reauth_grant(&ctx.client, &ctx.session.username, &password, "totp")?;
+    let grant = super::login::reauth_grant(&ctx.client, &password, "totp")?;
     ctx.client.disable_totp(&code, &grant)?;
 
     if json {
