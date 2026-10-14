@@ -275,6 +275,20 @@ later anchor stays. Only a re-anchoring moves it back or sideways.
 - While blocked, reads fall back to the device's own revision guard, and
   listed writes stop.
 
+**Races are not attacks** (the #202 review):
+- A verified head is a value its holder owns: WASM's `VerifiedAccountHead`,
+  each with its own copy. A check elsewhere in the page cannot swap the head
+  a write is building on. A write keeps the head it verified with its index,
+  through edit, next head, send and commit, so its scope entry always matches
+  its base, or the server refuses it and it is redone on the newer head.
+- The chain is cut at the head being checked, so a head written since does
+  not make it a fork.
+- A rollback or fork is read once more before it blocks: another tab or
+  device moving on between two reads is not one. A banner people learn to
+  click away would protect nothing.
+- A create keeps one UID for the whole form or dialog. Trying again after an
+  answer that was lost finds the value made, and makes no second one.
+
 **Blocked** (rollback or fork) shows `HeadStateBanner` under every app's
 header. "Continue with the server's data" asks once more, then re-anchors and
 logs it. A server with no head at all, while the device remembers one, is a
