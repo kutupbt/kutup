@@ -3,6 +3,7 @@
 //! Commands are ported incrementally; only fully-wired commands are exposed
 //! (no stubs). See `docs/roadmap.md` / the rewrite branch for what remains.
 
+mod account_head;
 mod api;
 mod collab_device;
 mod collection_crypto;
@@ -219,6 +220,12 @@ enum Commands {
         #[command(subcommand)]
         command: commands::devices::DevicesCmd,
     },
+    /// This device's view of the account's history: its state, and going on
+    /// with the server's data after a rollback or a fork (exit code 6).
+    Account {
+        #[command(subcommand)]
+        command: commands::account::AccountCmd,
+    },
     /// Who the people you share with are: trusted identities, safety numbers.
     Identity {
         #[command(subcommand)]
@@ -340,6 +347,7 @@ fn main() {
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Sessions { command } => commands::sessions::run(&cli.profile, cli.json, command),
+        Commands::Account { command } => commands::account::run(&cli.profile, cli.json, command),
         Commands::Identity { command } => commands::identity::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),
@@ -367,8 +375,12 @@ fn main() {
 
 /// Maps an error chain to a process exit code: 0 ok · 1 generic · 2 usage
 /// (matches clap's parse-error code) · 3 auth/session · 4 not found ·
-/// 5 network/server. Downcasting sees through `.context()` layers.
+/// 5 network/server · 6 the account's history was rolled back or forked
+/// (`kutup account reanchor`). Downcasting sees through `.context()` layers.
 fn exit_code_for(err: &anyhow::Error) -> i32 {
+    if err.downcast_ref::<errors::HeadBlocked>().is_some() {
+        return 6;
+    }
     if err.downcast_ref::<errors::UsageError>().is_some() {
         return 2;
     }
@@ -442,6 +454,12 @@ mod tests {
             .context("outermost");
             assert_eq!(exit_code_for(&e), want, "status {status}");
         }
+    }
+
+    #[test]
+    fn exit_codes_mark_a_blocked_account_head() {
+        let e = anyhow::Error::new(errors::HeadBlocked("fork".into())).context("pinning");
+        assert_eq!(exit_code_for(&e), 6);
     }
 
     #[test]

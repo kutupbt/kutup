@@ -144,7 +144,7 @@ mod unix {
                 .with_context(|| format!("{} is not a folder", root.display()))?;
             let (store, server) = match crate::context::require_session(profile) {
                 Ok(ctx) => {
-                    keys.sign_in(&ctx.session)?;
+                    keys.sign_in(&ctx.session, profile)?;
                     let server =
                         Some((ctx.session.server.clone(), ctx.session.access_token.clone()));
                     (ctx.store, server)
@@ -246,7 +246,7 @@ mod unix {
         /// agent outlives its access token).
         fn sign_in_again(&mut self, profile: &str, keys: &mut VaultKeys) {
             if let Ok(ctx) = crate::context::require_session(profile) {
-                if keys.sign_in(&ctx.session).is_ok() {
+                if keys.sign_in(&ctx.session, profile).is_ok() {
                     self.server =
                         Some((ctx.session.server.clone(), ctx.session.access_token.clone()));
                 }

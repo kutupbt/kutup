@@ -395,5 +395,35 @@
     "description": "Geri döneceği yerde bu adda bir öğe var. “{{name}}” adıyla geri yükleyin ya da çöp kutusunda bırakın.",
     "restore": "“{{name}}” olarak geri yükle",
     "leave": "Çöp kutusunda bırak"
+  },
+  "accountHead": {
+    "blockedTitle": "Bu uygulamadaki verilerinizle sunucudakiler uyuşmuyor",
+    "blockedBody": "Başka bir cihaza farklı bir geçmiş gösterilmiş olabilir ya da sunucunuz bir yedekten geri yüklendiği için son değişiklikler kaybolmuş olabilir. Siz karar verene kadar kişiler, etiketler, kayıtlı anahtarlar ve kasa parolalarındaki değişiklikler burada duraklatıldı.",
+    "continue": "Sunucudaki verilerle devam et",
+    "confirmTitle": "Sunucudaki verilerle devam edilsin mi?",
+    "confirmBody": "Bu uygulama bundan sonra sunucunun gösterdiğini izleyecek. Ardından kişilerinizi, etiketlerinizi ve kayıtlı anahtarlarınızı gözden geçirin: başka yerde yapılan değişiklikler eksik olabilir.",
+    "rollbackDetail": "Sunucu, bu uygulamanın daha önce gördüğünden eski bir durum gösteriyor.",
+    "forkDetail": "Sunucu, bu uygulamanın gördüğü değişiklikleri içermeyen bir geçmiş gösteriyor.",
+    "continueFailed": "Devam edilemedi. Bağlantınızı denetleyip yeniden deneyin.",
+    "tooOld": "Bu uygulama uzun süredir kullanılmamıştı; artık sunucudaki güncel verileri izliyor.",
+    "dismiss": "Kapat",
+    "dataState": "Veri durumu",
+    "dataStateDescription": "Kişiler, etiketler, kayıtlı anahtarlar ve kasa parolalarındaki her değişiklikte artan bir sayı. Sunucudan şüphelenirseniz cihazlarınız arasında karşılaştırın.",
+    "dataStateNone": "Henüz değişiklik yok.",
+    "dataStateLine": "#{{sequence}}",
+    "lastByThisApp": "En son burada değiştirildi",
+    "lastByAnother": "En son başka bir cihazda ya da uygulamada değiştirildi",
+    "since": "Burada görüldü: {{when}}",
+    "history": "Bu uygulamanın geçmişi",
+    "historyEmpty": "Gösterilecek bir şey yok.",
+    "startedFresh": "#{{sequence}} izlenmeye başlandı",
+    "startedFreshUnreadable": "Bu cihazın kaydı okunamadı; #{{sequence}} izlenmeye başlandı",
+    "reanchoredRollback": "Sunucudaki eski verilerle devam edildi (#{{from}} → #{{to}})",
+    "reanchoredFork": "Sunucudaki diğer geçmişle devam edildi (#{{from}} → #{{to}})",
+    "reanchoredTooOld": "Uzun bir aradan sonra güncellendi (#{{from}} → #{{to}})",
+    "forgotten": "Sunucu geçmişini yitirdikten sonra devam edildi (önceki #{{from}})"
+  },
+  "mailPlaces": {
+    "unnamedFolder": "Adsız klasör"
   }
 }

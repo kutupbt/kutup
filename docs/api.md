@@ -989,7 +989,7 @@ index against this head, not one fetched separately):
 `{ "head": "<base64>" | null, "values": [["<id>", <revision>], …], "basis":
 "<hex>" | null }`, sorted by id; `basis` (before the first head only) is what a
 chain start names. **Auth:** Bearer JWT. Scopes and their ids:
-- `contacts`: the contact id;
+- `contacts`: the contact's UID (chosen by the client, unique per account, never changed: an update naming another UID is `400`), so a head can be made before a create or an import;
 - `mailNames`: `folder:<id>`, `label:<id>`, `filter:<id>`, with the revision in
   the sealed name's header (a folder without a name, kept through an account
   reset, is left out until it is named again);

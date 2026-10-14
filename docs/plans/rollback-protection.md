@@ -1,9 +1,11 @@
 # Rollback protection across devices
 
 Status: agreed 2026-10-13, before the wipe release, after OPAQUE, renames and
-devices. The crypto layer (`kutup_crypto::account_head`, its WASM functions
-and vectors) is built. The server's head table and endpoints, and the
-clients' use of the head, follow.
+devices.
+- Built: the crypto layer (`kutup_crypto::account_head`, its WASM functions and
+  vectors), the server (head table, endpoints, every listed write carrying the
+  next head), and the web clients for pins and Pass secrets (section 9).
+- Next: contacts and mail names on the web, then Chat core and the CLI.
 
 ## What exists, and what it misses
 
@@ -206,7 +208,7 @@ Every write of a listed value also writes the next head, in the same request:
   two reads never looks like a rollback. An unknown scope is `404`, which the
   client treats as `Uncovered`. All three are limited per account (300 a
   minute).
-- **Value ids per scope:** a contact's id; `folder:`, `label:` or `filter:`
+- **Value ids per scope:** a contact's UID (client-chosen, unique per account, never changed); `folder:`, `label:` or `filter:`
   and the id for mail names; `pins`; a Pass secret's vault file id.
 
 **Audit: every write to a listed value, and its head.**
@@ -234,6 +236,108 @@ few; two starts at once, one wins; a wipe, then a start, a write and a read),
 and `account_heads::tests` against a database: 1,005 heads, 1,001 kept; the
 client's own `check` says `extends` at a gap of exactly `RETENTION` over the
 paged segment, and `tooOld` at `RETENTION` + 1 where the server answers 410.
+
+### 9. The clients (settled 2026-10-14)
+
+**One device = one web origin.** Each app has its own IndexedDB, so each app
+keeps its own anchor, writer tag and fork state. Chat core keeps one in its
+store, and the CLI one per profile. Drive and Mail in one browser are two
+writers, linked through the chain like any two devices.
+
+**What a device keeps** is one sealed record, `LocalHeadStateV1`, the same
+format for every client:
+- its anchor, a random device id (hashed into its writer tag), and when the
+  anchor last moved;
+- a log of the last 20 events: started fresh, re-anchored, forgotten.
+
+It is sealed under the head key, bound to the key binding and the
+incarnation, and stored under an HMAC name of the incarnation. Two accounts in
+one store, or one account before and after a reset, never share or compare
+anchors. A record that does not open means the device starts fresh, which is
+logged. The anchor moves only forward from a verified head. Another tab's
+later anchor stays. Only a re-anchoring moves it back or sideways.
+
+**One code path on the web**, `@kutup/session/accountHead`:
+- `verifiedHead`: the head, its chain from the anchor (every page of it),
+  then the check.
+- `verifiedIndex(scope)`: one snapshot of the index and its head, checked. A
+  scope the server keeps no index of (404) is uncovered.
+  - Once covered, a value must open at exactly the revision the index lists.
+  - A listing must be exactly the index's ids. Two reads that a write lands
+    between are read again once.
+- `listedWrite(scope, edit)`:
+  - the edit is made on the verified index and sent with the next head;
+  - the chain starts first on the index's `basis` when there is none;
+  - it is redone up to five times when another device wrote first;
+  - an edit with nothing to change sends nothing;
+  - a write whose answer was lost is found in the index at its own revision
+    and is never committed twice.
+- While blocked, reads fall back to the device's own revision guard, and
+  listed writes stop.
+
+**Races are not attacks** (the #202 review):
+- A verified head is a value its holder owns: WASM's `VerifiedAccountHead`,
+  each with its own copy. A check elsewhere in the page cannot swap the head
+  a write is building on. A write keeps the head it verified with its index,
+  through edit, next head, send and commit, so its scope entry always matches
+  its base, or the server refuses it and it is redone on the newer head.
+- The chain is cut at the head being checked, so a head written since does
+  not make it a fork.
+- A rollback or fork is read once more before it blocks: another tab or
+  device moving on between two reads is not one. A banner people learn to
+  click away would protect nothing.
+- A create keeps one UID for the whole form or dialog. Trying again after an
+  answer that was lost finds the value made, and makes no second one.
+
+**Blocked** (rollback or fork) shows `HeadStateBanner` under every app's
+header. "Continue with the server's data" asks once more, then re-anchors and
+logs it. A server with no head at all, while the device remembers one, is a
+rollback too: continuing drops the anchor, and that is logged as forgotten.
+Too old re-anchors with a quiet notice. Account → Security shows "Data state":
+the sequence this app verified, whether this app wrote it, when it was seen
+here (the head holds no time), and the app's log.
+
+**Chat** keeps the synced identity pins as a listed value through the web
+client, not a second anchor of its own:
+- Chat core passes the revision it sealed with each write. The web Chat
+  transport sends the write through `listedWrite('pins', …)`.
+- On reads, the transport checks the revision the server names against the
+  verified index, and Chat core checks the sealed revision against that one.
+- A list the head does not vouch for, or an app blocked on another history,
+  is not used. Chat keeps to its own pins, and the shell's banner says why.
+
+The native transport (`kutup-client-ffi`) writes no head yet. On an account
+with one, the server refuses its pin writes, which Chat takes as best effort.
+It gets the same checks, in Rust, before a native app ships (docs/roadmap.md).
+
+**The CLI** keeps the same `LocalHeadStateV1`, sealed, in the profile's data
+directory (`account-head-<name>`), and a sealed revision guard
+(`revisions.json`):
+- The guard replaces the plaintext `identity-pins-revision`, and takes over
+  its value once.
+- Pins (`kutup identity`) and Pass vault secrets (`kutup pass keep`,
+  `forget`, `ls`, `show-key`, and the keys sync and the ssh agent use) go
+  through one `listed_write`.
+- A rollback or fork stops listed writes with exit code 6.
+- `kutup account state` shows where the device stands, and `kutup account
+  reanchor` continues with the server's data after a confirmation (`--yes`
+  for scripts), logged in the device's state.
+- Too old re-anchors with a notice on stderr.
+- **The state on disk** (the #205 review):
+  - Every read and change of the state file and the guard is under the
+    profile's lock (`account-head.lock`), re-read inside it. The anchor never
+    moves back, except by a re-anchoring, which is checked against the anchor
+    it was decided on.
+  - Writes go to a temporary file of their own, are synced, renamed over the
+    file, and the directory is synced.
+  - A state that does not open is kept aside (`….corrupt-<ms>`), with a
+    warning. The fresh state records why it started over, and the first
+    anchor's log entry says so (`startedOver` in `kutup account state`).
+  - The old plaintext revision file goes only after the guard holds its value.
+
+**Writes to the local store** count only once IndexedDB commits them. A
+request's success comes first, and a page closed in between would lose an
+anchor or a re-anchoring.
 
 ## Is it needed before the wipe?
 

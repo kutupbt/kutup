@@ -31,10 +31,11 @@ impl Client {
         file_id: &str,
         envelope: &str,
         base_revision: u64,
+        head: &str,
     ) -> Result<bool> {
         let resp = self
             .request(Method::PUT, &format!("/pass/vault-secrets/{file_id}"))
-            .json(&serde_json::json!({ "envelope": envelope, "baseRevision": base_revision }))
+            .json(&serde_json::json!({ "envelope": envelope, "baseRevision": base_revision, "head": head }))
             .send()?;
         if resp.status().as_u16() == 409 {
             return Ok(false);
@@ -43,11 +44,17 @@ impl Client {
         Ok(true)
     }
 
-    /// Forgets the caller's secret for vault `file_id`.
-    pub fn delete_vault_secret(&self, file_id: &str) -> Result<()> {
+    /// Forgets the caller's secret for vault `file_id`, with the next account
+    /// head. `false`: another device wrote first.
+    pub fn delete_vault_secret(&self, file_id: &str, head: &str) -> Result<bool> {
         let resp = self
             .request(Method::DELETE, &format!("/pass/vault-secrets/{file_id}"))
+            .json(&serde_json::json!({ "head": head }))
             .send()?;
-        super::check_ok(resp)
+        if resp.status().as_u16() == 409 {
+            return Ok(false);
+        }
+        super::check_ok(resp)?;
+        Ok(true)
     }
 }

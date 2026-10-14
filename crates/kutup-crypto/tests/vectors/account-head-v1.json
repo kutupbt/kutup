@@ -218,5 +218,43 @@
       "kind": "rollback"
     },
     "atMs": 1791000000000
-  }
+  },
+  "localName": "ca3cae3480ba424d7016545499d372a90d6de5ba2dfd0ff08261d5f08bc490c3",
+  "localState": {
+    "incarnationId": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "deviceId": "device-alpha",
+    "anchor": {
+      "sequence": 1,
+      "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+    },
+    "anchoredAtMs": 1791000000000,
+    "log": [
+      {
+        "kind": "startedFresh",
+        "anchor": {
+          "sequence": 1,
+          "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+        },
+        "atMs": 1790500000000
+      },
+      {
+        "kind": "reanchored",
+        "record": {
+          "from": {
+            "sequence": 3,
+            "digest": "96fead8726e59ca8707cb3808f00f470317284b01d3dd08ff9a4cfe6b29872f1"
+          },
+          "to": {
+            "sequence": 1,
+            "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+          },
+          "status": {
+            "kind": "rollback"
+          },
+          "atMs": 1791000000000
+        }
+      }
+    ]
+  },
+  "localSealed": "S1VUQUwxAAAAAUJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQtIcWcKDCDh4TcEjg/U1Tor0RMkwjTOsojCflUV3bfrJ/9pWAANKRu5W0siq2SZtLLssrGW/jzjonTloJSyY4lJT0aKL+COX32FMS+S7kip8UH2ttZzC7raLYLySWLmT6RkgHpL+PF7S0xxrwcE/eojav1ztDQpGjlAbXBTtJik2Klk93AJaCG/wJpaQXMpA5XP0RK7j8g36bY2Ea2uvxgFVk97gm7Wj0Lm5Zsavlmvbo29LEA863amziP+6AqAUdghzp7QcTmsGekYgGHmycJZnFWcbFvhvlcAgj/VCJS68Mdw4Wl+K9b8EbfGdZf3zal+CDG28yx5mJzFcv0HisSHv11Q23dCM8hyRLYRuNOH4mvV/yr/gQcK83uQjKo6jNY1HU7YJVDugS/zsgkeIJwlW/7nTS+SqdwwU+KG81E7TBZwGFazo0SGXGDjuqlPos/+jzRuL95kVQB+oWydLpBOLt1WKi34lG9Dy5+WG6OOxLbJo+RNePnBCAztmzvOtyzJvHrALFLFbfRxVl+aHhT3ttZ0EuJsHwL7Qgv6ab3wuKLo4rH8o4DFsFgXqPqpyLmjPaTMLWl/Ddzqq3VDRzDzJ91D5H17EJ1tVEigOJfsPKqtQvSL3yBvnUGIDhBC9RA5Mac4NjE/KkTiQ9E7wRo3Od+EI6Ptmi7RQtWU0E8wzMybTW4v+e4brJL/2RZ631NNoGYa4DZWGafpF8YJwKAMkJwXewu1an74l7mT7zAWR0Pa2DW8sHauFBFMQvMh+Ia9eN9IhZg+ymUAsG/h1XFTBT06xr8oHvUXZP/Q25V7brPOJU3WYELKnvtNg4dbrLQlcqoiWzyZKGsBlFy65Eu/DBsdEbtzm1lO8cAnL+bdA68/5a84aFnBLl+pnkfdgmToW3QADIDrrDlRPOzs="
 }

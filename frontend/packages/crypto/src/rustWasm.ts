@@ -584,16 +584,43 @@ export interface LiveLocationUpdate {
 let modulePromise: Promise<CryptoWasmModule> | null = null
 
 /** The account head's keys and verified head (Rust `kutup_crypto::account_head`); kept in WASM. */
+/** A verified account head (Rust `VerifiedHead`): each holder its own; free when done. */
+export interface VerifiedAccountHeadHandle {
+  anchor(): unknown
+  head(): unknown
+  copy(): VerifiedAccountHeadHandle
+  free(): void
+}
+
+export interface AccountHeadCheckedHandle {
+  status(): unknown
+  takeVerified(): VerifiedAccountHeadHandle | undefined
+  free(): void
+}
+
+export interface AccountHeadReanchoredHandle {
+  record(): unknown
+  takeVerified(): VerifiedAccountHeadHandle | undefined
+  free(): void
+}
+
 export interface AccountHeadKeysHandle {
   writer(deviceId: string): string
   scope(scope: string, indexJson: string): unknown
-  check(anchorJson: string | undefined, currentBase64: string, segmentJson: string | undefined): unknown
-  reanchor(anchorJson: string, currentBase64: string, segmentJson: string | undefined, confirmed: boolean, atMs: number): unknown
-  checkIndex(scope: string, indexJson: string): unknown
-  next(writer: string, scopesJson: string): string
+  check(anchorJson: string | undefined, currentBase64: string, segmentJson: string | undefined): AccountHeadCheckedHandle
+  reanchor(anchorJson: string, currentBase64: string, segmentJson: string | undefined, confirmed: boolean, atMs: number): AccountHeadReanchoredHandle
+  checkIndex(verified: VerifiedAccountHeadHandle, scope: string, indexJson: string): unknown
+  next(verified: VerifiedAccountHeadHandle, writer: string, scopesJson: string): string
   first(writer: string, scopesJson: string): string
-  committed(sealedBase64: string): unknown
-  verifiedHead(): unknown
+  committed(verified: VerifiedAccountHeadHandle, sealedBase64: string): VerifiedAccountHeadHandle
+  committedFirst(sealedBase64: string): VerifiedAccountHeadHandle
+  localStateName(): string
+  newLocalState(): unknown
+  openLocalState(sealedBase64: string): unknown
+  sealLocalState(stateJson: string): string
+  advanceLocalState(stateJson: string, verified: VerifiedAccountHeadHandle, atMs: number): unknown
+  reanchoredLocalState(stateJson: string, recordJson: string, verified: VerifiedAccountHeadHandle): unknown
+  forgottenLocalState(stateJson: string, atMs: number): unknown
   free(): void
 }
 

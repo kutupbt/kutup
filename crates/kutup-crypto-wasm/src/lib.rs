@@ -3517,22 +3517,109 @@ fn js_json<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct HeadCheckJs<'a> {
-    status: &'a kutup_crypto::account_head::HeadStatus,
-    /// What to remember now (a trusted head).
-    anchor: Option<&'a kutup_crypto::account_head::Anchor>,
+struct LocalAdvancedJs<'a> {
+    state: &'a kutup_crypto::account_head::LocalHeadStateV1,
+    changed: bool,
 }
 
-/// The account's head keys and the head this page has verified, for one
-/// account (master key, key binding, incarnation), made once per session. The
-/// keys never leave WASM; an index is checked, and a next head written, only
-/// against the head a check (or a re-anchoring) verified here.
+fn local_state_arg(
+    state_json: &str,
+    incarnation_id: &str,
+) -> Result<kutup_crypto::account_head::LocalHeadStateV1, JsValue> {
+    let state: kutup_crypto::account_head::LocalHeadStateV1 = serde_json::from_str(state_json)
+        .map_err(|_| js_error("account head: invalid local state"))?;
+    if state.incarnation_id != incarnation_id {
+        return Err(js_error(
+            "account head: the local state is another incarnation's",
+        ));
+    }
+    Ok(state)
+}
+
+/// A head a check (or a re-anchoring, or this page's own committed write)
+/// verified: the only kind an index is checked against, a next head written
+/// on top of, or an anchor taken from. Each holder has its own (`copy`), so
+/// a check elsewhere in the page cannot swap the one a write is using; free
+/// it when done.
+#[wasm_bindgen]
+pub struct VerifiedAccountHead {
+    inner: kutup_crypto::account_head::VerifiedHead,
+}
+
+#[wasm_bindgen]
+impl VerifiedAccountHead {
+    /// What to remember (`{ sequence, digest }`).
+    pub fn anchor(&self) -> Result<JsValue, JsValue> {
+        js_json(self.inner.anchor())
+    }
+
+    /// The head (JSON), for reading which scopes it covers and who wrote it.
+    pub fn head(&self) -> Result<JsValue, JsValue> {
+        js_json(self.inner.head())
+    }
+
+    /// Another handle to the same verified head, for another holder.
+    pub fn copy(&self) -> VerifiedAccountHead {
+        VerifiedAccountHead {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+/// What a check found: the status, and the verified head when trusted.
+#[wasm_bindgen]
+pub struct AccountHeadChecked {
+    status: kutup_crypto::account_head::HeadStatus,
+    verified: Option<kutup_crypto::account_head::VerifiedHead>,
+}
+
+#[wasm_bindgen]
+impl AccountHeadChecked {
+    /// `{ kind }`: fresh, current, extends (trusted), rollback, fork, tooOld.
+    pub fn status(&self) -> Result<JsValue, JsValue> {
+        js_json(&self.status)
+    }
+
+    /// The verified head, when trusted (once: the caller owns it).
+    #[wasm_bindgen(js_name = takeVerified)]
+    pub fn take_verified(&mut self) -> Option<VerifiedAccountHead> {
+        self.verified
+            .take()
+            .map(|inner| VerifiedAccountHead { inner })
+    }
+}
+
+/// A re-anchoring: the record to log, and the head now verified.
+#[wasm_bindgen]
+pub struct AccountHeadReanchored {
+    record: kutup_crypto::account_head::Reanchored,
+    verified: Option<kutup_crypto::account_head::VerifiedHead>,
+}
+
+#[wasm_bindgen]
+impl AccountHeadReanchored {
+    pub fn record(&self) -> Result<JsValue, JsValue> {
+        js_json(&self.record)
+    }
+
+    /// The verified head (once: the caller owns it).
+    #[wasm_bindgen(js_name = takeVerified)]
+    pub fn take_verified(&mut self) -> Option<VerifiedAccountHead> {
+        self.verified
+            .take()
+            .map(|inner| VerifiedAccountHead { inner })
+    }
+}
+
+/// The account's head keys, for one account (master key, key binding,
+/// incarnation), made once per session. The keys never leave WASM. Heads are
+/// verified into [`VerifiedAccountHead`]s the caller holds: an index is
+/// checked, and a next head written, only against one of those.
 #[wasm_bindgen]
 pub struct AccountHeadKeys {
     keys: kutup_crypto::account_head::HeadKeys,
     binding: String,
     incarnation_id: String,
-    verified: Option<kutup_crypto::account_head::VerifiedHead>,
 }
 
 #[wasm_bindgen]
@@ -3548,8 +3635,97 @@ impl AccountHeadKeys {
             keys: kutup_crypto::account_head::HeadKeys::derive(&master_key).map_err(head_err)?,
             binding: binding.to_owned(),
             incarnation_id: incarnation_id.to_owned(),
-            verified: None,
         })
+    }
+
+    /// The name this device stores its state under, for this account and
+    /// incarnation (hex).
+    #[wasm_bindgen(js_name = localStateName)]
+    pub fn local_state_name(&self) -> Result<String, JsValue> {
+        self.keys
+            .local_state_name(&self.incarnation_id)
+            .map_err(head_err)
+    }
+
+    /// A device's state before it has seen any head, with a new random device id.
+    #[wasm_bindgen(js_name = newLocalState)]
+    pub fn new_local_state(&self) -> Result<JsValue, JsValue> {
+        js_json(
+            &kutup_crypto::account_head::LocalHeadStateV1::new(&self.incarnation_id)
+                .map_err(head_err)?,
+        )
+    }
+
+    /// Opens this device's sealed state (canonical base64); throws when it
+    /// does not open (altered, another account's or incarnation's).
+    #[wasm_bindgen(js_name = openLocalState)]
+    pub fn open_local_state(&self, sealed_base64: &str) -> Result<JsValue, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "local head state")?;
+        js_json(
+            &kutup_crypto::account_head::open_local_state(
+                &self.keys,
+                &self.binding,
+                &self.incarnation_id,
+                &sealed,
+            )
+            .map_err(head_err)?,
+        )
+    }
+
+    /// Seals this device's state (JSON) for storing: canonical base64.
+    #[wasm_bindgen(js_name = sealLocalState)]
+    pub fn seal_local_state(&self, state_json: &str) -> Result<String, JsValue> {
+        let state = local_state_arg(state_json, &self.incarnation_id)?;
+        let sealed =
+            kutup_crypto::account_head::seal_local_state(&self.keys, &self.binding, &state)
+                .map_err(head_err)?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// Moves the state's anchor to `verified` (never back): `{ state, changed }`.
+    #[wasm_bindgen(js_name = advanceLocalState)]
+    pub fn advance_local_state(
+        &self,
+        state_json: &str,
+        verified: &VerifiedAccountHead,
+        at_ms: f64,
+    ) -> Result<JsValue, JsValue> {
+        let mut state = local_state_arg(state_json, &self.incarnation_id)?;
+        let changed = state.advance(&verified.inner, at_ms as u64);
+        js_json(&LocalAdvancedJs {
+            state: &state,
+            changed,
+        })
+    }
+
+    /// After `reanchor`: the state moves to its record's head (`verified`,
+    /// which the re-anchoring gave), and logs it.
+    #[wasm_bindgen(js_name = reanchoredLocalState)]
+    pub fn reanchored_local_state(
+        &self,
+        state_json: &str,
+        record_json: &str,
+        verified: &VerifiedAccountHead,
+    ) -> Result<JsValue, JsValue> {
+        let mut state = local_state_arg(state_json, &self.incarnation_id)?;
+        let record: kutup_crypto::account_head::Reanchored = serde_json::from_str(record_json)
+            .map_err(|_| js_error("account head: invalid re-anchoring record"))?;
+        if verified.inner.anchor() != &record.to {
+            return Err(js_error(
+                "account head: the record is not this re-anchoring's",
+            ));
+        }
+        state.reanchored(&record);
+        js_json(&state)
+    }
+
+    /// The server has no head at all and the person confirmed going on with
+    /// its data: the state's anchor is dropped, and logged.
+    #[wasm_bindgen(js_name = forgottenLocalState)]
+    pub fn forgotten_local_state(&self, state_json: &str, at_ms: f64) -> Result<JsValue, JsValue> {
+        let mut state = local_state_arg(state_json, &self.incarnation_id)?;
+        state.forgotten(at_ms as u64);
+        js_json(&state)
     }
 
     /// This device's writer tag in the heads it writes (hex).
@@ -3569,16 +3745,14 @@ impl AccountHeadKeys {
 
     /// Checks the current head against `anchor_json` (absent: nothing
     /// remembered), given the chain segment from the anchor to it (JSON list
-    /// of sealed heads; absent: the server did not show it):
-    /// `{ status: { kind }, anchor? }`. A trusted head (`fresh`, `current`,
-    /// `extends`) becomes this page's verified head, and `anchor` is what to
-    /// remember; the others leave none verified.
+    /// of sealed heads; absent: the server did not show it). A trusted head
+    /// (`fresh`, `current`, `extends`) comes with its verified head.
     pub fn check(
-        &mut self,
+        &self,
         anchor_json: Option<String>,
         current_base64: &str,
         segment_json: Option<String>,
-    ) -> Result<JsValue, JsValue> {
+    ) -> Result<AccountHeadChecked, JsValue> {
         let segment = segment_arg(segment_json)?;
         let checked = kutup_crypto::account_head::check(
             &self.keys,
@@ -3589,25 +3763,24 @@ impl AccountHeadKeys {
             segment.as_deref(),
         )
         .map_err(head_err)?;
-        self.verified = checked.verified;
-        js_json(&HeadCheckJs {
-            status: &checked.status,
-            anchor: self.verified.as_ref().map(|verified| verified.anchor()),
+        Ok(AccountHeadChecked {
+            status: checked.status,
+            verified: checked.verified,
         })
     }
 
     /// Re-anchors after a check did not trust the head: `tooOld` always,
     /// `rollback` and `fork` only when the person `confirmed` it. Runs the
-    /// check again itself. Returns the record to log; the head becomes this
-    /// page's verified one.
+    /// check again itself. Returns the record to log and the head now
+    /// verified.
     pub fn reanchor(
-        &mut self,
+        &self,
         anchor_json: &str,
         current_base64: &str,
         segment_json: Option<String>,
         confirmed: bool,
         at_ms: f64,
-    ) -> Result<JsValue, JsValue> {
+    ) -> Result<AccountHeadReanchored, JsValue> {
         let anchor = anchor_arg(Some(anchor_json.to_owned()))?.expect("given");
         let segment = segment_arg(segment_json)?;
         let (record, verified) = kutup_crypto::account_head::reanchor(
@@ -3621,22 +3794,25 @@ impl AccountHeadKeys {
             at_ms as u64,
         )
         .map_err(head_err)?;
-        self.verified = Some(verified);
-        js_json(&record)
+        Ok(AccountHeadReanchored {
+            record,
+            verified: Some(verified),
+        })
     }
 
-    /// Whether a scope's index (`[[id, revision], …]`) matches the verified
-    /// head: `"matches"`, or `"uncovered"` (the head does not cover the scope
-    /// yet); throws if it differs, or if no head is verified.
+    /// Whether a scope's index (`[[id, revision], …]`) matches `verified`:
+    /// `"matches"`, or `"uncovered"` (the head does not cover the scope yet);
+    /// throws if it differs.
     #[wasm_bindgen(js_name = checkIndex)]
-    pub fn check_index(&self, scope: &str, index_json: &str) -> Result<JsValue, JsValue> {
-        let verified = self
-            .verified
-            .as_ref()
-            .ok_or_else(|| js_error("account head: no verified head"))?;
+    pub fn check_index(
+        &self,
+        verified: &VerifiedAccountHead,
+        scope: &str,
+        index_json: &str,
+    ) -> Result<JsValue, JsValue> {
         let checked = kutup_crypto::account_head::check_index(
             &self.keys,
-            verified,
+            &verified.inner,
             scope,
             &index_arg(index_json)?,
         )
@@ -3644,25 +3820,25 @@ impl AccountHeadKeys {
         js_json(&checked)
     }
 
-    /// The next head, sealed, on top of the verified one (or the account's
-    /// first when none exists yet: `first`), written by `writer`, with the
-    /// scope entries in `scopes_json` replaced.
-    pub fn next(&self, writer: &str, scopes_json: &str) -> Result<String, JsValue> {
-        let verified = self
-            .verified
-            .as_ref()
-            .ok_or_else(|| js_error("account head: no verified head"))?;
+    /// The next head, sealed, on top of `verified`, written by `writer`, with
+    /// the scope entries in `scopes_json` replaced.
+    pub fn next(
+        &self,
+        verified: &VerifiedAccountHead,
+        writer: &str,
+        scopes_json: &str,
+    ) -> Result<String, JsValue> {
         let scopes = serde_json::from_str(scopes_json)
             .map_err(|_| js_error("account head: invalid scopes"))?;
-        let head = verified.next(writer, scopes).map_err(head_err)?;
+        let head = verified.inner.next(writer, scopes).map_err(head_err)?;
         kutup_crypto::account_head::seal(&self.keys, &self.binding, &head)
             .map(|sealed| STANDARD.encode(sealed))
             .map_err(head_err)
     }
 
-    /// The account's first head (the server has none), sealed; it becomes the
-    /// verified head once the server stores it (`committed`).
-    pub fn first(&mut self, writer: &str, scopes_json: &str) -> Result<String, JsValue> {
+    /// The account's first head (the server has none), sealed; verified once
+    /// the server stores it (`committedFirst`).
+    pub fn first(&self, writer: &str, scopes_json: &str) -> Result<String, JsValue> {
         let scopes = serde_json::from_str(scopes_json)
             .map_err(|_| js_error("account head: invalid scopes"))?;
         let (sealed, _) = kutup_crypto::account_head::first(
@@ -3676,43 +3852,40 @@ impl AccountHeadKeys {
         Ok(STANDARD.encode(sealed))
     }
 
-    /// After the server stored `sealed` (this page's next or first head): it
-    /// becomes the verified head; returns what to remember.
-    pub fn committed(&mut self, sealed_base64: &str) -> Result<JsValue, JsValue> {
+    /// After the server stored `sealed`, this page's next head on top of
+    /// `verified`: the newly verified head (it must directly follow).
+    pub fn committed(
+        &self,
+        verified: &VerifiedAccountHead,
+        sealed_base64: &str,
+    ) -> Result<VerifiedAccountHead, JsValue> {
         let sealed = sealed_head(sealed_base64)?;
-        let verified = match &self.verified {
-            Some(verified) => verified
-                .committed(&self.keys, &self.binding, &sealed)
-                .map_err(head_err)?,
-            None => {
-                let checked = kutup_crypto::account_head::check(
-                    &self.keys,
-                    &self.binding,
-                    &self.incarnation_id,
-                    None,
-                    &sealed,
-                    None,
-                )
-                .map_err(head_err)?;
-                let head = checked.verified.expect("a fresh head is verified");
-                if head.head().sequence != 1 {
-                    return Err(js_error("account head: not the account's first head"));
-                }
-                head
-            }
-        };
-        let anchor = js_json(verified.anchor())?;
-        self.verified = Some(verified);
-        Ok(anchor)
+        let inner = verified
+            .inner
+            .committed(&self.keys, &self.binding, &sealed)
+            .map_err(head_err)?;
+        Ok(VerifiedAccountHead { inner })
     }
 
-    /// The verified head (JSON), for reading which scopes it covers.
-    #[wasm_bindgen(js_name = verifiedHead)]
-    pub fn verified_head(&self) -> Result<JsValue, JsValue> {
-        match &self.verified {
-            Some(verified) => js_json(verified.head()),
-            None => Ok(JsValue::NULL),
+    /// After the server stored `sealed`, this page's first head of the
+    /// account: verified.
+    #[wasm_bindgen(js_name = committedFirst)]
+    pub fn committed_first(&self, sealed_base64: &str) -> Result<VerifiedAccountHead, JsValue> {
+        let sealed = sealed_head(sealed_base64)?;
+        let checked = kutup_crypto::account_head::check(
+            &self.keys,
+            &self.binding,
+            &self.incarnation_id,
+            None,
+            &sealed,
+            None,
+        )
+        .map_err(head_err)?;
+        let inner = checked.verified.expect("a fresh head is verified");
+        if inner.head().sequence != 1 {
+            return Err(js_error("account head: not the account's first head"));
         }
+        Ok(VerifiedAccountHead { inner })
     }
 }
 

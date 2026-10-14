@@ -379,7 +379,9 @@ fn every_kind_of_listed_write_takes_the_head() {
         ),
         required
     );
-    let made = chain.make("contacts", &[]); // the id is the server's: read it back
+    // The index lists contacts by their UID (client-chosen, unique per
+    // account, kept for good): a head is made before the write.
+    let made = chain.make("contacts", &[(&uid(1), 1)]);
     let r = bearer(c.post(format!("{base}/api/contacts")), &user.token)
         .json(&{
             let mut body = contact(&user, &uid(1), 1);
@@ -405,7 +407,21 @@ fn every_kind_of_listed_write_takes_the_head() {
         ),
         required
     );
-    let head = chain.keep(chain.make("contacts", &[(&id, 2)]));
+    // A contact keeps its UID: an update naming another is refused.
+    let mut renamed = contact(&user, &uid(9), 2);
+    renamed["baseRevision"] = json!(1);
+    let head = chain.make("contacts", &[(&uid(9), 2)]);
+    assert_eq!(
+        send(
+            Method::PUT,
+            &format!("/api/contacts/{id}"),
+            renamed,
+            Some(&b64(&head.1))
+        )
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let head = chain.keep(chain.make("contacts", &[(&uid(1), 2)]));
     ok(send(
         Method::PUT,
         &format!("/api/contacts/{id}"),
@@ -417,18 +433,26 @@ fn every_kind_of_listed_write_takes_the_head() {
         send(Method::POST, "/api/contacts/import", import.clone(), None),
         required
     );
-    let head = chain.keep(chain.make("contacts", &[(&id, 2)]));
+    let head = chain.keep(chain.make("contacts", &[(&uid(1), 2), (&uid(2), 1), (&uid(3), 1)]));
     ok(send(
         Method::POST,
         "/api/contacts/import",
         import,
         Some(&head),
     ));
-    let listed: Vec<String> = get(&c, &base, &user, "/api/account/index/contacts")["values"]
+    let indexed: Vec<String> = get(&c, &base, &user, "/api/account/index/contacts")["values"]
         .as_array()
         .unwrap()
         .iter()
         .map(|pair| pair[0].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(indexed, vec![uid(1), uid(2), uid(3)]);
+    // Deletes name the rows by their ids, as the contacts list gives them.
+    let listed: Vec<String> = get(&c, &base, &user, "/api/contacts")["contacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_str().unwrap().to_owned())
         .filter(|other| *other != id)
         .collect();
     assert_eq!(listed.len(), 2);
@@ -441,7 +465,7 @@ fn every_kind_of_listed_write_takes_the_head() {
         ),
         required
     );
-    let head = chain.keep(chain.make("contacts", &[]));
+    let head = chain.keep(chain.make("contacts", &[(&uid(2), 1), (&uid(3), 1)]));
     ok(send(
         Method::DELETE,
         &format!("/api/contacts/{id}"),

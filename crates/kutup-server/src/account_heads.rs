@@ -308,7 +308,7 @@ async fn values(
 ) -> AppResult<Vec<(String, i64)>> {
     let mut values: Vec<(String, i64)> = match scope {
         Scope::Contacts => {
-            sqlx::query_as("SELECT id::text, revision FROM contacts WHERE user_id = $1")
+            sqlx::query_as("SELECT uid, revision FROM contacts WHERE user_id = $1")
                 .bind(user_id)
                 .fetch_all(&mut *conn)
                 .await?

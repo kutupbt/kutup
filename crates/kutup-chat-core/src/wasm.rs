@@ -50,7 +50,7 @@ export interface KutupChatTransport {
   fetchSealedBundles(username: string, capability: string): Promise<unknown>;
   publishManifest(manifest: unknown): Promise<unknown>;
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>;
-  storeIdentityPins(write: { baseRevision: number; envelope: string }): Promise<boolean>;
+  storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
   fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;

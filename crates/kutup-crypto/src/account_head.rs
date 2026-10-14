@@ -38,7 +38,10 @@ const VALUE_ID_DOMAIN: &[u8] = b"kutup/account-head/value/v1\0";
 const WRITER_DOMAIN: &[u8] = b"kutup/account-head/writer/v1\0";
 const SCOPE_DOMAIN: &[u8] = b"kutup/account-head/scope/v1\0";
 const AAD_DOMAIN: &[u8] = b"kutup/account-head/sealed/v1\0";
+const LOCAL_NAME_DOMAIN: &[u8] = b"kutup/account-head/local-name/v1\0";
+const LOCAL_AAD_DOMAIN: &[u8] = b"kutup/account-head/local/v1\0";
 const MAGIC: &[u8; 8] = b"KUTAH1\0\0";
+const LOCAL_MAGIC: &[u8; 8] = b"KUTAL1\0\0";
 const SUITE: u16 = 1;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
@@ -96,6 +99,18 @@ impl HeadKeys {
             return Err(invalid("value id is invalid"));
         }
         Ok(self.mac(VALUE_ID_DOMAIN, &[scope.as_bytes(), id.as_bytes()]))
+    }
+
+    /// The name a device stores its [`LocalHeadStateV1`] under (hex): one per
+    /// account and incarnation, so two accounts in one store, or an account
+    /// before and after a reset, never share or compare anchors.
+    pub fn local_state_name(&self, incarnation_id: &str) -> Result<String> {
+        if !is_lower_hex_32(incarnation_id) {
+            return Err(invalid("incarnation id is invalid"));
+        }
+        Ok(hex::encode(
+            self.mac(LOCAL_NAME_DOMAIN, &[incarnation_id.as_bytes()]),
+        ))
     }
 
     /// Which device wrote a head, as the head says it (hex): stable for the
@@ -667,6 +682,263 @@ pub fn first(
     Ok((sealed, verified))
 }
 
+// --- What a device keeps --------------------------------------------------
+
+/// The most entries a device's local log keeps (the newest).
+pub const LOCAL_LOG_LEN: usize = 20;
+/// The largest sealed local state.
+pub const MAX_LOCAL_SEALED_BYTES: usize = 16 * 1024;
+
+/// Something a device notes about its anchor, newest last, so that trusting
+/// a head on first use, or moving to another history, is never silent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum LocalHeadEvent {
+    /// The device had no anchor (new, cleared, or its state did not open) and
+    /// trusted the head it read first. `reason` says why it had none when
+    /// that was not a first use: `unreadable` (its stored state did not open).
+    #[serde(rename_all = "camelCase")]
+    StartedFresh {
+        anchor: Anchor,
+        at_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// The device moved to another history ([`reanchor`]).
+    #[serde(rename_all = "camelCase")]
+    Reanchored { record: Reanchored },
+    /// The server showed no head at all though the device remembered one (a
+    /// restore from before the first head), and the person chose to go on
+    /// with the server's data: the anchor was dropped.
+    #[serde(rename_all = "camelCase")]
+    Forgotten { from: Anchor, at_ms: u64 },
+}
+
+/// What one device keeps for one account incarnation: its anchor (the
+/// highest verified head it has seen, its own writes included), its writer
+/// id, and its log. Every client (web origin, Chat store, CLI profile) keeps
+/// one, sealed ([`seal_local_state`]) under the name
+/// [`HeadKeys::local_state_name`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalHeadStateV1 {
+    pub incarnation_id: String,
+    /// Random, this device's: [`HeadKeys::writer`] hashes it into heads.
+    pub device_id: String,
+    pub anchor: Option<Anchor>,
+    /// When the anchor last changed, in Unix milliseconds (0: never).
+    pub anchored_at_ms: u64,
+    pub log: Vec<LocalHeadEvent>,
+    /// Why this state started over before its first anchor (`unreadable`):
+    /// kept until the anchor it starts from is logged with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_over: Option<String>,
+}
+
+impl LocalHeadStateV1 {
+    /// A device's state before it has seen any head, with a new random device id.
+    pub fn new(incarnation_id: &str) -> Result<Self> {
+        let mut device = [0u8; 16];
+        copy_randombytes(&mut device);
+        Self::with_device(incarnation_id, &hex::encode(device))
+    }
+
+    /// [`Self::new`] with a given device id (vectors; a device moving its id).
+    pub fn with_device(incarnation_id: &str, device_id: &str) -> Result<Self> {
+        let state = Self {
+            incarnation_id: incarnation_id.to_owned(),
+            device_id: device_id.to_owned(),
+            anchor: None,
+            anchored_at_ms: 0,
+            log: Vec::new(),
+            started_over: None,
+        };
+        state.validate()?;
+        Ok(state)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !is_lower_hex_32(&self.incarnation_id) {
+            return Err(invalid("incarnation id is invalid"));
+        }
+        if self.device_id.is_empty() || self.device_id.len() > 256 {
+            return Err(invalid("device id is invalid"));
+        }
+        if self.log.len() > LOCAL_LOG_LEN {
+            return Err(invalid("the local log is too long"));
+        }
+        Ok(())
+    }
+
+    fn note(&mut self, event: LocalHeadEvent) {
+        self.log.push(event);
+        if self.log.len() > LOCAL_LOG_LEN {
+            let extra = self.log.len() - LOCAL_LOG_LEN;
+            self.log.drain(..extra);
+        }
+    }
+
+    /// A head this device verified ([`check`] or [`VerifiedHead::committed`]):
+    /// the anchor moves to it, never back (another tab may have stored a later
+    /// one meanwhile; that one stays). The first anchor is logged as started
+    /// fresh. Returns whether anything changed.
+    pub fn advance(&mut self, verified: &VerifiedHead, at_ms: u64) -> bool {
+        let anchor = verified.anchor();
+        match &self.anchor {
+            Some(known) if known.sequence >= anchor.sequence => false,
+            Some(_) => {
+                self.anchor = Some(anchor.clone());
+                self.anchored_at_ms = at_ms;
+                true
+            }
+            None => {
+                self.anchor = Some(anchor.clone());
+                self.anchored_at_ms = at_ms;
+                let reason = self.started_over.take();
+                self.note(LocalHeadEvent::StartedFresh {
+                    anchor: anchor.clone(),
+                    at_ms,
+                    reason,
+                });
+                true
+            }
+        }
+    }
+
+    /// The server has no head at all, this device remembered one, and the
+    /// person confirmed going on with the server's data: the anchor is
+    /// dropped and logged, and the next head is trusted on first use. Returns
+    /// whether there was an anchor to drop.
+    pub fn forgotten(&mut self, at_ms: u64) -> bool {
+        let Some(from) = self.anchor.take() else {
+            return false;
+        };
+        self.anchored_at_ms = at_ms;
+        self.note(LocalHeadEvent::Forgotten { from, at_ms });
+        true
+    }
+
+    /// A fresh state that replaces one which did not open (`reason`, e.g.
+    /// `unreadable`): the anchor it then starts from is logged with why.
+    pub fn starting_over(mut self, reason: &str) -> Self {
+        self.started_over = Some(reason.to_owned());
+        self
+    }
+
+    /// After [`reanchor`]: the anchor moves to the new head, back or sideways
+    /// as the person (or the window) decided, and the record is logged.
+    pub fn reanchored(&mut self, record: &Reanchored) {
+        self.anchor = Some(record.to.clone());
+        self.anchored_at_ms = record.at_ms;
+        self.note(LocalHeadEvent::Reanchored {
+            record: record.clone(),
+        });
+    }
+}
+
+fn local_aad(binding: &str, incarnation_id: &str) -> Result<Vec<u8>> {
+    let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
+    Ok([
+        LOCAL_MAGIC.as_slice(),
+        &SUITE.to_be_bytes(),
+        LOCAL_AAD_DOMAIN,
+        &(binding.len() as u16).to_be_bytes(),
+        binding.as_bytes(),
+        incarnation_id.as_bytes(),
+    ]
+    .concat())
+}
+
+/// Seals a device's state for the account bound to `binding`:
+/// `magic ‖ suite ‖ nonce ‖ ciphertext`, bound to the binding and the
+/// incarnation, so it opens for no other account or incarnation.
+pub fn seal_local_state(
+    keys: &HeadKeys,
+    binding: &str,
+    state: &LocalHeadStateV1,
+) -> Result<Vec<u8>> {
+    let mut nonce = [0u8; NONCE_LEN];
+    copy_randombytes(&mut nonce);
+    seal_local_with_nonce(keys, binding, state, &nonce)
+}
+
+/// [`seal_local_state`] with a fixed nonce, for checked-in vectors only.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn seal_local_state_for_vectors(
+    keys: &HeadKeys,
+    binding: &str,
+    state: &LocalHeadStateV1,
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    seal_local_with_nonce(keys, binding, state, nonce)
+}
+
+fn seal_local_with_nonce(
+    keys: &HeadKeys,
+    binding: &str,
+    state: &LocalHeadStateV1,
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    state.validate()?;
+    let plain = Zeroizing::new(serde_json::to_vec(state).map_err(|_| invalid("encode"))?);
+    let ciphertext = XChaCha20Poly1305::new(keys.seal.as_slice().into())
+        .encrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: &plain,
+                aad: &local_aad(binding, &state.incarnation_id)?,
+            },
+        )
+        .map_err(|_| CryptoError::Backend("account head local seal".into()))?;
+    let sealed = [
+        LOCAL_MAGIC.as_slice(),
+        &SUITE.to_be_bytes(),
+        nonce,
+        &ciphertext,
+    ]
+    .concat();
+    if sealed.len() > MAX_LOCAL_SEALED_BYTES {
+        return Err(invalid("the local state is too large"));
+    }
+    Ok(sealed)
+}
+
+/// Opens a device's state for the account bound to `binding`, incarnation
+/// `incarnation_id`. Anything that does not open (altered, moved from another
+/// account or incarnation, another format) is an error: the device then
+/// starts fresh, which a disk attacker could cause by deleting it anyway.
+pub fn open_local_state(
+    keys: &HeadKeys,
+    binding: &str,
+    incarnation_id: &str,
+    sealed: &[u8],
+) -> Result<LocalHeadStateV1> {
+    let header = 8 + 2 + NONCE_LEN;
+    if sealed.len() <= header + TAG_LEN || sealed.len() > MAX_LOCAL_SEALED_BYTES {
+        return Err(invalid("size is invalid"));
+    }
+    if &sealed[..8] != LOCAL_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
+        return Err(invalid("not a local head state"));
+    }
+    let plain = Zeroizing::new(
+        XChaCha20Poly1305::new(keys.seal.as_slice().into())
+            .decrypt(
+                XNonce::from_slice(&sealed[10..header]),
+                Payload {
+                    msg: &sealed[header..],
+                    aad: &local_aad(binding, incarnation_id)?,
+                },
+            )
+            .map_err(|_| CryptoError::AuthFailed)?,
+    );
+    let state: LocalHeadStateV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
+    state.validate()?;
+    if state.incarnation_id != incarnation_id {
+        return Err(invalid("the local state is another incarnation's"));
+    }
+    Ok(state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -953,5 +1225,151 @@ mod tests {
             5
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_device_state_opens_only_for_its_account_and_incarnation() {
+        let keys = keys();
+        let other = "2222222222222222222222222222222222222222222222222222222222222222";
+        // One name per account and incarnation.
+        assert_ne!(
+            keys.local_state_name(INCARNATION).unwrap(),
+            keys.local_state_name(other).unwrap()
+        );
+        assert_ne!(
+            keys.local_state_name(INCARNATION).unwrap(),
+            HeadKeys::derive(&[8u8; 32])
+                .unwrap()
+                .local_state_name(INCARNATION)
+                .unwrap()
+        );
+        let state = LocalHeadStateV1::new(INCARNATION).unwrap();
+        assert_eq!(state.device_id.len(), 32);
+        let sealed = seal_local_state(&keys, BINDING, &state).unwrap();
+        assert_eq!(
+            open_local_state(&keys, BINDING, INCARNATION, &sealed).unwrap(),
+            state
+        );
+        // Another incarnation, binding or account: it does not open.
+        assert!(open_local_state(&keys, BINDING, other, &sealed).is_err());
+        assert!(open_local_state(
+            &keys,
+            "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+            INCARNATION,
+            &sealed
+        )
+        .is_err());
+        assert!(open_local_state(
+            &HeadKeys::derive(&[8u8; 32]).unwrap(),
+            BINDING,
+            INCARNATION,
+            &sealed
+        )
+        .is_err());
+        // Altered: it does not open.
+        let mut altered = sealed.clone();
+        *altered.last_mut().unwrap() ^= 1;
+        assert!(open_local_state(&keys, BINDING, INCARNATION, &altered).is_err());
+        // A head is not a local state.
+        assert!(open_local_state(&keys, BINDING, INCARNATION, &chain(&keys, 1)[0]).is_err());
+    }
+
+    #[test]
+    fn a_device_anchor_only_moves_forward_unless_reanchored() {
+        let keys = keys();
+        let sealed = chain(&keys, 3);
+        let verified = |i: usize| {
+            check(&keys, BINDING, INCARNATION, None, &sealed[i], None)
+                .unwrap()
+                .verified
+                .unwrap()
+        };
+        let mut state = LocalHeadStateV1::with_device(INCARNATION, "device-a").unwrap();
+        // The first anchor is trusted on first use, and says so.
+        assert!(state.advance(&verified(1), 10));
+        assert_eq!(state.anchor.as_ref().unwrap().sequence, 2);
+        assert!(matches!(
+            state.log.as_slice(),
+            [LocalHeadEvent::StartedFresh { at_ms: 10, .. }]
+        ));
+        // Forward only: another tab's later anchor stays.
+        assert!(state.advance(&verified(2), 20));
+        assert!(!state.advance(&verified(0), 30));
+        assert_eq!(state.anchor.as_ref().unwrap().sequence, 3);
+        assert_eq!(state.anchored_at_ms, 20);
+        assert_eq!(state.log.len(), 1);
+        // A confirmed re-anchoring moves it back, and is logged.
+        let anchor = state.anchor.clone().unwrap();
+        let (record, _) = reanchor(
+            &keys,
+            BINDING,
+            INCARNATION,
+            &anchor,
+            &sealed[0],
+            None,
+            true,
+            40,
+        )
+        .unwrap();
+        state.reanchored(&record);
+        assert_eq!(state.anchor.as_ref().unwrap().sequence, 1);
+        assert!(matches!(
+            state.log.last(),
+            Some(LocalHeadEvent::Reanchored { .. })
+        ));
+        // The log keeps the newest.
+        for at in 0..(LOCAL_LOG_LEN as u64 + 5) {
+            state.reanchored(&Reanchored {
+                at_ms: 100 + at,
+                ..record.clone()
+            });
+        }
+        assert_eq!(state.log.len(), LOCAL_LOG_LEN);
+        assert!(
+            matches!(state.log.last(), Some(LocalHeadEvent::Reanchored { record }) if record.at_ms == 100 + LOCAL_LOG_LEN as u64 + 4)
+        );
+        // A server with no head at all: dropped only on the person's word, logged.
+        let mut gone = state.clone();
+        assert!(gone.forgotten(50));
+        assert_eq!(gone.anchor, None);
+        assert!(matches!(
+            gone.log.last(),
+            Some(LocalHeadEvent::Forgotten { at_ms: 50, .. })
+        ));
+        assert!(!gone.forgotten(60));
+        let sealed_state = seal_local_state(&keys, BINDING, &state).unwrap();
+        assert_eq!(
+            open_local_state(&keys, BINDING, INCARNATION, &sealed_state).unwrap(),
+            state
+        );
+    }
+
+    #[test]
+    fn a_state_that_started_over_says_why_with_its_first_anchor() {
+        let keys = keys();
+        let sealed = chain(&keys, 1);
+        let state = LocalHeadStateV1::with_device(INCARNATION, "device-a")
+            .unwrap()
+            .starting_over("unreadable");
+        // Kept through a save until the first anchor.
+        let reopened = open_local_state(
+            &keys,
+            BINDING,
+            INCARNATION,
+            &seal_local_state(&keys, BINDING, &state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reopened.started_over.as_deref(), Some("unreadable"));
+        let mut state = reopened;
+        let verified = check(&keys, BINDING, INCARNATION, None, &sealed[0], None)
+            .unwrap()
+            .verified
+            .unwrap();
+        state.advance(&verified, 7);
+        assert!(matches!(
+            state.log.as_slice(),
+            [LocalHeadEvent::StartedFresh { reason: Some(reason), .. }] if reason == "unreadable"
+        ));
+        assert_eq!(state.started_over, None);
     }
 }

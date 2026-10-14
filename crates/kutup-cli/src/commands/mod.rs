@@ -1,6 +1,7 @@
 //! CLI command implementations. Each module mirrors the matching `cmd/*.go`.
 
 pub mod access;
+pub mod account;
 pub mod color;
 pub mod devices;
 pub mod download;

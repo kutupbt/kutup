@@ -17,6 +17,8 @@ import { UserMenu } from '@kutup/ui/components/user-menu'
 import { GroupDialog } from '../features/GroupDialog'
 import { ContactEditorDialog } from '../features/ContactEditor'
 import { openEditor, useEditor } from '../features/editorState'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 function Count({ value }: { value: number }) {
   return <span className="text-xs tabular-nums text-chrome-muted">{value}</span>
@@ -26,6 +28,8 @@ function Count({ value }: { value: number }) {
 export function ContactsShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const contacts = useContacts()
   const groups = useContactGroups()
@@ -49,6 +53,7 @@ export function ContactsShell() {
   }, [adding, setParams])
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.contacts')}
       switcher={
         <AppSwitcher

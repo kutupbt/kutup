@@ -32,6 +32,8 @@ import { ChatNotifier } from './ChatNotifier'
 import { Shortcuts } from './Shortcuts'
 import { forgetAccountHostTokens } from '../features/callLinks/hostTokens'
 import { closeChat, useChat } from './chatStore'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 /**
  * Chat in the Kutup frame: the sidebar (New chat, Chats, Settings,
@@ -41,6 +43,8 @@ import { closeChat, useChat } from './chatStore'
 export function ChatShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const chat = useChat()
   const readThrough = useReadThrough()
@@ -78,6 +82,7 @@ export function ChatShell() {
 
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.chat')}
       flush
       switcher={

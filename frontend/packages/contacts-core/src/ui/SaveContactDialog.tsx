@@ -11,7 +11,7 @@ import { Input } from '@kutup/ui/components/input'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { useAddEmailToContact, useContacts, useSaveContact } from '../api'
-import { displayName, emptyDraft, type Contact } from '../model'
+import { displayName, emptyDraft, newUid, type Contact } from '../model'
 
 type Mode = 'new' | 'existing'
 
@@ -36,6 +36,8 @@ export function SaveContactDialog({ address, name, onClose }: { address: string;
   const [newName, setNewName] = useState(name?.trim() ?? '')
   const [query, setQuery] = useState('')
   const [chosen, setChosen] = useState<string | null>(null)
+  // One UID for this dialog: saving again after a lost answer makes no second contact.
+  const [uid] = useState(newUid)
   const pending = save.isPending || addEmail.isPending
   const hasContacts = (contacts.data?.contacts.length ?? 0) > 0
 
@@ -61,7 +63,7 @@ export function SaveContactDialog({ address, name, onClose }: { address: string;
   function submit() {
     const onError = (error: unknown) => toast.error(apiErrorMessage(error, t('contactSave.failed')))
     if (mode === 'new') {
-      save.mutate({ draft: { ...emptyDraft(), name: newName.trim(), emails: [{ address: lower }] } }, { onSuccess: done, onError })
+      save.mutate({ draft: { ...emptyDraft(), name: newName.trim(), emails: [{ address: lower }] }, uid }, { onSuccess: done, onError })
     } else if (chosen) {
       addEmail.mutate({ contactId: chosen, address: lower, name: name?.trim() }, { onSuccess: done, onError })
     }

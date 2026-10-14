@@ -1,3 +1,4 @@
 # Account: registration and administration.
 specs/155-registration-codes.spec.ts
 specs/156-account-password.spec.ts
+specs/157-account-head.spec.ts

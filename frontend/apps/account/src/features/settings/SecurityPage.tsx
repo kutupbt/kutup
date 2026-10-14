@@ -14,6 +14,7 @@ import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { OneUseSecret, ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { DataStateSection } from './DataStateSection'
 import { useDisableTotp, useStartTotp, useVerifyTotp, type TotpEnrolment } from './api'
 import { ChangePasswordSection } from './ChangePasswordSection'
 import { SecurityEventsSection } from './SecurityEventsSection'
@@ -217,6 +218,8 @@ export function SecurityPage() {
       <ChangePasswordSection />
 
       <SecurityEventsSection />
+
+      <DataStateSection />
 
       <Section title={t('settings.security.recovery')} description={t('settings.security.recoveryDescription')}>
         <Alert>{t('settings.security.recoveryNote')}</Alert>

@@ -13,6 +13,13 @@ import {
   verifyContactSummary,
   type ContactSummary,
 } from '@kutup/crypto'
+import {
+  accountHead,
+  HeadBlockedError,
+  NotInVerifiedIndexError,
+  type ListedEdit,
+  type VerifiedIndex,
+} from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { updateSession, useRequiredSession, type Session } from '@kutup/session/store'
 import { displayName, emptyDraft, pgpFor, newUid, type Contact, type ContactDraft, type ContactGroup, type ContactKey } from './model'
@@ -28,6 +35,44 @@ import { parseVCards, toVCard } from './vcard'
 
 /** What the guard calls a contact: its UID, which a re-import keeps. */
 const CONTACT_SCOPE = 'contact'
+
+/**
+ * The address book is the account head's `contacts` scope
+ * (docs/plans/rollback-protection.md), its values named by UID: chosen here,
+ * unique per account, never changed, so a head can be made before a create.
+ */
+const HEAD_SCOPE = 'contacts'
+
+/**
+ * The head's index of the address book, or null when it cannot vouch (this
+ * app is blocked on another history: reads go on, held to this browser's own
+ * guard, and the banner says why).
+ */
+async function contactsIndex(session: Session): Promise<VerifiedIndex | null> {
+  try {
+    return await (await accountHead(session)).verifiedIndex(HEAD_SCOPE)
+  } catch (error) {
+    if (error instanceof HeadBlockedError) return null
+    throw error
+  }
+}
+
+/** A listed write of the address book, with the next account head. */
+async function listedContacts<T>(session: Session, edit: (index: VerifiedIndex) => Promise<ListedEdit<T> | null>): Promise<T | undefined> {
+  return (await accountHead(session)).listedWrite(HEAD_SCOPE, edit)
+}
+
+/**
+ * Another device changed the contact since the edit started (the server's
+ * `revision_conflict`, or the head's index listing another revision): the
+ * person's form is not laid over it.
+ */
+export class ContactChangedError extends Error {
+  constructor() {
+    super('the contact was changed elsewhere')
+    this.name = 'ContactChangedError'
+  }
+}
 
 interface ContactRow {
   id: string
@@ -56,7 +101,13 @@ export function useAccountAddress() {
   })
 }
 
-async function openRow(session: Session, row: ContactRow, masterKey: string, authority: string): Promise<Contact | null> {
+async function openRow(
+  session: Session,
+  row: ContactRow,
+  masterKey: string,
+  authority: string,
+  index: VerifiedIndex | null,
+): Promise<Contact | null> {
   const binding = session.envelopeBinding
   try {
     // The server says which revision the card is; the summary's signature
@@ -64,6 +115,8 @@ async function openRow(session: Session, row: ContactRow, masterKey: string, aut
     const summary = await verifyContactSummary(row.summary, row.signature, binding, row.revision, authority)
     const { value: vcard, revision } = await openContactCard(masterKey, binding, summary.uid, row.card)
     if (revision !== row.revision) throw new Error('the card is not the revision its summary was signed for')
+    // Not the revision the account head vouches for: rolled back, or brought back.
+    index?.expect(summary.uid, revision)
     await revisionGuard(session).accept(CONTACT_SCOPE, summary.uid, revision)
     const [card] = parseVCards(vcard)
     if (!card) return null
@@ -75,6 +128,7 @@ async function openRow(session: Session, row: ContactRow, masterKey: string, aut
     const draft = { ...card.draft, name: summary.name, groups: summary.groups, keys }
     return { id: row.id, uid: summary.uid, revision: row.revision, draft, updatedAt: row.updatedAt }
   } catch (error) {
+    if (error instanceof NotInVerifiedIndexError) throw error
     console.warn('contacts: a contact did not verify or open', row.id, error)
     return null
   }
@@ -92,19 +146,31 @@ export function useContacts() {
   })
 }
 
-async function loadContacts(session: Session): Promise<{ contacts: Contact[]; unreadable: number }> {
+export async function loadContacts(session: Session): Promise<{ contacts: Contact[]; unreadable: number }> {
   const masterKey = toBase64(session.masterKey)
   const { authorityPublicKey } = await deriveAccountIdentityKeys(masterKey)
-  const rows: ContactRow[] = []
-  for (let offset = 0; ; ) {
-    const { data } = await api.get<{ contacts: ContactRow[]; total: number }>('/contacts', { params: { offset, limit: 1000 } })
-    rows.push(...data.contacts)
-    offset += data.contacts.length
-    if (data.contacts.length === 0 || offset >= data.total) break
+  // The book and the head's index are two reads: a write landing between
+  // them is read again once before the book counts as one the head does not
+  // vouch for (then nothing of it is shown).
+  for (let attempt = 0; ; attempt++) {
+    const index = await contactsIndex(session)
+    const rows: ContactRow[] = []
+    for (let offset = 0; ; ) {
+      const { data } = await api.get<{ contacts: ContactRow[]; total: number }>('/contacts', { params: { offset, limit: 1000 } })
+      rows.push(...data.contacts)
+      offset += data.contacts.length
+      if (data.contacts.length === 0 || offset >= data.total) break
+    }
+    try {
+      // One more or fewer than the head lists: dropped, or brought back.
+      if (index?.covered && rows.length !== index.values.length) throw new NotInVerifiedIndexError(HEAD_SCOPE, null)
+      const opened = await Promise.all(rows.map((row) => openRow(session, row, masterKey, authorityPublicKey, index)))
+      const contacts = opened.filter((contact): contact is Contact => contact !== null)
+      return { contacts, unreadable: rows.length - contacts.length }
+    } catch (error) {
+      if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
+    }
   }
-  const opened = await Promise.all(rows.map((row) => openRow(session, row, masterKey, authorityPublicKey)))
-  const contacts = opened.filter((contact): contact is Contact => contact !== null)
-  return { contacts, unreadable: rows.length - contacts.length }
 }
 
 /** Most pinned keys one contact may have (kutup-crypto `MAX_PINNED_KEYS`). */
@@ -159,21 +225,69 @@ async function prepare(session: Session, uid: string, input: ContactDraft, base 
   const revision = await revisionGuard(session).next(CONTACT_SCOPE, uid, base)
   const signed = await signContactSummary(masterKey, session.envelopeBinding, revision, summary)
   const card = await sealContactCard(masterKey, session.envelopeBinding, uid, revision, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
-  return { body: { summary: signed.summary, signature: signed.signature, card }, revision }
+  return { body: { summary: signed.summary, signature: signed.signature, card }, revision, uid }
 }
 
-/** Another device saved the contact first (the server's `revision_conflict`). */
+/** Another device saved the contact first (the server's `revision_conflict`, or the head saying so). */
 export function isRevisionConflict(error: unknown): boolean {
+  if (error instanceof ContactChangedError) return true
   return isAxiosError(error) && error.response?.status === 409 && (error.response.data as { code?: string } | undefined)?.code === 'revision_conflict'
 }
 
-/** Saves an edit of `existing` made from its revision. */
-async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision'>, draft: ContactDraft): Promise<ContactRow> {
+/**
+ * Saves an edit of `existing` made from its revision, with the next head.
+ * When another device wrote first: sent again on the new head if the contact
+ * is still at that revision (another value changed); refused with
+ * {@link ContactChangedError} if the contact itself changed. Stored already (a
+ * retry after a lost answer) counts as stored.
+ */
+export async function putContact(session: Session, existing: Pick<Contact, 'id' | 'uid' | 'revision'>, draft: ContactDraft): Promise<void> {
   const { body, revision } = await prepare(session, existing.uid, draft, existing.revision)
-  const { data } = await api.put<ContactRow>(`/contacts/${existing.id}`, { ...body, baseRevision: existing.revision })
+  await listedContacts(session, (index) => {
+    const listed = index.revision(existing.uid)
+    if (listed === revision) return Promise.resolve(null)
+    if (listed !== undefined && listed !== existing.revision) throw new ContactChangedError()
+    return Promise.resolve({
+      changes: [[existing.uid, revision]] as const,
+      send: async (head: string) => {
+        await api.put(`/contacts/${existing.id}`, { ...body, baseRevision: existing.revision, head })
+      },
+    })
+  })
   // The revision sealed here, not the server's word for it.
   await revisionGuard(session).accept(CONTACT_SCOPE, existing.uid, revision)
-  return data
+}
+
+/**
+ * Adds a contact under `uid`, with the next head; its row id (read back by
+ * UID when the head already lists it). The UID is kept for the whole form or
+ * dialog that makes the contact, so trying again after an answer that was
+ * lost (a network error) finds the contact made, never makes a second.
+ */
+export async function createContact(session: Session, uid: string, draft: ContactDraft): Promise<string | undefined> {
+  const { body, revision } = await prepare(session, uid, draft)
+  let id: string | undefined
+  const stored = await listedContacts(session, (index) =>
+    Promise.resolve(
+      // Made already (this form's earlier try): nothing to send.
+      index.revision(uid) !== undefined
+        ? null
+        : {
+            changes: [[uid, revision]] as const,
+            send: async (head: string) => {
+              id = (await api.post<ContactRow>('/contacts', { ...body, head })).data.id
+              return true
+            },
+          },
+    ),
+  )
+  if (stored) {
+    // The revision sealed here, not the server's word for it.
+    await revisionGuard(session).accept(CONTACT_SCOPE, uid, revision)
+    return id
+  }
+  // Made by an earlier try: its own revision is the one to hold to.
+  return (await loadContacts(session)).contacts.find((contact) => contact.uid === uid)?.id
 }
 
 /**
@@ -222,25 +336,37 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
 /** Creates a contact, or saves an edit made from its `revision`. */
 export function useSaveContact() {
   return useContactMutation(
-    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'> }, session) => {
+    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'>; uid?: string }, session) => {
       // An edit made on an older revision fails with a revision conflict:
       // the person's form is not laid over another device's change.
-      if (input.existing) return (await putContact(session, input.existing, input.draft)).id
-      const uid = newUid()
-      const { body, revision } = await prepare(session, uid, input.draft)
-      const { data } = await api.post<ContactRow>('/contacts', body)
-      await revisionGuard(session).accept(CONTACT_SCOPE, uid, revision)
-      return data.id
+      if (input.existing) {
+        await putContact(session, input.existing, input.draft)
+        return input.existing.id
+      }
+      return createContact(session, input.uid ?? newUid(), input.draft)
     },
   )
 }
 
+/** Deletes contacts, 500 at a time, each batch with the next head (ones already gone are skipped). */
 export function useDeleteContacts() {
-  return useContactMutation(async (ids: string[]) => {
-    for (let i = 0; i < ids.length; i += 500) {
-      await api.post('/contacts/delete', { ids: ids.slice(i, i + 500) })
-    }
-  })
+  return useContactMutation((contacts: Pick<Contact, 'id' | 'uid'>[], session) => deleteContacts(session, contacts))
+}
+
+export async function deleteContacts(session: Session, contacts: Pick<Contact, 'id' | 'uid'>[]): Promise<void> {
+  for (let i = 0; i < contacts.length; i += 500) {
+    const batch = contacts.slice(i, i + 500)
+    await listedContacts(session, (index) => {
+      const still = batch.filter((contact) => index.revision(contact.uid) !== undefined)
+      if (still.length === 0) return Promise.resolve(null)
+      return Promise.resolve({
+        changes: still.map((contact) => [contact.uid, null] as const),
+        send: async (head: string) => {
+          await api.post('/contacts/delete', { ids: still.map((contact) => contact.id), head })
+        },
+      })
+    })
+  }
 }
 
 /**
@@ -253,14 +379,29 @@ export function useImportContacts() {
       let imported = 0
       for (let i = 0; i < input.cards.length; i += 500) {
         const batch = input.cards.slice(i, i + 500)
-        const contacts = await Promise.all(
+        const prepared = await Promise.all(
           batch.map(({ uid, draft }) => {
             const ownUid = uid && !input.takenUids.has(uid) && uid.length <= 200 ? uid : newUid()
             input.takenUids.add(ownUid)
-            return prepare(session, ownUid, draft).then((prepared) => prepared.body)
+            return prepare(session, ownUid, draft)
           }),
         )
-        await api.post('/contacts/import', { contacts })
+        // One head for the batch; a batch whose answer was lost is in the
+        // index already at its revisions, and is not sent again.
+        await listedContacts(session, (index) =>
+          Promise.resolve(
+            prepared.every((p) => index.revision(p.uid) === p.revision)
+              ? null
+              : {
+                  changes: prepared.map((p) => [p.uid, p.revision] as const),
+                  send: async (head: string) => {
+                    await api.post('/contacts/import', { contacts: prepared.map((p) => p.body), head })
+                  },
+                },
+          ),
+        )
+        const guard = revisionGuard(session)
+        await Promise.all(prepared.map((p) => guard.accept(CONTACT_SCOPE, p.uid, p.revision).catch(() => undefined)))
         imported += batch.length
       }
       return imported
@@ -320,7 +461,7 @@ export function usePinKey() {
       )
       if (existing) return
       const draft: ContactDraft = { ...emptyDraft(), name: input.name?.trim() ?? '', emails: [{ address }], keys: [key] }
-      await api.post('/contacts', (await prepare(session, newUid(), draft)).body)
+      await createContact(session, newUid(), draft)
     },
   )
 }

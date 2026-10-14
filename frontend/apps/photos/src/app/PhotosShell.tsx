@@ -12,14 +12,19 @@ import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 /** Photos' frame: Upload, the library and its settings, the storage it shares with Drive. */
 export function PhotosShell({ primaryAction }: { primaryAction?: ReactNode }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.photos')}
       flush
       switcher={
