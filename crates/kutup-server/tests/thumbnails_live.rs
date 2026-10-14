@@ -425,4 +425,6 @@ fn thumbnails_contract() {
         listed(&c, &base, &token, &collection_id, &file_id)["thumbnails"],
         json!({})
     );
+    // Nothing left behind for the gate's checks.
+    common::purge_accounts(&c, &base, &[&owner, &stranger]);
 }

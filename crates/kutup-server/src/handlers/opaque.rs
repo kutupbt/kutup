@@ -241,7 +241,7 @@ pub async fn login_start(
     .bind(reauth.as_ref().map(|(caller, _)| caller.session.session_id))
     .bind(reauth.as_ref().map(|(_, grant_for)| grant_for.as_str()))
     .bind(&source)
-    .bind(&lockout)
+    .bind(lockout.as_bytes())
     .bind(ceiling.as_ref().map(|c| c.0.as_str()))
     .bind(ceiling.as_ref().map(|c| c.1.as_str()))
     .bind(server_key_id as i16)
@@ -315,7 +315,7 @@ pub async fn login_finish(
         String,
         Option<Uuid>,
         Option<String>,
-        String,
+        Vec<u8>,
         Option<String>,
         Option<String>,
         i16,
@@ -363,6 +363,7 @@ pub async fn login_finish(
     let Some(user_id) = user_id else {
         return Err(AppError::invalid_credentials());
     };
+    let lockout = String::from_utf8(lockout).map_err(|_| AppError::internal("lockout key"))?;
     auth_check::Guard::succeeded(
         &lockout,
         ceiling_account.as_deref().zip(ceiling_source.as_deref()),

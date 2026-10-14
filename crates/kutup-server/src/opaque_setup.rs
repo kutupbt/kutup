@@ -222,6 +222,34 @@ mod tests {
         assert_eq!(keys.get(3), None);
     }
 
+    /// Against the gate's database, whose server made setup 1 under the
+    /// gate's `OPAQUE_SETUP_KEYS`: that key opens it; another key for the
+    /// same id stops the server instead of locking everyone out.
+    #[tokio::test]
+    async fn live_a_wrong_key_for_a_stored_setup_stops_the_server() {
+        let (Ok(url), Ok(keys)) = (
+            std::env::var("KUTUP_LIVE_DATABASE_URL"),
+            std::env::var("OPAQUE_SETUP_KEYS"),
+        ) else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL / OPAQUE_SETUP_KEYS unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let keys = OpaqueSetupKeys::parse(&keys).unwrap();
+        let server = OpaqueServer::load(&pool, &keys).await.unwrap();
+        let (current, _) = server.current();
+        let wrong = OpaqueSetupKeys::parse(&format!("{current}:{}", key(0x5a))).unwrap();
+        let error = OpaqueServer::load(&pool, &wrong)
+            .await
+            .err()
+            .expect("refused");
+        assert!(error.contains("does not open"), "{error}");
+    }
+
     #[test]
     fn bad_keys_are_refused_without_printing_them() {
         let secret = key(7);

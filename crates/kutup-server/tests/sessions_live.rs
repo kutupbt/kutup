@@ -334,4 +334,6 @@ fn sessions_and_forks_contract() {
         StatusCode::OK,
         "other sign-ins survive"
     );
+    // Nothing left behind for the gate's checks.
+    common::purge_accounts(&c, &base, &[&account]);
 }

@@ -291,3 +291,70 @@ Rust module directly. `KUTUP_PASSWORD` still works. Profiles keep no OPAQUE stat
 
 **Native clients later:** 64 MiB Argon2id is fine on phones, and the suite table
 handles a later bump.
+
+## 10. The server, as built
+
+Built on `slate/opaque-server` from the server note agreed by the main and
+third sessions (2026-10-13). The wire is the one above, plus the addendum.
+
+- **Storage:**
+  - `users.opaque_record`, `opaque_suite` and `opaque_server_key_id` (all
+    three or none); the old login-key hash, salt and Argon2 columns are gone.
+  - `opaque_server_setups`: each setup sealed under its `OPAQUE_SETUP_KEYS`
+    key.
+  - `opaque_login_states`: a sign-in between start and finish, two minutes,
+    single use, its server state sealed under a subkey of the setup key
+    (`kutup_crypto::opaque_login_state`, AAD the login id).
+  - `auth_grants`: kept as their SHA-256, used by an atomic `UPDATE …
+    RETURNING`.
+- **Keys:**
+  - `OPAQUE_SETUP_KEYS` is parsed strictly (ids 1–32767, no duplicates, exactly
+    32 bytes in canonical base64, never printed). A stored setup that does not
+    open under its key stops the server.
+  - A record whose key is missing gets `500 opaqueKeyMissing`, and a warning
+    with the count of such accounts at startup.
+  - Setups older than the current one that no account uses are dropped at
+    startup.
+- **One canonical name:** this server's address is cut to its username, then
+  `CanonicalName::parse`. It is used for the lookup, the fake answer, the
+  lockout and the caps. Lookup is by username only, so a held or foreign name
+  gets the fake answer.
+- **Lockout at the start:** each `login/start` takes the attempt's lockout and
+  ceiling slots before any OPAQUE work. The state row keeps them, and only a
+  right finish gives them back, so starts without a finish cost as wrong
+  passwords do.
+- **Caps:** 5 sign-ins under way per name and 20 per address; the oldest goes.
+- **Reauth:** `for` is one of `pass`, `passwordChange`, `totp`,
+  `deleteAccount`, `adminReset`. The account is compared by user id, and the
+  finish must come from the session that started it.
+- **Registration:**
+  - `register/start` checks a grant without using it, and needs a grant, the
+    setup token, an admin session (a new account) or open sign-ups.
+  - Records are taken only against the current setup (`409 opaqueKeyStale`).
+  - Key binding uniqueness is enforced again in the transaction that stores
+    the record (`409 keyBindingTaken`).
+- **New passwords:**
+  - `register/finish` takes `passwordChange` (that session), `recovery` or
+    `rotate` (that session).
+  - Every outstanding grant and pending sign-in of the account ends in the
+    same transaction.
+  - A password change ends the other sessions, a recovery all of them, a
+    rotation none.
+  - A rotation is logged apart from password changes.
+- **Rotation:** a session answer carries `rotate` and a `rotate` grant (two
+  minutes) when the record's setup is not the current one. The CLI moves the
+  record at once; the web client does too.
+- **Admins:**
+  - `reset-grant` exchanges the admin's own `adminReset` reauth grant for one
+    bound to the target.
+  - Rotate-temp-password and wipe take it, used before anything is destroyed.
+  - Creating an account needs only the admin's session at `register/start`.
+  - The bootstrap admin is registered in process only when the account does
+    not exist yet.
+- **Tests:**
+  - `tests/opaque_live.rs`: a login id once, the per-name cap, password
+    change, recovery.
+  - `account_identity_live.rs`: fake answers, lockout from starts alone, the
+    known-client ceiling, admin temporary passwords.
+  - `pass_live.rs`: reauth and PIN grants.
+  - `opaque_setup` unit tests, and a live database test for a wrong key.

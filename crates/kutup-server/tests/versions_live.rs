@@ -404,4 +404,6 @@ fn versions_v2_contract() {
     assert_eq!(me(&c, &base, &token)["versionRetentionDays"], 90);
     assert_eq!(set(45), StatusCode::BAD_REQUEST);
     assert_eq!(me(&c, &base, &token)["versionRetentionDays"], 90);
+    // Nothing left behind for the gate's checks.
+    common::purge_accounts(&c, &base, &[&owner, &stranger]);
 }

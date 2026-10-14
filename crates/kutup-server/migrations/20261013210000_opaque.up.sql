@@ -43,7 +43,8 @@ CREATE TABLE opaque_login_states (
     session_id uuid REFERENCES auth_sessions(id) ON DELETE CASCADE,
     grant_for text CHECK (grant_for IN ('pass', 'passwordChange', 'totp', 'deleteAccount', 'adminReset')),
     source text NOT NULL,
-    lockout_key text NOT NULL,
+    -- The lockout key as auth_check makes it (it holds a NUL: bytes, not text).
+    lockout_key bytea NOT NULL,
     ceiling_account text,
     ceiling_source text,
     server_key_id smallint NOT NULL,
