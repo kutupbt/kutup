@@ -1019,12 +1019,6 @@ fn report_yjs(rel: &str, synced: &crate::yjs_sync::Synced, result: &mut SyncResu
     if synced.busy {
         eprintln!("  ⏸ {rel}: changed while syncing; left for the next run");
     }
-    if synced.waiting {
-        eprintln!(
-            "  ⏸ {rel}: another editor is opening it for the first time; \
-             your edit goes up on the next run"
-        );
-    }
 }
 
 /// Records a note or list as in sync with the file as it was compared or
@@ -1399,18 +1393,22 @@ fn latest_version_id(client: &Client, file_id: &str) -> Result<String> {
 }
 
 pub(crate) fn stat_local(path: &Path) -> Result<LocalFile> {
-    let m = std::fs::metadata(path)?;
+    Ok(local_file_of(&std::fs::metadata(path)?))
+}
+
+/// A file's size and modification time, as the sync records them.
+pub(crate) fn local_file_of(m: &std::fs::Metadata) -> LocalFile {
     let (mtime_secs, mtime_nanos) = m
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| (d.as_secs() as i64, d.subsec_nanos()))
         .unwrap_or((0, 0));
-    Ok(LocalFile {
+    LocalFile {
         size: m.len() as i64,
         mtime_secs,
         mtime_nanos,
-    })
+    }
 }
 
 fn walk_local(

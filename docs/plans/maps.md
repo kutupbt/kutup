@@ -253,7 +253,9 @@ goes beyond Signal parity.
      one rule, shared with `kutup-collab` (the CLI) and pinned by byte-level
      seed vectors:
      - a byte-order mark is dropped;
-     - coordinates must be JSON numbers;
+     - coordinates must be finite JSON numbers (a number too large for a
+       double, Infinity to `JSON.parse`, drops that place, not the list);
+     - a lone UTF-16 surrogate escape in a string becomes U+FFFD;
      - a time must be strict RFC 3339 with a real calendar day, or it becomes
        1970-01-01;
      - names are trimmed as JavaScript trims;

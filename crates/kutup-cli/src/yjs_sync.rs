@@ -160,15 +160,6 @@ impl Doc {
             kutup_collab::seed_text_upload(file_id, content)
         }
     }
-
-    /// How close `local` is to what the document holds (0 to 1).
-    fn likeness(&self, local: &[u8]) -> f32 {
-        similar::TextDiff::from_chars(
-            String::from_utf8_lossy(local).as_ref(),
-            String::from_utf8_lossy(&self.render()).as_ref(),
-        )
-        .ratio()
-    }
 }
 
 /// The file's document as Drive has it now.
@@ -310,12 +301,15 @@ fn current_content(client: &Client, keys: &Keys) -> Result<Vec<u8>> {
 /// A sender sequence prefix above `must_exceed`: 31 random bits, shifted
 /// past the counter's 32 (as `randomSenderSeqPrefix`).
 fn sender_prefix(must_exceed: i64) -> i64 {
-    loop {
+    // Bounded: near the top of the range a random prefix above is rare, and
+    // then the count simply goes on from the highest.
+    for _ in 0..64 {
         let candidate = i64::from(rand::random::<u32>() & 0x7FFF_FFFF) << 32;
         if candidate > must_exceed {
             return candidate;
         }
     }
+    must_exceed.saturating_add(1)
 }
 
 /// Sends `update` as one signed frame; its log position. A sequence another
@@ -409,9 +403,6 @@ pub struct Synced {
     /// The file changed on disk while it was being synced: nothing written;
     /// the next run takes it.
     pub busy: bool,
-    /// Nobody has opened it yet, and another editor claimed its first
-    /// content but has not sent it: the local edit waits for the next run.
-    pub waiting: bool,
     /// The file as recorded in sync (taken where it was compared or
     /// written), when it is.
     pub stat: Option<crate::syncengine::LocalFile>,
@@ -523,29 +514,28 @@ fn fault(point: &str, file: &Path) {
 
 /// Settles a write the last run began: from what the file holds, whether
 /// the merged document reached it.
-fn settle_writing(target: &Target, base: &mut YjsBase, list: bool) -> Result<()> {
+/// `false` when it cannot tell: the file was changed since, so neither state
+/// is the one it holds. The base is then dropped, and the file synced as one
+/// never synced (Drive's copy kept beside it, the local content an edit over
+/// it), rather than diffed against a guess.
+fn settle_writing(target: &Target, base: &mut YjsBase) -> Result<bool> {
     let Some(writing) = base.writing.take() else {
-        return Ok(());
+        return Ok(true);
     };
     let local = std::fs::read(&target.abs).unwrap_or_default();
-    let written = match sha256_hex(&local) {
-        hash if hash == writing.after => true,
-        hash if hash == writing.before => false,
-        // Changed since, either way: the base is the state the file is
-        // nearer to.
-        _ => {
-            let merged = Doc::new(list);
-            merged.apply_v2(&STANDARD.decode(&writing.state)?)?;
-            let recorded = Doc::new(list);
-            recorded.apply_v2(&STANDARD.decode(&base.state)?)?;
-            merged.likeness(&local) >= recorded.likeness(&local)
+    match sha256_hex(&local) {
+        hash if hash == writing.after => {
+            base.state = writing.state;
+            base.seq = writing.seq;
         }
-    };
-    if written {
-        base.state = writing.state;
-        base.seq = writing.seq;
+        hash if hash == writing.before => {}
+        _ => {
+            target.store.delete_yjs_base(target.pair, target.rel)?;
+            return Ok(false);
+        }
     }
-    target.store.put_yjs_base(target.pair, target.rel, base)
+    target.store.put_yjs_base(target.pair, target.rel, base)?;
+    Ok(true)
 }
 
 /// Syncs one note, code file or place list both ways; records where it is
@@ -568,8 +558,10 @@ pub fn sync_file(
     let file_key =
         crate::file_crypto::open_key(target.file, target.dir_keys).context("decrypt file key")?;
     let mut base = base_of(target)?;
-    if let Some(base) = base.as_mut() {
-        settle_writing(target, base, list)?;
+    if let Some(known) = base.as_mut() {
+        if !settle_writing(target, known)? {
+            base = None;
+        }
     }
     let mut keys = Keys {
         file: target.file.clone(),
@@ -633,16 +625,13 @@ pub fn sync_file(
             target.folder_epoch,
         )?;
         keys = Keys { file, current };
-        let mut updates = Vec::new();
-        if let Some(seed) = remote.seed.take() {
-            // The first content goes in first, once: only by the editor that
-            // claimed it, as tabs do.
-            if !client.claim_seed(&target.file.id)? {
-                out.waiting = true;
-                return Ok(out);
-            }
-            updates.push(seed);
-        }
+        // Nobody has opened it: its first content goes in first. The seed is
+        // the same Yjs item wherever it is made (shared vectors pin the
+        // bytes), so a copy another editor sent, or sends later, merges into
+        // this one: the CLI sends it whoever won the claim, never waits for a
+        // claimer that may never send, and never makes the text twice.
+        let seeding = remote.seed.take();
+        let mut updates: Vec<Vec<u8>> = seeding.iter().cloned().collect();
         updates.push(update);
         // Recorded before it is sent: whatever happens next, the next run
         // sends these bytes, never a new edit of the same change.
@@ -656,6 +645,16 @@ pub fn sync_file(
         target
             .store
             .put_yjs_base(target.pair, target.rel, &journal)?;
+        // The claim tells tabs the first content is there (they then load
+        // it rather than seed); its answer changes nothing here.
+        if seeding.is_some() {
+            if let Err(e) = client.claim_seed(&target.file.id) {
+                eprintln!(
+                    "    note: claiming the first content of {}: {e:#}",
+                    target.rel
+                );
+            }
+        }
         for update in &updates {
             remote.doc.apply_v1(update)?;
             send(client, peer, &keys, &mut remote, update)?;
@@ -706,21 +705,23 @@ pub fn sync_file(
         target
             .store
             .put_yjs_base(target.pair, target.rel, &writing)?;
-        write_new(&target.abs, &merged)?;
+        // The stat of what this run wrote (taken before the rename): a save
+        // after it is a change for the next run.
+        let written = write_new(&target.abs, &merged)?;
         fault("after-write", &target.abs);
         target
             .store
             .put_yjs_base(target.pair, target.rel, &merged_base)?;
         out.written = true;
-        out.stat = Some(crate::syncengine::stat_local(&target.abs)?);
+        out.stat = Some(written);
     } else {
         target
             .store
             .put_yjs_base(target.pair, target.rel, &merged_base)?;
-        if unchanged() {
-            out.stat = Some(crate::syncengine::stat_local(&target.abs)?);
-        } else {
-            out.busy = true;
+        // The stat taken where the file was read and compared.
+        match (&before, unchanged()) {
+            (Some(meta), true) => out.stat = Some(crate::syncengine::local_file_of(meta)),
+            _ => out.busy = true,
         }
     }
     if out.sent {
@@ -739,8 +740,8 @@ fn stamp(meta: &std::fs::Metadata) -> (u64, Option<std::time::SystemTime>) {
 
 /// Writes `bytes` to `dest` through a temporary file beside it (its own
 /// name, so two writers never share one), synced to disk with the folder
-/// before the run goes on.
-fn write_new(dest: &Path, bytes: &[u8]) -> Result<()> {
+/// before the run goes on. The written file's stat (a rename keeps it).
+fn write_new(dest: &Path, bytes: &[u8]) -> Result<crate::syncengine::LocalFile> {
     use std::io::Write as _;
     let name = dest
         .file_name()
@@ -749,19 +750,23 @@ fn write_new(dest: &Path, bytes: &[u8]) -> Result<()> {
     let parent = dest.parent().ok_or_else(|| anyhow!("bad file path"))?;
     std::fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(".kutup-tmp-{name}-{:016x}", rand::random::<u64>()));
-    let written = (|| -> std::io::Result<()> {
+    let written = (|| -> std::io::Result<std::fs::Metadata> {
         let mut file = std::fs::File::create(&tmp)?;
         file.write_all(bytes)?;
-        file.sync_all()
+        file.sync_all()?;
+        file.metadata()
     })();
-    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, dest)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e).context("write the file");
-    }
+    let meta = match written.and_then(|meta| std::fs::rename(&tmp, dest).map(|()| meta)) {
+        Ok(meta) => meta,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e).context("write the file");
+        }
+    };
     // The rename itself, durable (a folder cannot be opened for this on
     // every platform; there it is the system's to keep).
     if let Ok(dir) = std::fs::File::open(parent) {
         let _ = dir.sync_all();
     }
-    Ok(())
+    Ok(crate::syncengine::local_file_of(&meta))
 }

@@ -67,10 +67,7 @@ async fn check_cap(
     except: Option<i64>,
 ) -> AppResult<()> {
     // One count per account, under its row's lock.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut **tx)
-        .await?;
+    lock_account_devices(tx, user_id).await?;
     let in_use: i64 = sqlx::query_scalar(&format!(
         "SELECT COUNT(*) FROM user_devices d JOIN users u ON u.id = d.user_id
          WHERE d.user_id = $1 AND d.id <> COALESCE($2, 0) AND {}",
@@ -400,6 +397,8 @@ pub async fn renew(
         .parse()
         .map_err(|_| AppError::bad_request("invalid id"))?;
     let mut tx = state.pool.begin().await?;
+    // The account's lock first, as every device change takes it.
+    lock_account_devices(&mut tx, user_id).await?;
     let key: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT d.public_signing FROM user_devices d JOIN users u ON u.id = d.user_id
          WHERE d.id = $1 AND d.user_id = $2 AND d.is_active
@@ -445,6 +444,46 @@ pub async fn renew(
     .await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Every change of an account's devices (a registration's count, a renewal,
+/// a revocation) holds the account's row lock, taken first: one at a time,
+/// in one lock order.
+pub(crate) async fn lock_account_devices(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+) -> sqlx::Result<()> {
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Records a verified revocation. Its sequence number is taken under the
+/// account's lock, so the account's revocations are numbered in the order
+/// they commit: other servers are told them by that number, and a bridge
+/// that sent number n has sent every one before it.
+pub(crate) async fn record_revocation(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    device_id: i64,
+    revoked_at_ms: i64,
+    signature: &str,
+) -> sqlx::Result<()> {
+    lock_account_devices(tx, user_id).await?;
+    sqlx::query(
+        "UPDATE user_devices SET is_active = false, revoked_at_ms = $3, revocation_signature = $4,
+                                 revocation_seq = nextval('user_devices_revocation_seq')
+         WHERE id = $1 AND user_id = $2",
+    )
+    .bind(device_id)
+    .bind(user_id)
+    .bind(revoked_at_ms)
+    .bind(signature)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// `GET /api/devices` — the account's devices.
@@ -539,6 +578,7 @@ pub async fn revoke(
         .map_err(|_| AppError::bad_request("invalid id"))?;
 
     let mut tx = state.pool.begin().await?;
+    lock_account_devices(&mut tx, user_id).await?;
     let key: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT public_signing FROM user_devices
          WHERE id = $1 AND user_id = $2 AND is_active FOR UPDATE",
@@ -574,15 +614,13 @@ pub async fn revoke(
     {
         return Err(not_authorized("the account's revocation does not verify"));
     }
-    sqlx::query(
-        "UPDATE user_devices SET is_active = false, revoked_at_ms = $2, revocation_signature = $3,
-                                 revocation_seq = nextval('user_devices_revocation_seq')
-         WHERE id = $1",
+    record_revocation(
+        &mut tx,
+        user_id,
+        device_id,
+        req.revoked_at_ms,
+        &req.signature,
     )
-    .bind(device_id)
-    .bind(req.revoked_at_ms)
-    .bind(&req.signature)
-    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     // Drop this device's live collab connections.

@@ -121,8 +121,13 @@ upload, which the first editor turns into a deterministic seed
   fields).
   - It is applied locally, and sent only in front of the CLI's first edit, so
     a pull writes nothing to the server.
-  - As tabs do, the CLI sends it only when its `claim-seed` won. Otherwise the
-    edit waits for the next run.
+  - Unlike a tab, the CLI sends it whether or not its `claim-seed` won. The
+    seed is deterministic (same items, same client and clock for every peer),
+    so a second copy merges into the first and adds nothing, while holding it
+    back would leave a journaled edit made on top of it that could only be
+    sent without it. The seed and the edit are journaled first, so a later
+    run resends the same bytes; the claim is still made, best effort, so tabs
+    keep their order.
 - **Crash safety.** No run ever makes the same edit twice as new operations:
   - **Before sending,** a local edit is recorded: the base becomes the state
     the file held, and the update bytes are kept as pending. A later run sends

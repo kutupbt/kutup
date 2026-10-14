@@ -410,6 +410,86 @@ pub fn text_of(bytes: &[u8]) -> String {
     text.strip_prefix('\u{FEFF}').unwrap_or(&text).to_owned()
 }
 
+/// JSON text as `JSON.parse` takes what serde would refuse whole, place by
+/// place: a number out of range (`1e400`, `Infinity` to JavaScript, so that
+/// place is dropped) becomes `null`, which drops it here too; a lone UTF-16
+/// surrogate escape, which no Rust string holds, becomes U+FFFD.
+fn as_javascript_reads(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let hex = |at: usize| -> Option<u32> {
+        let digits: String = chars.get(at..at + 4)?.iter().collect();
+        u32::from_str_radix(&digits, 16).ok()
+    };
+    let mut in_string = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            match c {
+                '"' => {
+                    in_string = false;
+                    out.push(c);
+                    i += 1;
+                }
+                '\\' if chars.get(i + 1) == Some(&'u') => match hex(i + 2) {
+                    Some(high @ 0xD800..=0xDBFF) => {
+                        let low = (chars.get(i + 6) == Some(&'\\')
+                            && chars.get(i + 7) == Some(&'u'))
+                        .then(|| hex(i + 8))
+                        .flatten()
+                        .filter(|low| (0xDC00..=0xDFFF).contains(low));
+                        match low {
+                            Some(low) => {
+                                out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+                                i += 12;
+                            }
+                            None => {
+                                out.push_str("\\ufffd");
+                                i += 6;
+                            }
+                        }
+                    }
+                    Some(0xDC00..=0xDFFF) => {
+                        out.push_str("\\ufffd");
+                        i += 6;
+                    }
+                    _ => {
+                        out.extend(&chars[i..(i + 6).min(chars.len())]);
+                        i += 6;
+                    }
+                },
+                '\\' => {
+                    out.extend(&chars[i..(i + 2).min(chars.len())]);
+                    i += 2;
+                }
+                _ => {
+                    out.push(c);
+                    i += 1;
+                }
+            }
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+        } else if c == '-' || c.is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && matches!(chars[i], '0'..='9' | '-' | '+' | '.' | 'e' | 'E') {
+                i += 1;
+            }
+            let token: String = chars[start..i].iter().collect();
+            match token.parse::<f64>() {
+                Ok(n) if !n.is_finite() => out.push_str("null"),
+                _ => out.push_str(&token),
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// The places in a stored list (`parseListJson`): an empty file (or a
 /// one-character placeholder) is an empty list; entries that are not places,
 /// and repeated ids, are dropped; a place without a usable id gets
@@ -421,7 +501,7 @@ pub fn parse_list_json_with(bytes: &[u8], id_for: impl Fn(usize) -> String) -> R
         return Ok(Vec::new());
     }
     let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|_| CollabError::NotAPlaceList)?;
+        serde_json::from_str(&as_javascript_reads(text)).map_err(|_| CollabError::NotAPlaceList)?;
     // `version === 1` in JavaScript: `1.0` is the same number.
     let version_1 = value.get("version").and_then(|v| v.as_f64()) == Some(1.0);
     let places = match (
@@ -801,6 +881,16 @@ mod tests {
             ordered(places[..2].to_vec())
         );
         assert!(parse_list_json(b"").unwrap().is_empty());
+        // One bad place is dropped, not the list: an out-of-range number (as
+        // JavaScript's Infinity) and a lone surrogate (kept, replaced).
+        let odd = br#"{"format":"kutupmap","version":1,"places":[
+            {"id":"inf","name":"Far","lat":1e400,"lon":0},
+            {"id":"ls","name":"x\ud800y","lat":1,"lon":2},
+            {"id":"ok","name":"Ok","lat":3,"lon":4}]}"#;
+        let places = parse_list_json(odd).unwrap();
+        let ids: Vec<_> = places.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["ls", "ok"]);
+        assert_eq!(places[0].name, "x\u{fffd}y");
         assert!(parse_list_json(b"{\"format\":\"other\"}").is_err());
     }
 

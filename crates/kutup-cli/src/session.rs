@@ -298,6 +298,10 @@ impl Store {
         Ok(serde_json::from_slice(&self.decrypt(v.value())?).ok())
     }
 
+    pub fn delete_yjs_base(&self, pair: &str, rel: &str) -> Result<()> {
+        self.sync_state_delete(&format!("{pair}|y|{rel}"))
+    }
+
     pub fn put_yjs_base(&self, pair: &str, rel: &str, base: &YjsBase) -> Result<()> {
         let encrypted = self.encrypt(&serde_json::to_vec(base)?)?;
         self.sync_state_put(&format!("{pair}|y|{rel}"), &encrypted)

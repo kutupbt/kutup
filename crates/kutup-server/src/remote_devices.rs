@@ -1008,4 +1008,90 @@ mod tests {
         }
         clean(&pool, &incarnation).await;
     }
+
+    /// Two revocations of one account at once are numbered in the order they
+    /// commit: the second waits for the first, so a bridge that sent number
+    /// n has sent every revocation before it.
+    #[tokio::test]
+    async fn live_revocations_are_numbered_in_commit_order() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let alice = identity(81);
+        let incarnation = alice.incarnation_id();
+        let user_id = uuid::Uuid::new_v4();
+        let username = format!("order{}", &user_id.simple().to_string()[..12]);
+        sqlx::query(
+            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                drive_private_key_envelope, public_key, account_authority_public_key,
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key,
+                account_protection_suite, account_protection_salt, argon_memory_kib,
+                argon_iterations, argon_parallelism, login_key_hash)
+             VALUES ($1, $2, '', '', '', '', $3, $4, $5, '', 1, '', 65536, 3, 1, '')",
+        )
+        .bind(user_id)
+        .bind(&username)
+        .bind(STANDARD.encode(alice.authority_public_key()))
+        .bind(alice.authority_key_id())
+        .bind(&incarnation)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let now = now_ms();
+        let mut ids = Vec::new();
+        for seed in [196u8, 197] {
+            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+                .verifying_key()
+                .to_bytes();
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO user_devices (user_id, public_signing, incarnation_id, registration_challenge,
+                    registration_issued_at_ms, registration_signature)
+                 VALUES ($1, $2, $3, $4, $5, 'x') RETURNING id",
+            )
+            .bind(user_id)
+            .bind(key.to_vec())
+            .bind(&incarnation)
+            .bind(vec![0u8; 32])
+            .bind(now)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        // The first revocation is recorded and held open...
+        let mut first = pool.begin().await.unwrap();
+        crate::handlers::devices::record_revocation(&mut first, user_id, ids[0], now, "a")
+            .await
+            .unwrap();
+        // ...the second starts meanwhile and must wait for it.
+        let second = {
+            let pool = pool.clone();
+            let id = ids[1];
+            tokio::spawn(async move {
+                let mut tx = pool.begin().await.unwrap();
+                crate::handlers::devices::record_revocation(&mut tx, user_id, id, now, "b")
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(!second.is_finished(), "the second waits for the first");
+        first.commit().await.unwrap();
+        second.await.unwrap();
+        let seqs: Vec<i64> = sqlx::query_scalar(
+            "SELECT revocation_seq FROM user_devices WHERE id = ANY($1) ORDER BY id",
+        )
+        .bind(&ids)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(seqs[0] < seqs[1], "numbered as committed: {seqs:?}");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }
