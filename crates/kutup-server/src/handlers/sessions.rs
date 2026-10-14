@@ -45,6 +45,10 @@ pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<
                     SET_COOKIE,
                     crate::auth_check::clear_known_client_cookie(&state),
                 ),
+                (
+                    SET_COOKIE,
+                    crate::auth_check::clear_retired_known_client_cookie(&state),
+                ),
             ]),
             body,
         )
@@ -276,6 +280,10 @@ pub async fn consume_fork(
             (
                 SET_COOKIE,
                 crate::auth_check::known_client_cookie(&state, consumed.user_id).await?,
+            ),
+            (
+                SET_COOKIE,
+                crate::auth_check::clear_retired_known_client_cookie(&state),
             ),
         ]),
         Json(body),

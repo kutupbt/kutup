@@ -317,8 +317,9 @@ fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// The `Set-Cookie` value marking this client as one `user_id` signed in
-/// from: HttpOnly, sent only to `/api`, `Secure` in production; bound to the
-/// account's current password.
+/// from: HttpOnly, sent only to `/api/auth` (sign-in reads it; no other route,
+/// above all the anonymous Chat routes, which refuse any cookie, ever sees
+/// it), `Secure` in production; bound to the account's current password.
 pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppResult<String> {
     let opaque_record: Vec<u8> =
         sqlx::query_scalar("SELECT COALESCE(opaque_record, ''::bytea) FROM users WHERE id = $1")
@@ -332,7 +333,7 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
         &credential_epoch(&opaque_record),
     );
     let mut cookie = format!(
-        "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api; HttpOnly; SameSite=Strict",
+        "{KNOWN_CLIENT_COOKIE}={value}; Max-Age={}; Path=/api/auth; HttpOnly; SameSite=Strict",
         KNOWN_CLIENT_DAYS * 86_400
     );
     if state.config.app_env == "production" {
@@ -343,8 +344,19 @@ pub(crate) async fn known_client_cookie(state: &AppState, user_id: Uuid) -> AppR
 
 /// Clears the mark on this origin (signing out).
 pub(crate) fn clear_known_client_cookie(state: &AppState) -> String {
+    clear_at(state, "/api/auth")
+}
+
+/// Clears the mark a browser may still hold at `Path=/api`, where it was set
+/// before: sent with every set or clear of the mark, so it reaches no route
+/// outside `/api/auth` again.
+pub(crate) fn clear_retired_known_client_cookie(state: &AppState) -> String {
+    clear_at(state, "/api")
+}
+
+fn clear_at(state: &AppState, path: &str) -> String {
     let mut cookie =
-        format!("{KNOWN_CLIENT_COOKIE}=; Max-Age=0; Path=/api; HttpOnly; SameSite=Strict");
+        format!("{KNOWN_CLIENT_COOKIE}=; Max-Age=0; Path={path}; HttpOnly; SameSite=Strict");
     if state.config.app_env == "production" {
         cookie.push_str("; Secure");
     }

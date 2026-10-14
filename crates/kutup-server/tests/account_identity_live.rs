@@ -325,17 +325,52 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     // A right sign-in marks the client as known (an HttpOnly cookie).
     let signed_in = try_in("192.0.2.10", &user.password, None);
     assert_eq!(signed_in.status(), 200);
-    let known = signed_in
+    let set: Vec<String> = signed_in
         .headers()
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
-        .find(|v| v.starts_with("kutup_known="))
+        .filter(|v| v.starts_with("kutup_known="))
+        .map(str::to_owned)
+        .collect();
+    let path_of = |cookie: &str| -> String {
+        cookie
+            .split(';')
+            .filter_map(|part| part.trim().strip_prefix("Path="))
+            .next()
+            .unwrap_or("/")
+            .to_owned()
+    };
+    let known = set
+        .iter()
+        .find(|v| !v.starts_with("kutup_known=;"))
         .expect("known-client cookie")
-        .to_owned();
+        .clone();
+    assert!(known.contains("HttpOnly"), "{known}");
+    // Sent to sign-in only: a browser path-matches (RFC 6265 5.1.4), so the
+    // anonymous Chat routes, which refuse any cookie, never carry it.
+    let path = path_of(&known);
+    assert_eq!(path, "/api/auth", "{known}");
+    let matches = |request: &str| {
+        request == path
+            || (request.starts_with(&path)
+                && (path.ends_with('/') || request[path.len()..].starts_with('/')))
+    };
+    assert!(matches("/api/auth/login/start"));
+    for route in [
+        "/api/chat/mls/anonymous/key-packages",
+        "/api/chat/mls/anonymous/messages",
+        "/api/chat/users/x/keys",
+        "/api",
+    ] {
+        assert!(!matches(route), "{route} would carry {known}");
+    }
+    // The mark a browser may hold from before, at `Path=/api`, is cleared.
     assert!(
-        known.contains("HttpOnly") && known.contains("Path=/api"),
-        "{known}"
+        set.iter().any(|v| v.starts_with("kutup_known=;")
+            && v.contains("Max-Age=0")
+            && path_of(v) == "/api"),
+        "{set:?}"
     );
     let known = known.split(';').next().unwrap().to_owned();
 

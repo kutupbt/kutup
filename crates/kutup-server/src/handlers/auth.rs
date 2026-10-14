@@ -1715,6 +1715,10 @@ async fn issue_tokens_and_respond(
                     SET_COOKIE,
                     auth_check::known_client_cookie(state, uid).await?,
                 ),
+                (
+                    SET_COOKIE,
+                    auth_check::clear_retired_known_client_cookie(state),
+                ),
             ]),
             Json(body),
         )
