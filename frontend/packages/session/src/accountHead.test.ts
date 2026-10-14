@@ -10,6 +10,7 @@ import {
   NotInVerifiedIndexError,
   VerifiedIndex,
   type HeadEngine,
+  type VerifiedHeadLike,
 } from './accountHead'
 
 // A stand-in for the Rust head with its rules kept small: heads are base64
@@ -27,13 +28,43 @@ const unseal = (sealed: string) => JSON.parse(Buffer.from(sealed, 'base64').toSt
 const digest = (sealed: string) => createHash('sha256').update(Buffer.from(sealed, 'base64')).digest('hex')
 const anchorOf = (sealed: string): HeadAnchor => ({ sequence: unseal(sealed).sequence, digest: digest(sealed) })
 
+/** A verified head: its sealed bytes; counted while alive, to catch leaks and use after free. */
+let alive = 0
+class FakeVerified implements VerifiedHeadLike {
+  private freed = false
+  constructor(readonly sealed: string) {
+    alive++
+  }
+  private live(): void {
+    if (this.freed) throw new Error('used after free')
+  }
+  get anchor(): HeadAnchor {
+    this.live()
+    return anchorOf(this.sealed)
+  }
+  get head(): AccountHeadValue {
+    this.live()
+    return unseal(this.sealed) as unknown as AccountHeadValue
+  }
+  copy(): FakeVerified {
+    this.live()
+    return new FakeVerified(this.sealed)
+  }
+  free(): void {
+    this.live()
+    this.freed = true
+    alive--
+  }
+}
+
 class FakeEngine implements HeadEngine {
-  verified: string | null = null
   constructor(readonly name = 'incarnation-a') {}
   writer = (device: string) => `w:${device}`
   scope = (scope: string, index: HeadIndex): HeadScope => ({ scope, count: index.length, digest: JSON.stringify([...index].sort()) })
-  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; anchor?: HeadAnchor } {
-    this.verified = null
+  /** Runs before a check returns: a test's chance to change what the server shows. */
+  onCheck: (() => void) | null = null
+  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; verified: VerifiedHeadLike | null } {
+    this.onCheck?.()
     const head = unseal(current)
     let kind: HeadStatus['kind']
     if (!anchor) kind = 'fresh'
@@ -42,34 +73,33 @@ class FakeEngine implements HeadEngine {
     else if (segment && segment.length > 0 && digest(segment[0]!) === anchor.digest && segment.at(-1) === current) kind = 'extends'
     else if (segment === null && head.sequence - anchor.sequence > 1000) kind = 'tooOld'
     else kind = 'fork'
-    if (kind === 'fresh' || kind === 'current' || kind === 'extends') this.verified = current
-    return { status: { kind }, anchor: this.verified ? anchorOf(current) : undefined }
+    const trusted = kind === 'fresh' || kind === 'current' || kind === 'extends'
+    return { status: { kind }, verified: trusted ? new FakeVerified(current) : null }
   }
-  reanchor(anchor: HeadAnchor, current: string, segment: readonly string[] | null, confirmed: boolean, atMs: number): Reanchored {
-    const { status } = this.check(anchor, current, segment)
+  reanchor(anchor: HeadAnchor, current: string, segment: readonly string[] | null, confirmed: boolean, atMs: number) {
+    const { status, verified } = this.check(anchor, current, segment)
+    verified?.free()
     if (status.kind !== 'tooOld' && !confirmed) throw new Error('needs the person')
-    this.verified = current
-    return { from: anchor, to: anchorOf(current), status, atMs }
+    return { record: { from: anchor, to: anchorOf(current), status, atMs } as Reanchored, verified: new FakeVerified(current) }
   }
-  checkIndex(scope: string, index: HeadIndex): 'matches' | 'uncovered' {
-    if (!this.verified) throw new Error('no verified head')
-    const entry = unseal(this.verified).scopes.find((s) => s.scope === scope)
+  checkIndex(verified: VerifiedHeadLike, scope: string, index: HeadIndex): 'matches' | 'uncovered' {
+    const entry = unseal((verified as FakeVerified).sealed).scopes.find((s) => s.scope === scope)
     if (!entry) return 'uncovered'
     if (entry.digest !== this.scope(scope, index).digest) throw new Error('differs')
     return 'matches'
   }
-  next(writer: string, scopes: readonly HeadScope[]): string {
-    if (!this.verified) throw new Error('no verified head')
-    const before = unseal(this.verified)
+  next(verified: VerifiedHeadLike, writer: string, scopes: readonly HeadScope[]): string {
+    const base = (verified as FakeVerified).sealed
+    const before = unseal(base)
     const kept = before.scopes.filter((s) => !scopes.some((n) => n.scope === s.scope))
-    return seal({ sequence: before.sequence + 1, previous: digest(this.verified), writer, scopes: [...kept, ...scopes] })
+    return seal({ sequence: before.sequence + 1, previous: digest(base), writer, scopes: [...kept, ...scopes] })
   }
   first = (writer: string, scopes: readonly HeadScope[]) => seal({ sequence: 1, previous: null, writer, scopes: [...scopes] })
-  committed(sealed: string): HeadAnchor {
-    this.verified = sealed
-    return anchorOf(sealed)
+  committed(verified: VerifiedHeadLike | null, sealed: string): VerifiedHeadLike {
+    const head = unseal(sealed)
+    if (verified ? head.previous !== digest((verified as FakeVerified).sealed) : head.sequence !== 1) throw new Error('does not follow')
+    return new FakeVerified(sealed)
   }
-  verifiedHead = () => (this.verified ? (unseal(this.verified) as unknown as AccountHeadValue) : null)
   localStateName = () => this.name
   newLocalState = (): LocalHeadState => ({ incarnationId: this.name, deviceId: 'dev-1', anchor: null, anchoredAtMs: 0, log: [] })
   openLocalState(sealed: string): LocalHeadState {
@@ -78,14 +108,13 @@ class FakeEngine implements HeadEngine {
     return state
   }
   sealLocalState = (state: LocalHeadState) => JSON.stringify(state)
-  advanceLocalState(state: LocalHeadState, atMs: number) {
-    if (!this.verified) throw new Error('no verified head')
-    const anchor = anchorOf(this.verified)
+  advanceLocalState(state: LocalHeadState, verified: VerifiedHeadLike, atMs: number) {
+    const anchor = verified.anchor
     if (state.anchor && state.anchor.sequence >= anchor.sequence) return { state, changed: false }
     const log = state.anchor ? state.log : [...state.log, { kind: 'startedFresh' as const, anchor, atMs }]
     return { state: { ...state, anchor, anchoredAtMs: atMs, log }, changed: true }
   }
-  reanchoredLocalState = (state: LocalHeadState, record: Reanchored): LocalHeadState => ({
+  reanchoredLocalState = (state: LocalHeadState, record: Reanchored, _verified: VerifiedHeadLike): LocalHeadState => ({
     ...state,
     anchor: record.to,
     anchoredAtMs: record.atMs,
@@ -114,6 +143,28 @@ function chain(n: number, writer = 'w:other'): string[] {
     )
   }
   return heads
+}
+
+function conflict409(code: string): AxiosError {
+  return refused(409, code)
+}
+
+/** A server whose index and head come from `state()`; its chain is every head it has shown. */
+function server2(state: () => { head: string; values: [string, number][] }) {
+  const all: string[] = []
+  const shown = () => {
+    const { head } = state()
+    if (!all.includes(head)) all.push(head)
+    return state()
+  }
+  const routes: Record<string, Route> = {
+    'GET /account/index/contacts': () => ({ head: shown().head, values: shown().values, basis: null }),
+    'GET /account/head': () => ({ head: shown().head }),
+  }
+  for (let from = 1; from <= 10; from++) {
+    routes[`GET /account/heads?from=${from}`] = () => ({ heads: all.filter((head) => unseal(head).sequence >= from), next: null })
+  }
+  return server(routes)
 }
 
 function refused(status: number, code?: string): AxiosError {
@@ -440,5 +491,83 @@ describe('data state', () => {
     expect(await client.dataState()).toMatchObject({ sequence: 1, lastByThisApp: false, anchoredAtMs: 77 })
     await client.listedWrite('pins', async () => ({ changes: [['pins', 1]], send: () => Promise.resolve() }))
     expect(await client.dataState()).toMatchObject({ sequence: 2, lastByThisApp: true })
+  })
+})
+
+describe('races (the #202 review)', () => {
+  it('a write keeps the head it verified while another check in the page moves on, and redoes its edit on the newer one', async () => {
+    const before = alive
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    // The server: head 1 covers contact a@1.
+    const h1 = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('contacts', [['a', 1]])] })
+    let server = { head: h1, values: [['a', 1]] as [string, number][] }
+    const sent: string[] = []
+    const { http } = server2(() => server)
+    const client = new AccountHeadClient(engine, store, http)
+    let edits = 0
+    const written = client.listedWrite('contacts', async () => {
+      edits++
+      if (edits === 1) {
+        // While this edit is made, another device writes contact a@2 (head 2),
+        // and another read in this page verifies it.
+        const h2 = seal({ sequence: 2, previous: digest(h1), writer: 'w:other', scopes: [engine.scope('contacts', [['a', 2]])] })
+        server = { head: h2, values: [['a', 2]] }
+        await client.verifiedIndex('contacts')
+      }
+      return {
+        changes: [['b', 7]],
+        send: (head: string) => {
+          sent.push(head)
+          // The server takes a head only on top of its newest.
+          if (unseal(head).previous !== digest(server.head)) return Promise.reject(conflict409('head_conflict'))
+          server = { head, values: [...server.values, ['b', 7]] }
+          return Promise.resolve('ok')
+        },
+      }
+    })
+    await expect(written).resolves.toBe('ok')
+    // First try: built on the head it verified (1), with that head's values; refused.
+    expect(unseal(sent[0]!)).toMatchObject({ sequence: 2, previous: digest(h1) })
+    expect(unseal(sent[0]!).scopes).toEqual([engine.scope('contacts', [['a', 1], ['b', 7]])])
+    // Second try: on head 2, with the other device's change kept.
+    expect(unseal(sent[1]!)).toMatchObject({ sequence: 3 })
+    expect(unseal(sent[1]!).scopes).toEqual([engine.scope('contacts', [['a', 2], ['b', 7]])])
+    // Every verified head it made is freed (none used after free either).
+    client.close()
+    expect(alive).toBe(before)
+  })
+
+  it('a chain that grew past the head being checked is cut at it, not taken for a fork', async () => {
+    const heads = chain(3)
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    await remembering(engine, store, heads[0]!)
+    const { http } = server({
+      // The index was read at head 2; head 3 was written before the chain was asked for.
+      'GET /account/index/contacts': () => ({ head: heads[1], values: [['c', 1], ['d', 2]], basis: null }),
+      'GET /account/heads?from=1': () => ({ heads, next: null }),
+    })
+    const client = new AccountHeadClient(engine, store, http)
+    await client.verifiedIndex('contacts').catch(() => undefined)
+    expect(client.current().kind).toBe('trusted')
+    expect((await stateIn(engine, store)).anchor?.sequence).toBe(2)
+  })
+
+  it('a rollback seen once (another tab moved on between two reads) is read again, not blocked', async () => {
+    const heads = chain(2)
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    await remembering(engine, store, heads[1]!)
+    let reads = 0
+    const { http } = server({
+      'GET /account/head': () => ({ head: reads++ === 0 ? heads[0] : heads[1] }),
+      'GET /account/heads?from=2': () => ({ heads: [heads[1]], next: null }),
+    })
+    const client = new AccountHeadClient(engine, store, http)
+    const seen: string[] = []
+    client.subscribe((condition) => seen.push(condition.kind))
+    await client.verifiedHead()
+    expect(seen).toEqual(['unknown', 'trusted'])
   })
 })

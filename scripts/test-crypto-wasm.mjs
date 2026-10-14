@@ -1000,9 +1000,6 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   for (const [i, index] of v.indexes.entries()) {
     assert.deepEqual(head.scope('contacts', JSON.stringify(index)), JSON.parse(v.heads[i]).scopes[0])
   }
-  // No verified head yet: no index check, no next head.
-  assert.throws(() => head.checkIndex('contacts', '[]'), /no verified head/)
-  assert.throws(() => head.next(v.writer, '[]'), /no verified head/)
   const named = (name) => ({ forked: v.forked, far: v.far, near: v.near })[name] ?? v.sealed[Number(name)]
   for (const check of v.checks) {
     const result = head.check(
@@ -1010,58 +1007,66 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
       named(check.current),
       check.segment ? JSON.stringify(check.segment.map(named)) : undefined,
     )
-    assert.deepEqual(result.status, check.status, check.case)
+    assert.deepEqual(result.status(), check.status, check.case)
+    // Only a trusted head comes with a verified one.
+    const verified = result.takeVerified()
+    assert.equal(verified !== undefined, ['fresh', 'current', 'extends'].includes(check.status.kind), check.case)
+    verified?.free()
+    result.free()
   }
   // A verified head checks its index and refuses the others.
-  const verified = head.check(undefined, v.sealed[2], undefined)
-  assert.deepEqual(verified.anchor, v.anchors[2])
-  assert.equal(head.checkIndex('contacts', JSON.stringify(v.indexes[2])), 'matches')
-  assert.equal(head.checkIndex('mailNames', '[]'), 'uncovered')
+  const checked = head.check(undefined, v.sealed[2], undefined)
+  const verified = checked.takeVerified()
+  assert.equal(checked.takeVerified(), undefined, 'taken once')
+  assert.deepEqual(verified.anchor(), v.anchors[2])
+  assert.equal(head.checkIndex(verified, 'contacts', JSON.stringify(v.indexes[2])), 'matches')
+  assert.equal(head.checkIndex(verified, 'mailNames', '[]'), 'uncovered')
   for (const refused of v.refusedIndexes) {
-    assert.throws(() => head.checkIndex('contacts', JSON.stringify(refused.index)), undefined, refused.case)
+    assert.throws(() => head.checkIndex(verified, 'contacts', JSON.stringify(refused.index)), undefined, refused.case)
   }
-  // A check that does not trust, or fails, leaves no verified head behind.
-  head.check(undefined, v.sealed[2], undefined)
-  const untrusted = head.check(JSON.stringify(v.anchors[2]), v.sealed[0], undefined)
-  assert.notDeepEqual(untrusted.status.kind, 'current')
-  assert.equal(untrusted.anchor ?? null, null)
-  assert.throws(() => head.checkIndex('contacts', JSON.stringify(v.indexes[2])), /no verified head/)
-  head.check(undefined, v.sealed[2], undefined)
+  // A check elsewhere does not touch it: a head a write holds stays its own.
+  const elsewhere = head.check(JSON.stringify(v.anchors[2]), v.sealed[0], undefined)
+  assert.equal(elsewhere.status().kind, 'rollback')
+  assert.equal(elsewhere.takeVerified(), undefined)
+  assert.equal(head.checkIndex(verified, 'contacts', JSON.stringify(v.indexes[2])), 'matches')
   assert.throws(() => head.check(undefined, 'AAAA', undefined))
-  assert.throws(() => head.next(v.writer, '[]'), /no verified head/)
-  head.check(undefined, v.sealed[2], undefined)
-  // A head written here follows it, and is committed.
-  const next = head.next(v.writer, JSON.stringify([head.scope('contacts', JSON.stringify(v.indexes[2]))]))
-  assert.equal(head.committed(next).sequence, 4)
+  // A head written here follows it, and is committed; a copy is independent.
+  const copy = verified.copy()
+  const next = head.next(verified, v.writer, JSON.stringify([head.scope('contacts', JSON.stringify(v.indexes[2]))]))
+  const committed = head.committed(copy, next)
+  assert.equal(committed.anchor().sequence, 4)
+  assert.equal(verified.anchor().sequence, 3)
+  assert.throws(() => head.committed(committed, next), undefined, 'a head follows only its own base')
   // A rollback re-anchors only when the person confirms; the record matches Rust's.
   assert.throws(() => head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, false, v.reanchored.atMs))
-  assert.throws(() => head.checkIndex('contacts', '[]'), /no verified head/)
-  assert.deepEqual(head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, true, v.reanchored.atMs), v.reanchored)
-  head.free()
+  const reanchored = head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, true, v.reanchored.atMs)
+  assert.deepEqual(reanchored.record(), v.reanchored)
+  const moved = reanchored.takeVerified()
+  assert.deepEqual(moved.anchor(), v.reanchored.to)
 
   // What a device keeps: named per account and incarnation, sealed, opened
-  // only for its incarnation, advanced only from a verified head.
-  const local = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId)
-  assert.equal(local.localStateName(), v.localName)
-  assert.deepEqual(local.openLocalState(v.localSealed), v.localState)
-  const elsewhere = new crypto.AccountHeadKeys(v.masterKey, v.binding, '6'.repeat(64))
-  assert.notEqual(elsewhere.localStateName(), v.localName)
-  assert.throws(() => elsewhere.openLocalState(v.localSealed))
-  assert.throws(() => elsewhere.sealLocalState(JSON.stringify(v.localState)), /another incarnation/)
-  elsewhere.free()
-  const fresh = local.newLocalState()
+  // only for its incarnation, advanced only to a verified head.
+  assert.equal(head.localStateName(), v.localName)
+  assert.deepEqual(head.openLocalState(v.localSealed), v.localState)
+  const other = new crypto.AccountHeadKeys(v.masterKey, v.binding, '6'.repeat(64))
+  assert.notEqual(other.localStateName(), v.localName)
+  assert.throws(() => other.openLocalState(v.localSealed))
+  assert.throws(() => other.sealLocalState(JSON.stringify(v.localState)), /another incarnation/)
+  other.free()
+  const fresh = head.newLocalState()
   assert.equal(fresh.anchor, null)
   assert.match(fresh.deviceId, /^[0-9a-f]{32}$/)
-  assert.throws(() => local.advanceLocalState(JSON.stringify(fresh), 1), /no verified head/)
-  local.check(undefined, v.sealed[1], undefined)
-  const advanced = local.advanceLocalState(JSON.stringify(fresh), 5)
+  const advanced = head.advanceLocalState(JSON.stringify(fresh), verified, 5)
   assert.equal(advanced.changed, true)
-  assert.deepEqual(advanced.state.anchor, v.anchors[1])
+  assert.deepEqual(advanced.state.anchor, v.anchors[2])
   assert.equal(advanced.state.log[0].kind, 'startedFresh')
-  assert.deepEqual(local.openLocalState(local.sealLocalState(JSON.stringify(advanced.state))), advanced.state)
-  // A re-anchoring record is taken only for the head this page re-anchored on.
-  assert.throws(() => local.reanchoredLocalState(JSON.stringify(advanced.state), JSON.stringify(v.reanchored)), /not this page/)
-  local.free()
+  assert.deepEqual(head.openLocalState(head.sealLocalState(JSON.stringify(advanced.state))), advanced.state)
+  // A re-anchoring record is taken only with the head that re-anchoring gave.
+  assert.throws(() => head.reanchoredLocalState(JSON.stringify(advanced.state), JSON.stringify(v.reanchored), verified), /not this re-anchoring/)
+  const again = head.reanchoredLocalState(JSON.stringify(advanced.state), JSON.stringify(v.reanchored), moved)
+  assert.deepEqual(again.anchor, v.reanchored.to)
+  for (const handle of [checked, elsewhere, verified, copy, committed, reanchored, moved]) handle.free()
+  head.free()
 }
 
 console.log('crypto WASM canonical vectors passed')

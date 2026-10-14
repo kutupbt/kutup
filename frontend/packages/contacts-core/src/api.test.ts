@@ -131,6 +131,17 @@ describe('writing contacts', () => {
     expect(http.post).toHaveBeenCalledWith('/contacts', expect.objectContaining({ head: 'head-1' }))
   })
 
+  it('a create tried again after a lost answer finds the contact made, and sends nothing', async () => {
+    http.post.mockRejectedValueOnce(new Error('Network Error'))
+    await expect(createContact(session, 'u-9', draft('Ada'))).rejects.toThrow('Network Error')
+    // The first try was stored after all: the head lists the UID.
+    head.index = () => [['u-9', 123]]
+    http.rows = [row('r9', 'u-9', 123)]
+    http.post.mockClear()
+    expect(await createContact(session, 'u-9', draft('Ada'))).toBe('r9')
+    expect(http.post).not.toHaveBeenCalled()
+  })
+
   it('saves an edit with the next head; sends it again when only another value moved', async () => {
     http.put.mockRejectedValueOnce(conflict('head_conflict')).mockResolvedValue({ data: {} })
     head.index = () => [['u-1', 5]]

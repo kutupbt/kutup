@@ -32,23 +32,36 @@ import { indexedDbRevisionStore, type RevisionStore } from '@kutup/crypto/revisi
 import api from './client'
 import { getSession, subscribe } from './store'
 
+/** A verified head (`@kutup/crypto/accountHead` `VerifiedHead`): each holder its own, freed when done. */
+export interface VerifiedHeadLike {
+  readonly anchor: HeadAnchor
+  readonly head: AccountHeadValue
+  copy(): VerifiedHeadLike
+  free(): void
+}
+
 /** What this module needs of the Rust head (an `AccountHead`; tests use a fake). */
 export interface HeadEngine {
   writer(deviceId: string): string
   scope(scope: string, index: HeadIndex): HeadScope
-  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; anchor?: HeadAnchor }
-  reanchor(anchor: HeadAnchor, current: string, segment: readonly string[] | null, confirmed: boolean, atMs: number): Reanchored
-  checkIndex(scope: string, index: HeadIndex): 'matches' | 'uncovered'
-  next(writer: string, scopes: readonly HeadScope[]): string
+  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; verified: VerifiedHeadLike | null }
+  reanchor(
+    anchor: HeadAnchor,
+    current: string,
+    segment: readonly string[] | null,
+    confirmed: boolean,
+    atMs: number,
+  ): { record: Reanchored; verified: VerifiedHeadLike }
+  checkIndex(verified: VerifiedHeadLike, scope: string, index: HeadIndex): 'matches' | 'uncovered'
+  next(verified: VerifiedHeadLike, writer: string, scopes: readonly HeadScope[]): string
   first(writer: string, scopes: readonly HeadScope[]): string
-  committed(sealed: string): HeadAnchor
-  verifiedHead(): AccountHeadValue | null
+  committed(verified: VerifiedHeadLike | null, sealed: string): VerifiedHeadLike
   localStateName(): string
   newLocalState(): LocalHeadState
   openLocalState(sealed: string): LocalHeadState
   sealLocalState(state: LocalHeadState): string
-  advanceLocalState(state: LocalHeadState, atMs: number): { state: LocalHeadState; changed: boolean }
-  reanchoredLocalState(state: LocalHeadState, record: Reanchored): LocalHeadState
+  advanceLocalState(state: LocalHeadState, verified: VerifiedHeadLike, atMs: number): { state: LocalHeadState; changed: boolean }
+  reanchoredLocalState(state: LocalHeadState, record: Reanchored, verified: VerifiedHeadLike): LocalHeadState
   forgottenLocalState(state: LocalHeadState, atMs: number): LocalHeadState
   close(): void
 }
@@ -201,11 +214,18 @@ function locked<T>(name: string, task: () => Promise<T>): Promise<T> {
   return locks ? (locks.request(`kutup-account-head:${name}`, task) as Promise<T>) : task()
 }
 
+/** What one check of a head found. */
+type Inspected =
+  | { kind: 'trusted'; verified: VerifiedHeadLike | null; notice: 'tooOld' | null }
+  | { kind: 'blocked'; reason: 'rollback' | 'fork'; on: NonNullable<AccountHeadClient['blockedOn']> }
+
 export class AccountHeadClient {
   private condition: HeadCondition = { kind: 'unknown' }
   /** What "continue with the server's data" needs, while blocked. */
   private blockedOn: { current: string; segment: readonly string[] | null } | { forget: true } | null = null
   private verifiedAt = 0
+  /** The latest head this page verified (its own copy), for the data state. */
+  private latest: VerifiedHeadLike | null = null
   private writes: Promise<unknown> = Promise.resolve()
   private readonly listeners = new Set<HeadListener>()
 
@@ -253,7 +273,19 @@ export class AccountHeadClient {
     await this.store.put(this.entry, this.engine.sealLocalState(state))
   }
 
-  private async segment(from: number): Promise<string[] | null> {
+  /** `verified` becomes this page's latest, and the anchor moves to it (never back). */
+  private async remember(verified: VerifiedHeadLike): Promise<void> {
+    await locked(this.engine.localStateName(), async () => {
+      const advanced = this.engine.advanceLocalState(await this.load(), verified, this.now())
+      if (advanced.changed) await this.save(advanced.state)
+    })
+    this.latest?.free()
+    this.latest = verified.copy()
+    this.verifiedAt = this.now()
+  }
+
+  /** The chain from `from`, every page of it, cut at `current` (null when past the server's window). */
+  private async segment(from: number, current: string): Promise<string[] | null> {
     const heads: string[] = []
     let next: number | null = from
     try {
@@ -262,6 +294,9 @@ export class AccountHeadClient {
           await this.http.get<{ heads: string[]; next: number | null }>(`/account/heads?from=${next}`)
         ).data
         heads.push(...page.heads)
+        // The chain up to the head being checked: one written since does not belong.
+        const at = heads.indexOf(current)
+        if (at >= 0) return heads.slice(0, at + 1)
         next = page.next
       }
     } catch (error) {
@@ -273,95 +308,115 @@ export class AccountHeadClient {
   }
 
   /**
-   * Checks the head the server shows (`current`; null: none) against what
-   * this app remembers, and remembers it when trusted. Throws
-   * {@link HeadBlockedError} for a rollback or a fork.
+   * One check of the head the server shows (`current`; null: none) against
+   * what this app remembers. Trusted: the verified head (the caller owns it),
+   * and the anchor moved; too old: re-anchored with a notice.
    */
-  private async verify(current: string | null): Promise<void> {
-    await locked(this.engine.localStateName(), async () => {
+  private async inspect(current: string | null): Promise<Inspected> {
+    return locked(this.engine.localStateName(), async (): Promise<Inspected> => {
       const state = await this.load()
       if (current === null) {
-        if (state.anchor) return this.block('rollback', { forget: true })
-        this.verifiedAt = this.now()
-        if (this.condition.kind !== 'trusted') this.set({ kind: 'trusted', notice: null })
-        return
+        if (state.anchor) return { kind: 'blocked', reason: 'rollback', on: { forget: true } }
+        return { kind: 'trusted', verified: null, notice: null }
       }
       const anchor = state.anchor
-      const segment = anchor && (await sha256Hex(current)) !== anchor.digest ? await this.segment(anchor.sequence) : null
-      const { status } = this.engine.check(anchor, current, segment)
+      const segment = anchor && (await sha256Hex(current)) !== anchor.digest ? await this.segment(anchor.sequence, current) : null
+      const { status, verified } = this.engine.check(anchor, current, segment)
       switch (status.kind) {
         case 'fresh':
         case 'current':
         case 'extends': {
-          const advanced = this.engine.advanceLocalState(state, this.now())
+          const advanced = this.engine.advanceLocalState(state, verified!, this.now())
           if (advanced.changed) await this.save(advanced.state)
-          this.verifiedAt = this.now()
-          if (this.condition.kind !== 'trusted') this.set({ kind: 'trusted', notice: null })
-          return
+          return { kind: 'trusted', verified, notice: null }
         }
         case 'tooOld': {
           // Further back than the server keeps: neither shown nor refuted.
           // Re-anchored with a notice, never blocking (docs/plans §7).
-          const record = this.engine.reanchor(anchor!, current, segment, false, this.now())
-          await this.save(this.engine.reanchoredLocalState(state, record))
-          this.verifiedAt = this.now()
-          this.set({ kind: 'trusted', notice: 'tooOld' })
-          return
+          const moved = this.engine.reanchor(anchor!, current, segment, false, this.now())
+          await this.save(this.engine.reanchoredLocalState(state, moved.record, moved.verified))
+          return { kind: 'trusted', verified: moved.verified, notice: 'tooOld' }
         }
         case 'rollback':
         case 'fork':
-          return this.block(status.kind, { current, segment })
+          return { kind: 'blocked', reason: status.kind, on: { current, segment } }
       }
     })
   }
 
-  private block(reason: 'rollback' | 'fork', on: NonNullable<AccountHeadClient['blockedOn']>): never {
-    this.blockedOn = on
-    this.verifiedAt = 0
-    this.set({ kind: 'blocked', reason })
-    throw new HeadBlockedError(reason)
+  /**
+   * Reads a snapshot (`read`: what the server shows, and the head it goes
+   * with) and checks its head. A rollback or fork is read once more first:
+   * another tab or device moving on between two reads is not one. Then it
+   * blocks ({@link HeadBlockedError}).
+   */
+  private async checked<T>(read: () => Promise<{ current: string | null; data: T }>): Promise<{ data: T; verified: VerifiedHeadLike | null }> {
+    if (this.condition.kind === 'blocked') throw new HeadBlockedError(this.condition.reason)
+    for (let attempt = 0; ; attempt++) {
+      const snapshot = await read()
+      const outcome = await this.inspect(snapshot.current)
+      if (outcome.kind === 'trusted') {
+        if (outcome.verified) {
+          this.latest?.free()
+          this.latest = outcome.verified.copy()
+        }
+        this.verifiedAt = this.now()
+        if (outcome.notice || this.condition.kind !== 'trusted') this.set({ kind: 'trusted', notice: outcome.notice })
+        return { data: snapshot.data, verified: outcome.verified }
+      }
+      if (attempt > 0) {
+        this.blockedOn = outcome.on
+        this.verifiedAt = 0
+        this.set({ kind: 'blocked', reason: outcome.reason })
+        throw new HeadBlockedError(outcome.reason)
+      }
+    }
   }
 
   /** The account's head, verified (asked again after a while, or after a write). */
   async verifiedHead(): Promise<void> {
     if (this.condition.kind === 'blocked') throw new HeadBlockedError(this.condition.reason)
     if (this.condition.kind === 'trusted' && this.now() - this.verifiedAt < VERIFIED_FOR_MS) return
-    const { data } = await this.http.get<{ head: string | null }>('/account/head')
-    await this.verify(data.head)
+    const { verified } = await this.checked(async () => ({ current: (await this.http.get<{ head: string | null }>('/account/head')).data.head, data: null }))
+    verified?.free()
   }
 
   /**
-   * A scope's index, checked against the head it was read with (one
-   * snapshot). A scope the server keeps no index of yet (404) is uncovered.
+   * A scope's index checked against the head it was read with (one
+   * snapshot), and that verified head (the caller owns it). A scope the
+   * server keeps no index of yet (404) is uncovered.
    */
-  async verifiedIndex(scope: HeadScopeName): Promise<VerifiedIndex> {
-    let data: { head: string | null; values: [string, number][]; basis: string | null }
-    try {
-      data = (await this.http.get<typeof data>(`/account/index/${encodeURIComponent(scope)}`)).data
-    } catch (error) {
-      if (statusOf(error) !== 404) throw error
-      await this.verifiedHead()
-      return new VerifiedIndex(scope, false, [], null)
-    }
-    await this.verify(data.head)
-    if (data.head === null) return new VerifiedIndex(scope, false, data.values, data.basis)
+  private async readIndex(scope: HeadScopeName): Promise<{ index: VerifiedIndex; verified: VerifiedHeadLike | null }> {
+    type Snapshot = { values: [string, number][]; basis: string | null; known: boolean }
+    const { data, verified } = await this.checked<Snapshot>(async () => {
+      try {
+        const { data } = await this.http.get<{ head: string | null; values: [string, number][]; basis: string | null }>(
+          `/account/index/${encodeURIComponent(scope)}`,
+        )
+        return { current: data.head, data: { values: data.values, basis: data.basis, known: true } }
+      } catch (error) {
+        if (statusOf(error) !== 404) throw error
+        const { data } = await this.http.get<{ head: string | null }>('/account/head')
+        return { current: data.head, data: { values: [], basis: null, known: false } }
+      }
+    })
+    if (!data.known) return { index: new VerifiedIndex(scope, false, [], null), verified }
+    if (!verified) return { index: new VerifiedIndex(scope, false, data.values, data.basis), verified }
     let covered: boolean
     try {
-      covered = this.engine.checkIndex(scope, data.values) === 'matches'
+      covered = this.engine.checkIndex(verified, scope, data.values) === 'matches'
     } catch {
+      verified.free()
       throw new IndexMismatchError(scope)
     }
-    return new VerifiedIndex(scope, covered, data.values, null)
+    return { index: new VerifiedIndex(scope, covered, data.values, null), verified }
   }
 
-  /** The head the server stored for this app's write becomes the verified one and the anchor. */
-  private async commit(sealed: string): Promise<void> {
-    this.engine.committed(sealed)
-    await locked(this.engine.localStateName(), async () => {
-      const advanced = this.engine.advanceLocalState(await this.load(), this.now())
-      if (advanced.changed) await this.save(advanced.state)
-    })
-    this.verifiedAt = this.now()
+  /** A scope's index, checked against the head it was read with. */
+  async verifiedIndex(scope: HeadScopeName): Promise<VerifiedIndex> {
+    const { index, verified } = await this.readIndex(scope)
+    verified?.free()
+    return index
   }
 
   /**
@@ -370,7 +425,8 @@ export class AccountHeadClient {
    * device wrote first (`attempt` counts from 1: past the first, re-read the
    * value). The chain is started first when there is none. An edit that
    * returns null changes nothing and sends nothing. One listed write at a
-   * time in this page.
+   * time in this page, each on the head it verified itself: a check elsewhere
+   * in the page cannot change it midway.
    */
   listedWrite<T>(scope: HeadScopeName, edit: (index: VerifiedIndex, attempt: number) => Promise<ListedEdit<T> | null>): Promise<T | undefined> {
     const run = () => this.write(scope, edit)
@@ -385,12 +441,10 @@ export class AccountHeadClient {
   ): Promise<T | undefined> {
     for (let attempt = 1; ; attempt++) {
       if (this.condition.kind === 'blocked') throw new HeadBlockedError(this.condition.reason)
-      // Every attempt reads the index again: an earlier one met a newer head.
-      this.verifiedAt = 0
-      const index = await this.verifiedIndex(scope)
-      const state = await this.load()
-      const writer = this.engine.writer(state.deviceId)
+      const { index, verified } = await this.readIndex(scope)
+      let base = verified
       try {
+        const writer = this.engine.writer((await this.load()).deviceId)
         const change = await edit(index, attempt)
         // Nothing to change (the edit found it already done): nothing is sent.
         if (change === null) return undefined
@@ -399,16 +453,28 @@ export class AccountHeadClient {
           // every value; then this write follows it.
           const first = this.engine.first(writer, [this.engine.scope(scope, index.values)])
           await this.http.post('/account/head', { head: first, basis: index.basis })
-          await this.commit(first)
+          base = this.engine.committed(null, first)
+          await this.remember(base)
         }
-        const head = this.engine.next(writer, [this.engine.scope(scope, applied(index.values, change.changes))])
+        if (!base) throw new Error('no verified account head to write on')
+        const head = this.engine.next(base, writer, [this.engine.scope(scope, applied(index.values, change.changes))])
         const result = await change.send(head)
-        await this.commit(head)
+        try {
+          const after = this.engine.committed(base, head)
+          await this.remember(after)
+          after.free()
+        } catch {
+          // Stored, but not taken as verified here: the next read checks it.
+          this.verifiedAt = 0
+        }
         return result
       } catch (error) {
         const code = conflictCode(error)
         if ((code === 'head_conflict' || code === 'revision_conflict') && attempt < WRITE_TRIES) continue
         throw error
+      } finally {
+        base?.free()
+        if (verified && verified !== base) verified.free()
       }
     }
   }
@@ -426,8 +492,10 @@ export class AccountHeadClient {
       if ('forget' in on) {
         await this.save(this.engine.forgottenLocalState(state, this.now()))
       } else if (state.anchor) {
-        const record = this.engine.reanchor(state.anchor, on.current, on.segment, true, this.now())
-        await this.save(this.engine.reanchoredLocalState(state, record))
+        const moved = this.engine.reanchor(state.anchor, on.current, on.segment, true, this.now())
+        await this.save(this.engine.reanchoredLocalState(state, moved.record, moved.verified))
+        this.latest?.free()
+        this.latest = moved.verified
       }
     })
     this.blockedOn = null
@@ -443,7 +511,7 @@ export class AccountHeadClient {
   /** What Account → Security shows. */
   async dataState(): Promise<DataState> {
     const state = await this.load()
-    const head = this.engine.verifiedHead()
+    const head = this.latest?.head ?? null
     return {
       sequence: state.anchor?.sequence ?? null,
       lastByThisApp: head ? head.writer === this.engine.writer(state.deviceId) : null,
@@ -453,6 +521,8 @@ export class AccountHeadClient {
   }
 
   close(): void {
+    this.latest?.free()
+    this.latest = null
     this.engine.close()
     this.listeners.clear()
   }

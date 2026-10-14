@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactGroups, useSaveContact } from '@kutup/contacts-core/api'
-import { displayName, emptyDraft, type ContactAddress, type ContactDraft } from '@kutup/contacts-core/model'
+import { displayName, emptyDraft, newUid, type ContactAddress, type ContactDraft } from '@kutup/contacts-core/model'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
@@ -86,10 +86,14 @@ export function ContactEditorDialog() {
   const target = editor.target
   const [draft, setDraft] = useState<ContactDraft>(emptyDraft())
   const [error, setError] = useState<string | null>(null)
+  // One UID for each opening of the form: saving again after a lost answer
+  // finds the contact made, never makes a second.
+  const [uid, setUid] = useState(newUid)
 
   useEffect(() => {
     if (!target) return
     setError(null)
+    setUid(newUid())
     save.reset()
     if (target.kind === 'edit') setDraft(structuredClone(target.contact.draft))
     else setDraft({ ...emptyDraft(), emails: [{ address: target.email ?? '' }], groups: target.groupId ? [target.groupId] : [] })
@@ -118,7 +122,7 @@ export function ContactEditorDialog() {
     if (!displayName(cleaned)) return setError(t('editor.needName'))
     setError(null)
     save.mutate(
-      { draft: cleaned, existing: target?.kind === 'edit' ? target.contact : undefined },
+      { draft: cleaned, existing: target?.kind === 'edit' ? target.contact : undefined, uid },
       {
         onSuccess: (id) => {
           toast.success(target?.kind === 'edit' ? t('editor.saved') : t('editor.created'))

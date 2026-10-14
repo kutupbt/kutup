@@ -260,14 +260,17 @@ export async function putContact(session: Session, existing: Pick<Contact, 'id' 
 
 /**
  * Adds a contact under `uid`, with the next head; its row id (read back by
- * UID when the answer was lost and the head already lists it).
+ * UID when the head already lists it). The UID is kept for the whole form or
+ * dialog that makes the contact, so trying again after an answer that was
+ * lost (a network error) finds the contact made, never makes a second.
  */
 export async function createContact(session: Session, uid: string, draft: ContactDraft): Promise<string | undefined> {
   const { body, revision } = await prepare(session, uid, draft)
   let id: string | undefined
   const stored = await listedContacts(session, (index) =>
     Promise.resolve(
-      index.revision(uid) === revision
+      // Made already (this form's earlier try): nothing to send.
+      index.revision(uid) !== undefined
         ? null
         : {
             changes: [[uid, revision]] as const,
@@ -278,8 +281,12 @@ export async function createContact(session: Session, uid: string, draft: Contac
           },
     ),
   )
-  await revisionGuard(session).accept(CONTACT_SCOPE, uid, revision)
-  if (stored) return id
+  if (stored) {
+    // The revision sealed here, not the server's word for it.
+    await revisionGuard(session).accept(CONTACT_SCOPE, uid, revision)
+    return id
+  }
+  // Made by an earlier try: its own revision is the one to hold to.
   return (await loadContacts(session)).contacts.find((contact) => contact.uid === uid)?.id
 }
 
@@ -329,14 +336,14 @@ function useContactMutation<T, R>(fn: (input: T, session: Session) => Promise<R>
 /** Creates a contact, or saves an edit made from its `revision`. */
 export function useSaveContact() {
   return useContactMutation(
-    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'> }, session) => {
+    async (input: { draft: ContactDraft; existing?: Pick<Contact, 'id' | 'uid' | 'revision'>; uid?: string }, session) => {
       // An edit made on an older revision fails with a revision conflict:
       // the person's form is not laid over another device's change.
       if (input.existing) {
         await putContact(session, input.existing, input.draft)
         return input.existing.id
       }
-      return createContact(session, newUid(), input.draft)
+      return createContact(session, input.uid ?? newUid(), input.draft)
     },
   )
 }

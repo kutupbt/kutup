@@ -5,7 +5,7 @@
 // canonical base64.
 
 import { toBase64 } from './base64'
-import { getCryptoWasm, type AccountHeadKeysHandle } from './rustWasm'
+import { getCryptoWasm, type AccountHeadKeysHandle, type VerifiedAccountHeadHandle } from './rustWasm'
 
 /** One scope's entry: how many values, and the digest of their (id, revision) pairs. */
 export interface HeadScope {
@@ -68,7 +68,39 @@ export interface LocalHeadState {
 /** A scope's index, as the server lists it: value ids and their revisions. */
 export type HeadIndex = ReadonlyArray<readonly [string, number]>
 
-/** The account head for one signed-in account. Call `close()` at sign-out. */
+/**
+ * A head a check, a re-anchoring, or this page's own committed write
+ * verified (Rust `VerifiedHead`). Each holder has its own: a check elsewhere
+ * in the page cannot change the one a write is using. `free()` it when done.
+ */
+export class VerifiedHead {
+  constructor(private readonly handle: VerifiedAccountHeadHandle) {}
+
+  /** What to remember. */
+  get anchor(): HeadAnchor {
+    return this.handle.anchor() as HeadAnchor
+  }
+
+  get head(): AccountHeadValue {
+    return this.handle.head() as AccountHeadValue
+  }
+
+  /** Another, independent handle to the same head. */
+  copy(): VerifiedHead {
+    return new VerifiedHead(this.handle.copy())
+  }
+
+  /** @internal */
+  get raw(): VerifiedAccountHeadHandle {
+    return this.handle
+  }
+
+  free(): void {
+    this.handle.free()
+  }
+}
+
+/** The account head's keys for one signed-in account. Call `close()` at sign-out. */
 export class AccountHead {
   private constructor(private readonly handle: AccountHeadKeysHandle) {}
 
@@ -88,28 +120,36 @@ export class AccountHead {
   /**
    * Checks `current` against `anchor`. `segment` is the chain from the anchor
    * to `current`, or null when the server did not show it. A trusted head
-   * becomes the verified one, and `anchor` is what to remember.
+   * comes with its verified head, which the caller owns.
    */
-  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; anchor?: HeadAnchor } {
-    return this.handle.check(anchor ? JSON.stringify(anchor) : undefined, current, segment ? JSON.stringify(segment) : undefined) as {
-      status: HeadStatus
-      anchor?: HeadAnchor
+  check(anchor: HeadAnchor | null, current: string, segment: readonly string[] | null): { status: HeadStatus; verified: VerifiedHead | null } {
+    const checked = this.handle.check(anchor ? JSON.stringify(anchor) : undefined, current, segment ? JSON.stringify(segment) : undefined)
+    try {
+      const verified = checked.takeVerified()
+      return { status: checked.status() as HeadStatus, verified: verified ? new VerifiedHead(verified) : null }
+    } finally {
+      checked.free()
     }
   }
 
-  /** Re-anchors after a check did not trust the head (`rollback`/`fork` only when the person `confirmed`); the record to log. */
-  reanchor(anchor: HeadAnchor, current: string, segment: readonly string[] | null, confirmed: boolean): Reanchored {
-    return this.handle.reanchor(JSON.stringify(anchor), current, segment ? JSON.stringify(segment) : undefined, confirmed, Date.now()) as Reanchored
+  /** Re-anchors after a check did not trust the head (`rollback`/`fork` only when the person `confirmed`): the record to log, and the head now verified. */
+  reanchor(anchor: HeadAnchor, current: string, segment: readonly string[] | null, confirmed: boolean, atMs = Date.now()): { record: Reanchored; verified: VerifiedHead } {
+    const result = this.handle.reanchor(JSON.stringify(anchor), current, segment ? JSON.stringify(segment) : undefined, confirmed, atMs)
+    try {
+      return { record: result.record() as Reanchored, verified: new VerifiedHead(result.takeVerified()!) }
+    } finally {
+      result.free()
+    }
   }
 
-  /** `matches`, or `uncovered` (the head does not cover the scope yet); throws if it differs or no head is verified. */
-  checkIndex(scope: string, index: HeadIndex): 'matches' | 'uncovered' {
-    return this.handle.checkIndex(scope, JSON.stringify(index)) as 'matches' | 'uncovered'
+  /** `matches`, or `uncovered` (the head does not cover the scope yet); throws if it differs. */
+  checkIndex(verified: VerifiedHead, scope: string, index: HeadIndex): 'matches' | 'uncovered' {
+    return this.handle.checkIndex(verified.raw, scope, JSON.stringify(index)) as 'matches' | 'uncovered'
   }
 
-  /** The next head, sealed, on top of the verified one. */
-  next(writer: string, scopes: readonly HeadScope[]): string {
-    return this.handle.next(writer, JSON.stringify(scopes))
+  /** The next head, sealed, on top of `verified`. */
+  next(verified: VerifiedHead, writer: string, scopes: readonly HeadScope[]): string {
+    return this.handle.next(verified.raw, writer, JSON.stringify(scopes))
   }
 
   /** The account's first head, sealed (the server has none yet). */
@@ -117,13 +157,9 @@ export class AccountHead {
     return this.handle.first(writer, JSON.stringify(scopes))
   }
 
-  /** After the server stored `sealed`: it becomes the verified head; what to remember. */
-  committed(sealed: string): HeadAnchor {
-    return this.handle.committed(sealed) as HeadAnchor
-  }
-
-  verifiedHead(): AccountHeadValue | null {
-    return this.handle.verifiedHead() as AccountHeadValue | null
+  /** After the server stored `sealed` on top of `verified` (or as the first head, with null): the newly verified head. */
+  committed(verified: VerifiedHead | null, sealed: string): VerifiedHead {
+    return new VerifiedHead(verified ? this.handle.committed(verified.raw, sealed) : this.handle.committedFirst(sealed))
   }
 
   /** The name this device stores its state under: one per account and incarnation. */
@@ -145,14 +181,14 @@ export class AccountHead {
     return this.handle.sealLocalState(JSON.stringify(state))
   }
 
-  /** Moves the anchor to this page's verified head, never back. */
-  advanceLocalState(state: LocalHeadState, atMs: number): { state: LocalHeadState; changed: boolean } {
-    return this.handle.advanceLocalState(JSON.stringify(state), atMs) as { state: LocalHeadState; changed: boolean }
+  /** Moves the anchor to `verified`, never back. */
+  advanceLocalState(state: LocalHeadState, verified: VerifiedHead, atMs: number): { state: LocalHeadState; changed: boolean } {
+    return this.handle.advanceLocalState(JSON.stringify(state), verified.raw, atMs) as { state: LocalHeadState; changed: boolean }
   }
 
-  /** After `reanchor`: the anchor moves to its head, and the record is logged. */
-  reanchoredLocalState(state: LocalHeadState, record: Reanchored): LocalHeadState {
-    return this.handle.reanchoredLocalState(JSON.stringify(state), JSON.stringify(record)) as LocalHeadState
+  /** After `reanchor`: the anchor moves to its head (`verified`, which it gave), and the record is logged. */
+  reanchoredLocalState(state: LocalHeadState, record: Reanchored, verified: VerifiedHead): LocalHeadState {
+    return this.handle.reanchoredLocalState(JSON.stringify(state), JSON.stringify(record), verified.raw) as LocalHeadState
   }
 
   /** The server has no head at all and the person confirmed going on: the anchor is dropped, logged. */
