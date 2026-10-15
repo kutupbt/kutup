@@ -678,8 +678,8 @@ fn a_renamed_account_keeps_its_chat_profile_until_it_publishes_again() {
         json!({
             "suite": 1, "account": account, "version": version, "revision": revision,
             "sourceDeviceId": device,
-            "name": profile_envelope(account, version, revision, device, Purpose::DisplayName, 40),
-            "wrappedKey": profile_envelope(account, version, revision, device, Purpose::WrappedProfileKey, 48),
+            "name": profile_envelope(account, version, revision, device, Purpose::DisplayName, 53 + 16),
+            "wrappedKey": profile_envelope(account, version, revision, device, Purpose::WrappedProfileKey, 32 + 16),
             "accessKeyVerifier": hex::encode(sha2::Sha256::digest(access)),
             "deliveryCapabilityVerifier": hex::encode(sha2::Sha256::digest([6u8; 16])),
         })
