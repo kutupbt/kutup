@@ -60,7 +60,7 @@ pre-wipe, nothing stored needs reading under the old layout.
 | `named_share` (folder and file share envelopes) | HPKE AAD and Ed25519 signature bind sender and recipient addresses (exact match) and incarnations | bind sender and recipient (`server`, `accountId`) and incarnations | Signal: everything addressed by ServiceId |
 | `profile_key_share` | both addresses in header AAD and signature | both (`server`, `accountId`) | as above |
 | `MailKeyListV1` | signs `account` (`username@server`) and requires it unchanged along the chain | `account` removed; the list stays bound to its address, incarnation and authority key id | Proton's SignedKeyList data names keys and flags, no account |
-| Shared-mailbox group key share | OpenPGP-encrypted to the member's active per-address key; lost on a rename | sealed (HPKE, the account envelope suite) to the member's account-level HPKE key (`drive_hpke_public_key`, bound by the key binding to `accountId`); AAD binds group id, group key fingerprint and member `accountId` | Proton wraps address keys to the account's user key, one level above addresses |
+| Shared-mailbox group key share | OpenPGP-encrypted to the member's active per-address key; lost on a rename | sealed (HPKE, the account envelope suite) to the member's account-level HPKE key (`drive_hpke_public_key`, bound by the key binding to `accountId`); AAD binds group id, group key fingerprint and member `accountId`. A member who leaves or is removed gets no new keys: the manager's browser rotates the group key on removal and shares the new one to the remaining members' account keys only (as now, `rotate_group_key`); the server refuses a rotation that still shares to a removed member | Proton wraps address keys to the account's user key, one level above addresses, and rotates on member removal |
 | `AccountManifestV1` (Chat) | signs `account` (address) and incarnation | signs `server`, `accountId`, incarnation; no address. The server checks `accountId` = `users.id` on publish | Signal: identity bound to the ACI |
 | Sealed-sender `SenderCertificate` | `sender_uuid` = address; no id | `sender_uuid` = `accountId`, plus `sender_server`; identity key as now | Signal `CertificateGenerator`: `sender_uuid` = ACI plus identity key |
 | Chat profile envelope | AAD header and HKDF info bind the address | bind `server`, `accountId` | Signal profile keys are per ACI |
@@ -115,7 +115,12 @@ Untouched (FINE in the audit):
   - `/api/fed/drive/accounts/:accountId` (the identity, by id);
   - `DriveInviteResponse` and `FileInviteResponse` carry the recipient's `accountId` and incarnation;
   - accept and refresh compare those, not usernames.
-- **New lookup by id:** `GET /api/users/by-id/:accountId[?server=]`, with federated twins `/api/fed/{chat|drive}/accounts/:accountId`. It answers the current address and identity, so a client refreshes a contact's handle by id.
+- **`?server=` for a remote account** (Chat routes and by-id):
+  - checked with `validate_server_name` (a canonical DNS name, no IP, no single label);
+  - this server's own name means local;
+  - a remote server is reached only through the federation stack's discovery and pinned identity, the same path as #209's lookups. Never a URL built from the parameter, so the parameter cannot point the server at an arbitrary host;
+  - the account id must be a canonical UUID (`AccountRef::new`) before any request is made, and the request path is checked against the transport's namespace rule.
+- **New lookup by id:** `GET /api/users/by-id/:accountId[?server=]`, with federated twins `/api/fed/{chat|drive}/accounts/:accountId`. It answers the current address and identity, so a client refreshes a contact's handle by id. It is rate-limited like by-address (the user-lookup limit per account; remote fetches per account and per peer, coalesced per id, as #209's renames lookup).
 - **`/user/me`** gains `accountId`; `POST /api/users/drive-identities` answers it too.
 - **Renames:** `/api/users/renames/:address` stays (the chain is the proof of names). Remote rows are found by account id too.
 
