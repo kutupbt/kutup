@@ -20,7 +20,7 @@ import type { Session } from '@kutup/session/store'
 import type { ChatData } from '../state/views'
 import { setSealedStorage } from '../state/sealedState'
 import { currentReadMarks } from '../state/readState'
-import { followRenamedState, type RenameAliases } from '../state/renames'
+import { aliasesDigest, followRenamedState, type RenameAliases } from '../state/renames'
 import { draftKeys } from '../lib/drafts'
 import { foldAccountState, mergeReadMarks } from '../state/accountState'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
@@ -176,7 +176,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         orPrevious(service.renameAliases(), previous.aliases),
       ])
     if (mine !== generation || state.service !== service) return
-    if (Object.keys(aliases).length !== Object.keys(previous.aliases).length) {
+    if (aliasesDigest(aliases) !== aliasesDigest(previous.aliases)) {
       // A peer renamed: this device's read marks and drafts follow its thread.
       await followRenamedState([...Object.keys(currentReadMarks()), ...draftKeys()], aliases)
     }

@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 import type {
+  ChatRenameAliases,
   AccountAddress,
   ChatCapabilities,
   ChangeMark,
@@ -437,7 +438,7 @@ export class ChatService {
    * The addresses peers left and where each is now (folded old address →
    * current address): the app moves its own per-conversation state with them.
    */
-  async renameAliases(): Promise<Record<string, string>> {
+  async renameAliases(): Promise<ChatRenameAliases> {
     if (!this.client.renameAliases) return {}
     return this.withLock(() => this.client.renameAliases!())
   }

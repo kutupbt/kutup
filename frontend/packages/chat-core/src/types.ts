@@ -331,6 +331,19 @@ export interface SendSummary {
   movedTo?: string
 }
 
+/** One address a peer left (docs/plans/username-renames.md). */
+export interface ChatRenameAlias {
+  /** Where the peer is now. */
+  to: string
+  incarnationId: string
+  movedAtMs: number
+  /** When someone else was met at the address: records from then on are theirs. */
+  reusedAtMs?: number
+}
+
+/** Folded old address → the alias. */
+export type ChatRenameAliases = Readonly<Record<string, ChatRenameAlias>>
+
 /** A peer followed from one address to another along its verified rename chain. */
 export interface ChatPeerRenamed {
   from: string
@@ -1951,8 +1964,8 @@ export interface WasmChatClientHandle {
   recordCallLog(peer: string, body: ChatCallLog): Promise<void>
   /** Follows this account's own rename to `address`; true when its records moved or the device took the new address. */
   adoptOwnRename?(address: string): Promise<boolean>
-  /** Folded addresses peers left → where each is now. */
-  renameAliases?(): Promise<Record<string, string>>
+  /** Folded addresses peers left → where each is now, and when someone else took it. */
+  renameAliases?(): Promise<ChatRenameAliases>
   sendDisappearingTimer(
     sendId: string,
     peer: string,

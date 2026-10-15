@@ -13,7 +13,7 @@ vi.mock('../lib/drafts', () => ({ moveDraft: (from: string, to: string) => moved
 
 const { currentKey, followRenamedState } = await import('./renames')
 
-const aliases = { 'adal@kutup.test': 'ada_lovelace@kutup.test' }
+const aliases = { 'adal@kutup.test': { to: 'ada_lovelace@kutup.test', incarnationId: 'i', movedAtMs: 0 } }
 
 beforeEach(() => {
   moved.marks = []
@@ -27,6 +27,15 @@ describe('a peer that renamed', () => {
     expect(await currentKey('direct:ada_lovelace@kutup.test', aliases)).toBeNull()
     expect(await currentKey('direct:grace@kutup.test', aliases)).toBeNull()
     expect(await currentKey('group:abc', aliases)).toBeNull()
+    // Someone else holds the name now: their thread, not hers.
+    const reused = { 'adal@kutup.test': { ...aliases['adal@kutup.test'], reusedAtMs: 5 } }
+    expect(await currentKey('direct:ada_l@kutup.test', reused)).toBeNull()
+  })
+
+  it('tells a change of the log by its content, not its size', async () => {
+    const { aliasesDigest } = await import('./renames')
+    const back = { 'adal@kutup.test': { to: 'ada_king@kutup.test', incarnationId: 'i', movedAtMs: 1 } }
+    expect(aliasesDigest(back)).not.toBe(aliasesDigest(aliases))
   })
 
   it('takes this device’s read mark and draft along, once each', async () => {
