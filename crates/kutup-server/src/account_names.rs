@@ -100,6 +100,15 @@ pub async fn renamed(
     server_name: &str,
     name: &str,
 ) -> AppResult<Option<AppError>> {
+    // Someone's current name is not a renamed one (a chain names its
+    // current address too): what was not found there is just not found.
+    let current: Option<Uuid> = sqlx::query_scalar("SELECT kutup_current_user($1)")
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+    if current.is_some() {
+        return Ok(None);
+    }
     let address = format!("{name}@{server_name}");
     let found = chains(pool, &address, None).await?;
     if found["chains"].as_array().is_none_or(|c| c.is_empty()) {
