@@ -37,8 +37,18 @@ The one stated exception: OpenPGP keys per mail address, as Proton does.
   - the answer is server-asserted, as Signal's username lookup returns an ACI;
   - the client checks it against its pins and the signed rename chain.
 - **The incarnation id** (hash of the authority key) stays: it means "this account's current keys". The account id is the person; the incarnation is their current key generation.
+- **One shared type:** `AccountRef { server, account_id }` in kutup-crypto, re-exported by chat-proto. It serializes as `{ "server", "accountId" }` and parses its `aci:<uuid>@<server>` string form strictly: lowercase hyphenated UUID, a valid server name, nothing else. It lands first, as its own commit, so both sides build on it.
+- **Agreed with the third session (client note):**
+  - **One string form in clients:** clients always write the prefixed form (`aci:<uuid>@<server>`) as the libsignal `ProtocolAddress` name, the MLS credential identity and local store keys, even for peers on the same server. A peer's records never change key when federation context does. Server routes and JSON within one server use the bare UUID.
+  - **A different id is a different person:** a by-address answer that maps a pinned address to another `accountId` is someone new (a new thread, "not the person you verified"), never a key change. This replaces the formerly/detached/moved pin machinery.
+  - **Renames are display history:** continuity through a rename is "same accountId, same authority". `AccountRenameV1` chains are used only to show "X changed their username to Y". Without a verified chain, the new address is a server-asserted label, as Signal's usernames are.
 
 ## Format changes (crypto and proto crates)
+
+The server-checked formats below are mine; the third session takes the chat-proto content formats:
+- `ConversationId::Direct`, `ContactControlBody.peer`, `SentTranscriptBody.peer`, `GroupUpdateBody.actor`;
+- mentions, backup records and the attachment ledger reference;
+- the chat-core stores.
 
 Each one gets new checked-in vectors in `crates/kutup-crypto/tests/vectors` (or the chat-proto
 vectors). The Rust and WASM vector tests run on every change. All formats keep their V1 names:
@@ -133,10 +143,11 @@ Docs only (done alongside, never holding the format work):
 ## Sequencing with the third session
 
 1. **Approve this note and the client note** together: the same definition, field names and string form.
-2. **Formats first (me):** the crypto and proto changes above, with vectors and the WASM bindings, in one PR. The third session builds clients against it at once. It does not wait for routes.
-3. **Server (me), in parallel with clients:** migration, routes by account id, by-address as the only name entry, by-id lookups, Drive invites, mail key-list authorization, the group key share check, the small bugs, the CLI. One PR, on top of the formats PR.
-4. **Clients (third session):** pins keyed by (server, accountId), Chat on account ids (conversation keys, ProtocolAddress, content), Drive and Mail on the new formats, and the shared-mailbox key on the account key.
-5. **Gates:** the full local gates per PR. The two-server gate once, on the final branch, run by the main session.
+2. **`AccountRef` first (me):** the shared type, with its parser tests and vectors, as a tiny first commit both sides base on.
+3. **Formats (me):** the crypto and proto changes above, with vectors and the WASM bindings, in one PR. The third session builds clients against it at once. It does not wait for routes.
+4. **Server (me), in parallel with clients:** migration, routes by account id, by-address as the only name entry, by-id lookups, Drive invites, mail key-list authorization, the group key share check, the small bugs, the CLI. One PR, on top of the formats PR.
+5. **Clients (third session):** pins keyed by (server, accountId), Chat on account ids (conversation keys, ProtocolAddress, content), Drive and Mail on the new formats, and the shared-mailbox key on the account key.
+6. **Gates:** the full local gates per PR. The two-server gate once, on the final branch, run by the main session.
 
 ## Estimate (honest)
 

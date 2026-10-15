@@ -4036,6 +4036,26 @@ pub fn verify_account_rename_chain(
     .map_err(|error| js_error(&format!("encode rename chain: {error}")))
 }
 
+/// A person across servers from its string form (`kutup_crypto::account_ref`):
+/// exactly `aci:<lowercase uuid>@<canonical server>`, as `{ server, accountId }`.
+/// Throws for anything else (a `username@server` included).
+#[wasm_bindgen(js_name = parseAccountRef)]
+pub fn parse_account_ref(value: &str) -> Result<JsValue, JsValue> {
+    let person: kutup_crypto::account_ref::AccountRef = value
+        .parse()
+        .map_err(|error: kutup_crypto::error::CryptoError| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&person).map_err(|error| js_error(&error.to_string()))
+}
+
+/// The string form `aci:<uuid>@<server>` of a person, after checking both
+/// parts (`kutup_crypto::account_ref`).
+#[wasm_bindgen(js_name = accountRefString)]
+pub fn account_ref_string(server: &str, account_id: &str) -> Result<String, JsValue> {
+    kutup_crypto::account_ref::AccountRef::new(server, account_id)
+        .map(|person| person.to_string())
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 /// The folded form of a name (`kutup_crypto::names::fold`): lowercase,
 /// without `.`, `_` and `-`. One account per folded name.
 #[wasm_bindgen(js_name = foldName)]

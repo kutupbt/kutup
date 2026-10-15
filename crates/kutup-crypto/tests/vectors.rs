@@ -1363,6 +1363,28 @@ fn print_account_rename_vector() {
     );
 }
 
+/// A person across servers: the same table the web checks through WASM.
+#[test]
+fn account_ref_vector() {
+    use kutup_crypto::account_ref::AccountRef;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["accountRef"];
+    for case in v["valid"].as_array().unwrap() {
+        let string = case["string"].as_str().unwrap();
+        let person: AccountRef = string.parse().unwrap();
+        assert_eq!(person.server, case["server"].as_str().unwrap());
+        assert_eq!(person.account_id, case["accountId"].as_str().unwrap());
+        assert_eq!(person.to_string(), string);
+        assert_eq!(hex::encode(person.bytes()), case["bytes"].as_str().unwrap());
+        let json = serde_json::json!({ "server": case["server"], "accountId": case["accountId"] });
+        assert_eq!(serde_json::from_value::<AccountRef>(json).unwrap(), person);
+    }
+    for bad in v["invalid"].as_array().unwrap() {
+        let bad = bad.as_str().unwrap();
+        assert!(bad.parse::<AccountRef>().is_err(), "{bad}");
+    }
+}
+
 /// Folded names: the same table the web checks through WASM.
 #[test]
 fn name_fold_vector() {
