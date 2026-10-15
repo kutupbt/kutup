@@ -468,6 +468,8 @@ pub async fn delete_user(
     .bind(hold_days as i32)
     .execute(&mut *tx)
     .await?;
+    // Its account id is never given to anyone again (docs/plans/account-ids.md).
+    crate::account_ids::retire(&mut tx, target).await?;
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
         .execute(&mut *tx)

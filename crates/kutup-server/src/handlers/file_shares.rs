@@ -210,7 +210,8 @@ pub struct SharedFile {
 }
 
 struct Party {
-    account: String,
+    /// Who: their server and account id.
+    person: kutup_crypto::account_ref::AccountRef,
     incarnation: String,
     signing_public_key: Option<String>,
 }
@@ -224,8 +225,8 @@ async fn party(pool: &PgPool, user_id: Uuid, domain: &str) -> AppResult<Party> {
     .fetch_optional(pool)
     .await?;
     match row {
-        Some((Some(username), incarnation, signing_public_key)) => Ok(Party {
-            account: format!("{username}@{domain}"),
+        Some((Some(_), incarnation, signing_public_key)) => Ok(Party {
+            person: crate::account_ids::local(domain, user_id)?,
             incarnation,
             signing_public_key,
         }),
@@ -304,10 +305,10 @@ fn verify_envelope(
             decoded.verify_binding_and_signature(
                 &file_id.to_string(),
                 u32::try_from(generation).unwrap_or(0),
-                &owner.account,
+                &owner.person,
                 &owner.incarnation,
                 &signing,
-                &recipient.account,
+                &recipient.person,
                 &recipient.incarnation,
             )
         })
@@ -621,19 +622,19 @@ async fn store_federated_envelopes(
     envelopes: &[FederatedEnvelope],
 ) -> AppResult<()> {
     for member in envelopes {
-        let target: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT recipient_username, recipient_domain, recipient_incarnation_id
+        let target: Option<(Uuid, String, String)> = sqlx::query_as(
+            "SELECT recipient_account_id, recipient_domain, recipient_incarnation_id
              FROM federated_outgoing_file_shares WHERE id = $1 AND file_id = $2",
         )
         .bind(member.id)
         .bind(file_id)
         .fetch_optional(&mut **tx)
         .await?;
-        let Some((username, domain, incarnation)) = target else {
+        let Some((account_id, domain, incarnation)) = target else {
             return Err(AppError::conflict("the file's access changed; reload"));
         };
         let recipient = Party {
-            account: format!("{username}@{domain}"),
+            person: crate::account_ids::stored(&domain, account_id)?,
             incarnation,
             signing_public_key: None,
         };

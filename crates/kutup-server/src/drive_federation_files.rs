@@ -44,8 +44,11 @@ const MAX_STATE_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateFederatedFileShareRequest {
+    /// Shown only: the recipient is their server and account id.
     pub recipient_username: String,
     pub recipient_server: String,
+    /// The recipient's permanent account id, from the lookup of their name.
+    pub recipient_account_id: String,
     /// `FileShareEnvelopeV1` sealed to the remote account's Drive key.
     pub share_envelope: String,
     /// They may edit it too (live, through their server).
@@ -64,7 +67,8 @@ pub struct CreateFederatedFileShareResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileInviteResponse {
     pub source_server: String,
-    pub recipient_username: String,
+    /// Who it is for: their account id on the server accepting it.
+    pub recipient_account_id: Uuid,
     pub file: FederatedDriveFile,
     pub share_envelope: String,
     /// The generation the envelope opens.
@@ -174,16 +178,13 @@ pub async fn create_federated_file_share(
     let Some(generation) = generation else {
         return Err(AppError::forbidden("only the owner shares this file"));
     };
-    let sender: (Option<String>, String, String) = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
+    let sender: (String, String) = sqlx::query_as(
+        "SELECT account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&state.pool)
     .await?;
-    let sender_username = sender
-        .0
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("sender identity is unavailable"))?;
+    let recipient = crate::account_ids::remote(recipient_domain, &request.recipient_account_id)?;
     let envelope = FileShareEnvelopeV1::decode_b64(&request.share_envelope)
         .map_err(|_| AppError::bad_request("invalid file share"))?;
     let recipient_incarnation = hex::encode(envelope.recipient_incarnation_id);
@@ -191,10 +192,10 @@ pub async fn create_federated_file_share(
         .verify_binding_and_signature(
             &file_id.to_string(),
             u32::try_from(generation).map_err(|_| AppError::conflict("invalid key generation"))?,
-            &format!("{sender_username}@{}", federation.server_name()),
-            &sender.1,
-            &canonical_public_key(&sender.2)?,
-            &format!("{recipient_username}@{recipient_domain}"),
+            &crate::account_ids::local(federation.server_name(), owner)?,
+            &sender.0,
+            &canonical_public_key(&sender.1)?,
+            &recipient,
             &recipient_incarnation,
         )
         .map_err(|_| {
@@ -205,8 +206,9 @@ pub async fn create_federated_file_share(
     sqlx::query(
         "INSERT INTO federated_outgoing_file_shares
             (file_id, sharer_user_id, recipient_username, recipient_domain,
-             recipient_incarnation_id, share_envelope, key_generation, capability_hash, can_edit)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+             recipient_incarnation_id, share_envelope, key_generation, capability_hash, can_edit,
+             recipient_account_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(file_id)
     .bind(owner)
@@ -217,6 +219,7 @@ pub async fn create_federated_file_share(
     .bind(generation)
     .bind(capability_hash(&capability))
     .bind(request.can_edit)
+    .bind(Uuid::parse_str(&recipient.account_id).expect("checked"))
     .execute(&state.pool)
     .await?;
     let invite_url = format!(
@@ -234,7 +237,7 @@ pub async fn create_federated_file_share(
 
 struct OutgoingFileShare {
     file_id: Uuid,
-    recipient_username: String,
+    recipient_account_id: Uuid,
     share_envelope: String,
     key_generation: i32,
     can_edit: bool,
@@ -252,8 +255,8 @@ async fn outgoing_file_share(
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| AppError::not_found("Drive share not found"))?;
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
-    let row: Option<(Uuid, String, String, i32, bool)> = sqlx::query_as(
-        "SELECT s.file_id, s.recipient_username, s.share_envelope, s.key_generation, s.can_edit
+    let row: Option<(Uuid, Uuid, String, i32, bool)> = sqlx::query_as(
+        "SELECT s.file_id, s.recipient_account_id, s.share_envelope, s.key_generation, s.can_edit
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
@@ -263,11 +266,11 @@ async fn outgoing_file_share(
     .bind(authenticated.origin())
     .fetch_optional(&state.pool)
     .await?;
-    let (file_id, recipient_username, share_envelope, key_generation, can_edit) =
+    let (file_id, recipient_account_id, share_envelope, key_generation, can_edit) =
         row.ok_or_else(|| AppError::not_found("Drive share not found"))?;
     Ok(OutgoingFileShare {
         file_id,
-        recipient_username,
+        recipient_account_id,
         share_envelope,
         key_generation,
         can_edit,
@@ -352,7 +355,7 @@ pub async fn get_file_invite(
                 StatusCode::OK,
                 &FileInviteResponse {
                     source_server: federation.server_name().to_owned(),
-                    recipient_username: share.recipient_username,
+                    recipient_account_id: share.recipient_account_id,
                     file,
                     share_envelope: share.share_envelope,
                     key_generation: share.key_generation,
@@ -459,7 +462,7 @@ async fn fetch_verified_file_invite(
     federation: &FederationStack,
     server: &str,
     capability: &str,
-    local_username: &str,
+    local_user_id: Uuid,
     local_incarnation: &str,
 ) -> AppResult<FileInviteResponse> {
     let response = federation
@@ -488,7 +491,9 @@ async fn fetch_verified_file_invite(
     }
     let invite: FileInviteResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid file invite"))?;
-    if invite.source_server != server || invite.recipient_username != local_username {
+    // For this account by its permanent id: a rename on either side since
+    // the invite changes nothing.
+    if invite.source_server != server || invite.recipient_account_id != local_user_id {
         return Err(AppError::forbidden(
             "this file invite is for another account or server",
         ));
@@ -501,11 +506,17 @@ async fn fetch_verified_file_invite(
             envelope.verify_binding_and_signature(
                 &invite.file.id.to_string(),
                 u32::try_from(invite.key_generation).unwrap_or(0),
-                &invite.owner_account,
+                &kutup_crypto::account_ref::AccountRef::new(
+                    server,
+                    &invite.owner_user_id.to_string(),
+                )?,
                 &invite.owner_incarnation_id,
                 &canonical_public_key(&invite.owner_signing_public_key)
                     .map_err(|_| kutup_crypto::CryptoError::InvalidInput("key".into()))?,
-                &format!("{}@{}", local_username, federation.server_name()),
+                &kutup_crypto::account_ref::AccountRef::new(
+                    federation.server_name(),
+                    &local_user_id.to_string(),
+                )?,
                 local_incarnation,
             )
         })
@@ -513,9 +524,10 @@ async fn fetch_verified_file_invite(
     Ok(invite)
 }
 
-async fn local_identity(state: &AppState, user_id: Uuid) -> AppResult<(String, String)> {
-    sqlx::query_as(
-        "SELECT username, account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
+/// The account's current incarnation (an active account's).
+async fn local_incarnation(state: &AppState, user_id: Uuid) -> AppResult<String> {
+    sqlx::query_scalar(
+        "SELECT account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -542,12 +554,12 @@ pub async fn accept_file_share(
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
     let user_id = trusted_uuid(&user.user_id)?;
-    let (username, incarnation) = local_identity(&state, user_id).await?;
+    let incarnation = local_incarnation(&state, user_id).await?;
     let invite = fetch_verified_file_invite(
         federation,
         server,
         &request.capability,
-        &username,
+        user_id,
         &incarnation,
     )
     .await?;
@@ -662,12 +674,13 @@ pub async fn get_file_share(
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
     let share = incoming(&state, &user, &id).await?;
-    let (username, incarnation) = local_identity(&state, trusted_uuid(&user.user_id)?).await?;
+    let user_id = trusted_uuid(&user.user_id)?;
+    let incarnation = local_incarnation(&state, user_id).await?;
     let invite = fetch_verified_file_invite(
         federation,
         &share.remote_domain,
         &share.remote_capability,
-        &username,
+        user_id,
         &incarnation,
     )
     .await?;

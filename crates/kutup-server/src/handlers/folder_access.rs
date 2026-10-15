@@ -153,8 +153,10 @@ pub struct AccessLink {
 #[serde(rename_all = "camelCase")]
 pub struct AccessFederated {
     pub id: Uuid,
+    /// Shown only: the recipient is their server and account id.
     pub recipient_username: String,
     pub recipient_server: String,
+    pub recipient_account_id: Uuid,
     /// The incarnation the current envelope was sealed to; a re-seal must
     /// name the same one.
     pub recipient_incarnation_id: String,
@@ -250,6 +252,7 @@ pub async fn access(
         Uuid,
         String,
         String,
+        Uuid,
         String,
         bool,
         bool,
@@ -257,8 +260,8 @@ pub async fn access(
         OffsetDateTime,
     );
     let federated: Vec<FederatedRow> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_domain, named_share_envelope,
-                can_upload, can_delete, upload_quota_bytes, created_at
+        "SELECT id, recipient_username, recipient_domain, recipient_account_id,
+                named_share_envelope, can_upload, can_delete, upload_quota_bytes, created_at
          FROM federated_outgoing_shares WHERE collection_id = $1 ORDER BY created_at",
     )
     .bind(collection_id)
@@ -311,11 +314,22 @@ pub async fn access(
         federated_shares: federated
             .into_iter()
             .map(
-                |(id, username, server, envelope, can_upload, can_delete, quota, created_at)| {
+                |(
+                    id,
+                    username,
+                    server,
+                    account_id,
+                    envelope,
+                    can_upload,
+                    can_delete,
+                    quota,
+                    created_at,
+                )| {
                     AccessFederated {
                         id,
                         recipient_username: username,
                         recipient_server: server,
+                        recipient_account_id: account_id,
                         recipient_incarnation_id: NamedShareEnvelopeV1::decode_b64(&envelope)
                             .map(|share| hex::encode(share.recipient_incarnation_id))
                             .unwrap_or_default(),
@@ -517,21 +531,13 @@ pub async fn rotate(
         .ok_or_else(|| AppError::conflict("name revision exhausted"))?;
 
     // The owner's identity, which signs the chain and every share.
-    let (username, incarnation, signing_key, authority_key): (
-        Option<String>,
-        String,
-        String,
-        String,
-    ) = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key,
+    let (incarnation, signing_key, authority_key): (String, String, String) = sqlx::query_as(
+        "SELECT account_incarnation_id, drive_signing_public_key,
                     account_authority_public_key FROM users WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&mut *tx)
     .await?;
-    let username = username
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| AppError::conflict("owner identity is unavailable"))?;
     let signing_key = public_key(&signing_key)?;
 
     let statement = CollectionEpochStatementV1::decode_b64(&req.epoch_statement)
@@ -594,8 +600,8 @@ pub async fn rotate(
     .bind(collection_id)
     .fetch_all(&mut *tx)
     .await?;
-    let federated: Vec<(Uuid, String, String, String)> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_domain, named_share_envelope
+    let federated: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, recipient_account_id, recipient_domain, named_share_envelope
          FROM federated_outgoing_shares WHERE collection_id = $1",
     )
     .bind(collection_id)
@@ -622,20 +628,15 @@ pub async fn rotate(
 
     // Every kept envelope must be for the new epoch and its exact recipient.
     let domain = state.config.chat_server_name.as_str();
-    let sender_account = format!("{username}@{domain}");
-    let member_identity: BTreeMap<Uuid, (Option<String>, String)> = members
+    let sender_account = crate::account_ids::local(domain, owner)?;
+    let member_identity: BTreeMap<Uuid, String> = members
         .into_iter()
-        .map(|(id, name, incarnation)| (id, (name, incarnation)))
+        .map(|(id, _, incarnation)| (id, incarnation))
         .collect();
     let next_u32 = u32::try_from(next).map_err(|_| AppError::conflict("invalid epoch"))?;
     for member in &req.members {
-        let (name, recipient_incarnation) = &member_identity[&member.user_id];
-        let recipient = format!(
-            "{}@{domain}",
-            name.as_deref()
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| AppError::conflict("member identity is unavailable"))?
-        );
+        let recipient_incarnation = &member_identity[&member.user_id];
+        let recipient = crate::account_ids::local(domain, member.user_id)?;
         NamedShareEnvelopeV1::decode_b64(&member.named_share_envelope)
             .and_then(|share| {
                 share.verify_binding_and_signature(
@@ -668,13 +669,14 @@ pub async fn rotate(
             .as_deref()
             .map(|stack| stack.server_name().to_owned())
             .ok_or_else(|| AppError::conflict("federation is not configured"))?;
-        let fed_sender = format!("{username}@{server_name}");
-        let rows: BTreeMap<Uuid, (String, String, String)> = federated
+        let fed_sender = crate::account_ids::local(&server_name, owner)?;
+        let rows: BTreeMap<Uuid, (Uuid, String, String)> = federated
             .into_iter()
-            .map(|(id, name, server, envelope)| (id, (name, server, envelope)))
+            .map(|(id, account_id, server, envelope)| (id, (account_id, server, envelope)))
             .collect();
         for share in &req.federated_shares {
-            let (name, server, current) = &rows[&share.id];
+            let (account_id, server, current) = &rows[&share.id];
+            let recipient = crate::account_ids::stored(server, *account_id)?;
             // Sealed to the same account incarnation as before.
             let recipient_incarnation = NamedShareEnvelopeV1::decode_b64(current)
                 .map(|share| hex::encode(share.recipient_incarnation_id))
@@ -687,7 +689,7 @@ pub async fn rotate(
                         &fed_sender,
                         &incarnation,
                         &signing_key,
-                        &format!("{name}@{server}"),
+                        &recipient,
                         &recipient_incarnation,
                     )
                 })

@@ -7,6 +7,7 @@
 //! handler slice lands.
 
 mod account_heads;
+mod account_ids;
 mod account_names;
 mod albums;
 mod auth_check;

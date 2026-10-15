@@ -74,8 +74,11 @@ pub struct RemoteDriveUserResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFederatedShareRequest {
+    /// Shown only: the recipient is their server and account id.
     pub recipient_username: String,
     pub recipient_server: String,
+    /// The recipient's permanent account id, from the lookup of their name.
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -93,7 +96,8 @@ pub struct CreateFederatedShareResponse {
 pub struct DriveInviteResponse {
     pub source_server: String,
     pub collection_id: Uuid,
-    pub recipient_username: String,
+    /// Who it is for: their account id on the server accepting it.
+    pub recipient_account_id: Uuid,
     pub named_share_envelope: String,
     pub name_envelope: String,
     pub key_epoch: i32,
@@ -194,7 +198,7 @@ pub(crate) struct OutgoingShare {
     id: Uuid,
     pub(crate) collection_id: Uuid,
     sharer_user_id: Uuid,
-    recipient_username: String,
+    recipient_account_id: Uuid,
     can_upload: bool,
     can_delete: bool,
     upload_quota_bytes: Option<i64>,
@@ -492,27 +496,23 @@ pub async fn create_federated_share(
         ));
     }
 
-    let sender: (Option<String>, String, String) = sqlx::query_as(
-        "SELECT username, account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
+    let sender: (String, String) = sqlx::query_as(
+        "SELECT account_incarnation_id, drive_signing_public_key FROM users WHERE id = $1",
     )
     .bind(owner)
     .fetch_one(&state.pool)
     .await?;
-    let sender_username = sender
-        .0
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("sender identity is unavailable"))?;
+    let recipient = crate::account_ids::remote(recipient_domain, &request.recipient_account_id)?;
     let named_share = NamedShareEnvelopeV1::decode_b64(&request.named_share_envelope)
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
     named_share
         .verify_binding_and_signature(
             &collection_id.to_string(),
             u32::try_from(key_epoch).map_err(|_| AppError::conflict("invalid collection epoch"))?,
-            &format!("{}@{}", sender_username, federation.server_name()),
-            &sender.1,
-            &canonical_public_key(&sender.2)?,
-            &format!("{recipient_username}@{recipient_domain}"),
+            &crate::account_ids::local(federation.server_name(), owner)?,
+            &sender.0,
+            &canonical_public_key(&sender.1)?,
+            &recipient,
             &hex::encode(named_share.recipient_incarnation_id),
         )
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
@@ -523,8 +523,9 @@ pub async fn create_federated_share(
         "INSERT INTO federated_outgoing_shares
             (collection_id, sharer_user_id, recipient_username,
              recipient_domain, named_share_envelope, capability_hash,
-             can_upload, can_delete, upload_quota_bytes, recipient_incarnation_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+             can_upload, can_delete, upload_quota_bytes, recipient_incarnation_id,
+             recipient_account_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
     )
     .bind(collection_id)
     .bind(owner)
@@ -538,6 +539,7 @@ pub async fn create_federated_share(
     // Whose collaboration devices may write through this share (the
     // envelope, verified above, names it: docs/plans/device-registration.md).
     .bind(hex::encode(named_share.recipient_incarnation_id))
+    .bind(Uuid::parse_str(&recipient.account_id).expect("checked"))
     .execute(&state.pool)
     .await?;
 
@@ -650,19 +652,18 @@ pub async fn accept_incoming_share(
     let server = canonical_domain(&request.server)?;
     validate_capability(&request.capability)?;
     let user_id = trusted_uuid(&user.user_id)?;
-    let local_identity: Option<(String, String)> = sqlx::query_as(
-        "SELECT username, account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
+    let local_incarnation: String = sqlx::query_scalar(
+        "SELECT account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
-    .await?;
-    let (local_username, local_incarnation) =
-        local_identity.ok_or_else(|| AppError::unauthorized("unauthorized"))?;
+    .await?
+    .ok_or_else(|| AppError::unauthorized("unauthorized"))?;
     let invite = fetch_verified_invite(
         federation,
         server,
         &request.capability,
-        &local_username,
+        user_id,
         &local_incarnation,
     )
     .await?;
@@ -751,7 +752,7 @@ async fn fetch_verified_invite(
     federation: &FederationStack,
     server: &str,
     capability: &str,
-    local_username: &str,
+    local_user_id: Uuid,
     local_incarnation: &str,
 ) -> AppResult<DriveInviteResponse> {
     let response = federation
@@ -780,7 +781,9 @@ async fn fetch_verified_invite(
     }
     let invite: DriveInviteResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive invite"))?;
-    if invite.source_server != server || invite.recipient_username != local_username {
+    // For this account by its permanent id: a rename on either side since
+    // the invite changes nothing.
+    if invite.source_server != server || invite.recipient_account_id != local_user_id {
         return Err(AppError::forbidden(
             "federated Drive invite is intended for another account or server",
         ));
@@ -798,10 +801,10 @@ async fn fetch_verified_invite(
             &invite.collection_id.to_string(),
             u32::try_from(invite.key_epoch)
                 .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid Drive epoch"))?,
-            &invite.owner_account,
+            &crate::account_ids::from_peer(server, &invite.owner_user_id.to_string())?,
             &invite.owner_incarnation_id,
             &canonical_public_key(&invite.owner_signing_public_key)?,
-            &format!("{}@{}", local_username, federation.server_name()),
+            &crate::account_ids::local(federation.server_name(), local_user_id)?,
             local_incarnation,
         )
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid named share envelope"))?;
@@ -871,8 +874,8 @@ pub async fn refresh_incoming_share(
     .await?
     .ok_or_else(|| AppError::not_found("share not found"))?;
     let (server, capability, collection_id, epoch, statement_hash, owner_id, authority) = stored;
-    let local_identity: (String, String) = sqlx::query_as(
-        "SELECT username, account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
+    let local_incarnation: String = sqlx::query_scalar(
+        "SELECT account_incarnation_id FROM users WHERE id = $1 AND is_active = true",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -882,8 +885,8 @@ pub async fn refresh_incoming_share(
         federation,
         &server,
         &capability,
-        &local_identity.0,
-        &local_identity.1,
+        user_id,
+        &local_incarnation,
     )
     .await?;
     if invite.collection_id != collection_id
@@ -1404,7 +1407,7 @@ pub async fn get_invite(State(state): State<AppState>, headers: HeaderMap) -> Ap
             &DriveInviteResponse {
                 source_server: federation.server_name().to_owned(),
                 collection_id,
-                recipient_username: share.recipient_username,
+                recipient_account_id: share.recipient_account_id,
                 named_share_envelope,
                 name_envelope,
                 key_epoch,
@@ -1980,7 +1983,7 @@ pub(crate) async fn outgoing_share(
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
     let hash = capability_hash(capability);
     sqlx::query_as(
-        "SELECT s.id, s.collection_id, s.sharer_user_id, s.recipient_username,
+        "SELECT s.id, s.collection_id, s.sharer_user_id, s.recipient_account_id,
                 s.can_upload, s.can_delete, s.upload_quota_bytes, c.key_epoch
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
