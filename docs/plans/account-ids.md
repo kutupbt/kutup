@@ -164,3 +164,19 @@ Docs only (done alongside, never holding the format work):
 | Review rounds and gates (going by #204 and #209, each took two or three) | 1–2 days |
 
 Total: about 5–7 working days of my time, partly in parallel with the third session's clients.
+
+## Slice 1 as built (Drive and accounts)
+
+What landed, and where it differs from the note above:
+- **Minting.** `register/start` mints a sign-up's id (random UUID) with an HMAC proof bound to the key binding, stateless as the registration answer is. `register` takes the id back only with its proof (`accountIdInvalid`) and only if no account has or had it (`accountIdTaken`). Deleting an account retires its id (`retired_account_ids`), so nobody comes back as that person. An admin-made account has its id from creation. The first sign-in's setup answer carries it (`userId`), and `complete-setup` refuses a minted one.
+- **Formats.** The Drive key binding, the folder and file share envelopes and the profile key envelope bind `AccountRef` bytes (u16 server length, server, 16 id bytes). A rename sends no binding. Vectors: `crates/kutup-crypto/tests/vectors/account-refs-v1.json`, checked in Rust and in the browser build. The WASM functions take `{ server, accountId }` objects, as the client branch's do.
+- **Lookups.** By-address, the federated user lookup, `drive-identities` and `/user/me` answer `server` and `accountId`. `GET /api/users/by-id/:accountId[?server=]` and `/api/fed/drive/accounts/:accountId` are as above (`RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN`, coalesced per account).
+- **Drive answers name accounts.**
+  - Shared folders carry `ownerServer`, so the owner is `(ownerServer, ownerUserId)`.
+  - `GET /api/shared-files` carries `server` and `sharerUserId`.
+  - Folder and file access lists carry the federated recipient's `recipientAccountId`; the owner re-seals to it through the by-id lookup.
+- **Break-glass admin** is protected by `users.is_break_glass`, set when `bootstrap_admin` makes it (one at most). The configured name stays reserved as a name.
+- **Kept as is:**
+  - `drive_profile_keys` keeps no address column. People's labels come from the shares and accounts when listed.
+  - `federated_incoming_*_shares.owner_user_id` keeps its name: it already is the owner's account id, as `collections.owner_user_id` and the JSON `ownerUserId` are.
+- **Moved to the Chat slice:** `remote_account_renames.account_id`. Rename chains are display only, and the peer's account id arrives signed in the account manifest that slice changes.
