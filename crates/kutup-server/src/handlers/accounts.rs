@@ -3,6 +3,10 @@
 //! now, or to read their identity again. Names reach an id only through the
 //! address lookup (`/api/users/by-address`); everything else asks by id.
 
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
+
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -12,9 +16,11 @@ use utoipa::IntoParams;
 use uuid::Uuid;
 
 use crate::drive_federation::{
-    canonical_public_key, configured_stack, drive_spec, gateway_error, signed_app_error,
+    configured_stack, drive_spec, gateway_error, remote_keys_consistent, signed_app_error,
     signed_json, RemoteDriveUserResponse, JSON_CONTENT_TYPE,
 };
+use kutup_crypto::account_ref::AccountRef;
+
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -55,11 +61,48 @@ async fn local_identity(state: &AppState, id: Uuid) -> AppResult<Option<RemoteDr
     ))
 }
 
+/// What one fetch of another server's account answered: kept a short while
+/// so the lookups made meanwhile, and just after, are answered from it.
+#[derive(Clone)]
+enum Fetched {
+    Found(Box<RemoteDriveUserResponse>),
+    Missing,
+}
+
+/// How long a fetched answer is served before the account is asked again.
+const FRESH_FOR: Duration = Duration::from_secs(30);
+
+type Slot = Arc<tokio::sync::Mutex<Option<(Instant, Fetched)>>>;
+
+/// Per account (`aci:<id>@<server>`): its fetch in flight (the slot's lock)
+/// and its last answer.
+static FETCHES: LazyLock<std::sync::Mutex<HashMap<String, Slot>>> = LazyLock::new(Default::default);
+
+fn slot(person: &AccountRef) -> Slot {
+    let mut fetches = FETCHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Dropped once nobody waits on them and their answer is stale.
+    fetches.retain(|_, slot| {
+        Arc::strong_count(slot) > 1
+            || slot
+                .try_lock()
+                .map(|kept| {
+                    kept.as_ref()
+                        .is_some_and(|(at, _)| at.elapsed() < FRESH_FOR)
+                })
+                .unwrap_or(true)
+    });
+    fetches.entry(person.to_string()).or_default().clone()
+}
+
 /// `GET /api/users/by-id/{accountId}?server=` — an account by its permanent
 /// id: its address now (server-asserted, shown as a label) and its identity.
 /// Another server's is asked of it through federation (its pinned identity,
-/// never a URL from the query), limited per peer and once per account at a
-/// time; rate-limited per caller like the address lookup.
+/// never a URL from the query): one fetch per account at a time, whose
+/// answer serves every lookup of it made meanwhile and for a short while
+/// after. Only a real fetch counts against the caller's limit for that peer,
+/// so nobody's lookups use up anyone else's.
 #[utoipa::path(
     get,
     path = "/api/users/by-id/{accountId}",
@@ -73,7 +116,7 @@ async fn local_identity(state: &AppState, id: Uuid) -> AppResult<Option<RemoteDr
 )]
 pub async fn by_id(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(account_id): Path<String>,
     Query(query): Query<ByIdQuery>,
 ) -> AppResult<Response> {
@@ -81,23 +124,39 @@ pub async fn by_id(
     let server = query.server.unwrap_or_else(|| local_server.clone());
     // A canonical server name and account id, or nothing is asked of anyone.
     let person = crate::account_ids::remote(&server, &account_id)?;
-    let id = Uuid::parse_str(&person.account_id).expect("canonical");
     if person.server == local_server {
+        let id = Uuid::parse_str(&person.account_id).expect("canonical");
         return local_identity(&state, id)
             .await?
             .map(|found| Json(found).into_response())
             .ok_or_else(|| AppError::not_found("no such account"));
     }
-    if !crate::ratelimit::ACCOUNT_PEER_FETCHES.allow(&person.server) {
-        return Err(
-            AppError::too_many_requests("too many lookups of that server")
-                .with_details(serde_json::json!({ "code": "rateLimited" })),
-        );
+    let slot = slot(&person);
+    let mut kept = slot.lock().await;
+    let fetched = match kept.as_ref() {
+        Some((at, fetched)) if at.elapsed() < FRESH_FOR => fetched.clone(),
+        _ => {
+            let limit_key = format!("{}|{}", user.user_id, person.server);
+            if !crate::ratelimit::ACCOUNT_PEER_FETCHES.allow(&limit_key) {
+                return Err(
+                    AppError::too_many_requests("too many lookups of that server")
+                        .with_details(serde_json::json!({ "code": "rateLimited" })),
+                );
+            }
+            let fetched = fetch(&state, &person).await?;
+            *kept = Some((Instant::now(), fetched.clone()));
+            fetched
+        }
+    };
+    match fetched {
+        Fetched::Found(remote) => Ok(Json(*remote).into_response()),
+        Fetched::Missing => Err(AppError::not_found("no such account")),
     }
-    // One fetch per account at a time: the rest wait for it.
-    let lock = crate::remote_renames::fetch_lock(&person.to_string());
-    let _fetching = lock.lock().await;
-    let federation = configured_stack(&state)?;
+}
+
+/// Asks `person`'s server for them; an answer for anyone else is refused.
+async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
+    let federation = configured_stack(state)?;
     let response = federation
         .send(
             &person.server,
@@ -113,7 +172,7 @@ pub async fn by_id(
         .await
         .map_err(gateway_error)?;
     if response.status == StatusCode::NOT_FOUND {
-        return Err(AppError::not_found("no such account"));
+        return Ok(Fetched::Missing);
     }
     if response.status != StatusCode::OK {
         return Err(AppError::new(
@@ -126,17 +185,14 @@ pub async fn by_id(
     if remote.server != person.server
         || remote.account_id != person.account_id
         || remote.account != format!("{}@{}", remote.username, person.server)
-        || canonical_public_key(&remote.drive_hpke_public_key).is_err()
-        || canonical_public_key(&remote.drive_signing_public_key).is_err()
-        || canonical_public_key(&remote.account_authority_public_key).is_err()
-        || remote.account_incarnation_id.len() != 64
+        || !remote_keys_consistent(&remote)
     {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "the other server answered for another account",
         ));
     }
-    Ok(Json(remote).into_response())
+    Ok(Fetched::Found(Box::new(remote)))
 }
 
 /// `GET /api/fed/drive/accounts/{accountId}` — signed: this server's account
@@ -181,5 +237,38 @@ pub async fn fed_by_id(
     match result {
         Ok(found) => signed_json(federation, &authenticated, StatusCode::OK, &found),
         Err(error) => signed_app_error(federation, &authenticated, error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn person(id: &str) -> AccountRef {
+        AccountRef::new("peer.test", id).unwrap()
+    }
+
+    #[tokio::test]
+    async fn lookups_of_one_account_share_one_fetch_and_its_answer() {
+        let alice = person("3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70");
+        let first = slot(&alice);
+        // Another lookup of the same account meanwhile waits on the same
+        // fetch; another account has its own.
+        assert!(Arc::ptr_eq(&first, &slot(&alice)));
+        assert!(!Arc::ptr_eq(
+            &first,
+            &slot(&person("8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b"))
+        ));
+        // What the fetch kept answers the next lookup, while fresh.
+        *first.lock().await = Some((Instant::now(), Fetched::Missing));
+        drop(first);
+        let again = slot(&alice);
+        let kept = again.lock().await;
+        assert!(matches!(kept.as_ref(), Some((at, Fetched::Missing)) if at.elapsed() < FRESH_FOR));
+        drop(kept);
+        // A stale answer nobody waits on is dropped: the next lookup fetches.
+        *again.lock().await = Some((Instant::now() - FRESH_FOR, Fetched::Missing));
+        drop(again);
+        assert!(slot(&alice).lock().await.is_none());
     }
 }

@@ -976,9 +976,11 @@ An account by its permanent id (docs/plans/account-ids.md): its address now
 answers them. `?server=` names the account's server (this one when left
 out); another server's account is asked of that server through federation
 (`GET /api/fed/drive/accounts/:accountId`, the pinned peer, never a URL from
-the query), at most `RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN` a minute per
-peer and one fetch per account at a time. The answer must name the same
-server and id (`502` otherwise).
+the query). One fetch per account at a time; its answer (or its `404`)
+serves every lookup of that account for 30 seconds. Only a real fetch counts,
+at most `RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN` a minute per caller and
+peer. The answer must name the same server and id, with the incarnation its
+authority key stands for (`502` otherwise).
 
 **Auth:** Bearer JWT; counted with the user lookups
 (`RATE_LIMIT_USER_LOOKUP_PER_MIN`). `400` for an id that is not a lowercase

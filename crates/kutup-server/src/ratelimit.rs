@@ -519,7 +519,8 @@ pub static RENAME_LOOKUPS: LazyLock<RateLimiter> = LazyLock::new(|| {
 });
 
 /// Fetches of renames from one peer: 120 a minute per peer, whoever asks.
-/// Accounts asked of one peer by id: 120 a minute per peer, whoever asks.
+/// Accounts one account asks of one peer by id (real fetches only: answers
+/// kept a short while serve the rest): 120 a minute per caller and peer.
 pub static ACCOUNT_PEER_FETCHES: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120) as usize,

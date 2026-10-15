@@ -54,7 +54,7 @@ pub struct RemoteDriveUserQuery {
     pub server: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteDriveUserResponse {
     /// The address asked for, server-asserted: a lookup handle.
@@ -253,6 +253,19 @@ pub(crate) fn canonical_domain(domain: &str) -> AppResult<&str> {
     Ok(domain)
 }
 
+/// A peer's account answer's keys: canonical, and its incarnation the one
+/// its authority key stands for.
+pub(crate) fn remote_keys_consistent(remote: &RemoteDriveUserResponse) -> bool {
+    let Ok(authority) = canonical_public_key(&remote.account_authority_public_key) else {
+        return false;
+    };
+    let authority: [u8; 32] = authority.try_into().expect("32 bytes, checked");
+    canonical_public_key(&remote.drive_hpke_public_key).is_ok()
+        && canonical_public_key(&remote.drive_signing_public_key).is_ok()
+        && remote.account_incarnation_id
+            == kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
+}
+
 pub(crate) fn canonical_public_key(value: &str) -> AppResult<Vec<u8>> {
     let bytes = STANDARD
         .decode(value)
@@ -427,10 +440,7 @@ pub async fn fetch_remote_user(
     if kutup_crypto::names::fold(&remote.username) != kutup_crypto::names::fold(username)
         || remote.server != server
         || remote.account != format!("{}@{server}", remote.username)
-        || canonical_public_key(&remote.drive_hpke_public_key).is_err()
-        || canonical_public_key(&remote.drive_signing_public_key).is_err()
-        || canonical_public_key(&remote.account_authority_public_key).is_err()
-        || remote.account_incarnation_id.len() != 64
+        || !remote_keys_consistent(&remote)
     {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
