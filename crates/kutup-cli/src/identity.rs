@@ -12,7 +12,9 @@ use base64::Engine as _;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
-use kutup_crypto::identity_pins::{self, IdentityPinsV2, PinMatch, PinState, PinUpdate, Recorded};
+use kutup_crypto::identity_pins::{
+    self, AuthorityCheck, IdentityPinsV2, PinMatch, PinState, PinUpdate, Recorded,
+};
 use kutup_crypto::safety_number;
 
 use crate::api::types::IdentityPinsWrite;
@@ -30,11 +32,17 @@ pub enum Status {
     Invalid,
     /// Another authority than the one this account met before.
     Changed,
+    /// The address is one the list knows another account holds: whoever the
+    /// server says is there is not them.
+    SomeoneElse,
 }
 
 impl Status {
     pub fn in_doubt(self) -> bool {
-        matches!(self, Status::Invalid | Status::Changed)
+        matches!(
+            self,
+            Status::Invalid | Status::Changed | Status::SomeoneElse
+        )
     }
 
     /// One word for tables and JSON.
@@ -45,6 +53,7 @@ impl Status {
             Status::Unproven => "unproven",
             Status::Invalid => "invalid",
             Status::Changed => "changed",
+            Status::SomeoneElse => "someone-else",
         }
     }
 
@@ -56,6 +65,9 @@ impl Status {
             ),
             Status::Invalid => format!(
                 "the keys the server gave for {account} are not signed by their account; the server may be able to read what is shared with them, or this may not come from them."
+            ),
+            Status::SomeoneElse => format!(
+                "{account} belongs to someone else now: it is not the person you knew there. Check who they are before sharing ('kutup identity show {account}')."
             ),
             _ => String::new(),
         }
@@ -374,41 +386,47 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
         return Ok(Status::Invalid);
     }
     match found {
-        PinMatch::Pinned {
-            pin,
-            same_authority: true,
-            ..
-        } => {
-            // Met under a new name: remember it (trust is unchanged).
-            if !pin.had(account) {
-                pin_or_note(ctx, me, &person);
+        // Someone the list knows holds this address: whoever is found there
+        // is not them.
+        PinMatch::Pinned { others, .. } if !others.is_empty() => Ok(Status::SomeoneElse),
+        PinMatch::SomeoneElse { .. } => {
+            pin_new(ctx, me, &person)?;
+            Ok(Status::SomeoneElse)
+        }
+        PinMatch::Pinned { pin, authority, .. } => {
+            if authority != AuthorityCheck::Same {
+                return Ok(Status::Changed);
+            }
+            // The account found is shown by its own name, never by the
+            // address it was found at (as Signal shows the account's profile).
+            if let Some(name) = pin
+                .address()
+                .filter(|name| !pin.had(account) && *name != account)
+            {
+                eprintln!("note: {account} is the account you know as {name}");
             }
             Ok(Status::Ok {
                 verified: pin.state == PinState::Verified,
             })
         }
-        PinMatch::Pinned { .. } => Ok(Status::Changed),
-        PinMatch::SomeoneElse { .. } | PinMatch::New => {
-            match pin(ctx, me, &person, PinUpdate::FirstSeen)? {
-                // Someone the user knew had this address: this is another
-                // person (accept with `kutup identity trust`).
-                Recorded::AddressHadOthers { .. } => Ok(Status::Changed),
-                // Another account's authority handed out for this one.
-                Recorded::AuthorityElsewhere { .. } => Ok(Status::Invalid),
-                Recorded::Updated | Recorded::Unchanged => Ok(Status::Ok { verified: false }),
-            }
+        PinMatch::New => {
+            pin_new(ctx, me, &person)?;
+            Ok(Status::Ok { verified: false })
         }
     }
 }
 
-/// Notes a new address of a pinned person; a failure to store it is only
-/// told, as nothing about their trust depends on it.
-fn pin_or_note(ctx: &Ctx, me: &Me, person: &Published) {
-    if let Err(error) = pin(ctx, me, person, PinUpdate::FirstSeen) {
-        eprintln!(
-            "note: could not remember {}'s new address: {error}",
+/// Pins an account met for the first time (trust on first use).
+fn pin_new(ctx: &Ctx, me: &Me, person: &Published) -> Result<()> {
+    match pin(ctx, me, person, PinUpdate::FirstSeen)? {
+        // Another account's authority handed out for this one.
+        Recorded::AuthorityElsewhere { .. } => bail!(
+            "the keys given for {} belong to another account: do not trust them",
             person.account
-        );
+        ),
+        // Someone else at an address the list knew: told as such, not pinned
+        // until the user trusts them.
+        Recorded::AddressHadOthers { .. } | Recorded::Updated | Recorded::Unchanged => Ok(()),
     }
 }
 

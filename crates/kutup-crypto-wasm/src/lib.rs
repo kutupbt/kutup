@@ -3153,8 +3153,8 @@ struct RecordedJs {
 /// Records what a client learned about `account` (`{ server, accountId }`),
 /// met at `address` (or null) with an authority (`update`: `firstSeen`,
 /// `accepted` or `verified`), by the rules every app shares: `{ pins,
-/// changed, result: { kind: "updated" | "unchanged" | "addressHadOthers" |
-/// "authorityElsewhere", … } }`.
+/// changed, result: { kind: "updated" | "unchanged" | "authorityElsewhere",
+/// … } }`. The address is kept only on a pin made now.
 #[wasm_bindgen(js_name = recordIdentityPin)]
 pub fn record_identity_pin(
     pins_json_text: &str,
@@ -3191,8 +3191,8 @@ pub fn record_identity_pin(
 }
 
 /// What the pin list says about `account`, met at `address` (or null), given
-/// the authority published for it now (or null): `{ kind: "pinned" |
-/// "someoneElse" | "new", … }`.
+/// the authority published for it now (or null): `{ kind: "pinned" (with
+/// `authority` and `others`) | "someoneElse" | "new", … }`.
 #[wasm_bindgen(js_name = lookupIdentityPin)]
 pub fn lookup_identity_pin(
     pins_json_text: &str,
@@ -3221,21 +3221,22 @@ pub fn identity_pins_at(pins_json_text: &str, address: &str) -> Result<JsValue, 
         .map_err(|error| js_error(&format!("encode: {error}")))
 }
 
-/// Follows a rename chain of `account`, signed by its pinned authority: the
-/// chain's addresses become the pin's labels, the current one newest. `{
-/// pins, from, to, changed }`; throws for a chain that does not verify
-/// against the pinned authority, an account not pinned, or a rollback.
+/// Follows a rename chain of `account`, signed by its pinned authority, at
+/// `since`: the chain's addresses become the pin's labels, the current one
+/// held now. `{ pins, from, to, changed }`; throws for a chain that does not
+/// verify against the pinned authority, an account not pinned, or a rollback.
 #[wasm_bindgen(js_name = applyAccountRenameToPins)]
 pub fn apply_account_rename_to_pins(
     pins_json_text: &str,
     account: JsValue,
     chain_json: &str,
+    since: &str,
 ) -> Result<JsValue, JsValue> {
     let mut list = pins_arg(pins_json_text)?;
     let account = account_arg(account, "account")?;
     let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
         serde_json::from_str(chain_json).map_err(|_| js_error("invalid rename chain"))?;
-    let applied = kutup_crypto::identity_pins::apply_rename(&mut list, &account, &chain)
+    let applied = kutup_crypto::identity_pins::apply_rename(&mut list, &account, &chain, since)
         .map_err(|error| js_error(&error.to_string()))?;
     PinsChanged {
         pins: pins_json(&list)?,

@@ -90,7 +90,7 @@ describe('an address’s keys against the pin list', () => {
   const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
   const binding = crypto.randomUUID()
 
-  async function lookedUp(verdict: { kind: string; now?: string }) {
+  async function lookedUp(verdict: { kind: string; now?: string; name?: string }) {
     pins.verdict = verdict
     forgetKeys()
     const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev')
@@ -102,15 +102,19 @@ describe('an address’s keys against the pin list', () => {
     await expect(lookedUp({ kind: 'changed' })).rejects.toBeInstanceOf(KeysIdentityChanged)
   })
 
-  it('refuses someone else at a name a pinned person left, naming where that person is', async () => {
-    await expect(lookedUp({ kind: 'changed', now: 'ada_lovelace@kutup.dev' })).rejects.toMatchObject({
+  it('refuses someone else at a name a known person holds, naming where that person is', async () => {
+    await expect(lookedUp({ kind: 'someoneElse', now: 'ada_lovelace@kutup.dev' })).rejects.toMatchObject({
       now: 'ada_lovelace@kutup.dev',
     })
+    await expect(lookedUp({ kind: 'someoneElse' })).rejects.toBeInstanceOf(KeysIdentityChanged)
   })
 
-  it('takes an old address its verified rename chain covers, and someone never met', async () => {
-    await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
-    await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+  it('takes a pinned account, shown by its own name, and someone never met', async () => {
+    await expect(lookedUp({ kind: 'pinned', name: 'mal@kutup.dev' })).resolves.toMatchObject({
+      address: 'ada_l@kutup.dev',
+      knownAs: 'mal@kutup.dev',
+    })
+    await expect(lookedUp({ kind: 'pinned' })).resolves.not.toHaveProperty('knownAs')
     await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
   })
 })

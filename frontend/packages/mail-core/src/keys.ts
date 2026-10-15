@@ -1,5 +1,6 @@
 import { foldAddress, fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailGroupKeyChain, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
 import { driveIdentityOf } from '@kutup/drive-core/identity'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { pinnedVerdict } from '@kutup/drive-core/identityPins'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import api from '@kutup/session/client'
@@ -63,6 +64,17 @@ export interface AddressKeys {
   sequence: number
   /** A shared mailbox: its verified chain, held to the pin list by its id. */
   group?: GroupChainOf
+  /**
+   * The account the address belongs to, for good (docs/plans/account-ids.md);
+   * absent for a shared mailbox, which is no person.
+   */
+  accountRef?: AccountRef
+  /**
+   * The account's own name, when the pin list knows it by another address
+   * than this one (an alias of theirs, or a server pointing this address at
+   * them): shown beside the address, as Signal shows an account's own name.
+   */
+  knownAs?: string
   authorityPublicKey: string
   /** The key to encrypt to (base64). */
   primary: string
@@ -85,9 +97,10 @@ export class UnverifiedKeys extends Error {
 }
 
 /**
- * The keys are signed by another authority than the one the account's pin
- * list holds for this person (docs/plans/username-renames.md): a reset, a
- * name someone else took, or a server handing out keys of its own.
+ * The keys are not those of the person the pin list knows (docs/plans/
+ * account-ids.md): another authority for a pinned account (a reset, or a
+ * server handing out keys of its own), or an address a known person holds
+ * whose keys now belong to another account (a name someone else took).
  */
 export class KeysIdentityChanged extends UnverifiedKeys {
   constructor(
@@ -102,9 +115,9 @@ export class KeysIdentityChanged extends UnverifiedKeys {
 
 /**
  * `keys` held against the pin list shared with Drive and Chat: a pinned
- * person's keys must be signed by the pinned authority, and an address that
- * person left needs their verified rename chain naming both addresses.
- * Someone never met is trusted on first use, as before.
+ * account's keys must be signed by its pinned authority, and an address a
+ * known person holds must not lead to another account. Someone never met is
+ * trusted on first use.
  */
 async function pinned(keys: AddressKeys): Promise<AddressKeys> {
   const session = getSession()
@@ -114,9 +127,11 @@ async function pinned(keys: AddressKeys): Promise<AddressKeys> {
   // (server, group id) come with the pin list's groups section
   // (docs/plans/account-ids.md, slice 3).
   if (keys.group) return keys
-  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, keys.authorityPublicKey)
-  if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address, verdict.now)
-  return keys
+  if (!keys.accountRef) return keys
+  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.accountRef, keys.address, keys.authorityPublicKey)
+  if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address)
+  if (verdict.kind === 'someoneElse') throw new KeysIdentityChanged(keys.address, verdict.now)
+  return verdict.kind === 'pinned' && verdict.name ? { ...keys, knownAs: verdict.name } : keys
 }
 
 /** The address is a group's: its members' keys come from `groupMembers`. */
@@ -229,7 +244,7 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
   return {
     address: lookup.address,
     sequence: newest.sequence,
-    ...(isGroupLookup(lookup) ? { group } : {}),
+    ...(isGroupLookup(lookup) ? { group } : { accountRef: { server: lookup.server, accountId: lookup.accountId } }),
     authorityPublicKey: signer,
     primary: primary.publicKey,
     // A key its owner marked compromised no longer vouches for anything.

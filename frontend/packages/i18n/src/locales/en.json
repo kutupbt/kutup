@@ -321,6 +321,13 @@
       "body": "The keys the server gave for {{account}} are not signed by their account. This may not be from them: don't trust its contents, links or requests.",
       "shareBody": "The keys the server gave for {{account}} are not signed by their account, so the server might be able to read what you share."
     },
+    "someoneElse": {
+      "title": "{{account}} is someone else now",
+      "body": "The person you knew at {{account}} no longer has this address. Whoever has it now is someone else: check who they are before you trust anything from them.",
+      "bodyNow": "The person you knew at {{account}} is now {{now}}. Whoever has {{account}} now is someone else: check who they are before you trust anything from them.",
+      "shareBody": "The person you knew at {{account}} no longer has this address, so you would be sharing with someone else. Check who they are first.",
+      "shareBodyNow": "The person you knew at {{account}} is now {{now}}, so you would be sharing with someone else. Share with {{now}} instead, or check who this is first."
+    },
     "renamed": {
       "banner": "{{name}} is now {{now}} (formerly {{account}}).",
       "share": "{{account}} is a name this person has left: they are now {{now}}.",
@@ -329,7 +336,7 @@
     },
     "accept": "Trust the new identity",
     "acceptFailed": "It could not be saved. Try again.",
-    "knownElsewhere": "This identity is someone you already know as {{other}}. Their address changed; it is followed once their renaming is confirmed.",
+    "knownAs": "the account you know as {{name}}",
     "shareAnyway": "Share anyway",
     "verified": "{{name}} is verified",
     "verify": "Verify {{name}}",
@@ -343,7 +350,8 @@
       "unverified": "Not verified",
       "unproven": "Keys not confirmed yet",
       "changed": "Identity changed",
-      "invalid": "Identity not confirmed"
+      "invalid": "Identity not confirmed",
+      "someoneElse": "Someone else"
     }
   },
   "safetyNumber": {

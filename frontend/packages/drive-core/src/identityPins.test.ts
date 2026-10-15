@@ -1,19 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// The crypto is Rust's (kutup-crypto vectors); here, its decisions are stubbed:
-// a binding "verifies" when it names the authority it was made with, an
-// incarnation is the authority's name, and a sealed list is its JSON, which
-// opens only for the key binding and revision it was sealed with.
-/** What the next `recordIdentityPin` decides instead of the model (a Rust outcome to react to). */
-const recordOverride = vi.hoisted(() => ({ next: null as null | Record<string, unknown> }))
+// The crypto is Rust's (kutup-crypto vectors); here, its decisions are
+// modelled: a binding "verifies" when it names the authority it was made
+// with, an incarnation is the authority's name, and a sealed list is its
+// JSON, which opens only for the key binding and revision it was sealed with.
+
+interface Ref {
+  server: string
+  accountId: string
+}
+
+interface Label {
+  address: string
+  seenAt: string
+}
 
 interface Pin {
-  account: string
+  account: Ref
   authorityPublicKey: string
   state: 'seen' | 'verified'
   since: string
   replaced?: string[]
-  formerly?: string[]
+  addresses?: Label[]
 }
 
 interface Rename {
@@ -31,6 +39,13 @@ function fold(address: string): string | null {
   return at > 0 ? `${address.slice(0, at).replace(/[._-]/g, '').toLowerCase()}@${address.slice(at + 1).toLowerCase()}` : null
 }
 
+const sameRef = (a: Ref, b: Ref) => a.server === b.server && a.accountId === b.accountId
+const had = (pin: Pin, address: string) => (pin.addresses ?? []).find((label) => fold(label.address) === fold(address))
+const holds = (pin: Pin, address: string) => {
+  const last = pin.addresses?.at(-1)
+  return Boolean(last && fold(last.address) === fold(address))
+}
+
 // Rust's account_rename::verify_chain, modelled: a statement "verifies" when
 // signed by the authority, and each starts where the one before ended.
 function verifyChain(authority: string, chain: Rename[]) {
@@ -43,86 +58,99 @@ function verifyChain(authority: string, chain: Rename[]) {
   return { incarnationId: `inc-${authority}`, first: addresses[0], current: addresses.at(-1)!, addresses, sequence: chain.length, digests: [] }
 }
 
+// Rust's IdentityPinsV2::at: those holding the address first, by when seen.
+function at(list: { pins: Pin[] }, address: string): Pin[] {
+  return list.pins
+    .filter((pin) => had(pin, address))
+    .sort((a, b) => Number(holds(b, address)) - Number(holds(a, address)) || had(b, address)!.seenAt.localeCompare(had(a, address)!.seenAt))
+}
+
 vi.mock('@kutup/crypto/accountRename', () => ({
   foldAddress: vi.fn((address: string) => Promise.resolve(fold(address))),
   verifyAccountRenameChain: vi.fn((authority: string, chain: Rename[]) => Promise.resolve(verifyChain(authority, chain))),
 }))
+
+vi.mock('@kutup/crypto/accountRef', () => ({ sameAccount: (a: Ref, b: Ref) => sameRef(a, b) }))
 
 vi.mock('@kutup/crypto/identityPins', () => ({
   verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string) =>
     Promise.resolve(binding === `bound-by-${authority}`),
   ),
   incarnationIdOfAuthority: vi.fn((authority: string) => Promise.resolve(`inc-${authority}`)),
-  // The pair's number names both authorities; a scan matches only the current pair.
-  deriveSafetyNumber: vi.fn((la: string, pa: string) =>
-    Promise.resolve({ fingerprint: `${la}-${pa}`, qrPayload: `qr:${la}:${pa}` }),
-  ),
-  safetyQrMatches: vi.fn((la: string, pa: string, scanned: string) =>
-    Promise.resolve(scanned === `qr:${la}:${pa}`),
-  ),
-  // Rust's identity_pins::record, modelled: first use pins, accepted or
-  // verified replace (the old incarnation kept), the same authority keeps its history.
+  // The number names both accounts' authorities; each side's code names its own first.
+  deriveSafetyNumber: vi.fn((_l: Ref, la: string, _p: Ref, pa: string) => Promise.resolve({ fingerprint: `${la}-${pa}`, qrPayload: `qr:${la}:${pa}` })),
+  // A scan matches only the peer's own code for this pair.
+  safetyQrMatches: vi.fn((_l: Ref, la: string, _p: Ref, pa: string, scanned: string) => Promise.resolve(scanned === `qr:${pa}:${la}`)),
+  pinAddress: (pin: Pin) => pin.addresses?.at(-1)?.address,
+  // Rust's identity_pins::record, modelled: a new account is pinned with the
+  // address it was met at (not on first sight when others were known there);
+  // accepted or verified replace the authority; no address is ever written
+  // onto an account already pinned.
   recordIdentityPin: vi.fn(
-    (current: { text: string; list: { pins: Pin[] } }, account: string, authority: string, update: 'firstSeen' | 'accepted' | 'verified', since: string) => {
+    (current: { list: { pins: Pin[] } }, account: Ref, address: string | undefined, authority: string, update: 'firstSeen' | 'accepted' | 'verified', since: string) => {
       const list = current.list
       const out = (next: Record<string, unknown>, changed: boolean, result: Record<string, unknown>) =>
         Promise.resolve({ pins: { text: JSON.stringify(next), list: next }, changed, result })
-      if (recordOverride.next) {
-        const result = recordOverride.next
-        recordOverride.next = null
-        return out(list, false, result)
-      }
+      const elsewhere = list.pins.find((pin) => pin.authorityPublicKey === authority && !sameRef(pin.account, account))
+      if (elsewhere) return out(list, false, { kind: 'authorityElsewhere', pin: elsewhere })
       const pins = list.pins.map((pin) => ({ ...pin }))
-      const at = pins.findIndex((pin) => pin.account === account)
+      const i = pins.findIndex((pin) => sameRef(pin.account, account))
       const state = update === 'verified' ? 'verified' : 'seen'
-      const unchanged = out({ ...list, pins }, false, { kind: 'unchanged' })
-      const pinned = () => out({ ...list, pins }, true, { kind: 'pinned' })
-      if (at < 0) {
-        pins.push({ account, authorityPublicKey: authority, state, since })
-        pins.sort((a, b) => (a.account < b.account ? -1 : 1))
-        return pinned()
+      if (i < 0) {
+        const others = address && update === 'firstSeen' ? at(list, address) : []
+        if (others.length > 0) return out(list, false, { kind: 'addressHadOthers', pins: others })
+        pins.push({ account, authorityPublicKey: authority, state, since, ...(address ? { addresses: [{ address, seenAt: since }] } : {}) })
+        pins.sort((a, b) => `${a.account.server}|${a.account.accountId}`.localeCompare(`${b.account.server}|${b.account.accountId}`))
+        return out({ ...list, pins }, true, { kind: 'updated' })
       }
-      const pin = pins[at]
+      const pin = pins[i]
       if (pin.authorityPublicKey === authority) {
-        if (update !== 'verified' || pin.state === 'verified') return unchanged
-        pins[at] = { ...pin, state: 'verified', since }
-        return pinned()
+        if (update !== 'verified' || pin.state === 'verified') return out(list, false, { kind: 'unchanged' })
+        pins[i] = { ...pin, state: 'verified', since }
+        return out({ ...list, pins }, true, { kind: 'updated' })
       }
-      if (update === 'firstSeen') return unchanged
-      const replaced = [...(pin.replaced ?? []), `inc-${pin.authorityPublicKey}`].slice(-10)
-      pins[at] = { account, authorityPublicKey: authority, state, since, replaced }
-      return pinned()
+      if (update === 'firstSeen') return out(list, false, { kind: 'unchanged' })
+      const replaced = [...(pin.replaced ?? []).filter((id) => id !== `inc-${authority}`), `inc-${pin.authorityPublicKey}`].slice(-10)
+      pins[i] = { ...pin, authorityPublicKey: authority, state, since, replaced }
+      return out({ ...list, pins }, true, { kind: 'updated' })
     },
   ),
-  // Rust's identity_pins::lookup, modelled: addresses compared folded.
-  lookupIdentityPin: vi.fn((current: { list: { pins: Pin[]; detached?: Pin[] } }, address: string, authority?: string) => {
-    const pin = current.list.pins.find((known) => fold(known.account) === fold(address))
-    if (pin) return Promise.resolve({ kind: 'pinned', pin, sameAuthority: pin.authorityPublicKey === authority })
-    const elsewhere = authority ? current.list.pins.find((known) => known.authorityPublicKey === authority) : undefined
-    if (elsewhere) return Promise.resolve({ kind: 'renamed', pin: elsewhere })
-    const back = (current.list.detached ?? []).find((known) => fold(known.account) === fold(address))
-    if (back) return Promise.resolve({ kind: 'returned', pin: back })
-    // Someone pinned had this address before (their rename) and is elsewhere now.
-    const left = current.list.pins.filter((known) => (known.formerly ?? []).some((former) => fold(former) === fold(address)))
-    if (left.length > 0) return Promise.resolve({ kind: 'moved', pins: left.map((known) => ({ pin: known, now: known.account })) })
-    return Promise.resolve({ kind: 'new' })
-  }),
-  // Rust's identity_pins::apply_rename, modelled: the pin of that authority
-  // moves to the chain's current address, its old one kept in `formerly`.
-  applyAccountRenameToPins: vi.fn((current: { list: { pins: Pin[] } }, authority: string, chain: Rename[]) => {
-    const view = verifyChain(authority, chain)
-    const pins = current.list.pins.map((pin) => ({ ...pin }))
-    const at = pins.findIndex((pin) => pin.authorityPublicKey === authority)
-    if (at < 0) return Promise.reject(new Error('concerns no pinned account'))
-    const pin = pins[at]
-    const from = pin.account
-    if (fold(from) === fold(view.current)) {
-      return Promise.resolve({ pins: { text: JSON.stringify(current.list), list: current.list }, applied: { from, to: view.current, changed: false, displaced: null } })
+  // Rust's identity_pins::lookup, modelled.
+  lookupIdentityPin: vi.fn((current: { list: { pins: Pin[] } }, account: Ref, address: string | undefined, authority?: string) => {
+    const pin = current.list.pins.find((known) => sameRef(known.account, account))
+    if (!pin) {
+      const others = address ? at(current.list, address) : []
+      return Promise.resolve(others.length > 0 ? { kind: 'someoneElse', pins: others } : { kind: 'new' })
     }
-    if (!view.addresses.some((address) => fold(address) === fold(from))) return Promise.reject(new Error('the chain does not name the pin'))
-    pins[at] = { ...pin, account: view.current, formerly: [...(pin.formerly ?? []), from] }
+    const own = address ? had(pin, address)?.seenAt : undefined
+    const others = address
+      ? at(current.list, address).filter((other) => !sameRef(other.account, account) && holds(other, address) && (own === undefined || had(other, address)!.seenAt > own))
+      : []
+    const check = authority === undefined ? 'unknown' : authority === pin.authorityPublicKey ? 'same' : (pin.replaced ?? []).includes(`inc-${authority}`) ? 'earlier' : 'changed'
+    return Promise.resolve({ kind: 'pinned', pin, authority: check, others })
+  }),
+  identityPinsAt: vi.fn((current: { list: { pins: Pin[] } }, address: string) => Promise.resolve(at(current.list, address))),
+  // Rust's identity_pins::apply_rename, modelled: the chain, signed by the
+  // pinned authority, labels the pin; its current address last.
+  applyAccountRenameToPins: vi.fn((current: { list: { pins: Pin[] } }, account: Ref, chain: Rename[], since: string) => {
+    const pins = current.list.pins.map((pin) => ({ ...pin }))
+    const i = pins.findIndex((pin) => sameRef(pin.account, account))
+    if (i < 0) return Promise.reject(new Error('no pin for this account'))
+    const pin = pins[i]
+    let view
+    try {
+      view = verifyChain(pin.authorityPublicKey, chain)
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    const from = pin.addresses?.at(-1)?.address ?? null
+    const known = pin.addresses ?? []
+    const labels = known.filter((label) => !view.addresses.some((a) => fold(a) === fold(label.address)))
+    for (const address of view.addresses) labels.push({ address, seenAt: known.find((l) => fold(l.address) === fold(address))?.seenAt ?? since })
+    pins[i] = { ...pin, addresses: labels }
     const list = { ...current.list, pins }
-    return Promise.resolve({ pins: { text: JSON.stringify(list), list }, applied: { from, to: view.current, changed: true, displaced: null } })
+    const changed = JSON.stringify(list) !== JSON.stringify(current.list)
+    return Promise.resolve({ pins: { text: JSON.stringify(changed ? list : current.list), list: changed ? list : current.list }, applied: { from, to: view.current, changed } })
   }),
   EMPTY_PINS: { text: '{"pins":[]}', list: { pins: [] } },
   sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, pins: { text: string }) =>
@@ -221,7 +249,7 @@ vi.mock('@kutup/session/client', () => {
           // Another app stored revision 1 with a pin of its own.
           server.pins = {
             revision: 1,
-            envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: 'carol@kutup.dev', authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z' }] } }),
+            envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [{ account: { server: 'kutup.dev', accountId: 'acct-C' }, authorityPublicKey: 'C', state: 'seen', since: '2026-10-10T00:00:00Z', addresses: [{ address: 'carol@kutup.dev', seenAt: '2026-10-10T00:00:00Z' }] }] } }),
           }
           return Promise.reject(conflict())
         }
@@ -239,7 +267,9 @@ import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import {
   acceptIdentity,
   checkIdentity,
+  confirmRecipient,
   currentAddressOf,
+  IdentityNotConfirmed,
   personSafetyNumber,
   pinnedVerdict,
   PinsRolledBack,
@@ -262,9 +292,19 @@ const me: DriveIdentity = {
   authorityPublicKey: 'ME',
 }
 
-function publish(account: string, authority: string, { bound = true, hpke = `${authority}-hpke`, signing = `${authority}-sign` } = {}) {
-  server.people.set(account, {
-    account,
+/**
+ * The server's answer for `address`: the account it belongs to (by default
+ * the one whose authority it is: `acct-<authority>`) and its keys.
+ */
+function publish(
+  address: string,
+  authority: string,
+  { bound = true, hpke = `${authority}-hpke`, signing = `${authority}-sign`, id = `acct-${authority}` } = {},
+) {
+  server.people.set(address, {
+    account: address,
+    server: address.split('@')[1],
+    accountId: id,
     accountAuthorityPublicKey: authority,
     driveHpkePublicKey: hpke,
     driveSigningPublicKey: signing,
@@ -272,12 +312,25 @@ function publish(account: string, authority: string, { bound = true, hpke = `${a
   })
 }
 
-function storedPins(): { account: string; authorityPublicKey: string; replaced?: string[] }[] {
-  return (JSON.parse(server.pins!.envelope) as { list: { pins: { account: string; authorityPublicKey: string; replaced?: string[] }[] } }).list.pins
+/** The stored list, each pin by its account id and its addresses. */
+function storedPins(): { id: string; authorityPublicKey: string; state: string; replaced?: string[]; addresses: string[] }[] {
+  return (JSON.parse(server.pins!.envelope) as { list: { pins: Pin[] } }).list.pins.map((pin) => ({
+    id: pin.account.accountId,
+    authorityPublicKey: pin.authorityPublicKey,
+    state: pin.state,
+    ...(pin.replaced ? { replaced: pin.replaced } : {}),
+    addresses: (pin.addresses ?? []).map((label) => label.address),
+  }))
+}
+
+/** A new page: nothing looked up yet, the pins read again. */
+function newPage() {
+  const pins = server.pins
+  resetIdentityPinsForTesting()
+  server.pins = pins
 }
 
 beforeEach(() => {
-  recordOverride.next = null
   resetIdentityPinsForTesting()
   server.people.clear()
   server.pins = null
@@ -292,10 +345,10 @@ beforeEach(() => {
 })
 
 describe('checkIdentity', () => {
-  it('pins an account the first time, then recognises it', async () => {
+  it('pins an account the first time, at the address it was met at, then recognises it', async () => {
     publish('bob@kutup.dev', 'B')
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveSigningPublicKey: 'B-sign' })).toEqual({ kind: 'ok', verified: false })
-    expect(storedPins()).toMatchObject([{ account: 'bob@kutup.dev', authorityPublicKey: 'B' }])
+    expect(storedPins()).toMatchObject([{ id: 'acct-B', authorityPublicKey: 'B', addresses: ['bob@kutup.dev'] }])
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'B-hpke' })).toEqual({ kind: 'ok', verified: false })
     expect(server.puts).toBe(1)
   })
@@ -307,22 +360,28 @@ describe('checkIdentity', () => {
     // A recipient key that is not Bob's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
     // A binding by another authority than the one published.
-    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B' })
+    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B' })
     expect(await checkIdentity(me, 'eve@kutup.dev')).toEqual({ kind: 'invalid' })
     // An incarnation that is not this authority's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { incarnationId: 'inc-OTHER' })).toEqual({ kind: 'invalid' })
     expect(server.pins).toBeNull()
   })
 
-  it('warns when the address now has another authority, until accepted', async () => {
+  it('refuses an answer for an account on another server than the address', async () => {
+    publish('bob@kutup.dev', 'B')
+    server.people.set('bob@kutup.dev', { ...server.people.get('bob@kutup.dev'), server: 'evil.dev' })
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'unknown' })
+  })
+
+  it('warns when the account now has another authority (a reset), until accepted', async () => {
     publish('bob@kutup.dev', 'B')
     await checkIdentity(me, 'bob@kutup.dev')
-    resetIdentityPinsForTesting()
-    // Bob's account was wiped and set up again (or the server lies).
-    publish('bob@kutup.dev', 'B2')
+    newPage()
+    // Bob's account was reset (same account id), or the server lies.
+    publish('bob@kutup.dev', 'B2', { id: 'acct-B' })
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'changed' })
     await acceptIdentity(me, 'bob@kutup.dev')
-    expect(storedPins()).toMatchObject([{ account: 'bob@kutup.dev', authorityPublicKey: 'B2', replaced: ['inc-B'] }])
+    expect(storedPins()).toMatchObject([{ id: 'acct-B', authorityPublicKey: 'B2', replaced: ['inc-B'], addresses: ['bob@kutup.dev'] }])
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: false })
   })
 
@@ -335,7 +394,7 @@ describe('checkIdentity', () => {
   it('does not let a server drop the binding of an account already pinned', async () => {
     publish('bob@kutup.dev', 'B')
     await checkIdentity(me, 'bob@kutup.dev')
-    resetIdentityPinsForTesting()
+    newPage()
     publish('bob@kutup.dev', 'B', { bound: false, hpke: 'EVIL-hpke' })
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'invalid' })
   })
@@ -349,7 +408,7 @@ describe('checkIdentity', () => {
     server.conflictOnce = true
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: false })
     expect(server.pins!.revision).toBeGreaterThan(1)
-    expect(storedPins().map((p) => p.account)).toEqual(['bob@kutup.dev', 'carol@kutup.dev'])
+    expect(storedPins().map((p) => p.id)).toEqual(['acct-B', 'acct-C'])
   })
 
   it('refuses an older list than this browser has seen', async () => {
@@ -420,48 +479,92 @@ describe('checkIdentity', () => {
     expect(server.batches).toEqual([['a@kutup.dev', 'b@kutup.dev', 'c@kutup.dev']])
   })
 
-  it('warns, and pins nothing, when someone the user knew had this address before', async () => {
-    publish('alice@kutup.dev', 'M')
-    recordOverride.next = { kind: 'formerAddressTaken', pins: [{ pin: { account: 'alicia@kutup.dev' }, now: 'alicia@kutup.dev' }] }
-    expect(await checkIdentity(me, 'alice@kutup.dev')).toEqual({ kind: 'changed' })
-    expect(server.pins).toBeNull()
-  })
-
-  it('warns about an identity the user replaced, wherever it turns up', async () => {
-    publish('carol@kutup.dev', 'A')
-    recordOverride.next = { kind: 'replacedIdentity', pin: { account: 'bob@kutup.dev', authorityPublicKey: 'A', state: 'seen', detachedBy: 'replaced' } }
-    expect(await checkIdentity(me, 'carol@kutup.dev')).toEqual({ kind: 'changed' })
-    expect(server.pins).toBeNull()
-  })
-
-  it('recognises an account pinned under another of its names', async () => {
-    publish('alicia@kutup.dev', 'A')
-    recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'verified' } }
-    expect(await checkIdentity(me, 'alicia@kutup.dev')).toEqual({ kind: 'ok', verified: true })
-    expect(server.pins).toBeNull()
-  })
-
-  it('says when the identity to accept is someone known under another address', async () => {
-    publish('bob@kutup.dev', 'B')
-    await checkIdentity(me, 'bob@kutup.dev')
-    publish('bob@kutup.dev', 'A')
-    recordOverride.next = { kind: 'knownElsewhere', pin: { account: 'alice@kutup.dev', authorityPublicKey: 'A', state: 'seen' } }
-    await expect(acceptIdentity(me, 'bob@kutup.dev')).rejects.toMatchObject({ other: 'alice@kutup.dev' })
-  })
-
-  it('writes back what it does not know: detached pins and later fields', async () => {
-    const detached = [{ account: 'erin@kutup.dev', authorityPublicKey: 'E', state: 'verified', since: '2026-10-10T00:00:00Z' }]
-    server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [], detached, laterList: { a: 1 } } }) }
+  it('writes back what it does not know: later fields', async () => {
+    server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [], laterList: { a: 1 } } }) }
     publish('bob@kutup.dev', 'B')
     await checkIdentity(me, 'bob@kutup.dev')
     const stored = (JSON.parse(server.pins.envelope) as { list: Record<string, unknown> }).list
-    expect(stored.detached).toEqual(detached)
     expect(stored.laterList).toEqual({ a: 1 })
-    expect(storedPins()).toMatchObject([{ account: 'bob@kutup.dev' }])
+    expect(storedPins()).toMatchObject([{ id: 'acct-B' }])
   })
 
   it('trusts the account itself', async () => {
     expect(await checkIdentity(me, me.account)).toEqual({ kind: 'ok', verified: true })
+  })
+
+  it('refuses keys of an account already pinned handed out for another', async () => {
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'bob@kutup.dev')
+    // Eve's account, with Bob's authority.
+    publish('eve@kutup.dev', 'B', { id: 'acct-E' })
+    expect(await checkIdentity(me, 'eve@kutup.dev')).toEqual({ kind: 'invalid' })
+    expect(storedPins()).toHaveLength(1)
+  })
+})
+
+describe('an address only finds an account (Signal’s model)', () => {
+  it('shows an account found at someone else’s address by its own name, with their notice, and writes nothing', async () => {
+    publish('ada@kutup.dev', 'A')
+    publish('mal@kutup.dev', 'M')
+    await checkIdentity(me, 'ada@kutup.dev')
+    await checkIdentity(me, 'mal@kutup.dev')
+    newPage()
+    const puts = server.puts
+    // The server says ada@ is Mal's.
+    publish('ada@kutup.dev', 'M')
+    expect(await checkIdentity(me, 'ada@kutup.dev')).toEqual({ kind: 'someoneElse', name: 'mal@kutup.dev' })
+    await expect(confirmRecipient(me, 'ada@kutup.dev', {})).rejects.toBeInstanceOf(IdentityNotConfirmed)
+    expect(server.puts).toBe(puts)
+    expect(storedPins()).toMatchObject([
+      { id: 'acct-A', addresses: ['ada@kutup.dev'] },
+      { id: 'acct-M', addresses: ['mal@kutup.dev'] },
+    ])
+  })
+
+  it('shows an account found at an address nobody known has by its own name, and writes nothing', async () => {
+    publish('mal@kutup.dev', 'M')
+    await checkIdentity(me, 'mal@kutup.dev')
+    newPage()
+    const puts = server.puts
+    publish('nobody@kutup.dev', 'M')
+    expect(await checkIdentity(me, 'nobody@kutup.dev')).toEqual({ kind: 'ok', verified: false, name: 'mal@kutup.dev' })
+    expect(server.puts).toBe(puts)
+  })
+
+  it('takes a new address of a known account only from its own signed rename chain', async () => {
+    publish('ada.l@kutup.dev', 'A')
+    await checkIdentity(me, 'ada.l@kutup.dev')
+    newPage()
+    publish('ada.lovelace@kutup.dev', 'A')
+    // A chain its authority did not sign proves nothing: shown by its own name.
+    server.renames.set('ada.lovelace@kutup.dev', chains('A', ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev'], { by: 'M' }))
+    expect(await checkIdentity(me, 'ada.lovelace@kutup.dev')).toEqual({ kind: 'ok', verified: false, name: 'ada.l@kutup.dev' })
+    // Its own chain: a rename, followed.
+    newPage()
+    server.renames.set('ada.lovelace@kutup.dev', chains('A', ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev']))
+    expect(await checkIdentity(me, 'ada.lovelace@kutup.dev')).toEqual({ kind: 'ok', verified: false, formerly: 'ada.l@kutup.dev' })
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev'] }])
+  })
+
+  it('a reused name is a new account: someone else, pinned only when accepted', async () => {
+    // Alice, met at alice@, renamed to alicia@ (her chain followed).
+    publish('alice@kutup.dev', 'A')
+    await checkIdentity(me, 'alice@kutup.dev')
+    newPage()
+    publish('alicia@kutup.dev', 'A')
+    server.renames.set('alicia@kutup.dev', chains('A', ['alice@kutup.dev', 'alicia@kutup.dev']))
+    await checkIdentity(me, 'alicia@kutup.dev')
+    // Mallory, another account, takes alice@.
+    newPage()
+    publish('alice@kutup.dev', 'X')
+    expect(await checkIdentity(me, 'alice@kutup.dev')).toEqual({ kind: 'someoneElse', now: 'alicia@kutup.dev' })
+    expect(storedPins().map((p) => p.id)).toEqual(['acct-A'])
+    await acceptIdentity(me, 'alice@kutup.dev')
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['alice@kutup.dev', 'alicia@kutup.dev'] }, { id: 'acct-X', addresses: ['alice@kutup.dev'] }])
+    newPage()
+    expect(await checkIdentity(me, 'alice@kutup.dev')).toEqual({ kind: 'ok', verified: false })
+    // Alice is still who she was, at her name.
+    expect(await checkIdentity(me, 'alicia@kutup.dev')).toEqual({ kind: 'ok', verified: false, formerly: 'alice@kutup.dev' })
   })
 })
 
@@ -469,10 +572,11 @@ describe('verifyPerson', () => {
   it('marks a person verified with their scanned safety QR, for every app', async () => {
     publish('bob@kutup.dev', 'B')
     const number = await personSafetyNumber(me, 'bob@kutup.dev')
-    await expect(verifyPerson(me, 'bob@kutup.dev', 'qr:somebody-else')).rejects.toBeInstanceOf(SafetyNumberMismatch)
-    await verifyPerson(me, 'bob@kutup.dev', number.qrPayload)
-    expect(storedPins()).toMatchObject([{ account: 'bob@kutup.dev', authorityPublicKey: 'B', state: 'verified' }])
-    resetIdentityPinsForTesting()
+    expect(number.qrPayload).toBe('qr:ME:B')
+    await expect(verifyPerson(me, 'bob@kutup.dev', number.qrPayload)).rejects.toBeInstanceOf(SafetyNumberMismatch)
+    await verifyPerson(me, 'bob@kutup.dev', 'qr:B:ME')
+    expect(storedPins()).toMatchObject([{ id: 'acct-B', authorityPublicKey: 'B', state: 'verified' }])
+    newPage()
     publish('bob@kutup.dev', 'B')
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'ok', verified: true })
   })
@@ -480,11 +584,10 @@ describe('verifyPerson', () => {
   it('accepts a changed identity once it is compared in person', async () => {
     publish('bob@kutup.dev', 'B')
     await checkIdentity(me, 'bob@kutup.dev')
-    resetIdentityPinsForTesting()
-    publish('bob@kutup.dev', 'B2')
+    newPage()
+    publish('bob@kutup.dev', 'B2', { id: 'acct-B' })
     expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'changed' })
-    const number = await personSafetyNumber(me, 'bob@kutup.dev')
-    await verifyPerson(me, 'bob@kutup.dev', number.qrPayload)
+    await verifyPerson(me, 'bob@kutup.dev', 'qr:B2:ME')
     expect(storedPins()).toMatchObject([{ authorityPublicKey: 'B2', state: 'verified', replaced: ['inc-B'] }])
   })
 
@@ -514,55 +617,40 @@ function chains(authority: string, addresses: string[], { by = authority, state 
 }
 
 describe('renames (docs/plans/username-renames.md)', () => {
-  /** Ada met as ada.l, pinned. */
+  /** Ada met as ada.l, pinned; then renamed: the old name held (not found here). */
   async function metAda() {
     publish('ada.l@kutup.dev', 'A')
     expect(await checkIdentity(me, 'ada.l@kutup.dev')).toEqual({ kind: 'ok', verified: false })
-    // Then renamed: the old name is held (not found here), the new one published.
     server.people.clear()
     publish('ada.lovelace@kutup.dev', 'A')
-    resetLookups()
-  }
-
-  /** A new page: nothing looked up yet, the pins read again. */
-  function resetLookups() {
-    const pins = server.pins
-    resetIdentityPinsForTesting()
-    server.pins = pins
+    newPage()
   }
 
   it('finds a pin in any spelling of its address', async () => {
     publish('ada.l@kutup.dev', 'A')
     await checkIdentity(me, 'ada.l@kutup.dev')
     publish('Ada_L@kutup.dev', 'A')
-    expect(await checkIdentity(me, 'Ada_L@kutup.dev')).toEqual({ kind: 'ok', verified: false })
+    expect((await checkIdentity(me, 'Ada_L@kutup.dev')).kind).toBe('ok')
     expect(storedPins()).toHaveLength(1)
   })
 
-  it('says where someone pinned at a name they left is now, and moves the pin', async () => {
+  it('says where someone pinned at a name they left is now, labelling their pin', async () => {
     await metAda()
     server.renames.set('ada.l@kutup.dev', chains('A', ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev']))
     expect(await checkIdentity(me, 'ada.l@kutup.dev')).toEqual({ kind: 'renamed', now: 'ada.lovelace@kutup.dev', verified: false })
-    expect(storedPins()).toMatchObject([{ account: 'ada.lovelace@kutup.dev', authorityPublicKey: 'A', formerly: ['ada.l@kutup.dev'] }])
-    resetLookups()
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', authorityPublicKey: 'A', addresses: ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev'] }])
+    newPage()
     expect(await checkIdentity(me, 'ada.lovelace@kutup.dev')).toEqual({ kind: 'ok', verified: false, formerly: 'ada.l@kutup.dev' })
   })
 
-  it('follows the chain from the new address too: formerly the old one', async () => {
-    await metAda()
-    server.renames.set('ada.lovelace@kutup.dev', chains('A', ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev']))
-    expect(await checkIdentity(me, 'ada.lovelace@kutup.dev')).toEqual({ kind: 'ok', verified: false, formerly: 'ada.l@kutup.dev' })
-    expect(storedPins()).toMatchObject([{ account: 'ada.lovelace@kutup.dev', formerly: ['ada.l@kutup.dev'] }])
-  })
-
-  it('never moves a pin on a chain its authority did not sign, nor on an unknown format', async () => {
+  it('never follows a chain its authority did not sign, nor an unknown format', async () => {
     await metAda()
     server.renames.set('ada.l@kutup.dev', chains('A', ['ada.l@kutup.dev', 'mallory@kutup.dev'], { by: 'M' }))
     expect(await checkIdentity(me, 'ada.l@kutup.dev')).toEqual({ kind: 'unknown' })
     server.renames.set('ada.l@kutup.dev', chains('A', ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev'], { version: 2 }))
-    resetLookups()
+    newPage()
     expect(await checkIdentity(me, 'ada.l@kutup.dev')).toEqual({ kind: 'unknown' })
-    expect(storedPins()).toMatchObject([{ account: 'ada.l@kutup.dev', authorityPublicKey: 'A' }])
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
   })
 
   it('keeps the pin when the server cannot say, or names another authority', async () => {
@@ -570,16 +658,16 @@ describe('renames (docs/plans/username-renames.md)', () => {
     server.renames.set('ada.l@kutup.dev', { version: 1, chains: [], unavailable: true })
     expect(await checkIdentity(me, 'ada.l@kutup.dev')).toEqual({ kind: 'unknown' })
     server.renames.set('ada.l@kutup.dev', chains('M', ['ada.l@kutup.dev', 'mallory@kutup.dev']))
-    resetLookups()
+    newPage()
     expect(await checkIdentity(me, 'ada.l@kutup.dev')).toEqual({ kind: 'unknown' })
-    expect(storedPins()).toMatchObject([{ account: 'ada.l@kutup.dev', authorityPublicKey: 'A' }])
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
   })
 
   it('follows a federated 409 renamed for a pinned person', async () => {
     publish('bob@other.dev', 'B')
     await checkIdentity(me, 'bob@other.dev')
     server.people.clear()
-    resetLookups()
+    newPage()
     server.heldNames.set('bob', chains('B', ['bob@other.dev', 'robert@other.dev']))
     expect(await checkIdentity(me, 'bob@other.dev')).toEqual({ kind: 'renamed', now: 'robert@other.dev', verified: false })
   })
@@ -602,55 +690,35 @@ describe('renames (docs/plans/username-renames.md)', () => {
 })
 
 describe('pinnedVerdict (Mail’s key checks)', () => {
-  /** A new page: nothing looked up yet, the pins read again. */
-  function resetForNewPage() {
-    const pins = server.pins
-    resetIdentityPinsForTesting()
-    server.pins = pins
+  const ref = (authority: string) => ({ server: 'kutup.dev', accountId: `acct-${authority}` })
+
+  async function met(address: string, authority: string) {
+    publish(address, authority)
+    await checkIdentity(me, address)
   }
 
-  async function met(account: string, authority: string) {
-    publish(account, authority)
-    await checkIdentity(me, account)
-  }
-
-  it('says pinned, changed or unknown for an address', async () => {
+  it('says pinned, changed or unknown for an account', async () => {
     await met('bob@kutup.dev', 'B')
-    expect(await pinnedVerdict(me, 'bob@kutup.dev', 'B')).toEqual({ kind: 'pinned' })
-    expect(await pinnedVerdict(me, 'bob@kutup.dev', 'M')).toEqual({ kind: 'changed' })
-    expect(await pinnedVerdict(me, 'carol@kutup.dev', 'C')).toEqual({ kind: 'unknown' })
+    expect(await pinnedVerdict(me, ref('B'), 'bob@kutup.dev', 'B')).toEqual({ kind: 'pinned' })
+    expect(await pinnedVerdict(me, ref('B'), 'bob@kutup.dev', 'M')).toEqual({ kind: 'changed' })
+    expect(await pinnedVerdict(me, ref('C'), 'carol@kutup.dev', 'C')).toEqual({ kind: 'unknown' })
   })
 
-  it('takes an address the pinned person left only with a chain naming both', async () => {
-    await met('ada_lovelace@kutup.dev', 'A')
-    // Ada's old address, signed by her authority, which is pinned elsewhere.
-    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'changed' })
-    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev']))
-    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })
-    // A chain its authority did not sign covers nothing.
-    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev'], { by: 'M' }))
-    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'changed' })
+  it('gives a pinned account found at another address its own name', async () => {
+    await met('bob@kutup.dev', 'B')
+    expect(await pinnedVerdict(me, ref('B'), 'robert@kutup.dev', 'B')).toEqual({ kind: 'pinned', name: 'bob@kutup.dev' })
   })
 
-  it('refuses someone else at an address a pinned person left, naming where that person is', async () => {
-    // Ada renamed (followed); her old name was freed and Mallory took it.
+  it('refuses someone else at an address a known person holds, naming where they are when they moved on', async () => {
     await met('ada_l@kutup.dev', 'A')
-    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev']))
-    server.people.clear()
+    expect(await pinnedVerdict(me, ref('M'), 'ada_l@kutup.dev', 'M')).toEqual({ kind: 'someoneElse' })
+    // Ada's rename followed; Mallory at her old name.
+    newPage()
     publish('ada_lovelace@kutup.dev', 'A')
-    resetForNewPage()
-    await checkIdentity(me, 'ada_l@kutup.dev')
-    expect(storedPins()).toMatchObject([{ account: 'ada_lovelace@kutup.dev' }])
-    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'M')).toEqual({ kind: 'changed', now: 'ada_lovelace@kutup.dev' })
-    // Ada herself at her new name is who she was.
-    expect(await pinnedVerdict(me, 'ada_lovelace@kutup.dev', 'A')).toEqual({ kind: 'pinned' })
-  })
-
-  it('takes a detached pin back only with its own authority', async () => {
-    const detached = [{ account: 'erin@kutup.dev', authorityPublicKey: 'E', state: 'seen', since: '2026-10-10T00:00:00Z' }]
-    server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [], detached } }) }
-    expect(await pinnedVerdict(me, 'erin@kutup.dev', 'E')).toEqual({ kind: 'pinned' })
-    expect(await pinnedVerdict(me, 'erin@kutup.dev', 'M')).toEqual({ kind: 'changed' })
+    server.renames.set('ada_lovelace@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev']))
+    await checkIdentity(me, 'ada_lovelace@kutup.dev')
+    expect(await pinnedVerdict(me, ref('M'), 'ada_l@kutup.dev', 'M')).toEqual({ kind: 'someoneElse', now: 'ada_lovelace@kutup.dev' })
+    expect(await pinnedVerdict(me, ref('A'), 'ada_lovelace@kutup.dev', 'A')).toEqual({ kind: 'pinned' })
   })
 
   it('names where an old address’s account is now', async () => {

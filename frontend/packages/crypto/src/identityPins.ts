@@ -19,11 +19,23 @@ export interface IdentityPin {
   since: string
   /** Incarnation ids this account had before (changes accepted), oldest first. */
   replaced?: string[]
-  /** Addresses the account was met at, oldest first: labels, never keys. The last is the newest. */
-  addresses?: string[]
+  /**
+   * Addresses the account is known at, oldest first: labels, never keys. Only
+   * the one it was first met at and those its own signed rename chain proves;
+   * never one a server resolved to it. The last is the one it holds now.
+   */
+  addresses?: AddressLabel[]
   /** The newest rename verified for its authority: a later chain must hold it (no rollback). */
   renames?: { sequence: number; digest: string; [later: string]: unknown }
   /** Fields from a later version: kept and written back as they are. */
+  [later: string]: unknown
+}
+
+/** An address a pinned account is known at, and when the list learned it. */
+export interface AddressLabel {
+  address: string
+  /** RFC 3339 UTC. */
+  seenAt: string
   [later: string]: unknown
 }
 
@@ -35,9 +47,9 @@ export interface IdentityPins {
   [later: string]: unknown
 }
 
-/** The newest address a pin was met at. */
+/** The address a pinned account holds now, as far as the list knows: its own name. */
 export function pinAddress(pin: IdentityPin): string | undefined {
-  return pin.addresses?.at(-1)
+  return pin.addresses?.at(-1)?.address
 }
 
 /** The account's Drive key binding, signed with its authority for `account` (its server and id). */
@@ -122,9 +134,11 @@ export async function safetyQrMatches(
 export type PinUpdate = 'firstSeen' | 'accepted' | 'verified'
 
 /**
- * Records `update` about `account`, met at `address` (null when it came
- * without one) with `authority`: pinned on first use, replaced only when
- * accepted or verified. The list after, and whether it changed.
+ * Records `update` about `account`, found at `address` (null when it came
+ * without one) with `authority`: pinned on first use (the address kept as the
+ * one it was first met at) unless others were known there, replaced only
+ * when accepted or verified. An address is never written onto an account
+ * already pinned. The list after, and whether it changed.
  */
 export async function recordIdentityPin(
   pins: PinsText,
@@ -146,8 +160,8 @@ export async function recordIdentityPin(
  * What `recordIdentityPin` decided:
  * - `updated` / `unchanged` (for `firstSeen`, also another authority than
  *   the pinned one: `lookupIdentityPin` reports it as changed);
- * - `addressHadOthers`: not pinned; accounts the user knew were met at this
- *   address (`pins`), and this is someone else; pinned only when accepted;
+ * - `addressHadOthers`: not pinned; the account is new and the list knew
+ *   others at this address (`pins`): someone else, pinned only when accepted;
  * - `authorityElsewhere`: refused; this authority is pinned for another
  *   account (`pin`): someone else's keys handed out under this account.
  */
@@ -158,17 +172,26 @@ export type Recorded =
   | { kind: 'authorityElsewhere'; pin: IdentityPin }
 
 /**
- * What the list says about `account`, met at `address` (null: it came
+ * How the published authority compares with the pinned one: `same`;
+ * `changed` (the safety number changed); `earlier` (one the account had
+ * before, handed out again: a change too); `unknown` (not looked up: neither).
+ */
+export type AuthorityCheck = 'same' | 'changed' | 'earlier' | 'unknown'
+
+/**
+ * What the list says about `account`, found at `address` (null: it came
  * without one, as an inbound message does), given the authority published
- * for it now (null: not looked up):
- * - `pinned`: `sameAuthority` false is "safety number changed";
- *   `earlierAuthority`: the published key is one this account had before;
- * - `someoneElse`: not pinned, but accounts the list knows were met at the
- *   address (`pins`, newest holder first): whoever has it now is another person;
+ * for it now (null: not looked up). As Signal, an address only finds an
+ * account; the account is shown by its own name (`pinAddress(pin)`), never
+ * by the address it was found at:
+ * - `pinned`: `others` are accounts the list knows hold the address now:
+ *   the address is someone else's ("someone else" notice);
+ * - `someoneElse`: the account is new, but the list knew others at the
+ *   address (`pins`, those that hold it now first);
  * - `new`: nothing known.
  */
 export type PinMatch =
-  | { kind: 'pinned'; pin: IdentityPin; sameAuthority: boolean; earlierAuthority: boolean }
+  | { kind: 'pinned'; pin: IdentityPin; authority: AuthorityCheck; others: IdentityPin[] }
   | { kind: 'someoneElse'; pins: IdentityPin[] }
   | { kind: 'new' }
 
@@ -181,16 +204,16 @@ export async function lookupIdentityPin(
   return (await getCryptoWasm()).lookupIdentityPin(pins.text, account, address ?? undefined, publishedAuthority ?? undefined) as PinMatch
 }
 
-/** Every pin met at `address`, newest holder first (compared folded, in Rust). */
+/** Every pin known at `address`: those that hold it now first, by when it was seen (compared folded, in Rust). */
 export async function identityPinsAt(pins: PinsText, address: string): Promise<IdentityPin[]> {
   return (await getCryptoWasm()).identityPinsAt(pins.text, address) as IdentityPin[]
 }
 
 /** What following a rename did. */
 export interface RenameApplied {
-  /** The pin's newest address before. */
+  /** The address the pin held before. */
   from: string | null
-  /** The chain's current address, now the newest. */
+  /** The chain's current address, which the pin holds now. */
   to: string
   /** False: this chain was already applied. */
   changed: boolean
@@ -198,16 +221,18 @@ export interface RenameApplied {
 
 /**
  * Follows a verified rename chain of `account`, signed by its pinned
- * authority: the chain's addresses become the pin's labels. Trust is
- * untouched. Throws for a chain that does not verify against the pinned
- * authority, an account not pinned, or a rollback.
+ * authority, at `since`: the chain's addresses become the pin's labels (the
+ * only way an address joins a known account). Trust is untouched. Throws for
+ * a chain that does not verify against the pinned authority, an account not
+ * pinned, or a rollback.
  */
 export async function applyAccountRenameToPins(
   pins: PinsText,
   account: AccountRef,
   chain: readonly AccountRenameV1[],
+  since: string,
 ): Promise<{ pins: PinsText; applied: RenameApplied }> {
-  const result = (await getCryptoWasm()).applyAccountRenameToPins(pins.text, account, JSON.stringify(chain))
+  const result = (await getCryptoWasm()).applyAccountRenameToPins(pins.text, account, JSON.stringify(chain), since)
   const { pins: text, ...applied } = result as RenameApplied & { pins: string }
   return { pins: pinsText(text), applied }
 }

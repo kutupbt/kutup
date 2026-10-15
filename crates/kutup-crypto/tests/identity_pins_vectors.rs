@@ -16,7 +16,7 @@ use kutup_crypto::account_rename::{self, AccountRenameV1};
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::identity_pins::{
-    self, IdentityPinV2, IdentityPinsV2, PinState, PinUpdate, RenameAnchorV1,
+    self, AddressLabelV1, IdentityPinV2, IdentityPinsV2, PinState, PinUpdate, RenameAnchorV1,
 };
 
 const PATH: &str = concat!(
@@ -174,7 +174,14 @@ fn plain(
         state,
         since: "2026-10-12T09:00:00Z".into(),
         replaced: vec![],
-        addresses: addresses.iter().map(|a| a.to_string()).collect(),
+        addresses: addresses
+            .iter()
+            .map(|a| AddressLabelV1 {
+                address: a.to_string(),
+                seen_at: "2026-10-12T09:00:00Z".into(),
+                unknown: Default::default(),
+            })
+            .collect(),
         renames: None,
         unknown: Default::default(),
     }
@@ -214,7 +221,7 @@ fn rules() -> RuleVectors {
     };
     before.pins.sort_by(|a, b| a.account.cmp(&b.account));
     let mut after = before.clone();
-    let applied = identity_pins::apply_rename(&mut after, &dave, &chain).unwrap();
+    let applied = identity_pins::apply_rename(&mut after, &dave, &chain, SINCE).unwrap();
     let lookup_case = |case: &str,
                        list: &IdentityPinsV2,
                        account: &AccountRef,
@@ -262,6 +269,20 @@ fn rules() -> RuleVectors {
             Some(b64(&stranger_keys)),
         ),
         lookup_case(
+            "Frank found at Dave's name: Frank, by his own name, with Dave's notice",
+            &after,
+            &frank,
+            Some("david@kutup.dev"),
+            Some(b64(&frank_keys)),
+        ),
+        lookup_case(
+            "Frank found at a name nobody known has: Frank, by his own name",
+            &after,
+            &frank,
+            Some("frankie@kutup.dev"),
+            Some(b64(&frank_keys)),
+        ),
+        lookup_case(
             "a stranger at a name Dave and Erin had: both, Dave first",
             &after,
             &stranger,
@@ -290,7 +311,7 @@ fn rules() -> RuleVectors {
             None,
         ),
         lookup_case(
-            "Frank, not looked up: pinned, not the same",
+            "Frank, not looked up: pinned, authority unknown",
             &after,
             &frank,
             Some("frank@example.org"),
@@ -360,7 +381,7 @@ fn rules() -> RuleVectors {
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "met under a new name: labelled, trust kept",
+            "found at another name: nothing written",
             &after,
             &dave,
             Some("dai@kutup.dev"),
@@ -400,11 +421,19 @@ fn rules() -> RuleVectors {
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "accepted at a name others had: pinned",
+            "accepted at a name others had: pinned as itself",
             &after,
             &gina,
             Some("dave@kutup.dev"),
             &gina_keys,
+            PinUpdate::Accepted,
+        ),
+        record_case(
+            "a known account accepted at another's name: nothing written",
+            &after,
+            &frank,
+            Some("david@kutup.dev"),
+            &frank_keys,
             PinUpdate::Accepted,
         ),
         record_case(
@@ -423,6 +452,9 @@ fn rules() -> RuleVectors {
         })
         .unwrap()
     };
+    let labels = |addresses: &[&str]| -> Vec<AddressLabelV1> {
+        plain(&dave, &dave_keys, PinState::Seen, addresses).addresses
+    };
     let with = |change: &dyn Fn(&mut IdentityPinV2)| {
         let mut pin = plain(&dave, &dave_keys, PinState::Seen, &["dave@kutup.dev"]);
         change(&mut pin);
@@ -432,19 +464,23 @@ fn rules() -> RuleVectors {
     let refused_lists = vec![
         RefusedList {
             case: "an address twice".into(),
-            pins: with(&|p| p.addresses = vec!["dave@kutup.dev".into(), "dave@kutup.dev".into()]),
+            pins: with(&|p| p.addresses = labels(&["dave@kutup.dev", "dave@kutup.dev"])),
         },
         RefusedList {
             case: "an address twice, folded".into(),
-            pins: with(&|p| p.addresses = vec!["dave@kutup.dev".into(), "d_ave@kutup.dev".into()]),
+            pins: with(&|p| p.addresses = labels(&["dave@kutup.dev", "d_ave@kutup.dev"])),
         },
         RefusedList {
             case: "an address not canonical".into(),
-            pins: with(&|p| p.addresses = vec!["Dave@kutup.dev".into()]),
+            pins: with(&|p| p.addresses = labels(&["Dave@kutup.dev"])),
+        },
+        RefusedList {
+            case: "an address seen at no valid time".into(),
+            pins: with(&|p| p.addresses[0].seen_at = "yesterday".into()),
         },
         RefusedList {
             case: "an account reference as an address".into(),
-            pins: with(&|p| p.addresses = vec![dave.to_string()]),
+            pins: with(&|p| p.addresses = labels(&[&dave.to_string()])),
         },
         RefusedList {
             case: "anchor sequence 0".into(),
@@ -524,7 +560,7 @@ fn rules() -> RuleVectors {
         },
     ];
     let preserved = format!(
-        r#"{{"pins":[{{"account":{},"authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","addresses":["davey@kutup.dev"],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"laterList":{{"a":[1,2]}}}}"#,
+        r#"{{"pins":[{{"account":{},"authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","addresses":[{{"address":"davey@kutup.dev","seenAt":"2026-10-12T09:00:00Z","via":"chain"}}],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"laterList":{{"a":[1,2]}}}}"#,
         serde_json::to_string(&dave).unwrap(),
         b64(&dave_keys),
         "ab".repeat(32),
@@ -704,17 +740,17 @@ fn check_rules(r: &RuleVectors) {
     assert_eq!(r.chain, want.chain);
     assert_eq!(r.before, want.before);
     let mut list = identity_pins::decode(r.before.as_bytes()).unwrap();
-    let applied = identity_pins::apply_rename(&mut list, &r.dave, &r.chain).unwrap();
+    let applied = identity_pins::apply_rename(&mut list, &r.dave, &r.chain, SINCE).unwrap();
     assert_eq!(serde_json::to_value(&applied).unwrap(), r.applied);
     assert_eq!(json(&list), r.after);
     // Once more: nothing changes; the shorter chain is a rollback.
     assert!(
-        !identity_pins::apply_rename(&mut list, &r.dave, &r.chain)
+        !identity_pins::apply_rename(&mut list, &r.dave, &r.chain, SINCE)
             .unwrap()
             .changed
     );
     assert_eq!(json(&list), r.after);
-    assert!(identity_pins::apply_rename(&mut list, &r.dave, &r.rollback).is_err());
+    assert!(identity_pins::apply_rename(&mut list, &r.dave, &r.rollback, SINCE).is_err());
     for case in &r.lookups {
         let list = identity_pins::decode(r.after.as_bytes()).unwrap();
         let found = identity_pins::lookup(

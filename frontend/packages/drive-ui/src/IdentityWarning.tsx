@@ -2,19 +2,30 @@ import { Shield, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAcceptIdentity, useIdentityStatus, usePersonSafetyNumber, useVerifyPerson } from '@kutup/drive-core/identityStatus'
-import { IdentityKnownElsewhere, IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed, type RecipientRenamed } from '@kutup/drive-core/identityPins'
+import { IdentityUnproven, type ClaimedKeys, type IdentityNotConfirmed, type IdentityStatus, type RecipientRenamed } from '@kutup/drive-core/identityPins'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { SafetyVerificationDialog } from '@kutup/ui/components/safety-verification'
-import { formerlyLabel } from './formerly'
+import { personLabel, someoneElseKey } from './personLabel'
 
 // What Drive says when it cannot vouch for who someone is
 // (docs/plans/drive-identity-pins.md): their keys are not signed by their
-// account, or their account is not the one met before. Drive warns; it does
-// not refuse (decided 2026-10-10, as Proton Drive does).
+// account, their account is not the one met before, or the address belongs
+// to someone the user knew and the account found there is someone else.
+// Drive warns; it does not refuse (decided 2026-10-10, as Proton Drive does).
+
+/** Whether a status puts the person's identity in doubt. */
+function inDoubt(kind: IdentityStatus['kind'] | undefined): kind is 'changed' | 'invalid' | 'someoneElse' {
+  return kind === 'changed' || kind === 'invalid' || kind === 'someoneElse'
+}
+
+/** The title of a doubt: about the person, or, for someone else, about the address. */
+function doubtTitle(t: (key: string, values?: Record<string, string>) => string, kind: 'changed' | 'invalid' | 'someoneElse', name: string, account: string): string {
+  return t(`identityCheck.${kind}.title`, { name, account })
+}
 
 /** A shield beside a person: red when their identity is in doubt, green when verified, nothing otherwise. */
 export function IdentityWarningIcon({ account, claimed }: { account: string | null | undefined; claimed?: ClaimedKeys }) {
@@ -32,8 +43,8 @@ export function IdentityWarningIcon({ account, claimed }: { account: string | nu
       </span>
     )
   }
-  if (kind !== 'changed' && kind !== 'invalid') return null
-  const label = t(`identityCheck.${kind}.title`, { name })
+  if (!inDoubt(kind)) return null
+  const label = doubtTitle(t, kind, name, account)
   return (
     <span role="img" aria-label={label} title={label} data-testid="identity-warning" className="inline-flex shrink-0 text-destructive">
       <ShieldAlert className="size-4" aria-hidden />
@@ -99,8 +110,11 @@ export function VerifyPersonDialog({
       safety={{
         fingerprint: number.data.fingerprint,
         qrPayload: number.data.qrPayload,
-        state: kind === 'changed' || kind === 'invalid' ? 'blocked' : kind === 'ok' && status.data?.kind === 'ok' && status.data.verified ? 'verified' : 'unverified',
-        canVerifyBlocked: kind === 'changed',
+        state: inDoubt(kind) ? 'blocked' : status.data?.kind === 'ok' && status.data.verified ? 'verified' : 'unverified',
+        // A changed identity, or someone new at a known address, may be
+        // verified in person; a known account at someone else's address
+        // stays what it is.
+        canVerifyBlocked: kind === 'changed' || (status.data?.kind === 'someoneElse' && !status.data.name),
       }}
       onVerify={(scanned) => verify.mutateAsync({ account, scanned })}
     />
@@ -116,12 +130,11 @@ export function VerifyPersonButton({ account, claimed }: { account: string; clai
   const name = personOf(people.data, account).name
   const kind = status.data?.kind
   const verified = kind === 'ok' && status.data?.kind === 'ok' && status.data.verified
-  const doubt = kind === 'changed' || kind === 'invalid'
-  const formerly = status.data?.kind === 'ok' ? status.data.formerly : undefined
-  const label = formerlyLabel(
+  const doubt = inDoubt(kind)
+  const label = personLabel(
     t,
-    doubt ? t(`identityCheck.${kind}.title`, { name }) : verified ? t('identityCheck.verified', { name }) : t('identityCheck.verify', { name }),
-    formerly,
+    inDoubt(kind) ? doubtTitle(t, kind, name, account) : verified ? t('identityCheck.verified', { name }) : t('identityCheck.verify', { name }),
+    status.data,
   )
   return (
     <>
@@ -160,16 +173,21 @@ export function IdentityBanner({ account, claimed }: { account: string | null | 
       </div>
     )
   }
-  if (!account || (kind !== 'changed' && kind !== 'invalid')) return null
+  if (!account || !inDoubt(kind)) return null
   const name = personOf(people.data, account).name
+  // Someone new at an address the user knew someone at may be trusted; a
+  // known account found at someone else's address stays a warning.
+  const acceptable = kind === 'changed' || (status.data?.kind === 'someoneElse' && !status.data.name)
   return (
     <div role="alert" data-testid="identity-banner" className="flex shrink-0 flex-wrap items-start gap-x-3 gap-y-2 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-sm">
       <ShieldAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
       <p className="min-w-0 flex-1">
-        <span className="font-medium">{t(`identityCheck.${kind}.title`, { name })}</span>{' '}
-        <span className="text-muted-foreground">{t(`identityCheck.${kind}.body`, { account })}</span>
+        <span className="font-medium">{personLabel(t, doubtTitle(t, kind, name, account), status.data)}</span>{' '}
+        <span className="text-muted-foreground">
+          {t(`identityCheck.${kind}.${someoneElseKey('body', status.data)}`, { account, now: status.data?.kind === 'someoneElse' ? (status.data.now ?? '') : '' })}
+        </span>
       </p>
-      {kind === 'changed' ? (
+      {acceptable ? (
         <>
           <Button size="sm" variant="outline" onClick={() => setVerifying(true)}>
             {t('identityCheck.verifyInPerson')}
@@ -180,9 +198,7 @@ export function IdentityBanner({ account, claimed }: { account: string | null | 
           <VerifyPersonDialog account={account} claimed={claimed} open={verifying} onOpenChange={setVerifying} />
         </>
       ) : null}
-      {accept.error instanceof IdentityKnownElsewhere ? (
-        <p className="w-full text-xs text-destructive">{t('identityCheck.knownElsewhere', { other: accept.error.other })}</p>
-      ) : accept.isError ? (
+      {accept.isError ? (
         <p className="w-full text-xs text-destructive">{t('identityCheck.acceptFailed')}</p>
       ) : null}
     </div>
@@ -197,9 +213,15 @@ export function IdentityShareWarning({ error, onShareAnyway }: { error: Identity
   const { t } = useTranslation()
   const people = usePeople()
   const name = personOf(people.data, error.account).name
+  const status = error.status
   return (
-    <Alert variant="error" title={t(`identityCheck.${error.status.kind}.title`, { name })}>
-      <p>{t(`identityCheck.${error.status.kind}.shareBody`, { account: error.account })}</p>
+    <Alert variant="error" title={personLabel(t, doubtTitle(t, status.kind, name, error.account), status)}>
+      <p>
+        {t(`identityCheck.${status.kind}.${someoneElseKey('shareBody', status)}`, {
+          account: error.account,
+          now: status.kind === 'someoneElse' ? (status.now ?? '') : '',
+        })}
+      </p>
       <Button className="mt-2" size="sm" variant="outline" onClick={onShareAnyway} data-testid="identity-share-anyway">
         {t('identityCheck.shareAnyway')}
       </Button>

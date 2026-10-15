@@ -5,7 +5,7 @@
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::AccountIdentityKeysV1;
-use kutup_crypto::identity_pins::{self, IdentityPinV2, IdentityPinsV2, PinState};
+use kutup_crypto::identity_pins::{self, AddressLabelV1, IdentityPinV2, IdentityPinsV2, PinState};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -119,7 +119,11 @@ fn identity_pins_sync_by_revision() {
             state: PinState::Seen,
             since: "2026-10-10T12:00:00Z".into(),
             replaced: vec![],
-            addresses: vec!["friend@kutup.localhost".into()],
+            addresses: vec![AddressLabelV1 {
+                address: "friend@kutup.localhost".into(),
+                seen_at: "2026-10-10T12:00:00Z".into(),
+                unknown: Default::default(),
+            }],
             renames: None,
             unknown: Default::default(),
         }],

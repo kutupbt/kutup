@@ -125,7 +125,7 @@ export interface CryptoWasmModule {
     publishedAuthorityBase64?: string,
   ): unknown
   identityPinsAt(pinsJson: string, address: string): unknown
-  applyAccountRenameToPins(pinsJson: string, account: { server: string; accountId: string }, chainJson: string): unknown
+  applyAccountRenameToPins(pinsJson: string, account: { server: string; accountId: string }, chainJson: string, since: string): unknown
   verifyDriveKeyBinding(
     account: { server: string; accountId: string },
     authorityPublicKeyBase64: string,
