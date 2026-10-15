@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { generateKey, sealNamedShareEnvelope, sealPublicLinkCollectionKeyV1 } from '@kutup/crypto'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { createCollectionEpochStatement } from '@kutup/crypto/collectionEpoch'
 import { sealPreviousCollectionKey } from '@kutup/crypto/collectionKeyring'
 import { DRIVE_ENVELOPE_PURPOSE, sealDriveEnvelope } from '@kutup/crypto/driveEnvelope'
@@ -38,8 +39,10 @@ export interface AccessLink {
 
 export interface AccessFederated {
   id: string
+  /** Shown only: the recipient is their server and account id. */
   recipientUsername: string
   recipientServer: string
+  recipientAccountId: string
   recipientIncarnationId: string
   canUpload: boolean
   canDelete: boolean
@@ -56,6 +59,11 @@ export interface FolderAccess {
 }
 
 export const accessKey = (folderId: string) => ['folder-access', folderId] as const
+
+/** A member: an account on this server (its user id is its account id). */
+function memberRef(me: DriveIdentity, member: AccessMember): AccountRef {
+  return { server: me.accountRef.server, accountId: member.userId }
+}
 
 async function loadAccess(folderId: string): Promise<FolderAccess> {
   return (await api.get<FolderAccess>(`/collections/${folderId}/access`)).data
@@ -132,13 +140,13 @@ export async function rotateFolder(
   ])
 
   const removedLinks = new Set(removed.publicLinks)
-  const seal = (publicKey: string, account: string, incarnationId: string) =>
+  const seal = (publicKey: string, to: AccountRef, incarnationId: string) =>
     sealNamedShareEnvelope(key, me.masterKey, publicKey, {
       collectionId: folder.id,
       epoch: next,
-      senderAccount: me.account,
+      sender: me.accountRef,
       senderIncarnationId: me.incarnationId,
-      recipientAccount: account,
+      recipient: to,
       recipientIncarnationId: incarnationId,
     })
 
@@ -147,7 +155,7 @@ export async function rotateFolder(
       .filter((m) => !removed.members.includes(m.userId))
       .map(async (m) => ({
         userId: m.userId,
-        namedShareEnvelope: await seal(m.drivePublicKey, m.account, m.accountIncarnationId),
+        namedShareEnvelope: await seal(m.drivePublicKey, memberRef(me, m), m.accountIncarnationId),
       })),
   )
   const publicLinks = await Promise.all(
@@ -166,16 +174,18 @@ export async function rotateFolder(
     access.federatedShares
       .filter((f) => !removed.federatedShares.includes(f.id))
       .map(async (f) => {
-        // Their Drive key, through the signed federation lookup; it must still
-        // belong to the account incarnation the folder was shared with.
-        const { data: remote } = await api.get<{ account: string; driveHpkePublicKey: string; accountIncarnationId: string }>(
-          `/drive/federation/users/${encodeURIComponent(f.recipientUsername)}`,
-          { params: { server: f.recipientServer } },
+        // Their Drive key, from their server by their account id; it must
+        // still belong to the account incarnation the folder was shared with.
+        const to: AccountRef = { server: f.recipientServer, accountId: f.recipientAccountId }
+        const { data: remote } = await api.get<{ server: string; accountId: string; account: string; driveHpkePublicKey: string; accountIncarnationId: string }>(
+          `/users/by-id/${encodeURIComponent(to.accountId)}`,
+          { params: { server: to.server } },
         )
+        if (remote.server !== to.server || remote.accountId !== to.accountId) throw new Error('the lookup answered for another account')
         if (remote.accountIncarnationId !== f.recipientIncarnationId) throw new RecipientChanged(remote.account)
         return {
           id: f.id,
-          namedShareEnvelope: await seal(remote.driveHpkePublicKey, remote.account, remote.accountIncarnationId),
+          namedShareEnvelope: await seal(remote.driveHpkePublicKey, to, remote.accountIncarnationId),
         }
       }),
   )
@@ -223,9 +233,9 @@ export function useSetFolderPermissions() {
         const namedShareEnvelope = await sealNamedShareEnvelope(folder.key, me.masterKey, member.drivePublicKey, {
           collectionId: folder.id,
           epoch: folder.keyEpoch,
-          senderAccount: me.account,
+          sender: me.accountRef,
           senderIncarnationId: me.incarnationId,
-          recipientAccount: member.account,
+          recipient: memberRef(me, member),
           recipientIncarnationId: member.accountIncarnationId,
         })
         await api.post(`/collections/${folder.id}/share`, {

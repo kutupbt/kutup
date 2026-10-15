@@ -1,12 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { deriveAccountIdentityKeys, toBase64 } from '@kutup/crypto'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { loadServerSettings } from '@kutup/session/apps'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
 export interface DriveIdentity {
   userId: string
-  /** `username@server`, as named shares bind it. */
+  /** `username@server`: this account's current handle. */
   account: string
+  /** This account, for good: its server and permanent id (`users.id`). */
+  accountRef: AccountRef
   /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
   binding: string
   incarnationId: string
@@ -33,6 +36,7 @@ export async function driveIdentityOf(session: Session): Promise<DriveIdentity> 
   return {
     userId: session.userId,
     account: `${session.username}@${serverName}`,
+    accountRef: { server: serverName, accountId: session.userId },
     binding: session.envelopeBinding,
     incarnationId: identity.incarnationId,
     masterKey: session.masterKey,

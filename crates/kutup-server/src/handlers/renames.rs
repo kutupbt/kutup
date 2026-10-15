@@ -401,14 +401,12 @@ pub async fn rename(
             account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation)).await?
         }
     }
-    sqlx::query(
-        "UPDATE users SET username = $2, updated_at = now() WHERE id = $1",
-    )
-    .bind(user_id)
-    .bind(&new_name)
-    .execute(&mut *tx)
-    .await
-    .map_err(crate::handlers::auth::map_insert_conflict)?;
+    sqlx::query("UPDATE users SET username = $2, updated_at = now() WHERE id = $1")
+        .bind(user_id)
+        .bind(&new_name)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::handlers::auth::map_insert_conflict)?;
     sqlx::query(
         "INSERT INTO account_renames
              (incarnation_id, sequence, user_id, authority_public_key, previous, current,

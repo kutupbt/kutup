@@ -26,7 +26,6 @@ vi.mock('@kutup/crypto/accountRename', () => ({
   },
   signAccountRename,
 }))
-vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding: () => Promise.resolve('binding') }))
 vi.mock('@kutup/mail-core/addressKey', () => ({ firstAddressKey }))
 const session = { address: 'ada.l@kutup.test', username: 'ada.l', masterKey: new Uint8Array(32), envelopeBinding: 'b' }
 vi.mock('@kutup/session/store', () => ({ useRequiredSession: () => session, getSession: () => session }))
@@ -115,9 +114,10 @@ describe('the rename dialog', () => {
     expect(body).toMatchObject({
       grant: 'grant-1',
       rename: { sequence: 1, previous: 'ada.l@kutup.test', current: 'ada-lovelace@kutup.test' },
-      driveKeyBinding: 'binding',
       mailAddress: { publicKey: 'pk' },
     })
+    // The Drive key binding names the account's id: a rename keeps it.
+    expect(body).not.toHaveProperty('driveKeyBinding')
     await waitFor(() => expect(recheckAccount).toHaveBeenCalled())
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })

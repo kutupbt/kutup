@@ -10,6 +10,9 @@ export interface CollectionRow {
   nameRevision: number
   epochStatement: string
   epochStatementHash: string
+  /** A shared folder's owner's server; with `ownerUserId`, the owner. */
+  ownerServer?: string
+  /** Shown only: the owner's address now. */
   ownerAccount?: string
   ownerIncarnationId?: string
   ownerDriveSigningPublicKey?: string

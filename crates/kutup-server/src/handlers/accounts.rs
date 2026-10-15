@@ -29,10 +29,7 @@ pub struct ByIdQuery {
 }
 
 /// This server's account `id`, as the identity lookups answer it.
-async fn local_identity(
-    state: &AppState,
-    id: Uuid,
-) -> AppResult<Option<RemoteDriveUserResponse>> {
+async fn local_identity(state: &AppState, id: Uuid) -> AppResult<Option<RemoteDriveUserResponse>> {
     type Row = (String, String, String, String, String, Option<String>);
     let row: Option<Row> = sqlx::query_as(
         "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
@@ -92,8 +89,10 @@ pub async fn by_id(
             .ok_or_else(|| AppError::not_found("no such account"));
     }
     if !crate::ratelimit::ACCOUNT_PEER_FETCHES.allow(&person.server) {
-        return Err(AppError::too_many_requests("too many lookups of that server")
-            .with_details(serde_json::json!({ "code": "rateLimited" })));
+        return Err(
+            AppError::too_many_requests("too many lookups of that server")
+                .with_details(serde_json::json!({ "code": "rateLimited" })),
+        );
     }
     // One fetch per account at a time: the rest wait for it.
     let lock = crate::remote_renames::fetch_lock(&person.to_string());
@@ -171,9 +170,12 @@ pub async fn fed_by_id(
         .await?;
     let result = async {
         let person = crate::account_ids::remote(federation.server_name(), &account_id)?;
-        local_identity(&state, Uuid::parse_str(&person.account_id).expect("canonical"))
-            .await?
-            .ok_or_else(|| AppError::not_found("no such account"))
+        local_identity(
+            &state,
+            Uuid::parse_str(&person.account_id).expect("canonical"),
+        )
+        .await?
+        .ok_or_else(|| AppError::not_found("no such account"))
     }
     .await;
     match result {

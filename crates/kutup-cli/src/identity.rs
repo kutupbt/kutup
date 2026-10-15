@@ -71,20 +71,21 @@ pub struct Claimed<'a> {
 
 /// A person as their server describes them.
 pub struct Published {
-    /// Who they are: their server and permanent account id.
-    pub person: AccountRef,
-    /// Shown only: their address now (server-asserted).
+    /// The address they were looked up by.
     pub account: String,
+    /// Who they are, for good: their server and account id.
+    pub account_ref: AccountRef,
     pub authority: String,
     pub hpke: String,
     pub signing: String,
     pub binding: Option<String>,
 }
 
-/// This account and its keys.
+/// This account's address and keys.
 pub struct Me {
-    /// Who this account is: its server and permanent account id.
-    pub person: AccountRef,
+    pub account: String,
+    /// This account, for good: the server and its id (`users.id`).
+    pub account_ref: AccountRef,
     /// The account's key binding, which its own seals (the pin list) bind.
     binding: String,
     pub identity: AccountIdentityKeysV1,
@@ -100,9 +101,11 @@ impl Me {
             .as_slice()
             .try_into()
             .context("master key must be 32 bytes")?;
-        let person = ctx.session.person()?;
+        let server = ctx.client.settings()?.chat.server_name;
         Ok(Me {
-            person,
+            account: format!("{}@{server}", ctx.session.username),
+            account_ref: AccountRef::new(&server, &ctx.session.user_id)
+                .context("this session's account id is not valid")?,
             binding: ctx.session.binding().to_string(),
             identity: AccountIdentityKeysV1::derive(&master_key)?,
             master_key,
@@ -136,12 +139,13 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
     let (username, server) = account
         .split_once('@')
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
-    let local = me.person.server == server;
+    let local = me.account.split_once('@').map(|(_, s)| s) == Some(server);
     let person = if local {
         let user = ctx.client.get_user_by_address(account)?;
         Published {
-            person: AccountRef::new(&user.server, &user.account_id)
-                .context("the lookup answered no account")?,
+            // On this server the account id is the user id.
+            account_ref: AccountRef::new(server, &user.user_id)
+                .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
             account: user.account,
             authority: user.account_authority_public_key,
             hpke: user.drive_hpke_public_key,
@@ -151,8 +155,8 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
     } else {
         let user = ctx.client.get_fed_pubkey(username, server)?;
         Published {
-            person: AccountRef::new(&user.server, &user.account_id)
-                .context("the lookup answered no account")?,
+            account_ref: AccountRef::new(server, &user.account_id)
+                .with_context(|| format!("{server} gave no valid account id for {account}"))?,
             account: user.account,
             authority: user.account_authority_public_key,
             hpke: user.drive_hpke_public_key,
@@ -160,7 +164,7 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
             binding: user.drive_key_binding,
         }
     };
-    if person.account != account || person.person.server != server {
+    if person.account != account {
         bail!("the lookup for {account} answered for {}", person.account);
     }
     Ok(person)
@@ -184,7 +188,7 @@ fn bound(person: &Published) -> bool {
     ) else {
         return false;
     };
-    drive_key_binding::verify(&person.person, &authority, &hpke, &signing, &binding).is_ok()
+    drive_key_binding::verify(&person.account_ref, &authority, &hpke, &signing, &binding).is_ok()
 }
 
 // ------------------------------------------------------------------ pins
@@ -315,9 +319,12 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) ->
 /// How far `account`'s `claimed` keys can be trusted; pins its authority the
 /// first time it is met with a valid binding.
 pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Status> {
+    if account == me.account {
+        return Ok(Status::Ok { verified: true });
+    }
     let person = published(ctx, me, account)?;
-    // This account, under any of its names: by its id, never its name.
-    if person.person == me.person {
+    // This account under another of its names (an old address): by its id.
+    if person.account_ref == me.account_ref {
         return Ok(Status::Ok { verified: true });
     }
     if claimed.hpke.is_some_and(|k| k != person.hpke)

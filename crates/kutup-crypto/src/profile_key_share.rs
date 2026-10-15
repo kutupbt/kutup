@@ -15,8 +15,8 @@ use base64::Engine as _;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use hpke_rs::{HpkePrivateKey, HpkePublicKey};
 
-use crate::error::{CryptoError, Result};
 use crate::account_ref::AccountRef;
+use crate::error::{CryptoError, Result};
 use crate::named_share::{hpke_suite, parse_hex_32, read_person, take};
 
 const MAGIC: &[u8; 8] = b"KUTPPK1\0";

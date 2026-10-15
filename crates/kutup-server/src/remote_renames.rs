@@ -1180,13 +1180,15 @@ mod tests {
         assert_eq!(store(&pool, PEER, &hers).await.unwrap(), Stored::Advanced);
         assert_eq!(shown(0).await, format!("{alicia}@{PEER}"));
         assert_eq!(shown(1).await, address, "the earlier holder's row stays");
-        sqlx::query("DELETE FROM remote_collab_devices WHERE domain = $1 AND device_id IN ($2, $3)")
-            .bind(PEER)
-            .bind(device_base)
-            .bind(device_base + 1)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "DELETE FROM remote_collab_devices WHERE domain = $1 AND device_id IN ($2, $3)",
+        )
+        .bind(PEER)
+        .bind(device_base)
+        .bind(device_base + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
         clean(&pool, &incarnations).await;
     }
 }

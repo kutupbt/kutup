@@ -208,9 +208,7 @@ macro_rules! share_envelope {
                 let mut cursor = 96usize;
                 let sender = read_person(bytes, &mut cursor)?;
                 let recipient = read_person(bytes, &mut cursor)?;
-                if sender == recipient
-                    && sender_incarnation_id == recipient_incarnation_id
-                {
+                if sender == recipient && sender_incarnation_id == recipient_incarnation_id {
                     return Err(CryptoError::InvalidInput(
                         concat!($what_space, " sender and recipient must differ").into(),
                     ));

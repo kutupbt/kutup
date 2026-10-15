@@ -1,12 +1,14 @@
 import { fromBase64, toBase64 } from './base64'
+import type { AccountRef } from './accountRef'
 import { getCryptoWasm } from './rustWasm'
 
 export interface NamedShareContextV1 {
   collectionId: string
   epoch: number
-  senderAccount: string
+  /** Who sends it, and to whom: accounts, never addresses (docs/plans/account-ids.md). */
+  sender: AccountRef
   senderIncarnationId: string
-  recipientAccount: string
+  recipient: AccountRef
   recipientIncarnationId: string
 }
 
@@ -23,9 +25,9 @@ export async function sealNamedShareEnvelope(
     recipientHpkePublicKeyBase64,
     context.collectionId,
     context.epoch,
-    context.senderAccount,
+    context.sender,
     context.senderIncarnationId,
-    context.recipientAccount,
+    context.recipient,
     context.recipientIncarnationId,
   )
 }
@@ -43,18 +45,19 @@ export async function openNamedShareEnvelope(
     toBase64(recipientHpkePrivateKey),
     expected.collectionId,
     expected.epoch,
-    expected.senderAccount,
+    expected.sender,
     expected.senderIncarnationId,
-    expected.recipientAccount,
+    expected.recipient,
     expected.recipientIncarnationId,
   ))
 }
 
 /** Who a profile key goes from and to (docs/plans/unified-profile.md). */
 export interface ProfileKeyPartiesV1 {
-  senderAccount: string
+  /** Who sends it, and to whom: accounts, never addresses (docs/plans/account-ids.md). */
+  sender: AccountRef
   senderIncarnationId: string
-  recipientAccount: string
+  recipient: AccountRef
   recipientIncarnationId: string
 }
 
@@ -70,9 +73,9 @@ export async function sealProfileKeyEnvelope(
     toBase64(profileKey),
     toBase64(senderMasterKey),
     recipientHpkePublicKeyBase64,
-    parties.senderAccount,
+    parties.sender,
     parties.senderIncarnationId,
-    parties.recipientAccount,
+    parties.recipient,
     parties.recipientIncarnationId,
   )
 }
@@ -89,9 +92,9 @@ export async function openProfileKeyEnvelope(
     envelopeBase64,
     senderSigningPublicKeyBase64,
     toBase64(recipientHpkePrivateKey),
-    expected.senderAccount,
+    expected.sender,
     expected.senderIncarnationId,
-    expected.recipientAccount,
+    expected.recipient,
     expected.recipientIncarnationId,
   ))
 }
@@ -101,9 +104,10 @@ export interface FileShareContextV1 {
   fileId: string
   /** The file key's generation. */
   generation: number
-  senderAccount: string
+  /** Who sends it, and to whom: accounts, never addresses (docs/plans/account-ids.md). */
+  sender: AccountRef
   senderIncarnationId: string
-  recipientAccount: string
+  recipient: AccountRef
   recipientIncarnationId: string
 }
 
@@ -121,9 +125,9 @@ export async function sealFileShareEnvelope(
     recipientHpkePublicKeyBase64,
     context.fileId,
     context.generation,
-    context.senderAccount,
+    context.sender,
     context.senderIncarnationId,
-    context.recipientAccount,
+    context.recipient,
     context.recipientIncarnationId,
   )
 }
@@ -142,9 +146,9 @@ export async function openFileShareEnvelope(
     toBase64(recipientHpkePrivateKey),
     expected.fileId,
     expected.generation,
-    expected.senderAccount,
+    expected.sender,
     expected.senderIncarnationId,
-    expected.recipientAccount,
+    expected.recipient,
     expected.recipientIncarnationId,
   ))
 }

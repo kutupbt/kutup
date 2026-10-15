@@ -1,6 +1,7 @@
 import { createCollectionEpochStatement, verifyCollectionEpochStatement } from './collectionEpoch'
 import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope, sealDriveEnvelope } from './driveEnvelope'
 import { deriveAccountIdentityKeys } from './identity'
+import type { AccountRef } from './accountRef'
 import { openNamedShareEnvelope } from './namedShare'
 import { fromBase64, toBase64 } from './base64'
 import { generateKey } from './symmetric'
@@ -147,13 +148,14 @@ export async function renameOwnedCollectionV1(
 export async function openSharedCollectionV1(
   row: OwnedCollectionWireV1 & {
     namedShareEnvelope: string
-    ownerAccount: string
+    /** The owner's server; with `ownerUserId`, who sealed the share. */
+    ownerServer: string
     ownerIncarnationId: string
     ownerDriveSigningPublicKey: string
     ownerAuthorityPublicKey: string
   },
   recipientHpkePrivateKey: Uint8Array,
-  recipientAccount: string,
+  recipient: AccountRef,
   recipientIncarnationId: string,
 ): Promise<{ collectionKey: Uint8Array; name: string }> {
   const collectionKey = await openNamedShareEnvelope(
@@ -163,9 +165,9 @@ export async function openSharedCollectionV1(
     {
       collectionId: row.id,
       epoch: row.keyEpoch,
-      senderAccount: row.ownerAccount,
+      sender: { server: row.ownerServer, accountId: row.ownerUserId },
       senderIncarnationId: row.ownerIncarnationId,
-      recipientAccount,
+      recipient,
       recipientIncarnationId,
     },
   )

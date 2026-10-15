@@ -445,13 +445,8 @@ fn times_challenges_and_a_wipe() {
     .unwrap();
     assert!(r.status().is_success(), "wipe: {}", r.status());
     let first = sign_in(&c, &base, &alice.username, "Temporary*Password123");
-    let (token, identity) = complete_setup(
-        &c,
-        &base,
-        &first,
-        &alice.username,
-        "Another*Password456",
-    );
+    let (token, identity) =
+        complete_setup(&c, &base, &first, &alice.username, "Another*Password456");
     let again = User {
         token,
         identity,

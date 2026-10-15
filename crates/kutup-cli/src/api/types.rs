@@ -451,12 +451,11 @@ pub struct UserByAddress {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FedPubKeyResponse {
-    /// The account: its server and permanent id; `account` is its address
-    /// now, shown only.
-    pub server: String,
-    pub account_id: String,
     #[serde(default)]
     pub account: String,
+    /// The account's permanent id on its server (docs/plans/account-ids.md).
+    #[serde(default)]
+    pub account_id: String,
     #[serde(default)]
     pub drive_hpke_public_key: String,
     #[serde(default)]
@@ -467,6 +466,9 @@ pub struct FedPubKeyResponse {
     pub account_authority_public_key: String,
     #[serde(default)]
     pub drive_key_binding: Option<String>,
+    /// The account's server (with `account_id`, who it is).
+    #[serde(default)]
+    pub server: String,
 }
 
 /// The account's sealed identity pin list (`GET/PUT /api/user/identity-pins`).

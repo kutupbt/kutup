@@ -1708,7 +1708,9 @@ fn drive_profile_key_exchange(
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["server"] == who.server.as_str() && p["accountId"] == who.account_id.as_str())
+            .find(|p| {
+                p["server"] == who.server.as_str() && p["accountId"] == who.account_id.as_str()
+            })
             .cloned()
             .unwrap_or_else(|| panic!("{who} is not among the people shared with: {people}"))
     };

@@ -4,6 +4,7 @@ import axios from 'axios'
 import { fromBase64, openProfileKeyEnvelope, sealProfileKeyEnvelope, toBase64 } from '@kutup/crypto'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import type { ProfileLookup } from '@kutup/chat-core/types'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import api from '@kutup/session/client'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 
@@ -24,6 +25,10 @@ export interface PersonProfile {
 }
 
 interface DrivePerson {
+  /** Who: their server and permanent account id. */
+  server: string
+  accountId: string
+  /** Shown only: their address now (server-asserted). */
   account: string
   local: boolean
   accountIncarnationId: string | null
@@ -34,6 +39,8 @@ interface DrivePerson {
 }
 
 interface RemoteUser {
+  server: string
+  accountId: string
   accountIncarnationId: string
   driveHpkePublicKey: string
   driveSigningPublicKey: string
@@ -49,7 +56,11 @@ export const peopleKey = ['drive-people'] as const
 
 const remoteKeys = new Map<string, Promise<Keys | null>>()
 
-/** Someone's Drive keys: from this server, or looked up on theirs (once a session). */
+function refOf(person: DrivePerson): AccountRef {
+  return { server: person.server, accountId: person.accountId }
+}
+
+/** Someone's Drive keys: from this server, or looked up on theirs by account id (once a session). */
 function keysOf(person: DrivePerson): Promise<Keys | null> {
   if (person.local) {
     return Promise.resolve(
@@ -62,23 +73,27 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
         : null,
     )
   }
-  let pending = remoteKeys.get(person.account)
+  const cacheKey = `${person.server}/${person.accountId}`
+  let pending = remoteKeys.get(cacheKey)
   if (!pending) {
-    const at = person.account.lastIndexOf('@')
     pending = api
-      .get<RemoteUser>(`/drive/federation/users/${encodeURIComponent(person.account.slice(0, at))}`, {
-        params: { server: person.account.slice(at + 1) },
+      .get<RemoteUser>(`/users/by-id/${encodeURIComponent(person.accountId)}`, {
+        params: { server: person.server },
       })
-      .then(({ data }) => ({
+      .then(({ data }) => {
+        if (data.server !== person.server || data.accountId !== person.accountId) throw new Error('another account')
+        return data
+      })
+      .then((data) => ({
         incarnationId: data.accountIncarnationId,
         hpkePublicKey: data.driveHpkePublicKey,
         signingPublicKey: data.driveSigningPublicKey,
       }))
       .catch(() => {
-        remoteKeys.delete(person.account)
+        remoteKeys.delete(cacheKey)
         return null
       })
-    remoteKeys.set(person.account, pending)
+    remoteKeys.set(cacheKey, pending)
   }
   return pending
 }
@@ -104,14 +119,15 @@ async function give(person: DrivePerson, keys: Keys, own: ProfileLookup, me: Dri
     me.masterKey,
     keys.hpkePublicKey,
     {
-      senderAccount: me.account,
+      sender: me.accountRef,
       senderIncarnationId: me.incarnationId,
-      recipientAccount: person.account,
+      recipient: refOf(person),
       recipientIncarnationId: keys.incarnationId,
     },
   )
   await api.put('/drive/profile-keys', {
-    recipientAccount: person.account,
+    recipientServer: person.server,
+    recipientAccountId: person.accountId,
     envelope,
     profileVersion: own.version,
   })
@@ -121,9 +137,9 @@ async function give(person: DrivePerson, keys: Keys, own: ProfileLookup, me: Dri
 async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise<PersonProfile | null> {
   if (!person.receivedEnvelope) return null
   const key = await openProfileKeyEnvelope(person.receivedEnvelope, keys.signingPublicKey, me.privateKey, {
-    senderAccount: person.account,
+    sender: refOf(person),
     senderIncarnationId: keys.incarnationId,
-    recipientAccount: me.account,
+    recipient: me.accountRef,
     recipientIncarnationId: me.incarnationId,
   })
   const wasm = await loadChatWasm()

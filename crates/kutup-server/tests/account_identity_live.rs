@@ -271,13 +271,8 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
     assert_eq!(rotate(&grant, "Another*Temporary456"), 200);
     assert_eq!(login("Temporary*Password123").0, 401);
     // The setup token of the replaced temporary password is over.
-    let (status, stale, _) = common::try_complete_setup(
-        &c,
-        &base,
-        &first,
-        &username,
-        "Never*Set*Password1",
-    );
+    let (status, stale, _) =
+        common::try_complete_setup(&c, &base, &first, &username, "Never*Set*Password1");
     assert_eq!(status, 401, "{stale}");
     assert_eq!(stale["code"], "setupTokenInvalid");
     assert_eq!(login("Another*Temporary456").0, 200);

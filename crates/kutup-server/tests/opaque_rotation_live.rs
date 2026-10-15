@@ -103,11 +103,8 @@ fn a_rotation_moves_the_record_once_and_shows() {
         token: first["accessToken"].as_str().unwrap().to_owned(),
         identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
         master_key,
-        person: kutup_crypto::account_ref::AccountRef::new(
-            &server_domain(&c, &base),
-            &text("id"),
-        )
-        .unwrap(),
+        person: kutup_crypto::account_ref::AccountRef::new(&server_domain(&c, &base), &text("id"))
+            .unwrap(),
         account: text("account"),
     };
     // Each sign-in under the retired setup is offered the move.
