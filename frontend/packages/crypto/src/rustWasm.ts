@@ -53,6 +53,10 @@ export interface CryptoWasmModule {
   deriveSafetyNumber(localAuthorityBase64: string, peerAuthorityBase64: string): { fingerprint: string; qrPayload: string }
   safetyQrMatches(localAuthorityBase64: string, peerAuthorityBase64: string, scanned: string): boolean
   foldName(name: string): string
+  /** `aci:<uuid>@<server>` → `{ server, accountId }`; throws for anything else. */
+  parseAccountRef(value: string): { server: string; accountId: string }
+  /** `{ server, accountId }` → `aci:<uuid>@<server>`, both checked. */
+  accountRefString(server: string, accountId: string): string
   foldAddress(address: string): string | undefined
   signAccountRename(masterKeyBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
   verifyAccountRenameChain(

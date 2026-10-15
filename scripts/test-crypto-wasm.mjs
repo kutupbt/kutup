@@ -921,6 +921,13 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   for (const [name, folded] of vectors.nameFold.names) {
     assert.equal(crypto.foldName(name), folded, name)
   }
+  for (const valid of vectors.accountRef.valid) {
+    assert.deepEqual(crypto.parseAccountRef(valid.string), { server: valid.server, accountId: valid.accountId })
+    assert.equal(crypto.accountRefString(valid.server, valid.accountId), valid.string)
+  }
+  for (const bad of vectors.accountRef.invalid) {
+    assert.throws(() => crypto.parseAccountRef(bad), bad)
+  }
   const v = vectors.safetyNumber
   const safety = crypto.deriveSafetyNumber(v.localAuthority, v.peerAuthority)
   assert.equal(safety.fingerprint, v.fingerprint)

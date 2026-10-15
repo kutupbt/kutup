@@ -348,6 +348,37 @@ pub async fn renamed_or(
 mod tests {
     use super::*;
 
+    /// A person's server, as `AccountRef` checks it, is what servers require
+    /// of their own name: the two checks agree.
+    #[test]
+    fn account_ref_servers_are_federation_server_names() {
+        for server in [
+            "kutup.dev",
+            "a.test",
+            "x-y.example.org",
+            "kutup.local",
+            "localhost",
+            "127.0.0.1",
+            "Kutup.dev",
+            "kutup.dev.",
+            ".kutup.dev",
+            "-a.test",
+            "a-.test",
+            "a..test",
+            "",
+            "a_b.test",
+            "ş.test",
+            "[::1]",
+            "a.b.c.d.e",
+        ] {
+            assert_eq!(
+                kutup_crypto::account_ref::valid_server(server),
+                kutup_federation_proto::validate_server_name(server).is_ok(),
+                "{server}"
+            );
+        }
+    }
+
     /// Every lookup of an account by name goes through `kutup_current_user`
     /// (any spelling, current names only): a query comparing `username`
     /// itself would miss a variant, or find a name the account left.

@@ -452,5 +452,37 @@
       ["_.-@kutup.dev", null],
       ["ada", null]
     ]
+  },
+  "accountRef": {
+    "description": "A person across servers (kutup-crypto/src/account_ref.rs): { server, accountId } in JSON; the string form aci:<lowercase hyphenated uuid>@<canonical server>; bytes = u16 server length, server, the id's 16 bytes. Anything else is refused, a username@server included.",
+    "valid": [
+      {
+        "string": "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@kutup.dev",
+        "server": "kutup.dev",
+        "accountId": "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+        "bytes": "00096b757475702e6465763f1c9a526b7e4f0e9d1a2c3b4d5e6f70"
+      },
+      {
+        "string": "aci:00000000-0000-4000-8000-000000000001@a.test",
+        "server": "a.test",
+        "accountId": "00000000-0000-4000-8000-000000000001",
+        "bytes": "0006612e7465737400000000000040008000000000000001"
+      }
+    ],
+    "invalid": [
+      "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@kutup.dev",
+      "ACI:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@kutup.dev",
+      "aci:3F1C9A52-6B7E-4F0E-9D1A-2C3B4D5E6F70@kutup.dev",
+      "aci:3f1c9a526b7e4f0e9d1a2c3b4d5e6f70@kutup.dev",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@Kutup.dev",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@localhost",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@127.0.0.1",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@kutup.dev.",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@-kutup.dev",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
+      "aci:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70@kutup.dev@x.dev",
+      "aci:alice@kutup.dev",
+      "alice@kutup.dev"
+    ]
   }
 }
