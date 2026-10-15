@@ -199,7 +199,17 @@ function serverOfAddress(address: string): string {
 // --- security events (the account's own sign-in history) ------------------
 
 /** What happened to the way the account signs in. Later kinds are shown generically. */
-export type SecurityEventKind = 'passwordChange' | 'recovery' | 'rotate' | 'adminReset' | 'accountReset' | (string & {})
+export type SecurityEventKind =
+  | 'passwordChange'
+  | 'recovery'
+  | 'rotate'
+  | 'adminReset'
+  | 'accountReset'
+  | 'rename'
+  | 'nameDropped'
+  | 'nameClosed'
+  | 'nameFreed'
+  | (string & {})
 
 export interface SecurityEvent {
   id: string
@@ -214,6 +224,10 @@ export interface SecurityEvent {
   userAgent: string | null
   /** Done by an administrator. */
   byAdmin: boolean
+  /** For a name event: the name it was about (the old one, for a rename). */
+  oldName?: string
+  /** For a rename: the new name. */
+  newName?: string
 }
 
 interface SecurityEventsPage {

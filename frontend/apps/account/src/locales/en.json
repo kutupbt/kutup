@@ -177,7 +177,65 @@
       "colourAuto": "Automatic",
       "colourFailed": "The colour could not be saved.",
       "details": "Account details",
-      "address": "Kutup address"
+      "address": "Kutup address",
+      "username": {
+        "title": "Username",
+        "description": "Your username is your Kutup address. You can change it: your files, chats, mail and contacts stay with you.",
+        "change": "Change username"
+      },
+      "rename": {
+        "title": "Change your username",
+        "description": "Only your name and address change. People who know you see the new name, and your old address receives mail for a while.",
+        "newName": "New username",
+        "hint": "3 to 32 characters: a–z, 0–9, _ and -.",
+        "checking": "Checking…",
+        "available": "Available.",
+        "takeBack": "One of your earlier names: you can take it back.",
+        "newAddress": "Your new address:",
+        "same": "That is your username now.",
+        "checkFailed": "The name could not be checked. Try again in a moment.",
+        "reason": {
+          "taken": "Someone already has this name.",
+          "held": "This name is held for its earlier owner.",
+          "reserved": "This name is reserved.",
+          "invalid": "Use 3 to 32 characters: a–z, 0–9, _ and -."
+        },
+        "warning": "Your old address, {{address}}, will receive mail for {{receive}} and cannot send. After that it stops receiving, and after {{hold}} someone else can take the name. Update every service that uses the old address now.",
+        "days_one": "{{count}} day",
+        "days_other": "{{count}} days",
+        "windowsFailed": "Kutup could not say how long your old address is kept. Try again later.",
+        "submit": "Change username",
+        "done": "Your username is now {{name}}.",
+        "failed": "Your username could not be changed.",
+        "errors": {
+          "tooSoon": "You can change your username once every 30 days. You can change it again on {{date}}.",
+          "tooSoonNoDate": "You can change your username once every 30 days.",
+          "tooManyHeld": "You hold as many earlier names as an account can while they receive mail. Stop one of them from receiving below, then change your username.",
+          "breakGlass": "This server's emergency administrator account keeps its name.",
+          "setupRequired": "Finish setting up your account first.",
+          "conflict": "Your username changed on another device meanwhile. Close this and try again."
+        }
+      },
+      "names": {
+        "title": "Earlier names",
+        "description": "Names you left are held for you. Each receives mail for a while and cannot send, then is freed for others.",
+        "receivesUntil": "Receives mail until {{date}}",
+        "notReceiving": "No longer receives mail",
+        "freeAt": "Free for others from {{date}}",
+        "takeBack": "Take back",
+        "drop": "Stop receiving",
+        "dropTitle": "Stop receiving mail at {{address}}?",
+        "dropDescription": "Mail to this address bounces from now on. The name stays yours until {{date}}, then anyone can take it.",
+        "dropWarning": "This cannot be undone. You can stop one address every 30 days.",
+        "dropped": "{{address}} no longer receives mail.",
+        "failed": "Your earlier names could not be loaded.",
+        "errors": {
+          "tooSoon": "You can stop one address every 30 days. Next on {{date}}.",
+          "tooSoonNoDate": "You can stop one address every 30 days.",
+          "notHeld": "This name is no longer held for you.",
+          "failed": "Receiving could not be stopped."
+        }
+      }
     },
     "security": {
       "title": "Security",
@@ -223,6 +281,10 @@
           "rotate": "Your sign-in was refreshed",
           "adminReset": "Password reset by an administrator",
           "accountReset": "Account reset by an administrator",
+          "rename": "Username changed from {{oldName}} to {{newName}}",
+          "nameDropped": "Stopped receiving mail at {{oldName}}",
+          "nameClosed": "Mail to {{oldName}} stopped by an administrator",
+          "nameFreed": "{{oldName}} freed for others",
           "other": "A change to your sign-in"
         }
       },

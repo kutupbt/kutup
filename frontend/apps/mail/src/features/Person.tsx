@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Contact } from '@kutup/contacts-core/model'
+import { currentAddressOf } from '@kutup/drive-core/identityPins'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { addressKeys, NoKutupAddress } from '@kutup/mail-core/keys'
 import type { Mailbox } from '@kutup/mail-core/mime'
@@ -41,7 +42,9 @@ function useKutupAccount(address: string, enabled: boolean) {
     retry: false,
     queryFn: () =>
       addressKeys(address).then(
-        (keys) => keys.account,
+        // An old address's account goes by another name now: Chat and calls
+        // go to the name it has (its verified rename chain says which).
+        (keys) => currentAddressOf(keys.account, keys.authorityPublicKey),
         (error: unknown) => {
           if (error instanceof NoKutupAddress) return null
           throw error

@@ -9,6 +9,7 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { useMe } from './api'
+import { UsernameSection } from './UsernameSection'
 
 export function AccountSettingsPage() {
   const { t, i18n } = useTranslation()
@@ -45,6 +46,7 @@ export function AccountSettingsPage() {
         {me.isError ? <Alert variant="error">{apiErrorMessage(me.error, t('common.tryAgain'))}</Alert> : null}
       </Section>
 
+      <UsernameSection />
     </PageBody>
   )
 }

@@ -554,3 +554,29 @@ above:
   `409 renamed` at their next lookup.
 - **Admin name actions** are recorded on the account as `nameClosed` and
   `nameFreed` (with the admin), besides the audit log.
+
+## As built: web clients (slate/renames-web)
+
+- **Account → Settings → Account → Username:** the rename dialog checks the
+  name as it is typed (folded against the current one in Rust first), warns
+  with `oldAddressReceiveDays` / `nameHoldDays`, and signs the statement, the
+  re-issued Drive key binding and, when the check says `needsKey`, the new
+  address's first key (`firstAddressKey`, mail-core). A take-back signs the
+  returned `spelling`. A `renameConflict` (another device renamed meanwhile)
+  is signed once more on the chain read again, with the same grant (the
+  refused request stored nothing). Held names list their dates, with take
+  back and stop receiving (a `rename` grant). Security events name the old
+  and new name.
+- **Mail:** the account is the `active` address; the earlier addresses' keys,
+  each sealed for its own address, open the mail sent to them, and their
+  public keys check the account's own signatures. Own addresses are compared
+  folded (`isOwnAddress`). A `403 addressReceiveOnly` reads the account
+  again so the next send goes from the current address.
+- **Drive:** a lookup answering `409 renamed`, or a pinned local name not
+  found, follows the chain of the pinned authority (`followRename`): the pin
+  moves with its trust (`formerly` kept) and the status is `renamed { now }`.
+  A pin found at a new address under an earlier name moves too (`ok` with
+  `formerly`). An unknown `version`, `unavailable`, or a chain the pinned
+  authority did not sign keeps the pin. Sharing to a left name offers the new
+  address (`RecipientRenamed`; first use for someone never met).
+- **Chat:** follows in its own PR (peer records keyed by a stable identity).

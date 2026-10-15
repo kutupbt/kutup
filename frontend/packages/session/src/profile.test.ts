@@ -28,6 +28,7 @@ const me = {
   storageUsedBytes: 0,
   isAdmin: false,
   color: '',
+  renames: { sequence: 0 },
 }
 
 beforeEach(() => {

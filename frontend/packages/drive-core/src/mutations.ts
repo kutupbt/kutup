@@ -18,7 +18,7 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
 import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
-import { confirmRecipient } from './identityPins'
+import { confirmRecipient, recipientError } from './identityPins'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
 export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
@@ -230,7 +230,8 @@ export function useShareFolder() {
         local = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
       } catch (error) {
         const status = (error as { response?: { status?: number } }).response?.status
-        if (status !== 404) throw error
+        // A name its person left: `RecipientRenamed`, with where they are now.
+        if (status !== 404) throw await recipientError(me, recipient, error)
       }
     }
     if (local) {
@@ -253,7 +254,7 @@ export function useShareFolder() {
     } catch (error) {
       const status = (error as { response?: { status?: number } }).response?.status
       if (status === 404) throw new RecipientNotFound()
-      throw error
+      throw await recipientError(me, recipient, error)
     }
     await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
     const namedShareEnvelope = await seal(remote.driveHpkePublicKey, remote.account, remote.accountIncarnationId)

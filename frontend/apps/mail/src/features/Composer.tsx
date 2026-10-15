@@ -27,7 +27,8 @@ import {
   type SendAs,
   type SendRecipient,
 } from '@kutup/mail-core/api'
-import { GroupNotAllowed } from '@kutup/mail-core/keys'
+import { GroupNotAllowed, KeysIdentityChanged } from '@kutup/mail-core/keys'
+import { foldAddress } from '@kutup/crypto/accountRename'
 import { armorMailPublicKey } from '@kutup/crypto'
 import { attachmentPart, describePart, inlineContentId, partContent, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
 import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
@@ -89,10 +90,11 @@ function prefixed(prefix: string, subject: string): string {
   return new RegExp(`^${prefix}:`, 'i').test(subject.trim()) ? subject : `${prefix}: ${subject}`
 }
 
-function without(list: Mailbox[], addresses: Set<string>): Mailbox[] {
+/** `list` without the account's own addresses (`own`), `addresses`, and repeats. */
+function without(list: Mailbox[], own: (address: string) => boolean, addresses: Set<string> = new Set()): Mailbox[] {
   const seen = new Set(addresses)
   return list.filter((m) => {
-    if (seen.has(m.address)) return false
+    if (own(m.address) || seen.has(m.address)) return false
     seen.add(m.address)
     return true
   })
@@ -239,12 +241,13 @@ function initial(account: MailAccount, target: ComposerTarget, t: (key: string, 
       })),
     }
   }
-  const self = new Set([account.address])
+  // A reply goes from the current address, never to any of the account's own.
+  const self = account.isOwnAddress
   const replyTo = parsed.replyTo.length ? parsed.replyTo : from ? [from] : []
   const sentByMe = message.direction === 'outbound'
   const to = sentByMe ? without(parsed.to.length ? parsed.to : message.to, self) : without(replyTo, self)
   const cc =
-    target.kind === 'replyAll' ? without([...(sentByMe ? [] : parsed.to), ...parsed.cc], new Set([...self, ...to.map((m) => m.address)])) : []
+    target.kind === 'replyAll' ? without([...(sentByMe ? [] : parsed.to), ...parsed.cc], self, new Set(to.map((m) => m.address))) : []
   const parentId = parsed.messageId ?? message.messageId
   return {
     draft: emptyDraft(account, {
@@ -310,6 +313,20 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
   const [bcc, setBcc] = useState(start.draft.bcc)
+  /** Puts `now` where `address` is among the recipients (any spelling of it). */
+  const replaceRecipient = async (address: string, now: string) => {
+    const target = await foldAddress(address)
+    const folded = await Promise.all([...to, ...cc, ...bcc].map((m) => foldAddress(m.address)))
+    let i = 0
+    const swap = (list: typeof to) =>
+      list.map((m) => (folded[i++] === target && target !== null ? { ...m, address: now } : m))
+    const nextTo = swap(to)
+    const nextCc = swap(cc)
+    const nextBcc = swap(bcc)
+    setTo(nextTo)
+    setCc(nextCc)
+    setBcc(nextBcc)
+  }
   // Before the server's mail setup is checked, only Kutup addresses are reachable.
   const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !m.address.toLowerCase().endsWith(`@${account.domain}`))
   const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
@@ -619,12 +636,33 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
       else if (error instanceof NoGroupShare) toast.error(t('compose.noGroupShare'))
       else if (error instanceof GroupNotAllowed) toast.error(t('compose.groupNotAllowed', { address: error.address }))
-      else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
+      else if (error instanceof KeysIdentityChanged) {
+        // Someone else holds an address a person the account knows left (a
+        // freed name taken): never sent there silently. When the list knows
+        // where that person is now, offer to write there instead.
+        const now = error.now
+        if (now) {
+          toast.error(t('compose.addressTakenNow', { address: error.address, now }), {
+            action: {
+              label: t('compose.writeTo', { address: now }),
+              onClick: () => void replaceRecipient(error.address, now),
+            },
+          })
+        } else {
+          toast.error(t('compose.addressTaken', { address: error.address }))
+        }
+      } else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
       else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
+        // Written from an address the account has left (renamed meanwhile,
+        // perhaps in another tab): read the account again, so the next
+        // send goes from the current address.
+        if (data?.code === 'addressReceiveOnly') refresh()
         toast.error(
-          data?.code === 'notAllowed'
+          data?.code === 'addressReceiveOnly'
+            ? t('compose.addressReceiveOnly')
+            : data?.code === 'notAllowed'
             ? t('compose.groupNotAllowed', { address: (data as { address?: string }).address ?? '' })
             : data?.code === 'expiringOutside'
             ? t('expiry.outside')

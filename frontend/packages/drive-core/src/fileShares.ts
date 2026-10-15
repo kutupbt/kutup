@@ -9,7 +9,7 @@ import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { opensInOffice } from './editorKind'
-import { confirmRecipient, type ClaimedKeys } from './identityPins'
+import { confirmRecipient, recipientError, type ClaimedKeys } from './identityPins'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -489,7 +489,8 @@ export function useShareFile() {
       try {
         recipient = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
       } catch (error) {
-        if (!(isAxiosError(error) && error.response?.status === 404)) throw error
+        // A name its person left: `RecipientRenamed`, with where they are now.
+        if (!(isAxiosError(error) && error.response?.status === 404)) throw await recipientError(me, address, error)
       }
       try {
         if (!recipient) {
@@ -506,7 +507,7 @@ export function useShareFile() {
             ).data
           } catch (error) {
             if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
-            throw error
+            throw await recipientError(me, address, error)
           }
           await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
           const file = await bringFileSharesUpToDate(input.folder, input.file, me)

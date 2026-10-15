@@ -9,10 +9,17 @@ vi.mock('../../crypto/src/rustWasm', async () => {
   await module.default({ module_or_path: wasm })
   return { getCryptoWasm: () => Promise.resolve(module) }
 })
-vi.mock('@kutup/session/client', () => ({ default: { get: vi.fn() } }))
+const get = vi.hoisted(() => vi.fn())
+vi.mock('@kutup/session/client', () => ({ default: { get } }))
+// What the pin list says (drive-core's own tests cover how it decides).
+type Verdict = { kind: string; now?: string }
+const pins: { verdict: Verdict } = vi.hoisted(() => ({ verdict: { kind: 'unknown' } }))
+vi.mock('@kutup/drive-core/identityPins', () => ({ pinnedVerdict: vi.fn(() => Promise.resolve(pins.verdict)) }))
+vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn(() => Promise.resolve({})) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me' }) }))
 
 import { deriveAccountIdentityKeys, generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
-import { UnverifiedKeys, verified } from './keys'
+import { addressKeys, forgetKeys, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `account`. */
 async function lookupOf(master: string, binding: string, address: string, account: string) {
@@ -60,5 +67,34 @@ describe('an address’s keys', () => {
     const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev')
     await expect(verified('bob@kutup.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('ada_l@other.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+})
+
+describe('an address’s keys against the pin list', () => {
+  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const binding = crypto.randomUUID()
+
+  async function lookedUp(verdict: { kind: string; now?: string }) {
+    pins.verdict = verdict
+    forgetKeys()
+    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev')
+    get.mockResolvedValueOnce({ data: lookup })
+    return addressKeys('ada_l@kutup.dev')
+  }
+
+  it('refuses another authority for a pinned person', async () => {
+    await expect(lookedUp({ kind: 'changed' })).rejects.toBeInstanceOf(KeysIdentityChanged)
+  })
+
+  it('refuses someone else at a name a pinned person left, naming where that person is', async () => {
+    await expect(lookedUp({ kind: 'changed', now: 'ada_lovelace@kutup.dev' })).rejects.toMatchObject({
+      now: 'ada_lovelace@kutup.dev',
+    })
+  })
+
+  it('takes an old address its verified rename chain covers, and someone never met', async () => {
+    await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
   })
 })

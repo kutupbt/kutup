@@ -14,7 +14,8 @@ import { securityEventDevice, securityEventLabel } from './securityEvents'
 /**
  * Changes to how this account signs in (docs/plans/opaque.md), newest
  * first: a password changed or reset, a refreshed sign-in, an administrator's
- * reset. No addresses are kept, so none are shown.
+ * reset, a new username or a held name closed. No IP addresses are kept, so
+ * none are shown.
  */
 export function SecurityEventsSection() {
   const { t, i18n } = useTranslation()
@@ -28,6 +29,10 @@ export function SecurityEventsSection() {
     // Refetching an infinite query starts from its first page.
     if (staleCursor) void refetch({ cancelRefetch: false })
   }, [staleCursor, refetch])
+  const label = (event: (typeof list)[number]) => {
+    const what = securityEventLabel(event)
+    return t(what.key, what.values)
+  }
   const device = (event: (typeof list)[number]) => {
     const where = securityEventDevice(event)
     return where ? t(where.key, where.values) : null
@@ -47,7 +52,7 @@ export function SecurityEventsSection() {
             <ul className="divide-y divide-border" aria-label={t('settings.security.events.title')}>
               {list.map((event) => (
                 <li key={event.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 text-sm first:pt-0 last:pb-0">
-                  <span className="font-medium">{t(securityEventLabel(event))}</span>
+                  <span className="font-medium">{label(event)}</span>
                   {device(event) ? <span className="text-muted-foreground">{device(event)}</span> : null}
                   {event.byAdmin ? <Badge variant="warn">{t('settings.security.events.byAdmin')}</Badge> : null}
                   {event.thisSession ? <Badge variant="neutral">{t('settings.security.events.thisDevice')}</Badge> : null}

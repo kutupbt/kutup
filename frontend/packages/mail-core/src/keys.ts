@@ -1,5 +1,8 @@
 import { foldAddress, fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
+import { driveIdentityOf } from '@kutup/drive-core/identity'
+import { pinnedVerdict } from '@kutup/drive-core/identityPins'
 import api from '@kutup/session/client'
+import { getSession } from '@kutup/session/store'
 
 // A Kutup address's public keys (docs/plans/mail-address-keys.md), checked
 // before anything is encrypted to them or a signature is trusted: every key
@@ -47,6 +50,36 @@ export class UnverifiedKeys extends Error {
   }
 }
 
+/**
+ * The keys are signed by another authority than the one the account's pin
+ * list holds for this person (docs/plans/username-renames.md): a reset, a
+ * name someone else took, or a server handing out keys of its own.
+ */
+export class KeysIdentityChanged extends UnverifiedKeys {
+  constructor(
+    address: string,
+    /** Where the person met at this address is now, when the list knows (a name taken by someone else). */
+    readonly now?: string,
+  ) {
+    super(address)
+    this.message = `the keys of ${address} are not signed by the account met before`
+  }
+}
+
+/**
+ * `keys` held against the pin list shared with Drive and Chat: a pinned
+ * person's keys must be signed by the pinned authority, and an address that
+ * person left needs their verified rename chain naming both addresses.
+ * Someone never met is trusted on first use, as before.
+ */
+async function pinned(keys: AddressKeys): Promise<AddressKeys> {
+  const session = getSession()
+  if (!session?.username) return keys
+  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, keys.authorityPublicKey)
+  if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address, verdict.now)
+  return keys
+}
+
 /** The address is a group's: its members' keys come from `groupMembers`. */
 export class GroupAddress extends Error {
   constructor(readonly address: string) {
@@ -79,7 +112,7 @@ async function load(address: string): Promise<AddressKeys> {
     if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
-  return verified(address, lookup)
+  return pinned(await verified(address, lookup))
 }
 
 /**
@@ -193,5 +226,5 @@ export async function groupMembers(address: string): Promise<AddressKeys[]> {
     if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
-  return Promise.all(members.map((member) => verified(member.address, member)))
+  return Promise.all(members.map(async (member) => pinned(await verified(member.address, member))))
 }

@@ -221,6 +221,7 @@
     "forwardedDate": "Date: {{date}}",
     "forwardedSubject": "Subject: {{subject}}",
     "sendingPaused": "Mail to outside addresses is paused for your account. Ask your administrator.",
+    "addressReceiveOnly": "This was written from your old address, which now only receives mail. Your current address is filled in: send it again.",
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
     "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
     "pinnedKeyUnusable": "The key you trust for {{address}} can no longer be used. Replace or remove it in Contacts.",
@@ -264,7 +265,10 @@
     "rightToLeft": "Right to left",
     "emoji": "Insert emoji",
     "contactGroup_one": "Contact group · {{count}} member",
-    "contactGroup_other": "Contact group · {{count}} members"
+    "contactGroup_other": "Contact group · {{count}} members",
+    "addressTaken": "{{address}} now belongs to someone else, not the person you wrote to before. Nothing was sent.",
+    "addressTakenNow": "{{address}} now belongs to someone else. The person you wrote to before is now {{now}}. Nothing was sent.",
+    "writeTo": "Write to {{address}}"
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
