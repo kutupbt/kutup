@@ -579,4 +579,53 @@ above:
   `formerly`). An unknown `version`, `unavailable`, or a chain the pinned
   authority did not sign keeps the pin. Sharing to a left name offers the new
   address (`RecipientRenamed`; first use for someone never met).
-- **Chat:** follows in its own PR (peer records keyed by a stable identity).
+- **Chat:** see below.
+
+## As built: Chat (slate/renames-chat)
+
+Chat core keys a peer's records by its address (keying them by incarnation
+instead is on the roadmap, "Chat · peer records keyed by a stable
+identity"). A rename is followed so (`kutup-chat-core` `renames.rs`,
+`engine/renames.rs`, `Session::move_peer`):
+
+- **When.** A lookup of a name its peer left answers `409 renamed`
+  (`ChatError::Renamed`, through the web and native transports): a send
+  follows it and goes again to the new address (`SendSummary.moved_to`). An
+  address met for the first time asks `GET /api/users/renames/:address`: a
+  peer pinned under an earlier name of its chain brings its thread along
+  before the new address is accepted. Another authority at a pinned address
+  first asks for the pinned incarnation's chain: when the pinned account
+  moved away, its thread follows it and whoever is at the address is met as
+  someone new (the synced pins still warn, "This address may now belong to
+  someone else"); without such a chain it stays the usual quarantine.
+- **What is followed.** Only the chain of the pinned authority and
+  incarnation, verified, extending the digests kept with the pin
+  (`ManifestTrust.renames`), naming the pinned address, of an account still
+  current. Addresses compare folded everywhere (the manifest rule too). A
+  manifest may name any address of the followed chain: until the peer
+  re-publishes, its manifest names the address it left.
+- **The move.** One store transaction on either backend: the trust pin and
+  manifest history, the contact, the profile, and the libsignal sessions and
+  identities of the peer's devices go to the new address; the alias log
+  records old → new; a local `peerRenamed` line (`rename:<incarnation>:
+  <sequence>`) is written in the thread, once per rename; the timeline and
+  search are marked stale and rebuilt (on open, should the device stop in
+  between). A second answer of the same chain, or a restart, moves nothing.
+- **The alias log.** History keeps the address it was written under
+  (messages, Note to Self controls, backups); the timeline, search, history
+  views, the expiry sweep and the account's own controls read it through the
+  log, as do the libsignal store adapters and the inbound sender (a
+  sealed-sender certificate issued before the rename names the old address).
+  Queued sends resolve through it when delivered. A test classifies every
+  staged store and SQLite table as moved or not, so a new one cannot miss it.
+- **This account's own rename.** Chat opens again when the session's
+  username changes; on opening, `adoptOwnRename` finds the account's own
+  records under an earlier address of its own verified chain and moves them
+  (no line: renames show in Account → Security), then publishes the
+  manifest (MLS keeps the identity its state was made under) and the
+  profile under the new address.
+- **The app.** The line reads "ada_l changed their username to ada_lovelace"
+  (en/tr); read marks, drafts and an open thread follow the peer; restored
+  backup history goes to the new thread. MLS state stays as it is.
+- **Native.** The FFI maps `409 renamed` and `fetch_renames`; the native
+  apps call `adoptOwnRename` and show the line when they are built.
