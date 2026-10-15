@@ -45,6 +45,7 @@ import type {
   WasmChatClientHandle,
 } from './types'
 import { loadChatWasm } from './wasm'
+import { throughRenameAliases } from './renamedHistory'
 import { EngineLock } from './engineLock'
 import { SealedStorage } from './sealedStorage'
 import {
@@ -532,7 +533,7 @@ export class ChatService {
   private async loadHistory(): Promise<ChatHistoryEntry[]> {
     const [live, restored] = await Promise.all([
       this.liveHistory(),
-      this.backup?.restoredHistoryAsync() ?? Promise.resolve([]),
+      this.restoredEntries(),
     ])
     const merged = new Map(restored.map(entry => [entry.id, entry]))
     for (const entry of live) merged.set(entry.id, entry)
@@ -679,12 +680,19 @@ export class ChatService {
     return entries.reverse()
   }
 
+  /** The backup's restored history, under the addresses peers have now. */
+  private async restoredEntries(): Promise<ChatHistoryEntry[]> {
+    if (!this.backup) return []
+    const [entries, aliases] = await Promise.all([this.backup.restoredHistoryAsync(), this.renameAliases()])
+    return throughRenameAliases(entries, aliases)
+  }
+
   private restoredHistory(): Promise<Map<string, ChatHistoryEntry[]>> {
     if (!this.backup) return Promise.resolve(new Map())
     const version = this.backup.restoredVersion()
     if (!this.restoredByKey || this.restoredByKeyVersion !== version) {
       this.restoredByKeyVersion = version
-      const loading = this.backup.restoredHistoryAsync().then((entries) => {
+      const loading = this.restoredEntries().then((entries) => {
         const byKey = new Map<string, ChatHistoryEntry[]>()
         for (const entry of entries.map((value) => value)) {
           const key = conversationKey(entry.conversation)
@@ -1387,6 +1395,12 @@ export class ChatService {
     })
       .then(async ({ commits, expiry, report }) => {
         await this.releaseExpiredAttachments(expiry)
+        if ((report.renamed ?? []).length > 0) {
+          // Peers moved: restored history is read again under their new
+          // addresses, and the whole list is drawn again.
+          this.restoredByKey = null
+          this.historyCache.clear()
+        }
         const mlsTyping = await this.withMlsWorkflow(async () => {
           return await this.mls?.reconcile() ?? []
         })
