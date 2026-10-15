@@ -32,7 +32,8 @@ use trust::FederationTrustStore;
 
 pub(crate) use policy::{FederationAdmissionError, FederationDirection, FederationPolicyFeature};
 pub(crate) use transport::{
-    lacks_capability, AuthenticatedFederationRequest, FederationRequestSpec,
+    lacks_capability, AuthenticatedFederationRequest, AuthenticatedFederationResponse,
+    FederationRequestSpec,
 };
 
 use crate::config::Config;

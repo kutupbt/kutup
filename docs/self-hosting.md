@@ -188,6 +188,9 @@ SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
 # RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=20 # collaboration device registrations, per account
 # RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN=300 # account head, chain and index reads, per account
 # RATE_LIMIT_RENAME_CHECKS_PER_15_MIN=30 # name checks before a rename, per account
+# RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN=60 # another server's renames fetched for an account
+# RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN=120 # renames fetched from one other server
+# RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN=600 # rename announces taken from one other server
 # A name an account leaves (a rename, a deletion) stays held this many days
 # before anyone may take it; a renamed account's old address receives (only)
 # for the second number of days, then bounces. Both seed the values

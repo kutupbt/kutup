@@ -485,6 +485,14 @@ traffic is enabled.
 
 ---
 
+### Renames · small follow-ups (low)
+
+- `mail::group_keys::wkd_keys` folds each group's address per row: add a folded
+  index (or a generated `folded` column) on `mail_groups.address`.
+- WKD serves an address's keys under the user ID they were made with (the stored
+  spelling); a variant spelling's WKD lookup gets that user ID, which OpenPGP
+  clients may not match to the address they asked for.
+
 ## New apps (after v1)
 
 Two more apps join Drive and Chat, each built the same way (product owner,

@@ -112,6 +112,24 @@ wait_url "http://127.0.0.1:$port_b/api/health"
 
 run_phase verify-retry
 
+# Renames across servers: B learns of A's rename (announce, or lookup) and
+# relays 409 renamed; A's announce reaches B and leaves A's outbox.
+run_phase renames
+deadline=$((SECONDS + 90))
+until [[ "$(compose exec -T postgres-a psql -U kutup -d kutup -Atc \
+  "SELECT COUNT(*) FROM rename_announce_outbox")" == "0" ]]; do
+  if (( SECONDS >= deadline )); then
+    echo "A's rename announce was never delivered" >&2
+    compose exec -T postgres-a psql -U kutup -d kutup -Atc \
+      "SELECT destination, attempts, last_error FROM rename_announce_outbox" >&2
+    exit 1
+  fi
+  sleep 2
+done
+kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
+  "SELECT COUNT(*) FROM remote_account_renames WHERE domain='a.test' AND current_address LIKE 'ren_alicia@%'")"
+[[ "$kept_renames" == "1" ]] || { echo "B did not keep A's rename chain ($kept_renames)" >&2; exit 1; }
+
 # Destination Chat-media state may contain the authenticated origin domain and
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.

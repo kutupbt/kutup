@@ -45,6 +45,7 @@ mod public_fetch;
 mod ratelimit;
 mod registration;
 mod remote_devices;
+mod remote_renames;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
@@ -442,6 +443,8 @@ async fn main() -> anyhow::Result<()> {
     }
     // Old addresses past their receiving, names past their hold.
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+    // Announces of this server's renames to its peers.
+    remote_renames::spawn_announcer(state.clone());
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
@@ -1811,6 +1814,24 @@ fn build_router(state: AppState) -> Router {
             post(chat_media_federation::serve_object)
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        // Renames, under Chat's and Drive's namespaces alike (the signed
+        // request's feature says which).
+        .route(
+            "/api/fed/chat/accounts/:username/renames",
+            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/accounts/:username/renames",
+            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/accounts/renames",
+            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/fed/drive/accounts/renames",
+            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
             "/api/fed/drive/users/:username",

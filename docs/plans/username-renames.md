@@ -580,3 +580,42 @@ above:
   authority did not sign keeps the pin. Sharing to a left name offers the new
   address (`RecipientRenamed`; first use for someone never met).
 - **Chat:** follows in its own PR (peer records keyed by a stable identity).
+
+## As built (R2, federation)
+
+Migration `20261015010000_account_renames_federation`; `crate::remote_renames`.
+
+- **Feature and paths.** Renames are the account's, for Chat and Drive alike: requests
+  go out under `chat.v2` when the peer admits it, else `drive.v1`, and are taken under
+  whichever the signed request names, with that feature's admission policy. Each
+  feature's requests stay in its own namespace (the transport refuses others), so the
+  endpoints are served twice: `/api/fed/chat/accounts/…` and `/api/fed/drive/accounts/…`
+  (the plan's `/api/fed/accounts/…` above). No new federation feature.
+- **Announce.** In the rename's transaction, one outbox row per pinned peer not
+  quarantined (`trust_state <> 'quarantined'`: "verified" in the trust table is the
+  rare admin-verified state). A worker sends the whole chain every 30 seconds, with
+  backoff to 6 hours, for 7 days; a peer without either feature, or one this server
+  may not send to, is dropped at once (it learns at its next lookup).
+- **Keeping chains** (`remote_account_renames`, one per domain and incarnation): kept
+  when it verifies (the incarnation is the authority's hash, so no stored authority is
+  needed), every address is on the domain that gave it, and it extends the one kept;
+  a shorter one is a rollback and a different one a fork, neither kept. At most
+  50,000 per domain. Every address a chain names is indexed folded.
+- **Rows move by incarnation only** (incoming and outgoing federated shares, profile
+  keys, collaboration devices). A peer can sign a chain for a fresh authority claiming
+  one of its names; that is another incarnation and moves nothing (tested). A profile
+  key whose new address already has one stays under the old address until the next
+  key exchange replaces it (logged with its ids); the person sees the old address on
+  that one key until then.
+- **A peer's `409 renamed`** to Chat keys, manifests, history and profile lookups and
+  the Drive user lookup is relayed to the client, its chains verified and kept (this
+  closes an R1 gap: those answers were `502`). Chat's federated errors now carry their
+  details, so the chains reach the asker at all.
+- **Remote chain lookups** answer from what is kept when a chain is younger than a
+  day; otherwise the peer is asked (per account 60 per 15 minutes, per peer 120 a
+  minute, one fetch per address at a time). Unreachable with nothing kept:
+  `unavailable: true`.
+- **Tests:** `remote_renames::tests` (a chain kept only for its own server; kept,
+  same, shorter, forked; rows by incarnation, the forged chain moving nothing) and the
+  two-server gate's `renames` phase (B learns of A's rename, relays `409 renamed`,
+  finds the new name; A's outbox empties and B keeps the chain).

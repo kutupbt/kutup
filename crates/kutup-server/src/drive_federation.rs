@@ -396,6 +396,13 @@ pub async fn fetch_remote_user(
         )
         .await
         .map_err(gateway_error)?;
+    // A held name there: where the account went (crate::remote_renames).
+    if let Some(renamed) =
+        crate::remote_renames::relay(&state, server, &format!("{username}@{server}"), &response)
+            .await
+    {
+        return Err(renamed);
+    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote Drive user not found"));
     }

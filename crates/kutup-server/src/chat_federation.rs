@@ -71,6 +71,18 @@ pub async fn fetch_remote_bundles(
         )
         .await
         .map_err(federation_gateway_error)?;
+    // A held name there: where the account went, its chains verified and
+    // kept here (crate::remote_renames).
+    if let Some(renamed) = crate::remote_renames::relay(
+        state,
+        address.server.as_str(),
+        &address.canonical(),
+        &response,
+    )
+    .await
+    {
+        return Err(renamed);
+    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote chat user not found"));
     }
@@ -123,6 +135,18 @@ pub async fn fetch_remote_sealed_bundles(
         )
         .await
         .map_err(federation_gateway_error)?;
+    // A held name there: where the account went, its chains verified and
+    // kept here (crate::remote_renames).
+    if let Some(renamed) = crate::remote_renames::relay(
+        state,
+        address.server.as_str(),
+        &address.canonical(),
+        &response,
+    )
+    .await
+    {
+        return Err(renamed);
+    }
     if response.status != StatusCode::OK {
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
@@ -159,6 +183,18 @@ pub async fn fetch_remote_manifest_history(
         )
         .await
         .map_err(federation_gateway_error)?;
+    // A held name there: where the account went, its chains verified and
+    // kept here (crate::remote_renames).
+    if let Some(renamed) = crate::remote_renames::relay(
+        state,
+        address.server.as_str(),
+        &address.canonical(),
+        &response,
+    )
+    .await
+    {
+        return Err(renamed);
+    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found(
             "remote chat manifest history not found",
@@ -210,6 +246,18 @@ pub async fn fetch_remote_manifest(
         )
         .await
         .map_err(federation_gateway_error)?;
+    // A held name there: where the account went, its chains verified and
+    // kept here (crate::remote_renames).
+    if let Some(renamed) = crate::remote_renames::relay(
+        state,
+        address.server.as_str(),
+        &address.canonical(),
+        &response,
+    )
+    .await
+    {
+        return Err(renamed);
+    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote chat manifest not found"));
     }
@@ -275,6 +323,18 @@ pub async fn fetch_remote_profile(
         )
         .await
         .map_err(federation_gateway_error)?;
+    // A held name there: where the account went, its chains verified and
+    // kept here (crate::remote_renames).
+    if let Some(renamed) = crate::remote_renames::relay(
+        state,
+        address.server.as_str(),
+        &address.canonical(),
+        &response,
+    )
+    .await
+    {
+        return Err(renamed);
+    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote chat profile not found"));
     }

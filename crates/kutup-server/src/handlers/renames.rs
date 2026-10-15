@@ -233,6 +233,26 @@ pub async fn rename(
     // on this server, the next of its chain, signed now.
     let statement = &req.rename;
     let old_address = format!("{username}@{server}");
+    // Another device renamed meanwhile: the chain moved, or the statement
+    // starts from an address this account has since left. Read again and
+    // sign anew (a conflict, not a wrong statement).
+    let (stored_len, left_before): (i64, bool) = sqlx::query_as(
+        "SELECT COUNT(*),
+                COALESCE(bool_or(previous = $2 OR current = $2), false)
+           FROM account_renames WHERE incarnation_id = $1",
+    )
+    .bind(&incarnation)
+    .bind(&statement.previous)
+    .fetch_one(&mut *tx)
+    .await?;
+    if statement.sequence != stored_len as u64 + 1
+        || (statement.previous != old_address && left_before)
+    {
+        return Err(
+            AppError::conflict("the chain moved: read it again and sign anew")
+                .with_details(json!({ "code": "renameConflict", "sequence": stored_len })),
+        );
+    }
     let (new_name, new_server) = statement
         .current
         .rsplit_once('@')
@@ -506,6 +526,8 @@ pub async fn rename(
         Some(&new_name),
     )
     .await?;
+    // Peers learn of it from the announce, sent after this commits.
+    crate::remote_renames::enqueue(&mut tx, &server, &incarnation, view.sequence).await?;
     tx.commit().await?;
     tracing::info!(%user_id, sequence = view.sequence, "account renamed");
     Ok(Json(RenameView {
@@ -784,7 +806,7 @@ pub struct ChainsQuery {
 )]
 pub async fn chains(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(address): Path<String>,
     Query(query): Query<ChainsQuery>,
 ) -> AppResult<Response> {
@@ -792,9 +814,18 @@ pub async fn chains(
     let Some((_, server)) = address.rsplit_once('@') else {
         return Err(AppError::bad_request("an address is username@server"));
     };
-    // Another server's chains come with federation (its announce and cache).
+    // Another server's: the chains kept of it, asked of that server when
+    // none is fresh (crate::remote_renames).
     if server != state.config.chat_server_name.to_ascii_lowercase() {
-        return Ok(Json(json!({ "version": 1, "chains": [] })).into_response());
+        let mut found =
+            crate::remote_renames::lookup(&state, trusted_uuid(&user.user_id)?, &address).await?;
+        if let (Some(incarnation), Some(chains)) = (
+            query.incarnation_id.as_deref(),
+            found["chains"].as_array_mut(),
+        ) {
+            chains.retain(|chain| chain["incarnationId"] == incarnation);
+        }
+        return Ok(Json(found).into_response());
     }
     let found =
         account_names::chains(&state.pool, &address, query.incarnation_id.as_deref()).await?;
