@@ -111,6 +111,11 @@ impl ChatStore {
         Ok(())
     }
 
+    /// The rename alias log as this store holds it.
+    pub(crate) fn aliases(&self) -> RenameAliases {
+        self.aliases.borrow().clone()
+    }
+
     /// Where the peer last known at `address` is now (`address` itself when
     /// it never moved).
     pub(crate) fn current_address(&self, address: &str) -> String {

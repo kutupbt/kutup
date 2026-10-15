@@ -218,6 +218,21 @@ impl RenameAliases {
     }
 }
 
+/// A direct conversation where its peer is now (groups as they are).
+pub fn current_conversation(
+    aliases: &RenameAliases,
+    conversation: &kutup_chat_proto::ConversationId,
+) -> kutup_chat_proto::ConversationId {
+    match conversation {
+        kutup_chat_proto::ConversationId::Direct { address } if !aliases.is_empty() => aliases
+            .resolve(&address.canonical())
+            .parse::<kutup_chat_proto::AccountAddress>()
+            .map(kutup_chat_proto::ConversationId::direct)
+            .unwrap_or_else(|_| conversation.clone()),
+        _ => conversation.clone(),
+    }
+}
+
 /// The alias log as `pending` would leave it: its staged copy, else the
 /// stored one.
 pub(crate) async fn load_aliases(

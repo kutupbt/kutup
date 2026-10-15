@@ -139,65 +139,91 @@ impl Engine {
         }
     }
 
-    /// This account was renamed (`/user/me` names `new_address`): its own
-    /// records follow, verified against its own authority, and the device
-    /// goes by the new address. Then the manifest and the profile are
-    /// published under it (`republish_after_own_rename`). Returns whether
-    /// anything moved; a restart re-runs it as a no-op.
+    /// This account goes by `new_address` (`/user/me` says so, or the app
+    /// opened the store under it): its own records still under an earlier
+    /// address of its verified chain follow it, and the device goes by the
+    /// new address. Then the manifest and the profile are published under it
+    /// (`republish_profile_after_rename`). Returns whether anything moved; a
+    /// restart re-runs it as a no-op.
     pub async fn adopt_own_rename(
         &mut self,
         authority: &AccountAuthority,
         new_address: &str,
     ) -> Result<bool> {
-        let old = self.session.user().to_string();
-        if renames::same_address(&old, new_address) {
+        let current = self.session.user().to_string();
+        let settled = renames::same_address(&current, new_address)
+            && self.session.manifest_trust(&current).await?.is_some();
+        if settled {
             return Ok(false);
         }
         let chains = Rc::clone(&self.transport)
             .fetch_renames(new_address, Some(&authority.incarnation_id()))
             .await?;
-        let own = match self.session.manifest_trust(&old).await? {
-            Some(trust) => trust,
-            // No pin of this account yet (a device that never published):
-            // only the address changes, once the chain says so.
-            None => {
-                let pinned = own_pin(authority, &old);
-                let Some(found) = renames::select(&pinned, &chains)? else {
-                    return Err(ChatError::Trust(
-                        "this account's rename chain does not lead to its new address".into(),
-                    ));
-                };
-                if !renames::same_address(&found.to, new_address) {
-                    return Err(ChatError::Trust(
-                        "this account's rename chain ends at another address".into(),
-                    ));
-                }
-                self.session.set_user(&found.to)?;
-                return Ok(true);
+        if chains.version != renames::RENAME_CHAINS_VERSION || chains.unavailable {
+            return Ok(false);
+        }
+        let Some(entry) = chains
+            .chains
+            .iter()
+            .find(|entry| entry.authority_public_key == authority.public_key_base64())
+        else {
+            // Never renamed: nothing of this account is anywhere else.
+            if !renames::same_address(&current, new_address) {
+                return Err(ChatError::Trust(
+                    "this account's new address has no rename chain of its own".into(),
+                ));
             }
+            return Ok(false);
         };
-        if own.self_authority_key != authority.public_key_base64() {
-            return Err(ChatError::Trust(
-                "this account's pin names another authority".into(),
-            ));
-        }
-        let Some(found) = renames::select(&own, &chains)? else {
-            return Err(ChatError::Trust(
-                "this account's rename chain does not lead to its new address".into(),
-            ));
-        };
-        if !renames::same_address(&found.to, new_address) {
-            return Err(ChatError::Trust(
-                "this account's rename chain ends at another address".into(),
-            ));
-        }
-        self.session
+        // Its own records, under the newest earlier address that holds them
+        // (or a pin made from its authority, for a device that never
+        // published).
+        let mut earlier: Vec<String> = entry.chain.iter().map(|s| s.previous.clone()).collect();
+        earlier.reverse();
+        let mut moved = false;
+        for address in earlier {
+            if renames::same_address(&address, new_address) {
+                continue;
+            }
+            let Some(own) = self.session.manifest_trust(&address).await? else {
+                continue;
+            };
+            if own.self_authority_key != authority.public_key_base64() {
+                return Err(ChatError::Trust(
+                    "this account's pin names another authority".into(),
+                ));
+            }
+            let Some(found) = renames::select(&own, &chains)? else {
+                continue;
+            };
+            if !renames::same_address(&found.to, new_address) {
+                return Err(ChatError::Trust(
+                    "this account's rename chain ends at another address".into(),
+                ));
+            }
             // The linked devices are those of the newest own manifest.
-            .move_own_records(&found.from, &found.to, found.known, &[])
-            .await?;
-        self.forget_peer(&found.from);
-        self.session.set_user(&found.to)?;
-        Ok(true)
+            moved = self
+                .session
+                .move_own_records(&found.from, &found.to, found.known, &[])
+                .await?;
+            self.forget_peer(&found.from);
+            break;
+        }
+        if !moved {
+            // No pin of this account anywhere: its chain must still lead here.
+            let pinned = own_pin(authority, &current);
+            let leads_here = renames::select(&pinned, &chains)?
+                .is_some_and(|found| renames::same_address(&found.to, new_address))
+                || renames::same_address(&current, new_address);
+            if !leads_here {
+                return Err(ChatError::Trust(
+                    "this account's rename chain does not lead to its new address".into(),
+                ));
+            }
+        }
+        let changed = !renames::same_address(&current, new_address) || moved;
+        self.session.set_user(new_address)?;
+        Ok(changed)
     }
 
     /// After [`Self::adopt_own_rename`]: the encrypted profile again, bound

@@ -368,6 +368,10 @@ export class ChatService {
       new SealedStorage(wasm, options.masterKey, scope),
     )
     try {
+      // Renamed since this device last ran (or opened under the new name):
+      // its records follow along its own verified chain, and the manifest and
+      // profile are published under the new address.
+      await service.followOwnRename()
       if (capabilities.backup?.alwaysEnabled) {
         service.backup = await ChatBackupCoordinator.open({
           databaseName,
@@ -410,6 +414,21 @@ export class ChatService {
     } catch (error) {
       service.dispose()
       throw error
+    }
+  }
+
+  /**
+   * Follows this account's own rename (docs/plans/username-renames.md). An
+   * answer that cannot be had now (offline) is tried again at the next
+   * start; Chat works meanwhile under the address it was opened with.
+   */
+  private async followOwnRename(): Promise<void> {
+    if (!this.client.adoptOwnRename) return
+    const address = `${this.username}@${this.capabilities.serverName}`
+    try {
+      if (await this.withLock(() => this.client.adoptOwnRename!(address))) this.emitUpdate()
+    } catch (error) {
+      console.warn('chat: could not follow this account’s rename yet', error)
     }
   }
 

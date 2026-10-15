@@ -17,6 +17,8 @@ export interface ChatContentView {
   call?: ChatCallSignal
   /** A call in the timeline, written by this device. */
   callLog?: ChatCallLog
+  /** A peer's username changed: a line this device wrote when it followed their verified rename chain. */
+  peerRenamed?: ChatPeerRenamed
   /** A group call started or ended (MLS only). */
   groupCall?: ChatGroupCall
   disappearingTimer?: ChatDisappearingTimerV1
@@ -325,6 +327,15 @@ export interface SendSummary {
   deduplicated: boolean
   attempts: number
   safetyNumberChanges: string[]
+  /** The peer renamed: the message went to this address (docs/plans/username-renames.md). */
+  movedTo?: string
+}
+
+/** A peer followed from one address to another along its verified rename chain. */
+export interface ChatPeerRenamed {
+  from: string
+  to: string
+  sequence: number
 }
 
 export interface InboundFailure {
@@ -347,6 +358,8 @@ export interface ReceiveReport {
   repaired?: string[]
   /** Queued messages that could not be delivered on this pass. */
   sendFailures?: Array<{ sendId: string; peer: string; error: string }>
+  /** Peers followed to another address: their threads moved there. */
+  renamed?: Array<{ from: string; to: string }>
 }
 
 export interface ReceivedChatMessage {
@@ -1936,6 +1949,10 @@ export interface WasmChatClientHandle {
   sendCallSignal(sendId: string, peer: string, sentAt: string, signal: ChatCallSignal): Promise<SendSummary>
   refreshProfile(): Promise<void>
   recordCallLog(peer: string, body: ChatCallLog): Promise<void>
+  /** Follows this account's own rename to `address`; true when its records moved or the device took the new address. */
+  adoptOwnRename?(address: string): Promise<boolean>
+  /** Folded addresses peers left → where each is now. */
+  renameAliases?(): Promise<Record<string, string>>
   sendDisappearingTimer(
     sendId: string,
     peer: string,

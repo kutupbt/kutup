@@ -194,19 +194,6 @@ fn routed_conversation(content: &ChatContent) -> Option<ConversationId> {
     serde_json::from_value(content.body.get("conversation")?.clone()).ok()
 }
 
-/// A routed control's direct conversation, where its peer is now.
-fn routed_through(target: ConversationId, aliases: &RenameAliases) -> ConversationId {
-    match &target {
-        ConversationId::Direct { address } => {
-            let now = aliases.resolve(&address.canonical());
-            now.parse::<AccountAddress>()
-                .map(ConversationId::direct)
-                .unwrap_or(target)
-        }
-        ConversationId::Group { .. } => target,
-    }
-}
-
 fn content_of(bytes: &[u8]) -> Option<ChatContent> {
     serde_json::from_slice(bytes).ok()
 }
@@ -290,7 +277,7 @@ fn place(
     if let Some(target) = decoded
         .as_ref()
         .and_then(routed_conversation)
-        .map(|target| routed_through(target, aliases))
+        .map(|target| crate::renames::current_conversation(aliases, &target))
     {
         if target != conversation {
             placed.push(Indexed {

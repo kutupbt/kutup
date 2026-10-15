@@ -295,7 +295,7 @@ impl Session {
     #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
     pub(crate) async fn disappearing_expiry_starts(&self) -> Result<DisappearingExpiryStarts> {
         let outgoing = self.store.db().list_sent_messages().await?;
-        collect_disappearing_expiry_starts(&outgoing, self.user())
+        collect_disappearing_expiry_starts(&outgoing, self.user(), &self.store.aliases())
     }
 
     pub(crate) async fn validate_disappearing_expiry_start(
@@ -1838,14 +1838,18 @@ impl Session {
         let incoming = self.store.db().list_messages().await?;
         let outgoing = self.store.db().list_sent_messages().await?;
         let mls = self.store.db().list_mls_messages().await?;
-        let starts = collect_disappearing_expiry_starts(&outgoing, self.user())?;
-        let controls = collect_account_controls(&outgoing, self.user());
+        let aliases = self.store.aliases();
+        let starts = collect_disappearing_expiry_starts(&outgoing, self.user(), &aliases)?;
+        let controls = collect_account_controls(&outgoing, self.user(), &aliases);
         let mut expired_ids = std::collections::BTreeSet::new();
         let mut attachment_ids = std::collections::BTreeSet::new();
         let mut expired_messages = 0u32;
 
         for message in &incoming {
-            let conversation = direct_conversation(&message.peer)?;
+            let conversation = crate::renames::current_conversation(
+                &aliases,
+                &direct_conversation(&message.peer)?,
+            );
             if let Some(expired) = expired_content(
                 &message.content,
                 &conversation,
@@ -1862,7 +1866,10 @@ impl Session {
             }
         }
         for message in &outgoing {
-            let conversation = direct_conversation(&message.peer)?;
+            let conversation = crate::renames::current_conversation(
+                &aliases,
+                &direct_conversation(&message.peer)?,
+            );
             if let Some(expired) = expired_content(
                 &message.content,
                 &conversation,
@@ -1876,7 +1883,9 @@ impl Session {
                 self.store.delete_sent_message(&message.send_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
-            } else if message.peer == self.user() && controls.is_superseded(&message.content) {
+            } else if aliases.resolve(&message.peer) == self.user()
+                && controls.is_superseded(&message.content)
+            {
                 self.store.delete_sent_message(&message.send_id);
             }
         }
@@ -1918,7 +1927,8 @@ impl Session {
             }
         }
         for entry in self.store.db().list_outbox().await? {
-            let conversation = direct_conversation(&entry.peer)?;
+            let conversation =
+                crate::renames::current_conversation(&aliases, &direct_conversation(&entry.peer)?);
             if expired_content(
                 &entry.content,
                 &conversation,
@@ -3480,16 +3490,24 @@ impl AccountControls {
 /// (by revision, then device) and the furthest read position (by the
 /// reading device's clock) per conversation are kept; delete-for-me
 /// controls are all kept so a copy arriving late is removed too.
-fn collect_account_controls(outgoing: &[SentMessage], local_account: &str) -> AccountControls {
+fn collect_account_controls(
+    outgoing: &[SentMessage],
+    local_account: &str,
+    aliases: &crate::renames::RenameAliases,
+) -> AccountControls {
     let mut controls = AccountControls::default();
     let mut states = std::collections::BTreeMap::<String, ((u32, u32), String)>::new();
     // Stickers: the newest save of each, and which were removed.
     let mut stickers = std::collections::BTreeMap::<String, ((String, String), String)>::new();
     let mut removed_stickers = std::collections::BTreeSet::<String>::new();
     let mut positions = std::collections::BTreeMap::<String, ((i64, String), String)>::new();
+    // Note to Self under every address this account has had.
+    let current = |conversation: &kutup_chat_proto::ConversationId| {
+        crate::renames::current_conversation(aliases, conversation).key()
+    };
     let own = outgoing
         .iter()
-        .filter(|message| message.peer == local_account)
+        .filter(|message| aliases.resolve(&message.peer) == local_account)
         .map(|message| message.content.as_slice());
     for bytes in own {
         let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
@@ -3497,7 +3515,7 @@ fn collect_account_controls(outgoing: &[SentMessage], local_account: &str) -> Ac
         };
         let control_id = content.message_id.clone();
         if let Some(delete) = content.as_delete_for_me() {
-            let key = delete.conversation.key();
+            let key = current(&delete.conversation);
             for message_id in delete.message_ids {
                 controls.deleted.insert((key.clone(), message_id));
             }
@@ -3506,11 +3524,11 @@ fn collect_account_controls(outgoing: &[SentMessage], local_account: &str) -> Ac
             // stays as the "Viewed" placeholder.
             controls
                 .deleted
-                .insert((opened.conversation.key(), opened.message_id));
+                .insert((current(&opened.conversation), opened.message_id));
         } else if let Some(state) = content.as_conversation_state() {
             keep_newest(
                 &mut states,
-                state.conversation.key(),
+                current(&state.conversation),
                 state.order(),
                 control_id,
                 &mut controls.superseded,
@@ -3530,7 +3548,7 @@ fn collect_account_controls(outgoing: &[SentMessage], local_account: &str) -> Ac
             let order = (position.read_through_ms, control_id.clone());
             keep_newest(
                 &mut positions,
-                position.conversation.key(),
+                current(&position.conversation),
                 order,
                 control_id,
                 &mut controls.superseded,
@@ -3574,11 +3592,12 @@ pub(crate) type DisappearingExpiryStarts = std::collections::BTreeMap<(String, S
 pub(crate) fn collect_disappearing_expiry_starts(
     outgoing: &[SentMessage],
     local_account: &str,
+    aliases: &crate::renames::RenameAliases,
 ) -> Result<DisappearingExpiryStarts> {
     let mut starts = DisappearingExpiryStarts::new();
     for message in outgoing {
-        if message.peer == local_account {
-            collect_disappearing_expiry_start(&message.content, &mut starts)?;
+        if aliases.resolve(&message.peer) == local_account {
+            collect_disappearing_expiry_start(&message.content, &mut starts, aliases)?;
         }
     }
     Ok(starts)
@@ -3587,6 +3606,7 @@ pub(crate) fn collect_disappearing_expiry_starts(
 fn collect_disappearing_expiry_start(
     bytes: &[u8],
     starts: &mut DisappearingExpiryStarts,
+    aliases: &crate::renames::RenameAliases,
 ) -> Result<()> {
     let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
         return Ok(());
@@ -3599,7 +3619,10 @@ fn collect_disappearing_expiry_start(
         ));
     }
     if let Some(start) = start {
-        let key = (start.conversation.key(), start.target_message_id);
+        let key = (
+            crate::renames::current_conversation(aliases, &start.conversation).key(),
+            start.target_message_id,
+        );
         starts
             .entry(key)
             .and_modify(|current| *current = (*current).min(start.started_at_ms))

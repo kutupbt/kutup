@@ -224,14 +224,23 @@ function expireTyping(): void {
 }
 
 /**
+ * What Chat is open for: the session and its username. A rename (made in
+ * Account, read here through the session version) opens Chat again under the
+ * new name, which follows it (`ChatService.open`, `adoptOwnRename`).
+ */
+function openKey(session: Session): string {
+  return `${session.sessionId}\u0000${session.username ?? ''}`
+}
+
+/**
  * Open the chat for `session` (once; later calls for the same session do
  * nothing). A failure is kept in the state for the page to explain.
  */
 export function openChat(session: Session): void {
-  if (openedFor === session.sessionId) return
+  if (openedFor === openKey(session)) return
   closeChat()
-  openedFor = session.sessionId
-  const sessionId = session.sessionId
+  openedFor = openKey(session)
+  const sessionId = openKey(session)
   set({ ...initial, status: 'opening' })
   void (async () => {
     let capabilities: ChatCapabilities | null
@@ -345,7 +354,7 @@ function reopenLater(session: Session, capabilities: ChatCapabilities | null): v
   const delay = REOPEN_DELAYS_MS[Math.min(reopenAttempt, REOPEN_DELAYS_MS.length - 1)]
   reopenAttempt += 1
   const reopen = () => {
-    if (openedFor !== session.sessionId || state.failure !== 'unreachable') return
+    if (openedFor !== openKey(session) || state.failure !== 'unreachable') return
     reopenChat(session)
   }
   reopenTimer = window.setTimeout(reopen, delay)

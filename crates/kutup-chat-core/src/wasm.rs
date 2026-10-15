@@ -720,9 +720,11 @@ impl WasmChatClient {
                 Source::Inbox | Source::Mls => {}
             }
         }
+        let aliases = crate::renames::load_aliases(db, None).await?;
         crate::session::collect_disappearing_expiry_starts(
             &start_sent,
             self.engine.session().user(),
+            &aliases,
         )
     }
 
@@ -739,13 +741,14 @@ impl WasmChatClient {
         }
         let db = self.engine.session().db().as_ref();
         let me = self.engine.session().user();
+        let aliases = crate::renames::load_aliases(db, None).await?;
         let built = match entry.source {
             Source::Inbox => match db.load_message(&entry.id).await? {
-                Some(message) => Some(HistoryEntry::incoming(message)?),
+                Some(message) => Some(HistoryEntry::incoming(message, &aliases)?),
                 None => None,
             },
             Source::Sent => match db.load_sent_message(&entry.id).await? {
-                Some(message) => Some(HistoryEntry::outgoing(message, me)?),
+                Some(message) => Some(HistoryEntry::outgoing(message, me, &aliases)?),
                 None => None,
             },
             Source::Mls => match db.load_mls_message(&entry.id).await? {
@@ -3208,12 +3211,15 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         let me = self.engine.session().user().to_owned();
+        let aliases = crate::renames::load_aliases(self.engine.session().db().as_ref(), None)
+            .await
+            .map_err(chat_error)?;
         let mut history = Vec::with_capacity(incoming.len() + outgoing.len() + mls.len());
         for message in incoming {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            let mut entry = HistoryEntry::incoming(message).map_err(chat_error)?;
+            let mut entry = HistoryEntry::incoming(message, &aliases).map_err(chat_error)?;
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
@@ -3221,7 +3227,7 @@ impl WasmChatClient {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            let mut entry = HistoryEntry::outgoing(message, &me).map_err(chat_error)?;
+            let mut entry = HistoryEntry::outgoing(message, &me, &aliases).map_err(chat_error)?;
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
@@ -4105,18 +4111,24 @@ impl HistoryEntry {
             base_ms.map(|base_ms| base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000)));
     }
 
-    fn incoming(message: crate::InboxMessage) -> Result<Self> {
+    /// History keeps the address a record was written under; the view shows
+    /// it where its peer is now (`aliases`).
+    fn incoming(
+        message: crate::InboxMessage,
+        aliases: &crate::renames::RenameAliases,
+    ) -> Result<Self> {
         let content = crate::timeline::content_or_unsupported(
             &message.content,
             &message.id,
             iso_time(message.received_at),
         );
         let id = content.message_id.clone();
-        let conversation = direct_conversation(&message.peer)?;
+        let peer = aliases.resolve(&message.peer);
+        let conversation = direct_conversation(&peer)?;
         Ok(Self {
             id,
             conversation,
-            sender: message.peer,
+            sender: peer,
             direction: "incoming",
             sender_device_id: Some(message.sender_device_id),
             cursor: Some(message.cursor.to_string()),
@@ -4127,13 +4139,17 @@ impl HistoryEntry {
         })
     }
 
-    fn outgoing(message: crate::SentMessage, me: &str) -> Result<Self> {
+    fn outgoing(
+        message: crate::SentMessage,
+        me: &str,
+        aliases: &crate::renames::RenameAliases,
+    ) -> Result<Self> {
         let content = crate::timeline::content_or_unsupported(
             &message.content,
             &message.send_id,
             iso_time(message.created_at),
         );
-        let conversation = direct_conversation(&message.peer)?;
+        let conversation = direct_conversation(&aliases.resolve(&message.peer))?;
         Ok(Self {
             id: message.send_id,
             conversation,
