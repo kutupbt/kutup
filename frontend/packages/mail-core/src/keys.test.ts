@@ -86,6 +86,12 @@ describe('an address’s keys against the pin list', () => {
     await expect(lookedUp({ kind: 'changed' })).rejects.toBeInstanceOf(KeysIdentityChanged)
   })
 
+  it('refuses someone else at a name a pinned person left, naming where that person is', async () => {
+    await expect(lookedUp({ kind: 'changed', now: 'ada_lovelace@kutup.dev' })).rejects.toMatchObject({
+      now: 'ada_lovelace@kutup.dev',
+    })
+  })
+
   it('takes an old address its verified rename chain covers, and someone never met', async () => {
     await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
     await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })

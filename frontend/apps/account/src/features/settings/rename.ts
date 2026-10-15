@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { toBase64 } from '@kutup/crypto/base64'
-import { signAccountRename, type AccountRenameV1 } from '@kutup/crypto/accountRename'
+import { foldAddress, signAccountRename, type AccountRenameV1 } from '@kutup/crypto/accountRename'
 import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { firstAddressKey, type FirstAddressKey } from '@kutup/mail-core/addressKey'
 import { loadServerSettings } from '@kutup/session/apps'
@@ -101,36 +101,41 @@ interface RenameRequest {
 export async function renameAccount(name: string, needsKey: boolean, password: OneUseSecret): Promise<Renamed> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  // The password first: nothing is built for a wrong one. A grant is good
-  // for a few minutes and is used only when the rename is stored, so the
-  // retry below can send it again.
+  // The password first: nothing is built for a wrong one.
   const grant = await accountGrant(password.take(), 'rename')
   const masterKey = toBase64(session.masterKey)
-  // The new address's key is the same whatever the chain says: made once.
-  let mailAddress: FirstAddressKey | undefined
-  for (let attempt = 0; ; attempt++) {
-    // Where the chain ends and the address it ends at, read now: another
-    // device may have renamed since this page loaded.
-    const { data: me } = await api.get<MeResponse>('/user/me')
-    const domain = me.address.slice(me.address.lastIndexOf('@') + 1)
-    const address = `${name}@${domain}`
-    if (needsKey && !mailAddress) mailAddress = await firstAddressKey(session, address)
-    const body: RenameRequest = {
-      grant,
-      rename: await signAccountRename(masterKey, me.renames.sequence + 1, me.address, address, Date.now()),
-      driveKeyBinding: await signDriveKeyBinding(masterKey, address),
-      ...(mailAddress ? { mailAddress } : {}),
-    }
-    try {
-      return (await api.post<Renamed>('/user/rename', body)).data
-    } catch (error) {
-      const refused = refusal(error)
-      // Another device renamed in between: sign once more on what is there
-      // now (the grant was not used: the refusal stored nothing).
-      if (refused?.code === 'renameConflict' && attempt === 0) continue
-      throw refused ?? error
-    }
+  // Where the chain ends and the address it ends at, read now. Another device
+  // may have renamed since this page loaded: then this rename is no longer
+  // the one the person chose, and they are told so.
+  const { data: me } = await api.get<MeResponse>('/user/me')
+  const [signedFrom, shown] = await Promise.all([foldAddress(me.address), foldAddress(session.address)])
+  if (signedFrom === null || signedFrom !== shown) throw await changedElsewhere()
+  const domain = me.address.slice(me.address.lastIndexOf('@') + 1)
+  const address = `${name}@${domain}`
+  const body: RenameRequest = {
+    grant,
+    rename: await signAccountRename(masterKey, me.renames.sequence + 1, me.address, address, Date.now()),
+    driveKeyBinding: await signDriveKeyBinding(masterKey, address),
+    ...(needsKey ? { mailAddress: await firstAddressKey(session, address) } : {}),
   }
+  try {
+    return (await api.post<Renamed>('/user/rename', body)).data
+  } catch (error) {
+    const refused = refusal(error)
+    if (refused?.code === 'renameConflict') throw await changedElsewhere()
+    if (refused?.code === 'renameInvalid') {
+      // Refused as no longer starting where the account is: renamed meanwhile.
+      const { data: now } = await api.get<MeResponse>('/user/me')
+      if (now.address !== me.address || now.renames.sequence !== me.renames.sequence) throw await changedElsewhere()
+    }
+    throw refused ?? error
+  }
+}
+
+/** The account's name changed on another device: this page reads it again. */
+async function changedElsewhere(): Promise<NameRefusedError> {
+  await recheckAccount().catch(() => undefined)
+  return new NameRefusedError('renameConflict')
 }
 
 export const namesKey = ['account-names'] as const

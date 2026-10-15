@@ -124,15 +124,21 @@ function RenameDialog({ initialName, current, address, onClose }: { initialName:
     }
   })()
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault()
     if (!available || password === '' || rename.isPending) return
     setError(null)
+    // A held name comes back as it was spelled, signed so: only when that
+    // spelling is the name typed (folded), never another the server names.
+    const spelling = available.takeBack ? available.spelling : undefined
+    if (spelling && (await foldName(spelling)) !== (await foldName(typed))) {
+      setError(t('settings.account.rename.failed'))
+      return
+    }
     const secret = new OneUseSecret(password)
     setPassword('')
     rename.mutate(
-      // A held name comes back as it was spelled, signed so.
-      { name: available.takeBack && available.spelling ? available.spelling : typed, needsKey: available.needsKey, password: secret },
+      { name: spelling ?? typed, needsKey: available.needsKey, password: secret },
       {
         onSuccess: (renamed) => {
           toast.success(t('settings.account.rename.done', { name: renamed.username }))
@@ -150,7 +156,7 @@ function RenameDialog({ initialName, current, address, onClose }: { initialName:
           <DialogTitle>{t('settings.account.rename.title')}</DialogTitle>
           <DialogDescription>{t('settings.account.rename.description')}</DialogDescription>
         </DialogHeader>
-        <form className="mt-4 space-y-4" onSubmit={submit} noValidate>
+        <form className="mt-4 space-y-4" onSubmit={(event) => void submit(event)} noValidate>
           <Field label={t('settings.account.rename.newName')} description={t('settings.account.rename.hint')} required>
             {(field) => (
               <Input

@@ -20,6 +20,10 @@ vi.mock('@kutup/session/apps', () => ({
 }))
 vi.mock('@kutup/crypto/accountRename', () => ({
   foldName: (name: string) => Promise.resolve(name.replace(/[._-]/g, '').toLowerCase()),
+  foldAddress: (address: string) => {
+    const at = address.lastIndexOf('@')
+    return Promise.resolve(at > 0 ? `${address.slice(0, at).replace(/[._-]/g, '').toLowerCase()}@${address.slice(at + 1).toLowerCase()}` : null)
+  },
   signAccountRename,
 }))
 vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding: () => Promise.resolve('binding') }))
@@ -133,26 +137,53 @@ describe('the rename dialog', () => {
     expect((post.mock.calls[0] as [string, object])[1]).toMatchObject({ rename: { current: 'a-da@kutup.test' } })
   })
 
-  it('signs once more on the chain another device moved, with the same grant', async () => {
+  it('says so, and sends nothing more, when another device renamed meanwhile', async () => {
     post.mockImplementationOnce(() => {
-      // Another device renamed meanwhile: the chain is one longer now.
       me = { address: 'ada.x@kutup.test', renames: { sequence: 1 } }
       return Promise.reject(refused(409, { error: 'moved', code: 'renameConflict' }))
     })
-    post.mockResolvedValueOnce({ data: { username: 'grace', address: 'grace@kutup.test', sequence: 2, oldAddressReceivesUntil: '', oldNameFreeAt: '' } })
     show()
     const dialog = await openAndType('grace')
     await said(dialog, 'Available.')
     fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Change username' }))
-    await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
-    expect(accountGrant).toHaveBeenCalledTimes(1)
-    expect((post.mock.calls[1] as [string, { grant: string; rename: object }])[1]).toMatchObject({
-      grant: 'grant-1',
-      rename: { sequence: 2, previous: 'ada.x@kutup.test', current: 'grace@kutup.test' },
+    await within(dialog).findByText('Your username changed on another device meanwhile. Close this and try again.')
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(recheckAccount).toHaveBeenCalled()
+  })
+
+  it('takes a refusal of a moved chain as the same, and signs nothing when the page is behind', async () => {
+    post.mockImplementationOnce(() => {
+      me = { address: 'ada.x@kutup.test', renames: { sequence: 1 } }
+      return Promise.reject(refused(400, { error: 'previous', code: 'renameInvalid' }))
     })
-    // The address key is the same whatever the chain says: made once.
-    expect(firstAddressKey).toHaveBeenCalledTimes(1)
+    show()
+    const dialog = await openAndType('grace')
+    await said(dialog, 'Available.')
+    fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change username' }))
+    await within(dialog).findByText('Your username changed on another device meanwhile. Close this and try again.')
+    // The session still names the old address: nothing is signed for it.
+    signAccountRename.mockClear()
+    post.mockClear()
+    fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change username' }))
+    await waitFor(() => expect(accountGrant).toHaveBeenCalledTimes(2))
+    await within(dialog).findByText('Your username changed on another device meanwhile. Close this and try again.')
+    expect(signAccountRename).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('refuses a take-back spelling that is not the name typed', async () => {
+    check = { available: true, takeBack: true, needsKey: false, spelling: 'grace' }
+    show()
+    const dialog = await openAndType('ada')
+    await said(dialog, 'One of your earlier names: you can take it back.')
+    fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change username' }))
+    await within(dialog).findByText('Your username could not be changed.')
+    expect(accountGrant).not.toHaveBeenCalled()
+    expect(post).not.toHaveBeenCalled()
   })
 
   it('says when the next rename is allowed', async () => {

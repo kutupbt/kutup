@@ -95,11 +95,17 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     },
   ),
   // Rust's identity_pins::lookup, modelled: addresses compared folded.
-  lookupIdentityPin: vi.fn((current: { list: { pins: Pin[] } }, address: string, authority?: string) => {
+  lookupIdentityPin: vi.fn((current: { list: { pins: Pin[]; detached?: Pin[] } }, address: string, authority?: string) => {
     const pin = current.list.pins.find((known) => fold(known.account) === fold(address))
     if (pin) return Promise.resolve({ kind: 'pinned', pin, sameAuthority: pin.authorityPublicKey === authority })
     const elsewhere = authority ? current.list.pins.find((known) => known.authorityPublicKey === authority) : undefined
-    return Promise.resolve(elsewhere ? { kind: 'renamed', pin: elsewhere } : { kind: 'new' })
+    if (elsewhere) return Promise.resolve({ kind: 'renamed', pin: elsewhere })
+    const back = (current.list.detached ?? []).find((known) => fold(known.account) === fold(address))
+    if (back) return Promise.resolve({ kind: 'returned', pin: back })
+    // Someone pinned had this address before (their rename) and is elsewhere now.
+    const left = current.list.pins.filter((known) => (known.formerly ?? []).some((former) => fold(former) === fold(address)))
+    if (left.length > 0) return Promise.resolve({ kind: 'moved', pins: left.map((known) => ({ pin: known, now: known.account })) })
+    return Promise.resolve({ kind: 'new' })
   }),
   // Rust's identity_pins::apply_rename, modelled: the pin of that authority
   // moves to the chain's current address, its old one kept in `formerly`.
@@ -595,6 +601,13 @@ describe('renames (docs/plans/username-renames.md)', () => {
 })
 
 describe('pinnedVerdict (Mail’s key checks)', () => {
+  /** A new page: nothing looked up yet, the pins read again. */
+  function resetForNewPage() {
+    const pins = server.pins
+    resetIdentityPinsForTesting()
+    server.pins = pins
+  }
+
   async function met(account: string, authority: string) {
     publish(account, authority)
     await checkIdentity(me, account)
@@ -616,6 +629,27 @@ describe('pinnedVerdict (Mail’s key checks)', () => {
     // A chain its authority did not sign covers nothing.
     server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev'], { by: 'M' }))
     expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'changed' })
+  })
+
+  it('refuses someone else at an address a pinned person left, naming where that person is', async () => {
+    // Ada renamed (followed); her old name was freed and Mallory took it.
+    await met('ada_l@kutup.dev', 'A')
+    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev']))
+    server.people.clear()
+    publish('ada_lovelace@kutup.dev', 'A')
+    resetForNewPage()
+    await checkIdentity(me, 'ada_l@kutup.dev')
+    expect(storedPins()).toMatchObject([{ account: 'ada_lovelace@kutup.dev' }])
+    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'M')).toEqual({ kind: 'changed', now: 'ada_lovelace@kutup.dev' })
+    // Ada herself at her new name is who she was.
+    expect(await pinnedVerdict(me, 'ada_lovelace@kutup.dev', 'A')).toEqual({ kind: 'pinned' })
+  })
+
+  it('takes a detached pin back only with its own authority', async () => {
+    const detached = [{ account: 'erin@kutup.dev', authorityPublicKey: 'E', state: 'seen', since: '2026-10-10T00:00:00Z' }]
+    server.pins = { revision: 1, envelope: JSON.stringify({ binding: ME_BINDING, revision: 1, list: { pins: [], detached } }) }
+    expect(await pinnedVerdict(me, 'erin@kutup.dev', 'E')).toEqual({ kind: 'pinned' })
+    expect(await pinnedVerdict(me, 'erin@kutup.dev', 'M')).toEqual({ kind: 'changed' })
   })
 
   it('names where an old address’s account is now', async () => {

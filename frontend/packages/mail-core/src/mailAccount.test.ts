@@ -51,4 +51,14 @@ describe('the mail account after a rename', () => {
     expect(() => mailAccountOf(rows.slice(1), null, session, fold)).toThrow(NoAddressKey)
     expect(() => mailAccountOf([{ ...rows[0], keys: [] }], null, session, fold)).toThrow(NoAddressKey)
   })
+  it('keeps a freed name\'s keys for its old mail, never as its own', () => {
+    // ada@ was freed and may be Bob's now.
+    const freed: OwnAddressRow[] = [rows[0], rows[1], { ...rows[2], state: 'freed' }]
+    const account = mailAccountOf(freed, null, session, fold)
+    expect(account.olderKeys.map((k) => k.fingerprint)).toContain('fp-first')
+    expect(account.isOwnAddress('ada@kutup.test')).toBe(false)
+    expect(account.ownPublicKeys).not.toContain('pk-first')
+    expect(account.addresses).toEqual(['ada.lovelace@kutup.test', 'ada.l@kutup.test'])
+    expect(account.isOwnAddress('ada.l@kutup.test')).toBe(true)
+  })
 })

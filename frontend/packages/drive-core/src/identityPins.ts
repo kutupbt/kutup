@@ -404,26 +404,47 @@ export async function followRename(me: DriveIdentity, address: string, renames: 
  * - `pinned`: the address is pinned to this authority;
  * - `renamed`: the authority is pinned under another address of the same
  *   account, and its verified rename chain names both (`now`: where it is);
- * - `changed`: the list holds another authority for the address, or names
- *   this authority elsewhere without a chain that covers both;
+ * - `changed`: the list holds another authority for the address; or a
+ *   person it knows had the address and someone else has it now (`now`:
+ *   where that person is, when known); or it names this authority elsewhere
+ *   without a chain that covers both; or it is an identity the user replaced;
  * - `unknown`: nobody the list knows (trusted on first use, as before).
  */
 export type PinnedVerdict =
   | { kind: 'pinned' }
   | { kind: 'renamed'; now: string }
-  | { kind: 'changed' }
+  | { kind: 'changed'; now?: string }
   | { kind: 'unknown' }
 
 export async function pinnedVerdict(me: DriveIdentity, address: string, authority: string): Promise<PinnedVerdict> {
   const pins = await pinStore(me)
   const match = await lookupIdentityPin(pins.pins, address, authority)
-  if (match.kind === 'pinned') return match.sameAuthority ? { kind: 'pinned' } : { kind: 'changed' }
-  if (match.kind === 'replaced') return { kind: 'changed' }
-  if (match.kind !== 'renamed') return { kind: 'unknown' }
-  // The same account under another of its names: its chain must name both.
+  switch (match.kind) {
+    case 'pinned':
+      return match.sameAuthority ? { kind: 'pinned' } : { kind: 'changed' }
+    case 'returned':
+      // A detached pin back at its address: the same person only with its authority.
+      return match.pin.authorityPublicKey === authority ? { kind: 'pinned' } : { kind: 'changed' }
+    case 'moved': {
+      // Someone the list knows had this address and is elsewhere now: whoever
+      // holds it is another person (a freed name taken), never trusted silently.
+      const now = match.pins.find((moved) => moved.now)?.now ?? undefined
+      return now ? { kind: 'changed', now } : { kind: 'changed' }
+    }
+    case 'replaced':
+      return { kind: 'changed' }
+    case 'new':
+      return { kind: 'unknown' }
+    case 'renamed':
+      return renamedVerdict(address, authority, match.pin.account)
+  }
+}
+
+/** An authority pinned under another address: the same account only with a chain naming both. */
+async function renamedVerdict(address: string, authority: string, pinnedAt: string): Promise<PinnedVerdict> {
   const renames = await fetchRenames(address).catch(() => null)
   if (!renames || renames.version !== 1 || renames.unavailable) return { kind: 'changed' }
-  const [asked, pinned] = await Promise.all([foldAddress(address), foldAddress(match.pin.account)])
+  const [asked, pinned] = await Promise.all([foldAddress(address), foldAddress(pinnedAt)])
   for (const entry of renames.chains) {
     if (entry.authorityPublicKey !== authority) continue
     try {

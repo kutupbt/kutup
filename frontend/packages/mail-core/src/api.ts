@@ -163,7 +163,7 @@ export interface MailAccount {
    * (docs/plans/username-renames.md), which open the mail sent to them.
    */
   olderKeys: SealedMailKey[]
-  /** Every address the account has had, the current one first: none but the current one sends. */
+  /** Every address the account holds (current first, then old ones not yet freed): none but the current one sends. */
   addresses: string[]
   /** The public keys of all of them: what the account's own signatures are checked with. */
   ownPublicKeys: string[]
@@ -244,7 +244,11 @@ export function mailAccountOf(
   const primary = current?.keys.find((k) => k.primary)
   if (!current || !primary) throw new NoAddressKey()
   const earlier = rows.filter((row) => row !== current)
-  const own = new Set(rows.map((row) => fold(row.address)).filter((folded) => folded !== null))
+  // A freed name may be someone else's now: its keys only open the mail it
+  // received while it was this account's, and it is never "me". Receiving
+  // and closed names stay the account's own (it holds them).
+  const held = rows.filter((row) => row.state !== 'freed')
+  const own = new Set(held.map((row) => fold(row.address)).filter((folded) => folded !== null))
   const sealed = (row: OwnAddressRow) => (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
     masterKeyBase64: toBase64(session.masterKey),
     binding: session.envelopeBinding,
@@ -263,8 +267,8 @@ export function mailAccountOf(
       ...current.keys.filter((k) => k !== primary).map(sealed(current)),
       ...earlier.flatMap((row) => row.keys.map(sealed(row))),
     ],
-    addresses: [current.address, ...earlier.map((row) => row.address)],
-    ownPublicKeys: [primary.publicKey, ...rows.flatMap((row) => row.keys.filter((k) => k !== primary).map((k) => k.publicKey))],
+    addresses: [current.address, ...earlier.filter((row) => row.state !== 'freed').map((row) => row.address)],
+    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => row.keys.filter((k) => k !== primary).map((k) => k.publicKey))],
     isOwnAddress: (candidate) => {
       if (!candidate) return false
       const folded = fold(candidate)

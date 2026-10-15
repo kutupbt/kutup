@@ -56,7 +56,11 @@ export class UnverifiedKeys extends Error {
  * name someone else took, or a server handing out keys of its own.
  */
 export class KeysIdentityChanged extends UnverifiedKeys {
-  constructor(address: string) {
+  constructor(
+    address: string,
+    /** Where the person met at this address is now, when the list knows (a name taken by someone else). */
+    readonly now?: string,
+  ) {
     super(address)
     this.message = `the keys of ${address} are not signed by the account met before`
   }
@@ -72,7 +76,7 @@ async function pinned(keys: AddressKeys): Promise<AddressKeys> {
   const session = getSession()
   if (!session?.username) return keys
   const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, keys.authorityPublicKey)
-  if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address)
+  if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address, verdict.now)
   return keys
 }
 

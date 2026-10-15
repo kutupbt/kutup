@@ -265,7 +265,10 @@
     "rightToLeft": "Sağdan sola",
     "emoji": "Emoji ekle",
     "contactGroup_one": "Kişi grubu · {{count}} üye",
-    "contactGroup_other": "Kişi grubu · {{count}} üye"
+    "contactGroup_other": "Kişi grubu · {{count}} üye",
+    "addressTaken": "{{address}} artık başka birine ait, daha önce yazdığınız kişiye değil. Hiçbir şey gönderilmedi.",
+    "addressTakenNow": "{{address}} artık başka birine ait. Daha önce yazdığınız kişi artık {{now}}. Hiçbir şey gönderilmedi.",
+    "writeTo": "{{address}} adresine yaz"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
