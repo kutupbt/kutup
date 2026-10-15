@@ -48,6 +48,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_RENAME_CHECKS_PER_15_MIN", 30),
     ("RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN", 60),
     ("RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN", 120),
+    ("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120),
     ("RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN", 600),
     ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
@@ -518,6 +519,14 @@ pub static RENAME_LOOKUPS: LazyLock<RateLimiter> = LazyLock::new(|| {
 });
 
 /// Fetches of renames from one peer: 120 a minute per peer, whoever asks.
+/// Accounts asked of one peer by id: 120 a minute per peer, whoever asks.
+pub static ACCOUNT_PEER_FETCHES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+
 pub static RENAME_PEER_FETCHES: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN", 120) as usize,
@@ -630,6 +639,7 @@ pub fn spawn_cleanup() {
             RENAME_CHECKS.cleanup();
             RENAME_LOOKUPS.cleanup();
             RENAME_PEER_FETCHES.cleanup();
+            ACCOUNT_PEER_FETCHES.cleanup();
             RENAME_ANNOUNCES.cleanup();
             LOGIN.cleanup();
             REGISTRATION_CODE_CHECK.cleanup();

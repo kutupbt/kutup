@@ -1075,6 +1075,10 @@ fn build_router(state: AppState) -> Router {
             get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
+            "/api/users/by-id/:accountId",
+            get(handlers::accounts::by_id).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
             "/api/users/drive-identities",
             post(identity::drive_identities)
                 .route_layer(from_fn(middleware::rate_limit_user_lookup)),
@@ -1833,6 +1837,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/drive/accounts/renames",
             post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/fed/drive/accounts/:accountId",
+            get(handlers::accounts::fed_by_id)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
             "/api/fed/drive/users/:username",

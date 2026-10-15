@@ -1172,6 +1172,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     .await?;
     Ok(Json(MeResponse {
         id: id.to_string(),
+        account_id: id.to_string(),
+        server: state.config.chat_server_name.clone(),
         address,
         envelope_binding,
         username,
@@ -1319,6 +1321,8 @@ pub async fn get_user_by_address(
     let domain = state.config.chat_server_name.as_str();
     Ok(Json(UserLookupResponse {
         user_id: id.to_string(),
+        server: domain.to_owned(),
+        account_id: id.to_string(),
         account: format!("{username}@{domain}"),
         drive_hpke_public_key: public_key,
         account_incarnation_id: incarnation_id,

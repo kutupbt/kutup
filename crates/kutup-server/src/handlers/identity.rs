@@ -156,6 +156,10 @@ pub struct DriveIdentitiesRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveIdentity {
+    /// Who it is: the server and the permanent account id.
+    server: String,
+    account_id: String,
+    /// The address asked for, server-asserted: a lookup handle only.
     account: String,
     account_authority_public_key: String,
     drive_hpke_public_key: String,
@@ -193,8 +197,10 @@ pub async fn drive_identities(
         .filter(|username| !username.is_empty() && !username.contains('@'))
         .map(str::to_owned)
         .collect();
-    let rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT username, account_authority_public_key, public_key, drive_signing_public_key, drive_key_binding
+    type Row = (uuid::Uuid, String, String, String, String, Option<String>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, username, account_authority_public_key, public_key, drive_signing_public_key,
+                drive_key_binding
            FROM users
           WHERE id IN (SELECT kutup_current_user(name) FROM unnest($1::text[]) AS name)
             AND is_active AND NOT is_first_login",
@@ -205,7 +211,9 @@ pub async fn drive_identities(
     let identities: Vec<DriveIdentity> = rows
         .into_iter()
         .map(
-            |(username, authority, hpke, signing, binding)| DriveIdentity {
+            |(id, username, authority, hpke, signing, binding)| DriveIdentity {
+                server: state.config.chat_server_name.clone(),
+                account_id: id.to_string(),
                 account: format!("{username}{suffix}"),
                 account_authority_public_key: authority,
                 drive_hpke_public_key: hpke,

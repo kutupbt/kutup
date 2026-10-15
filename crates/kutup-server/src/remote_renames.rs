@@ -465,7 +465,7 @@ fn renamed(entries: Vec<ChainEntry>) -> AppError {
 static FETCHES: LazyLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(Default::default);
 
-fn fetch_lock(folded: &str) -> Arc<tokio::sync::Mutex<()>> {
+pub(crate) fn fetch_lock(folded: &str) -> Arc<tokio::sync::Mutex<()>> {
     let mut fetches = FETCHES.lock().unwrap();
     fetches.retain(|_, lock| Arc::strong_count(lock) > 1);
     fetches.entry(folded.to_owned()).or_default().clone()

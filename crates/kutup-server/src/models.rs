@@ -113,6 +113,10 @@ pub struct RefreshResponse {
 #[serde(rename_all = "camelCase")]
 pub struct MeResponse {
     pub id: String,
+    /// The account's permanent id (= `id`), with `server` what names the
+    /// account everywhere (docs/plans/account-ids.md).
+    pub account_id: String,
+    pub server: String,
     /// The account's Kutup address (`username@<domain>`): its identity.
     pub address: String,
     /// What the account's envelopes carry now (docs/plans/account-identity.md).
@@ -166,6 +170,11 @@ pub struct TotpCodeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UserLookupResponse {
     pub user_id: String,
+    /// Who it is: the server and the permanent account id. The address is
+    /// what was asked for, server-asserted: a lookup handle, never a label
+    /// to keep on a pinned account (docs/plans/account-ids.md).
+    pub server: String,
+    pub account_id: String,
     pub account: String,
     pub drive_hpke_public_key: String,
     pub account_incarnation_id: String,

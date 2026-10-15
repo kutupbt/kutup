@@ -57,8 +57,11 @@ pub struct RemoteDriveUserQuery {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteDriveUserResponse {
+    /// The address asked for, server-asserted: a lookup handle.
     pub username: String,
     pub server: String,
+    /// Who it is: the permanent account id on `server`.
+    pub account_id: String,
     pub account: String,
     pub drive_hpke_public_key: String,
     pub account_incarnation_id: String,
@@ -420,6 +423,7 @@ pub async fn fetch_remote_user(
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote Drive user"))?;
     // Another spelling of the asked name is the same account (one per
     // folded name); the answer's spelling is the one it goes by.
+    crate::account_ids::from_peer(server, &remote.account_id)?;
     if kutup_crypto::names::fold(&remote.username) != kutup_crypto::names::fold(username)
         || remote.server != server
         || remote.account != format!("{}@{server}", remote.username)
@@ -589,16 +593,16 @@ pub async fn get_user(
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
         // Any spelling finds the account; the answer names it as stored.
-        type Row = (String, String, String, String, String, Option<String>);
+        type Row = (Uuid, String, String, String, String, String, Option<String>);
         let identity: Option<Row> = sqlx::query_as(
-            "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
+            "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
                     account_authority_public_key, drive_key_binding
              FROM users WHERE id = kutup_current_user($1) AND is_active = true",
         )
         .bind(username)
         .fetch_optional(&state.pool)
         .await?;
-        let Some((stored, hpke_key, incarnation_id, signing_key, authority_key, binding)) =
+        let Some((id, stored, hpke_key, incarnation_id, signing_key, authority_key, binding)) =
             identity
         else {
             let error = crate::account_names::renamed_or(
@@ -618,6 +622,7 @@ pub async fn get_user(
                 account: format!("{}@{}", stored, federation.server_name()),
                 username: stored,
                 server: federation.server_name().to_owned(),
+                account_id: id.to_string(),
                 drive_hpke_public_key: hpke_key,
                 account_incarnation_id: incarnation_id,
                 drive_signing_public_key: signing_key,
