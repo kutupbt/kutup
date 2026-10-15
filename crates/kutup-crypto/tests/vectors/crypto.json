@@ -273,13 +273,18 @@
     }
   },
   "safetyNumber": {
-    "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V2): the two account authorities only, sorted; no address, so a rename keeps the number and a new incarnation changes it.",
+    "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V3): Signal's fingerprint v2 (5200 x SHA-512 per side, 2 x 30 digits, CombinedFingerprints QR) with the stable id AccountRef::bytes() and the identity key the raw 32-byte Ed25519 account authority (no type prefix). A rename keeps the number; a reset or another account changes it.",
+    "localAccount": "aci:3f1c6a52-8d0e-4b7a-9c21-5e4d8f0a1b2c@kutup.dev",
     "localAuthority": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+    "peerAccount": "aci:9a7b5c3d-1e2f-4a6b-8c0d-2e4f6a8b0c1d@example.org",
     "peerAuthority": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
-    "fingerprint": "43100 60160 13086 23180 20270 59288 35528 49059 03664 39188 29452 02985 02153 55835 41468 60697",
-    "qrPayload": "kutup://verify/v2/a3V0dXAvc2FmZXR5LW51bWJlci92MgABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC",
-    "newIncarnationAuthority": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
-    "newIncarnationFingerprint": "60342 36479 01365 56605 13534 07493 09178 05266 64749 53932 27342 28063 17039 28405 00055 43270"
+    "fingerprint": "39802 50733 77782 23437 02321 89028 75625 06939 41895 32506 06355 36566",
+    "localQrPayload": "kutup://verify/v3/CAISIgog32uBQJq9SEEwbV47w0E2U0Ge-o0themGUR-FI5nEGrUaIgog5M3h36kiZrrPm9zhy-fnTnPXNBoss2B90zvRA3p2XQ4",
+    "peerQrPayload": "kutup://verify/v3/CAISIgog5M3h36kiZrrPm9zhy-fnTnPXNBoss2B90zvRA3p2XQ4aIgog32uBQJq9SEEwbV47w0E2U0Ge-o0themGUR-FI5nEGrU",
+    "resetAuthority": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+    "resetFingerprint": "39802 50733 77782 23437 02321 89028 91833 72749 35456 55043 87794 66986",
+    "otherAccount": "aci:c2d4e6f8-0a1b-4c3d-9e5f-7a9b1c3d5e7f@example.org",
+    "otherAccountFingerprint": "39802 50733 77782 23437 02321 89028 72465 55207 07462 66039 34446 08057"
   },
   "accountRename": {
     "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
