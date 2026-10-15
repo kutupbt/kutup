@@ -1129,6 +1129,30 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
     // The two people, as every share names them: server and account id.
     let alice_ref = AccountRef::new("a.test", owner_user_id).unwrap();
     let bob_ref = AccountRef::new("b.test", remote_user["accountId"].as_str().unwrap()).unwrap();
+    // The same account by its id, asked of B through A (federation, never
+    // a URL from the query): the address now and the same keys.
+    let by_id = json_response(
+        c.get(format!("{a}/api/users/by-id/{}", bob_ref.account_id))
+            .query(&[("server", "b.test")])
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "Drive account by id across servers",
+    );
+    assert_eq!(by_id["server"], "b.test");
+    assert_eq!(by_id["accountId"], bob_ref.account_id.as_str());
+    assert_eq!(by_id["account"], "bobfed@b.test");
+    assert_eq!(by_id["driveKeyBinding"], remote_user["driveKeyBinding"]);
+    let nobody = Uuid::new_v4();
+    assert_eq!(
+        c.get(format!("{a}/api/users/by-id/{nobody}"))
+            .query(&[("server", "b.test")])
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     let recipient_hpke = STANDARD
         .decode(remote_user["driveHpkePublicKey"].as_str().unwrap())
         .unwrap();

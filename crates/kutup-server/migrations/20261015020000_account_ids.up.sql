@@ -2,6 +2,11 @@
 -- are keyed by their server and account id (`users.id`), never their name.
 -- Before the wipe: nothing here is kept across it.
 
+-- The break-glass admin by its account id, recorded when it is made (its
+-- name is configuration; the protection follows the account).
+ALTER TABLE users ADD COLUMN is_break_glass boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX users_one_break_glass ON users ((true)) WHERE is_break_glass;
+
 -- An account id is never given again once its account is deleted.
 CREATE TABLE retired_account_ids (
     id         uuid PRIMARY KEY,

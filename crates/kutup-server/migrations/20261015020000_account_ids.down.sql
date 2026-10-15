@@ -19,3 +19,5 @@ ALTER TABLE drive_profile_keys
         CHECK (length(peer_account) >= 3 AND length(peer_account) <= 320),
     ADD PRIMARY KEY (user_id, direction, peer_account);
 DROP TABLE retired_account_ids;
+DROP INDEX IF EXISTS users_one_break_glass;
+ALTER TABLE users DROP COLUMN is_break_glass;

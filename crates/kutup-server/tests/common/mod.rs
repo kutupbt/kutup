@@ -358,8 +358,57 @@ fn register_full(
     username: String,
     code: Option<&str>,
 ) -> Result<User, (StatusCode, Value)> {
+    sign_up(c, base, binding, username, code, None, |_| {}).0
+}
+
+/// What a sign-up was given and sent: its key binding, and the account id
+/// register/start minted with its proof (to send again, as a client would
+/// that kept them).
+#[allow(dead_code)]
+pub struct SignUp {
+    pub key_binding: String,
+    pub account_id: String,
+    pub account_id_proof: String,
+}
+
+/// A sign-up as the apps make it, under `key_binding` (a new one when none),
+/// its body changed by `tweak` before it is sent.
+pub fn sign_up(
+    c: &Client,
+    base: &str,
+    binding: bool,
+    username: String,
+    code: Option<&str>,
+    key_binding: Option<String>,
+    tweak: impl FnOnce(&mut Value),
+) -> (Result<User, (StatusCode, Value)>, Option<SignUp>) {
+    let mut sent = None;
+    let user = sign_up_sent(
+        c,
+        base,
+        binding,
+        username,
+        code,
+        key_binding,
+        tweak,
+        &mut sent,
+    );
+    (user, sent)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_up_sent(
+    c: &Client,
+    base: &str,
+    binding: bool,
+    username: String,
+    code: Option<&str>,
+    key_binding: Option<String>,
+    tweak: impl FnOnce(&mut Value),
+    sent: &mut Option<SignUp>,
+) -> Result<User, (StatusCode, Value)> {
     let mut rng = rand::thread_rng();
-    let key_binding = uuid::Uuid::new_v4().to_string();
+    let key_binding = key_binding.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let password = PASSWORD;
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -401,6 +450,12 @@ fn register_full(
         )
         .unwrap()));
     }
+    *sent = Some(SignUp {
+        key_binding: key_binding.clone(),
+        account_id: account_id.clone(),
+        account_id_proof: started["accountIdProof"].as_str().unwrap().to_owned(),
+    });
+    tweak(&mut body);
     // Sign-up answers the session, as a sign-in does.
     let r = c
         .post(format!("{base}/api/auth/register"))
@@ -424,7 +479,7 @@ fn register_full(
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(id, account_id, "the account is the id minted for it");
+    assert_eq!(id, body["accountId"], "the account is the id it was given");
     let account = format!("{username}@{}", server_domain(c, base));
     Ok(User {
         id,

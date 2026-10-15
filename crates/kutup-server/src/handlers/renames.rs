@@ -202,10 +202,10 @@ pub async fn rename(
     let user_id = trusted_uuid(&user.user_id)?;
     let server = state.config.chat_server_name.to_ascii_lowercase();
     let mut tx = state.pool.begin().await?;
-    type Account = (String, String, String, bool);
-    let (username, incarnation, authority, first_login): Account = sqlx::query_as(
+    type Account = (String, String, String, bool, bool);
+    let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
         "SELECT COALESCE(username, ''), account_incarnation_id, account_authority_public_key,
-                is_first_login
+                is_first_login, is_break_glass
            FROM users WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
@@ -217,10 +217,7 @@ pub async fn rename(
             .with_details(json!({ "code": "setupRequired" })));
     }
     grants::take_for_session(&mut *tx, &req.grant, Purpose::Rename, &user).await?;
-    let break_glass = &state.config.break_glass_admin_username;
-    if !break_glass.is_empty()
-        && kutup_crypto::names::fold(break_glass) == kutup_crypto::names::fold(&username)
-    {
+    if break_glass {
         return Err(
             AppError::forbidden("the break-glass account keeps its name")
                 .with_details(json!({ "code": "breakGlassAccount" })),
@@ -329,7 +326,7 @@ pub async fn rename(
     let found = match account_names::available(
         &mut tx,
         &server,
-        break_glass,
+        &state.config.break_glass_admin_username,
         &new_name,
         Some((user_id, &incarnation)),
     )
