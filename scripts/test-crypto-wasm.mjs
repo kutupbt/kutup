@@ -249,6 +249,10 @@ assert.throws(
   /authentication failed/,
 )
 
+// People by their accounts (docs/plans/account-ids.md): server and id.
+const ALICE = { server: 'a.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+const BOB = { server: 'b.test', accountId: '8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b' }
+const BOB_HERE = { server: 'a.test', accountId: BOB.accountId }
 const senderIdentity = crypto.deriveAccountIdentityKeys(
   Buffer.alloc(32, 1).toString('base64'),
 )
@@ -261,9 +265,9 @@ const namedShareEnvelope = crypto.sealNamedShareEnvelope(
   recipientIdentity.driveHpkePublicKey,
   '11111111-1111-4111-8111-111111111111',
   3,
-  'alice@a.test',
+  ALICE,
   senderIdentity.incarnationId,
-  'bob@b.test',
+  BOB,
   recipientIdentity.incarnationId,
 )
 assert.equal(
@@ -273,9 +277,9 @@ assert.equal(
     recipientIdentity.driveHpkePrivateKey,
     '11111111-1111-4111-8111-111111111111',
     3,
-    'alice@a.test',
+    ALICE,
     senderIdentity.incarnationId,
-    'bob@b.test',
+    BOB,
     recipientIdentity.incarnationId,
   ),
   collectionKey,
@@ -287,9 +291,9 @@ assert.throws(
     recipientIdentity.driveHpkePrivateKey,
     '11111111-1111-4111-8111-111111111111',
     4,
-    'alice@a.test',
+    ALICE,
     senderIdentity.incarnationId,
-    'bob@b.test',
+    BOB,
     recipientIdentity.incarnationId,
   ),
   /authentication failed/,
@@ -582,17 +586,17 @@ assert.equal(
   const fileId = '22222222-2222-4222-8222-222222222222'
   const sealed = crypto.sealFileShareEnvelope(
     Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveHpkePublicKey,
-    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+    fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   const open = (file, generation) => crypto.openFileShareEnvelope(
     sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
-    file, generation, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+    file, generation, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   assert.equal(open(fileId, 2), Buffer.alloc(32, 0x66).toString('base64'))
   assert.throws(() => open(fileId, 3))
   assert.throws(() => crypto.openNamedShareEnvelope(
     sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
-    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+    fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   ))
 }
 
@@ -853,18 +857,22 @@ assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.bindi
 assert.throws(() => crypto.sealMailName(nameVectors.masterKey, 'alice@kutup.dev', 'label', nameVectors.id, 5, nameVectors.name))
 
 // Drive identity (docs/plans/drive-identity-pins.md): the Drive key binding
-// names the address (a statement to others); the pin list binds the key binding.
+// names the account, its server and id (a statement to others); the pin list
+// binds the key binding.
 const identityVectors = JSON.parse(
   await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v2.json`, 'utf8'),
 )
 const iv = identityVectors
-assert.equal(crypto.signDriveKeyBinding(iv.masterKey, iv.account), iv.driveKeyBinding)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), true)
-// Another address, a swapped recipient key or signer, another authority: refused.
-assert.equal(crypto.verifyDriveKeyBinding('bob@kutup.dev', iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
+const ivAccount = crypto.parseAccountRef(iv.account)
+assert.equal(crypto.signDriveKeyBinding(iv.masterKey, ivAccount), iv.driveKeyBinding)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), true)
+// Another account, a swapped recipient key or signer, another authority: refused.
+assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
+// An address in place of an account is refused outright.
+assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, 'alice@kutup.dev'))
 assert.deepEqual(crypto.openIdentityPins(iv.masterKey, iv.binding, iv.sealed), { value: iv.pins, revision: iv.revision })
 for (const refused of iv.refused) {
   assert.throws(() => crypto.openIdentityPins(iv.masterKey, refused.binding, refused.sealed), undefined, refused.case)
