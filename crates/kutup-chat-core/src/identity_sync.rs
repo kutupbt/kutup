@@ -187,22 +187,7 @@ impl IdentityPinsSync {
             if list == before {
                 return Ok(());
             }
-            // A time, above every revision seen (docs/plans/drive-identity-pins.md).
-            let next = now_seconds
-                .saturating_mul(1000)
-                .max(revision + 1)
-                .max(self.highest_seen + 1);
-            let sealed =
-                identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
-            let write = IdentityPinsWrite {
-                base_revision: revision,
-                envelope: STANDARD.encode(sealed),
-                revision: next,
-            };
-            self.cache = None;
-            if transport.store_identity_pins(&write).await? {
-                self.highest_seen = next;
-                self.cache = Some((next, list));
+            if self.store(transport, revision, list, now_seconds).await? {
                 return Ok(());
             }
         }
@@ -213,6 +198,35 @@ impl IdentityPinsSync {
 }
 
 impl IdentityPinsSync {
+    /// Seals `list` at a revision above every one seen and stores it on top
+    /// of `revision`; false when another app stored a list first.
+    async fn store(
+        &mut self,
+        transport: &dyn ChatTransport,
+        revision: u64,
+        list: IdentityPinsV1,
+        now_seconds: u64,
+    ) -> Result<bool> {
+        // A time, above every revision seen (docs/plans/drive-identity-pins.md).
+        let next = now_seconds
+            .saturating_mul(1000)
+            .max(revision + 1)
+            .max(self.highest_seen + 1);
+        let sealed = identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
+        let write = IdentityPinsWrite {
+            base_revision: revision,
+            envelope: STANDARD.encode(sealed),
+            revision: next,
+        };
+        self.cache = None;
+        if transport.store_identity_pins(&write).await? {
+            self.highest_seen = next;
+            self.cache = Some((next, list));
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// Moves the pin of `authority` along its verified rename `chain`
     /// (`identity_pins::apply_rename`) and stores the list when it changed:
     /// the account's other apps then know the peer by its new address too.
@@ -235,20 +249,7 @@ impl IdentityPinsSync {
             if !applied.changed {
                 return Ok(());
             }
-            let next = now_seconds
-                .saturating_mul(1000)
-                .max(revision + 1)
-                .max(self.highest_seen + 1);
-            let sealed =
-                identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
-            let write = IdentityPinsWrite {
-                base_revision: revision,
-                envelope: STANDARD.encode(sealed),
-            };
-            self.cache = None;
-            if transport.store_identity_pins(&write).await? {
-                self.highest_seen = next;
-                self.cache = Some((next, list));
+            if self.store(transport, revision, list, now_seconds).await? {
                 return Ok(());
             }
         }
