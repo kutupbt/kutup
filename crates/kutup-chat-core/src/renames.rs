@@ -462,4 +462,101 @@ pub(crate) mod tests {
         assert_eq!(aliases.resolve("ada_king@kutup.test"), "ada_l@kutup.test");
         assert_eq!(aliases.resolve("grace@kutup.test"), "grace@kutup.test");
     }
+
+    /// Every record a peer's address keys, classified for a rename
+    /// (`Session::move_peer`): a field added to [`Pending`] does not compile
+    /// here until someone decides whether it moves with the peer.
+    #[test]
+    fn every_store_is_classified_for_a_rename() {
+        let Pending {
+            // Moved to the new address in the same transaction.
+            sessions: _,
+            identities: _,
+            manifest_trust: _,
+            manifest_history: _,
+            contacts: _,
+            peer_profiles: _,
+            delete_peer_records: _,
+            // History: kept under the address it was written with, read
+            // through the rename aliases (timeline, search, views, controls).
+            messages: _,
+            sent_messages: _,
+            mls_messages: _,
+            delete_messages_for_peers: _,
+            delete_message_ids: _,
+            delete_sent_message_ids: _,
+            delete_mls_message_ids: _,
+            // Derived from history, rebuilt after a move; holds the alias log.
+            index_values: _,
+            // Queued sends: resolved through the aliases when delivered.
+            outbox: _,
+            inbound: _,
+            // MLS state is frozen (docs/plans/username-renames.md).
+            mls_outbox: _,
+            mls_state: _,
+            // Reserved for groups, unused for 1:1.
+            sender_keys: _,
+            // This device's own keys and counters: no peer address.
+            local_identity: _,
+            pre_keys: _,
+            signed_pre_keys: _,
+            kyber_pre_keys: _,
+            kyber_seen: _,
+            local_profile: _,
+            prekey_upload: _,
+            prekey_rotation: _,
+            repair_limits: _,
+            delete_signed_pre_keys: _,
+            delete_kyber_pre_keys: _,
+            registration_upload: _,
+            last_cursor: _,
+            last_sent_seq: _,
+        } = Pending::default();
+    }
+
+    /// The SQLite tables, classified as [`every_store_is_classified_for_a_rename`]
+    /// does the staged fields: a new table fails here until it is.
+    #[cfg(feature = "sqlite")]
+    #[test]
+    fn every_sqlite_table_is_classified_for_a_rename() {
+        let classified = [
+            // Moved.
+            "sessions",
+            "identities",
+            "manifest_trust",
+            "manifest_history",
+            "contacts",
+            "peer_profiles",
+            // History, read through the aliases; the index holds the log.
+            "messages",
+            "sent_messages",
+            "mls_messages",
+            "index_values",
+            "outbox",
+            "inbound_envelopes",
+            // Frozen MLS, reserved group keys.
+            "mls_state",
+            "mls_outbox",
+            "sender_keys",
+            // No peer address.
+            "schema_migrations",
+            "local_identity",
+            "pre_keys",
+            "signed_pre_keys",
+            "kyber_pre_keys",
+            "kyber_base_keys_seen",
+            "pending_prekey_upload",
+            "prekey_rotation",
+            "repair_limits",
+            "pending_chat_registration",
+            "local_profile",
+            "meta",
+        ];
+        let db = crate::SqliteChatDb::open_in_memory().unwrap();
+        let mut tables = db.table_names();
+        tables.sort();
+        let mut expected: Vec<String> = classified.iter().map(|t| t.to_string()).collect();
+        expected.sort();
+        assert_eq!(tables, expected, "classify every new table for a rename");
+    }
 }

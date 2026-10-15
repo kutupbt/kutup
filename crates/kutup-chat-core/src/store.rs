@@ -620,8 +620,8 @@ impl IdentityKeyStore for IdentityAdapter {
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
-        self.stored_identity(&aliased(&self.aliases.borrow(), &address.to_string()))
-            .await
+        let key = aliased(&self.aliases.borrow(), &address.to_string());
+        self.stored_identity(&key).await
     }
 }
 

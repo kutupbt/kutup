@@ -215,7 +215,7 @@ pub fn verify_bundle_response(
             "bundle routing identity does not match its account manifest".into(),
         ));
     }
-    match_expected_account(expected_peer, &manifest.account)?;
+    account_of_peer(expected_peer, prior, &manifest.account)?;
 
     if response.devices.len() != manifest.devices.len() {
         return Err(ChatError::Trust(

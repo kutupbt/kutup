@@ -68,7 +68,9 @@ fn pair() -> Pair {
     block_on(crate::timeline::ensure_built(&*bob_db)).unwrap();
     let bob_address = ChatAddress::from_sender("bob@kutup.test", 1).unwrap();
     let bob_registration = bob.registration().unwrap().registration_id;
-    block_on(ada.establish(&bob_address, &bundle(&bob), &mut rng)).unwrap();
+    let bob_bundle = bundle(&bob);
+    block_on(bob.complete_registration(1)).unwrap();
+    block_on(ada.establish(&bob_address, &bob_bundle, &mut rng)).unwrap();
     let hello = ChatContent::text_with_id("m1", "2026-10-15T10:00:00Z", 1, "hello");
     let envelope = block_on(ada.encrypt(&bob_address, bob_registration, &hello, &mut rng)).unwrap();
     let from_ada = ChatAddress::from_sender(OLD, 1).unwrap();
@@ -221,4 +223,29 @@ fn a_move_that_fails_leaves_everything_where_it_was() {
     assert_eq!(rename_lines(&bob_db), 0);
     // Nothing staged survives into the next commit.
     assert!(bob.store.with_pending(|pending| pending.is_empty()));
+}
+
+#[test]
+fn a_crash_after_the_move_is_indexed_on_the_next_open() {
+    let Pair {
+        mut bob, bob_db, ..
+    } = pair();
+    let trust = block_on(bob.manifest_trust(OLD)).unwrap().unwrap();
+    let found = crate::renames::select(&trust, &chains(&identity(1), &[OLD, NEW]))
+        .unwrap()
+        .unwrap();
+    // The move commits; the device stops before the timeline is rebuilt.
+    assert!(
+        block_on(bob.stage_peer_move(&found.from, &found.to, found.known, &[1], true)).unwrap()
+    );
+    block_on(bob.store.commit()).unwrap();
+    let stale = block_on(crate::timeline::load_directory(&*bob_db))
+        .unwrap()
+        .unwrap();
+    assert_eq!(stale.version, 0);
+    // Reopened: indexed again, the history in the new thread.
+    let reopened = block_on(Session::open(Rc::clone(&bob_db), "bob@kutup.test", 1)).unwrap();
+    assert_eq!(conversations(&bob_db), vec![format!("direct:{NEW}")]);
+    assert_eq!(reopened.current_peer(OLD), NEW);
+    assert_eq!(rename_lines(&bob_db), 1);
 }

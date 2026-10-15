@@ -267,6 +267,23 @@ impl SqliteChatDb {
 
     /// An ephemeral in-memory store — for tests and throwaway sessions. State
     /// lives only as long as the returned value.
+    /// The tables this store has (tests: every one is classified for a
+    /// rename, `renames.rs`).
+    #[cfg(test)]
+    pub(crate) fn table_names(&self) -> Vec<String> {
+        let conn = self.conn.borrow();
+        let mut statement = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|name| name.unwrap())
+            .collect()
+    }
+
     pub fn open_in_memory() -> Result<Self> {
         Self::from_connection(db(Connection::open_in_memory())?)
     }
