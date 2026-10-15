@@ -494,6 +494,7 @@ mod tests {
             name_revision: 1,
             epoch_statement: String::new(),
             epoch_statement_hash: String::new(),
+            owner_server: None,
             owner_account: None,
             owner_incarnation_id: None,
             owner_drive_signing_public_key: None,

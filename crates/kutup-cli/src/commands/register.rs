@@ -100,17 +100,24 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     .context("seal Drive private-key envelope")?;
     let phrase = mnemonic::encode(&recovery_entropy).context("encode mnemonic")?;
 
-    // The address the account will have here, which its authority vouches
-    // for together with its Drive keys.
-    let server_name = settings.chat.server_name;
-    let drive_key_binding = kutup_crypto::drive_key_binding::sign(
-        &account_identity,
-        &format!("{username}@{server_name}"),
-    )
-    .context("sign the Drive key binding")?;
+    // The account the server minted for this sign-up (its permanent id),
+    // which its authority vouches for together with its Drive keys
+    // (docs/plans/account-ids.md).
+    let (Some(account_id), Some(account_id_proof)) =
+        (started.account_id.clone(), started.account_id_proof.clone())
+    else {
+        anyhow::bail!("the server gave no account id for the sign-up");
+    };
+    let person =
+        kutup_crypto::account_ref::AccountRef::new(&settings.chat.server_name, &account_id)
+            .context("the server's account id")?;
+    let drive_key_binding = kutup_crypto::drive_key_binding::sign(&account_identity, &person)
+        .context("sign the Drive key binding")?;
 
     let req = RegisterRequest {
         username: username.clone(),
+        account_id,
+        account_id_proof,
         registration_code,
         key_binding: key_binding.clone(),
         opaque_record: b64.encode(&registered.record),

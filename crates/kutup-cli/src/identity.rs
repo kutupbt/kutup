@@ -8,6 +8,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
 use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate, Recorded};
@@ -70,6 +71,9 @@ pub struct Claimed<'a> {
 
 /// A person as their server describes them.
 pub struct Published {
+    /// Who they are: their server and permanent account id.
+    pub person: AccountRef,
+    /// Shown only: their address now (server-asserted).
     pub account: String,
     pub authority: String,
     pub hpke: String,
@@ -77,9 +81,10 @@ pub struct Published {
     pub binding: Option<String>,
 }
 
-/// This account's address and keys.
+/// This account and its keys.
 pub struct Me {
-    pub account: String,
+    /// Who this account is: its server and permanent account id.
+    pub person: AccountRef,
     /// The account's key binding, which its own seals (the pin list) bind.
     binding: String,
     pub identity: AccountIdentityKeysV1,
@@ -95,9 +100,9 @@ impl Me {
             .as_slice()
             .try_into()
             .context("master key must be 32 bytes")?;
-        let server = ctx.client.settings()?.chat.server_name;
+        let person = ctx.session.person()?;
         Ok(Me {
-            account: format!("{}@{server}", ctx.session.username),
+            person,
             binding: ctx.session.binding().to_string(),
             identity: AccountIdentityKeysV1::derive(&master_key)?,
             master_key,
@@ -131,10 +136,12 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
     let (username, server) = account
         .split_once('@')
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
-    let local = me.account.split_once('@').map(|(_, s)| s) == Some(server);
+    let local = me.person.server == server;
     let person = if local {
         let user = ctx.client.get_user_by_address(account)?;
         Published {
+            person: AccountRef::new(&user.server, &user.account_id)
+                .context("the lookup answered no account")?,
             account: user.account,
             authority: user.account_authority_public_key,
             hpke: user.drive_hpke_public_key,
@@ -144,6 +151,8 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
     } else {
         let user = ctx.client.get_fed_pubkey(username, server)?;
         Published {
+            person: AccountRef::new(&user.server, &user.account_id)
+                .context("the lookup answered no account")?,
             account: user.account,
             authority: user.account_authority_public_key,
             hpke: user.drive_hpke_public_key,
@@ -151,7 +160,7 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
             binding: user.drive_key_binding,
         }
     };
-    if person.account != account {
+    if person.account != account || person.person.server != server {
         bail!("the lookup for {account} answered for {}", person.account);
     }
     Ok(person)
@@ -175,7 +184,7 @@ fn bound(person: &Published) -> bool {
     ) else {
         return false;
     };
-    drive_key_binding::verify(&person.account, &authority, &hpke, &signing, &binding).is_ok()
+    drive_key_binding::verify(&person.person, &authority, &hpke, &signing, &binding).is_ok()
 }
 
 // ------------------------------------------------------------------ pins
@@ -306,10 +315,11 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) ->
 /// How far `account`'s `claimed` keys can be trusted; pins its authority the
 /// first time it is met with a valid binding.
 pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Status> {
-    if account == me.account {
+    let person = published(ctx, me, account)?;
+    // This account, under any of its names: by its id, never its name.
+    if person.person == me.person {
         return Ok(Status::Ok { verified: true });
     }
-    let person = published(ctx, me, account)?;
     if claimed.hpke.is_some_and(|k| k != person.hpke)
         || claimed.signing.is_some_and(|k| k != person.signing)
     {

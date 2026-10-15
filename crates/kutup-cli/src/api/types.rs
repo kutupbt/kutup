@@ -26,6 +26,9 @@ pub struct ChatSettings {
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {
     pub username: String,
+    /// The account id the server minted at register/start, and its proof.
+    pub account_id: String,
+    pub account_id_proof: String,
     /// A referral code, when the server's registration mode asks for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registration_code: Option<String>,
@@ -137,6 +140,9 @@ pub struct SetupTotpResponse {
 #[serde(rename_all = "camelCase")]
 pub struct UserMe {
     pub id: String,
+    /// The account's permanent id and its server.
+    pub account_id: String,
+    pub server: String,
     /// The account's Kutup address.
     #[serde(default)]
     pub address: String,
@@ -176,6 +182,10 @@ pub struct Collection {
     pub epoch_statement: String,
     #[serde(default)]
     pub epoch_statement_hash: String,
+    /// A shared folder's owner's server; with `owner_user_id`, the owner.
+    #[serde(default)]
+    pub owner_server: Option<String>,
+    /// Shown only: the owner's address now.
     #[serde(default)]
     pub owner_account: Option<String>,
     #[serde(default)]
@@ -369,8 +379,10 @@ pub struct ShareRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FederatedShareRequest {
+    /// Shown only: the recipient is their server and account id.
     pub recipient_username: String,
     pub recipient_server: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -415,6 +427,10 @@ pub struct PublicShareResponse {
 pub struct UserByAddress {
     #[serde(default)]
     pub user_id: String,
+    /// The account the address leads to now (server-asserted): its server
+    /// and permanent id.
+    pub server: String,
+    pub account_id: String,
     #[serde(default)]
     pub account: String,
     #[serde(default)]
@@ -435,6 +451,10 @@ pub struct UserByAddress {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FedPubKeyResponse {
+    /// The account: its server and permanent id; `account` is its address
+    /// now, shown only.
+    pub server: String,
+    pub account_id: String,
     #[serde(default)]
     pub account: String,
     #[serde(default)]

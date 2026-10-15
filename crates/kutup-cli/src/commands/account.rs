@@ -197,8 +197,6 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
     let statement =
         kutup_crypto::account_rename::sign(&identity, sequence, &address, &current, now_ms)
             .context("sign the rename")?;
-    let binding = kutup_crypto::drive_key_binding::sign(&identity, &current)
-        .context("sign the Drive key binding")?;
     // The new address's key comes with the rename, unless the name is one
     // taken back whose address kept its keys (the check says).
     let mail_address = if check["needsKey"] == false {
@@ -231,7 +229,6 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
             .json(&json!({
                 "grant": grant,
                 "rename": statement,
-                "driveKeyBinding": STANDARD.encode(binding),
                 "mailAddress": mail_address,
             }))
             .send()?,

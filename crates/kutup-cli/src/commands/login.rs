@@ -181,14 +181,24 @@ pub(crate) fn login_with_password(
         }
     }
 
-    // Step 5: persist the session.
+    // Step 5: who the account is: its permanent id and its server, which
+    // every share names it by (docs/plans/account-ids.md).
+    let account = Client::new(server, &resp.access_token)
+        .me()
+        .context("read the account")?;
+    if account.account_id != resp.user_id {
+        bail!("the server described another account than the one signed in");
+    }
+
+    // Step 6: persist the session.
     let mut store = Store::open(profile)?;
     let sess = Session {
         server: server.to_string(),
         name: name.to_string(),
         envelope_binding: binding,
         user_id: resp.user_id,
-        username: resp.username,
+        server_name: account.server,
+        username: account.username,
         access_token: resp.access_token,
         refresh_token: resp.refresh_token,
         master_key: b64.encode(master_key.as_slice()),

@@ -57,6 +57,22 @@ impl Client {
         super::decode_json(resp)
     }
 
+    /// An account by its permanent id, here or through its server: its
+    /// address now (shown only) and its keys.
+    pub fn get_account(
+        &self,
+        person: &kutup_crypto::account_ref::AccountRef,
+    ) -> Result<FedPubKeyResponse> {
+        let resp = self
+            .request(
+                Method::GET,
+                &format!("/users/by-id/{}", super::path_segment(&person.account_id)),
+            )
+            .query(&[("server", person.server.as_str())])
+            .send()?;
+        super::decode_json(resp)
+    }
+
     /// Fetches a remote user's federation public key. Mirrors `GetFedPubKey`.
     pub fn get_fed_pubkey(&self, username: &str, server: &str) -> Result<FedPubKeyResponse> {
         let resp = self

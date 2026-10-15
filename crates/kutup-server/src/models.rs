@@ -202,6 +202,11 @@ pub struct CollectionRow {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
+    /// A shared folder's owner: their server, with `owner_user_id` their
+    /// account id (the share's envelope names them by both).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_server: Option<String>,
+    /// Shown only: the owner's address now (server-asserted).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -546,6 +551,7 @@ mod tests {
             name_revision: 1,
             epoch_statement: "statement".into(),
             epoch_statement_hash: "11".repeat(32),
+            owner_server: None,
             owner_account: None,
             owner_incarnation_id: None,
             owner_drive_signing_public_key: None,
