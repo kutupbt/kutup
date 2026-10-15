@@ -5,11 +5,11 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { accountOfKey } from '@kutup/crypto/accountRef'
 import { useAccountName } from '@kutup/drive-core/accountName'
+import { personOfAccount, usePeople } from '@kutup/drive-core/people'
 import { addPlace, listTitle, placesOf, removePlace } from '@kutup/map/list'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { formatFileDate } from '@kutup/ui/lib/format'
-import { PersonName } from '../people/PersonName'
 import { samePlace, useAtlas } from './atlasContext'
 import { sendToChat } from './chat'
 import type { ListEntry } from './lists'
@@ -126,15 +126,11 @@ export function PlaceCard() {
 /** Who added a place, by their name now; the date alone when nobody can say. */
 function AddedBy({ addedBy, date }: { addedBy: string; date: string | null }) {
   const { t } = useTranslation()
-  const name = useAccountName(accountOfKey(addedBy))
+  const account = accountOfKey(addedBy)
+  const address = useAccountName(account)
+  const people = usePeople()
   if (!date) return null
-  return (
-    <p className="text-xs text-muted-foreground">
-      {name.data ? (
-        <PersonName account={name.data} avatar={false} format={(person) => t('list.addedBy', { name: person, date })} />
-      ) : (
-        t('list.addedOn', { date })
-      )}
-    </p>
-  )
+  // Their own profile name once they gave you their key, else their address.
+  const name = account && address.data ? personOfAccount(people.data, account, address.data).name : null
+  return <p className="text-xs text-muted-foreground">{name ? t('list.addedBy', { name, date }) : t('list.addedOn', { date })}</p>
 }
