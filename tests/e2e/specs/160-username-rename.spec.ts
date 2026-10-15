@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process'
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
-import { acceptRequest, composer, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
+import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 
 // A username rename (docs/plans/username-renames.md), end to end: Ada
 // renames herself in Account; her Chat follows on its next start; Bob's Chat
@@ -69,7 +69,8 @@ function freeName(psql: string, name: string): void {
 /** Opens the direct conversation with `address` by its link (names can be alike). */
 async function openThread(page: Page, address: string): Promise<void> {
   await page.goto(appUrl('chat', `/c/${encodeURIComponent(`direct:${address}`)}`))
-  await expect(composer(page)).toBeVisible({ timeout: 60_000 })
+  // A message request has no composer yet: wait for Chat itself.
+  await expect(page.getByRole('region', { name: 'Conversations' })).toBeVisible({ timeout: 60_000 })
 }
 
 function renameNotices(page: Page) {
