@@ -537,7 +537,7 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   // pinned account without one is a server leaving it out.
   if (!person.driveKeyBinding) return pin ? { kind: 'invalid' } : { kind: 'unproven' }
   const bound = await verifyDriveKeyBinding(
-    { server: person.server, accountId: person.accountId },
+    refOf(person),
     person.accountAuthorityPublicKey,
     person.driveHpkePublicKey,
     person.driveSigningPublicKey,
@@ -704,7 +704,7 @@ export async function acceptIdentity(me: DriveIdentity, account: string): Promis
   const person = await publishedIdentity(me, account)
   if (!person.driveKeyBinding) throw new Error('this account has not signed its keys yet')
   const bound = await verifyDriveKeyBinding(
-    { server: person.server, accountId: person.accountId },
+    refOf(person),
     person.accountAuthorityPublicKey,
     person.driveHpkePublicKey,
     person.driveSigningPublicKey,
@@ -725,7 +725,7 @@ async function boundIdentity(me: DriveIdentity, account: string): Promise<Publis
   const bound =
     Boolean(person.driveKeyBinding) &&
     (await verifyDriveKeyBinding(
-      { server: person.server, accountId: person.accountId },
+      refOf(person),
       person.accountAuthorityPublicKey,
       person.driveHpkePublicKey,
       person.driveSigningPublicKey,
