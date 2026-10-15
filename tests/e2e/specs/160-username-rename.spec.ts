@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process'
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
-import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
+import { acceptRequest, composer, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 
 // A username rename (docs/plans/username-renames.md), end to end: Ada
 // renames herself in Account; her Chat follows on its next start; Bob's Chat
@@ -64,6 +64,12 @@ function freeName(psql: string, name: string): void {
             DELETE FROM account_names WHERE folded = kutup_fold('${name}');`,
     stdio: ['pipe', 'ignore', 'inherit'],
   })
+}
+
+/** Opens the direct conversation with `address` by its link (names can be alike). */
+async function openThread(page: Page, address: string): Promise<void> {
+  await page.goto(appUrl('chat', `/c/${encodeURIComponent(`direct:${address}`)}`))
+  await expect(composer(page)).toBeVisible({ timeout: 60_000 })
 }
 
 function renameNotices(page: Page) {
@@ -149,13 +155,14 @@ test.describe('username renames', () => {
     await send(pageM, claim)
 
     // Bob gets a request from someone new at the old name; Ada's thread is untouched.
-    await pageB.reload()
-    await openConversationWith(pageB, renamed)
+    await openThread(pageB, ada.address)
+    await expect(message(pageB, claim)).toBeVisible({ timeout: 60_000 })
+    await expect(pageB).toHaveURL(new RegExp(encodeURIComponent(`direct:${ada.address}`)))
+    await openThread(pageB, `${renamed}@${ada.address.split('@')[1]}`)
     await expect(message(pageB, hello)).toBeVisible({ timeout: 60_000 })
     await expect(message(pageB, claim)).toHaveCount(0)
     await expect(renameNotices(pageB)).toHaveCount(1)
-    await openConversationWith(pageB, ada.username)
-    await expect(message(pageB, claim)).toBeVisible({ timeout: 60_000 })
+    await openThread(pageB, ada.address)
     await expect(message(pageB, hello)).toHaveCount(0)
     await expect(pageB.getByRole('button', { name: 'Accept', exact: true })).toBeVisible()
   })
