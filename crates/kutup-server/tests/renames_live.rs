@@ -752,3 +752,43 @@ fn a_renamed_account_keeps_its_chat_profile_until_it_publishes_again() {
     assert_eq!(r.json::<Value>().unwrap()["account"], json!(current));
     purge_accounts(&c, &base, &[&user, &reader]);
 }
+
+/// Another server's renames, looked up through this one: a name that is not
+/// a plain name never reaches a signed request (`400`), and a server that
+/// cannot be reached, with nothing kept of it, answers `unavailable`: no
+/// news, not "no renames".
+#[test]
+fn remote_lookups_check_the_name_and_say_when_they_cannot_tell() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    for address in [
+        "..%2f..%2fdrive%2faccounts%2fx@peer.test",
+        "..@peer.test",
+        "a%20b@peer.test",
+    ] {
+        let r = get(
+            &c,
+            &base,
+            &user.token,
+            &format!("/api/users/renames/{address}"),
+        );
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{address}");
+    }
+    let answer: Value = get(
+        &c,
+        &base,
+        &user.token,
+        "/api/users/renames/ada@unreachable.invalid",
+    )
+    .json()
+    .unwrap();
+    assert_eq!(
+        answer,
+        json!({ "version": 1, "chains": [], "unavailable": true })
+    );
+    purge_accounts(&c, &base, &[&user]);
+}

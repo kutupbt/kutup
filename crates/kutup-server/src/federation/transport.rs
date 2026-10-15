@@ -993,6 +993,12 @@ fn operation_url(api_base: &str, path: &str, query: Option<&str>) -> anyhow::Res
     if url.fragment().is_some() {
         anyhow::bail!("federation operation URL cannot contain a fragment");
     }
+    // The path as sent must be the one checked against the feature's
+    // namespace: URL parsing resolves `.` and `..` and escapes characters,
+    // which would move a request out of it.
+    if !url.path().ends_with(path) {
+        anyhow::bail!("federation operation path is not canonical");
+    }
     Ok(url)
 }
 
@@ -1202,6 +1208,22 @@ mod tests {
         assert!(validate_request_spec(&spec).is_err());
         spec.path = "https://internal.example/api/fed/chat/users/alice/keys".into();
         assert!(validate_request_spec(&spec).is_err());
+    }
+
+    /// A path URL parsing would change (`.`/`..` segments, characters it
+    /// escapes) is refused, so a request cannot leave its namespace after the
+    /// namespace check.
+    #[test]
+    fn a_path_normalisation_would_change_is_refused() {
+        let base = "https://peer.test";
+        assert!(operation_url(base, "/api/fed/chat/accounts/ada/renames", None).is_ok());
+        for path in [
+            "/api/fed/chat/accounts/../../drive/accounts/x/renames",
+            "/api/fed/chat/./accounts/ada/renames",
+            "/api/fed/chat/accounts/a b/renames",
+        ] {
+            assert!(operation_url(base, path, None).is_err(), "{path}");
+        }
     }
 
     /// Renames are served under both features' namespaces: each feature's

@@ -53,6 +53,11 @@ const COALESCE_SECONDS: f64 = 60.0;
 /// next lookup instead, from `409 renamed`).
 const GIVE_UP_DAYS: i64 = 7;
 const ANNOUNCES_PER_PASS: i64 = 50;
+/// Announces sent at once: a dead peer does not hold up live ones.
+const ANNOUNCES_AT_ONCE: usize = 8;
+/// Peers announced to: those this server has been in touch with this
+/// recently (others learn at their next lookup).
+const PEER_RECENT_DAYS: i64 = 90;
 const FEATURE_HEADER: &str = "kutup-federation-feature";
 
 /// The endpoint namespace a feature's requests live under (the transport
@@ -163,6 +168,16 @@ fn verify(domain: &str, mut entry: ChainEntry) -> Result<Verified, &'static str>
 /// same incarnation (rows then move to its current address); never a shorter
 /// or a different one.
 async fn store(pool: &sqlx::PgPool, domain: &str, verified: &Verified) -> AppResult<Stored> {
+    store_capped(pool, domain, verified, MAX_PER_DOMAIN).await
+}
+
+/// [`store`] with the per-domain cap given (tests use a small one).
+async fn store_capped(
+    pool: &sqlx::PgPool,
+    domain: &str,
+    verified: &Verified,
+    cap: i64,
+) -> AppResult<Stored> {
     let entry = &verified.entry;
     let mut tx = pool.begin().await?;
     let kept: Option<(Value, String)> = sqlx::query_as(
@@ -188,12 +203,17 @@ async fn store(pool: &sqlx::PgPool, domain: &str, verified: &Verified) -> AppRes
         .to_vec();
     let outcome = match kept {
         None => {
+            // One new chain per domain at a time, so the cap holds.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('remote_account_renames:' || $1, 0))")
+                .bind(domain)
+                .execute(&mut *tx)
+                .await?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM remote_account_renames WHERE domain = $1")
                     .bind(domain)
                     .fetch_one(&mut *tx)
                     .await?;
-            if count >= MAX_PER_DOMAIN {
+            if count >= cap {
                 return Err(AppError::too_many_requests(
                     "this server keeps no more renames of that server",
                 )
@@ -235,9 +255,12 @@ async fn store(pool: &sqlx::PgPool, domain: &str, verified: &Verified) -> AppRes
                 .map_err(|_| AppError::internal("a kept rename chain"))?;
             if verified.view.extends(&old) {
                 let longer = verified.view.sequence > old.sequence;
+                // An equal chain keeps a more specific state it was told
+                // (held, gone) over an announce's plain `current`.
                 sqlx::query(
                     "UPDATE remote_account_renames
-                        SET sequence = $3, head_digest = $4, current_address = $5, state = $6,
+                        SET sequence = $3, head_digest = $4, current_address = $5,
+                            state = CASE WHEN sequence = $3 AND $6 = 'current' THEN state ELSE $6 END,
                             chain = $7, addresses = $8, updated_at = now()
                       WHERE domain = $1 AND incarnation_id = $2",
                 )
@@ -488,6 +511,9 @@ pub async fn lookup(state: &AppState, user_id: Uuid, address: &str) -> AppResult
     let (username, domain) = address
         .rsplit_once('@')
         .ok_or_else(|| AppError::bad_request("an address is username@server"))?;
+    if !path_name(username) || kutup_federation_proto::validate_server_name(domain).is_err() {
+        return Err(AppError::bad_request("an address is username@server"));
+    }
     let folded = fold_address(address)
         .ok_or_else(|| AppError::bad_request("an address is username@server"))?;
     let fresh =
@@ -581,6 +607,17 @@ fn refused_feature(error: &anyhow::Error) -> bool {
     lacks_capability(error) || error.downcast_ref::<FederationAdmissionError>().is_some()
 }
 
+/// A name as it may go into a signed request's path: 1-64 of `a-z 0-9 . _ -`,
+/// something left once folded (so never `.` or `..`, nor `/` or `%`).
+fn path_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+        && !kutup_crypto::names::fold(name).is_empty()
+}
+
 fn configured(state: &AppState) -> AppResult<&FederationStack> {
     state
         .federation
@@ -620,12 +657,7 @@ pub async fn publish(
         .authenticate_inbound(&headers, "GET", &path, query.as_deref(), &[], feature)
         .await?;
     let result = async {
-        if username.is_empty()
-            || username.len() > 64
-            || !username
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
-        {
+        if !path_name(&username) {
             return Err(AppError::bad_request("a name on this server"));
         }
         let incarnation = query.as_deref().and_then(|query| {
@@ -723,7 +755,8 @@ pub async fn announce(
 }
 
 /// Queues the announce of `incarnation`'s rename `sequence` to every peer
-/// this server has pinned (and not quarantined), in the rename's transaction.
+/// this server has pinned, not quarantined, and been in touch with in the
+/// last 90 days, in the rename's transaction.
 pub async fn enqueue(
     conn: &mut sqlx::PgConnection,
     server_name: &str,
@@ -734,22 +767,30 @@ pub async fn enqueue(
         "INSERT INTO rename_announce_outbox (destination, incarnation_id, sequence)
          SELECT domain, $1, $2 FROM federation_peer_identities
           WHERE trust_state <> 'quarantined' AND domain <> $3
+            AND last_seen_at > now() - make_interval(days => $4)
          ON CONFLICT DO NOTHING",
     )
     .bind(incarnation)
     .bind(sequence as i32)
     .bind(server_name)
+    .bind(PEER_RECENT_DAYS as i32)
     .execute(&mut *conn)
     .await?;
     Ok(())
 }
 
-/// Sends the announces due: one per peer and account, with the whole chain.
+/// One announce due: its peer, the account, the newest sequence queued, how
+/// often it was tried, and whether it is past being worth trying.
+type Due = (String, String, i32, i32, bool);
+
+/// Sends the announces due, a few at a time (each with its own time limit,
+/// so a peer that does not answer holds up no other): one per peer and
+/// account, with the whole chain.
 pub async fn deliver_due(state: &AppState) -> AppResult<usize> {
+    use futures_util::StreamExt as _;
     let Some(federation) = state.federation.as_deref() else {
         return Ok(0);
     };
-    type Due = (String, String, i32, i32, bool);
     let due: Vec<Due> = sqlx::query_as(
         "SELECT destination, incarnation_id, max(sequence), max(attempts),
                 min(created_at) < now() - make_interval(days => $1)
@@ -763,93 +804,108 @@ pub async fn deliver_due(state: &AppState) -> AppResult<usize> {
     .bind(ANNOUNCES_PER_PASS)
     .fetch_all(&state.pool)
     .await?;
-    let done = |destination: String, incarnation: String, through: i32| {
-        let pool = state.pool.clone();
-        async move {
-            sqlx::query(
-                "DELETE FROM rename_announce_outbox
-                  WHERE destination = $1 AND incarnation_id = $2 AND sequence <= $3",
-            )
-            .bind(destination)
-            .bind(incarnation)
-            .bind(through)
-            .execute(&pool)
-            .await
-        }
-    };
     let count = due.len();
-    for (destination, incarnation, through, attempts, expired) in due {
-        let rows: Vec<(Value, String, String)> = sqlx::query_as(
-            "SELECT statement, authority_public_key, current FROM account_renames
-              WHERE incarnation_id = $1 ORDER BY sequence",
-        )
-        .bind(&incarnation)
-        .fetch_all(&state.pool)
-        .await?;
-        let Some((_, authority, current)) = rows.last().cloned() else {
-            done(destination, incarnation, through).await?;
-            continue;
-        };
-        let chain: Vec<AccountRenameV1> = rows
-            .into_iter()
-            .map(|(statement, ..)| serde_json::from_value(statement))
-            .collect::<Result<_, _>>()
-            .map_err(|_| AppError::internal("a stored rename"))?;
-        let body = serde_json::to_vec(&AnnounceV1 {
-            version: VERSION,
-            username: current
-                .rsplit_once('@')
-                .map_or("", |(local, _)| local)
-                .to_owned(),
-            incarnation_id: incarnation.clone(),
-            authority_public_key: authority,
-            chain,
-        })
-        .expect("serialisable");
-        let sent = send_any(federation, &destination, Method::POST, announce_path, body).await;
-        let failure = match sent {
-            // Kept, or the peer holds as much or refuses it for good.
-            Ok(response)
-                if response.status.is_success()
-                    || response.status == StatusCode::CONFLICT
-                    || response.status == StatusCode::BAD_REQUEST =>
-            {
-                if response.status == StatusCode::BAD_REQUEST {
-                    tracing::warn!(%destination, %incarnation, "a peer refused a rename announce");
-                }
-                done(destination, incarnation, through).await?;
-                continue;
-            }
-            Ok(response) => format!("answered {}", response.status),
-            // A peer without Chat and Drive federation, or one this server
-            // may not send to: it learns on its next lookup.
-            Err(error) if refused_feature(&error) => {
-                done(destination, incarnation, through).await?;
-                continue;
-            }
-            Err(error) => format!("{error:#}"),
-        };
-        if expired {
-            tracing::warn!(%destination, %incarnation, error = %failure,
-                "a rename announce was never delivered; dropped");
-            done(destination, incarnation, through).await?;
-            continue;
-        }
-        let wait = (30_i64 << attempts.clamp(0, 10)).min(6 * 3600);
+    let results: Vec<AppResult<()>> = futures_util::stream::iter(due)
+        .map(|due| deliver_one(state, federation, due))
+        .buffer_unordered(ANNOUNCES_AT_ONCE)
+        .collect()
+        .await;
+    for result in results {
+        result?;
+    }
+    Ok(count)
+}
+
+/// The longest one announce may take before it counts as failed.
+const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(20);
+
+async fn deliver_one(
+    state: &AppState,
+    federation: &FederationStack,
+    (destination, incarnation, through, attempts, expired): Due,
+) -> AppResult<()> {
+    let done = || async {
         sqlx::query(
-            "UPDATE rename_announce_outbox
-                SET attempts = attempts + 1, last_error = left($3, 500),
-                    next_attempt_at = now() + make_interval(secs => $4)
-              WHERE destination = $1 AND incarnation_id = $2",
+            "DELETE FROM rename_announce_outbox
+              WHERE destination = $1 AND incarnation_id = $2 AND sequence <= $3",
         )
         .bind(&destination)
         .bind(&incarnation)
-        .bind(&failure)
-        .bind(wait as f64)
+        .bind(through)
         .execute(&state.pool)
-        .await?;
+        .await
+        .map(|_| ())
+        .map_err(AppError::from)
+    };
+    let rows: Vec<(Value, String, String)> = sqlx::query_as(
+        "SELECT statement, authority_public_key, current FROM account_renames
+          WHERE incarnation_id = $1 ORDER BY sequence",
+    )
+    .bind(&incarnation)
+    .fetch_all(&state.pool)
+    .await?;
+    let Some((_, authority, current)) = rows.last().cloned() else {
+        return done().await;
+    };
+    let chain: Vec<AccountRenameV1> = rows
+        .into_iter()
+        .map(|(statement, ..)| serde_json::from_value(statement))
+        .collect::<Result<_, _>>()
+        .map_err(|_| AppError::internal("a stored rename"))?;
+    let body = serde_json::to_vec(&AnnounceV1 {
+        version: VERSION,
+        username: current
+            .rsplit_once('@')
+            .map_or("", |(local, _)| local)
+            .to_owned(),
+        incarnation_id: incarnation.clone(),
+        authority_public_key: authority,
+        chain,
+    })
+    .expect("serialisable");
+    let sent = tokio::time::timeout(
+        ANNOUNCE_TIMEOUT,
+        send_any(federation, &destination, Method::POST, announce_path, body),
+    )
+    .await;
+    let failure = match sent {
+        Err(_) => "timed out".to_owned(),
+        // Kept, or the peer holds as much or refuses it for good.
+        Ok(Ok(response))
+            if response.status.is_success()
+                || response.status == StatusCode::CONFLICT
+                || response.status == StatusCode::BAD_REQUEST =>
+        {
+            if response.status == StatusCode::BAD_REQUEST {
+                tracing::warn!(%destination, %incarnation, "a peer refused a rename announce");
+            }
+            return done().await;
+        }
+        Ok(Ok(response)) => format!("answered {}", response.status),
+        // A peer without Chat and Drive federation, or one this server may
+        // not send to: it learns on its next lookup.
+        Ok(Err(error)) if refused_feature(&error) => return done().await,
+        Ok(Err(error)) => format!("{error:#}"),
+    };
+    if expired {
+        tracing::warn!(%destination, %incarnation, error = %failure,
+            "a rename announce was never delivered; dropped");
+        return done().await;
     }
-    Ok(count)
+    let wait = (30_i64 << attempts.clamp(0, 10)).min(6 * 3600);
+    sqlx::query(
+        "UPDATE rename_announce_outbox
+            SET attempts = attempts + 1, last_error = left($3, 500),
+                next_attempt_at = now() + make_interval(secs => $4)
+          WHERE destination = $1 AND incarnation_id = $2",
+    )
+    .bind(&destination)
+    .bind(&incarnation)
+    .bind(&failure)
+    .bind(wait as f64)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
 }
 
 /// Sends announces every half minute, for as long as the server runs.
@@ -899,6 +955,38 @@ mod tests {
             state: "current".into(),
             chain,
         }
+    }
+
+    #[test]
+    fn only_a_plain_name_goes_into_a_signed_path() {
+        for name in ["ada", "ada.l", "ada_l", "a-b"] {
+            assert!(path_name(name), "{name}");
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            "...",
+            "a/b",
+            "..%2f..%2fdrive",
+            "Ada",
+            "a b",
+            &"a".repeat(65),
+        ] {
+            assert!(!path_name(name), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn lookups_of_one_address_share_one_fetch() {
+        let first = fetch_lock("ada@peer.test");
+        let _held = first.lock().await;
+        // Another lookup of the address waits on the same fetch...
+        let second = fetch_lock("ada@peer.test");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(second.try_lock().is_err());
+        // ...and another address does not.
+        assert!(fetch_lock("bob@peer.test").try_lock().is_ok());
     }
 
     #[test]
@@ -965,6 +1053,88 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].0.current, format!("k3@{PEER}"));
         assert_eq!(kept(&pool, PEER, "k2@peer.test").await.unwrap().len(), 1);
+        clean(&pool, &[who.incarnation_id()]).await;
+    }
+
+    /// At most so many chains of one domain: one more is `429`.
+    #[tokio::test]
+    async fn live_a_domain_keeps_at_most_its_cap() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let (one, two) = (identity(31), identity(32));
+        clean(&pool, &[one.incarnation_id(), two.incarnation_id()]).await;
+        let kept_already: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM remote_account_renames WHERE domain = $1")
+                .bind(PEER)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let cap = kept_already + 1;
+        let first = verify(PEER, entry(&one, &["c1", "c2"])).unwrap();
+        let second = verify(PEER, entry(&two, &["d1", "d2"])).unwrap();
+        assert_eq!(
+            store_capped(&pool, PEER, &first, cap).await.unwrap(),
+            Stored::Advanced
+        );
+        let refused = store_capped(&pool, PEER, &second, cap).await.unwrap_err();
+        assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+        // The one kept still grows.
+        let longer = verify(PEER, entry(&one, &["c1", "c2", "c3"])).unwrap();
+        assert_eq!(
+            store_capped(&pool, PEER, &longer, cap).await.unwrap(),
+            Stored::Advanced
+        );
+        clean(&pool, &[one.incarnation_id(), two.incarnation_id()]).await;
+    }
+
+    /// The same chain again keeps a more specific state it was told (held)
+    /// over an announce's plain `current`; a longer one says anew.
+    #[tokio::test]
+    async fn live_an_equal_chain_keeps_its_state() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let who = identity(41);
+        clean(&pool, &[who.incarnation_id()]).await;
+        let state = || {
+            let pool = pool.clone();
+            let incarnation = who.incarnation_id();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT state FROM remote_account_renames WHERE domain = $1 AND incarnation_id = $2",
+                )
+                .bind(PEER)
+                .bind(incarnation)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let mut held = entry(&who, &["s1", "s2"]);
+        held.state = "held".into();
+        store(&pool, PEER, &verify(PEER, held).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(state().await, "held");
+        store(
+            &pool,
+            PEER,
+            &verify(PEER, entry(&who, &["s1", "s2"])).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state().await, "held");
+        store(
+            &pool,
+            PEER,
+            &verify(PEER, entry(&who, &["s1", "s2", "s3"])).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state().await, "current");
         clean(&pool, &[who.incarnation_id()]).await;
     }
 
