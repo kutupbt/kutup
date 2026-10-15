@@ -16,6 +16,7 @@ use kutup_chat_proto::{
     AccountManifestHistoryPageV1, AccountManifestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, UserPreKeyBundlesResponse,
 };
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
@@ -521,23 +522,32 @@ fn federation_peer<'a>(control_plane: &'a Value, domain: &str) -> &'a Value {
 
 /// The registration (or setup) body of the account seeded by `email`: its
 /// password registered with OPAQUE under the seeded key binding (with the
-/// setup token as `setup_bearer` when completing an admin-made account),
-/// the master key sealed under the OPAQUE export key.
+/// first sign-in's answer as `setup` when completing an admin-made account:
+/// its setup token and account id), the master key sealed under the OPAQUE
+/// export key, and the Drive key binding for the account's id (minted at a
+/// sign-up's register/start).
 fn registration_payload(
     c: &Client,
     base: &str,
     email: &str,
     username: &str,
-    setup_bearer: Option<&str>,
+    setup: Option<&Value>,
 ) -> Value {
+    let setup_bearer = setup.map(|first| first["setupToken"].as_str().unwrap());
     let mut rng = rand::thread_rng();
     let master_key = test_master_key(email);
     let binding = test_binding(email);
     let mut recovery_entropy = [0u8; 32];
     rng.fill_bytes(&mut recovery_entropy);
 
-    let (opaque_record, opaque_server_key_id, export_key) =
-        common::opaque_register(c, base, PASSWORD, &binding, None, setup_bearer);
+    let (opaque_record, opaque_server_key_id, export_key, started) =
+        common::try_opaque_register_answer(c, base, PASSWORD, &binding, None, setup_bearer)
+            .unwrap_or_else(|(status, body)| panic!("register/start: {status} {body}"));
+    let account_id = match setup {
+        Some(first) => first["userId"].as_str().unwrap().to_owned(),
+        None => started["accountId"].as_str().unwrap().to_owned(),
+    };
+    let person = AccountRef::new(&server_name(c, base), &account_id).unwrap();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
@@ -558,7 +568,7 @@ fn registration_payload(
     )
     .unwrap();
 
-    json!({
+    let mut payload = json!({
         "keyBinding": binding,
         "username": username,
         "opaqueRecord": opaque_record,
@@ -572,12 +582,13 @@ fn registration_payload(
         "accountIncarnationId": identity.incarnation_id(),
         "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
         "recoveryProof": b64(recovery_proof.as_slice()),
-        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(
-            &identity,
-            &format!("{username}@{}", server_name(c, base)),
-        )
-        .unwrap()),
-    })
+        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &person).unwrap()),
+    });
+    if setup.is_none() {
+        payload["accountId"] = json!(account_id);
+        payload["accountIdProof"] = started["accountIdProof"].clone();
+    }
+    payload
 }
 
 fn register_account(c: &Client, base: &str, email: &str, username: &str) -> (String, String) {
@@ -615,7 +626,7 @@ fn setup_admin(c: &Client, base: &str, email: &str, username: &str) -> String {
     }
     assert_eq!(first["requiresSetup"], true, "bootstrap admin: {first}");
     let setup_token = first["setupToken"].as_str().unwrap();
-    let setup_payload = registration_payload(c, base, email, username, Some(setup_token));
+    let setup_payload = registration_payload(c, base, email, username, Some(&first));
     let setup = json_response(
         c.post(format!("{base}/api/auth/complete-setup"))
             .bearer_auth(setup_token)
@@ -1115,6 +1126,9 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         remote_user["accountIncarnationId"],
         bob_identity.incarnation_id()
     );
+    // The two people, as every share names them: server and account id.
+    let alice_ref = AccountRef::new("a.test", owner_user_id).unwrap();
+    let bob_ref = AccountRef::new("b.test", remote_user["accountId"].as_str().unwrap()).unwrap();
     let recipient_hpke = STANDARD
         .decode(remote_user["driveHpkePublicKey"].as_str().unwrap())
         .unwrap();
@@ -1122,10 +1136,10 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         &collection_key,
         &collection_id,
         1,
-        "alicefed@a.test",
+        &alice_ref,
         &alice_identity.incarnation_id(),
         alice_identity.drive_signing_key(),
-        remote_user["account"].as_str().unwrap(),
+        &bob_ref,
         remote_user["accountIncarnationId"].as_str().unwrap(),
         &recipient_hpke,
     )
@@ -1141,6 +1155,7 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .json(&json!({
             "recipientUsername": BOB_USERNAME,
             "recipientServer": "b.test",
+            "recipientAccountId": bob_ref.account_id,
             "namedShareEnvelope": named_share,
             "canUpload": true,
             "canDelete": true,
@@ -1193,10 +1208,10 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
             .open(
                 &collection_id,
                 1,
-                "alicefed@a.test",
+                &alice_ref,
                 &alice_identity.incarnation_id(),
                 &alice_identity.drive_signing_public_key(),
-                "bobfed@b.test",
+                &bob_ref,
                 &bob_identity.incarnation_id(),
                 bob_identity.drive_hpke_private_key(),
             )
@@ -1222,8 +1237,8 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         b,
         alice_token,
         bob_token,
-        &alice_identity,
-        &bob_identity,
+        (&alice_ref, &alice_identity),
+        (&bob_ref, &bob_identity),
     );
     assert_eq!(
         drive_envelope::open_b64(
@@ -1420,10 +1435,10 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
             key,
             &collection_id,
             epoch,
-            "alicefed@a.test",
+            &alice_ref,
             &alice_identity.incarnation_id(),
             alice_identity.drive_signing_key(),
-            "bobfed@b.test",
+            &bob_ref,
             &bob_identity.incarnation_id(),
             &bob_identity.drive_hpke_public_key(),
         )
@@ -1506,10 +1521,10 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
             .open(
                 &collection_id,
                 2,
-                "alicefed@a.test",
+                &alice_ref,
                 &alice_identity.incarnation_id(),
                 &alice_identity.drive_signing_public_key(),
-                "bobfed@b.test",
+                &bob_ref,
                 &bob_identity.incarnation_id(),
                 bob_identity.drive_hpke_private_key(),
             )
@@ -1633,19 +1648,19 @@ fn drive_profile_key_exchange(
     b: &str,
     alice_token: &str,
     bob_token: &str,
-    alice: &AccountIdentityKeysV1,
-    bob: &AccountIdentityKeysV1,
+    (alice_ref, alice): (&AccountRef, &AccountIdentityKeysV1),
+    (bob_ref, bob): (&AccountRef, &AccountIdentityKeysV1),
 ) {
     let alice_to_bob = ProfileKeyParties {
-        sender_account: "alicefed@a.test",
+        sender: alice_ref,
         sender_incarnation_id: &alice.incarnation_id(),
-        recipient_account: "bobfed@b.test",
+        recipient: bob_ref,
         recipient_incarnation_id: &bob.incarnation_id(),
     };
     let bob_to_alice = ProfileKeyParties {
-        sender_account: "bobfed@b.test",
+        sender: bob_ref,
         sender_incarnation_id: &bob.incarnation_id(),
-        recipient_account: "alicefed@a.test",
+        recipient: alice_ref,
         recipient_incarnation_id: &alice.incarnation_id(),
     };
     let alice_key = [0x61; 32];
@@ -1666,16 +1681,22 @@ fn drive_profile_key_exchange(
         .encode_b64()
         .unwrap()
     };
-    let put = |base: &str, token: &str, recipient: &str, envelope: &str, version: &str| {
+    // To a person by their server and account id.
+    let put = |base: &str, token: &str, recipient: &AccountRef, envelope: &str, version: &str| {
         c.put(format!("{base}/api/drive/profile-keys"))
             .bearer_auth(token)
-            .json(&json!({"recipientAccount": recipient, "envelope": envelope, "profileVersion": version}))
+            .json(&json!({
+                "recipientServer": recipient.server,
+                "recipientAccountId": recipient.account_id,
+                "envelope": envelope,
+                "profileVersion": version,
+            }))
             .send()
             .unwrap()
             .status()
             .as_u16()
     };
-    let person = |base: &str, token: &str, account: &str| -> Value {
+    let person = |base: &str, token: &str, who: &AccountRef| -> Value {
         let people = json_response(
             c.get(format!("{base}/api/drive/people"))
                 .bearer_auth(token)
@@ -1687,25 +1708,21 @@ fn drive_profile_key_exchange(
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["account"] == account)
+            .find(|p| p["server"] == who.server.as_str() && p["accountId"] == who.account_id.as_str())
             .cloned()
-            .unwrap_or_else(|| panic!("{account} is not among the people shared with: {people}"))
+            .unwrap_or_else(|| panic!("{who} is not among the people shared with: {people}"))
     };
 
     // Owner to member, across servers.
     let alice_envelope = seal(&alice_key, &alice_to_bob, alice, bob);
     assert_eq!(
-        put(
-            a,
-            alice_token,
-            "bobfed@b.test",
-            &alice_envelope,
-            &alice_version
-        ),
+        put(a, alice_token, bob_ref, &alice_envelope, &alice_version),
         204
     );
-    let bob_sees = person(b, bob_token, "alicefed@a.test");
+    let bob_sees = person(b, bob_token, alice_ref);
     assert_eq!(bob_sees["local"], false);
+    // The address is a label beside the account, never its key.
+    assert_eq!(bob_sees["account"], "alicefed@a.test");
     let received =
         ProfileKeyEnvelopeV1::decode_b64(bob_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -1719,17 +1736,17 @@ fn drive_profile_key_exchange(
         alice_key
     );
     assert_eq!(
-        person(a, alice_token, "bobfed@b.test")["sentProfileVersion"],
+        person(a, alice_token, bob_ref)["sentProfileVersion"],
         alice_version
     );
 
     // Member to owner.
     let bob_envelope = seal(&bob_key, &bob_to_alice, bob, alice);
     assert_eq!(
-        put(b, bob_token, "alicefed@a.test", &bob_envelope, &bob_version),
+        put(b, bob_token, alice_ref, &bob_envelope, &bob_version),
         204
     );
-    let alice_sees = person(a, alice_token, "bobfed@b.test");
+    let alice_sees = person(a, alice_token, bob_ref);
     let received =
         ProfileKeyEnvelopeV1::decode_b64(alice_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -1744,25 +1761,23 @@ fn drive_profile_key_exchange(
     );
 
     // Not to someone they share nothing with, and never in someone else's name.
+    let nobody = AccountRef::new("b.test", &Uuid::new_v4().to_string()).unwrap();
     let stranger = ProfileKeyParties {
-        recipient_account: "nobody@b.test",
+        recipient: &nobody,
         ..alice_to_bob
     };
     assert_eq!(
         put(
             a,
             alice_token,
-            "nobody@b.test",
+            &nobody,
             &seal(&alice_key, &stranger, alice, bob),
             &alice_version
         ),
         404
     );
     let forged = seal(&bob_key, &bob_to_alice, bob, alice);
-    assert_eq!(
-        put(a, alice_token, "bobfed@b.test", &forged, &alice_version),
-        400
-    );
+    assert_eq!(put(a, alice_token, bob_ref, &forged, &alice_version), 400);
 }
 
 /// A live-location stream on A, read by an account of B through its own
@@ -2845,6 +2860,7 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
         token: token_a.clone(),
         identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
         master_key,
+        person: AccountRef::new(&domain_a, me["accountId"].as_str().unwrap()).unwrap(),
         account: format!("{old}@{domain_a}"),
     };
     let renamed = common::rename_account(c, a, &alice, new, false);

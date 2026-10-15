@@ -448,7 +448,7 @@ fn times_challenges_and_a_wipe() {
     let (token, identity) = complete_setup(
         &c,
         &base,
-        first["setupToken"].as_str().unwrap(),
+        &first,
         &alice.username,
         "Another*Password456",
     );

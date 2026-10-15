@@ -3,6 +3,7 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
@@ -72,6 +73,8 @@ pub struct User {
     pub token: String,
     pub identity: AccountIdentityKeysV1,
     pub master_key: [u8; 32],
+    /// Who the account is: the server it was made on and its id.
+    pub person: AccountRef,
     /// `username@domain`, with the domain of the server it was made on.
     pub account: String,
 }
@@ -160,6 +163,20 @@ pub fn try_opaque_register(
     grant: Option<&str>,
     bearer_token: Option<&str>,
 ) -> Result<(String, u16, kutup_crypto::opaque::ExportKey), (StatusCode, Value)> {
+    try_opaque_register_answer(c, base, password, key_binding, grant, bearer_token)
+        .map(|(record, key_id, export_key, _)| (record, key_id, export_key))
+}
+
+/// [`try_opaque_register`], with register/start's answer (a sign-up's
+/// minted `accountId` and `accountIdProof` are in it).
+pub fn try_opaque_register_answer(
+    c: &Client,
+    base: &str,
+    password: &str,
+    key_binding: &str,
+    grant: Option<&str>,
+    bearer_token: Option<&str>,
+) -> Result<(String, u16, kutup_crypto::opaque::ExportKey, Value), (StatusCode, Value)> {
     let (registering, request) = kutup_crypto::opaque::client_registration_start(password).unwrap();
     let mut req = c
         .post(format!("{base}/api/auth/opaque/register/start"))
@@ -181,6 +198,7 @@ pub fn try_opaque_register(
         b64(&registered.record),
         body["serverKeyId"].as_u64().unwrap() as u16,
         registered.export_key,
+        body,
     ))
 }
 
@@ -261,8 +279,7 @@ pub struct Renamed {
     pub key: Option<kutup_crypto::mail_key::FirstAddressKey>,
 }
 
-/// Renames `user` to `to` as the apps do: the signed statement, the Drive key
-/// binding for the new address and, unless `no_key` (a held name whose
+/// Renames `user` to `to` as the apps do: the signed statement and, unless `no_key` (a held name whose
 /// address kept its keys: the check's `needsKey` false), its first key.
 pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: bool) -> Renamed {
     let me: Value = bearer(c.get(format!("{base}/api/user/me")), &user.token)
@@ -285,7 +302,6 @@ pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: boo
         now.as_millis() as i64,
     )
     .unwrap();
-    let binding = kutup_crypto::drive_key_binding::sign(&user.identity, &current).unwrap();
     let key = (!no_key).then(|| {
         kutup_crypto::mail_key::first_address_key(
             &user.identity,
@@ -310,7 +326,7 @@ pub fn rename_account(c: &Client, base: &str, user: &User, to: &str, no_key: boo
     let grant = reauth_grant(c, base, user, "rename");
     let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
         .json(&json!({ "grant": grant, "rename": statement,
-                       "driveKeyBinding": b64(&binding), "mailAddress": mail_address }))
+                       "mailAddress": mail_address }))
         .send()
         .unwrap();
     let status = r.status();
@@ -350,8 +366,11 @@ fn register_full(
     rng.fill_bytes(&mut master_key);
     rng.fill_bytes(&mut recovery_entropy);
     // Sign-ups closed refuse already here (registrationClosed).
-    let (opaque_record, server_key_id, export_key) =
-        try_opaque_register(c, base, password, &key_binding, None, None)?;
+    let (opaque_record, server_key_id, export_key, started) =
+        try_opaque_register_answer(c, base, password, &key_binding, None, None)?;
+    // The account id the server minted for this sign-up.
+    let account_id = started["accountId"].as_str().unwrap().to_owned();
+    let person = AccountRef::new(&server_domain(c, base), &account_id).unwrap();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
@@ -361,6 +380,7 @@ fn register_full(
     };
     let mut body = json!({
             "keyBinding": key_binding, "username": username,
+            "accountId": account_id, "accountIdProof": started["accountIdProof"],
             "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, &key_binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
@@ -376,9 +396,8 @@ fn register_full(
         body["registrationCode"] = json!(code);
     }
     if binding {
-        let account = format!("{username}@{}", server_domain(c, base));
         body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
-            &identity, &account
+            &identity, &person
         )
         .unwrap()));
     }
@@ -405,9 +424,11 @@ fn register_full(
         .as_str()
         .unwrap()
         .to_string();
+    assert_eq!(id, account_id, "the account is the id minted for it");
     let account = format!("{username}@{}", server_domain(c, base));
     Ok(User {
         id,
+        person,
         binding: key_binding,
         password: password.to_owned(),
         recovery_entropy,
@@ -474,10 +495,10 @@ pub fn share(c: &Client, base: &str, owner: &User, folder: &Folder, to: &User, c
         &folder.key,
         &folder.id,
         1,
-        &owner.account,
+        &owner.person,
         &owner.identity.incarnation_id(),
         owner.identity.drive_signing_key(),
-        &to.account,
+        &to.person,
         &to.identity.incarnation_id(),
         &to.identity.drive_hpke_public_key(),
     )
@@ -677,10 +698,10 @@ pub fn purge_accounts(c: &Client, base: &str, users: &[&User]) {
 
 pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> String {
     let login = sign_in(c, base, username, password);
-    let Some(setup_token) = login["setupToken"].as_str() else {
+    if login["setupToken"].is_null() {
         return login["accessToken"].as_str().unwrap().to_string();
-    };
-    complete_setup(c, base, setup_token, username, password).0
+    }
+    complete_setup(c, base, &login, username, password).0
 }
 
 /// Completes an account's first sign-in (an administrator made or wiped it):
@@ -689,11 +710,11 @@ pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> St
 pub fn complete_setup(
     c: &Client,
     base: &str,
-    setup_token: &str,
+    first_login: &Value,
     username: &str,
     password: &str,
 ) -> (String, AccountIdentityKeysV1) {
-    let (status, body, identity) = try_complete_setup(c, base, setup_token, username, password);
+    let (status, body, identity) = try_complete_setup(c, base, first_login, username, password);
     assert_eq!(status, StatusCode::OK, "setup: {body}");
     (body["accessToken"].as_str().unwrap().to_string(), identity)
 }
@@ -702,10 +723,18 @@ pub fn complete_setup(
 pub fn try_complete_setup(
     c: &Client,
     base: &str,
-    setup_token: &str,
+    first_login: &Value,
     username: &str,
     password: &str,
 ) -> (StatusCode, Value, AccountIdentityKeysV1) {
+    // The first sign-in's answer: its setup token and the account's id, which
+    // the new keys' Drive key binding names.
+    let setup_token = first_login["setupToken"].as_str().unwrap();
+    let person = AccountRef::new(
+        &server_domain(c, base),
+        first_login["userId"].as_str().unwrap(),
+    )
+    .unwrap();
     let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
@@ -737,10 +766,7 @@ pub fn try_complete_setup(
             "accountIncarnationId": identity.incarnation_id(),
             "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
             "recoveryProof": b64(recovery_proof.as_slice()),
-            "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(
-                &identity,
-                &format!("{username}@{}", server_domain(c, base)),
-            ).unwrap()),
+            "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &person).unwrap()),
         }))
         .send()
         .unwrap();

@@ -95,10 +95,9 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
             .as_millis() as i64,
     )
     .unwrap();
-    let binding = kutup_crypto::drive_key_binding::sign(&user.identity, &stale.current).unwrap();
     let grant = reauth_grant(&c, &base, &user, "rename");
     let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
-        .json(&json!({ "grant": grant, "rename": stale, "driveKeyBinding": b64(&binding) }))
+        .json(&json!({ "grant": grant, "rename": stale }))
         .send()
         .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);

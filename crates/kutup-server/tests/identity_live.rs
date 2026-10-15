@@ -36,12 +36,15 @@ fn drive_key_bindings() {
     let alice_account = alice.account.clone();
     let bob_account = bob.account.clone();
 
-    // A lookup carries the authority and the binding, which verifies.
+    // A lookup carries the account (its server and permanent id), the
+    // authority and the binding, which verifies for that account.
     let found = lookup(&c, &base, &bob.token, &alice_account);
     assert_eq!(found["account"], alice_account.as_str());
+    assert_eq!(found["server"], alice.person.server.as_str());
+    assert_eq!(found["accountId"], alice.person.account_id.as_str());
     let key = |field: &str| key32(found[field].as_str().unwrap());
     drive_key_binding::verify(
-        &alice_account,
+        &alice.person,
         &key("accountAuthorityPublicKey"),
         &key("driveHpkePublicKey"),
         &key("driveSigningPublicKey"),
@@ -87,7 +90,7 @@ fn drive_key_bindings() {
 
     // Registration refuses a binding that does not match the keys sent.
     let mallory = AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
-    let forged = drive_key_binding::sign(&mallory, &alice_account).unwrap();
+    let forged = drive_key_binding::sign(&mallory, &alice.person).unwrap();
     let r = c
         .post(format!("{base}/api/auth/register"))
         .json(&json!({ "username": "forged", "driveKeyBinding": b64(&forged) }))

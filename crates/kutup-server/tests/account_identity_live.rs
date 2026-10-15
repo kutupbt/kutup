@@ -274,7 +274,7 @@ fn temporary_passwords_are_registered_by_the_administrators_client() {
     let (status, stale, _) = common::try_complete_setup(
         &c,
         &base,
-        first["setupToken"].as_str().unwrap(),
+        &first,
         &username,
         "Never*Set*Password1",
     );

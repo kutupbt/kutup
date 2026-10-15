@@ -777,14 +777,16 @@ pub(crate) async fn signed_in_answer(
     }
     let user_id = user_id.to_string();
 
-    // First-login account — no key material yet. Its username comes along:
-    // the new keys' Drive key binding names the account's address.
+    // First-login account — no key material yet. Its account id comes along:
+    // the new keys' Drive key binding names the account by it (with this
+    // server's name), never by its username (docs/plans/account-ids.md).
     if is_first_login {
         let setup_token = jwt::generate_setup_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_setup: true,
             setup_token: Some(setup_token),
+            user_id,
             username,
             ..Default::default()
         })

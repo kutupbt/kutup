@@ -705,7 +705,7 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
     let (token, identity) = complete_setup(
         &c,
         &base,
-        first_login["setupToken"].as_str().unwrap(),
+        &first_login,
         &user.username,
         "Another*Password456",
     );
