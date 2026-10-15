@@ -1,4 +1,5 @@
-import { expect, test, type BrowserContext } from '@playwright/test'
+import { execSync } from 'node:child_process'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 
@@ -24,6 +25,49 @@ async function rename(context: BrowserContext, to: string): Promise<void> {
   // The old name is held, receiving mail for a while.
   await expect(page.getByRole('list', { name: 'Earlier names' })).toBeVisible()
   await page.close()
+}
+
+/** Ada renames; her Chat and Bob's follow; a conversation both ways first. */
+async function renamedConversation(browser: import('@playwright/test').Browser, tag: number) {
+  const ada = newAccount('adaold', PASSWORD)
+  const bob = newAccount('bobrn', PASSWORD)
+  const renamed = newAccount('adanew', PASSWORD).username
+  const contextA = await browser.newContext()
+  const contextB = await browser.newContext()
+  await registerAccount(contextA, ada)
+  await registerAccount(contextB, bob)
+  const pageA = await openChat(contextA)
+  const pageB = await openChat(contextB)
+  const hello = `hello-${tag}`
+  await openDirectChat(pageA, bob.username)
+  await send(pageA, hello)
+  await openConversationWith(pageB, ada.username)
+  await expect(message(pageB, hello)).toBeVisible({ timeout: 60_000 })
+  await acceptRequest(pageB)
+  const reply = `reply-${tag}`
+  await send(pageB, reply)
+  await openConversationWith(pageA, bob.username)
+  await expect(message(pageA, reply)).toBeVisible({ timeout: 60_000 })
+  await rename(contextA, renamed)
+  await pageA.reload()
+  await openConversationWith(pageA, bob.username)
+  await expect(message(pageA, reply)).toBeVisible({ timeout: 60_000 })
+  return { ada, bob, renamed, pageA, pageB, hello, reply }
+}
+
+/** What an administrator's "free now" does (`POST /api/admin/names/:name/free`). */
+function freeName(psql: string, name: string): void {
+  execSync(psql, {
+    input: `UPDATE mail_addresses SET state = 'freed', receive_until = NULL
+              WHERE user_id = (SELECT user_id FROM account_names WHERE folded = kutup_fold('${name}'))
+                AND split_part(folded, '@', 1) = kutup_fold('${name}') AND state IN ('receiving', 'closed');
+            DELETE FROM account_names WHERE folded = kutup_fold('${name}');`,
+    stdio: ['pipe', 'ignore', 'inherit'],
+  })
+}
+
+function renameNotices(page: Page) {
+  return page.getByTestId('chat-rename-notice')
 }
 
 test.describe('username renames', () => {
@@ -80,5 +124,39 @@ test.describe('username renames', () => {
     await send(pageA, answer)
     await expect(message(pageB, answer)).toBeVisible({ timeout: 60_000 })
     await expect(pageB.getByTestId('chat-rename-notice')).toHaveCount(1)
+  })
+
+  test('someone who takes a left name is someone new, never in the old thread', async ({ browser }) => {
+    const psql = process.env.E2E_PSQL
+    test.skip(!psql, 'E2E_PSQL: a command that runs SQL from its stdin against the test stack database')
+    test.slow()
+    const tag = Date.now()
+    const { ada, bob, renamed, pageB, hello } = await renamedConversation(browser, tag)
+    // Bob follows Ada first.
+    await pageB.reload()
+    await openConversationWith(pageB, ada.username)
+    await send(pageB, `follow-${tag}`)
+    await expect(renameNotices(pageB)).toHaveCount(1, { timeout: 60_000 })
+
+    // Ada's old name is freed, and Mallory registers it.
+    freeName(psql!, ada.username)
+    const mallory = { ...newAccount('mallory', PASSWORD), username: ada.username, address: ada.address }
+    const contextM = await browser.newContext()
+    await registerAccount(contextM, mallory)
+    const pageM = await openChat(contextM)
+    const claim = `it-is-ada-${tag}`
+    await openDirectChat(pageM, bob.username)
+    await send(pageM, claim)
+
+    // Bob gets a request from someone new at the old name; Ada's thread is untouched.
+    await pageB.reload()
+    await openConversationWith(pageB, renamed)
+    await expect(message(pageB, hello)).toBeVisible({ timeout: 60_000 })
+    await expect(message(pageB, claim)).toHaveCount(0)
+    await expect(renameNotices(pageB)).toHaveCount(1)
+    await openConversationWith(pageB, ada.username)
+    await expect(message(pageB, claim)).toBeVisible({ timeout: 60_000 })
+    await expect(message(pageB, hello)).toHaveCount(0)
+    await expect(pageB.getByRole('button', { name: 'Accept', exact: true })).toBeVisible()
   })
 })

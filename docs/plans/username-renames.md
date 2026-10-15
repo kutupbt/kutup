@@ -611,13 +611,26 @@ identity"). A rename is followed so (`kutup-chat-core` `renames.rs`,
   <sequence>`) is written in the thread, once per rename; the timeline and
   search are marked stale and rebuilt (on open, should the device stop in
   between). A second answer of the same chain, or a restart, moves nothing.
-- **The alias log.** History keeps the address it was written under
-  (messages, Note to Self controls, backups); the timeline, search, history
-  views, the expiry sweep and the account's own controls read it through the
-  log, as do the libsignal store adapters and the inbound sender (a
-  sealed-sender certificate issued before the rename names the old address).
-  Queued sends resolve through it when delivered. A test classifies every
-  staged store and SQLite table as moved or not, so a new one cannot miss it.
+- **History moves too.** The move rewrites the peer's received and sent
+  messages and its queued sends under the new address, so nothing of the
+  peer stays under a name someone else may take.
+- **The alias log.** It maps an old address to where its peer is now,
+  with the peer's incarnation. What names a conversation inside its content
+  (Note to Self controls, backups) is read through it as of its time; live
+  routing (the libsignal store adapters, inbound senders, queued sends) reads
+  it as of now, since a sealed-sender certificate issued before the rename
+  names the old address. A test classifies every staged store and SQLite
+  table as moved or not, so a new one cannot miss it.
+- **A left name taken by someone else.** When another incarnation is pinned
+  at the address, the same transaction marks its alias reused: from then on
+  the address is the newcomer's (a message request, a thread of its own),
+  and only what came before follows the old peer. An inbound sender is
+  checked against the manifest the alias leads to, else against whoever
+  holds the address now; a send goes to the address asked and follows only
+  a `409 renamed`. Every inbound device, sealed or identified, must be in the
+  verified manifest of the authority pinned for its sender (identified
+  envelopes were not checked before; a session-starting message must carry
+  the manifest's identity key).
 - **This account's own rename.** Chat opens again when the session's
   username changes; on opening, `adoptOwnRename` finds the account's own
   records under an earlier address of its own verified chain and moves them
