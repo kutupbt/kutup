@@ -470,12 +470,11 @@ impl ChatAttachmentLedgerEntryV1 {
             return Err("Chat attachment conversation reference is invalid".into());
         }
         match self.conversation_kind {
+            // The peer's account (this account's own for Note to Self), in
+            // its one string form, `aci:<uuid>@<server>`.
             ChatMediaConversationKindV1::Direct | ChatMediaConversationKindV1::NoteToSelf => {
-                let address = AccountAddress::from_str(&self.conversation_reference)
-                    .map_err(|error| error.to_string())?;
-                if address.canonical() != self.conversation_reference {
-                    return Err("Chat attachment account reference is not canonical".into());
-                }
+                kutup_crypto::account_ref::AccountRef::from_str(&self.conversation_reference)
+                    .map_err(|_| "Chat attachment account reference is invalid".to_string())?;
             }
             ChatMediaConversationKindV1::MlsGroup => {
                 require_canonical_uuid("conversationReference", &self.conversation_reference)?;
@@ -830,7 +829,7 @@ mod tests {
         ChatAttachmentLedgerEntryV1 {
             version: 1,
             conversation_kind: ChatMediaConversationKindV1::Direct,
-            conversation_reference: "bob@example.org".into(),
+            conversation_reference: "aci:00000000-0000-4000-8000-000000000002@example.org".into(),
             message_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
             storage_reference_id: "22222222-2222-4222-8222-222222222222".into(),
@@ -891,7 +890,7 @@ mod tests {
         let bytes = entry.canonical_bytes().unwrap();
         assert_eq!(
             hex::encode(&bytes),
-            "4b55545043453100000101010200000f626f62406578616d706c652e6f7267aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa1111111111114111811111111111111122222222222242228222222222222222000000000000004c0000018bcfe5680000076361742e6a706700"
+            "4b5554504345310000010101020000346163693a30303030303030302d303030302d343030302d383030302d303030303030303030303032406578616d706c652e6f7267aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa1111111111114111811111111111111122222222222242228222222222222222000000000000004c0000018bcfe5680000076361742e6a706700"
         );
         assert_eq!(
             ChatAttachmentLedgerEntryV1::from_canonical_bytes(&bytes).unwrap(),

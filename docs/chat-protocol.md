@@ -31,16 +31,30 @@ is independently authenticated.
 Kutup does not fork or copy selected pieces of libsignal or OpenMLS. Their
 types do not cross Kutup's public API boundary.
 
-## 2. Addresses and conversation types
+## 2. Accounts, addresses and conversation types
 
-The stable address is canonical lowercase `username@server`. It is the only
-account form: on the wire (JSON `{"username", "server"}` with both required,
-or the `username@server` string), in the server mailbox (`chat_mailbox.sender`
-of an identified envelope), in sealed federation transactions (`recipient`)
-and in client stores. A bare username is refused wherever an account is
-decoded; a client qualifies what a person types (a bare name means the home
-server) before it reaches Chat. Display names and avatars are encrypted,
-mutable and non-unique; they are never routing keys.
+A person is their **account**: the pair `{server, accountId}`, where
+`accountId` is the permanent random id the server minted with the account
+(Signal's ACI; docs/plans/account-ids.md). It survives renames, password
+changes, recovery and an administrator's reset, and ends only with the
+account. It is the key of every durable Chat record: the direct
+conversation (`{"kind": "direct", "account": {"server", "accountId"}}`,
+key `direct:aci:<uuid>@<server>`), the libsignal `ProtocolAddress` name,
+the local stores, contact state (a block follows the person), sent
+transcripts (`peer`, Signal's `destinationServiceId`), mentions, group
+actors, view-once senders, invite join requests, the attachment ledger and
+backup records. Where one string is needed it is `aci:<uuid>@<server>`,
+which no address parser accepts and which is never shown to a person.
+
+An **address**, canonical lowercase `username@server`, is a handle: what a
+person types to find someone and what the app shows. It can change (a
+rename) and, once freed, belong to someone else, so no durable record keys
+on it or carries it. A client resolves an address to an account once, when
+a person starts a conversation; everything after uses the account. A bare
+username is refused wherever an address is decoded; a client qualifies what
+a person types (a bare name means the home server) before it reaches Chat.
+Display names and avatars are encrypted, mutable and non-unique; they are
+never routing keys.
 
 V1 conversation types are:
 
@@ -474,7 +488,7 @@ receive path (Direct, sync transcript, MLS):
 
 | Field | On | Rule |
 | --- | --- | --- |
-| `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` a canonical address. Readers show "@" and the member's current name. |
+| `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` an account `{server, accountId}`. Readers show "@" and the member's current name. |
 | `linkPreview` | text | `{url, title, description?, image?}`: an `https://` URL that appears in the text, title ≤ 300 and description ≤ 1000 characters, an optional JPEG/PNG/WebP image ≤ 24 KiB inline. Made by the sender; recipients never contact the site. |
 | `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
 | `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |

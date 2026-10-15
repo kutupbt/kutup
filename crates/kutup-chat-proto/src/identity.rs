@@ -1,16 +1,20 @@
 //! Stable account and conversation identifiers shared by every chat client.
 //!
-//! A Kutup account has exactly one routing identity, `username@server`, on the
-//! wire, in server mailboxes and in client stores alike: there is no bare
-//! username form. Display names and avatars are profile data; they never
+//! A person is their account ([`AccountRef`]: server and permanent account id,
+//! Signal's ACI, docs/plans/account-ids.md). Conversations, stores and every
+//! durable record key on it. An address, `username@server`, is a handle: what
+//! a person types to find someone, and what the app shows. It can change
+//! (a rename) and later belong to someone else, so nothing durable keys on it
+//! or carries it. Display names and avatars are profile data; they never
 //! participate in routing or trust.
 
 use std::fmt;
 use std::str::FromStr;
 
+use kutup_crypto::account_ref::AccountRef;
 use serde::{Deserialize, Serialize};
 
-/// The stable routing identity of one Kutup account.
+/// An account's handle: what a person types and sees, never a key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -32,8 +36,7 @@ impl AccountAddress {
         Ok(Self { username, server })
     }
 
-    /// The canonical routing form used as the libsignal account name and UI
-    /// contact address.
+    /// The canonical form people type and see.
     pub fn canonical(&self) -> String {
         format!("{}@{}", self.username, self.server)
     }
@@ -70,7 +73,8 @@ impl fmt::Display for AccountAddress {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationId {
     Direct {
-        address: AccountAddress,
+        #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+        account: AccountRef,
     },
     Group {
         #[serde(rename = "groupId")]
@@ -79,17 +83,31 @@ pub enum ConversationId {
 }
 
 impl ConversationId {
-    pub fn direct(address: AccountAddress) -> Self {
-        Self::Direct { address }
+    pub fn direct(account: AccountRef) -> Self {
+        Self::Direct { account }
     }
 
-    /// Stable key suitable for IndexedDB indexes and frontend selection state.
+    /// Stable key suitable for IndexedDB indexes and frontend selection
+    /// state: `direct:aci:<uuid>@<server>` or `group:<uuid>`.
     pub fn key(&self) -> String {
         match self {
-            Self::Direct { address } => format!("direct:{}", address.canonical()),
+            Self::Direct { account } => format!("direct:{account}"),
             Self::Group { group_id } => format!("group:{group_id}"),
         }
     }
+}
+
+/// The OpenAPI shape of [`AccountRef`] (kutup-crypto has no utoipa).
+#[cfg(feature = "openapi")]
+#[derive(utoipa::ToSchema)]
+#[schema(as = AccountRef)]
+#[allow(dead_code)]
+pub struct AccountRefSchema {
+    /// The account's home server: a lowercase DNS name.
+    server: String,
+    /// Its permanent id: a lowercase hyphenated UUID.
+    #[schema(rename = "accountId")]
+    account_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,8 +145,14 @@ fn validate_server(server: &str) -> Result<(), AddressError> {
 mod tests {
     use super::*;
 
+    const ID: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
+    fn alice() -> AccountRef {
+        AccountRef::new("example.org", ID).unwrap()
+    }
+
     #[test]
-    fn parses_accounts_canonically_and_refuses_bare_usernames() {
+    fn parses_addresses_canonically_and_refuses_bare_usernames() {
         assert!("alice_42".parse::<AccountAddress>().is_err());
         assert!(serde_json::from_value::<AccountAddress>(
             serde_json::json!({ "username": "alice_42" })
@@ -138,17 +162,8 @@ mod tests {
             serde_json::json!({ "username": "alice_42", "server": null })
         )
         .is_err());
-        assert!(serde_json::from_value::<ConversationId>(
-            serde_json::json!({ "kind": "direct", "address": { "username": "alice_42" } })
-        )
-        .is_err());
-
         let remote: AccountAddress = "alice_42@Chat.Example".parse().unwrap();
         assert_eq!(remote.canonical(), "alice_42@chat.example");
-        assert_eq!(
-            ConversationId::direct(remote).key(),
-            "direct:alice_42@chat.example"
-        );
     }
 
     #[test]
@@ -161,21 +176,34 @@ mod tests {
             "alice@127.0.0.1",
             "alice@-example.org",
             "alice@example_org",
+            "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.org",
         ] {
             assert!(invalid.parse::<AccountAddress>().is_err(), "{invalid}");
         }
     }
 
     #[test]
-    fn conversation_shape_is_stable() {
-        let conversation = ConversationId::direct("alice@example.org".parse().unwrap());
+    fn a_direct_conversation_is_an_account_never_an_address() {
+        let conversation = ConversationId::direct(alice());
+        assert_eq!(conversation.key(), format!("direct:aci:{ID}@example.org"));
         assert_eq!(
-            serde_json::to_value(conversation).unwrap(),
+            serde_json::to_value(&conversation).unwrap(),
             serde_json::json!({
                 "kind": "direct",
-                "address": { "username": "alice", "server": "example.org" }
+                "account": { "server": "example.org", "accountId": ID }
             })
         );
+        for refused in [
+            serde_json::json!({ "kind": "direct", "address": { "username": "alice", "server": "example.org" } }),
+            serde_json::json!({ "kind": "direct", "account": "alice@example.org" }),
+            serde_json::json!({ "kind": "direct", "account": format!("aci:{ID}@example.org") }),
+            serde_json::json!({ "kind": "direct", "account": { "server": "example.org", "accountId": ID.to_uppercase() } }),
+        ] {
+            assert!(
+                serde_json::from_value::<ConversationId>(refused.clone()).is_err(),
+                "{refused}"
+            );
+        }
         assert_eq!(
             serde_json::to_value(ConversationId::Group {
                 group_id: "11111111-1111-4111-8111-111111111111".into(),
