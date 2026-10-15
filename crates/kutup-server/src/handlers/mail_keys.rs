@@ -66,25 +66,6 @@ pub struct OwnMailAddress {
     pub key_list: Option<SignedKeyList>,
 }
 
-/// The account (`username@server`) and its email address: the same string.
-async fn account_and_address(
-    state: &AppState,
-    user_id: Uuid,
-) -> AppResult<Option<(String, String)>> {
-    let username: Option<Option<String>> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some(Some(username)) = username else {
-        return Ok(None);
-    };
-    let account = format!("{username}@{}", state.config.chat_server_name);
-    let address = mail_key::canonical_address(&account)
-        .map_err(|_| AppError::internal("username is not a valid mail address"))?;
-    Ok(Some((account, address)))
-}
-
 /// Gives a new account its address row, in the transaction that creates the
 /// account (a GET never creates one). `false` when the address is taken (a
 /// group's, or another account's): the caller refuses the username.
@@ -391,17 +372,16 @@ pub async fn add_key(
     Json(req): Json<AddMailKeyRequest>,
 ) -> AppResult<Json<OwnMailAddress>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let Some((_, address)) = account_and_address(&state, user_id).await? else {
-        return Err(AppError::not_found("not found"));
-    };
     let public_key = decode(&req.public_key, "publicKey")?;
     let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
-    let info = mail_key::inspect_address_public_key(&public_key, &address)
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
     account_envelope::inspect(&envelope)
         .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
 
+    // The address is the caller's row's (current, or an old one still
+    // receiving), and the key must be for it.
     let mut change = begin_list_change(&state, user_id, &id, &req.key_list).await?;
+    let info = mail_key::inspect_address_public_key(&public_key, &change.address)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
     // The account's key binding: a key sealed for any other is refused.
     let binding: String =
         sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
