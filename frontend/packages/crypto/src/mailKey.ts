@@ -106,6 +106,18 @@ export async function signMailKeyList(masterKeyBase64: string, list: MailKeyList
 }
 
 /**
+ * An address folded as Kutup servers compare names (`.`, `_`, `-` and case
+ * ignored in the local part; one account per folded name), or null. Rust's
+ * `kutup_crypto::names::fold_address`.
+ */
+export async function foldAddress(address: string): Promise<string | null> {
+  const at = address.lastIndexOf('@')
+  if (at <= 0 || at === address.length - 1) return null
+  const local = (await getCryptoWasm()).foldName(address.slice(0, at))
+  return local ? `${local}@${address.slice(at + 1).toLowerCase()}` : null
+}
+
+/**
  * Verifies a key list against an account authority and, when given, that it
  * directly follows `previous`.
  */

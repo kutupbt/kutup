@@ -100,7 +100,7 @@ impl MlsRepository {
             }
             for device in &request.initial_devices {
                 let device_user_id: Option<Uuid> = sqlx::query_scalar(
-                    "SELECT id FROM users WHERE username = $1 AND is_active = true",
+                    "SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true",
                 )
                 .bind(&device.address.username)
                 .fetch_optional(&mut *tx)
@@ -237,7 +237,7 @@ impl MlsRepository {
             .filter(|member| member.address.server == server_name)
         {
             let local_user_id: Option<Uuid> =
-                sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+                sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true")
                     .bind(&member.address.username)
                     .fetch_optional(&mut *tx)
                     .await?;
@@ -264,7 +264,7 @@ impl MlsRepository {
                 continue;
             }
             let local_user_id: Uuid =
-                sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+                sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true")
                     .bind(&device.address.username)
                     .fetch_one(&mut *tx)
                     .await?;

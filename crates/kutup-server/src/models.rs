@@ -56,6 +56,10 @@ pub struct SettingsResponse {
     /// Where each Kutup web app lives (server config; see docs/self-hosting.md).
     pub apps: crate::config::AppOrigins,
     pub feedback: FeedbackSettings,
+    /// Days a name an account leaves stays held before anyone may take it.
+    pub name_hold_days: i64,
+    /// Days a renamed account's old address still receives.
+    pub old_address_receive_days: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.
@@ -78,6 +82,10 @@ pub struct AdminSettingsResponse {
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
     pub chat_media_delivery_retention_days: i64,
+    /// Days a name an account left stays held before anyone may take it.
+    pub name_hold_days: i64,
+    /// Days a renamed account's old address still receives (at most the hold).
+    pub old_address_receive_days: i64,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -118,6 +126,18 @@ pub struct MeResponse {
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
+    /// Where the account's rename chain stands (`sequence` 0 and no `digest`
+    /// before a first rename): what its own devices anchor to.
+    pub renames: RenameAnchor,
+}
+
+/// The account's rename chain as its devices remember it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameAnchor {
+    pub sequence: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 /// Generic success — mirrors `handlers.OkResponse`.
@@ -460,6 +480,8 @@ pub struct UpdateAdminSettingsRequest {
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
+    pub name_hold_days: Option<i64>,
+    pub old_address_receive_days: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.

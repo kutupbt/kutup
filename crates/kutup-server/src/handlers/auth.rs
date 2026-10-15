@@ -180,12 +180,8 @@ pub(crate) async fn account_by_name(state: &AppState, name: &str) -> AppResult<O
         Some(_) => return Ok(None),
         None => name.as_str(),
     };
-    Ok(
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
-            .bind(local)
-            .fetch_optional(&state.pool)
-            .await?,
-    )
+    // A current name in any spelling; a held one is no account here.
+    crate::account_names::current(&state.pool, local).await
 }
 
 /// A name as one account would answer to it: trimmed, lowercased, and an
@@ -196,8 +192,12 @@ pub(crate) fn canonical_name(state: &AppState, name: &str) -> String {
     let name = name.trim().to_ascii_lowercase();
     let server = state.config.chat_server_name.to_ascii_lowercase();
     match name.rsplit_once('@') {
-        Some((local, domain)) if domain == server && !local.is_empty() => local.to_owned(),
-        _ => name,
+        Some((local, domain)) if domain == server && !local.is_empty() => {
+            kutup_crypto::names::fold(local)
+        }
+        // Another server's address: never an account here.
+        Some(_) => name,
+        None => kutup_crypto::names::fold(&name),
     }
 }
 
@@ -536,6 +536,8 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         sealed_sender_policy,
         ..Default::default()
     };
+    let (name_hold_days, old_address_receive_days) =
+        crate::site_settings::name_holds(&state.pool, &state.config).await?;
     Ok(Json(SettingsResponse {
         registration_mode,
         chat,
@@ -543,6 +545,8 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         feedback: crate::models::FeedbackSettings {
             github_repository: state.config.feedback_github_repository.clone(),
         },
+        name_hold_days,
+        old_address_receive_days,
     })
     .into_response())
 }
@@ -576,20 +580,6 @@ pub async fn register(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
-    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
-        return Err(AppError::bad_request(
-            "this username is reserved for the server",
-        ));
-    }
-    if crate::mail::groups::is_group_name(
-        &state.pool,
-        &req.username,
-        &state.config.chat_server_name,
-    )
-    .await?
-    {
-        return Err(AppError::conflict("this username is taken"));
-    }
     let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
     use kutup_crypto::account_envelope::AccountEnvelopePurpose;
     validate_account_envelope(
@@ -621,6 +611,19 @@ pub async fn register(
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
+    // One account per folded name, against every name in use or held and
+    // every address (docs/plans/username-renames.md, "Folded names").
+    if let Err(unavailable) = crate::account_names::available(
+        &mut tx,
+        &state.config.chat_server_name,
+        &state.config.break_glass_admin_username,
+        &req.username,
+        None,
+    )
+    .await?
+    {
+        return Err(unavailable.error());
+    }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
             username, master_key_envelope, recovery_key_envelope,
@@ -656,6 +659,13 @@ pub async fn register(
         Ok(id) => id,
         Err(err) => return Err(map_insert_conflict(err)),
     };
+    crate::account_names::claim(
+        &mut tx,
+        &req.username,
+        user_id,
+        Some(&req.account_incarnation_id),
+    )
+    .await?;
     // The code is used up with the account (a failure below rolls both back):
     // checked above, taken here, where the row's lock orders concurrent
     // sign-ups, so a code with N uses admits N accounts.
@@ -1132,6 +1142,15 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     } else {
         format!("{username}@{}", state.config.chat_server_name)
     };
+    // The account's rename chain, of its current incarnation: where it ends.
+    let anchor: Option<(i32, String)> = sqlx::query_as(
+        "SELECT r.sequence, r.digest FROM account_renames r
+           JOIN users u ON u.account_incarnation_id = r.incarnation_id
+          WHERE u.id = $1 ORDER BY r.sequence DESC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
     Ok(Json(MeResponse {
         id: id.to_string(),
         address,
@@ -1144,6 +1163,10 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        renames: crate::models::RenameAnchor {
+            sequence: anchor.as_ref().map_or(0, |a| a.0),
+            digest: anchor.map(|a| a.1),
+        },
     })
     .into_response())
 }
@@ -1245,7 +1268,7 @@ pub async fn get_user_by_address(
             Some(username) => sqlx::query_as(
                 "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
                         account_authority_public_key, drive_key_binding
-                 FROM users WHERE username = $1 AND is_active = true",
+                 FROM users WHERE id = kutup_current_user($1) AND is_active = true",
             )
             .bind(&username)
             .fetch_optional(&state.pool)
@@ -1255,7 +1278,21 @@ pub async fn get_user_by_address(
     let Some((id, username, public_key, incarnation_id, signing_public_key, authority, binding)) =
         row
     else {
-        return Err(AppError::not_found("user not found"));
+        // An old name: where the account went (the chains), never its keys.
+        return Err(
+            match local_account_username(&address, &state.config.chat_server_name) {
+                Some(username) => {
+                    crate::account_names::renamed_or(
+                        &state.pool,
+                        &state.config.chat_server_name,
+                        &username,
+                        AppError::not_found("user not found"),
+                    )
+                    .await
+                }
+                None => AppError::not_found("user not found"),
+            },
+        );
     };
     let username = username
         .filter(|value| !value.is_empty())
@@ -1528,6 +1565,9 @@ pub async fn complete_setup(
         Ok(_) => return Err(setup_token_invalid()),
     }
     crate::grants::end_all(&mut tx, uid).await?;
+    // The name belongs to this incarnation from now on (its rename chain
+    // starts under the new authority).
+    crate::account_names::set_incarnation(&mut tx, uid, &req.account_incarnation_id).await?;
     tx.commit().await?;
 
     let (is_admin, quota, used, username): (bool, i64, i64, String) = sqlx::query_as(
@@ -1768,7 +1808,7 @@ fn parse_uuid(s: &str) -> AppResult<Uuid> {
 
 /// Maps a duplicate-key INSERT error to the right 409 — mirrors `isDuplicateKeyError` +
 /// the username branch in `Register`.
-fn map_insert_conflict(err: sqlx::Error) -> AppError {
+pub(crate) fn map_insert_conflict(err: sqlx::Error) -> AppError {
     if let sqlx::Error::Database(db) = &err {
         if db.code().as_deref() == Some("23505") {
             let constraint = db.constraint().unwrap_or("");

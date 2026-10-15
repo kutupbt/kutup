@@ -190,21 +190,50 @@ async fn group_sender(
     ))
 }
 
+/// Whether `key_id` is the encryption key of one of the account's old
+/// addresses (receiving, closed or freed after a rename).
+async fn from_old_address(state: &AppState, user_id: Uuid, key_id: [u8; 8]) -> AppResult<bool> {
+    let keys: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
+          WHERE a.user_id = $1 AND a.state <> 'active'",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(keys
+        .iter()
+        .any(|key| mail_key::encryption_key_id(key).ok() == Some(key_id)))
+}
+
 async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
     let row: Option<(Uuid, String, Vec<u8>)> = sqlx::query_as(
         "SELECT a.id, a.address, k.public_key
            FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.user_id = $1
-          ORDER BY a.created_at LIMIT 1",
+          WHERE a.user_id = $1 AND a.state = 'active'
+          ORDER BY a.created_at DESC LIMIT 1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (address_id, address, public_key) = row.ok_or_else(|| {
-        AppError::conflict("this account has no mail address key yet")
-            .with_details(json!({ "code": "noAddressKey" }))
-    })?;
+    let Some((address_id, address, public_key)) = row else {
+        // Old addresses receive only: an account with no current address to
+        // send from is refused as such, never sent from an old one.
+        let receive_only: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM mail_addresses WHERE user_id = $1 AND state = 'receiving')
+                AND NOT EXISTS (SELECT 1 FROM mail_addresses WHERE user_id = $1 AND state = 'active')",
+        )
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+        return Err(if receive_only {
+            AppError::forbidden("an old address receives only")
+                .with_details(json!({ "code": "addressReceiveOnly" }))
+        } else {
+            AppError::conflict("this account has no mail address key yet")
+                .with_details(json!({ "code": "noAddressKey" }))
+        });
+    };
     let key_id = mail_key::encryption_key_id(&public_key)
         .map_err(|_| AppError::internal("stored address key does not parse"))?;
     Ok(Sender {
@@ -1014,7 +1043,19 @@ pub(crate) async fn deliver(
 
     // The sender's own copy.
     let own_packet = key_packet("self")?;
-    if mail_key::key_packet_key_id(&own_packet).ok() != Some(sender.key_id) {
+    let own_key_id = mail_key::key_packet_key_id(&own_packet).ok();
+    if own_key_id != Some(sender.key_id) {
+        // Written as an old address (a send scheduled before a rename): it
+        // receives only, and the message is not sent from it.
+        if let Some(key_id) = own_key_id {
+            if from_old_address(&state, user_id, key_id).await? {
+                return Err(
+                    AppError::forbidden("an old address receives only").with_details(
+                        json!({ "code": "addressReceiveOnly", "address": sender.address }),
+                    ),
+                );
+            }
+        }
         return Err(AppError::conflict("your address key changed; reload")
             .with_details(json!({ "code": "keyChanged", "address": sender.address })));
     }

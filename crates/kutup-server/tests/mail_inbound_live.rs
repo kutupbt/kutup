@@ -4980,3 +4980,273 @@ fn expiring_messages_are_deleted_everywhere() {
         "their storage freed"
     );
 }
+
+/// An account's old address after a rename (docs/plans/username-renames.md):
+/// it receives, never sends (an auto-reply goes from the current address),
+/// bounces once closed, and once freed is someone else's, while what it
+/// received stays its old owner's.
+#[test]
+fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
+    let (Ok(base), Ok(smtp_address), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_SMTP / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let token = common::admin_token(&c, &base, admin_password, admin_name);
+    let mut alice = register(&c, &base);
+    let old = set_up_address(&c, &base, &alice);
+    let old_name = alice.username.clone();
+    let bob = register(&c, &base);
+    let bob_address = set_up_address(&c, &base, &bob);
+    let domain = old.address.split_once('@').unwrap().1.to_string();
+    let r = bearer(c.put(format!("{base}/api/mail/auto-reply")), &alice.token)
+        .json(&json!({
+            "enabled": true, "repeat": "permanent", "zone": "Europe/Istanbul",
+            "messageHtml": "<p>Taşındım.</p>", "messageText": "Taşındım.",
+        }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "auto-reply: {}", r.status());
+
+    let new_name = format!("moved_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let renamed = common::rename_account(&c, &base, &alice, &new_name, false);
+    assert!(renamed.status.is_success(), "rename: {}", renamed.body);
+    let first = renamed.key.unwrap();
+    let new = Address {
+        address: format!("{new_name}@{domain}"),
+        secret_key: first.key.secret_key.to_vec(),
+        public_key: first.key.public_key.clone(),
+    };
+    alice.username = new_name.clone();
+    let outside = |to: &str, id: &str| {
+        format!(
+            "From: writer@sender.test\r\nTo: {to}\r\nSubject: moved\r\nMessage-ID: <{id}>\r\n\r\nmerhaba\r\n"
+        )
+    };
+
+    // During the window the old address receives, sealed to its own key; a
+    // spelling of the new one without its `_` reaches the new address.
+    let to_old = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(&smtp_address, &old.address, &outside(&old.address, &to_old)),
+        (250, 250)
+    );
+    let row = wait_for(&c, &base, &alice, &to_old);
+    assert!(open_row(&c, &base, &alice, &old, &row).contains("merhaba"));
+    let variant = format!("{}@{domain}", new_name.replace('_', ""));
+    let to_variant = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(&smtp_address, &variant, &outside(&variant, &to_variant)),
+        (250, 250)
+    );
+    let row = wait_for(&c, &base, &alice, &to_variant);
+    assert!(open_row(&c, &base, &alice, &new, &row).contains("merhaba"));
+
+    // Bob writes to the old address; the auto-reply comes from the new one.
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: Eski adres\r\nMessage-ID: <{message_id}>\r\n\r\nmerhaba\r\n",
+        bob_address.address, old.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&old.public_key, &bob_address.public_key],
+        &bob_address.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": old.address }],
+        "subject": "Eski adres",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[1]), old.address.clone(): b64(&split.key_packets[0]) },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &bob.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "send: {}", r.status());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let reply = loop {
+        if let Some(reply) = folder(&c, &base, &bob.token, "inbox")
+            .into_iter()
+            .find(|m| m["subject"] == "Auto: Eski adres")
+        {
+            break reply;
+        }
+        assert!(Instant::now() < deadline, "no auto-reply");
+        std::thread::sleep(Duration::from_millis(500));
+    };
+    assert_eq!(reply["from"]["address"], new.address.as_str(), "{reply}");
+
+    // Alice's own mail goes from the new address.
+    send_to_self(&c, &base, &alice, &new, "Yeni adres");
+    let sent = folder(&c, &base, &alice.token, "sent")
+        .into_iter()
+        .find(|m| m["subject"] == "Yeni adres")
+        .expect("in Sent");
+    assert_eq!(sent["from"]["address"], new.address.as_str(), "{sent}");
+
+    // The keys of each, checked as the apps check them (mail-core keys.ts):
+    // the answer is the address asked (folded), and the newest signed list
+    // names its address and account as the answer does. The old address's
+    // list names the account as it was called then.
+    for (asked, stored, account) in [
+        (
+            old.address.clone(),
+            old.address.clone(),
+            old.address.clone(),
+        ),
+        (variant.clone(), new.address.clone(), new.address.clone()),
+        (
+            new.address.clone(),
+            new.address.clone(),
+            new.address.clone(),
+        ),
+    ] {
+        let lookup: Value = bearer(
+            c.get(format!("{base}/api/mail/keys?email={asked}")),
+            &bob.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        assert_eq!(lookup["address"], stored.as_str(), "{asked}: {lookup}");
+        assert_eq!(lookup["account"], account.as_str(), "{asked}: {lookup}");
+        assert_eq!(
+            kutup_crypto::names::fold_address(lookup["address"].as_str().unwrap()),
+            kutup_crypto::names::fold_address(&asked)
+        );
+        let authority: [u8; 32] =
+            common::b64_decode(lookup["accountAuthorityPublicKey"].as_str().unwrap())
+                .try_into()
+                .unwrap();
+        let newest = lookup["keyLists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|list| {
+                mail_key::SignedMailKeyListV1::verify(
+                    &common::b64_decode(list["data"].as_str().unwrap()),
+                    &common::b64_decode(list["signature"].as_str().unwrap()),
+                    &authority,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+            .pop()
+            .unwrap();
+        assert_eq!(newest.list.address, stored, "{asked}");
+        assert_eq!(newest.list.account, account, "{asked}");
+    }
+
+    // A message written as the old address (sealed to its own key for the
+    // sender's copy: one scheduled before the rename) is not sent from it.
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {0}\r\nTo: {1}\r\nSubject: Eskiden\r\nMessage-ID: <{message_id}>\r\n\r\nmerhaba\r\n",
+        old.address, bob_address.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&bob_address.public_key, &old.public_key],
+        &old.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": bob_address.address }],
+        "subject": "Eskiden",
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[1]), bob_address.address.clone(): b64(&split.key_packets[0]) },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "addressReceiveOnly");
+
+    // Closed: mail to the old address bounces, and it publishes no key.
+    let r = bearer(
+        c.post(format!("{base}/api/admin/names/{old_name}/close")),
+        &token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 204);
+    let bounced = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    let (rcpt, _) = smtp_send(
+        &smtp_address,
+        &old.address,
+        &outside(&old.address, &bounced),
+    );
+    assert_ne!(rcpt, 250, "a closed address takes no mail");
+    let keys = bearer(
+        c.get(format!("{base}/api/mail/keys?email={}", old.address)),
+        &bob.token,
+    )
+    .send()
+    .unwrap();
+    let published: Value = keys.json().unwrap_or(Value::Null);
+    assert!(
+        published["keys"].as_array().is_none_or(|k| k.is_empty()),
+        "{published}"
+    );
+
+    // Freed and taken: the name is Carol's now, mail to it hers, a group
+    // would enrol her; what Alice received there stays Alice's.
+    let r = bearer(
+        c.post(format!("{base}/api/admin/names/{old_name}/free")),
+        &token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), 204);
+    let carol = common::register_as(&c, &base, &old_name).unwrap();
+    let carols = set_up_address(&c, &base, &carol);
+    assert_eq!(carols.address, old.address);
+    let to_carol = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp_address,
+            &old.address,
+            &outside(&old.address, &to_carol)
+        ),
+        (250, 250)
+    );
+    let row = wait_for(&c, &base, &carol, &to_carol);
+    assert!(open_row(&c, &base, &carol, &carols, &row).contains("merhaba"));
+    assert!(
+        messages(&c, &base, &alice.token)
+            .iter()
+            .any(|m| m["messageId"] == to_old.as_str()),
+        "Alice keeps what her old address received"
+    );
+    assert!(
+        !messages(&c, &base, &alice.token)
+            .iter()
+            .any(|m| m["messageId"] == to_carol.as_str()),
+        "Carol's mail is not Alice's"
+    );
+    let enrolled: Value = bearer(
+        c.get(format!("{base}/api/mail/accounts?address={}", old.address)),
+        &bob.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(enrolled["userId"], json!(carol.id), "{enrolled}");
+    common::purge_accounts(&c, &base, &[&alice, &bob, &carol]);
+}

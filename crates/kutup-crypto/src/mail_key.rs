@@ -1530,6 +1530,58 @@ fn backend(error: impl std::fmt::Display) -> CryptoError {
     CryptoError::Backend(error.to_string())
 }
 
+/// A new address's first key, sealed, with its first signed key list (the
+/// key alone, primary): what an account sends to give an address its key, at
+/// sign-up or in a rename.
+pub struct FirstAddressKey {
+    pub key: GeneratedAddressKey,
+    /// The secret key sealed under the master key for the account's binding.
+    pub private_key_envelope: Vec<u8>,
+    pub key_list: SignedMailKeyListV1,
+}
+
+/// Generates `address`'s first key for the account `identity` (master key
+/// and key binding), created at `created_at_secs`, its list issued at
+/// `issued_at` (RFC 3339).
+pub fn first_address_key(
+    identity: &crate::identity::AccountIdentityKeysV1,
+    master_key: &[u8],
+    binding: &str,
+    address: &str,
+    created_at_secs: u32,
+    issued_at: &str,
+) -> Result<FirstAddressKey> {
+    let address = canonical_address(address)?;
+    let key = generate_address_key(&address, created_at_secs)?;
+    let private_key_envelope = seal_address_key(master_key, binding, &address, &key.secret_key)?;
+    let hex32 = |value: String| -> Result<[u8; 32]> {
+        hex::decode(value)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| CryptoError::InvalidInput("identity id".into()))
+    };
+    let key_list = MailKeyListV1 {
+        account: address.clone(),
+        incarnation_id: hex32(identity.incarnation_id())?,
+        authority_key_id: hex32(identity.authority_key_id())?,
+        address,
+        sequence: 1,
+        previous_hash: None,
+        issued_at: issued_at.to_owned(),
+        keys: vec![MailKeyEntryV1 {
+            fingerprint: key.fingerprint,
+            sha256_fingerprint: key.sha256_fingerprint,
+            primary: true,
+            flags: DEFAULT_FLAGS,
+        }],
+    }
+    .sign(identity.authority_signing_key())?;
+    Ok(FirstAddressKey {
+        key,
+        private_key_envelope,
+        key_list,
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;

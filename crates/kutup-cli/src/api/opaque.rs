@@ -50,9 +50,11 @@ struct Granted {
 impl Client {
     /// Starts a sign-in (`purpose`: `session`, or `reauth` for a grant
     /// `grant_for`, with this client's session).
+    /// `name` is for a sign-in; a reauth names none (it is for the session's
+    /// own account).
     pub fn login_start(
         &self,
-        name: &str,
+        name: Option<&str>,
         request: &[u8],
         purpose: &str,
         grant_for: Option<&str>,

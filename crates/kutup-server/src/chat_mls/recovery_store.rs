@@ -482,7 +482,7 @@ async fn apply_recovery_delivery(
             "SELECT u.id
              FROM users u
              JOIN chat_mls_local_members m ON m.user_id = u.id
-             WHERE u.username = $1 AND u.is_active = true
+             WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true
                AND m.conversation_id = $2 AND m.incarnation = $3
                AND m.removed_epoch IS NULL AND m.membership_status = 'active'",
         )

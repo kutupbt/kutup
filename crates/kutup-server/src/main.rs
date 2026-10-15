@@ -7,6 +7,7 @@
 //! handler slice lands.
 
 mod account_heads;
+mod account_names;
 mod albums;
 mod auth_check;
 mod calls;
@@ -439,6 +440,8 @@ async fn main() -> anyhow::Result<()> {
             sealed_sender.spawn_maintenance(state.pool.clone(), Arc::clone(federation));
         }
     }
+    // Old addresses past their receiving, names past their hold.
+    account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
@@ -525,8 +528,10 @@ async fn bootstrap_admin(
     let (username, password) = (username.as_str(), password.as_str());
 
     // A failed check is not "no admin yet": nothing is created on an error.
+    // Any name in that folded form counts, held ones too (the break-glass
+    // account cannot be renamed; a held spelling is never re-created).
     let exists: Option<i64> = match sqlx::query_scalar(
-        "SELECT COUNT(*) FROM users WHERE username = $1",
+        "SELECT COUNT(*) FROM account_names WHERE folded = kutup_fold($1)",
     )
     .bind(username)
     .fetch_optional(pool)
@@ -613,9 +618,16 @@ async fn bootstrap_admin(
     .fetch_one(&mut *tx)
     .await;
     let created = match res {
-        Ok(id) => {
-            crate::handlers::mail_keys::create_own_address(&mut tx, server_name, id, username).await
-        }
+        Ok(id) => match crate::account_names::claim(&mut tx, username, id, None).await {
+            Ok(()) => {
+                crate::handlers::mail_keys::create_own_address(&mut tx, server_name, id, username)
+                    .await
+            }
+            Err(e) => {
+                tracing::warn!("bootstrapAdmin: the name @{username} is taken: {e:?}");
+                return;
+            }
+        },
         Err(e) => {
             tracing::warn!("bootstrapAdmin: insert error for @{username}: {e}");
             return;
@@ -770,6 +782,25 @@ fn build_router(state: AppState) -> Router {
         )
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
+        .route(
+            "/api/admin/names/:name/close",
+            post(handlers::renames::admin_close),
+        )
+        .route(
+            "/api/admin/names/:name/free",
+            post(handlers::renames::admin_free),
+        )
+        .route(
+            "/api/users/renames/:address",
+            get(handlers::renames::chains).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route("/api/user/rename/check", get(handlers::renames::check))
+        .route("/api/user/rename", post(handlers::renames::rename))
+        .route("/api/user/names", get(handlers::renames::names))
+        .route(
+            "/api/user/names/:name",
+            axum::routing::delete(handlers::renames::drop_name),
+        )
         .route(
             "/api/account/head",
             get(handlers::account_heads::head).post(handlers::account_heads::start),

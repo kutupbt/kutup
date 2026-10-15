@@ -211,8 +211,19 @@ impl IdentityPinV1 {
     /// Whether this incarnation is known to have had `address` before (its
     /// renames, or the address a detached pin was pushed off).
     fn had(&self, address: &str) -> bool {
-        self.formerly.iter().any(|former| former == address)
+        self.formerly.iter().any(|former| same(former, address))
     }
+}
+
+/// Whether two addresses are one account: equal once folded (a Kutup server
+/// keeps one account per folded name), so `ada-l` typed today finds the pin
+/// saved as `ada_l`. A pin keeps the spelling it was saved with.
+fn same(a: &str, b: &str) -> bool {
+    a == b
+        || matches!(
+            (crate::names::fold_address(a), crate::names::fold_address(b)),
+            (Some(a), Some(b)) if a == b
+        )
 }
 
 fn server_of(account: &str) -> &str {
@@ -522,7 +533,7 @@ pub fn record(
         PinUpdate::Verified => PinState::Verified,
         PinUpdate::FirstSeen | PinUpdate::Accepted => PinState::Seen,
     };
-    let live = list.pins.iter().position(|pin| pin.account == account);
+    let live = list.pins.iter().position(|pin| same(&pin.account, account));
     if let Some(i) = live {
         let pin = &mut list.pins[i];
         if pin.authority_public_key == authority {
@@ -555,7 +566,7 @@ pub fn record(
         }
         // The same account, pushed off this very address by a rename, is met
         // there again: back as it was.
-        Some((true, j)) if list.detached[j].account == account => {}
+        Some((true, j)) if same(&list.detached[j].account, account) => {}
         Some((detached, j)) => {
             let pin = if detached {
                 &mut list.detached[j]
@@ -618,12 +629,12 @@ fn pin_now(
         pin.formerly.clear();
         pin.renames = None;
     }
-    pin.formerly.retain(|former| former != account);
+    pin.formerly.retain(|former| !same(former, account));
     if state == PinState::Verified || !trusted_back {
         pin.state = state;
         pin.since = since.to_owned();
     }
-    if let Some(i) = list.pins.iter().position(|p| p.account == account) {
+    if let Some(i) = list.pins.iter().position(|p| same(&p.account, account)) {
         let previous = list.pins.remove(i);
         let mut replaced = previous.replaced.clone();
         replaced.push(previous.incarnation_id()?);
@@ -660,7 +671,7 @@ fn moved_from(list: &IdentityPinsV1, address: &str) -> Vec<MovedPin> {
     let detached = list
         .detached
         .iter()
-        .filter(|pin| pin.account == address || pin.had(address))
+        .filter(|pin| same(&pin.account, address) || pin.had(address))
         .map(|pin| MovedPin {
             pin: pin.clone(),
             now: None,
@@ -707,7 +718,7 @@ pub enum PinMatch {
 
 /// What the list says about `address`; see [`PinMatch`].
 pub fn lookup(list: &IdentityPinsV1, address: &str, published: Option<&str>) -> PinMatch {
-    if let Some(pin) = list.pins.iter().find(|pin| pin.account == address) {
+    if let Some(pin) = list.pins.iter().find(|pin| same(&pin.account, address)) {
         return PinMatch::Pinned {
             pin: pin.clone(),
             same_authority: published == Some(pin.authority_public_key.as_str()),
@@ -722,7 +733,7 @@ pub fn lookup(list: &IdentityPinsV1, address: &str, published: Option<&str>) -> 
                 }
             }
             (true, j)
-                if list.detached[j].account == address
+                if same(&list.detached[j].account, address)
                     && list.detached[j].detached_by == Some(DetachReason::Rename) =>
             {
                 PinMatch::Returned {
@@ -730,7 +741,7 @@ pub fn lookup(list: &IdentityPinsV1, address: &str, published: Option<&str>) -> 
                 }
             }
             // A former holder the user replaced, met at that address again.
-            (true, j) if list.detached[j].account == address => PinMatch::Moved {
+            (true, j) if same(&list.detached[j].account, address) => PinMatch::Moved {
                 pins: moved_from(list, address),
             },
             (true, j) => PinMatch::Renamed {
@@ -812,7 +823,7 @@ pub fn apply_rename(
     let mut formerly: Vec<String> = Vec::new();
     for address in &view.addresses[..view.addresses.len() - 1] {
         if *address != view.current {
-            formerly.retain(|known| known != address);
+            formerly.retain(|known| !same(known, address));
             formerly.push(address.clone());
         }
     }
@@ -837,7 +848,7 @@ pub fn apply_rename(
         *list = before.clone();
         error
     };
-    let changed_address = moved.account != view.current || entry.0;
+    let changed_address = !same(&moved.account, &view.current) || entry.0;
     moved.account = view.current.clone();
     moved.formerly = formerly;
     moved.renames = Some(head);
@@ -862,7 +873,11 @@ pub fn apply_rename(
         });
     }
     let mut displaced = None;
-    if let Some(i) = list.pins.iter().position(|p| p.account == view.current) {
+    if let Some(i) = list
+        .pins
+        .iter()
+        .position(|p| same(&p.account, &view.current))
+    {
         let holder = list.pins.remove(i);
         let mut replaced = holder.replaced.clone();
         let incarnation = holder.incarnation_id().map_err(|e| restore(list, e))?;

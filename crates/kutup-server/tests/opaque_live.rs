@@ -364,17 +364,28 @@ fn a_reauth_is_for_the_signed_in_account_only() {
     };
     let c = client();
     let (a, b) = (register(&c, &base), register(&c, &base));
-    // A's session, B's name and password.
+    // A reauth names no account: one that does is refused.
+    let (_, ke1) = kutup_crypto::opaque::client_login_start(&b.password).unwrap();
+    let named = bearer(c.post(format!("{base}/api/auth/login/start")), &a.token)
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "name": b.username, "credentialRequest": b64(&ke1),
+                       "purpose": "reauth", "for": "passwordChange" }))
+        .send()
+        .unwrap();
+    assert_eq!(named.status(), StatusCode::BAD_REQUEST);
+    // The session's own account is the one checked: a password that is not
+    // A's fails (test accounts share one password, so a wrong one stands in
+    // for B's).
     let (status, _, _) = opaque_login(
         &c,
         &base,
         &b.username,
-        &b.password,
+        "not-a-password-of-a",
         "reauth",
         Some("passwordChange"),
         Some(&a.token),
     );
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     purge_accounts(&c, &base, &[&a, &b]);
 }
 
@@ -630,10 +641,8 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
         let r = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
             .header("x-kutup-client", "cli")
             .header("x-real-ip", "192.0.2.140")
-            .json(
-                &json!({ "name": user.username, "credentialRequest": b64(&ke1),
-                           "purpose": "reauth", "for": "verify" }),
-            )
+            .json(&json!({ "credentialRequest": b64(&ke1),
+                           "purpose": "reauth", "for": "verify" }))
             .send()
             .unwrap();
         let status = r.status();

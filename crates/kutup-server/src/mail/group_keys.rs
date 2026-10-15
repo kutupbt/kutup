@@ -78,7 +78,7 @@ pub async fn check_shares(pool: &PgPool, shares: &[ShareInput]) -> AppResult<Vec
         let key: Option<(String, Vec<u8>)> = sqlx::query_as(
             "SELECT k.fingerprint, k.public_key FROM mail_addresses a
                JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-              WHERE a.user_id = $1",
+              WHERE a.user_id = $1 AND a.state = 'active'",
         )
         .bind(user_id)
         .fetch_optional(pool)
@@ -320,7 +320,9 @@ pub async fn lookup(
 pub async fn wkd_keys(pool: &PgPool, address: &str) -> sqlx::Result<Vec<Vec<u8>>> {
     sqlx::query_scalar(
         "SELECT k.public_key FROM mail_group_keys k JOIN mail_groups g ON g.id = k.group_id
-          WHERE g.address = $1 AND g.kind = 'shared' AND (k.flags & $2) <> 0
+          WHERE kutup_fold(split_part(g.address, '@', 1)) || '@' || lower(split_part(g.address, '@', 2))
+              = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND g.kind = 'shared' AND (k.flags & $2) <> 0
           ORDER BY k.is_primary DESC, k.created_at DESC",
     )
     .bind(address)

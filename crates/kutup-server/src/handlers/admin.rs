@@ -223,20 +223,6 @@ pub async fn create_user(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
     }
-    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
-        return Err(AppError::bad_request(
-            "this username is reserved for the server",
-        ));
-    }
-    if crate::mail::groups::is_group_name(
-        &state.pool,
-        &req.username,
-        &state.config.chat_server_name,
-    )
-    .await?
-    {
-        return Err(AppError::conflict("this username is taken"));
-    }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
         req.storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
@@ -246,6 +232,19 @@ pub async fn create_user(
     }
 
     let mut tx = state.pool.begin().await?;
+    // One account per folded name (docs/plans/username-renames.md). The
+    // break-glass account itself is made by `bootstrap_admin`, not here.
+    if let Err(unavailable) = crate::account_names::available(
+        &mut tx,
+        &state.config.chat_server_name,
+        &state.config.break_glass_admin_username,
+        &req.username,
+        None,
+    )
+    .await?
+    {
+        return Err(unavailable.error());
+    }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
@@ -269,6 +268,7 @@ pub async fn create_user(
         Ok(id) => id,
         Err(e) => return Err(map_insert_conflict(e)),
     };
+    crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,
         &state.config.chat_server_name,
@@ -454,10 +454,27 @@ pub async fn delete_user(
     purge_mail(&state, target).await?;
     hand_over_contributions(&state.pool, target).await?;
 
+    // Its names stay held, receiving nothing, until the hold ends: nobody
+    // takes a deleted person's name, nor their mail, before then
+    // (docs/plans/username-renames.md).
+    let (hold_days, _) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE account_names SET state = 'held', receive_until = now(),
+                free_at = now() + make_interval(days => $2::int)
+          WHERE user_id = $1",
+    )
+    .bind(target)
+    .bind(hold_days as i32)
+    .execute(&mut *tx)
+    .await?;
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await;
+    if res.as_ref().is_ok_and(|r| r.rows_affected() > 0) {
+        tx.commit().await?;
+    }
     match res {
         Ok(r) if r.rows_affected() > 0 => {
             audit(
@@ -767,11 +784,15 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     )
     .await?;
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
+    let (name_hold_days, old_address_receive_days) =
+        crate::site_settings::name_holds(&state.pool, &state.config).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
+        "nameHoldDays": name_hold_days,
+        "oldAddressReceiveDays": old_address_receive_days,
     }))
     .into_response())
 }
@@ -783,6 +804,8 @@ pub struct UpdateSettingsRequest {
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
+    name_hold_days: Option<i64>,
+    old_address_receive_days: Option<i64>,
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -803,6 +826,8 @@ pub async fn update_settings(
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
+        && req.name_hold_days.is_none()
+        && req.old_address_receive_days.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -825,6 +850,16 @@ pub async fn update_settings(
             .map_err(AppError::bad_request)?;
     }
 
+    // The two holds are checked together, each against the other's new or
+    // current value.
+    if req.name_hold_days.is_some() || req.old_address_receive_days.is_some() {
+        let (hold, receive) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
+        crate::site_settings::validate_name_holds(
+            req.name_hold_days.unwrap_or(hold),
+            req.old_address_receive_days.unwrap_or(receive),
+        )
+        .map_err(AppError::bad_request)?;
+    }
     let mut transaction = state.pool.begin().await?;
     if let Some(mode) = req.registration_mode {
         crate::registration::set_mode(&mut transaction, mode).await?;
@@ -841,6 +876,11 @@ pub async fn update_settings(
         (
             crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
             req.chat_media_delivery_retention_days,
+        ),
+        (crate::site_settings::NAME_HOLD_DAYS, req.name_hold_days),
+        (
+            crate::site_settings::OLD_ADDRESS_RECEIVE_DAYS,
+            req.old_address_receive_days,
         ),
     ] {
         let Some(value) = value else { continue };
@@ -865,6 +905,8 @@ pub async fn update_settings(
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
+            "nameHoldDays": req.name_hold_days,
+            "oldAddressReceiveDays": req.old_address_receive_days,
         }),
     )
     .await;
@@ -2053,6 +2095,14 @@ pub async fn wipe_user(
         "DELETE FROM mail_filters WHERE user_id = $1",
         "DELETE FROM pass_vault_secrets WHERE user_id = $1",
         "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
+        // Old names held by the old incarnation stop receiving now: no one
+        // holds the keys their mail would be sealed to. They are freed on
+        // their own dates; the current name waits for the new incarnation,
+        // which complete-setup records (docs/plans/username-renames.md).
+        "UPDATE mail_addresses SET state = 'closed', receive_until = now()
+          WHERE user_id = $1 AND state = 'receiving'",
+        "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+        "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
     ] {
         sqlx::query(statement)
             .bind(target)

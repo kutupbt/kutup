@@ -41,6 +41,7 @@ pub mod opaque;
 pub mod pass;
 pub mod pass_icons;
 pub mod registration_codes;
+pub mod renames;
 pub mod security_events;
 pub mod sessions;
 pub mod shares;

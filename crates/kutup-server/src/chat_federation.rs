@@ -87,7 +87,7 @@ pub async fn fetch_remote_bundles(
                 "invalid remote chat directory response",
             )
         })?;
-    if bundles.username != address.canonical() {
+    if !crate::account_names::same_address(&bundles.username, &address.canonical()) {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "remote chat directory returned the wrong account",
@@ -128,7 +128,7 @@ pub async fn fetch_remote_sealed_bundles(
     }
     let bundles: UserPreKeyBundlesResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if bundles.username != address.canonical() {
+    if !crate::account_names::same_address(&bundles.username, &address.canonical()) {
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
     Ok(bundles)
@@ -172,7 +172,7 @@ pub async fn fetch_remote_manifest_history(
     }
     let page: AccountManifestHistoryPageV1 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest history"))?;
-    if page.account != address.canonical()
+    if !crate::account_names::same_address(&page.account, &address.canonical())
         || page.from_sequence != query.page_from_sequence.unwrap_or(query.from_sequence)
         || page.to_sequence != query.to_sequence
     {
@@ -224,7 +224,7 @@ pub async fn fetch_remote_manifest(
     manifest
         .verify()
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
-    if manifest.account != address.canonical() {
+    if !crate::account_names::same_address(&manifest.account, &address.canonical()) {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "remote manifest returned the wrong account",
@@ -1527,17 +1527,21 @@ pub async fn get_manifest_history(
             FederationFeature::ChatV2,
         )
         .await?;
-    let target_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&account.username)
-            .fetch_optional(&state.pool)
-            .await?;
+    let target_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
+    )
+    .bind(&account.username)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some(target_id) = target_id else {
-        return signed_app_error(
-            federation,
-            &authenticated,
+        let error = crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &account.username,
             AppError::not_found("chat manifest history not found"),
-        );
+        )
+        .await;
+        return signed_app_error(federation, &authenticated, error);
     };
     let incarnation_id: Option<String> = match sqlx::query_scalar(
         "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
@@ -1633,17 +1637,21 @@ pub async fn get_manifest(
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
-    let target_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&account.username)
-            .fetch_optional(&state.pool)
-            .await?;
+    let target_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
+    )
+    .bind(&account.username)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some(target_id) = target_id else {
-        return signed_app_error(
-            federation,
-            &authenticated,
+        let error = crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &account.username,
             AppError::not_found("chat manifest not found"),
-        );
+        )
+        .await;
+        return signed_app_error(federation, &authenticated, error);
     };
     let value: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
@@ -1729,11 +1737,14 @@ pub async fn get_user_profile(
     {
         Ok(Some(profile)) => profile,
         Ok(None) => {
-            return signed_app_error(
-                federation,
-                &authenticated,
+            let error = crate::account_names::renamed_or(
+                &state.pool,
+                &state.config.chat_server_name,
+                &account.username,
                 AppError::not_found("chat profile not found"),
             )
+            .await;
+            return signed_app_error(federation, &authenticated, error);
         }
         Err(error) => return signed_app_error(federation, &authenticated, error),
     };
@@ -1881,7 +1892,7 @@ pub async fn deliver_messages(
                 AppError::bad_request(error.to_string())
             })?;
     let recipient_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE username = $1 AND is_active = true FOR SHARE",
+        "SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true FOR SHARE",
     )
     .bind(&recipient.username)
     .fetch_optional(&mut *tx)
@@ -2097,11 +2108,15 @@ fn signed_app_error(
     } else {
         error.message
     };
+    // A client error's details go back with it (a held name's `renamed`
+    // and its chains).
+    let mut body = error.details.unwrap_or_default();
+    body.insert("error".into(), serde_json::Value::String(message));
     signed_json(
         federation,
         authenticated,
         error.status,
-        &serde_json::json!({ "error": message }),
+        &serde_json::Value::Object(body),
     )
 }
 

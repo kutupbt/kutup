@@ -57,8 +57,11 @@ fn opaque_key_missing() -> AppError {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoginStartRequest {
-    /// The username, or the Kutup address on this server.
-    name: String,
+    /// The username, or the Kutup address on this server, in any spelling
+    /// (`.`, `_`, `-` and case fold away). None for a reauth, which is for
+    /// the session's own account.
+    #[serde(default)]
+    name: Option<String>,
     /// OPAQUE `CredentialRequest` (KE1), base64.
     credential_request: String,
     /// `session` (sign-in) or `reauth` (a signed-in person proving the
@@ -149,41 +152,65 @@ pub async fn login_start(
             let token = crate::middleware::bearer_from_headers(&headers)
                 .ok_or_else(|| AppError::unauthorized("reauth needs a session"))?;
             let caller = crate::middleware::authenticate_access_token(&state, &token).await?;
+            // The session's own account, by id: a name would only go stale
+            // across a rename (docs/plans/username-renames.md).
+            if req.name.is_some() {
+                return Err(AppError::bad_request("a reauth names no account"));
+            }
             Some((caller, grant_for))
         }
         _ => return Err(AppError::bad_request("purpose must be session or reauth")),
     };
 
-    // One canonical name for everything below: the lookup, the fake answer,
-    // the lockout and the caps (an address on this server is its username).
-    let canonical_name =
-        kutup_crypto::opaque::CanonicalName::parse(&canonical_name(&state, &req.name))
-            .map_err(|_| AppError::bad_request("invalid name"))?;
-    let canonical = canonical_name.as_str().to_owned();
-    // Only a username of this server is an account; an address elsewhere,
-    // or a name held after a rename, is not.
-    // id, key binding, record, the record's setup.
-    type Account = (Uuid, Option<String>, Option<Vec<u8>>, Option<i16>);
-    let account: Option<Account> =
-        if canonical.is_empty() || canonical.contains('@') || canonical.len() > 64 {
-            None
-        } else {
-            sqlx::query_as(
-                "SELECT id, key_binding, opaque_record, opaque_server_key_id
-                 FROM users WHERE username = $1",
+    // id, key binding, record, the record's setup, and the account's folded
+    // name.
+    type Account = (Uuid, Option<String>, Option<Vec<u8>>, Option<i16>, String);
+    let (canonical, account): (String, Option<Account>) = match &reauth {
+        Some((caller, _)) => {
+            let caller_id = crate::handlers::trusted_uuid(&caller.user_id)?;
+            let account: Account = sqlx::query_as(
+                "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
+                   FROM users u JOIN account_names n ON n.user_id = u.id AND n.state = 'current'
+                  WHERE u.id = $1",
             )
-            .bind(&canonical)
-            .fetch_optional(&state.pool)
-            .await?
-        };
-    if let Some((caller, _)) = &reauth {
-        // The caller's own account, by id (a rename in flight changes the
-        // name, never the id).
-        let caller_id = crate::handlers::trusted_uuid(&caller.user_id)?;
-        if account.as_ref().map(|a| a.0) != Some(caller_id) {
-            return Err(AppError::forbidden("reauth is for the signed-in account"));
+            .bind(caller_id)
+            .fetch_one(&state.pool)
+            .await?;
+            (account.4.clone(), Some(account))
         }
-    }
+        None => {
+            // One canonical name for everything below: the lookup, the fake
+            // answer, the lockout and the caps (an address on this server is
+            // its username, folded: every spelling is one name).
+            let name = req
+                .name
+                .as_deref()
+                .ok_or_else(|| AppError::bad_request("a sign-in names its account"))?;
+            let canonical =
+                kutup_crypto::opaque::CanonicalName::parse(&canonical_name(&state, name))
+                    .map_err(|_| AppError::bad_request("invalid name"))?
+                    .as_str()
+                    .to_owned();
+            // Only a current username of this server is an account; an
+            // address elsewhere, or a name held after a rename, is not.
+            let account = if canonical.is_empty() || canonical.contains('@') || canonical.len() > 64
+            {
+                None
+            } else {
+                sqlx::query_as(
+                    "SELECT u.id, u.key_binding, u.opaque_record, u.opaque_server_key_id, n.folded
+                       FROM account_names n JOIN users u ON u.id = n.user_id
+                      WHERE n.folded = $1 AND n.state = 'current'",
+                )
+                .bind(&canonical)
+                .fetch_optional(&state.pool)
+                .await?
+            };
+            (canonical, account)
+        }
+    };
+    let canonical_name = kutup_crypto::opaque::CanonicalName::parse(&canonical)
+        .map_err(|_| AppError::bad_request("invalid name"))?;
     let user_id = account.as_ref().map(|a| a.0);
     let record = account.as_ref().and_then(|a| a.2.as_deref().zip(a.3));
 
@@ -198,7 +225,7 @@ pub async fn login_start(
     // A real record under its own setup; anything else the fake, under the
     // current one.
     let (server_key_id, secrets, record, credential) = match (record, account.as_ref()) {
-        (Some((record, key_id)), Some((_, Some(key_binding), _, _))) => {
+        (Some((record, key_id)), Some((_, Some(key_binding), _, _, _))) => {
             let key_id = u16::try_from(key_id).map_err(|_| opaque_key_missing())?;
             let secrets = state.opaque.get(key_id).ok_or_else(opaque_key_missing)?;
             let credential = kutup_crypto::opaque::credential_identifier(key_binding)

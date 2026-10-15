@@ -39,13 +39,8 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
 
     // The current password, proved again: a reauth, whose answer is a grant.
     eprintln!("Checking the current password…");
-    let grant = super::login::reauth_grant(
-        &ctx.client,
-        &ctx.session.username,
-        &current,
-        "passwordChange",
-    )
-    .map_err(|e| anyhow::anyhow!("the current password: {e:#}"))?;
+    let grant = super::login::reauth_grant(&ctx.client, &current, "passwordChange")
+        .map_err(|e| anyhow::anyhow!("the current password: {e:#}"))?;
 
     eprintln!("Setting the new password…");
     let envelope = super::login::set_password(

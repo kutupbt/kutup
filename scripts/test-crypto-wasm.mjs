@@ -918,6 +918,9 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 // The safety number every app shows (kutup-crypto safety_number, V2): the
 // two authorities only, so a rename keeps it and a new incarnation changes it.
 {
+  for (const [name, folded] of vectors.nameFold.names) {
+    assert.equal(crypto.foldName(name), folded, name)
+  }
   const v = vectors.safetyNumber
   const safety = crypto.deriveSafetyNumber(v.localAuthority, v.peerAuthority)
   assert.equal(safety.fingerprint, v.fingerprint)

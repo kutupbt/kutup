@@ -40,6 +40,12 @@ pub struct SecurityEventView {
     /// recovery or an administrator's).
     client: Option<String>,
     user_agent: Option<String>,
+    /// For a name event: the name it was about (the old one, for a rename).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_name: Option<String>,
+    /// For a rename: the new name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_name: Option<String>,
     /// An administrator's reset of this account.
     by_admin: bool,
 }
@@ -113,6 +119,8 @@ pub async fn list(
             client: e.acting_client,
             user_agent: e.acting_user_agent,
             by_admin: e.by_admin,
+            old_name: e.old_name,
+            new_name: e.new_name,
         })
         .collect();
     Ok(Json(SecurityEventsPage { events, next }).into_response())

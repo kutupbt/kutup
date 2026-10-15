@@ -220,8 +220,9 @@ enum Commands {
         #[command(subcommand)]
         command: commands::devices::DevicesCmd,
     },
-    /// This device's view of the account's history: its state, and going on
-    /// with the server's data after a rollback or a fork (exit code 6).
+    /// Your account: this device's view of its history (its state, and going
+    /// on with the server's data after a rollback or a fork, exit code 6), and
+    /// your username (rename it, list the names you hold, drop one).
     Account {
         #[command(subcommand)]
         command: commands::account::AccountCmd,
@@ -345,9 +346,9 @@ fn main() {
         Commands::SshAdd(args) => commands::ssh::add(&cli.profile, cli.json, args),
         Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
+        Commands::Account { command } => commands::account::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Sessions { command } => commands::sessions::run(&cli.profile, cli.json, command),
-        Commands::Account { command } => commands::account::run(&cli.profile, cli.json, command),
         Commands::Identity { command } => commands::identity::run(&cli.profile, cli.json, command),
         Commands::Versions { command } => commands::versions::run(&cli.profile, cli.json, command),
         Commands::Share { command } => commands::share::run(&cli.profile, cli.json, command),

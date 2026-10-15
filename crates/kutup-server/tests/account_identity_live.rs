@@ -609,7 +609,14 @@ fn a_taken_address_refuses_the_username_and_reads_never_write() {
         .unwrap()
         .json()
         .unwrap();
-    assert!(listed.is_empty(), "{listed:?}");
+    // (Only the row this test made for `taken` is left: the account's own is
+    // not made again.)
+    assert!(
+        listed
+            .iter()
+            .all(|a| a["address"] != someone.account.as_str()),
+        "{listed:?}"
+    );
     assert_eq!(
         count(
             "SELECT count(*) FROM mail_addresses WHERE address = $1",

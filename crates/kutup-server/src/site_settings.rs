@@ -70,9 +70,56 @@ pub async fn chat_delivery_retention_days(
     )
 }
 
+/// How long a name an account left (a rename, a deletion) stays held before
+/// anyone may take it, and how long its old address still receives
+/// (docs/plans/username-renames.md, "Names over time"); administrators set
+/// both, `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS` only seed them.
+pub const NAME_HOLD_DAYS: &str = "name_hold_days";
+pub const OLD_ADDRESS_RECEIVE_DAYS: &str = "old_address_receive_days";
+
+/// Holds of 30 days to 10 years; receiving from 0 days to the hold.
+pub fn validate_name_holds(hold: i64, receive: i64) -> Result<(i64, i64), &'static str> {
+    if !(30..=3650).contains(&hold) {
+        return Err("a name is held for 30 to 3650 days");
+    }
+    if !(0..=hold).contains(&receive) {
+        return Err("an old address receives for 0 days up to the hold");
+    }
+    Ok((hold, receive))
+}
+
+/// The name holds now, `(hold days, receive days)`: the stored ones, else
+/// the configured ones, else the defaults (180, 90).
+pub async fn name_holds(
+    pool: &PgPool,
+    config: &crate::config::Config,
+) -> Result<(i64, i64), sqlx::Error> {
+    let read = |key: &'static str| async move {
+        sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+            .bind(key)
+            .fetch_optional(pool)
+            .await
+            .map(|v| v.and_then(|v| v.parse::<i64>().ok()))
+    };
+    let hold = read(NAME_HOLD_DAYS).await?.unwrap_or(config.name_hold_days);
+    let receive = read(OLD_ADDRESS_RECEIVE_DAYS)
+        .await?
+        .unwrap_or(config.old_address_receive_days);
+    Ok(validate_name_holds(hold, receive).unwrap_or((180, 90)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_holds_keep_receiving_within_the_hold() {
+        assert_eq!(validate_name_holds(180, 90), Ok((180, 90)));
+        assert_eq!(validate_name_holds(30, 0), Ok((30, 0)));
+        assert!(validate_name_holds(29, 0).is_err());
+        assert!(validate_name_holds(180, 181).is_err());
+        assert!(validate_name_holds(3651, 90).is_err());
+    }
 
     #[test]
     fn delivery_retention_bounds_are_closed() {

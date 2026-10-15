@@ -53,7 +53,17 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
-| `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write waits for setup |
+| `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
+| `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
+| `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
+| `renameInvalid` | 400 | A rename statement or its re-signed Drive key binding does not check out |
+| `renameConflict` | 409 | The rename chain moved (`sequence`): read `/user/me` and sign anew |
+| `tooManyHeldNames` | 409 | Five of the account's old names still receive: drop one first (a dropped name stays held until freed, but no longer counts) |
+| `renameTooSoon` | 429 | One rename per 30 days (`retryAt`); going back to the name just left within 7 days is free, once |
+| `dropTooSoon` | 429 | One dropped name per 30 days (`retryAt`) |
+| `addressReceiveOnly` | 403 | An account's old address receives only; mail is sent from its current one |
+| `notHeld` | 409 | Not a name the account (or, for an admin, anyone) holds |
+| `breakGlassAccount` | 403 | The break-glass account keeps its name |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
@@ -803,6 +813,63 @@ grant from a reauth of this session, so a stolen session cannot remove 2FA.
 
 ---
 
+### Usernames and renames
+
+Names are compared folded (docs/plans/username-renames.md): lowercase without
+`.`, `_` and `-`, so `ada.l`, `Ada_L` and `adal` are one name. One account
+holds a folded name; sign-in takes any spelling; mail to any spelling of a
+live address is delivered.
+
+A rename keeps everything but the name. The old name is **held** for the
+account: its address receives (only) for `oldAddressReceiveDays`, then
+bounces; after `nameHoldDays` the name is freed for anyone (a new owner is
+another incarnation, so pins warn). Both are in `GET /api/auth/settings`
+(`nameHoldDays`, `oldAddressReceiveDays`) and set by administrators
+(`PUT /api/admin/settings`). A deleted account's names are held the same way,
+receiving nothing.
+
+- `GET /api/user/rename/check?name=` → `{ "available": true, "takeBack"?,
+  "needsKey", "spelling"? }` or `{ "available": false, "reason": "taken" |
+  "held" | "reserved" | "invalid" }` (30 per 15 minutes per account).
+  `needsKey`: the rename sends the address's first key (`mailAddress`); false
+  only for a held name whose address kept its keys. `spelling`: for a name
+  taken back, the spelling it is taken back as (its address, keys and key
+  lists name it so; another spelling is `renameInvalid` with `spelling`).
+- `POST /api/user/rename` → `{ "grant": "<a rename grant from a reauth>",
+  "rename": <AccountRenameV1>, "driveKeyBinding": "<re-signed for the new
+  address>", "mailAddress": { "publicKey", "privateKeyEnvelope", "keyList" }
+  }` → `200 { "username", "address", "sequence", "oldAddressReceivesUntil",
+  "oldNameFreeAt" }`. `mailAddress` is the new address's first key and key
+  list (sequence 1, that key primary), as `POST /api/mail/addresses/{id}/keys`
+  takes them, stored in the rename's transaction so mail to the new address is
+  never deferred; sent exactly when the check says `needsKey` (otherwise
+  `renameInvalid`). The display
+  name and signature move to the new address. Errors: `renameInvalid`, `grantInvalid`, `breakGlassAccount`,
+  `setupRequired`, `nameTaken`, `nameReserved`, `renameConflict`,
+  `tooManyHeldNames`, `renameTooSoon`. One counted rename per 30 days; going
+  back to the name just left within 7 days of that rename is free, once, and
+  restarts the clock. No session ends.
+- `GET /api/user/names` → `[{ "name", "state": "current" | "held",
+  "receiveUntil", "freeAt" }]`.
+- `DELETE /api/user/names/:name` (`{ "grant" }`, a rename grant) → `204`:
+  receiving there ends now; the name stays held until its date (`notHeld`;
+  `dropTooSoon`: one drop per 30 days).
+- `GET /api/users/renames/:address[?incarnationId=]` → `{ "version": 1,
+  "chains": [{ "incarnationId", "authorityPublicKey", "current", "state":
+  "current" | "held" | "gone", "chain": [<AccountRenameV1>, …] }] }`, newest
+  first; a reused name appears in several. Clients verify every chain against
+  their pins (`version` other than 1: unverifiable, warn).
+- **Lookups of an old name** (the address lookup, Chat manifests, keys and
+  profiles, the federated Drive user and their `/api/fed/` twins) answer
+  `409 renamed` with that list.
+- `/user/me` carries `renames: { "sequence", "digest"? }`: where the
+  account's chain ends, what its devices anchor to.
+- **Reauth** (`login/start`, `purpose: "reauth"`) names no account: it is the
+  session's own; a `name` is `400`.
+- Admin: `POST /api/admin/names/:name/close` (receiving ends now) and
+  `POST /api/admin/names/:name/free` (free now) → `204`; recorded on the
+  account as `nameClosed` / `nameFreed`.
+
 ### GET /api/user/security-events
 
 What changed the caller's sign-in, newest first: a new password, a recovery, a
@@ -1347,8 +1414,10 @@ encrypted, `8` mail not expected to be signed.
 
 ### GET /api/mail/addresses
 
-The caller's addresses; the address row is created on first use. An account
-without a username has none.
+The caller's addresses, the current one first: after a rename the old ones
+follow, newest first, with their keys, which open the mail they received.
+`state` is `active` (the current address, the only one that sends),
+`receiving`, `closed` or `freed`. An account without a username has none.
 
 **Auth:** Bearer JWT
 
@@ -1357,6 +1426,7 @@ without a username has none.
 [{
   "id": "uuid",
   "address": "alice@kutup.dev",
+  "state": "active",
   "keys": [{
     "id": "uuid", "fingerprint": "40 hex", "sha256Fingerprint": "64 hex",
     "publicKey": "base64 binary OpenPGP certificate",
@@ -1411,7 +1481,11 @@ follow the current one.
 
 A Kutup address's public keys (primary first) and every signed key list, oldest
 first. Clients verify the chain against the authority of `account`'s verified
-manifest. Rate-limited like user lookup.
+manifest. Rate-limited like user lookup. `email` may be any spelling of the
+address (`.`, `_`, `-` and case ignored); the answer names it as stored, and
+`account` as its newest key list does: for an old address of a renamed
+account, the name it had then (the same authority; the rename chain links the
+two). Clients check that `address` is the one asked, compared folded.
 
 **Auth:** Bearer JWT
 

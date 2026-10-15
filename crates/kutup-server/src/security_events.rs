@@ -19,6 +19,14 @@ pub enum Kind {
     Rotate,
     AdminReset,
     AccountReset,
+    /// A new username (`old_name`, `new_name`).
+    Rename,
+    /// Receiving at a held name ended by its owner (`old_name`).
+    NameDropped,
+    /// Receiving at a held name ended by an administrator.
+    NameClosed,
+    /// A held name freed by an administrator before its date.
+    NameFreed,
 }
 
 impl Kind {
@@ -29,6 +37,10 @@ impl Kind {
             Kind::Rotate => "rotate",
             Kind::AdminReset => "adminReset",
             Kind::AccountReset => "accountReset",
+            Kind::Rename => "rename",
+            Kind::NameDropped => "nameDropped",
+            Kind::NameClosed => "nameClosed",
+            Kind::NameFreed => "nameFreed",
         }
     }
 }
@@ -43,10 +55,37 @@ pub async fn record(
     session: Option<Uuid>,
     admin: Option<Uuid>,
 ) -> AppResult<()> {
+    insert(tx, user_id, kind, session, admin, None, None).await
+}
+
+/// [`record`] for an event about a name: the name it was about, and for a
+/// rename the new one.
+pub async fn record_names(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    kind: Kind,
+    session: Option<Uuid>,
+    admin: Option<Uuid>,
+    old_name: &str,
+    new_name: Option<&str>,
+) -> AppResult<()> {
+    insert(tx, user_id, kind, session, admin, Some(old_name), new_name).await
+}
+
+async fn insert(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    kind: Kind,
+    session: Option<Uuid>,
+    admin: Option<Uuid>,
+    old_name: Option<&str>,
+    new_name: Option<&str>,
+) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO account_security_events
-             (id, user_id, kind, acting_session_id, acting_client, acting_user_agent, admin_user_id)
-         SELECT $1, $2, $3, $4, s.client_type, s.user_agent, $5
+             (id, user_id, kind, acting_session_id, acting_client, acting_user_agent, admin_user_id,
+              old_name, new_name)
+         SELECT $1, $2, $3, $4, s.client_type, s.user_agent, $5, $6, $7
          FROM (SELECT 1) one
          LEFT JOIN auth_sessions s ON s.id = $4",
     )
@@ -55,6 +94,8 @@ pub async fn record(
     .bind(kind.as_str())
     .bind(session)
     .bind(admin)
+    .bind(old_name)
+    .bind(new_name)
     .execute(&mut **tx)
     .await?;
     sqlx::query(
@@ -82,6 +123,8 @@ pub struct Event {
     pub acting_client: Option<String>,
     pub acting_user_agent: Option<String>,
     pub by_admin: bool,
+    pub old_name: Option<String>,
+    pub new_name: Option<String>,
 }
 
 /// The account's events, newest first: after the event `cursor` (the last
@@ -94,7 +137,8 @@ pub async fn list(
 ) -> AppResult<Vec<Event>> {
     Ok(sqlx::query_as(
         "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.acting_user_agent,
-                e.kind IN ('adminReset', 'accountReset') AS by_admin
+                e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed') AS by_admin,
+                e.old_name, e.new_name
          FROM account_security_events e
          WHERE e.user_id = $1
            AND ($2::uuid IS NULL OR (e.at, e.id) < (

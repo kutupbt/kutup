@@ -57,6 +57,7 @@ export {
   encryptMailPgpAsGroup,
   exportMailAddressKey,
   generateMailAddressKey,
+  foldAddress,
   generateMailGroupKey,
   importMailAddressKey,
   inspectExternalMailKey,

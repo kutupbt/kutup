@@ -495,7 +495,7 @@ async fn apply_local_snapshot(
     let mut next_users = BTreeMap::new();
     for member in &delivery.local_members_after {
         let user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
+            sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true")
                 .bind(&member.address.username)
                 .fetch_optional(&mut **tx)
                 .await?;
@@ -779,7 +779,7 @@ async fn apply_local_snapshot(
             ));
         }
         let recipient_user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+            sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL)")
                 .bind(&envelope.recipient.username)
                 .fetch_optional(&mut **tx)
                 .await?;

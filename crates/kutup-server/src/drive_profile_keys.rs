@@ -127,17 +127,18 @@ async fn local_user_by_id(pool: &PgPool, id: Uuid) -> AppResult<LocalUser> {
 }
 
 async fn local_user_by_name(pool: &PgPool, username: &str) -> AppResult<Option<LocalUser>> {
-    let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE username = $1 AND is_active = true",
+    // Any spelling finds the account; it goes by its name as stored.
+    let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, username, account_incarnation_id, drive_signing_public_key
+         FROM users WHERE id = kutup_current_user($1) AND is_active = true",
     )
     .bind(username)
     .fetch_optional(pool)
     .await?;
-    Ok(row.and_then(|(id, incarnation, signing)| {
+    Ok(row.and_then(|(id, username, incarnation, signing)| {
         signing.map(|signing_public_key| LocalUser {
             id,
-            username: username.to_owned(),
+            username,
             incarnation,
             signing_public_key,
         })
@@ -195,13 +196,16 @@ async fn store(
     user_id: Uuid,
     direction: &str,
     peer_account: &str,
+    peer_incarnation_id: &str,
     envelope: &str,
     profile_version: &str,
 ) -> AppResult<()> {
     sqlx::query(
-        "INSERT INTO drive_profile_keys (user_id, direction, peer_account, envelope, profile_version)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO drive_profile_keys
+             (user_id, direction, peer_account, peer_incarnation_id, envelope, profile_version)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (user_id, direction, peer_account) DO UPDATE SET
+             peer_incarnation_id = EXCLUDED.peer_incarnation_id,
              envelope = EXCLUDED.envelope,
              profile_version = EXCLUDED.profile_version,
              updated_at = now()",
@@ -209,6 +213,7 @@ async fn store(
     .bind(user_id)
     .bind(direction)
     .bind(peer_account)
+    .bind(peer_incarnation_id)
     .bind(envelope)
     .bind(profile_version)
     .execute(pool)
@@ -371,14 +376,27 @@ pub async fn put_profile_key(
             return Err(AppError::not_found("no share with that person"));
         }
         let mut tx = state.pool.begin().await?;
-        for (user_id, direction, peer) in [
-            (me.id, "sent", recipient_account.as_str()),
-            (recipient.id, "received", my_account.as_str()),
+        for (user_id, direction, peer, peer_incarnation) in [
+            (
+                me.id,
+                "sent",
+                recipient_account.as_str(),
+                recipient_incarnation.as_str(),
+            ),
+            (
+                recipient.id,
+                "received",
+                my_account.as_str(),
+                me.incarnation.as_str(),
+            ),
         ] {
             sqlx::query(
-                "INSERT INTO drive_profile_keys (user_id, direction, peer_account, envelope, profile_version)
-                 VALUES ($1, $2, $3, $4, $5)
+                "INSERT INTO drive_profile_keys
+                     (user_id, direction, peer_account, peer_incarnation_id, envelope,
+                      profile_version)
+                 VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT (user_id, direction, peer_account) DO UPDATE SET
+                     peer_incarnation_id = EXCLUDED.peer_incarnation_id,
                      envelope = EXCLUDED.envelope,
                      profile_version = EXCLUDED.profile_version,
                      updated_at = now()",
@@ -386,6 +404,7 @@ pub async fn put_profile_key(
             .bind(user_id)
             .bind(direction)
             .bind(peer)
+            .bind(peer_incarnation)
             .bind(&request.envelope)
             .bind(&request.profile_version)
             .execute(&mut *tx)
@@ -438,6 +457,7 @@ pub async fn put_profile_key(
         me.id,
         "sent",
         &recipient_account,
+        &recipient_incarnation,
         &request.envelope,
         &request.profile_version,
     )
@@ -507,6 +527,7 @@ pub async fn receive_profile_key(
             recipient.id,
             "received",
             &delivery.sender_account,
+            &hex::encode(envelope.sender_incarnation_id),
             &delivery.envelope,
             &delivery.profile_version,
         )

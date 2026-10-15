@@ -117,6 +117,7 @@ type PublicProfileRow = (
     Option<String>,
     Option<String>,
     Vec<u8>,
+    String,
 );
 type OwnProfileRow = (
     i16,
@@ -572,8 +573,10 @@ pub async fn publish_manifest(
             } else if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
                 return Err(AppError::conflict("manifest previousHash mismatch"));
             }
-            if manifest.account != current_manifest.account
-                || manifest.incarnation_id != current_manifest.incarnation_id
+            // The account may move to its current address after a rename
+            // (checked above: a manifest names the caller's current address),
+            // nothing else of the identity (docs/plans/username-renames.md).
+            if manifest.incarnation_id != current_manifest.incarnation_id
                 || manifest.authority_key_id != current_manifest.authority_key_id
                 || manifest.self_authority_key != current_manifest.self_authority_key
                 || manifest.drive != current_manifest.drive
@@ -725,12 +728,20 @@ pub async fn get_user_manifest(
         "SELECT m.manifest
          FROM chat_device_manifests m
          JOIN users u ON u.id = m.user_id
-         WHERE u.username = $1 AND u.is_active = true",
+         WHERE u.id = kutup_current_user($1) AND u.is_active = true",
     )
     .bind(&address.username)
     .fetch_optional(&state.pool)
     .await?;
-    let value = value.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let Some(value) = value else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &address.username,
+            AppError::not_found("chat manifest not found"),
+        )
+        .await);
+    };
     let manifest: AccountManifestV1 = serde_json::from_value(value)
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     manifest
@@ -790,12 +801,21 @@ pub async fn get_manifest_history(
             crate::chat_federation::fetch_remote_manifest_history(&state, &address, &query).await?;
         return Ok(Json(page).into_response());
     }
-    let target_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-            .bind(&address.username)
-            .fetch_optional(&state.pool)
-            .await?;
-    let target_id = target_id.ok_or_else(|| AppError::not_found("chat manifest not found"))?;
+    let target_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
+    )
+    .bind(&address.username)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(target_id) = target_id else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &address.username,
+            AppError::not_found("chat manifest not found"),
+        )
+        .await);
+    };
     let incarnation_id: Option<String> = sqlx::query_scalar(
         "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
     )
@@ -902,7 +922,7 @@ pub async fn put_profile(
         ));
     }
 
-    let current = load_own_profile_in(&mut tx, user_id, &canonical_account, true).await?;
+    let current = load_own_profile_in(&mut tx, user_id, true).await?;
     if let Some(current) = current {
         let incoming_order = (profile.revision, profile.source_device_id);
         let current_order = (current.revision, current.source_device_id);
@@ -999,12 +1019,11 @@ pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> A
         .bind(user_id)
         .fetch_one(&state.pool)
         .await?;
-    let username = username
+    username
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     let mut tx = state.pool.begin().await?;
-    let profile = load_own_profile_in(&mut tx, user_id, &canonical_account, false)
+    let profile = load_own_profile_in(&mut tx, user_id, false)
         .await?
         .ok_or_else(|| AppError::not_found("chat profile not found"))?;
     tx.commit().await?;
@@ -1055,9 +1074,17 @@ pub async fn get_user_profile(
                 .await?;
         return Ok(Json(profile).into_response());
     }
-    let profile = load_public_profile(&state, &address.username, &version, &access_key)
-        .await?
-        .ok_or_else(|| AppError::not_found("chat profile not found"))?;
+    let Some(profile) =
+        load_public_profile(&state, &address.username, &version, &access_key).await?
+    else {
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &address.username,
+            AppError::not_found("chat profile not found"),
+        )
+        .await);
+    };
     Ok(Json(profile).into_response())
 }
 
@@ -1083,16 +1110,17 @@ pub(crate) async fn load_public_profile(
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
+                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier, u.username
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
-         WHERE u.username = $1 AND u.is_active = true AND p.version = $2",
+         WHERE u.id = kutup_current_user($1) AND u.is_active = true AND p.version = $2",
     )
     .bind(username)
     .bind(version)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier)) = row
+    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier, stored)) =
+        row
     else {
         return Ok(None);
     };
@@ -1100,7 +1128,14 @@ pub(crate) async fn load_public_profile(
     if !constant_time_eq(&verifier, &presented) {
         return Ok(None);
     }
-    let account = local_chat_account(&state.config.chat_server_name, username);
+    // Any spelling finds the account; the answer names it as stored. A
+    // profile still sealed for an address the account has left (renamed,
+    // not published again yet) is not this address's: not found, and the
+    // asker keeps the profile it has.
+    let account = local_chat_account(&state.config.chat_server_name, &stored);
+    if !crate::account_names::same_address(&sealed_profile_account(&name)?, &account) {
+        return Ok(None);
+    }
     let suite = profile_suite_from_db(suite, "chat_profiles")?;
     let response = ChatProfileResponse {
         suite,
@@ -1116,10 +1151,23 @@ pub(crate) async fn load_public_profile(
     Ok(Some(response))
 }
 
+/// The account a stored profile was sealed for (its envelopes' context): the
+/// account's address when it was published, which a rename since leaves
+/// behind until the owner publishes again.
+fn sealed_profile_account(name_envelope: &str) -> AppResult<String> {
+    Ok(kutup_chat_proto::decode_profile_envelope(name_envelope)
+        .map_err(AppError::bad_request)?
+        .context
+        .account)
+}
+
+/// The account's current profile, as it was published: under the address the
+/// account had then (the row is the account's own, written by it), so a
+/// rename does not lock the account out of its profile; it publishes again
+/// under its new address.
 async fn load_own_profile_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
-    account: &str,
     lock: bool,
 ) -> AppResult<Option<OwnChatProfileResponse>> {
     let suffix = if lock { " FOR UPDATE" } else { "" };
@@ -1151,7 +1199,7 @@ async fn load_own_profile_in(
         )| {
             let profile = PutChatProfileRequest {
                 suite: profile_suite_from_db(suite, "chat_profiles")?,
-                account: account.to_string(),
+                account: sealed_profile_account(&name)?,
                 version,
                 revision: revision as u64,
                 source_device_id: source_device_id as u32,
@@ -1561,11 +1609,12 @@ pub async fn get_user_bundles(
 
     if query.sync_device_id.is_some() {
         let caller_id = trusted_uuid(&auth.user_id)?;
-        let target_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-                .bind(&address.username)
-                .fetch_optional(&state.pool)
-                .await?;
+        let target_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
+        )
+        .bind(&address.username)
+        .fetch_optional(&state.pool)
+        .await?;
         if Some(caller_id) != target_id {
             return Err(AppError::forbidden(
                 "linked-device key fetch is limited to the caller's account",
@@ -1676,21 +1725,28 @@ pub(crate) async fn load_user_bundles(
     delivery_capability: Option<&[u8; 32]>,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let mut tx = state.pool.begin().await?;
-    let target: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT u.id, c.capability_hash
+    let target: Option<(Uuid, String, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT u.id, u.username, c.capability_hash
          FROM users u
          LEFT JOIN chat_delivery_capabilities c ON c.user_id = u.id
-         WHERE u.username = $1 AND u.is_active = true",
+         WHERE u.id = kutup_current_user($1) AND u.is_active = true",
     )
     .bind(username)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((target_id, stored_capability)) = target else {
-        return Err(AppError::not_found(if delivery_capability.is_some() {
-            "sealed delivery unavailable"
-        } else {
-            "user not found"
-        }));
+    let Some((target_id, stored_name, stored_capability)) = target else {
+        drop(tx);
+        return Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            username,
+            AppError::not_found(if delivery_capability.is_some() {
+                "sealed delivery unavailable"
+            } else {
+                "user not found"
+            }),
+        )
+        .await);
     };
     if let Some(capability) = delivery_capability {
         let Some(stored) = stored_capability.and_then(|value| <[u8; 32]>::try_from(value).ok())
@@ -1703,6 +1759,12 @@ pub(crate) async fn load_user_bundles(
         consume_anonymous_rate(&mut tx, "capability_bundle", capability, 30, 60).await?;
     }
 
+    // Any spelling finds the account; the answer names it as stored.
+    let response_username = match response_username.rsplit_once('@') {
+        Some((_, server)) => format!("{stored_name}@{server}"),
+        None => stored_name,
+    };
+    let response_username = response_username.as_str();
     // Hold a stable account/device/manifest snapshot until the one-time keys
     // have been allocated. Writers take `FOR UPDATE` on this same row.
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
@@ -1903,7 +1965,7 @@ pub async fn send_messages(
         };
     }
     let recipient: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM users WHERE username = $1 AND is_active = true")
+        sqlx::query_as("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true")
             .bind(&address.username)
             .fetch_optional(&state.pool)
             .await?;
@@ -2009,7 +2071,7 @@ pub(crate) async fn store_sealed_messages(
         "SELECT u.id, c.capability_hash
          FROM users u
          JOIN chat_delivery_capabilities c ON c.user_id = u.id
-         WHERE u.username = $1 AND u.is_active = true
+         WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true
          FOR SHARE OF u, c",
     )
     .bind(username)

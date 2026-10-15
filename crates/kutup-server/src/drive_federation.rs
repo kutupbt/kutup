@@ -407,9 +407,11 @@ pub async fn fetch_remote_user(
     }
     let remote: RemoteDriveUserResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote Drive user"))?;
-    if remote.username != username
+    // Another spelling of the asked name is the same account (one per
+    // folded name); the answer's spelling is the one it goes by.
+    if kutup_crypto::names::fold(&remote.username) != kutup_crypto::names::fold(username)
         || remote.server != server
-        || remote.account != format!("{username}@{server}")
+        || remote.account != format!("{}@{server}", remote.username)
         || canonical_public_key(&remote.drive_hpke_public_key).is_err()
         || canonical_public_key(&remote.drive_signing_public_key).is_err()
         || canonical_public_key(&remote.account_authority_public_key).is_err()
@@ -577,29 +579,36 @@ pub async fn get_user(
             Ok(username) => username,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
-        let identity: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
-            "SELECT public_key, account_incarnation_id, drive_signing_public_key,
+        // Any spelling finds the account; the answer names it as stored.
+        type Row = (String, String, String, String, String, Option<String>);
+        let identity: Option<Row> = sqlx::query_as(
+            "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
                     account_authority_public_key, drive_key_binding
-             FROM users WHERE username = $1 AND is_active = true",
+             FROM users WHERE id = kutup_current_user($1) AND is_active = true",
         )
         .bind(username)
         .fetch_optional(&state.pool)
         .await?;
-        let Some((hpke_key, incarnation_id, signing_key, authority_key, binding)) = identity else {
-            return signed_app_error(
-                federation,
-                &authenticated,
+        let Some((stored, hpke_key, incarnation_id, signing_key, authority_key, binding)) =
+            identity
+        else {
+            let error = crate::account_names::renamed_or(
+                &state.pool,
+                &state.config.chat_server_name,
+                username,
                 AppError::not_found("Drive user not found"),
-            );
+            )
+            .await;
+            return signed_app_error(federation, &authenticated, error);
         };
         signed_json(
             federation,
             &authenticated,
             StatusCode::OK,
             &RemoteDriveUserResponse {
-                username: username.to_owned(),
+                account: format!("{}@{}", stored, federation.server_name()),
+                username: stored,
                 server: federation.server_name().to_owned(),
-                account: format!("{}@{}", username, federation.server_name()),
                 drive_hpke_public_key: hpke_key,
                 account_incarnation_id: incarnation_id,
                 drive_signing_public_key: signing_key,
