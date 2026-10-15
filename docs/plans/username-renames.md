@@ -619,4 +619,3 @@ Migration `20261015010000_account_renames_federation`; `crate::remote_renames`.
   same, shorter, forked; rows by incarnation, the forged chain moving nothing) and the
   two-server gate's `renames` phase (B learns of A's rename, relays `409 renamed`,
   finds the new name; A's outbox empties and B keeps the chain).
-
