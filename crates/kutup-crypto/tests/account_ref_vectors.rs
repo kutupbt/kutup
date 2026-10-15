@@ -78,7 +78,10 @@ fn write_vectors() {
     let recipient: AccountRef = "aci:8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b@b.kutup.test"
         .parse()
         .unwrap();
-    let (from, to) = (identity(&sender_master_key), identity(&recipient_master_key));
+    let (from, to) = (
+        identity(&sender_master_key),
+        identity(&recipient_master_key),
+    );
     let binding_bytes = drive_key_binding::binding_bytes(
         &sender,
         &from.authority_public_key(),
@@ -173,7 +176,9 @@ fn the_drive_key_binding_names_the_account() {
         from.drive_signing_public_key(),
     );
     assert_eq!(
-        hex::encode(drive_key_binding::binding_bytes(&sender, &authority, &hpke, &signing).unwrap()),
+        hex::encode(
+            drive_key_binding::binding_bytes(&sender, &authority, &hpke, &signing).unwrap()
+        ),
         v.binding_bytes
     );
     // Ed25519 is deterministic: the same signature, byte for byte.
@@ -183,10 +188,14 @@ fn the_drive_key_binding_names_the_account() {
     );
     let binding = b64(&v.binding);
     drive_key_binding::verify(&sender, &authority, &hpke, &signing, &binding).unwrap();
-    assert!(
-        drive_key_binding::verify(&someone_else(&sender), &authority, &hpke, &signing, &binding)
-            .is_err()
-    );
+    assert!(drive_key_binding::verify(
+        &someone_else(&sender),
+        &authority,
+        &hpke,
+        &signing,
+        &binding
+    )
+    .is_err());
 }
 
 #[test]
@@ -242,7 +251,8 @@ fn shares_open_only_between_their_accounts() {
 
     let profile = ProfileKeyEnvelopeV1::decode_b64(&v.profile_key_envelope).unwrap();
     let open_profile = |who: &AccountRef, to_whom: &AccountRef| -> [u8; 32] {
-        let (sender_incarnation, recipient_incarnation) = (from.incarnation_id(), to.incarnation_id());
+        let (sender_incarnation, recipient_incarnation) =
+            (from.incarnation_id(), to.incarnation_id());
         let parties = ProfileKeyParties {
             sender: who,
             sender_incarnation_id: &sender_incarnation,
@@ -258,6 +268,9 @@ fn shares_open_only_between_their_accounts() {
             .map(|key| key.as_slice().try_into().unwrap())
             .unwrap_or([0; 32])
     };
-    assert_eq!(open_profile(&sender, &recipient).as_slice(), b64(&v.profile_key));
+    assert_eq!(
+        open_profile(&sender, &recipient).as_slice(),
+        b64(&v.profile_key)
+    );
     assert_eq!(open_profile(&someone_else(&sender), &recipient), [0; 32]);
 }
