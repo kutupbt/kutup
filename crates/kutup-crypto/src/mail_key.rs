@@ -1272,8 +1272,9 @@ pub struct MailKeyEntryV1 {
 /// the account authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailKeyListV1 {
-    /// The account (`username@server`) that owns the address.
-    pub account: String,
+    /// The account's current keys (its incarnation) and the authority that
+    /// signs: the list names no username, so a rename never touches it
+    /// (docs/plans/account-ids.md; Proton's SignedKeyList names keys only).
     pub incarnation_id: [u8; 32],
     pub authority_key_id: [u8; 32],
     pub address: String,
@@ -1294,9 +1295,6 @@ impl MailKeyListV1 {
                 "mail key list: {reason}"
             )))
         };
-        if canonical_account(&self.account)? != self.account {
-            return invalid("account is not canonical");
-        }
         if canonical_address(&self.address)? != self.address {
             return invalid("address is not canonical");
         }
@@ -1336,7 +1334,6 @@ impl MailKeyListV1 {
         let mut out = Vec::with_capacity(256 + self.keys.len() * 57);
         out.extend_from_slice(KEY_LIST_DOMAIN);
         out.extend_from_slice(&KEY_LIST_VERSION.to_be_bytes());
-        push_str(&mut out, &self.account)?;
         out.extend_from_slice(&self.incarnation_id);
         out.extend_from_slice(&self.authority_key_id);
         push_str(&mut out, &self.address)?;
@@ -1366,7 +1363,6 @@ impl MailKeyListV1 {
         if take(&mut rest, 2)? != KEY_LIST_VERSION.to_be_bytes() {
             return Err(refused());
         }
-        let account = take_str(&mut rest)?.to_owned();
         let incarnation_id = take(&mut rest, 32)?.try_into().expect("32 bytes");
         let authority_key_id = take(&mut rest, 32)?.try_into().expect("32 bytes");
         let address = take_str(&mut rest)?.to_owned();
@@ -1404,7 +1400,6 @@ impl MailKeyListV1 {
             return Err(refused());
         }
         let list = Self {
-            account,
             incarnation_id,
             authority_key_id,
             address,
@@ -1488,8 +1483,7 @@ impl SignedMailKeyListV1 {
     /// Checks that `next` directly follows `self` in the same chain.
     pub fn check_successor(&self, next: &Self) -> Result<()> {
         let (before, after) = (&self.list, &next.list);
-        if after.account != before.account
-            || after.address != before.address
+        if after.address != before.address
             || after.incarnation_id != before.incarnation_id
             || after.authority_key_id != before.authority_key_id
             || after.sequence != before.sequence + 1
@@ -1561,7 +1555,6 @@ pub fn first_address_key(
             .ok_or_else(|| CryptoError::InvalidInput("identity id".into()))
     };
     let key_list = MailKeyListV1 {
-        account: address.clone(),
         incarnation_id: hex32(identity.incarnation_id())?,
         authority_key_id: hex32(identity.authority_key_id())?,
         address,
@@ -1716,7 +1709,6 @@ mod tests {
         keys: Vec<MailKeyEntryV1>,
     ) -> MailKeyListV1 {
         MailKeyListV1 {
-            account: ADDRESS.into(),
             incarnation_id: hex::decode(identity.incarnation_id())
                 .unwrap()
                 .try_into()

@@ -2614,7 +2614,6 @@ struct MailKeyEntryView {
 #[derive(serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailKeyListInput {
-    account: String,
     address: String,
     sequence: u64,
     #[serde(default)]
@@ -2629,7 +2628,6 @@ struct SignedMailKeyListView {
     data: String,
     signature: String,
     hash: String,
-    account: String,
     address: String,
     sequence: u64,
     previous_hash: Option<String>,
@@ -2654,7 +2652,6 @@ fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> Sig
         data: STANDARD.encode(&signed.data),
         signature: STANDARD.encode(signed.signature),
         hash: hex::encode(signed.hash()),
-        account: list.account.clone(),
         address: list.address.clone(),
         sequence: list.sequence,
         previous_hash: list.previous_hash.map(hex::encode),
@@ -2691,7 +2688,6 @@ pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsVa
         });
     }
     let list = kutup_crypto::mail_key::MailKeyListV1 {
-        account: input.account,
         incarnation_id: hex_array(&identity.incarnation_id(), "incarnation")?,
         authority_key_id: hex_array(&identity.authority_key_id(), "authority key id")?,
         address: input.address,

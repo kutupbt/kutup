@@ -199,7 +199,6 @@ pub async fn publish(
         None => (1, None),
     };
     let list = MailKeyListV1 {
-        account: address.to_string(),
         incarnation_id: hex_array(&incarnation_id_from_authority_public(&public))?,
         authority_key_id: hex_array(&authority_key_id_from_public(&public))?,
         address: address.to_string(),
@@ -266,6 +265,7 @@ pub async fn primary_public_key(pool: &PgPool, group_id: Uuid) -> sqlx::Result<O
 /// lists signed by this server's mail-group authority.
 pub async fn lookup(
     pool: &PgPool,
+    state_server: &str,
     group_id: Uuid,
     address: &str,
 ) -> AppResult<Option<crate::handlers::mail_keys::MailKeyLookup>> {
@@ -290,7 +290,8 @@ pub async fn lookup(
         .map_err(|_| AppError::internal("mail-group authority"))?;
     Ok(Some(crate::handlers::mail_keys::MailKeyLookup {
         address: address.to_string(),
-        account: address.to_string(),
+        server: state_server.to_owned(),
+        account_id: None,
         account_authority_public_key: STANDARD.encode(authority.verifying_key().to_bytes()),
         keys: keys
             .into_iter()

@@ -234,7 +234,9 @@ struct ListChange {
 }
 
 /// Verifies `key_list` as the next signed list of the caller's address
-/// `id`, against the account authority, and locks the address.
+/// `id`, against the account authority, and locks the address. The address
+/// is the caller's by its row (`user_id`), current or kept receiving after a
+/// rename: an old address's keys stay the account's to manage.
 async fn begin_list_change(
     state: &AppState,
     user_id: Uuid,
@@ -242,9 +244,6 @@ async fn begin_list_change(
     key_list: &SignedKeyList,
 ) -> AppResult<ListChange> {
     let address_id = Uuid::parse_str(id).map_err(|_| AppError::not_found("not found"))?;
-    let Some((account, address)) = account_and_address(state, user_id).await? else {
-        return Err(AppError::not_found("not found"));
-    };
     let data = decode(&key_list.data, "keyList.data")?;
     let signature = decode(&key_list.signature, "keyList.signature")?;
     let authority: String =
@@ -259,23 +258,19 @@ async fn begin_list_change(
         .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
     let signed = SignedMailKeyListV1::verify(&data, &signature, &authority)
         .map_err(|error| AppError::bad_request(format!("keyList: {error}")))?;
-    if signed.list.account != account || signed.list.address != address {
-        return Err(AppError::bad_request(
-            "keyList is for another account or address",
-        ));
-    }
 
     let mut tx = state.pool.begin().await?;
-    let owner: Option<(Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT user_id, address FROM mail_addresses
-              WHERE id = $1 AND state IN ('active', 'receiving') FOR UPDATE",
+    let address: String = sqlx::query_scalar(
+        "SELECT address FROM mail_addresses
+              WHERE id = $1 AND user_id = $2 AND state IN ('active', 'receiving') FOR UPDATE",
     )
     .bind(address_id)
+    .bind(user_id)
     .fetch_optional(&mut *tx)
-    .await?;
-    match owner {
-        Some((Some(owner), stored)) if owner == user_id && stored == address => {}
-        _ => return Err(AppError::not_found("not found")),
+    .await?
+    .ok_or_else(|| AppError::not_found("not found"))?;
+    if signed.list.address != address {
+        return Err(AppError::bad_request("keyList is for another address"));
     }
     // The list must follow the current one exactly.
     let current: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
@@ -516,10 +511,8 @@ pub(crate) async fn first_key(
             ))
         }
     };
-    if signed.list.account != account || signed.list.address != address {
-        return Err(AppError::bad_request(
-            "keyList is for another account or address",
-        ));
+    if signed.list.address != address {
+        return Err(AppError::bad_request("keyList is for another address"));
     }
     if signed.list.sequence != 1 || !only.primary {
         return Err(AppError::bad_request(
@@ -612,15 +605,20 @@ pub struct PublicMailKey {
 
 /// A Kutup address's public keys and the whole chain of its signed key
 /// lists, oldest first. Clients verify the chain against the account
-/// authority from the account's verified manifest (`account`).
+/// authority, which they check against their pin of the account.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MailKeyLookup {
     pub address: String,
-    pub account: String,
-    /// The account authority the server holds for `account`, base64: the
-    /// key the lists must chain under. A client that has verified the
-    /// account (a Chat safety number) checks it against its pin.
+    /// The account the address belongs to (server-asserted, as the address
+    /// lookup's answer is): its server and permanent id. Absent for a shared
+    /// mailbox, whose lists this server's mail-group authority signs.
+    pub server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// The authority the lists must chain under, base64: the account's (a
+    /// client checks it against its pin of the account), or the server's
+    /// mail-group authority for a shared mailbox.
     pub account_authority_public_key: String,
     pub keys: Vec<PublicMailKey>,
     pub key_lists: Vec<SignedKeyList>,
@@ -698,8 +696,13 @@ pub async fn lookup_keys(
     if let Some(group) = crate::mail::groups::find(&state.pool, &address).await? {
         // A shared mailbox is written to with its own key, like a person.
         if group.kind == "shared" {
-            if let Some(lookup) =
-                crate::mail::group_keys::lookup(&state.pool, group.id, &address).await?
+            if let Some(lookup) = crate::mail::group_keys::lookup(
+                &state.pool,
+                &state.config.chat_server_name,
+                group.id,
+                &address,
+            )
+            .await?
             {
                 return Ok(Json(lookup));
             }
@@ -720,8 +723,8 @@ pub(crate) async fn lookup_address(
     let Some((address_id, stored, keys)) = public_keys(state, address).await? else {
         return Ok(None);
     };
-    let authority: String = sqlx::query_scalar(
-        "SELECT u.account_authority_public_key FROM mail_addresses a JOIN users u ON u.id = a.user_id
+    let (account_id, authority): (Uuid, String) = sqlx::query_as(
+        "SELECT u.id, u.account_authority_public_key FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.id = $1",
     )
     .bind(address_id)
@@ -733,26 +736,10 @@ pub(crate) async fn lookup_address(
     .bind(address_id)
     .fetch_all(&state.pool)
     .await?;
-    // The account the address's newest key list names: the account as it
-    // was called when the address got its keys (an old address keeps its old
-    // name; the authority is the same, and the rename chain links the two).
-    let account = match lists.last() {
-        Some((data, signature)) => {
-            let authority: [u8; 32] = STANDARD
-                .decode(&authority)
-                .ok()
-                .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
-            SignedMailKeyListV1::verify(data, signature, &authority)
-                .map_err(|_| AppError::internal("stored key list does not verify"))?
-                .list
-                .account
-        }
-        None => stored.clone(),
-    };
     Ok(Some(MailKeyLookup {
         address: stored,
-        account,
+        server: state.config.chat_server_name.clone(),
+        account_id: Some(account_id.to_string()),
         account_authority_public_key: authority,
         keys,
         key_lists: lists

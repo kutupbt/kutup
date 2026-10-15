@@ -49,7 +49,6 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
             .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let list = MailKeyListV1 {
-        account: address.clone(),
         incarnation_id: hex32(user.identity.incarnation_id()),
         authority_key_id: hex32(user.identity.authority_key_id()),
         address: address.clone(),
@@ -5095,21 +5094,13 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     assert_eq!(sent["from"]["address"], new.address.as_str(), "{sent}");
 
     // The keys of each, checked as the apps check them (mail-core keys.ts):
-    // the answer is the address asked (folded), and the newest signed list
-    // names its address and account as the answer does. The old address's
-    // list names the account as it was called then.
-    for (asked, stored, account) in [
-        (
-            old.address.clone(),
-            old.address.clone(),
-            old.address.clone(),
-        ),
-        (variant.clone(), new.address.clone(), new.address.clone()),
-        (
-            new.address.clone(),
-            new.address.clone(),
-            new.address.clone(),
-        ),
+    // the answer is the address asked (folded) and the account it belongs to
+    // (by id: both addresses are Alice's), and the newest signed list names
+    // its address, never a username.
+    for (asked, stored) in [
+        (old.address.clone(), old.address.clone()),
+        (variant.clone(), new.address.clone()),
+        (new.address.clone(), new.address.clone()),
     ] {
         let lookup: Value = bearer(
             c.get(format!("{base}/api/mail/keys?email={asked}")),
@@ -5120,7 +5111,12 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         .json()
         .unwrap();
         assert_eq!(lookup["address"], stored.as_str(), "{asked}: {lookup}");
-        assert_eq!(lookup["account"], account.as_str(), "{asked}: {lookup}");
+        assert_eq!(lookup["accountId"], alice.id.as_str(), "{asked}: {lookup}");
+        assert_eq!(
+            lookup["server"],
+            alice.person.server.as_str(),
+            "{asked}: {lookup}"
+        );
         assert_eq!(
             kutup_crypto::names::fold_address(lookup["address"].as_str().unwrap()),
             kutup_crypto::names::fold_address(&asked)
@@ -5145,7 +5141,6 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
             .pop()
             .unwrap();
         assert_eq!(newest.list.address, stored, "{asked}");
-        assert_eq!(newest.list.account, account, "{asked}");
     }
 
     // A message written as the old address (sealed to its own key for the
