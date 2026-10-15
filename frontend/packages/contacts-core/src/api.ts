@@ -86,11 +86,11 @@ interface ContactRow {
 export const contactsKey = ['contacts'] as const
 export const contactGroupsKey = ['contacts', 'groups'] as const
 
-/** The account's routing address (`username@server`). */
+/** The account's current address (`username@server`): it follows a rename made in this session. */
 export function useAccountAddress() {
   const session = useRequiredSession()
   return useQuery({
-    queryKey: ['account-address', session.sessionId],
+    queryKey: ['account-address', session.sessionId, session.username],
     staleTime: Infinity,
     queryFn: async () => {
       const { data } = await api.get<{ chat?: { serverName?: string } }>('/auth/settings')
