@@ -934,6 +934,11 @@ mod tests {
 
     /// `who`'s chain through `addresses` (local parts on PEER).
     fn entry(who: &AccountIdentityKeysV1, addresses: &[&str]) -> ChainEntry {
+        entry_at(who, PEER, addresses)
+    }
+
+    /// `who`'s chain through `addresses` (local parts on `domain`).
+    fn entry_at(who: &AccountIdentityKeysV1, domain: &str, addresses: &[&str]) -> ChainEntry {
         let chain: Vec<AccountRenameV1> = addresses
             .windows(2)
             .enumerate()
@@ -941,8 +946,8 @@ mod tests {
                 kutup_crypto::account_rename::sign(
                     who,
                     i as u64 + 1,
-                    &format!("{}@{PEER}", pair[0]),
-                    &format!("{}@{PEER}", pair[1]),
+                    &format!("{}@{domain}", pair[0]),
+                    &format!("{}@{domain}", pair[1]),
                     1_790_000_000_000 + i as i64,
                 )
                 .unwrap()
@@ -951,7 +956,7 @@ mod tests {
         ChainEntry {
             incarnation_id: who.incarnation_id(),
             authority_public_key: STANDARD.encode(who.authority_public_key()),
-            current: format!("{}@{PEER}", addresses.last().unwrap()),
+            current: format!("{}@{domain}", addresses.last().unwrap()),
             state: "current".into(),
             chain,
         }
@@ -1063,30 +1068,34 @@ mod tests {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
         };
+        // A domain of its own: other tests keep chains of PEER meanwhile.
+        const CAPPED: &str = "capped.test";
         let (one, two) = (identity(31), identity(32));
-        clean(&pool, &[one.incarnation_id(), two.incarnation_id()]).await;
-        let kept_already: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM remote_account_renames WHERE domain = $1")
-                .bind(PEER)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        let cap = kept_already + 1;
-        let first = verify(PEER, entry(&one, &["c1", "c2"])).unwrap();
-        let second = verify(PEER, entry(&two, &["d1", "d2"])).unwrap();
+        sqlx::query("DELETE FROM remote_account_renames WHERE domain = $1")
+            .bind(CAPPED)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let cap = 1;
+        let first = verify(CAPPED, entry_at(&one, CAPPED, &["c1", "c2"])).unwrap();
+        let second = verify(CAPPED, entry_at(&two, CAPPED, &["d1", "d2"])).unwrap();
         assert_eq!(
-            store_capped(&pool, PEER, &first, cap).await.unwrap(),
+            store_capped(&pool, CAPPED, &first, cap).await.unwrap(),
             Stored::Advanced
         );
-        let refused = store_capped(&pool, PEER, &second, cap).await.unwrap_err();
+        let refused = store_capped(&pool, CAPPED, &second, cap).await.unwrap_err();
         assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
         // The one kept still grows.
-        let longer = verify(PEER, entry(&one, &["c1", "c2", "c3"])).unwrap();
+        let longer = verify(CAPPED, entry_at(&one, CAPPED, &["c1", "c2", "c3"])).unwrap();
         assert_eq!(
-            store_capped(&pool, PEER, &longer, cap).await.unwrap(),
+            store_capped(&pool, CAPPED, &longer, cap).await.unwrap(),
             Stored::Advanced
         );
-        clean(&pool, &[one.incarnation_id(), two.incarnation_id()]).await;
+        sqlx::query("DELETE FROM remote_account_renames WHERE domain = $1")
+            .bind(CAPPED)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// The same chain again keeps a more specific state it was told (held)
