@@ -568,9 +568,10 @@ fn write_vectors() {
         return;
     }
     let master = [0x11u8; 32];
-    let account = "alice@kutup.dev";
+    // The account the binding names: (server, account id), its string form.
+    let account = "aci:00000000-0000-4000-8000-0000000000a1@kutup.dev";
     let identity = AccountIdentityKeysV1::derive(&master).unwrap();
-    let binding = drive_key_binding::sign(&identity, account).unwrap();
+    let binding = drive_key_binding::sign(&identity, &account.parse().unwrap()).unwrap();
     let key = identity_pins::derive_key(&master).unwrap();
     let nonce = [0x44u8; 24];
     let sealed = identity_pins::seal_with_nonce(&key, BINDING, 7, &pins(), &nonce).unwrap();
@@ -615,11 +616,11 @@ fn checked_in_vectors_hold() {
         v.drive_signing_public_key
     );
     assert_eq!(
-        STANDARD.encode(drive_key_binding::sign(&identity, &v.account).unwrap()),
+        STANDARD.encode(drive_key_binding::sign(&identity, &v.account.parse().unwrap()).unwrap()),
         v.drive_key_binding
     );
     drive_key_binding::verify(
-        &v.account,
+        &v.account.parse().unwrap(),
         &key32(&v.authority_public_key),
         &key32(&v.drive_hpke_public_key),
         &key32(&v.drive_signing_public_key),

@@ -1281,9 +1281,9 @@ pub fn seal_named_share_envelope(
     recipient_hpke_public_key_base64: &str,
     collection_id: &str,
     epoch: u32,
-    sender_account: &str,
+    sender: &str,
     sender_incarnation_id: &str,
-    recipient_account: &str,
+    recipient: &str,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
@@ -1301,10 +1301,10 @@ pub fn seal_named_share_envelope(
         &collection_key,
         collection_id,
         epoch,
-        sender_account,
+        &person(sender, "sender")?,
         sender_incarnation_id,
         sender_identity.drive_signing_key(),
-        recipient_account,
+        &person(recipient, "recipient")?,
         recipient_incarnation_id,
         &recipient_public_key,
     )
@@ -1320,9 +1320,9 @@ pub fn open_named_share_envelope(
     recipient_hpke_private_key_base64: &str,
     expected_collection_id: &str,
     expected_epoch: u32,
-    expected_sender_account: &str,
+    expected_sender: &str,
     expected_sender_incarnation_id: &str,
-    expected_recipient_account: &str,
+    expected_recipient: &str,
     expected_recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let sender_signing_public_key = decode_canonical_base64(
@@ -1339,10 +1339,10 @@ pub fn open_named_share_envelope(
         .open(
             expected_collection_id,
             expected_epoch,
-            expected_sender_account,
+            &person(expected_sender, "sender")?,
             expected_sender_incarnation_id,
             &sender_signing_public_key,
-            expected_recipient_account,
+            &person(expected_recipient, "recipient")?,
             expected_recipient_incarnation_id,
             &recipient_private_key,
         )
@@ -1360,9 +1360,9 @@ pub fn seal_file_share_envelope(
     recipient_hpke_public_key_base64: &str,
     file_id: &str,
     generation: u32,
-    sender_account: &str,
+    sender: &str,
     sender_incarnation_id: &str,
-    recipient_account: &str,
+    recipient: &str,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
@@ -1380,10 +1380,10 @@ pub fn seal_file_share_envelope(
         &file_key,
         file_id,
         generation,
-        sender_account,
+        &person(sender, "sender")?,
         sender_incarnation_id,
         sender_identity.drive_signing_key(),
-        recipient_account,
+        &person(recipient, "recipient")?,
         recipient_incarnation_id,
         &recipient_public_key,
     )
@@ -1399,9 +1399,9 @@ pub fn open_file_share_envelope(
     recipient_hpke_private_key_base64: &str,
     expected_file_id: &str,
     expected_generation: u32,
-    expected_sender_account: &str,
+    expected_sender: &str,
     expected_sender_incarnation_id: &str,
-    expected_recipient_account: &str,
+    expected_recipient: &str,
     expected_recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let sender_signing_public_key = decode_canonical_base64(
@@ -1418,10 +1418,10 @@ pub fn open_file_share_envelope(
         .open(
             expected_file_id,
             expected_generation,
-            expected_sender_account,
+            &person(expected_sender, "sender")?,
             expected_sender_incarnation_id,
             &sender_signing_public_key,
-            expected_recipient_account,
+            &person(expected_recipient, "recipient")?,
             expected_recipient_incarnation_id,
             &recipient_private_key,
         )
@@ -1436,9 +1436,9 @@ pub fn seal_profile_key_envelope(
     profile_key_base64: &str,
     sender_master_key_base64: &str,
     recipient_hpke_public_key_base64: &str,
-    sender_account: &str,
+    sender: &str,
     sender_incarnation_id: &str,
-    recipient_account: &str,
+    recipient: &str,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let profile_key = decode_canonical_base64(profile_key_base64, "profile key")?;
@@ -1455,9 +1455,9 @@ pub fn seal_profile_key_envelope(
     kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::seal(
         &profile_key,
         &kutup_crypto::profile_key_share::ProfileKeyParties {
-            sender_account,
+            sender: &person(sender, "sender")?,
             sender_incarnation_id,
-            recipient_account,
+            recipient: &person(recipient, "recipient")?,
             recipient_incarnation_id,
         },
         sender_identity.drive_signing_key(),
@@ -1473,9 +1473,9 @@ pub fn open_profile_key_envelope(
     envelope_base64: &str,
     sender_signing_public_key_base64: &str,
     recipient_hpke_private_key_base64: &str,
-    expected_sender_account: &str,
+    expected_sender: &str,
     expected_sender_incarnation_id: &str,
-    expected_recipient_account: &str,
+    expected_recipient: &str,
     expected_recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let sender_signing_public_key = decode_canonical_base64(
@@ -1492,9 +1492,9 @@ pub fn open_profile_key_envelope(
     let key = envelope
         .open(
             &kutup_crypto::profile_key_share::ProfileKeyParties {
-                sender_account: expected_sender_account,
+                sender: &person(expected_sender, "sender")?,
                 sender_incarnation_id: expected_sender_incarnation_id,
-                recipient_account: expected_recipient_account,
+                recipient: &person(expected_recipient, "recipient")?,
                 recipient_incarnation_id: expected_recipient_incarnation_id,
             },
             &sender_signing_public_key,
@@ -1588,6 +1588,13 @@ fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue>
         return Err(js_error(&format!("{field} must be canonical base64")));
     }
     Ok(decoded)
+}
+
+/// A person's `aci:<uuid>@<server>` string form (`AccountRef`), strictly.
+fn person(value: &str, field: &str) -> Result<kutup_crypto::account_ref::AccountRef, JsValue> {
+    value
+        .parse()
+        .map_err(|_| js_error(&format!("{field} is not an aci:<uuid>@<server> account")))
 }
 
 fn js_error(message: &str) -> JsValue {
@@ -2752,12 +2759,13 @@ pub fn sign_drive_key_binding(master_key_base64: &str, account: &str) -> Result<
     let master_key = master_key_32(master_key_base64)?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
-    let signature = kutup_crypto::drive_key_binding::sign(&identity, account)
+    let signature = kutup_crypto::drive_key_binding::sign(&identity, &person(account, "account")?)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(signature))
 }
 
-/// Whether `authority` vouches for these Drive keys of `account`.
+/// Whether `authority` vouches for these Drive keys of `account` (its
+/// `aci:<uuid>@<server>` form).
 #[wasm_bindgen(js_name = verifyDriveKeyBinding)]
 pub fn verify_drive_key_binding(
     account: &str,
@@ -2769,7 +2777,7 @@ pub fn verify_drive_key_binding(
     let check = || -> Result<(), JsValue> {
         let signature = decode_canonical_base64(binding_base64, "binding")?;
         kutup_crypto::drive_key_binding::verify(
-            account,
+            &person(account, "account")?,
             &public_key_32(authority_public_key_base64, "authority key")?,
             &public_key_32(drive_hpke_public_key_base64, "Drive HPKE key")?,
             &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,

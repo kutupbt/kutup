@@ -6,8 +6,9 @@
 //! Drive hands the key over with a share: HPKE-sealed to the recipient's
 //! Drive public key and signed with the sender's Drive signing key, like a
 //! named share (`named_share.rs`), so a server can neither read it nor swap
-//! in a key for a profile of its own making. It is bound to both accounts
-//! and incarnations, not to a folder: the same key reaches the same person
+//! in a key for a profile of its own making. It is bound to both people,
+//! as (server, account id) and incarnation, never their names
+//! (docs/plans/account-ids.md), and not to a folder: the same key reaches the same person
 //! for every share, in both directions (owner to member, member to owner).
 
 use base64::Engine as _;
@@ -15,7 +16,8 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, Verifying
 use hpke_rs::{HpkePrivateKey, HpkePublicKey};
 
 use crate::error::{CryptoError, Result};
-use crate::named_share::{canonical_account, hpke_suite, parse_hex_32, read_account, take};
+use crate::account_ref::AccountRef;
+use crate::named_share::{hpke_suite, parse_hex_32, read_person, take};
 
 const MAGIC: &[u8; 8] = b"KUTPPK1\0";
 const HPKE_INFO: &[u8] = b"kutup/drive/profile-key-hpke/v1\0";
@@ -31,8 +33,8 @@ const FIXED_HEADER_LEN: usize = 8 + 2 + 2 + 32 + 32;
 pub struct ProfileKeyEnvelopeV1 {
     pub sender_incarnation_id: [u8; 32],
     pub recipient_incarnation_id: [u8; 32],
-    pub sender_account: String,
-    pub recipient_account: String,
+    pub sender: AccountRef,
+    pub recipient: AccountRef,
     pub encapsulated_key: [u8; ENCAPSULATED_KEY_LEN],
     pub ciphertext: [u8; CIPHERTEXT_LEN],
     pub signature: [u8; SIGNATURE_LEN],
@@ -40,9 +42,9 @@ pub struct ProfileKeyEnvelopeV1 {
 
 /// Who a profile key goes from and to.
 pub struct ProfileKeyParties<'a> {
-    pub sender_account: &'a str,
+    pub sender: &'a AccountRef,
     pub sender_incarnation_id: &'a str,
-    pub recipient_account: &'a str,
+    pub recipient: &'a AccountRef,
     pub recipient_incarnation_id: &'a str,
 }
 
@@ -67,13 +69,13 @@ impl ProfileKeyEnvelopeV1 {
                 parties.recipient_incarnation_id,
                 "recipient incarnation",
             )?,
-            sender_account: canonical_account(parties.sender_account)?,
-            recipient_account: canonical_account(parties.recipient_account)?,
+            sender: parties.sender.clone(),
+            recipient: parties.recipient.clone(),
             encapsulated_key: [0u8; ENCAPSULATED_KEY_LEN],
             ciphertext: [0u8; CIPHERTEXT_LEN],
             signature: [0u8; SIGNATURE_LEN],
         };
-        if envelope.sender_account == envelope.recipient_account {
+        if envelope.sender == envelope.recipient {
             return Err(CryptoError::InvalidInput(
                 "a profile key goes to someone else".into(),
             ));
@@ -111,20 +113,15 @@ impl ProfileKeyEnvelopeV1 {
     }
 
     fn header_bytes(&self) -> Result<Vec<u8>> {
-        let mut bytes = Vec::with_capacity(
-            FIXED_HEADER_LEN + 4 + self.sender_account.len() + self.recipient_account.len(),
-        );
+        let (sender, recipient) = (self.sender.bytes(), self.recipient.bytes());
+        let mut bytes = Vec::with_capacity(FIXED_HEADER_LEN + sender.len() + recipient.len());
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&SUITE_V1.to_be_bytes());
         bytes.extend_from_slice(&0u16.to_be_bytes());
         bytes.extend_from_slice(&self.sender_incarnation_id);
         bytes.extend_from_slice(&self.recipient_incarnation_id);
-        for account in [&self.sender_account, &self.recipient_account] {
-            let length = u16::try_from(account.len())
-                .map_err(|_| CryptoError::InvalidInput("account is too long".into()))?;
-            bytes.extend_from_slice(&length.to_be_bytes());
-            bytes.extend_from_slice(account.as_bytes());
-        }
+        bytes.extend_from_slice(&sender);
+        bytes.extend_from_slice(&recipient);
         Ok(bytes)
     }
 
@@ -160,8 +157,8 @@ impl ProfileKeyEnvelopeV1 {
         let sender_incarnation_id = bytes[12..44].try_into().expect("32-byte slice");
         let recipient_incarnation_id = bytes[44..76].try_into().expect("32-byte slice");
         let mut cursor = FIXED_HEADER_LEN;
-        let sender_account = read_account(&bytes, &mut cursor, "sender")?;
-        let recipient_account = read_account(&bytes, &mut cursor, "recipient")?;
+        let sender = read_person(&bytes, &mut cursor)?;
+        let recipient = read_person(&bytes, &mut cursor)?;
         let encapsulated_key = take(&bytes, &mut cursor, ENCAPSULATED_KEY_LEN)?
             .try_into()
             .expect("32-byte slice");
@@ -179,8 +176,8 @@ impl ProfileKeyEnvelopeV1 {
         Ok(Self {
             sender_incarnation_id,
             recipient_incarnation_id,
-            sender_account,
-            recipient_account,
+            sender,
+            recipient,
             encapsulated_key,
             ciphertext,
             signature,
@@ -194,8 +191,8 @@ impl ProfileKeyEnvelopeV1 {
         expected: &ProfileKeyParties<'_>,
         sender_signing_public_key: &[u8],
     ) -> Result<()> {
-        if self.sender_account != canonical_account(expected.sender_account)?
-            || self.recipient_account != canonical_account(expected.recipient_account)?
+        if &self.sender != expected.sender
+            || &self.recipient != expected.recipient
             || self.sender_incarnation_id
                 != parse_hex_32(expected.sender_incarnation_id, "sender incarnation")?
             || self.recipient_incarnation_id
@@ -260,23 +257,29 @@ mod tests {
     const ALICE_INC: &str = "1111111111111111111111111111111111111111111111111111111111111111";
     const BOB_INC: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
-    fn parties<'a>() -> ProfileKeyParties<'a> {
-        ProfileKeyParties {
-            sender_account: "alice@a.test",
-            sender_incarnation_id: ALICE_INC,
-            recipient_account: "bob@b.test",
-            recipient_incarnation_id: BOB_INC,
-        }
+    fn person(server: &str, id: &str) -> AccountRef {
+        AccountRef::new(server, id).unwrap()
     }
 
     #[test]
     fn a_profile_key_reaches_only_its_recipient_from_its_sender() {
+        let (alice_ref, bob_ref, carol_ref) = (
+            person("a.test", "00000000-0000-4000-8000-0000000000a1"),
+            person("b.test", "00000000-0000-4000-8000-0000000000b0"),
+            person("c.test", "00000000-0000-4000-8000-0000000000c0"),
+        );
+        let parties = ProfileKeyParties {
+            sender: &alice_ref,
+            sender_incarnation_id: ALICE_INC,
+            recipient: &bob_ref,
+            recipient_incarnation_id: BOB_INC,
+        };
         let alice = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
         let bob = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
         let key = [9u8; 32];
         let envelope = ProfileKeyEnvelopeV1::seal(
             &key,
-            &parties(),
+            &parties,
             alice.drive_signing_key(),
             &bob.drive_hpke_public_key(),
         )
@@ -287,23 +290,41 @@ mod tests {
         let alice_signing = alice.drive_signing_key().verifying_key().to_bytes();
         assert_eq!(
             decoded
-                .open(&parties(), &alice_signing, bob.drive_hpke_private_key())
+                .open(&parties, &alice_signing, bob.drive_hpke_private_key())
                 .unwrap(),
             key
         );
 
-        // Another reader, another claimed sender, or swapped parties fail.
+        // Another reader, another claimed sender, or other parties fail.
         let carol = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
         assert!(decoded
-            .open(&parties(), &alice_signing, carol.drive_hpke_private_key())
+            .open(&parties, &alice_signing, carol.drive_hpke_private_key())
             .is_err());
         let bob_signing = bob.drive_signing_key().verifying_key().to_bytes();
-        assert!(decoded.verify(&parties(), &bob_signing).is_err());
+        assert!(decoded.verify(&parties, &bob_signing).is_err());
         let other = ProfileKeyParties {
-            recipient_account: "carol@c.test",
-            ..parties()
+            recipient: &carol_ref,
+            ..parties
         };
         assert!(decoded.verify(&other, &alice_signing).is_err());
+        // The same id on another server is someone else.
+        let elsewhere = person("c.test", &bob_ref.account_id);
+        let moved = ProfileKeyParties {
+            recipient: &elsewhere,
+            ..parties
+        };
+        assert!(decoded.verify(&moved, &alice_signing).is_err());
+        // A profile key goes to someone else.
+        assert!(ProfileKeyEnvelopeV1::seal(
+            &key,
+            &ProfileKeyParties {
+                recipient: &alice_ref,
+                ..parties
+            },
+            alice.drive_signing_key(),
+            &bob.drive_hpke_public_key(),
+        )
+        .is_err());
 
         // Any changed byte breaks the signature.
         let mut bytes = base64::engine::general_purpose::STANDARD
@@ -315,6 +336,6 @@ mod tests {
             &base64::engine::general_purpose::STANDARD.encode(bytes),
         )
         .unwrap();
-        assert!(tampered.verify(&parties(), &alice_signing).is_err());
+        assert!(tampered.verify(&parties, &alice_signing).is_err());
     }
 }

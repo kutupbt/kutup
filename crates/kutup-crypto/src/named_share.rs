@@ -6,6 +6,7 @@ use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
 use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey, Mode};
 use hpke_rs_rust_crypto::HpkeRustCrypto;
 
+use crate::account_ref::AccountRef;
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
@@ -15,6 +16,7 @@ const HPKE_INFO: &[u8] = b"kutup/drive/named-share-hpke/v1\0";
 /// file's current key, bound to the file and its key generation.
 const FILE_MAGIC: &[u8; 8] = b"KUTPFS1\0";
 const FILE_HPKE_INFO: &[u8] = b"kutup/drive/file-share-hpke/v1\0";
+/// The AAD before the two people, plus their two server-length prefixes.
 const FIXED_AAD_LEN: usize = 8 + 2 + 2 + 16 + 4 + 32 + 32 + 2 + 2;
 const X25519_ENCAPSULATED_KEY_LEN: usize = 32;
 const COLLECTION_KEY_CIPHERTEXT_LEN: usize = 32 + 16;
@@ -48,8 +50,9 @@ impl TryFrom<u16> for NamedShareSuiteId {
 
 /// One layout for every Drive share envelope: magic, suite, reserved, the
 /// shared object's id and a number (a folder's key epoch, a file's key
-/// generation), both incarnations and accounts, the HPKE-sealed 32-byte key
-/// and the sender's signature. Each object kind has its own magic and HPKE
+/// generation), both incarnations, both people as (server, account id)
+/// (docs/plans/account-ids.md: never their names), the HPKE-sealed 32-byte
+/// key and the sender's signature. Each object kind has its own magic and HPKE
 /// info, so an envelope for one can never open as the other.
 macro_rules! share_envelope {
     ($name:ident, $id:ident, $number:ident, $magic:expr, $info:expr, $label:literal, $what:literal, $what_space:literal) => {
@@ -60,8 +63,8 @@ macro_rules! share_envelope {
             pub $number: u32,
             pub sender_incarnation_id: [u8; 32],
             pub recipient_incarnation_id: [u8; 32],
-            pub sender_account: String,
-            pub recipient_account: String,
+            pub sender: AccountRef,
+            pub recipient: AccountRef,
             pub encapsulated_key: [u8; X25519_ENCAPSULATED_KEY_LEN],
             pub ciphertext: [u8; COLLECTION_KEY_CIPHERTEXT_LEN],
             pub signature: [u8; SIGNATURE_LEN],
@@ -73,10 +76,10 @@ macro_rules! share_envelope {
                 object_key: &[u8],
                 $id: &str,
                 $number: u32,
-                sender_account: &str,
+                sender: &AccountRef,
                 sender_incarnation_id: &str,
                 sender_signing_key: &SigningKey,
-                recipient_account: &str,
+                recipient: &AccountRef,
                 recipient_incarnation_id: &str,
                 recipient_hpke_public_key: &[u8],
             ) -> Result<Self> {
@@ -97,13 +100,13 @@ macro_rules! share_envelope {
                         recipient_incarnation_id,
                         "recipient incarnation",
                     )?,
-                    sender_account: canonical_account(sender_account)?,
-                    recipient_account: canonical_account(recipient_account)?,
+                    sender: sender.clone(),
+                    recipient: recipient.clone(),
                     encapsulated_key: [0u8; X25519_ENCAPSULATED_KEY_LEN],
                     ciphertext: [0u8; COLLECTION_KEY_CIPHERTEXT_LEN],
                     signature: [0u8; SIGNATURE_LEN],
                 };
-                if envelope.sender_account == envelope.recipient_account
+                if envelope.sender == envelope.recipient
                     && envelope.sender_incarnation_id == envelope.recipient_incarnation_id
                 {
                     return Err(CryptoError::InvalidInput(
@@ -146,14 +149,8 @@ macro_rules! share_envelope {
             }
 
             fn aad_bytes(&self) -> Result<Vec<u8>> {
-                let sender_len = u16::try_from(self.sender_account.len())
-                    .map_err(|_| CryptoError::InvalidInput("sender account is too long".into()))?;
-                let recipient_len = u16::try_from(self.recipient_account.len()).map_err(|_| {
-                    CryptoError::InvalidInput("recipient account is too long".into())
-                })?;
-                let mut bytes = Vec::with_capacity(
-                    FIXED_AAD_LEN + self.sender_account.len() + self.recipient_account.len(),
-                );
+                let (sender, recipient) = (self.sender.bytes(), self.recipient.bytes());
+                let mut bytes = Vec::with_capacity(FIXED_AAD_LEN + sender.len() + recipient.len());
                 bytes.extend_from_slice($magic);
                 bytes.extend_from_slice(&self.suite.as_u16().to_be_bytes());
                 bytes.extend_from_slice(&0u16.to_be_bytes());
@@ -161,10 +158,8 @@ macro_rules! share_envelope {
                 bytes.extend_from_slice(&self.$number.to_be_bytes());
                 bytes.extend_from_slice(&self.sender_incarnation_id);
                 bytes.extend_from_slice(&self.recipient_incarnation_id);
-                bytes.extend_from_slice(&sender_len.to_be_bytes());
-                bytes.extend_from_slice(self.sender_account.as_bytes());
-                bytes.extend_from_slice(&recipient_len.to_be_bytes());
-                bytes.extend_from_slice(self.recipient_account.as_bytes());
+                bytes.extend_from_slice(&sender);
+                bytes.extend_from_slice(&recipient);
                 Ok(bytes)
             }
 
@@ -188,7 +183,8 @@ macro_rules! share_envelope {
             }
 
             pub fn decode(bytes: &[u8]) -> Result<Self> {
-                if bytes.len() < FIXED_AAD_LEN + 1 + 1 + 2 + 32 + 2 + 48 + 64
+                // Each person: at least a three-byte server and the id's 16 bytes.
+                if bytes.len() < FIXED_AAD_LEN + 2 * (3 + 16) + 2 + 32 + 2 + 48 + 64
                     || bytes.get(..$magic.len()) != Some($magic)
                 {
                     return Err(CryptoError::TooShort);
@@ -210,9 +206,9 @@ macro_rules! share_envelope {
                 let sender_incarnation_id = bytes[32..64].try_into().expect("32-byte slice");
                 let recipient_incarnation_id = bytes[64..96].try_into().expect("32-byte slice");
                 let mut cursor = 96usize;
-                let sender_account = read_account(bytes, &mut cursor, "sender")?;
-                let recipient_account = read_account(bytes, &mut cursor, "recipient")?;
-                if sender_account == recipient_account
+                let sender = read_person(bytes, &mut cursor)?;
+                let recipient = read_person(bytes, &mut cursor)?;
+                if sender == recipient
                     && sender_incarnation_id == recipient_incarnation_id
                 {
                     return Err(CryptoError::InvalidInput(
@@ -249,8 +245,8 @@ macro_rules! share_envelope {
                     $number,
                     sender_incarnation_id,
                     recipient_incarnation_id,
-                    sender_account,
-                    recipient_account,
+                    sender,
+                    recipient,
                     encapsulated_key,
                     ciphertext,
                     signature,
@@ -272,20 +268,20 @@ macro_rules! share_envelope {
                 &self,
                 expected_id: &str,
                 expected_number: u32,
-                expected_sender_account: &str,
+                expected_sender: &AccountRef,
                 expected_sender_incarnation_id: &str,
                 sender_signing_public_key: &[u8],
-                expected_recipient_account: &str,
+                expected_recipient: &AccountRef,
                 expected_recipient_incarnation_id: &str,
                 recipient_hpke_private_key: &[u8],
             ) -> Result<Vec<u8>> {
                 self.verify_binding_and_signature(
                     expected_id,
                     expected_number,
-                    expected_sender_account,
+                    expected_sender,
                     expected_sender_incarnation_id,
                     sender_signing_public_key,
-                    expected_recipient_account,
+                    expected_recipient,
                     expected_recipient_incarnation_id,
                 )?;
                 if recipient_hpke_private_key.len() != 32 {
@@ -322,18 +318,18 @@ macro_rules! share_envelope {
                 &self,
                 expected_id: &str,
                 expected_number: u32,
-                expected_sender_account: &str,
+                expected_sender: &AccountRef,
                 expected_sender_incarnation_id: &str,
                 sender_signing_public_key: &[u8],
-                expected_recipient_account: &str,
+                expected_recipient: &AccountRef,
                 expected_recipient_incarnation_id: &str,
             ) -> Result<()> {
                 if self.$id != parse_canonical_uuid(expected_id, $label)?
                     || self.$number != expected_number
-                    || self.sender_account != canonical_account(expected_sender_account)?
+                    || &self.sender != expected_sender
                     || self.sender_incarnation_id
                         != parse_hex_32(expected_sender_incarnation_id, "sender incarnation")?
-                    || self.recipient_account != canonical_account(expected_recipient_account)?
+                    || &self.recipient != expected_recipient
                     || self.recipient_incarnation_id
                         != parse_hex_32(expected_recipient_incarnation_id, "recipient incarnation")?
                 {
@@ -438,16 +434,11 @@ pub(crate) fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
         .expect("validated 32-byte hex"))
 }
 
-pub(crate) fn read_account(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<String> {
-    let len = read_u16(bytes, cursor)? as usize;
-    if len == 0 || len > MAX_ACCOUNT_LEN {
-        return Err(CryptoError::InvalidInput(format!(
-            "named-share {field} account length is invalid"
-        )));
-    }
-    let value = std::str::from_utf8(take(bytes, cursor, len)?)
-        .map_err(|_| CryptoError::InvalidInput("named-share account is not UTF-8".into()))?;
-    canonical_account(value)
+/// A person as [`AccountRef::bytes`] wrote them.
+pub(crate) fn read_person(bytes: &[u8], cursor: &mut usize) -> Result<AccountRef> {
+    let (person, used) = AccountRef::read(bytes.get(*cursor..).ok_or(CryptoError::TooShort)?)?;
+    *cursor += used;
+    Ok(person)
 }
 
 pub(crate) fn read_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16> {
@@ -468,6 +459,16 @@ mod tests {
     use super::*;
     use crate::identity::AccountIdentityKeysV1;
 
+    fn alice() -> AccountRef {
+        AccountRef::new("a.test", "00000000-0000-4000-8000-0000000000a1").unwrap()
+    }
+    fn bob_b() -> AccountRef {
+        AccountRef::new("b.test", "00000000-0000-4000-8000-0000000000b0").unwrap()
+    }
+    fn bob_a() -> AccountRef {
+        AccountRef::new("a.test", "00000000-0000-4000-8000-0000000000b0").unwrap()
+    }
+
     #[test]
     fn named_share_round_trip_is_signature_identity_and_incarnation_bound() {
         let sender = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
@@ -476,10 +477,10 @@ mod tests {
             &[0x55; 32],
             "11111111-1111-4111-8111-111111111111",
             3,
-            "alice@a.test",
+            &alice(),
             &sender.incarnation_id(),
             sender.drive_signing_key(),
-            "bob@b.test",
+            &bob_b(),
             &recipient.incarnation_id(),
             &recipient.drive_hpke_public_key(),
         )
@@ -490,24 +491,37 @@ mod tests {
                 .open(
                     "11111111-1111-4111-8111-111111111111",
                     3,
-                    "alice@a.test",
+                    &alice(),
                     &sender.incarnation_id(),
                     &sender.drive_signing_public_key(),
-                    "bob@b.test",
+                    &bob_b(),
                     &recipient.incarnation_id(),
                     recipient.drive_hpke_private_key(),
                 )
                 .unwrap(),
             vec![0x55; 32]
         );
+        // The same account id on another server is someone else.
+        assert!(decoded
+            .open(
+                "11111111-1111-4111-8111-111111111111",
+                3,
+                &alice(),
+                &sender.incarnation_id(),
+                &sender.drive_signing_public_key(),
+                &bob_a(),
+                &recipient.incarnation_id(),
+                recipient.drive_hpke_private_key(),
+            )
+            .is_err());
         assert!(decoded
             .open(
                 "11111111-1111-4111-8111-111111111111",
                 4,
-                "alice@a.test",
+                &alice(),
                 &sender.incarnation_id(),
                 &sender.drive_signing_public_key(),
-                "bob@b.test",
+                &bob_b(),
                 &recipient.incarnation_id(),
                 recipient.drive_hpke_private_key(),
             )
@@ -515,18 +529,19 @@ mod tests {
     }
 
     #[test]
-    fn parser_rejects_tamper_trailing_unknown_and_noncanonical_accounts() {
+    fn parser_rejects_tamper_trailing_unknown_and_self_shares() {
         let sender = AccountIdentityKeysV1::derive(&[1u8; 32]).unwrap();
         let recipient = AccountIdentityKeysV1::derive(&[2u8; 32]).unwrap();
+        // A share to oneself (same person, same incarnation) is refused.
         assert!(NamedShareEnvelopeV1::seal(
             &[0x55; 32],
             "11111111-1111-4111-8111-111111111111",
             3,
-            "Alice@a.test",
+            &alice(),
             &sender.incarnation_id(),
             sender.drive_signing_key(),
-            "bob@b.test",
-            &recipient.incarnation_id(),
+            &alice(),
+            &sender.incarnation_id(),
             &recipient.drive_hpke_public_key(),
         )
         .is_err());
@@ -534,10 +549,10 @@ mod tests {
             &[0x55; 32],
             "11111111-1111-4111-8111-111111111111",
             3,
-            "alice@a.test",
+            &alice(),
             &sender.incarnation_id(),
             sender.drive_signing_key(),
-            "bob@b.test",
+            &bob_b(),
             &recipient.incarnation_id(),
             &recipient.drive_hpke_public_key(),
         )
@@ -549,10 +564,10 @@ mod tests {
             .open(
                 "11111111-1111-4111-8111-111111111111",
                 3,
-                "alice@a.test",
+                &alice(),
                 &sender.incarnation_id(),
                 &sender.drive_signing_public_key(),
-                "bob@b.test",
+                &bob_b(),
                 &recipient.incarnation_id(),
                 recipient.drive_hpke_private_key(),
             )
@@ -573,10 +588,10 @@ mod tests {
             &[0x66; 32],
             file,
             2,
-            "alice@a.test",
+            &alice(),
             &sender.incarnation_id(),
             sender.drive_signing_key(),
-            "bob@a.test",
+            &bob_a(),
             &recipient.incarnation_id(),
             &recipient.drive_hpke_public_key(),
         )
@@ -589,10 +604,10 @@ mod tests {
             decoded.open(
                 file,
                 generation,
-                "alice@a.test",
+                &alice(),
                 &sender.incarnation_id(),
                 &signer.drive_signing_public_key(),
-                "bob@a.test",
+                &bob_a(),
                 &recipient.incarnation_id(),
                 recipient.drive_hpke_private_key(),
             )
@@ -613,10 +628,10 @@ mod tests {
             &[0x66; 32],
             file,
             2,
-            "alice@a.test",
+            &alice(),
             &sender.incarnation_id(),
             sender.drive_signing_key(),
-            "bob@a.test",
+            &bob_a(),
             &recipient.incarnation_id(),
             &recipient.drive_hpke_public_key(),
         )
