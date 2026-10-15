@@ -7,7 +7,13 @@ const fold = (address: string) => {
   const at = address.lastIndexOf('@')
   return at > 0 ? `${address.slice(0, at).replace(/[._-]/g, '').toLowerCase()}@${address.slice(at + 1).toLowerCase()}` : null
 }
-const session = { masterKey: new Uint8Array(32), envelopeBinding: 'binding', username: 'ada.lovelace' }
+const session = {
+  masterKey: new Uint8Array(32),
+  privateKey: new Uint8Array(32),
+  userId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
+  envelopeBinding: 'binding',
+  username: 'ada.lovelace',
+}
 const key = (id: string, primary: boolean) => ({ fingerprint: `fp-${id}`, publicKey: `pk-${id}`, privateKeyEnvelope: `env-${id}`, primary })
 
 // After a rename: the current address first, the old ones after (docs/api.md).

@@ -65,7 +65,7 @@ export function GroupsPage() {
       {open ? (
         <GroupDialog
           groupId={open}
-          ownKeys={account.data ? [account.data.key, ...account.data.olderKeys] : null}
+          ownKeys={account.data?.groupHolder ?? null}
           administrator={session.isAdmin}
           onClose={() => setOpen(null)}
         />

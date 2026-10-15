@@ -3,7 +3,7 @@ import { Trash2, UserPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import type { SealedMailKey } from '@kutup/crypto'
+import type { GroupKeyHolderOf } from '../api'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
@@ -42,8 +42,8 @@ export function GroupDialog({
   onClose,
 }: {
   groupId: string
-  /** The caller's address keys, to share a shared mailbox's keys from; null when they have none. */
-  ownKeys: SealedMailKey[] | null
+  /** What opens the caller's shares (their account key), to share a shared mailbox's keys from; null when unknown. */
+  ownKeys: GroupKeyHolderOf | null
   /** The caller is an administrator (may change owners and every group). */
   administrator: boolean
   onClose: () => void

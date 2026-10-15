@@ -1,7 +1,9 @@
 //! Shared mailboxes' keys (docs/plans/mail-groups.md, G1b). A shared mailbox
 //! has its own address key, made in a member's browser. Its secret reaches
-//! each member as a share, encrypted to the member's address key; the server
-//! only checks that each share is addressed to that member's current key.
+//! each member as a share sealed to the member's account key (their Drive
+//! HPKE key, which their key binding ties to their account id: a rename
+//! keeps it; docs/plans/account-ids.md); the server only checks that each
+//! share is sealed to that member's current account incarnation.
 //! The group's key lists are signed by the server's own mail-group authority
 //! (a group has no account authority), so senders and WKD see which key is
 //! current; this trusts the server for group keys, as distribution lists
@@ -38,10 +40,9 @@ pub async fn authority(pool: &PgPool) -> anyhow::Result<SigningKey> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShareInput {
     pub user_id: String,
-    /// The group key's secret encrypted to the member's address key, base64.
+    /// The group key's secret sealed to the member's account key
+    /// (`mail_key::seal_group_key_share`), base64.
     pub share: String,
-    /// The member's address key it is encrypted to.
-    pub member_fingerprint: String,
 }
 
 /// A new group key with a share for each member.
@@ -54,11 +55,11 @@ pub struct NewGroupKey {
     pub shares: Vec<ShareInput>,
 }
 
-/// A share checked against the member's current primary address key.
+/// A share checked against the member's current account incarnation.
 pub struct CheckedShare {
     pub user_id: Uuid,
     pub share: Vec<u8>,
-    pub member_fingerprint: String,
+    pub member_incarnation_id: String,
 }
 
 fn decode(value: &str, field: &str) -> AppResult<Vec<u8>> {
@@ -67,38 +68,37 @@ fn decode(value: &str, field: &str) -> AppResult<Vec<u8>> {
         .map_err(|_| AppError::bad_request(format!("{field} must be base64")))
 }
 
-/// Checks each share is encrypted to its member's current primary address
-/// key (the server cannot open it, but can see whom it is for).
+/// Checks each share is sealed to its member's current account incarnation
+/// (the server cannot open it, but can see whose keys it is for).
 pub async fn check_shares(pool: &PgPool, shares: &[ShareInput]) -> AppResult<Vec<CheckedShare>> {
     let mut checked = Vec::with_capacity(shares.len());
     for input in shares {
         let user_id = Uuid::parse_str(&input.user_id)
             .map_err(|_| AppError::bad_request("userId must be an account id"))?;
         let share = decode(&input.share, "share")?;
-        let key: Option<(String, Vec<u8>)> = sqlx::query_as(
-            "SELECT k.fingerprint, k.public_key FROM mail_addresses a
-               JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-              WHERE a.user_id = $1 AND a.state = 'active'",
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT account_incarnation_id FROM users
+              WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''",
         )
         .bind(user_id)
         .fetch_optional(pool)
         .await?;
-        let Some((fingerprint, public_key)) = key else {
-            return Err(AppError::bad_request("a member has no address key yet")
-                .with_details(serde_json::json!({ "code": "noAddressKey", "userId": user_id })));
+        let Some(current) = current else {
+            return Err(AppError::bad_request("a member has no account keys yet")
+                .with_details(serde_json::json!({ "code": "noAccountKey", "userId": user_id })));
         };
-        let expected = mail_key::encryption_key_id(&public_key)
-            .map_err(|_| AppError::internal("stored address key does not parse"))?;
-        if fingerprint != input.member_fingerprint.to_ascii_lowercase()
-            || mail_key::message_key_id(&share).ok() != Some(expected)
+        if mail_key::group_key_share_incarnation(&share)
+            .ok()
+            .as_deref()
+            != Some(current.as_str())
         {
-            return Err(AppError::conflict("a member's key changed; try again")
+            return Err(AppError::conflict("a member's keys changed; try again")
                 .with_details(serde_json::json!({ "code": "keyChanged", "userId": user_id })));
         }
         checked.push(CheckedShare {
             user_id,
             share,
-            member_fingerprint: fingerprint,
+            member_incarnation_id: current,
         });
     }
     Ok(checked)
@@ -150,13 +150,13 @@ pub async fn publish(
     .ok_or_else(|| AppError::conflict("this key is already in use"))?;
     for share in shares {
         sqlx::query(
-            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_fingerprint)
+            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_incarnation_id)
              VALUES ($1, $2, $3, $4)",
         )
         .bind(key_id)
         .bind(share.user_id)
         .bind(&share.share)
-        .bind(&share.member_fingerprint)
+        .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
         .await?;
     }
@@ -238,15 +238,15 @@ pub async fn add_shares(
     .ok_or_else(|| AppError::bad_request("no such group key"))?;
     for share in shares {
         sqlx::query(
-            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_fingerprint)
+            "INSERT INTO mail_group_key_shares (group_key_id, user_id, share, member_incarnation_id)
              VALUES ($1, $2, $3, $4)
              ON CONFLICT (group_key_id, user_id) DO UPDATE
-               SET share = EXCLUDED.share, member_fingerprint = EXCLUDED.member_fingerprint, created_at = now()",
+               SET share = EXCLUDED.share, member_incarnation_id = EXCLUDED.member_incarnation_id, created_at = now()",
         )
         .bind(key_id)
         .bind(share.user_id)
         .bind(&share.share)
-        .bind(&share.member_fingerprint)
+        .bind(&share.member_incarnation_id)
         .execute(&mut **tx)
         .await?;
     }

@@ -22,6 +22,7 @@ import {
   type SealedMailKey,
 } from '@kutup/crypto'
 import { addressFolder } from '@kutup/crypto/accountRename'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
 import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
@@ -169,6 +170,17 @@ export interface MailAccount {
   ownPublicKeys: string[]
   /** Whether `address` is one of the account's, in any spelling (compared folded). */
   isOwnAddress: (address: string | null | undefined) => boolean
+  /**
+   * What opens this account's shares of shared mailboxes' keys: the account
+   * (its server and id) and its account-level HPKE private key (base64).
+   */
+  groupHolder: GroupKeyHolderOf
+}
+
+/** The account a group key share is sealed to, with the key that opens it. */
+export interface GroupKeyHolderOf {
+  account: AccountRef
+  hpkePrivateKey: string
 }
 
 /** Opens a shared mailbox's message with the newest group key that opens it. */
@@ -237,7 +249,7 @@ export interface OwnAddressRow {
 export function mailAccountOf(
   rows: readonly OwnAddressRow[],
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
-  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username'>,
+  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'userId' | 'privateKey'>,
   fold: (address: string) => string | null,
 ): MailAccount {
   const current = rows.find((row) => row.state === 'active')
@@ -273,6 +285,11 @@ export function mailAccountOf(
       if (!candidate) return false
       const folded = fold(candidate)
       return folded !== null && own.has(folded)
+    },
+    // The account's server is its address's.
+    groupHolder: {
+      account: { server: current.address.split('@')[1] ?? '', accountId: session.userId },
+      hpkePrivateKey: toBase64(session.privateKey),
     },
   }
 }

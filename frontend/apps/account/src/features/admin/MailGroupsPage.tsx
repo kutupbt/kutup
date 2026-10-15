@@ -53,7 +53,7 @@ export function MailGroupsPage() {
       void queryClient.invalidateQueries({ queryKey: groupsAdminKey })
     },
   })
-  const ownKeys = account.data ? [account.data.key, ...account.data.olderKeys] : null
+  const ownKeys = account.data?.groupHolder ?? null
 
   return (
     <PageBody>
@@ -205,8 +205,11 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
   const create = useMutation({
     mutationFn: async () => {
       const lower = name.trim().toLowerCase()
-      const groupKey = kind === 'shared' ? await newGroupKey(`${lower}@${server.data}`, owners) : undefined
+      // The group's id, drawn here: its key shares are bound to it.
+      const id = crypto.randomUUID()
+      const groupKey = kind === 'shared' ? await newGroupKey(`${lower}@${server.data}`, id, owners) : undefined
       await api.post('/admin/mail/groups', {
+        id,
         name: lower,
         displayName: displayName.trim(),
         kind,

@@ -1,17 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import {
-  generateMailGroupKey,
-  inspectMailAddressPublicKey,
-  reshareMailGroupKey,
-  type GroupMailKey,
-  type SealedMailKey,
-} from '@kutup/crypto'
+import { generateMailGroupKey, reshareMailGroupKey, type GroupKeyMember, type GroupMailKey } from '@kutup/crypto'
+import { incarnationIdOfAuthority, verifyDriveKeyBinding } from '@kutup/crypto/identityPins'
 import api from '@kutup/session/client'
-import { addressKeys } from './keys'
+import type { GroupKeyHolderOf } from './api'
 
 // Mail groups (docs/plans/mail-groups.md): distribution lists and shared
 // mailboxes. A shared mailbox's key reaches each member as a share, the key's
-// secret encrypted to their address key; adding members means sharing every
+// secret sealed to their account key (docs/plans/account-ids.md); adding members means sharing every
 // key with them, removing one means a new key for everyone who stays. All of
 // that happens here, in the browser: the server never holds a group key.
 
@@ -56,15 +51,13 @@ export interface MailGroupKeyRow {
   publicKey: string
   primary: boolean
   flags: number
+  /** The group key's secret sealed to the caller's account key, when they hold it. */
   share: string | null
-  /** The caller's address key the share is encrypted to. */
-  memberFingerprint: string | null
 }
 
 export interface ShareInput {
   userId: string
   share: string
-  memberFingerprint: string
 }
 
 export interface NewGroupKey {
@@ -100,15 +93,11 @@ export function useGroupKeys(id: string | undefined) {
 }
 
 /**
- * The keys the caller can open a shared mailbox's mail with, primary first:
- * each share with the caller's address key it was made for (theirs may have
- * changed since).
+ * The keys the caller can open the shared mailbox `groupId`'s mail with,
+ * primary first: each share sealed to the caller's account key.
  */
-export function heldKeys(rows: MailGroupKeyRow[], own: SealedMailKey[]): GroupMailKey[] {
-  return rows.flatMap((row) => {
-    const member = own.find((key) => key.fingerprint === row.memberFingerprint) ?? (row.memberFingerprint ? undefined : own[0])
-    return row.share && member ? [{ member, share: row.share, fingerprint: row.fingerprint }] : []
-  })
+export function heldKeys(rows: MailGroupKeyRow[], groupId: string, holder: GroupKeyHolderOf): GroupMailKey[] {
+  return rows.flatMap((row) => (row.share ? [{ ...holder, share: row.share, groupId, fingerprint: row.fingerprint }] : []))
 }
 
 /** A Kutup account found by its address. */
@@ -128,23 +117,49 @@ export async function resolveAccount(address: string): Promise<AccountRef | null
   }
 }
 
-/** A member's current address key, checked against their signed key list, with its fingerprint. */
-async function memberKey(address: string): Promise<{ publicKey: string; fingerprint: string }> {
-  const keys = await addressKeys(address)
-  const info = await inspectMailAddressPublicKey(keys.primary, keys.address)
-  return { publicKey: keys.primary, fingerprint: info.fingerprint }
+/** The member's account key, as their server gives it by their account id. */
+interface MemberIdentity {
+  server: string
+  accountId: string
+  accountIncarnationId: string
+  driveHpkePublicKey: string
+  driveSigningPublicKey: string
+  accountAuthorityPublicKey: string
+  driveKeyBinding?: string | null
 }
 
-/** A new shared-mailbox key for `groupAddress` with a share for each of `members`. */
-export async function newGroupKey(groupAddress: string, members: { userId: string; address: string }[]): Promise<NewGroupKey> {
-  const keys = await Promise.all(members.map((member) => memberKey(member.address)))
-  const made = await generateMailGroupKey(
-    groupAddress,
-    keys.map((key) => key.publicKey),
-  )
+/** The member's account key is not one their account signed. */
+export class MemberKeyUnproven extends Error {
+  constructor(readonly userId: string) {
+    super('a member\'s account key is not signed by their account')
+  }
+}
+
+/**
+ * A member's account key (docs/plans/account-ids.md): looked up by their
+ * account id and kept only when their account authority's Drive key binding
+ * vouches for it, for that account.
+ */
+async function memberKey(userId: string): Promise<GroupKeyMember> {
+  const { data } = await api.get<MemberIdentity>(`/users/by-id/${encodeURIComponent(userId)}`)
+  const account = { server: data.server, accountId: data.accountId }
+  const bound =
+    data.accountId === userId &&
+    !!data.driveKeyBinding &&
+    (await verifyDriveKeyBinding(account, data.accountAuthorityPublicKey, data.driveHpkePublicKey, data.driveSigningPublicKey, data.driveKeyBinding))
+  if (!bound || (await incarnationIdOfAuthority(data.accountAuthorityPublicKey)) !== data.accountIncarnationId) {
+    throw new MemberKeyUnproven(userId)
+  }
+  return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveHpkePublicKey }
+}
+
+/** A new key for the shared mailbox `groupId` at `groupAddress`, with a share for each of `members`. */
+export async function newGroupKey(groupAddress: string, groupId: string, members: { userId: string }[]): Promise<NewGroupKey> {
+  const keys = await Promise.all(members.map((member) => memberKey(member.userId)))
+  const made = await generateMailGroupKey(groupAddress, groupId, keys)
   return {
     publicKey: made.publicKey,
-    shares: members.map((member, i) => ({ userId: member.userId, share: made.shares[i], memberFingerprint: keys[i].fingerprint })),
+    shares: members.map((member, i) => ({ userId: member.userId, share: made.shares[i] })),
   }
 }
 
@@ -173,31 +188,26 @@ export async function membershipBody(
   group: MailGroup,
   current: MailGroupMember[],
   next: MemberInput[],
-  me: SealedMailKey[] | null,
+  me: GroupKeyHolderOf | null,
 ): Promise<{ body: MembershipBody; historyShared: boolean }> {
   const members = next.map(({ userId, role, canSendAs }) => ({ userId, role, canSendAs }))
   if (group.kind !== 'shared') return { body: { members }, historyShared: true }
   const added = next.filter((m) => !current.some((c) => c.userId === m.userId))
   const removed = current.filter((c) => !next.some((m) => m.userId === c.userId))
   const rows = await groupKeys(group.id).catch(() => [] as MailGroupKeyRow[])
-  const held = me ? heldKeys(rows, me) : []
+  const held = me ? heldKeys(rows, group.id, me) : []
   const holdsAll = rows.length > 0 && held.length === rows.length
   const body: MembershipBody = { members }
   if (added.length > 0 && holdsAll) {
-    const keys = await Promise.all(added.map((member) => memberKey(member.address)))
+    const keys = await Promise.all(added.map((member) => memberKey(member.userId)))
     body.keyShares = []
     for (const key of held) {
-      const shares = await reshareMailGroupKey(
-        key,
-        keys.map((k) => k.publicKey),
-      )
-      added.forEach((member, i) =>
-        body.keyShares!.push({ groupFingerprint: key.fingerprint, userId: member.userId, share: shares[i], memberFingerprint: keys[i].fingerprint }),
-      )
+      const shares = await reshareMailGroupKey(key, keys)
+      added.forEach((member, i) => body.keyShares!.push({ groupFingerprint: key.fingerprint, userId: member.userId, share: shares[i] }))
     }
   }
   if (removed.length > 0 || (added.length > 0 && !holdsAll)) {
-    body.newKey = await newGroupKey(group.address, next)
+    body.newKey = await newGroupKey(group.address, group.id, next)
   }
   return { body, historyShared: added.length === 0 || holdsAll }
 }

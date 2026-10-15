@@ -358,7 +358,7 @@ pub async fn update_group(
         ));
     }
     apply_update(&state, &group, &change).await?;
-    audit(&state.pool, &user.user_id, "mail_group.update", None, json!({ "group": group.address, "change": {
+    audit(&state.pool, &user.user_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
         "displayName": change.display_name, "description": change.description, "postPolicy": change.post_policy,
     } })).await;
     Ok(Json(detail(&state, user_id, id).await?))
@@ -649,10 +649,12 @@ pub async fn set_members(
         }
     }
     tx.commit().await?;
-    let removed: Vec<&str> = current
+    // Audit entries name people by their account ids and the group by its
+    // id; the address is a snapshot (docs/plans/account-ids.md).
+    let removed: Vec<Uuid> = current
         .iter()
         .filter(|m| !ids.contains(&m.user_id))
-        .map(|m| m.username.as_str())
+        .map(|m| m.user_id)
         .collect();
     let added: Vec<Uuid> = ids
         .iter()
@@ -665,7 +667,7 @@ pub async fn set_members(
         "mail_group.members",
         None,
         json!({
-            "group": group.address, "added": added, "removed": removed, "count": ids.len(),
+            "groupId": group.id, "address": group.address, "added": added, "removed": removed, "count": ids.len(),
         }),
     )
     .await;
@@ -701,6 +703,9 @@ pub async fn admin_list(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateMailGroup {
+    /// The group's id, drawn by the creating browser (a lowercase UUID): a
+    /// shared mailbox's key shares are bound to it.
+    pub id: String,
     /// The part before the @: the username rules apply.
     pub name: String,
     #[serde(default)]
@@ -770,6 +775,10 @@ pub async fn admin_create(
     Json(input): Json<CreateMailGroup>,
 ) -> AppResult<Json<MailGroupDetail>> {
     let admin_id = trusted_uuid(&admin.user_id)?;
+    let requested_id = Uuid::parse_str(&input.id)
+        .ok()
+        .filter(|id| id.hyphenated().to_string() == input.id)
+        .ok_or_else(|| AppError::bad_request("id must be a lowercase UUID"))?;
     let name = input.name.trim().to_ascii_lowercase();
     let address = group_name_free(&state, &name).await?;
     if input.kind != "list" && input.kind != "shared" {
@@ -840,9 +849,10 @@ pub async fn admin_create(
 
     let mut tx = state.pool.begin().await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO mail_groups (address, display_name, description, kind, post_policy, storage_quota_bytes, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        "INSERT INTO mail_groups (id, address, display_name, description, kind, post_policy, storage_quota_bytes, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
+    .bind(requested_id)
     .bind(&address)
     .bind(input.display_name.trim())
     .bind(input.description.trim())
@@ -853,6 +863,10 @@ pub async fn admin_create(
     .fetch_one(&mut *tx)
     .await
     .map_err(|error| match error {
+        sqlx::Error::Database(db) if db.constraint() == Some("mail_groups_pkey") => {
+            AppError::conflict("this group id is taken: draw another")
+                .with_details(json!({ "code": "idTaken" }))
+        }
         sqlx::Error::Database(db) if db.is_unique_violation() => {
             AppError::conflict("this name is already taken").with_details(json!({ "code": "nameTaken" }))
         }
@@ -891,7 +905,7 @@ pub async fn admin_create(
         "mail_group.create",
         None,
         json!({
-            "group": address, "kind": input.kind, "quota": input.storage_quota_bytes,
+            "groupId": id, "address": address, "kind": input.kind, "quota": input.storage_quota_bytes,
         }),
     )
     .await;
@@ -948,7 +962,7 @@ pub async fn admin_update(
     )
     .await?;
     audit(&state.pool, &admin.user_id, "mail_group.update", None, json!({
-        "group": group.address, "quota": change.storage_quota_bytes, "postPolicy": change.post_policy,
+        "groupId": group.id, "address": group.address, "quota": change.storage_quota_bytes, "postPolicy": change.post_policy,
     }))
     .await;
     Ok(Json(detail(&state, admin_id, id).await?))
@@ -1006,7 +1020,7 @@ pub async fn admin_delete(
         &admin.user_id,
         "mail_group.delete",
         None,
-        json!({ "group": group.address }),
+        json!({ "groupId": group.id, "address": group.address }),
     )
     .await;
     Ok(axum::http::StatusCode::NO_CONTENT)
@@ -1040,15 +1054,7 @@ pub async fn security_txt(State(state): State<AppState>) -> axum::response::Resp
 
 /// A group key row with the caller's share: fingerprint, SHA-256 fingerprint,
 /// public key, primary, flags, share, member fingerprint.
-type KeyRow = (
-    String,
-    String,
-    Vec<u8>,
-    bool,
-    i32,
-    Option<Vec<u8>>,
-    Option<String>,
-);
+type KeyRow = (String, String, Vec<u8>, bool, i32, Option<Vec<u8>>);
 
 /// One of a shared mailbox's keys, with the caller's share of it.
 #[derive(Debug, Serialize, ToSchema)]
@@ -1060,11 +1066,9 @@ pub struct MailGroupKey {
     pub public_key: String,
     pub primary: bool,
     pub flags: i32,
-    /// The caller's share (the key's secret encrypted to their address key),
-    /// base64; absent when they have none of this key.
+    /// The caller's share (the key's secret sealed to their account key),
+    /// base64; absent when they have none for their current keys.
     pub share: Option<String>,
-    /// The address key the share is encrypted to.
-    pub member_fingerprint: Option<String>,
 }
 
 /// `GET /api/mail/groups/{id}/keys` — a shared mailbox's keys, primary
@@ -1094,9 +1098,11 @@ pub async fn group_keys(
     }
     let rows: Vec<KeyRow> = sqlx::query_as(
         "SELECT k.fingerprint, k.sha256_fingerprint, k.public_key, k.is_primary, k.flags,
-                    s.share, s.member_fingerprint
+                    s.share
                FROM mail_group_keys k
                LEFT JOIN mail_group_key_shares s ON s.group_key_id = k.id AND s.user_id = $2
+                    AND s.member_incarnation_id =
+                        (SELECT account_incarnation_id FROM users WHERE id = $2)
               WHERE k.group_id = $1
               ORDER BY k.is_primary DESC, k.created_at DESC",
     )
@@ -1108,14 +1114,13 @@ pub async fn group_keys(
     Ok(Json(
         rows.into_iter()
             .map(
-                |(fingerprint, sha256, public_key, primary, flags, share, member)| MailGroupKey {
+                |(fingerprint, sha256, public_key, primary, flags, share)| MailGroupKey {
                     fingerprint,
                     sha256_fingerprint: sha256,
                     public_key: b64.encode(public_key),
                     primary,
                     flags,
                     share: share.map(|share| b64.encode(share)),
-                    member_fingerprint: member,
                 },
             )
             .collect(),
@@ -1200,7 +1205,7 @@ pub async fn rotate_group_key(
         &user.user_id,
         "mail_group.key",
         None,
-        json!({ "group": group.address, "fingerprint": fingerprint }),
+        json!({ "groupId": group.id, "address": group.address, "fingerprint": fingerprint }),
     )
     .await;
     Ok(Json(fingerprint))

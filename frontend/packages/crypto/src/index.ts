@@ -80,6 +80,7 @@ export type {
   ExternalMailKey,
   GeneratedMailAddressKey,
   GeneratedMailGroupKey,
+  GroupKeyMember,
   GroupMailKey,
   MailKeyEntry,
   MailKeyListInput,

@@ -12,6 +12,22 @@ const BASE = typeof __KUTUP_CRYPTO_WASM__ === 'string' && __KUTUP_CRYPTO_WASM__ 
 const MODULE_URL = `${BASE}/kutup_crypto_wasm.js`
 const WASM_URL = `${BASE}/kutup_crypto_wasm_bg.wasm`
 
+/** A shared mailbox's key as a member holds it, as WASM takes it. */
+export interface GroupKeyHolder {
+  account: { server: string; accountId: string }
+  hpkePrivateKey: string
+  share: string
+  groupId: string
+  fingerprint: string
+}
+
+/** A member a group key is shared with: their account and checked account key. */
+export interface GroupKeyMember {
+  account: { server: string; accountId: string }
+  incarnationId: string
+  hpkePublicKey: string
+}
+
 export interface CryptoWasmModule {
   default(input?: unknown): Promise<unknown>
   sealLocalState(
@@ -96,27 +112,16 @@ export interface CryptoWasmModule {
   OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
   generateMailGroupKey(
     groupAddress: string,
+    groupId: string,
     createdAtSecs: number,
-    memberPublicKeys: string[],
+    members: GroupKeyMember[],
   ): { publicKey: string; fingerprint: string; sha256Fingerprint: string; shares: string[] }
   reshareMailGroupKey(
-    masterKeyBase64: string,
-    binding: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
-    memberPublicKeys: string[],
+    key: GroupKeyHolder,
+    members: GroupKeyMember[],
   ): string[]
   openMailGroupMessage(
-    masterKeyBase64: string,
-    binding: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     message: Uint8Array,
     senderPublicKeyBase64?: string,
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
@@ -125,44 +130,20 @@ export interface CryptoWasmModule {
   signMailDetached(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
   signMailCleartext(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
   signMailCleartextAsGroup(
-    masterKeyBase64: string,
-    binding: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     text: string,
   ): string
   signMailDetachedAsGroup(
-    masterKeyBase64: string,
-    binding: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     content: Uint8Array,
   ): string
   encryptMailMessageAsGroup(
-    masterKeyBase64: string,
-    binding: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     recipientPublicKeys: string[],
     plaintext: Uint8Array,
   ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpAsGroup(
-    masterKeyBase64: string,
-    binding: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     recipientPublicKeys: string[],
     plaintext: Uint8Array,
   ): string

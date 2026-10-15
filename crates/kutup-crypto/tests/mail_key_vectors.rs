@@ -116,7 +116,8 @@ fn write_vectors() {
     // change).
     if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() == Ok("lists") {
         let mut v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
-        let identity = AccountIdentityKeysV1::derive(&b64(&v.master_key).try_into().unwrap()).unwrap();
+        let identity =
+            AccountIdentityKeysV1::derive(&b64(&v.master_key).try_into().unwrap()).unwrap();
         let entry = |fingerprint: &str, sha256: &str| MailKeyEntryV1 {
             fingerprint: hex::decode(fingerprint).unwrap().try_into().unwrap(),
             sha256_fingerprint: hex::decode(sha256).unwrap().try_into().unwrap(),

@@ -93,8 +93,8 @@ describe('an address’s keys against the pin list', () => {
   })
 
   it('takes an old address its verified rename chain covers, and someone never met', async () => {
-    await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
-    await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
-    await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
   })
 })
