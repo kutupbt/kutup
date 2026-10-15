@@ -18,7 +18,6 @@ export async function firstAddressKey(session: Pick<Session, 'masterKey' | 'enve
   const masterKey = toBase64(session.masterKey)
   const key = await generateMailAddressKey(masterKey, session.envelopeBinding, address)
   const list = await signMailKeyList(masterKey, {
-    account: address,
     address,
     sequence: 1,
     issuedAt: new Date().toISOString(),

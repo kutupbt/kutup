@@ -20,7 +20,9 @@ interface PublicKeyRow {
 
 interface KeyLookup {
   address: string
-  account: string
+  /** The account the address belongs to (server-asserted; absent for a shared mailbox). */
+  server: string
+  accountId?: string
   accountAuthorityPublicKey: string
   keys: PublicKeyRow[]
   keyLists: { data: string; signature: string }[]
@@ -28,7 +30,6 @@ interface KeyLookup {
 
 export interface AddressKeys {
   address: string
-  account: string
   authorityPublicKey: string
   /** The key to encrypt to (base64). */
   primary: string
@@ -117,9 +118,8 @@ async function load(address: string): Promise<AddressKeys> {
 
 /**
  * A lookup's keys, kept only when the account's signed key lists name them.
- * The answer names the address as stored and the account its newest list
- * names: another spelling of the address asked (one account per folded name),
- * or, for an old address of a renamed account, its name then.
+ * The answer names the address as stored (another spelling of the address
+ * asked: one account per folded name), which its newest list names too.
  */
 export async function verified(address: string, lookup: KeyLookup): Promise<AddressKeys> {
   const asked = await foldAddress(address)
@@ -130,7 +130,7 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
     newest = await verifyMailKeyList(list, lookup.accountAuthorityPublicKey, previous)
     previous = list
   }
-  if (!newest || newest.address !== lookup.address || newest.account !== lookup.account) {
+  if (!newest || newest.address !== lookup.address) {
     throw new UnverifiedKeys(address)
   }
   const kept: { publicKey: string; primary: boolean; flags: number }[] = []
@@ -143,7 +143,6 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
   if (!primary) throw new UnverifiedKeys(address)
   return {
     address: lookup.address,
-    account: lookup.account,
     authorityPublicKey: lookup.accountAuthorityPublicKey,
     primary: primary.publicKey,
     // A key its owner marked compromised no longer vouches for anything.

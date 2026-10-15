@@ -103,7 +103,6 @@ async function nextList(session: Session, address: CheckedMailAddress, keys: Mai
   const current = address.verifiedList
   if (!current) throw new Error('the current key list is not signed by this account')
   return signMailKeyList(toBase64(session.masterKey), {
-    account: current.account,
     address: current.address,
     sequence: current.sequence + 1,
     previousHash: current.hash,

@@ -30,7 +30,6 @@ export interface MailKeyEntry {
 }
 
 export interface MailKeyListInput {
-  account: string
   address: string
   sequence: number
   previousHash?: string
