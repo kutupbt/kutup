@@ -919,8 +919,14 @@ impl Engine {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.canonical_self()?;
-        let mls_identity = format!("{canonical_self}#{}", self.session.device_id());
-        let mls = crate::MlsClient::new(Rc::clone(self.session.db()))
+        let mls_client = crate::MlsClient::new(Rc::clone(self.session.db()));
+        // MLS keeps the identity its state was made under, across a rename of
+        // this account (docs/plans/username-renames.md: MLS state is frozen).
+        let mls_identity = match mls_client.stored_identity().await? {
+            Some(identity) => identity,
+            None => format!("{canonical_self}#{}", self.session.device_id()),
+        };
+        let mls = mls_client
             .initialize(&mls_identity)
             .await?
             .manifest_binding();
@@ -932,7 +938,14 @@ impl Engine {
             }
             Some(current) => {
                 current.verify().map_err(ChatError::Trust)?;
-                if current.account != canonical_self {
+                // After a rename the stored manifest names an earlier address
+                // of this account (its followed chain), until this publishes.
+                let own_earlier = self
+                    .session
+                    .manifest_trust(&canonical_self)
+                    .await?
+                    .is_some_and(|own| crate::renames::known_address(&own, &current.account));
+                if current.account != canonical_self && !own_earlier {
                     return Err(ChatError::Trust(
                         "stored account manifest belongs to another account".into(),
                     ));
@@ -949,7 +962,8 @@ impl Engine {
                     Ok(index)
                         if devices[index].identity_key == local.identity_key
                             && devices[index].registration_id == local.registration_id
-                            && devices[index].mls == local.mls =>
+                            && devices[index].mls == local.mls
+                            && current.account == canonical_self =>
                     {
                         current
                     }

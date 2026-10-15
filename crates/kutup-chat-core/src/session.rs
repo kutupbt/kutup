@@ -279,6 +279,15 @@ impl Session {
         self.address.device_id
     }
 
+    /// This account's own address after a rename it followed
+    /// (`Engine::adopt_own_rename`): the device is the same.
+    pub(crate) fn set_user(&mut self, address: &str) -> Result<()> {
+        let moved = ChatAddress::from_sender(address, self.device_id())?;
+        self.account = moved.name();
+        self.address = moved;
+        Ok(())
+    }
+
     pub fn user(&self) -> &str {
         &self.account
     }
@@ -2305,7 +2314,31 @@ impl Session {
         known: crate::renames::KnownRenamesV1,
         devices: &[u32],
     ) -> Result<bool> {
-        let result = self.stage_peer_move(from, to, known, devices).await;
+        self.move_records(from, to, known, devices, true).await
+    }
+
+    /// [`Self::move_peer`] for this account's own records after its own
+    /// rename: no line in Note to Self (the account's renames show in
+    /// Account → Security).
+    pub(crate) async fn move_own_records(
+        &mut self,
+        from: &str,
+        to: &str,
+        known: crate::renames::KnownRenamesV1,
+        devices: &[u32],
+    ) -> Result<bool> {
+        self.move_records(from, to, known, devices, false).await
+    }
+
+    async fn move_records(
+        &mut self,
+        from: &str,
+        to: &str,
+        known: crate::renames::KnownRenamesV1,
+        devices: &[u32],
+        line: bool,
+    ) -> Result<bool> {
+        let result = self.stage_peer_move(from, to, known, devices, line).await;
         match result {
             Ok(true) => {
                 self.store.commit().await?;
@@ -2328,6 +2361,7 @@ impl Session {
         to: &str,
         known: crate::renames::KnownRenamesV1,
         devices: &[u32],
+        line: bool,
     ) -> Result<bool> {
         if crate::renames::same_address(from, to) {
             return Ok(false);
@@ -2397,27 +2431,30 @@ impl Session {
         let mut aliases = crate::renames::load_aliases(&*db, None).await?;
         aliases.record(from, to);
         // The line in the thread, once per rename.
-        let now = now_millis();
-        let content = ChatContent::peer_renamed_with_id(
-            format!("rename:{incarnation_id}:{sequence}"),
-            crate::clock::rfc3339(now),
-            &kutup_chat_proto::PeerRenamedBody {
-                from: from.to_string(),
-                to: to.to_string(),
-                sequence,
-            },
-        )
-        .map_err(ChatError::Content)?;
-        self.store.stage_sent_message(SentMessage {
-            send_id: content.message_id.clone(),
-            peer: to.to_string(),
-            sender_device_id: self.device_id(),
-            content: serde_json::to_vec(&content).map_err(|e| ChatError::Content(e.to_string()))?,
-            created_at: now,
-            delivered_at: Some(now),
-            delivered: true,
-            deduplicated: false,
-        });
+        if line {
+            let now = now_millis();
+            let content = ChatContent::peer_renamed_with_id(
+                format!("rename:{incarnation_id}:{sequence}"),
+                crate::clock::rfc3339(now),
+                &kutup_chat_proto::PeerRenamedBody {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    sequence,
+                },
+            )
+            .map_err(ChatError::Content)?;
+            self.store.stage_sent_message(SentMessage {
+                send_id: content.message_id.clone(),
+                peer: to.to_string(),
+                sender_device_id: self.device_id(),
+                content: serde_json::to_vec(&content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: now,
+                delivered_at: Some(now),
+                delivered: true,
+                deduplicated: false,
+            });
+        }
         let mut stale = crate::db::Pending::default();
         crate::timeline::invalidate(&*db, &mut stale).await?;
         self.store.with_pending(|pending| -> Result<()> {

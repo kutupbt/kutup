@@ -17,6 +17,16 @@ impl MlsClient {
         parse_verified_key_package(&KutupMlsProvider::default(), verified, now_seconds).map(|_| ())
     }
 
+    /// The credential identity (`account#device`) this device's MLS state
+    /// was made under, if it has one. MLS keeps it across a rename of the
+    /// account (docs/plans/username-renames.md: MLS state is frozen).
+    pub async fn stored_identity(&self) -> Result<Option<String>> {
+        match self.db.load_mls_state().await? {
+            Some(bytes) => Ok(Some(provider_from_snapshot(&bytes)?.1.credential_identity)),
+            None => Ok(None),
+        }
+    }
+
     /// Install a new Ed25519 MLS credential and independent X25519 delivery
     /// HPKE key, or reopen the exact existing identity. A different identity
     /// never replaces keys implicitly.

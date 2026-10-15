@@ -907,6 +907,48 @@ impl WasmChatClient {
         to_output(&manifest)
     }
 
+    /// This account was renamed (`/user/me` names `newAddress`): follows it
+    /// along its own verified chain, then publishes the manifest and the
+    /// profile under the new address. False when it had followed already.
+    #[wasm_bindgen(js_name = adoptOwnRename)]
+    pub async fn adopt_own_rename(
+        &mut self,
+        new_address: String,
+    ) -> std::result::Result<bool, JsValue> {
+        let moved = self
+            .engine
+            .adopt_own_rename(&self.authority, &new_address)
+            .await
+            .map_err(chat_error)?;
+        if moved {
+            self.engine
+                .sync_own_manifest(&self.authority, now_rfc3339())
+                .await
+                .map_err(chat_error)?;
+            let mut rng = rand::rngs::OsRng.unwrap_err();
+            self.engine
+                .republish_profile_after_rename(
+                    &self.profile_wrapping_key,
+                    &now_rfc3339(),
+                    &mut rng,
+                )
+                .await
+                .map_err(chat_error)?;
+        }
+        Ok(moved)
+    }
+
+    /// The addresses peers left, and where each is now (folded old address
+    /// → current address): the app reads its own per-conversation state
+    /// (read marks, restored backup records) through it.
+    #[wasm_bindgen(js_name = renameAliases)]
+    pub async fn rename_aliases(&self) -> std::result::Result<JsValue, JsValue> {
+        let aliases = crate::renames::load_aliases(&**self.engine.session().db(), None)
+            .await
+            .map_err(chat_error)?;
+        to_output(&aliases.moved)
+    }
+
     #[wasm_bindgen(js_name = revokeManifestDevice)]
     pub async fn revoke_manifest_device(
         &mut self,
@@ -3884,6 +3926,8 @@ struct ContentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     call_log: Option<kutup_chat_proto::CallLogBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    peer_renamed: Option<kutup_chat_proto::PeerRenamedBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     group_call: Option<kutup_chat_proto::GroupCallBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disappearing_timer: Option<kutup_chat_proto::DisappearingTimerBody>,
@@ -3942,6 +3986,7 @@ impl From<ChatContent> for ContentView {
         let typing = content.as_typing();
         let call = content.as_call();
         let call_log = content.as_call_log();
+        let peer_renamed = content.as_peer_renamed();
         let group_call = content.as_group_call();
         let disappearing_timer = content.as_disappearing_timer();
         let conversation_state = content.as_conversation_state();
@@ -3976,6 +4021,7 @@ impl From<ChatContent> for ContentView {
             typing,
             call,
             call_log,
+            peer_renamed,
             group_call,
             disappearing_timer,
             conversation_state,
