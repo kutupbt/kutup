@@ -1488,24 +1488,19 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
-        let peer = self.session.current_peer(peer_user);
-        match self.send_once(send_id, &peer, content, rng).await {
+        // The address as asked: it may be a name its peer left, which the
+        // server says (`409 renamed`, followed below), or someone else's now.
+        match self.send_once(send_id, peer_user, content, rng).await {
             Err(ChatError::Renamed(chains)) => {
-                let now = self.session.current_peer(&peer);
-                if now == peer {
+                let now = self.session.current_peer(peer_user);
+                if now == peer_user {
                     return Err(ChatError::Renamed(chains));
                 }
                 let mut summary = self.send_once(send_id, &now, content, rng).await?;
                 summary.moved_to = Some(now);
                 Ok(summary)
             }
-            Ok(mut summary) => {
-                if peer != peer_user {
-                    summary.moved_to = Some(peer);
-                }
-                Ok(summary)
-            }
-            Err(error) => Err(error),
+            other => other,
         }
     }
 
@@ -2313,8 +2308,9 @@ impl Engine {
         rng: &mut R,
     ) -> Result<SendSummary> {
         // Queued for an address its peer has left since: it goes where the
-        // peer is now (the ratchet moved with it).
-        entry.peer = self.session.current_peer(&entry.peer);
+        // peer is now (the ratchet moved with it), never to someone who took
+        // the name after it was queued.
+        entry.peer = self.session.peer_as_of(&entry.peer, entry.created_at);
         let primary = if entry.primary_delivered {
             summary.delivered = true;
             summary.deduplicated = true;
@@ -2755,47 +2751,75 @@ impl Engine {
         let (sender, _) = self
             .session
             .resolve_delivered_sender(sender, envelope.sender_device_id)?;
-        let device_id = envelope.sender_device_id;
-        let peer = self.session.current_peer(&sender);
-        let mut identity = self.session.manifest_identity_key(&peer, device_id).await?;
-        if identity.is_none() {
-            match self.fetch_verified_bundles(&peer).await {
-                Ok(_) => {}
-                // A development server without manifests, as for sends.
-                Err(_)
-                    if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
-                        && self.session.manifest_trust(&peer).await?.is_none() =>
-                {
-                    return Ok(());
+        let claimed = if envelope.envelope_type == kutup_chat_proto::EnvelopeType::PreKey {
+            match crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)? {
+                libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) => {
+                    Some(*message.identity_key().public_key())
                 }
-                Err(error) => return Err(error),
+                _ => None,
             }
-            let now = self.session.current_peer(&peer);
-            identity = self.session.manifest_identity_key(&now, device_id).await?;
-        }
-        let Some(identity) = identity else {
-            if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
-                && self.session.manifest_trust(&peer).await?.is_none()
-            {
-                return Ok(());
-            }
-            return Err(ChatError::Trust(
-                "sender device is absent from the account-manifest-verified manifest".into(),
-            ));
+        } else {
+            None
         };
-        if envelope.envelope_type == kutup_chat_proto::EnvelopeType::PreKey {
-            let message =
-                crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)?;
-            if let libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) = message {
-                if message.identity_key().public_key().serialize() != identity.serialize() {
-                    return Err(ChatError::Trust(
-                        "session-starting identity key differs from the signed account manifest"
-                            .into(),
-                    ));
+        match self
+            .sender_device_identity(&sender, envelope.sender_device_id, claimed.as_ref())
+            .await
+        {
+            Ok(Some(_)) => Ok(()),
+            // A development server without manifests, as for sends.
+            Ok(None) | Err(_)
+                if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                    && self.session.manifest_trust(&sender).await?.is_none() =>
+            {
+                Ok(())
+            }
+            Ok(None) => Err(ChatError::Trust(
+                "sender device is absent from the account-manifest-verified manifest".into(),
+            )),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Which account vouches for `device_id` of the sender at `literal`:
+    /// the peer the address leads to now when its verified manifest has the
+    /// device (with the `claimed` identity key, when there is one); else
+    /// whoever holds the address itself now: a name its peer left and
+    /// someone else took is that someone, never the peer that left it.
+    /// Unknown manifests are fetched and verified first. `None`: no account
+    /// vouches for the device.
+    async fn sender_device_identity(
+        &mut self,
+        literal: &str,
+        device_id: u32,
+        claimed: Option<&libsignal_protocol::PublicKey>,
+    ) -> Result<Option<(String, libsignal_protocol::PublicKey)>> {
+        let resolved = self.session.current_peer(literal);
+        let mut candidates = vec![resolved.clone()];
+        if resolved != literal {
+            candidates.push(literal.to_string());
+        }
+        let last = candidates.len() - 1;
+        for (index, peer) in candidates.into_iter().enumerate() {
+            let mut identity = self.session.manifest_identity_key(&peer, device_id).await?;
+            let mut at = peer.clone();
+            if identity.is_none() {
+                // Retrieve and verify the complete current manifest before
+                // touching the inner ratchet; its prekeys stay unused.
+                match self.fetch_verified_bundles(&peer).await {
+                    Ok(_) => {}
+                    Err(_) if index < last => continue,
+                    Err(error) => return Err(error),
+                }
+                at = self.session.current_peer(&peer);
+                identity = self.session.manifest_identity_key(&at, device_id).await?;
+            }
+            if let Some(identity) = identity {
+                if claimed.is_none_or(|claimed| claimed.serialize() == identity.serialize()) {
+                    return Ok(Some((at, identity)));
                 }
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     async fn validate_inbound_sealed_envelope(
@@ -2810,32 +2834,22 @@ impl Engine {
         let domain = sender_address.server.as_str();
 
         // A certificate from before its sender's rename names the address it
-        // left: the sender is the peer where it is now.
-        let sender = self.session.current_peer(&inspection.sender);
-        let mut manifest_identity = self
-            .session
-            .manifest_identity_key(&sender, inspection.sender_device_id)
-            .await?;
-        if manifest_identity.is_none() {
-            // Retrieve and verify the complete current manifest before touching
-            // the inner ratchet. The returned prekeys are intentionally unused.
-            self.fetch_verified_bundles(&sender).await?;
-            let now = self.session.current_peer(&sender);
-            manifest_identity = self
-                .session
-                .manifest_identity_key(&now, inspection.sender_device_id)
-                .await?;
-        }
-        let manifest_identity = manifest_identity.ok_or_else(|| {
-            ChatError::Trust(
-                "sealed sender device is absent from the account-manifest-verified manifest".into(),
+        // left: the sender is the peer where it is now, when its manifest has
+        // the device; whoever holds the address now otherwise.
+        let manifest_identity = self
+            .sender_device_identity(
+                &inspection.sender,
+                inspection.sender_device_id,
+                Some(&inspection.identity_key),
             )
-        })?;
-        if manifest_identity.serialize() != inspection.identity_key.serialize() {
-            return Err(ChatError::Trust(
-                "sealed envelope identity key differs from the signed account manifest".into(),
-            ));
-        }
+            .await?
+            .map(|(_, identity)| identity)
+            .ok_or_else(|| {
+                ChatError::Trust(
+                    "sealed sender device or identity key is not in the account-manifest-verified manifest"
+                        .into(),
+                )
+            })?;
 
         let now_seconds = unix_millis().div_euclid(1000);
         let history = Rc::clone(&self.transport)

@@ -140,7 +140,19 @@ impl ChatStore {
         if pending.is_empty() {
             return Ok(());
         }
-        self.db.apply(&pending).await
+        let aliases = pending
+            .index_values
+            .get(crate::renames::ALIASES_KEY)
+            .cloned()
+            .flatten();
+        self.db.apply(&pending).await?;
+        // The log this commit wrote is the one adapters read from now on.
+        if let Some(bytes) = aliases {
+            if let Ok(aliases) = serde_json::from_slice::<RenameAliases>(&bytes) {
+                *self.aliases.borrow_mut() = aliases;
+            }
+        }
+        Ok(())
     }
 
     /// Drop the current unit of work without touching the durable store.
@@ -289,10 +301,26 @@ impl ChatStore {
     }
 
     pub(crate) fn stage_manifest_trust(&self, trust: ManifestTrust) {
-        self.pending
-            .borrow_mut()
-            .manifest_trust
-            .insert(trust.peer.clone(), trust);
+        // Another incarnation pinned at an address a peer left (a freed name
+        // taken): from now on the address is the newcomer's, in this same
+        // transaction (`renames.rs`).
+        let mut pending = self.pending.borrow_mut();
+        let staged = pending
+            .index_values
+            .get(crate::renames::ALIASES_KEY)
+            .cloned()
+            .flatten()
+            .and_then(|bytes| serde_json::from_slice::<RenameAliases>(&bytes).ok());
+        let mut aliases = staged.unwrap_or_else(|| self.aliases.borrow().clone());
+        if aliases.mark_reused(
+            &trust.peer,
+            &trust.incarnation_id,
+            crate::clock::unix_millis(),
+        ) {
+            // Encoding a plain map of strings cannot fail.
+            let _ = crate::renames::stage_aliases(&mut pending, &aliases);
+        }
+        pending.manifest_trust.insert(trust.peer.clone(), trust);
     }
 
     pub(crate) fn stage_manifest_history(&self, record: AccountManifestHistoryRecordV1) {

@@ -277,7 +277,7 @@ fn place(
     if let Some(target) = decoded
         .as_ref()
         .and_then(routed_conversation)
-        .map(|target| crate::renames::current_conversation(aliases, &target))
+        .map(|target| crate::renames::current_conversation(aliases, &target, ts))
     {
         if target != conversation {
             placed.push(Indexed {
@@ -306,13 +306,13 @@ fn place(
 
 /// The direct conversation of `peer`: where it is now, through the rename
 /// aliases (history keeps the address it was written under).
-pub(crate) fn direct_of(peer: &str, aliases: &RenameAliases) -> Result<ConversationId> {
-    direct(&aliases.resolve(peer))
+pub(crate) fn direct_of(peer: &str, aliases: &RenameAliases, at_ms: i64) -> Result<ConversationId> {
+    direct(&aliases.resolve_at(peer, at_ms))
 }
 
 pub(crate) fn place_inbox(message: &InboxMessage, aliases: &RenameAliases) -> Result<Vec<Indexed>> {
     Ok(place(
-        direct_of(&message.peer, aliases)?,
+        direct_of(&message.peer, aliases, message.received_at)?,
         aliases,
         Source::Inbox,
         message.id.clone(),
@@ -325,7 +325,7 @@ pub(crate) fn place_inbox(message: &InboxMessage, aliases: &RenameAliases) -> Re
 
 pub(crate) fn place_sent(message: &SentMessage, aliases: &RenameAliases) -> Result<Vec<Indexed>> {
     Ok(place(
-        direct_of(&message.peer, aliases)?,
+        direct_of(&message.peer, aliases, message.created_at)?,
         aliases,
         Source::Sent,
         message.send_id.clone(),
@@ -432,7 +432,7 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     let mut writer = Writer::new(db, &mut directory);
     for peer in &pending.delete_messages_for_peers {
         writer
-            .remove_source(&direct_of(peer, &aliases)?.key(), Source::Inbox)
+            .remove_source(&direct(&aliases.resolve(peer))?.key(), Source::Inbox)
             .await?;
     }
     for indexed in removed {

@@ -835,6 +835,10 @@ impl ChatDb for IndexedDbChatDb {
             operations.push(self.put(&meta, string_key(LAST_SENT_SEQ), &seq)?);
         }
 
+        // A peer that moved: its received messages under its new address.
+        for message in &pending.moved_messages {
+            operations.push(self.put(&messages, string_key(&message.id), &encode(message)?)?);
+        }
         // A peer that moved to another address: its old records go, after
         // every write (the same transaction wrote them under the new one).
         let moved = &pending.delete_peer_records;

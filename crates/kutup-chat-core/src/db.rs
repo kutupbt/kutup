@@ -593,6 +593,10 @@ pub struct Pending {
     /// `renames.rs`): deleted in the transaction that writes them under the
     /// new one. Applied after every write.
     pub(crate) delete_peer_records: PeerRecordDeletes,
+    /// Received messages of a peer that moved, rewritten under its new
+    /// address (same id and content): the old address may become someone
+    /// else's, and its history must not go with it.
+    pub(crate) moved_messages: Vec<InboxMessage>,
 }
 
 /// Records deleted under a peer's old address when it moves (sessions go
@@ -656,6 +660,7 @@ impl Pending {
             && self.last_cursor.is_none()
             && self.last_sent_seq.is_none()
             && self.delete_peer_records.is_empty()
+            && self.moved_messages.is_empty()
     }
 
     pub(crate) fn clear(&mut self) {

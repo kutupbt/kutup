@@ -1849,6 +1849,7 @@ impl Session {
             let conversation = crate::renames::current_conversation(
                 &aliases,
                 &direct_conversation(&message.peer)?,
+                message.received_at,
             );
             if let Some(expired) = expired_content(
                 &message.content,
@@ -1869,6 +1870,7 @@ impl Session {
             let conversation = crate::renames::current_conversation(
                 &aliases,
                 &direct_conversation(&message.peer)?,
+                message.created_at,
             );
             if let Some(expired) = expired_content(
                 &message.content,
@@ -1883,7 +1885,7 @@ impl Session {
                 self.store.delete_sent_message(&message.send_id);
                 collect_expired(expired, &mut expired_ids, &mut attachment_ids);
                 expired_messages = expired_messages.saturating_add(1);
-            } else if aliases.resolve(&message.peer) == self.user()
+            } else if aliases.resolve_at(&message.peer, message.created_at) == self.user()
                 && controls.is_superseded(&message.content)
             {
                 self.store.delete_sent_message(&message.send_id);
@@ -1927,8 +1929,8 @@ impl Session {
             }
         }
         for entry in self.store.db().list_outbox().await? {
-            let conversation =
-                crate::renames::current_conversation(&aliases, &direct_conversation(&entry.peer)?);
+            // Queued now: where the peer is now.
+            let conversation = direct_conversation(&aliases.resolve(&entry.peer))?;
             if expired_content(
                 &entry.content,
                 &conversation,
@@ -2193,6 +2195,12 @@ impl Session {
         self.store.current_address(peer)
     }
 
+    /// Where a record written for `peer` at `at_ms` belongs now: the peer
+    /// that left the address, unless someone else had it by then.
+    pub(crate) fn peer_as_of(&self, peer: &str, at_ms: i64) -> String {
+        self.store.aliases().resolve_at(peer, at_ms)
+    }
+
     pub async fn manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>> {
         self.store.db().load_manifest_trust(peer).await
     }
@@ -2398,15 +2406,15 @@ impl Session {
             else {
                 continue;
             };
-            if sequence == trust.highest_sequence {
-                all_devices.extend(
-                    record
-                        .manifest
-                        .devices
-                        .iter()
-                        .map(|device| device.device_id),
-                );
-            }
+            // Every device the peer ever listed: a session with a device
+            // since removed still opens what it sent before.
+            all_devices.extend(
+                record
+                    .manifest
+                    .devices
+                    .iter()
+                    .map(|device| device.device_id),
+            );
             record.peer = to.to_string();
             self.store.stage_manifest_history(record);
             self.store.with_pending(|pending| {
@@ -2438,8 +2446,29 @@ impl Session {
             profile.peer = to.to_string();
             self.store.stage_peer_profile(profile);
         }
+        // The history goes with the peer: the old address may become someone
+        // else's, and then nothing of the peer must be found under it.
+        for mut message in db.list_messages().await? {
+            if message.peer == from {
+                message.peer = to.to_string();
+                self.store
+                    .with_pending(|pending| pending.moved_messages.push(message));
+            }
+        }
+        for mut message in db.list_sent_messages().await? {
+            if message.peer == from {
+                message.peer = to.to_string();
+                self.store.stage_sent_message(message);
+            }
+        }
+        for mut entry in db.list_outbox().await? {
+            if entry.peer == from {
+                entry.peer = to.to_string();
+                self.store.stage_outbox(entry);
+            }
+        }
         let mut aliases = crate::renames::load_aliases(&*db, None).await?;
-        aliases.record(from, to);
+        aliases.record(from, to, &incarnation_id, now_millis());
         // The line in the thread, once per rename.
         if line {
             let now = now_millis();
@@ -3501,15 +3530,16 @@ fn collect_account_controls(
     let mut stickers = std::collections::BTreeMap::<String, ((String, String), String)>::new();
     let mut removed_stickers = std::collections::BTreeSet::<String>::new();
     let mut positions = std::collections::BTreeMap::<String, ((i64, String), String)>::new();
-    // Note to Self under every address this account has had.
-    let current = |conversation: &kutup_chat_proto::ConversationId| {
-        crate::renames::current_conversation(aliases, conversation).key()
-    };
+    // Note to Self under every address this account has had; each control
+    // names a conversation as it was when it was written.
     let own = outgoing
         .iter()
-        .filter(|message| aliases.resolve(&message.peer) == local_account)
-        .map(|message| message.content.as_slice());
-    for bytes in own {
+        .filter(|message| aliases.resolve_at(&message.peer, message.created_at) == local_account)
+        .map(|message| (message.created_at, message.content.as_slice()));
+    for (at, bytes) in own {
+        let current = |conversation: &kutup_chat_proto::ConversationId| {
+            crate::renames::current_conversation(aliases, conversation, at).key()
+        };
         let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
             continue;
         };
@@ -3596,8 +3626,13 @@ pub(crate) fn collect_disappearing_expiry_starts(
 ) -> Result<DisappearingExpiryStarts> {
     let mut starts = DisappearingExpiryStarts::new();
     for message in outgoing {
-        if aliases.resolve(&message.peer) == local_account {
-            collect_disappearing_expiry_start(&message.content, &mut starts, aliases)?;
+        if aliases.resolve_at(&message.peer, message.created_at) == local_account {
+            collect_disappearing_expiry_start(
+                &message.content,
+                &mut starts,
+                aliases,
+                message.created_at,
+            )?;
         }
     }
     Ok(starts)
@@ -3607,6 +3642,7 @@ fn collect_disappearing_expiry_start(
     bytes: &[u8],
     starts: &mut DisappearingExpiryStarts,
     aliases: &crate::renames::RenameAliases,
+    at_ms: i64,
 ) -> Result<()> {
     let Ok(content) = serde_json::from_slice::<ChatContent>(bytes) else {
         return Ok(());
@@ -3620,7 +3656,7 @@ fn collect_disappearing_expiry_start(
     }
     if let Some(start) = start {
         let key = (
-            crate::renames::current_conversation(aliases, &start.conversation).key(),
+            crate::renames::current_conversation(aliases, &start.conversation, at_ms).key(),
             start.target_message_id,
         );
         starts

@@ -1246,6 +1246,13 @@ impl ChatDb for SqliteChatDb {
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
             };
         }
+        // A peer that moved: its received messages under its new address.
+        for message in &pending.moved_messages {
+            db(tx.execute(
+                "UPDATE messages SET peer = ?1 WHERE id = ?2",
+                rusqlite::params![message.peer, message.id],
+            ))?;
+        }
         // A peer that moved to another address: its old records go, after
         // every write (the same transaction wrote them under the new one).
         let moved = &pending.delete_peer_records;

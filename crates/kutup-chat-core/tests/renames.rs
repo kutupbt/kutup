@@ -112,6 +112,7 @@ struct Server {
     own: RefCell<Option<AccountManifestV1>>,
     own_bundle: RefCell<Option<DevicePreKeyBundle>>,
     delivered: RefCell<Vec<String>>,
+    inbox: RefCell<Vec<kutup_chat_proto::DeliveredEnvelope>>,
 }
 
 impl Server {
@@ -229,14 +230,21 @@ impl ChatTransport for Server {
         })
     }
 
-    async fn drain(&self, _device: u32, _after: Option<u64>, _limit: u32) -> Result<MailboxPage> {
+    async fn drain(&self, _device: u32, after: Option<u64>, _limit: u32) -> Result<MailboxPage> {
         Ok(MailboxPage {
-            envelopes: Vec::new(),
+            envelopes: self
+                .inbox
+                .borrow()
+                .iter()
+                .filter(|e| after.is_none_or(|a| e.cursor > a))
+                .cloned()
+                .collect(),
             more: false,
         })
     }
 
-    async fn ack(&self, _device: u32, _ids: &[String]) -> Result<()> {
+    async fn ack(&self, _device: u32, ids: &[String]) -> Result<()> {
+        self.inbox.borrow_mut().retain(|e| !ids.contains(&e.id));
         Ok(())
     }
 }
@@ -419,4 +427,149 @@ fn a_chain_of_another_authority_never_moves_this_account() {
     assert!(block_on(alice.adopt_own_rename(&authority, new)).is_err());
     assert_eq!(alice.session().user(), ALICE);
     assert!(pinned(&alice, ALICE).is_some());
+}
+
+/// Ada renamed and Alice followed; then Ada's old name was freed and Mallory
+/// took it. Mallory is someone new at `ada_l`: never Ada, never in her thread.
+fn mallory_takes_adas_old_name(server: &Server) -> (Session, AccountAuthority) {
+    server.left.borrow_mut().remove(ADA_OLD);
+    let mallory = device(ADA_OLD);
+    let bundle = bundle_of(&mallory);
+    let authority = AccountAuthority::derive(&[2; 32]).unwrap();
+    server.publish(ADA_OLD, manifest(ADA_OLD, &bundle, &authority), bundle);
+    (mallory, authority)
+}
+
+/// What Mallory writes to Alice from `ada_l`, as delivered.
+fn from_mallory(
+    mallory: &mut Session,
+    server: &Server,
+    text: &str,
+    cursor: u64,
+) -> kutup_chat_proto::DeliveredEnvelope {
+    let alice = kutup_chat_core::ChatAddress::from_sender(ALICE, 1).unwrap();
+    let bundle = server.own_bundle.borrow().clone().unwrap();
+    let mut rng = OsRng.unwrap_err();
+    block_on(mallory.establish(&alice, &bundle, &mut rng)).unwrap();
+    let env = block_on(mallory.encrypt(
+        &alice,
+        bundle.registration_id,
+        &ChatContent::text_with_id(text, "2026-10-15T12:00:00Z", 1, text),
+        &mut rng,
+    ))
+    .unwrap();
+    kutup_chat_proto::DeliveredEnvelope {
+        id: text.to_string(),
+        cursor,
+        sender: Some(ADA_OLD.to_string()),
+        sealed_sender: false,
+        sender_device_id: 1,
+        envelope_type: env.envelope_type,
+        suite: env.suite,
+        content: env.content,
+        server_timestamp: "2026-10-15T12:00:00Z".into(),
+        send_id: None,
+    }
+}
+
+fn ada_followed(alice: &mut Engine, server: &Server) {
+    server.rename(ADA_OLD, ADA_NEW, chains(1, &[ADA_OLD, ADA_NEW]));
+    alice.forget_known_devices();
+    assert_eq!(
+        send(alice, "m2", ADA_OLD).unwrap().moved_to.as_deref(),
+        Some(ADA_NEW)
+    );
+}
+
+fn ada_identity(db: &Rc<dyn ChatDb>) -> Option<Vec<u8>> {
+    block_on(db.load_identity(&format!("{ADA_NEW}.1"))).unwrap()
+}
+
+#[test]
+fn someone_who_took_a_left_name_writes_as_themselves_not_as_the_peer_that_left_it() {
+    let (mut alice, server, db, _) = alice_knows_ada();
+    ada_followed(&mut alice, &server);
+    let ada_key = ada_identity(&db);
+    let (mut mallory, mallory_authority) = mallory_takes_adas_old_name(&server);
+
+    // Mallory writes first, from Ada's old name and Ada's device id.
+    *server.inbox.borrow_mut() = vec![from_mallory(&mut mallory, &server, "it-is-me", 1)];
+    let report = block_on(alice.receive(&mut OsRng.unwrap_err())).unwrap();
+    assert_eq!(report.messages.len(), 1);
+    let message = &report.messages[0];
+    assert_eq!(
+        message.from.name(),
+        ADA_OLD,
+        "Mallory, at the name he holds"
+    );
+    // Mallory is pinned at the old name; Ada's pin and keys are untouched.
+    assert_eq!(
+        pinned(&alice, ADA_OLD).unwrap().self_authority_key,
+        mallory_authority.public_key_base64()
+    );
+    assert_eq!(
+        pinned(&alice, ADA_NEW).unwrap().renames.unwrap().addresses,
+        [ADA_OLD, ADA_NEW]
+    );
+    assert_eq!(ada_identity(&db), ada_key);
+    assert_eq!(alice.session().current_peer(ADA_OLD), ADA_OLD);
+
+    // A request from someone new, not Ada's accepted conversation.
+    assert_eq!(
+        block_on(alice.session().contact(ADA_OLD))
+            .unwrap()
+            .unwrap()
+            .state,
+        kutup_chat_core::ContactState::PendingIncoming
+    );
+    // Ada's own contact is as Alice left it (she wrote first).
+    assert_eq!(
+        block_on(alice.session().contact(ADA_NEW))
+            .unwrap()
+            .unwrap()
+            .state,
+        kutup_chat_core::ContactState::PendingOutgoing
+    );
+    block_on(alice.accept_contact(ADA_OLD, "2026-10-15T12:01:00Z", &mut OsRng.unwrap_err()))
+        .unwrap();
+    // A send to the old name goes to Mallory; Ada's thread stays hers.
+    let summary = send(&mut alice, "to-mallory", ADA_OLD).unwrap();
+    assert_eq!(summary.moved_to, None);
+    assert_eq!(
+        server.delivered.borrow().last().map(String::as_str),
+        Some(ADA_OLD)
+    );
+    let ada_thread = block_on(alice.session().history()).unwrap();
+    assert!(
+        ada_thread
+            .iter()
+            .all(|m| m.peer != ADA_OLD || m.cursor == 1),
+        "only Mallory's message is under the old name"
+    );
+}
+
+#[test]
+fn a_send_to_a_left_name_someone_took_goes_to_them_and_pins_them() {
+    let (mut alice, server, _, _) = alice_knows_ada();
+    ada_followed(&mut alice, &server);
+    let (_mallory, mallory_authority) = mallory_takes_adas_old_name(&server);
+    alice.forget_known_devices();
+
+    let summary = send(&mut alice, "m3", ADA_OLD).unwrap();
+    assert_eq!(summary.moved_to, None);
+    assert_eq!(
+        server.delivered.borrow().last().map(String::as_str),
+        Some(ADA_OLD)
+    );
+    assert_eq!(
+        pinned(&alice, ADA_OLD).unwrap().self_authority_key,
+        mallory_authority.public_key_base64()
+    );
+    assert_eq!(alice.session().current_peer(ADA_OLD), ADA_OLD);
+    // Ada is still where she went.
+    send(&mut alice, "m4", ADA_NEW).unwrap();
+    assert_eq!(
+        server.delivered.borrow().last().map(String::as_str),
+        Some(ADA_NEW)
+    );
 }

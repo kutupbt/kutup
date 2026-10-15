@@ -4137,7 +4137,7 @@ impl HistoryEntry {
             iso_time(message.received_at),
         );
         let id = content.message_id.clone();
-        let peer = aliases.resolve(&message.peer);
+        let peer = aliases.resolve_at(&message.peer, message.received_at);
         let conversation = direct_conversation(&peer)?;
         Ok(Self {
             id,
@@ -4163,7 +4163,8 @@ impl HistoryEntry {
             &message.send_id,
             iso_time(message.created_at),
         );
-        let conversation = direct_conversation(&aliases.resolve(&message.peer))?;
+        let conversation =
+            direct_conversation(&aliases.resolve_at(&message.peer, message.created_at))?;
         Ok(Self {
             id: message.send_id,
             conversation,

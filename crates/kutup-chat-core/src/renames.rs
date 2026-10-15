@@ -180,36 +180,93 @@ pub(crate) const ALIASES_KEY: &[u8] = b"renames/aliases";
 /// address it was written under (messages, Note to Self controls, backups),
 /// and the timeline, search and the app read it through this log, so a
 /// thread follows its peer. Kept with the store; never sent.
+///
+/// A left name may later be someone else's (a freed name taken). From the
+/// moment this device pins another incarnation there (`reused_at_ms`, set in
+/// the same transaction), the alias no longer applies: what is written after
+/// it is the newcomer's, and only what came before follows the old peer.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenameAliases {
-    /// Folded old address → the peer's newest address.
+    /// Folded old address → where the peer that left it is now.
     #[serde(default)]
-    pub moved: BTreeMap<String, String>,
+    pub moved: BTreeMap<String, RenameAlias>,
+}
+
+/// One address a peer left.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameAlias {
+    /// The peer's newest address.
+    pub to: String,
+    /// The peer's incarnation: someone else at the address is not it.
+    pub incarnation_id: String,
+    /// When this device followed the peer away (unix ms).
+    pub moved_at_ms: i64,
+    /// When this device met another incarnation at the address (unix ms):
+    /// records from then on are the newcomer's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reused_at_ms: Option<i64>,
 }
 
 impl RenameAliases {
-    /// Where the peer last known at `address` is now (`address` itself when
-    /// it never moved).
+    /// Where the peer last known at `address` is now, for what happens now
+    /// (sessions, inbound senders, queued sends): `address` itself when it
+    /// never moved, or when someone else holds it now.
     pub fn resolve(&self, address: &str) -> String {
-        self.moved
-            .get(&fold(address))
-            .cloned()
-            .unwrap_or_else(|| address.to_string())
+        match self.moved.get(&fold(address)) {
+            Some(alias) if alias.reused_at_ms.is_none() => alias.to.clone(),
+            _ => address.to_string(),
+        }
     }
 
-    /// Records that the peer at `from` is `to` now. Earlier addresses that
-    /// led to `from` lead to `to`; `to` itself is no longer an alias (a
-    /// peer that took a name back).
-    pub fn record(&mut self, from: &str, to: &str) {
+    /// Where a record written under `address` at `at_ms` belongs: the peer
+    /// that left the address, unless the record came once someone else had it.
+    pub fn resolve_at(&self, address: &str, at_ms: i64) -> String {
+        match self.moved.get(&fold(address)) {
+            Some(alias) if alias.reused_at_ms.is_none_or(|reused| at_ms < reused) => {
+                alias.to.clone()
+            }
+            _ => address.to_string(),
+        }
+    }
+
+    /// Records that the peer (`incarnation_id`) at `from` is `to` now.
+    /// Earlier addresses that led to `from` lead to `to`; `to` itself is no
+    /// longer an alias (a peer that took a name back).
+    pub fn record(&mut self, from: &str, to: &str, incarnation_id: &str, at_ms: i64) {
         let to_folded = fold(to);
-        for target in self.moved.values_mut() {
-            if same_address(target, from) {
-                *target = to.to_string();
+        // The peer's earlier names follow it, a reused one too (for the
+        // records from before someone else had it).
+        for alias in self.moved.values_mut() {
+            if alias.incarnation_id == incarnation_id && same_address(&alias.to, from) {
+                alias.to = to.to_string();
             }
         }
         self.moved.remove(&to_folded);
         if fold(from) != to_folded {
-            self.moved.insert(fold(from), to.to_string());
+            self.moved.insert(
+                fold(from),
+                RenameAlias {
+                    to: to.to_string(),
+                    incarnation_id: incarnation_id.to_string(),
+                    moved_at_ms: at_ms,
+                    reused_at_ms: None,
+                },
+            );
+        }
+    }
+
+    /// Another incarnation (`incarnation_id`) is pinned at `address`: if a
+    /// peer left it, the alias stops applying from `at_ms`. Whether it did.
+    pub fn mark_reused(&mut self, address: &str, incarnation_id: &str, at_ms: i64) -> bool {
+        match self.moved.get_mut(&fold(address)) {
+            Some(alias)
+                if alias.reused_at_ms.is_none() && alias.incarnation_id != incarnation_id =>
+            {
+                alias.reused_at_ms = Some(at_ms);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -218,14 +275,16 @@ impl RenameAliases {
     }
 }
 
-/// A direct conversation where its peer is now (groups as they are).
+/// A direct conversation as of `at_ms`, where its peer is now (groups as
+/// they are): see [`RenameAliases::resolve_at`].
 pub fn current_conversation(
     aliases: &RenameAliases,
     conversation: &kutup_chat_proto::ConversationId,
+    at_ms: i64,
 ) -> kutup_chat_proto::ConversationId {
     match conversation {
         kutup_chat_proto::ConversationId::Direct { address } if !aliases.is_empty() => aliases
-            .resolve(&address.canonical())
+            .resolve_at(&address.canonical(), at_ms)
             .parse::<kutup_chat_proto::AccountAddress>()
             .map(kutup_chat_proto::ConversationId::direct)
             .unwrap_or_else(|_| conversation.clone()),
@@ -445,19 +504,24 @@ pub(crate) mod tests {
     #[test]
     fn aliases_follow_a_peer_through_every_rename_and_back() {
         let mut aliases = RenameAliases::default();
-        aliases.record("ada_l@kutup.test", "ada_lovelace@kutup.test");
+        aliases.record("ada_l@kutup.test", "ada_lovelace@kutup.test", "inc-ada", 1);
         assert_eq!(
             aliases.resolve("ada-l@kutup.test"),
             "ada_lovelace@kutup.test"
         );
-        aliases.record("ada_lovelace@kutup.test", "ada_king@kutup.test");
+        aliases.record(
+            "ada_lovelace@kutup.test",
+            "ada_king@kutup.test",
+            "inc-ada",
+            2,
+        );
         assert_eq!(aliases.resolve("ada_l@kutup.test"), "ada_king@kutup.test");
         assert_eq!(
             aliases.resolve("ada_lovelace@kutup.test"),
             "ada_king@kutup.test"
         );
         // Back to the first name: it is the peer's address again, not an alias.
-        aliases.record("ada_king@kutup.test", "ada_l@kutup.test");
+        aliases.record("ada_king@kutup.test", "ada_l@kutup.test", "inc-ada", 3);
         assert_eq!(aliases.resolve("ada_l@kutup.test"), "ada_l@kutup.test");
         assert_eq!(aliases.resolve("ada_king@kutup.test"), "ada_l@kutup.test");
         assert_eq!(aliases.resolve("grace@kutup.test"), "grace@kutup.test");
@@ -477,8 +541,11 @@ pub(crate) mod tests {
             contacts: _,
             peer_profiles: _,
             delete_peer_records: _,
-            // History: kept under the address it was written with, read
-            // through the rename aliases (timeline, search, views, controls).
+            // History: rewritten under the new address (received messages
+            // through moved_messages, sent ones re-staged); Note to Self
+            // controls and backups name conversations inside their content
+            // and are read through the rename aliases, as of their time.
+            moved_messages: _,
             messages: _,
             sent_messages: _,
             mls_messages: _,
@@ -527,7 +594,8 @@ pub(crate) mod tests {
             "manifest_history",
             "contacts",
             "peer_profiles",
-            // History, read through the aliases; the index holds the log.
+            // History: rewritten on a move, or read through the aliases; the
+            // index holds the log.
             "messages",
             "sent_messages",
             "mls_messages",
@@ -558,5 +626,46 @@ pub(crate) mod tests {
         let mut expected: Vec<String> = classified.iter().map(|t| t.to_string()).collect();
         expected.sort();
         assert_eq!(tables, expected, "classify every new table for a rename");
+    }
+
+    #[test]
+    fn a_name_someone_else_took_is_no_alias_from_then_on() {
+        let mut aliases = RenameAliases::default();
+        aliases.record(
+            "ada_l@kutup.test",
+            "ada_lovelace@kutup.test",
+            "inc-ada",
+            100,
+        );
+        // Ada herself pinned again at her old name is no reuse.
+        assert!(!aliases.mark_reused("ada_l@kutup.test", "inc-ada", 150));
+        // Mallory, another incarnation, pinned there at 200.
+        assert!(aliases.mark_reused("ADA-L@kutup.test", "inc-mallory", 200));
+        assert!(!aliases.mark_reused("ada_l@kutup.test", "inc-mallory", 300));
+        assert_eq!(aliases.resolve("ada_l@kutup.test"), "ada_l@kutup.test");
+        assert_eq!(
+            aliases.resolve_at("ada_l@kutup.test", 199),
+            "ada_lovelace@kutup.test"
+        );
+        assert_eq!(
+            aliases.resolve_at("ada_l@kutup.test", 200),
+            "ada_l@kutup.test"
+        );
+        // Ada renaming again takes her records from before the reuse along.
+        aliases.record(
+            "ada_lovelace@kutup.test",
+            "ada_king@kutup.test",
+            "inc-ada",
+            400,
+        );
+        assert_eq!(
+            aliases.resolve_at("ada_l@kutup.test", 199),
+            "ada_king@kutup.test"
+        );
+        assert_eq!(aliases.resolve("ada_l@kutup.test"), "ada_l@kutup.test");
+        assert_eq!(
+            aliases.resolve("ada_lovelace@kutup.test"),
+            "ada_king@kutup.test"
+        );
     }
 }
