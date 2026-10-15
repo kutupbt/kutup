@@ -81,6 +81,7 @@ describe('an address’s keys', () => {
 
   it('are refused when the answer is another address', async () => {
     const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev')
+    await expect(verified('ada_l@kutup.dev', { ...lookup, server: 'other.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('bob@kutup.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('ada_l@other.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
   })

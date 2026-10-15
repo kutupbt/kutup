@@ -97,7 +97,7 @@
     ],
     "lookups": [
       {
-        "case": "Dave at his new name: pinned, the same",
+        "case": "Dave at his new name, which Erin held: pinned, the same, with her notice",
         "account": {
           "server": "kutup.dev",
           "accountId": "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -134,7 +134,24 @@
             }
           },
           "authority": "same",
-          "others": []
+          "knownAt": true,
+          "others": [
+            {
+              "account": {
+                "server": "kutup.dev",
+                "accountId": "6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c"
+              },
+              "authorityPublicKey": "5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=",
+              "state": "seen",
+              "since": "2026-10-12T09:00:00Z",
+              "addresses": [
+                {
+                  "address": "david@kutup.dev",
+                  "seenAt": "2026-10-12T09:00:00Z"
+                }
+              ]
+            }
+          ]
         }
       },
       {
@@ -175,11 +192,12 @@
             }
           },
           "authority": "same",
+          "knownAt": false,
           "others": []
         }
       },
       {
-        "case": "Dave reset: pinned, changed",
+        "case": "Dave reset, at a name Erin held: pinned, changed, with her notice",
         "account": {
           "server": "kutup.dev",
           "accountId": "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
@@ -216,7 +234,24 @@
             }
           },
           "authority": "changed",
-          "others": []
+          "knownAt": true,
+          "others": [
+            {
+              "account": {
+                "server": "kutup.dev",
+                "accountId": "6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c"
+              },
+              "authorityPublicKey": "5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=",
+              "state": "seen",
+              "since": "2026-10-12T09:00:00Z",
+              "addresses": [
+                {
+                  "address": "david@kutup.dev",
+                  "seenAt": "2026-10-12T09:00:00Z"
+                }
+              ]
+            }
+          ]
         }
       },
       {
@@ -286,6 +321,7 @@
             ]
           },
           "authority": "same",
+          "knownAt": false,
           "others": [
             {
               "account": {
@@ -358,6 +394,7 @@
             ]
           },
           "authority": "same",
+          "knownAt": false,
           "others": []
         }
       },
@@ -508,6 +545,7 @@
             ]
           },
           "authority": "unknown",
+          "knownAt": true,
           "others": []
         }
       }
@@ -578,13 +616,13 @@
         }
       },
       {
-        "case": "verified, same authority",
+        "case": "verified, same authority, opened as the account",
         "before": "{\"pins\":[{\"account\":{\"server\":\"example.org\",\"accountId\":\"7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d\"},\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"frank@example.org\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b\"},\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"dave@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"},{\"address\":\"davey@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"},{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"}],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c\"},\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]}]}",
         "account": {
           "server": "kutup.dev",
           "accountId": "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
         },
-        "address": "david@kutup.dev",
+        "address": null,
         "authority": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
         "update": "verified",
         "since": "2026-10-13T12:00:00Z",
@@ -594,13 +632,13 @@
         }
       },
       {
-        "case": "accepted, another authority: replaced, history kept",
+        "case": "accepted, another authority, opened as the account: replaced, history kept",
         "before": "{\"pins\":[{\"account\":{\"server\":\"example.org\",\"accountId\":\"7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d\"},\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"frank@example.org\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b\"},\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"dave@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"},{\"address\":\"davey@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"},{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"}],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c\"},\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]}]}",
         "account": {
           "server": "kutup.dev",
           "accountId": "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
         },
-        "address": "david@kutup.dev",
+        "address": null,
         "authority": "JTha6AEVtxpiH5tyo9Tn8yKjfPUkUlfAcaXU87gmh/I=",
         "update": "accepted",
         "since": "2026-10-13T12:00:00Z",
@@ -687,7 +725,67 @@
         }
       },
       {
-        "case": "a known account accepted at another's name: nothing written",
+        "case": "a key change accepted through another's name: refused",
+        "before": "{\"pins\":[{\"account\":{\"server\":\"example.org\",\"accountId\":\"7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d\"},\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"frank@example.org\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b\"},\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"dave@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"},{\"address\":\"davey@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"},{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"}],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c\"},\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]}]}",
+        "account": {
+          "server": "example.org",
+          "accountId": "7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d"
+        },
+        "address": "david@kutup.dev",
+        "authority": "JTha6AEVtxpiH5tyo9Tn8yKjfPUkUlfAcaXU87gmh/I=",
+        "update": "accepted",
+        "since": "2026-10-13T12:00:00Z",
+        "after": "{\"pins\":[{\"account\":{\"server\":\"example.org\",\"accountId\":\"7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d\"},\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"frank@example.org\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b\"},\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"dave@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"},{\"address\":\"davey@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"},{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"}],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c\"},\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]}]}",
+        "result": {
+          "kind": "addressHeldByOthers",
+          "pins": [
+            {
+              "account": {
+                "server": "kutup.dev",
+                "accountId": "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
+              },
+              "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+              "state": "verified",
+              "since": "2026-10-12T09:00:00Z",
+              "addresses": [
+                {
+                  "address": "dave@kutup.dev",
+                  "seenAt": "2026-10-12T09:00:00Z"
+                },
+                {
+                  "address": "davey@kutup.dev",
+                  "seenAt": "2026-10-13T12:00:00Z"
+                },
+                {
+                  "address": "david@kutup.dev",
+                  "seenAt": "2026-10-13T12:00:00Z"
+                }
+              ],
+              "renames": {
+                "sequence": 2,
+                "digest": "5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925"
+              }
+            },
+            {
+              "account": {
+                "server": "kutup.dev",
+                "accountId": "6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c"
+              },
+              "authorityPublicKey": "5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=",
+              "state": "seen",
+              "since": "2026-10-12T09:00:00Z",
+              "addresses": [
+                {
+                  "address": "david@kutup.dev",
+                  "seenAt": "2026-10-12T09:00:00Z"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "case": "a known account accepted at another's name: refused, nothing written",
         "before": "{\"pins\":[{\"account\":{\"server\":\"example.org\",\"accountId\":\"7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d\"},\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"frank@example.org\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b\"},\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"dave@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"},{\"address\":\"davey@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"},{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"}],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c\"},\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]}]}",
         "account": {
           "server": "example.org",
@@ -699,7 +797,51 @@
         "since": "2026-10-13T12:00:00Z",
         "after": "{\"pins\":[{\"account\":{\"server\":\"example.org\",\"accountId\":\"7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d\"},\"authorityPublicKey\":\"yviCpXBsy5j0HulCszfD3VQuqT/RLYc3RFGgoCu3odU=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"frank@example.org\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b\"},\"authorityPublicKey\":\"hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=\",\"state\":\"verified\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"dave@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"},{\"address\":\"davey@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"},{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-13T12:00:00Z\"}],\"renames\":{\"sequence\":2,\"digest\":\"5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925\"}},{\"account\":{\"server\":\"kutup.dev\",\"accountId\":\"6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c\"},\"authorityPublicKey\":\"5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=\",\"state\":\"seen\",\"since\":\"2026-10-12T09:00:00Z\",\"addresses\":[{\"address\":\"david@kutup.dev\",\"seenAt\":\"2026-10-12T09:00:00Z\"}]}]}",
         "result": {
-          "kind": "unchanged"
+          "kind": "addressHeldByOthers",
+          "pins": [
+            {
+              "account": {
+                "server": "kutup.dev",
+                "accountId": "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b"
+              },
+              "authorityPublicKey": "hln+B/Mewh1d1A0py/m4VgYd7Ka5OOuD0zlW3Gna/7Y=",
+              "state": "verified",
+              "since": "2026-10-12T09:00:00Z",
+              "addresses": [
+                {
+                  "address": "dave@kutup.dev",
+                  "seenAt": "2026-10-12T09:00:00Z"
+                },
+                {
+                  "address": "davey@kutup.dev",
+                  "seenAt": "2026-10-13T12:00:00Z"
+                },
+                {
+                  "address": "david@kutup.dev",
+                  "seenAt": "2026-10-13T12:00:00Z"
+                }
+              ],
+              "renames": {
+                "sequence": 2,
+                "digest": "5c40218061f409c14d32be076d281b0675d7c58354e4ddcc24cc7ba980883925"
+              }
+            },
+            {
+              "account": {
+                "server": "kutup.dev",
+                "accountId": "6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c"
+              },
+              "authorityPublicKey": "5VG+A69CADG5qkoI2+ut0xB+xs1rLPETLDhQi2yuWb4=",
+              "state": "seen",
+              "since": "2026-10-12T09:00:00Z",
+              "addresses": [
+                {
+                  "address": "david@kutup.dev",
+                  "seenAt": "2026-10-12T09:00:00Z"
+                }
+              ]
+            }
+          ]
         }
       },
       {

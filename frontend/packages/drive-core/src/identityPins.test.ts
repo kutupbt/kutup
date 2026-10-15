@@ -65,6 +65,11 @@ function at(list: { pins: Pin[] }, address: string): Pin[] {
     .sort((a, b) => Number(holds(b, address)) - Number(holds(a, address)) || had(b, address)!.seenAt.localeCompare(had(a, address)!.seenAt))
 }
 
+// Rust's other_holders: other pins that hold the address now.
+function holders(list: { pins: Pin[] }, account: Ref, address: string): Pin[] {
+  return at(list, address).filter((other) => !sameRef(other.account, account) && holds(other, address))
+}
+
 vi.mock('@kutup/crypto/accountRename', () => ({
   foldAddress: vi.fn((address: string) => Promise.resolve(fold(address))),
   verifyAccountRenameChain: vi.fn((authority: string, chain: Rename[]) => Promise.resolve(verifyChain(authority, chain))),
@@ -103,6 +108,10 @@ vi.mock('@kutup/crypto/identityPins', () => ({
         pins.sort((a, b) => `${a.account.server}|${a.account.accountId}`.localeCompare(`${b.account.server}|${b.account.accountId}`))
         return out({ ...list, pins }, true, { kind: 'updated' })
       }
+      if (update !== 'firstSeen' && address) {
+        const others = holders(list, account, address)
+        if (others.length > 0) return out(list, false, { kind: 'addressHeldByOthers', pins: others })
+      }
       const pin = pins[i]
       if (pin.authorityPublicKey === authority) {
         if (update !== 'verified' || pin.state === 'verified') return out(list, false, { kind: 'unchanged' })
@@ -122,12 +131,8 @@ vi.mock('@kutup/crypto/identityPins', () => ({
       const others = address ? at(current.list, address) : []
       return Promise.resolve(others.length > 0 ? { kind: 'someoneElse', pins: others } : { kind: 'new' })
     }
-    const own = address ? had(pin, address)?.seenAt : undefined
-    const others = address
-      ? at(current.list, address).filter((other) => !sameRef(other.account, account) && holds(other, address) && (own === undefined || had(other, address)!.seenAt > own))
-      : []
     const check = authority === undefined ? 'unknown' : authority === pin.authorityPublicKey ? 'same' : (pin.replaced ?? []).includes(`inc-${authority}`) ? 'earlier' : 'changed'
-    return Promise.resolve({ kind: 'pinned', pin, authority: check, others })
+    return Promise.resolve({ kind: 'pinned', pin, authority: check, others: address ? holders(current.list, account, address) : [], knownAt: Boolean(address && had(pin, address)) })
   }),
   identityPinsAt: vi.fn((current: { list: { pins: Pin[] } }, address: string) => Promise.resolve(at(current.list, address))),
   // Rust's identity_pins::apply_rename, modelled: the chain, signed by the
@@ -521,6 +526,20 @@ describe('an address only finds an account (Signal’s model)', () => {
     ])
   })
 
+  it('a key change through someone else’s address is their notice, never offered to accept', async () => {
+    publish('ada@kutup.dev', 'A')
+    publish('bob@kutup.dev', 'B')
+    await checkIdentity(me, 'ada@kutup.dev')
+    await checkIdentity(me, 'bob@kutup.dev')
+    newPage()
+    // The server says ada@ is Bob's account, with a key it minted.
+    publish('ada@kutup.dev', 'EVIL', { id: 'acct-B' })
+    expect(await checkIdentity(me, 'ada@kutup.dev')).toEqual({ kind: 'someoneElse', name: 'bob@kutup.dev' })
+    await expect(acceptIdentity(me, 'ada@kutup.dev')).rejects.toThrow(/someone else/)
+    await expect(verifyPerson(me, 'ada@kutup.dev', 'qr:EVIL:ME')).rejects.toBeInstanceOf(SafetyNumberMismatch)
+    expect(storedPins()).toMatchObject([{ id: 'acct-A' }, { id: 'acct-B', authorityPublicKey: 'B' }])
+  })
+
   it('shows an account found at an address nobody known has by its own name, and writes nothing', async () => {
     publish('mal@kutup.dev', 'M')
     await checkIdentity(me, 'mal@kutup.dev')
@@ -702,6 +721,12 @@ describe('pinnedVerdict (Mail’s key checks)', () => {
     expect(await pinnedVerdict(me, ref('B'), 'bob@kutup.dev', 'B')).toEqual({ kind: 'pinned' })
     expect(await pinnedVerdict(me, ref('B'), 'bob@kutup.dev', 'M')).toEqual({ kind: 'changed' })
     expect(await pinnedVerdict(me, ref('C'), 'carol@kutup.dev', 'C')).toEqual({ kind: 'unknown' })
+  })
+
+  it('names someone else before any key change at their address', async () => {
+    await met('ada@kutup.dev', 'A')
+    await met('bob@kutup.dev', 'B')
+    expect(await pinnedVerdict(me, ref('B'), 'ada@kutup.dev', 'EVIL')).toEqual({ kind: 'someoneElse' })
   })
 
   it('gives a pinned account found at another address its own name', async () => {

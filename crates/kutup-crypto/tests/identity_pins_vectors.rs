@@ -241,7 +241,7 @@ fn rules() -> RuleVectors {
     };
     let lookups = vec![
         lookup_case(
-            "Dave at his new name: pinned, the same",
+            "Dave at his new name, which Erin held: pinned, the same, with her notice",
             &after,
             &dave,
             Some("david@kutup.dev"),
@@ -255,7 +255,7 @@ fn rules() -> RuleVectors {
             Some(b64(&dave_keys)),
         ),
         lookup_case(
-            "Dave reset: pinned, changed",
+            "Dave reset, at a name Erin held: pinned, changed, with her notice",
             &after,
             &dave,
             Some("david@kutup.dev"),
@@ -389,18 +389,18 @@ fn rules() -> RuleVectors {
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "verified, same authority",
+            "verified, same authority, opened as the account",
             &seen_after,
             &dave,
-            Some("david@kutup.dev"),
+            None,
             &dave_keys,
             PinUpdate::Verified,
         ),
         record_case(
-            "accepted, another authority: replaced, history kept",
+            "accepted, another authority, opened as the account: replaced, history kept",
             &after,
             &dave,
-            Some("david@kutup.dev"),
+            None,
             &gina_keys,
             PinUpdate::Accepted,
         ),
@@ -429,7 +429,15 @@ fn rules() -> RuleVectors {
             PinUpdate::Accepted,
         ),
         record_case(
-            "a known account accepted at another's name: nothing written",
+            "a key change accepted through another's name: refused",
+            &after,
+            &frank,
+            Some("david@kutup.dev"),
+            &gina_keys,
+            PinUpdate::Accepted,
+        ),
+        record_case(
+            "a known account accepted at another's name: refused, nothing written",
             &after,
             &frank,
             Some("david@kutup.dev"),

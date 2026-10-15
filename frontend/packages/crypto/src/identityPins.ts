@@ -162,6 +162,9 @@ export async function recordIdentityPin(
  *   the pinned one: `lookupIdentityPin` reports it as changed);
  * - `addressHadOthers`: not pinned; the account is new and the list knew
  *   others at this address (`pins`): someone else, pinned only when accepted;
+ * - `addressHeldByOthers`: refused; the account is pinned and was reached by
+ *   an address another pinned account holds (`pins`): a key change is
+ *   accepted only for the account opened by its own name;
  * - `authorityElsewhere`: refused; this authority is pinned for another
  *   account (`pin`): someone else's keys handed out under this account.
  */
@@ -169,6 +172,7 @@ export type Recorded =
   | { kind: 'updated' }
   | { kind: 'unchanged' }
   | { kind: 'addressHadOthers'; pins: IdentityPin[] }
+  | { kind: 'addressHeldByOthers'; pins: IdentityPin[] }
   | { kind: 'authorityElsewhere'; pin: IdentityPin }
 
 /**
@@ -185,13 +189,14 @@ export type AuthorityCheck = 'same' | 'changed' | 'earlier' | 'unknown'
  * account; the account is shown by its own name (`pinAddress(pin)`), never
  * by the address it was found at:
  * - `pinned`: `others` are accounts the list knows hold the address now:
- *   the address is someone else's ("someone else" notice);
+ *   the address is someone else's ("someone else" notice), checked before
+ *   `authority`; `knownAt`: the address is one of its own labels (folded);
  * - `someoneElse`: the account is new, but the list knew others at the
  *   address (`pins`, those that hold it now first);
  * - `new`: nothing known.
  */
 export type PinMatch =
-  | { kind: 'pinned'; pin: IdentityPin; authority: AuthorityCheck; others: IdentityPin[] }
+  | { kind: 'pinned'; pin: IdentityPin; authority: AuthorityCheck; others: IdentityPin[]; knownAt: boolean }
   | { kind: 'someoneElse'; pins: IdentityPin[] }
   | { kind: 'new' }
 

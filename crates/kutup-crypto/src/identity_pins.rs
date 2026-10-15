@@ -437,6 +437,11 @@ pub enum Recorded {
     /// The user may accept it ([`PinUpdate::Accepted`]); pinning it on sight
     /// would let its first-met address outrank theirs.
     AddressHadOthers { pins: Vec<IdentityPinV2> },
+    /// Refused: the account is pinned, and was reached by an address another
+    /// pinned account holds (`pins`). A key change is accepted only for the
+    /// account opened by its own name, or verified in person there: never on
+    /// a server's word that this address leads to it.
+    AddressHeldByOthers { pins: Vec<IdentityPinV2> },
     /// Refused: this authority is pinned for another account. An authority
     /// signs one account id, so this is a server handing out someone else's
     /// keys under this account; nothing is changed.
@@ -489,6 +494,14 @@ pub fn record(
         }
         Ok(i) => i,
     };
+    if update != PinUpdate::FirstSeen {
+        if let Some(address) = address {
+            let others = other_holders(list, account, address);
+            if !others.is_empty() {
+                return Ok(Recorded::AddressHeldByOthers { pins: others });
+            }
+        }
+    }
     let pin = &mut list.pins[i];
     if pin.authority_public_key == authority {
         if update == PinUpdate::Verified && pin.state != PinState::Verified {
@@ -550,14 +563,18 @@ pub enum AuthorityCheck {
 )]
 pub enum PinMatch {
     /// The account is pinned: show it by its own name (`pin`'s address),
-    /// never by the address it was found at.
+    /// never by the address it was found at. Check `others` before
+    /// `authority`: an address someone else holds is that first.
     Pinned {
         pin: Box<IdentityPinV2>,
         authority: AuthorityCheck,
+        /// Whether the address it was found at is one of its own labels
+        /// (compared folded): if not, it is named by its own name beside it.
+        known_at: bool,
         /// Other pinned accounts that hold the address now, as far as the
-        /// list knows, and were seen there after this one: the address is
-        /// someone else's, and the account found there is not them
-        /// ("someone else" notice).
+        /// list knows: the address is someone else's, and the account found
+        /// there is not them ("someone else" notice). A key change found this
+        /// way cannot be accepted ([`Recorded::AddressHeldByOthers`]).
         others: Vec<IdentityPinV2>,
     },
     /// The account is new to the list, but the list knew others at the
@@ -602,32 +619,26 @@ pub fn lookup(
             }
         }
     };
-    // Others that hold the address now and were seen there after this
-    // account was (all such, when it never was): a label this account's own
-    // chain proved later outranks one left behind.
-    let others = address
-        .map(|address| {
-            let own = pin.label_of(address).map(|label| label.seen_at.as_str());
-            list.at(address)
-                .into_iter()
-                .filter(|other| {
-                    other.account != *account
-                        && other.holds(address)
-                        && own.is_none_or(|own| {
-                            other
-                                .label_of(address)
-                                .is_some_and(|label| label.seen_at.as_str() > own)
-                        })
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
     PinMatch::Pinned {
         pin: Box::new(pin.clone()),
         authority,
-        others,
+        others: address
+            .map(|address| other_holders(list, account, address))
+            .unwrap_or_default(),
+        known_at: address.is_some_and(|address| pin.had(address)),
     }
+}
+
+/// The pins other than `account`'s that hold `address` now, as far as the
+/// list knows. Two accounts that hold one address both get the notice until
+/// the other's own chain shows it moved away: a label proved later never
+/// silently outranks a holder that has not left.
+fn other_holders(list: &IdentityPinsV2, account: &AccountRef, address: &str) -> Vec<IdentityPinV2> {
+    list.at(address)
+        .into_iter()
+        .filter(|other| other.account != *account && other.holds(address))
+        .cloned()
+        .collect()
 }
 
 /// What [`apply_rename`] did.
@@ -689,7 +700,16 @@ pub fn apply_rename(
         labels.retain(|label| !same(&label.address, address));
         labels.push(AddressLabelV1 {
             address: address.clone(),
-            seen_at: previous.map_or_else(|| since.to_owned(), |label| label.seen_at.clone()),
+            // A label it knew keeps when it was seen, unless the chain proves
+            // the account back at it now.
+            seen_at: match previous {
+                Some(label)
+                    if *address != view.current || from.as_deref() == Some(address.as_str()) =>
+                {
+                    label.seen_at.clone()
+                }
+                _ => since.to_owned(),
+            },
             unknown: previous
                 .map(|label| label.unknown.clone())
                 .unwrap_or_default(),
@@ -1133,8 +1153,10 @@ mod tests {
                 pin,
                 authority,
                 others,
+                known_at,
             } => {
                 // Mal, shown as mal@; Ada's notice beside him.
+                assert!(!known_at);
                 assert_eq!(pin.address(), Some("mal@kutup.dev"));
                 assert_eq!(authority, AuthorityCheck::Same);
                 assert_eq!(others.len(), 1);
@@ -1213,8 +1235,9 @@ mod tests {
     }
 
     #[test]
-    fn a_chain_onto_a_name_someone_known_left_outranks_their_old_label() {
-        // Erin was met at bob@ and left it; Dave's own chain proves he holds it.
+    fn a_chain_onto_a_name_another_known_account_holds_never_silently_wins() {
+        // Erin holds bob@ as far as the list knows. Dave's chain (or a
+        // server serving one for an account it controls) names bob@.
         let mut list = IdentityPinsV2::default();
         rec(&mut list, 2, "bob@kutup.dev", 2, PinUpdate::FirstSeen);
         rec(&mut list, 1, "dave@kutup.dev", 1, PinUpdate::FirstSeen);
@@ -1225,16 +1248,28 @@ mod tests {
             LATER,
         )
         .unwrap();
-        assert!(matches!(
-            lookup(&list, &acct(1), Some("bob@kutup.dev"), Some(&authority(1))),
-            PinMatch::Pinned { ref others, .. } if others.is_empty()
-        ));
-        // Erin found at bob@ again: Dave holds it later, so a notice.
+        // Both get the notice until Erin's own chain shows she left.
+        match lookup(&list, &acct(1), Some("bob@kutup.dev"), Some(&authority(1))) {
+            PinMatch::Pinned { others, .. } => assert_eq!(others[0].account, acct(2)),
+            other => panic!("{other:?}"),
+        }
         match lookup(&list, &acct(2), Some("bob@kutup.dev"), Some(&authority(2))) {
             PinMatch::Pinned { others, .. } => assert_eq!(others[0].account, acct(1)),
             other => panic!("{other:?}"),
         }
-        // Someone new there: both named, the newer holder first.
+        // Erin's chain away from bob@: Dave alone holds it.
+        apply_rename(
+            &mut list,
+            &acct(2),
+            &renames(2, &["bob@kutup.dev", "erin@kutup.dev"]),
+            LATER,
+        )
+        .unwrap();
+        assert!(matches!(
+            lookup(&list, &acct(1), Some("bob@kutup.dev"), Some(&authority(1))),
+            PinMatch::Pinned { ref others, known_at: true, .. } if others.is_empty()
+        ));
+        // Someone new there: those who hold it first, then those who had it.
         match lookup(&list, &acct(9), Some("bob@kutup.dev"), Some(&authority(9))) {
             PinMatch::SomeoneElse { pins } => {
                 let accounts: Vec<_> = pins.iter().map(|p| p.account.clone()).collect();
@@ -1242,6 +1277,54 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_key_change_is_never_accepted_through_someone_elses_address() {
+        // Ada at ada@, Bob at bob@. The server answers ada@ with Bob's
+        // account and a key of its own.
+        let mut list = IdentityPinsV2::default();
+        rec(&mut list, 1, "ada@kutup.dev", 1, PinUpdate::FirstSeen);
+        rec(&mut list, 2, "bob@kutup.dev", 2, PinUpdate::FirstSeen);
+        match lookup(&list, &acct(2), Some("ada@kutup.dev"), Some(&authority(7))) {
+            PinMatch::Pinned {
+                others, authority, ..
+            } => {
+                assert_eq!(others[0].account, acct(1));
+                assert_eq!(authority, AuthorityCheck::Changed);
+            }
+            other => panic!("{other:?}"),
+        }
+        let before = list.clone();
+        for update in [PinUpdate::Accepted, PinUpdate::Verified] {
+            match rec(&mut list, 2, "ada@kutup.dev", 7, update) {
+                Recorded::AddressHeldByOthers { pins } => assert_eq!(pins[0].account, acct(1)),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(list, before);
+        // Opened by his own name (or with no address), the change is his to accept.
+        assert_eq!(
+            rec(&mut list, 2, "bob@kutup.dev", 7, PinUpdate::Accepted),
+            Recorded::Updated
+        );
+        assert_eq!(
+            list.get(&acct(2)).unwrap().authority_public_key,
+            authority(7)
+        );
+    }
+
+    #[test]
+    fn a_chain_back_to_an_earlier_address_proves_it_anew() {
+        let mut list = IdentityPinsV2::default();
+        rec(&mut list, 1, "ali@kutup.dev", 1, PinUpdate::FirstSeen);
+        let chain = renames(1, &["ali@kutup.dev", "alicia@kutup.dev", "ali@kutup.dev"]);
+        apply_rename(&mut list, &acct(1), &chain[..1], LATER).unwrap();
+        let back = "2026-10-15T12:00:00Z";
+        apply_rename(&mut list, &acct(1), &chain, back).unwrap();
+        let p = list.get(&acct(1)).unwrap();
+        assert_eq!(addresses(p), ["alicia@kutup.dev", "ali@kutup.dev"]);
+        assert_eq!(p.addresses[1].seen_at, back);
     }
 
     #[test]

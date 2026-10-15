@@ -393,16 +393,18 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
             pin_new(ctx, me, &person)?;
             Ok(Status::SomeoneElse)
         }
-        PinMatch::Pinned { pin, authority, .. } => {
+        PinMatch::Pinned {
+            pin,
+            authority,
+            known_at,
+            ..
+        } => {
             if authority != AuthorityCheck::Same {
                 return Ok(Status::Changed);
             }
             // The account found is shown by its own name, never by the
             // address it was found at (as Signal shows the account's profile).
-            if let Some(name) = pin
-                .address()
-                .filter(|name| !pin.had(account) && *name != account)
-            {
+            if let Some(name) = pin.address().filter(|_| !known_at) {
                 eprintln!("note: {account} is the account you know as {name}");
             }
             Ok(Status::Ok {
@@ -426,7 +428,10 @@ fn pin_new(ctx: &Ctx, me: &Me, person: &Published) -> Result<()> {
         ),
         // Someone else at an address the list knew: told as such, not pinned
         // until the user trusts them.
-        Recorded::AddressHadOthers { .. } | Recorded::Updated | Recorded::Unchanged => Ok(()),
+        Recorded::AddressHadOthers { .. }
+        | Recorded::AddressHeldByOthers { .. }
+        | Recorded::Updated
+        | Recorded::Unchanged => Ok(()),
     }
 }
 
@@ -458,6 +463,10 @@ pub fn verify(ctx: &Ctx, me: &Me, account: &str, person: &Published) -> Result<(
         Recorded::AuthorityElsewhere { .. } => {
             bail!("the keys given for {account} belong to another account: do not trust them")
         }
+        Recorded::AddressHeldByOthers { pins } => bail!(
+            "{account} is someone else's address ({}): open the person you mean by their own address to trust a new identity",
+            pins.first().and_then(|pin| pin.address()).unwrap_or(account)
+        ),
         _ => Ok(()),
     }
 }
@@ -473,6 +482,10 @@ pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
         Recorded::AuthorityElsewhere { .. } => {
             bail!("the keys given for {account} belong to another account: do not trust them")
         }
+        Recorded::AddressHeldByOthers { pins } => bail!(
+            "{account} is someone else's address ({}): open the person you mean by their own address to trust a new identity",
+            pins.first().and_then(|pin| pin.address()).unwrap_or(account)
+        ),
         _ => Ok(()),
     }
 }

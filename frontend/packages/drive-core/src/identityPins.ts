@@ -452,9 +452,9 @@ export async function pinnedVerdict(me: DriveIdentity, account: AccountRef, addr
   }
   switch (match.kind) {
     case 'pinned': {
-      if (match.authority !== 'same') return { kind: 'changed' }
       if (match.others.length > 0) return holder(match.others[0])
-      const name = nameOf(match.pin, address)
+      if (match.authority !== 'same') return { kind: 'changed' }
+      const name = match.knownAt ? undefined : pinAddress(match.pin)
       return name ? { kind: 'pinned', name } : { kind: 'pinned' }
     }
     case 'someoneElse':
@@ -492,10 +492,12 @@ async function sameAddress(a: string, b: string): Promise<boolean> {
   return x !== null && x === y
 }
 
-/** The address a pin was met at before `address`, if it has had another. */
-function formerOf(pin: IdentityPin, address: string): string | undefined {
+/** The address a pin held before `address` (compared folded), if it has had another. */
+async function formerOf(pin: IdentityPin, address: string): Promise<string | undefined> {
   const labels = pin.addresses ?? []
-  const at = labels.findIndex((label) => label.address === address)
+  const asked = await foldAddress(address)
+  const folded = await Promise.all(labels.map((label) => foldAddress(label.address)))
+  const at = asked === null ? -1 : folded.indexOf(asked)
   return at > 0 ? labels[at - 1].address : undefined
 }
 
@@ -543,15 +545,16 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   ).catch(() => false)
   if (!bound) return { kind: 'invalid' }
   if (match.kind === 'pinned') {
-    if (match.authority !== 'same') return { kind: 'changed' }
     // Someone the list knows holds this address: the account found there is
-    // not them; it is shown by its own name.
+    // not them, whatever its keys; it is shown by its own name. First, so a
+    // key change through someone else's address is never offered to accept.
     if (match.others.length > 0) return someoneElse(match.others[0], account, pinAddress(match.pin))
+    if (match.authority !== 'same') return { kind: 'changed' }
+    if (match.knownAt) return okStatus(match.pin, account)
     // Found at an address the list does not know for them: their own signed
     // rename chain may prove it (a rename); nothing else does.
-    const known = (match.pin.addresses ?? []).some((label) => label.address === account)
-    const proven = known ? match.pin : ((await proveAddress(me, match.pin, account)) ?? match.pin)
-    return okStatus(proven, account, nameOf(proven, account))
+    const proven = await proveAddress(me, match.pin, account)
+    return proven ? okStatus(proven, account) : okStatus(match.pin, account, pinAddress(match.pin))
   }
   // First met: trusted from now on, at the address they were met at, unless
   // the list knew someone else there (then only when the user accepts).
@@ -587,19 +590,13 @@ async function proveAddress(me: DriveIdentity, pin: IdentityPin, address: string
   return proven
 }
 
-/** The account's own name, when it is not `address` (compared as stored: a label is canonical). */
-function nameOf(pin: IdentityPin, address: string): string | undefined {
-  const own = pinAddress(pin)
-  return own && own !== address && !(pin.addresses ?? []).some((label) => label.address === address) ? own : undefined
-}
-
 function someoneElse(holder: IdentityPin | undefined, address: string, name?: string): IdentityStatus {
   const now = holder ? pinAddress(holder) : undefined
   return { kind: 'someoneElse', ...(now && now !== address ? { now } : {}), ...(name ? { name } : {}) }
 }
 
-function okStatus(pin: IdentityPin, address: string, name?: string): IdentityStatus {
-  const formerly = formerOf(pin, address)
+async function okStatus(pin: IdentityPin, address: string, name?: string): Promise<IdentityStatus> {
+  const formerly = await formerOf(pin, address)
   return { kind: 'ok', verified: pin.state === 'verified', ...(formerly ? { formerly } : {}), ...(name ? { name } : {}) }
 }
 
@@ -717,6 +714,9 @@ export async function acceptIdentity(me: DriveIdentity, account: string): Promis
   const recorded = await recordPin(me, person, 'accepted')
   // Another account's authority handed out for this one: never accepted.
   if (recorded.kind === 'authorityElsewhere') throw new Error('these keys belong to another account')
+  // Reached by someone else's address: a key change is accepted only for the
+  // person opened by their own name.
+  if (recorded.kind === 'addressHeldByOthers') throw new Error('this address belongs to someone else')
 }
 
 /** A person's published identity, once their binding is checked; throws otherwise. */
@@ -768,7 +768,7 @@ export async function verifyPerson(me: DriveIdentity, account: string, scanned: 
   const matches = await safetyQrMatches(me.accountRef, me.authorityPublicKey, refOf(person), person.accountAuthorityPublicKey, scanned)
   if (!matches) throw new SafetyNumberMismatch()
   const recorded = await recordPin(me, person, 'verified')
-  if (recorded.kind === 'authorityElsewhere') throw new SafetyNumberMismatch()
+  if (recorded.kind === 'authorityElsewhere' || recorded.kind === 'addressHeldByOthers') throw new SafetyNumberMismatch()
 }
 
 /** Test seam: forget what this page has looked up and pinned. */
