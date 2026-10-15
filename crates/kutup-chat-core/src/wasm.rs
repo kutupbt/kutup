@@ -864,7 +864,7 @@ impl WasmChatClient {
         let account = kutup_chat_proto::AccountAddress::federated(&user, &server_name)
             .map_err(|error| js_error(&error.to_string()))?
             .canonical();
-        let mut engine = Engine::register(db, transport, account, 50, &mut rng)
+        let mut engine = Engine::register(db, transport, account.clone(), 50, &mut rng)
             .await
             .map_err(chat_error)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
@@ -872,6 +872,14 @@ impl WasmChatClient {
             .enable_identity_pins(&master_key, &binding)
             .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
+        // Renamed since this device last ran: its own records follow along the
+        // account's verified chain before anything is published under the
+        // new address (docs/plans/username-renames.md). Not reachable now:
+        // the manifest below says what is wrong, and the next start retries.
+        let renamed = engine
+            .adopt_own_rename(&authority, &account)
+            .await
+            .unwrap_or(false);
         engine
             .sync_own_manifest(&authority, now_rfc3339())
             .await
@@ -880,6 +888,12 @@ impl WasmChatClient {
             .initialize_profile(&profile_wrapping_key, &user, &mut rng)
             .await
             .map_err(chat_error)?;
+        if renamed {
+            engine
+                .republish_profile_after_rename(&profile_wrapping_key, &now_rfc3339(), &mut rng)
+                .await
+                .map_err(chat_error)?;
+        }
         Ok(Self {
             engine,
             authority,
