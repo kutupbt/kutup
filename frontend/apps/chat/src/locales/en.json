@@ -62,7 +62,7 @@
       "section": "Safety number",
       "view": "View safety number",
       "verifiedStatus": "You have verified this safety number.",
-      "changedStatus": "The safety number changed. Verify it again before sharing anything sensitive.",
+      "changedStatus": "The safety number changed. This address may now belong to someone else: verify it before continuing.",
       "unverifiedStatus": "Compare the safety number with {{name}} in person or on a call to be sure no one is in between."
     },
     "groupSecurity": {
@@ -1070,7 +1070,10 @@
       "inContacts": "In your contacts.",
       "view": "View contact"
     },
-    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does."
+    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does.",
+    "renamed": {
+      "line": "{{from}} changed their username to {{to}}"
+    }
   },
   "boot": {
     "opening": "Opening Chat…",

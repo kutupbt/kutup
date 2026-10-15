@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 import type { MessageView } from '../state/views'
 import { callLogText } from './callText'
+import { renameText } from './renameText'
 import { groupUpdateSentences } from './groupUpdate'
 import { messagePreview } from './names'
 import { formatCoordinates } from '../features/location/places'
@@ -29,6 +30,10 @@ export function chatTranscript(
     }
     if (view.callLog) {
       lines.push(`${at} ${callLogText(view.callLog, t)}`)
+      continue
+    }
+    if (view.peerRenamed) {
+      lines.push(`${at} ${renameText(view.peerRenamed, t)}`)
       continue
     }
     if (view.undecryptable) {

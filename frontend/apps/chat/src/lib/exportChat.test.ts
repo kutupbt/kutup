@@ -21,6 +21,7 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
     timerChange: null,
     groupUpdate: null,
     callLog: null,
+    peerRenamed: null,
     undecryptable: null,
     groupCall: null,
     viewedOnce: null,

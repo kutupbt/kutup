@@ -62,7 +62,7 @@
       "section": "Güvenlik numarası",
       "view": "Güvenlik numarasını göster",
       "verifiedStatus": "Bu güvenlik numarasını doğruladın.",
-      "changedStatus": "Güvenlik numarası değişti. Hassas bir şey paylaşmadan önce yeniden doğrula.",
+      "changedStatus": "Güvenlik numarası değişti. Bu adres artık başka birine ait olabilir: devam etmeden önce doğrula.",
       "unverifiedStatus": "Arada kimse olmadığından emin olmak için güvenlik numarasını {{name}} ile yüz yüze ya da bir aramada karşılaştır."
     },
     "groupSecurity": {
@@ -1070,7 +1070,10 @@
       "inContacts": "Kişileriniz arasında.",
       "view": "Kişiyi görüntüle"
     },
-    "peerWaiting": "{{server}} henüz bu Chat sürümünü desteklemiyor. Mesajlarınız bekler ve desteklediği anda gönderilir."
+    "peerWaiting": "{{server}} henüz bu Chat sürümünü desteklemiyor. Mesajlarınız bekler ve desteklediği anda gönderilir.",
+    "renamed": {
+      "line": "{{from}} kullanıcı adını {{to}} olarak değiştirdi"
+    }
   },
   "boot": {
     "opening": "İleti açılıyor…",

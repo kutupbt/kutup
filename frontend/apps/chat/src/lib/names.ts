@@ -2,6 +2,7 @@ import type { TFunction } from 'i18next'
 import type { ChatHistoryEntry, ConversationId, MlsGroupInfo, PeerChatProfile } from '@kutup/chat-core/types'
 import { undecryptableState, type MessageMutationState } from '../state/views'
 import { callLogText } from './callText'
+import { renameText } from './renameText'
 import { groupUpdateSentences } from './groupUpdate'
 
 /** A group's name; one never named shows "Group" and the start of its id. */
@@ -48,6 +49,7 @@ export function messagePreview(
     return groupUpdateSentences(entry.content.groupUpdate, notice.self, notice.nameOf, t)[0] ?? ''
   }
   if (entry.content.callLog) return callLogText(entry.content.callLog, t)
+  if (entry.content.peerRenamed) return renameText(entry.content.peerRenamed, t)
   if (entry.content.undecryptable) return t(undecryptableState(entry) === 'waiting' ? 'chat.undecryptable.waitingPreview' : 'chat.undecryptable.preview')
   if (entry.content.groupCall) {
     return entry.content.groupCall.event === 'started' ? t('chat.calls.groupStartedPreview') : t('chat.calls.groupEndedPreview')

@@ -14,7 +14,7 @@ import {
   type ReactionOperation,
 } from '@kutup/chat-core/reactions'
 import type {
-  ChatCallLog,
+  ChatCallLog, ChatPeerRenamed,
   ChatGroupCall,
   ChatGroupUpdate,
   ChatPollV1,
@@ -190,7 +190,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
   for (const message of data.history) {
     // A group change notice counts as the latest activity (Signal shows it
     // as the preview), though it is not a message.
-    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message) || message.content.callLog || message.content.groupCall || message.content.undecryptable) {
+    if (isVisibleChatMessage(message, nowMs) || isGroupNotice(message) || message.content.callLog || message.content.peerRenamed || message.content.groupCall || message.content.undecryptable) {
       latest.set(conversationKey(message.conversation), message)
     }
   }
@@ -312,6 +312,8 @@ export interface MessageView {
   groupUpdate: ChatGroupUpdate | null
   /** A call in the timeline. */
   callLog: ChatCallLog | null
+  /** The peer's username changed (a verified rename chain). */
+  peerRenamed: ChatPeerRenamed | null
   /**
    * A notice where a message could not be read: `waiting` once its sender
    * has been asked for it again (it is replaced when the message arrives),
@@ -448,7 +450,7 @@ export function threadView(
   }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.peerRenamed || m.content.undecryptable || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
       !opened.has(m.content.messageId) &&
       !repeatedStart(m),
   )
@@ -473,6 +475,7 @@ export function threadView(
       timerChange: entry.content.disappearingTimer ? { seconds: entry.content.disappearingTimer.durationSeconds } : null,
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
       callLog: entry.content.callLog ?? null,
+      peerRenamed: entry.content.peerRenamed ?? null,
       undecryptable: undecryptableState(entry),
       groupCall: entry.content.groupCall?.event === 'started' ? entry.content.groupCall : null,
       viewedOnce: null,
@@ -508,6 +511,7 @@ export function threadView(
       timerChange: null,
       groupUpdate: null,
       callLog: null,
+      peerRenamed: null,
       undecryptable: null,
       groupCall: null,
       viewedOnce: { video: body.video },

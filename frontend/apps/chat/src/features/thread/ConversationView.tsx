@@ -24,6 +24,7 @@ import { Avatar } from '@kutup/ui/components/avatar'
 import { DISAPPEARING_PRESETS, disappearingLabel } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
 import { callLogText } from '../../lib/callText'
+import { renameText } from '../../lib/renameText'
 import { chatTranscript, downloadText, transcriptFileName } from '../../lib/exportChat'
 import { pendingDefaultTimer, settlePendingDefaultTimer } from '../../lib/pendingTimers'
 import { groupUpdateSentences } from '../../lib/groupUpdate'
@@ -506,6 +507,13 @@ export function ConversationView({
                   </Button>
                 ) : null}
               </div>
+            )
+          }
+          if (row.kind === 'notice' && row.view.peerRenamed) {
+            return (
+              <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto max-w-sm px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-rename-notice">
+                {renameText(row.view.peerRenamed, t)}
+              </p>
             )
           }
           if (row.kind === 'notice' && row.view.undecryptable) {
