@@ -1,12 +1,15 @@
 import { LockKeyhole } from 'lucide-react'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { cn } from '@kutup/ui/lib/cn'
 import { ConnectionBanner } from '../features/list/ConnectionBanner'
 import { ConversationList } from '../features/list/ConversationList'
 import { GroupInvitations } from '../features/list/GroupInvitations'
 import { NotificationPrompt } from '../features/list/NotificationPrompt'
-import { parseConversationKey } from '../features/list/paths'
+import { conversationPath, parseConversationKey } from '../features/list/paths'
+import { useChat } from '../app/chatStore'
+import { currentKey } from '../state/renames'
 import { SearchResults } from '../features/list/SearchResults'
 import { ConversationView } from '../features/thread/ConversationView'
 
@@ -22,6 +25,19 @@ export function ChatsPage() {
   const query = params.get('q')?.trim() ?? ''
   const selectedKey = key ?? null
   const conversation = selectedKey ? parseConversationKey(selectedKey) : null
+  const aliases = useChat().snapshot.aliases
+  const navigate = useNavigate()
+  useEffect(() => {
+    // A thread whose peer renamed is under its new address now.
+    if (!selectedKey) return
+    let gone = false
+    void currentKey(selectedKey, aliases).then((now) => {
+      if (now && !gone) void navigate(conversationPath(now), { replace: true })
+    })
+    return () => {
+      gone = true
+    }
+  }, [selectedKey, aliases, navigate])
 
   return (
     <div className="flex h-[calc(100svh-3.5rem)] min-h-0">

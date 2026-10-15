@@ -432,6 +432,15 @@ export class ChatService {
     }
   }
 
+  /**
+   * The addresses peers left and where each is now (folded old address →
+   * current address): the app moves its own per-conversation state with them.
+   */
+  async renameAliases(): Promise<Record<string, string>> {
+    if (!this.client.renameAliases) return {}
+    return this.withLock(() => this.client.renameAliases!())
+  }
+
   subscribe(listener: UpdateListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

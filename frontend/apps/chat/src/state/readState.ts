@@ -48,6 +48,19 @@ export function startFreshMarks(newestByKey: ReadonlyMap<string, number>): void 
   store({ ...Object.fromEntries(newestByKey), ...marks })
 }
 
+/**
+ * A conversation now under another key (its peer renamed,
+ * docs/plans/username-renames.md): its mark goes with it, the newer of the
+ * two kept.
+ */
+export function moveReadMark(from: string, to: string): void {
+  if (!activeSealedStorage()) return
+  const { marks } = load()
+  if (!(from in marks)) return
+  const { [from]: moved = 0, ...rest } = marks
+  store({ ...rest, [to]: Math.max(moved, rest[to] ?? 0) })
+}
+
 /** Mark `key` read up to `timestampMs` (never backwards). */
 export function markRead(key: string, timestampMs: number): void {
   if (!activeSealedStorage()) return

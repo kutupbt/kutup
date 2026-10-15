@@ -35,6 +35,24 @@ function store(drafts: Drafts): void {
   for (const listener of listeners) listener()
 }
 
+/**
+ * A conversation now under another key (its peer renamed): its draft goes
+ * with it, unless one was started there already.
+ */
+export function moveDraft(from: string, to: string): void {
+  const drafts = load()
+  const moved = drafts[from]
+  if (!moved) return
+  const rest = { ...drafts }
+  delete rest[from]
+  store(rest[to] ? rest : { ...rest, [to]: moved })
+}
+
+/** The conversations with a draft. */
+export function draftKeys(): string[] {
+  return Object.keys(load())
+}
+
 export function getDraft(conversationKey: string): Draft | undefined {
   return load()[conversationKey]
 }

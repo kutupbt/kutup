@@ -20,6 +20,8 @@ import type { Session } from '@kutup/session/store'
 import type { ChatData } from '../state/views'
 import { setSealedStorage } from '../state/sealedState'
 import { currentReadMarks } from '../state/readState'
+import { followRenamedState, type RenameAliases } from '../state/renames'
+import { draftKeys } from '../lib/drafts'
 import { foldAccountState, mergeReadMarks } from '../state/accountState'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
@@ -57,6 +59,8 @@ export interface ChatSnapshot extends ChatData {
   /** This account's own requests through group links. */
   ownJoinRequests: OwnJoinRequest[]
   backup: ChatBackupView | null
+  /** Folded addresses peers left → where each is now (docs/plans/username-renames.md). */
+  aliases: RenameAliases
 }
 
 export interface ChatState {
@@ -92,6 +96,7 @@ const emptySnapshot: ChatSnapshot = {
   joinRequests: [],
   ownJoinRequests: [],
   backup: null,
+  aliases: {},
 }
 
 const initial: ChatState = {
@@ -152,7 +157,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         console.warn('chat: part of the reload kept its last value', error)
         return fallback
       })
-    const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals] =
+    const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals, aliases] =
       await Promise.all([
         // The live window, not the whole history (Phase 2b): read again only
         // for the conversations that changed.
@@ -168,8 +173,13 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         mlsGroups ? orPrevious(service.groupInvitations(), previous.invitations) : Promise.resolve([]),
         mlsGroups ? orPrevious(service.groupInvitationFeedback(), previous.invitationFeedback) : Promise.resolve([]),
         mlsGroups ? orPrevious(service.pendingGroupOwnerApprovals(), previous.ownerApprovals) : Promise.resolve([]),
+        orPrevious(service.renameAliases(), previous.aliases),
       ])
     if (mine !== generation || state.service !== service) return
+    if (Object.keys(aliases).length !== Object.keys(previous.aliases).length) {
+      // A peer renamed: this device's read marks and drafts follow its thread.
+      await followRenamedState([...Object.keys(currentReadMarks()), ...draftKeys()], aliases)
+    }
     set({
       snapshot: {
         history,
@@ -181,6 +191,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         invitations,
         invitationFeedback,
         ownerApprovals,
+        aliases,
         joinRequests: service.groupJoinRequests(),
         ownJoinRequests: service.ownJoinRequests(),
         backup: service.backupStatus(),
