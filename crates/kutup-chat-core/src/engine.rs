@@ -97,6 +97,9 @@ pub struct ReceiveReport {
     /// Mailbox ids that could not be decrypted and were given up on, with
     /// the sender's session refreshed where that was due.
     pub repaired: Vec<String>,
+    /// Peers followed to another address (a verified rename chain): their
+    /// threads are under the new address now, with a `peerRenamed` line.
+    pub renamed: Vec<PeerRenamed>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +193,8 @@ pub struct Engine {
     /// The account's synced identity pins, once the application hands over
     /// the key (`enable_identity_pins`); without it Chat keeps to its own.
     identity_pins: Option<crate::identity_sync::IdentityPinsSync>,
+    /// Peers followed to another address this run, until reported.
+    renamed: Vec<PeerRenamed>,
 }
 
 impl Engine {
@@ -229,6 +234,7 @@ impl Engine {
             clock_offset_ms: 0,
             mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
             identity_pins: None,
+            renamed: Vec::new(),
         }
     }
 
@@ -1457,7 +1463,39 @@ impl Engine {
     /// Send `content` to every active device of `peer_user`. Persists the ciphertext
     /// in a durable `sendId`-keyed outbox before hitting the network, recovers from
     /// `409 DeviceListMismatch`, and drops the outbox entry once delivered.
+    ///
+    /// A peer that renamed is sent to where it is now: through the rename
+    /// aliases, and, when the server says the address is a name it left,
+    /// once more after following it (`summary.moved_to`).
     pub async fn send<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        peer_user: &str,
+        content: &ChatContent,
+        rng: &mut R,
+    ) -> Result<SendSummary> {
+        let peer = self.session.current_peer(peer_user);
+        match self.send_once(send_id, &peer, content, rng).await {
+            Err(ChatError::Renamed(chains)) => {
+                let now = self.session.current_peer(&peer);
+                if now == peer {
+                    return Err(ChatError::Renamed(chains));
+                }
+                let mut summary = self.send_once(send_id, &now, content, rng).await?;
+                summary.moved_to = Some(now);
+                Ok(summary)
+            }
+            Ok(mut summary) => {
+                if peer != peer_user {
+                    summary.moved_to = Some(peer);
+                }
+                Ok(summary)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn send_once<R: Rng + CryptoRng>(
         &mut self,
         send_id: &str,
         peer_user: &str,
@@ -1523,7 +1561,7 @@ impl Engine {
         // ratchet again. Reuse the exact durable ciphertext, or no-op if its
         // delivery was already confirmed locally.
         if let Some(entry) = self.session.outbox_entry(send_id).await? {
-            if entry.peer != peer_user {
+            if self.session.current_peer(&entry.peer) != peer_user {
                 return Err(ChatError::Invalid(format!(
                     "sendId {send_id} is already bound to {}",
                     entry.peer
@@ -1537,7 +1575,7 @@ impl Engine {
             return Ok(summary);
         }
         if let Some(sent) = self.session.sent_message(send_id).await? {
-            if sent.peer != peer_user {
+            if self.session.current_peer(&sent.peer) != peer_user {
                 return Err(ChatError::Invalid(format!(
                     "sendId {send_id} is already bound to {}",
                     sent.peer
@@ -1801,6 +1839,7 @@ impl Engine {
         self.session.purge_used_pre_keys(cutoff).await?;
         // Never fatal: asking again is best effort and tried again later.
         let _ = self.ask_again_for_waiting(rng).await;
+        report.renamed = self.take_renamed();
         Ok(report)
     }
 
@@ -2252,10 +2291,13 @@ impl Engine {
     /// the durable sync leg remains queued for the next reconciliation.
     async fn deliver_outbox_entry<R: Rng + CryptoRng>(
         &mut self,
-        entry: OutboxEntry,
+        mut entry: OutboxEntry,
         mut summary: SendSummary,
         rng: &mut R,
     ) -> Result<SendSummary> {
+        // Queued for an address its peer has left since: it goes where the
+        // peer is now (the ratchet moved with it).
+        entry.peer = self.session.current_peer(&entry.peer);
         let primary = if entry.primary_delivered {
             summary.delivered = true;
             summary.deduplicated = true;
@@ -2523,14 +2565,18 @@ impl Engine {
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
         self.known_devices.remove(peer_user);
+        // Someone pinned under an earlier name of theirs, met here first: their
+        // thread moves here before this address is accepted.
+        self.adopt_renamed_peer(peer_user).await?;
         let transport = Rc::clone(&self.transport);
-        let response = if peer_user == self.session.user() {
+        let fetched = if peer_user == self.session.user() {
             transport
                 .fetch_sync_bundles(peer_user, self.session.device_id())
-                .await?
+                .await
         } else {
-            transport.fetch_bundles(peer_user).await?
+            transport.fetch_bundles(peer_user).await
         };
+        let response = self.followed(peer_user, fetched).await?;
         let bundles = self
             .accept_verified_bundle_response(peer_user, response)
             .await?;
@@ -2544,9 +2590,11 @@ impl Engine {
         capability: &[u8; 16],
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
         self.known_devices.remove(peer_user);
-        let response = Rc::clone(&self.transport)
+        self.adopt_renamed_peer(peer_user).await?;
+        let fetched = Rc::clone(&self.transport)
             .fetch_sealed_bundles(peer_user, capability)
-            .await?;
+            .await;
+        let response = self.followed(peer_user, fetched).await?;
         let bundles = self
             .accept_verified_bundle_response(peer_user, response)
             .await?;
@@ -2568,6 +2616,17 @@ impl Engine {
         ) {
             Ok(inspected) => inspected,
             Err(error) => {
+                // Another authority at a pinned address: when the pinned
+                // account renamed away, its thread follows it, and whoever is
+                // here now is met as someone new (the synced pins still warn).
+                if let Some(prior) = prior_manifest.as_ref() {
+                    if identity_changed(response.manifest.as_ref(), prior)
+                        && self.follow_before_quarantine(peer_user, prior).await?
+                    {
+                        return Box::pin(self.accept_verified_bundle_response(peer_user, response))
+                            .await;
+                    }
+                }
                 self.quarantine_manifest_failure(
                     peer_user,
                     response.manifest.as_ref(),
@@ -2675,17 +2734,21 @@ impl Engine {
             .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
         let domain = sender_address.server.as_str();
 
+        // A certificate from before its sender's rename names the address it
+        // left: the sender is the peer where it is now.
+        let sender = self.session.current_peer(&inspection.sender);
         let mut manifest_identity = self
             .session
-            .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
+            .manifest_identity_key(&sender, inspection.sender_device_id)
             .await?;
         if manifest_identity.is_none() {
             // Retrieve and verify the complete current manifest before touching
             // the inner ratchet. The returned prekeys are intentionally unused.
-            self.fetch_verified_bundles(&inspection.sender).await?;
+            self.fetch_verified_bundles(&sender).await?;
+            let now = self.session.current_peer(&sender);
             manifest_identity = self
                 .session
-                .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
+                .manifest_identity_key(&now, inspection.sender_device_id)
                 .await?;
         }
         let manifest_identity = manifest_identity.ok_or_else(|| {
@@ -2850,6 +2913,15 @@ impl Engine {
     }
 }
 
+/// Whether `manifest` names another incarnation or authority than `prior`.
+fn identity_changed(manifest: Option<&AccountManifestV1>, prior: &crate::ManifestTrust) -> bool {
+    manifest.is_some_and(|manifest| {
+        manifest.incarnation_id != prior.incarnation_id
+            || manifest.authority_key_id != prior.authority_key_id
+            || manifest.self_authority_key != prior.self_authority_key
+    })
+}
+
 fn parse_mls_device_credential_identity(identity: &str) -> Result<(String, u32)> {
     let (account, device_id) = identity.rsplit_once('#').ok_or_else(|| {
         ChatError::Trust("MLS credential identity must be account@server#device".into())
@@ -2958,3 +3030,7 @@ mod tests {
         }
     }
 }
+
+#[path = "engine/renames.rs"]
+mod renames;
+pub use renames::PeerRenamed;

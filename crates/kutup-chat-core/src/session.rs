@@ -57,6 +57,9 @@ pub struct SendSummary {
     pub safety_number_changes: Vec<ChatAddress>,
     /// Number of send/recovery rounds performed.
     pub attempts: u32,
+    /// The peer renamed: the message went to its new address
+    /// (docs/plans/username-renames.md).
+    pub moved_to: Option<String>,
 }
 
 pub(crate) struct DirectSend<'a> {
@@ -226,6 +229,7 @@ impl Session {
             }
         }
         let store = ChatStore::attach(db, local)?;
+        store.refresh_aliases().await?;
         let mut session = Session {
             store,
             registration: None,
@@ -256,6 +260,7 @@ impl Session {
         let registration = serde_json::from_slice(&encoded)
             .map_err(|error| ChatError::Db(format!("decode registration journal: {error}")))?;
         let store = ChatStore::attach(db, local)?;
+        store.refresh_aliases().await?;
         Ok(Self {
             store,
             registration: Some(registration),
@@ -1258,6 +1263,15 @@ impl Session {
         from: ChatAddress,
         plaintext: Vec<u8>,
     ) -> Result<ReceiveOutcome> {
+        // Sent under an address its sender has left (a certificate or a
+        // message from before the rename): it is the peer's, where it is now.
+        let current = self.store.current_address(&sender);
+        let (sender, from) = if current == sender {
+            (sender, from)
+        } else {
+            let from = ChatAddress::from_sender(&current, sender_device_id)?;
+            (current, from)
+        };
         let mut plaintext = plaintext;
         let mut parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
         // A message sent again is handled as the message inside it, and
@@ -2154,6 +2168,12 @@ impl Session {
     }
 
     /// The pinned self-authority and highest manifest observed for `peer`.
+    /// Where the peer last known at `peer` is now (`peer` itself when it
+    /// never moved), through the rename alias log.
+    pub fn current_peer(&self, peer: &str) -> String {
+        self.store.current_address(peer)
+    }
+
     pub async fn manifest_trust(&self, peer: &str) -> Result<Option<ManifestTrust>> {
         self.store.db().load_manifest_trust(peer).await
     }
@@ -2289,6 +2309,7 @@ impl Session {
         match result {
             Ok(true) => {
                 self.store.commit().await?;
+                self.store.refresh_aliases().await?;
                 // The moved history is indexed under its new thread now.
                 crate::timeline::ensure_built(&**self.store.db()).await?;
                 Ok(true)
@@ -4416,3 +4437,7 @@ fn refuse_group_only(content: &ChatContent) -> std::result::Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "session/rename_tests.rs"]
+mod rename_tests;

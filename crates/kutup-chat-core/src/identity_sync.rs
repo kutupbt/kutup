@@ -212,6 +212,52 @@ impl IdentityPinsSync {
     }
 }
 
+impl IdentityPinsSync {
+    /// Moves the pin of `authority` along its verified rename `chain`
+    /// (`identity_pins::apply_rename`) and stores the list when it changed:
+    /// the account's other apps then know the peer by its new address too.
+    pub(crate) async fn apply_rename(
+        &mut self,
+        transport: &dyn ChatTransport,
+        authority: &str,
+        chain: &[kutup_crypto::account_rename::AccountRenameV1],
+        now_seconds: u64,
+    ) -> Result<()> {
+        let authority: [u8; 32] = STANDARD
+            .decode(authority)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| ChatError::Trust("authority key is malformed".into()))?;
+        for _ in 0..5 {
+            let (revision, mut list) = self.load(transport).await?;
+            let applied =
+                identity_pins::apply_rename(&mut list, &authority, chain).map_err(crypto)?;
+            if !applied.changed {
+                return Ok(());
+            }
+            let next = now_seconds
+                .saturating_mul(1000)
+                .max(revision + 1)
+                .max(self.highest_seen + 1);
+            let sealed =
+                identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
+            let write = IdentityPinsWrite {
+                base_revision: revision,
+                envelope: STANDARD.encode(sealed),
+            };
+            self.cache = None;
+            if transport.store_identity_pins(&write).await? {
+                self.highest_seen = next;
+                self.cache = Some((next, list));
+                return Ok(());
+            }
+        }
+        Err(ChatError::Transport(
+            "the identity pin list kept changing".into(),
+        ))
+    }
+}
+
 fn crypto(error: kutup_crypto::error::CryptoError) -> ChatError {
     ChatError::Trust(format!("identity pins: {error}"))
 }

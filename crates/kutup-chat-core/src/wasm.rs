@@ -3645,6 +3645,9 @@ struct SendSummaryView {
     deduplicated: bool,
     attempts: u32,
     safety_number_changes: Vec<String>,
+    /// The peer renamed: the message went to this address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    moved_to: Option<String>,
 }
 
 impl From<crate::SendSummary> for SendSummaryView {
@@ -3653,6 +3656,7 @@ impl From<crate::SendSummary> for SendSummaryView {
             delivered: summary.delivered,
             deduplicated: summary.deduplicated,
             attempts: summary.attempts,
+            moved_to: summary.moved_to,
             safety_number_changes: summary
                 .safety_number_changes
                 .into_iter()
@@ -3678,6 +3682,15 @@ struct ReceiveReportView {
     repaired: Vec<String>,
     /// Queued messages that could not be delivered on this pass.
     send_failures: Vec<SendFailureView>,
+    /// Peers followed to another address: their threads moved there.
+    renamed: Vec<PeerRenamedView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerRenamedView {
+    from: String,
+    to: String,
 }
 
 #[derive(Serialize)]
@@ -3710,6 +3723,14 @@ impl From<ReceiveReport> for ReceiveReportView {
             duplicates: report.duplicates,
             repaired: report.repaired,
             send_failures: Vec::new(),
+            renamed: report
+                .renamed
+                .into_iter()
+                .map(|renamed| PeerRenamedView {
+                    from: renamed.from,
+                    to: renamed.to,
+                })
+                .collect(),
         }
     }
 }

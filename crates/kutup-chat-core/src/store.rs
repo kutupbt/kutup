@@ -29,6 +29,7 @@ use crate::db::{
     LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result as ChatResult};
+use crate::renames::RenameAliases;
 
 /// libsignal's store traits return its own `Result` alias, which the crate does
 /// not re-export at its root — so we mirror it here for the trait impls. Our own
@@ -46,6 +47,11 @@ fn cb(method: &'static str) -> impl FnOnce(ChatError) -> SignalProtocolError {
 pub(crate) struct ChatStore {
     pending: Rc<RefCell<Pending>>,
     db: Rc<dyn ChatDb>,
+    /// Where peers that renamed are now (`renames.rs`): a libsignal session
+    /// or identity asked for under an address its peer left (a sealed-sender
+    /// certificate issued before the rename, an older outbox entry) is the
+    /// one under the peer's current address.
+    aliases: Rc<RefCell<RenameAliases>>,
     pub(crate) session_store: SessionAdapter,
     pub(crate) identity_store: IdentityAdapter,
     pub(crate) pre_key_store: PreKeyAdapter,
@@ -62,14 +68,17 @@ impl ChatStore {
         let key_pair = IdentityKeyPair::try_from(local.identity_key_pair.as_slice())
             .map_err(|e| ChatError::Protocol(e.to_string()))?;
         let pending = Rc::new(RefCell::new(Pending::default()));
+        let aliases = Rc::new(RefCell::new(RenameAliases::default()));
         Ok(ChatStore {
             session_store: SessionAdapter {
                 db: db.clone(),
                 pending: pending.clone(),
+                aliases: aliases.clone(),
             },
             identity_store: IdentityAdapter {
                 db: db.clone(),
                 pending: pending.clone(),
+                aliases: aliases.clone(),
                 key_pair,
                 registration_id: local.registration_id,
             },
@@ -91,7 +100,26 @@ impl ChatStore {
             },
             pending,
             db,
+            aliases,
         })
+    }
+
+    /// Reads the rename alias log again (on open, and after a peer moved).
+    pub(crate) async fn refresh_aliases(&self) -> ChatResult<()> {
+        let loaded = crate::renames::load_aliases(&*self.db, None).await?;
+        *self.aliases.borrow_mut() = loaded;
+        Ok(())
+    }
+
+    /// Where the peer last known at `address` is now (`address` itself when
+    /// it never moved).
+    pub(crate) fn current_address(&self, address: &str) -> String {
+        self.aliases.borrow().resolve(address)
+    }
+
+    /// `name.deviceId` with its name where that peer is now.
+    fn current_key(&self, key: &str) -> String {
+        aliased(&self.aliases.borrow(), key)
     }
 
     /// Flush the current unit of work atomically. Clears the batch either way, so
@@ -119,6 +147,7 @@ impl ChatStore {
     /// lets the engine encrypt with an existing session instead of re-establishing
     /// (which would reset the ratchet).
     pub(crate) async fn has_session(&self, address: &str) -> ChatResult<bool> {
+        let address = &self.current_key(address);
         Ok(match self.session_record(address).await? {
             Some(record) => record
                 .has_usable_sender_chain(crate::clock::now(), SessionUsabilityRequirements::empty())
@@ -146,6 +175,7 @@ impl ChatStore {
     /// messages already on their way under it still decrypt. Returns whether
     /// there was a current session to set aside.
     pub(crate) async fn archive_session(&self, address: &str) -> ChatResult<bool> {
+        let address = &self.current_key(address);
         let Some(mut record) = self.session_record(address).await? else {
             return Ok(false);
         };
@@ -170,10 +200,8 @@ impl ChatStore {
 
     /// Stage a session archive (drop) for a stale/extra device.
     pub(crate) fn delete_session(&self, address: &str) {
-        self.pending
-            .borrow_mut()
-            .sessions
-            .insert(address.to_string(), None);
+        let address = self.current_key(address);
+        self.pending.borrow_mut().sessions.insert(address, None);
     }
 
     /// Stage an outbox upsert (the pending send for its `sendId`).
@@ -209,6 +237,11 @@ impl ChatStore {
     /// `None` — lets the send path detect a reinstall (changed identity key) before
     /// reusing a now-stale session.
     pub(crate) async fn peer_identity(&self, address: &str) -> ChatResult<Option<Vec<u8>>> {
+        self.stored_peer_identity(&self.current_key(address)).await
+    }
+
+    /// The identity bytes stored under exactly `address` (no alias).
+    async fn stored_peer_identity(&self, address: &str) -> ChatResult<Option<Vec<u8>>> {
         if let Some(bytes) = self.pending.borrow().identities.get(address) {
             return Ok(Some(bytes.clone()));
         }
@@ -300,7 +333,7 @@ impl ChatStore {
             Some(staged) => staged,
             None => self.db.load_session(&old).await?,
         };
-        let identity = self.peer_identity(&old).await?;
+        let identity = self.stored_peer_identity(&old).await?;
         let mut pending = self.pending.borrow_mut();
         if let Some(bytes) = session {
             pending.sessions.insert(new.clone(), Some(bytes));
@@ -452,12 +485,25 @@ impl ChatStore {
 pub(crate) struct SessionAdapter {
     db: Rc<dyn ChatDb>,
     pending: Rc<RefCell<Pending>>,
+    aliases: Rc<RefCell<RenameAliases>>,
+}
+
+/// `name.deviceId` (a [`ProtocolAddress`] key) with its name where that peer
+/// is now, through the rename aliases.
+fn aliased(aliases: &RenameAliases, key: &str) -> String {
+    if aliases.is_empty() {
+        return key.to_string();
+    }
+    match key.rsplit_once('.') {
+        Some((name, device)) => format!("{}.{device}", aliases.resolve(name)),
+        None => key.to_string(),
+    }
 }
 
 #[async_trait(?Send)]
 impl SessionStore for SessionAdapter {
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>> {
-        let key = address.to_string();
+        let key = aliased(&self.aliases.borrow(), &address.to_string());
         match self.pending.borrow().sessions.get(&key) {
             Some(Some(bytes)) => return Ok(Some(SessionRecord::deserialize(bytes)?)),
             Some(None) => return Ok(None), // archived earlier in this unit of work
@@ -479,10 +525,11 @@ impl SessionStore for SessionAdapter {
         address: &ProtocolAddress,
         record: &SessionRecord,
     ) -> Result<()> {
+        let key = aliased(&self.aliases.borrow(), &address.to_string());
         self.pending
             .borrow_mut()
             .sessions
-            .insert(address.to_string(), Some(record.serialize()?));
+            .insert(key, Some(record.serialize()?));
         Ok(())
     }
 }
@@ -492,6 +539,7 @@ impl SessionStore for SessionAdapter {
 pub(crate) struct IdentityAdapter {
     db: Rc<dyn ChatDb>,
     pending: Rc<RefCell<Pending>>,
+    aliases: Rc<RefCell<RenameAliases>>,
     key_pair: IdentityKeyPair,
     registration_id: u32,
 }
@@ -538,7 +586,7 @@ impl IdentityKeyStore for IdentityAdapter {
         address: &ProtocolAddress,
         identity: &IdentityKey,
     ) -> Result<IdentityChange> {
-        let key = address.to_string();
+        let key = aliased(&self.aliases.borrow(), &address.to_string());
         // TOFU with change detection — mirrors InMemIdentityKeyStore exactly: only
         // (re)write when new or changed, and report whether an existing key moved.
         match self.stored_identity(&key).await? {
@@ -559,14 +607,16 @@ impl IdentityKeyStore for IdentityAdapter {
         identity: &IdentityKey,
         _direction: Direction,
     ) -> Result<bool> {
-        match self.stored_identity(&address.to_string()).await? {
+        let key = aliased(&self.aliases.borrow(), &address.to_string());
+        match self.stored_identity(&key).await? {
             None => Ok(true), // trust on first use
             Some(k) => Ok(&k == identity),
         }
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
-        self.stored_identity(&address.to_string()).await
+        self.stored_identity(&aliased(&self.aliases.borrow(), &address.to_string()))
+            .await
     }
 }
 
