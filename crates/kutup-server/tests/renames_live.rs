@@ -81,6 +81,31 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
         .as_str()
         .is_some_and(|d| d.len() == 64));
 
+    // Another device, unaware of it, renames from the old address: the
+    // chain moved, a conflict (read again and sign anew), not a wrong one.
+    let domain = server_domain(&c, &base);
+    let stale = kutup_crypto::account_rename::sign(
+        &user.identity,
+        1,
+        &format!("{old}@{domain}"),
+        &format!("{}@{domain}", name("elsewhere_")),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64,
+    )
+    .unwrap();
+    let binding = kutup_crypto::drive_key_binding::sign(&user.identity, &stale.current).unwrap();
+    let grant = reauth_grant(&c, &base, &user, "rename");
+    let r = bearer(c.post(format!("{base}/api/user/rename")), &user.token)
+        .json(&json!({ "grant": grant, "rename": stale, "driveKeyBinding": b64(&binding) }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    let conflict: Value = r.json().unwrap();
+    assert_eq!(conflict["code"], "renameConflict", "{conflict}");
+    assert_eq!(conflict["sequence"], 1);
+
     // The new name and its variants sign in, the same account; the old one
     // is no account.
     for spelling in [new.clone(), new.to_uppercase(), new.replace('_', "")] {
@@ -95,7 +120,6 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     );
 
     // Lookups of the old name say where it went, with the chain.
-    let domain = server_domain(&c, &base);
     let r = get(
         &c,
         &base,

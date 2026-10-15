@@ -233,6 +233,26 @@ pub async fn rename(
     // on this server, the next of its chain, signed now.
     let statement = &req.rename;
     let old_address = format!("{username}@{server}");
+    // Another device renamed meanwhile: the chain moved, or the statement
+    // starts from an address this account has since left. Read again and
+    // sign anew (a conflict, not a wrong statement).
+    let (stored_len, left_before): (i64, bool) = sqlx::query_as(
+        "SELECT COUNT(*),
+                COALESCE(bool_or(previous = $2 OR current = $2), false)
+           FROM account_renames WHERE incarnation_id = $1",
+    )
+    .bind(&incarnation)
+    .bind(&statement.previous)
+    .fetch_one(&mut *tx)
+    .await?;
+    if statement.sequence != stored_len as u64 + 1
+        || (statement.previous != old_address && left_before)
+    {
+        return Err(
+            AppError::conflict("the chain moved: read it again and sign anew")
+                .with_details(json!({ "code": "renameConflict", "sequence": stored_len })),
+        );
+    }
     let (new_name, new_server) = statement
         .current
         .rsplit_once('@')
