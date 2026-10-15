@@ -752,6 +752,14 @@ pub fn purge_accounts(c: &Client, base: &str, users: &[&User]) {
 }
 
 pub fn admin_token(c: &Client, base: &str, password: &str, username: &str) -> String {
+    // One at a time in a test process: on a fresh server the first sign-in
+    // goes into first-login setup, and two tests setting the account up at
+    // once would end each other's setup token (`setupTokenInvalid`). The
+    // next one in signs in to the account already set up.
+    static SIGNING_IN: Mutex<()> = Mutex::new(());
+    let _one = SIGNING_IN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let login = sign_in(c, base, username, password);
     if login["setupToken"].is_null() {
         return login["accessToken"].as_str().unwrap().to_string();
