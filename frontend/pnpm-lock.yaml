@@ -1222,6 +1222,9 @@ importers:
 
   packages/map:
     dependencies:
+      '@kutup/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@kutup/session':
         specifier: workspace:*
         version: link:../session

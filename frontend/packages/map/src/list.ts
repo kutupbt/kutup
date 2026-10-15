@@ -1,4 +1,5 @@
 import * as Y from 'yjs'
+import { isAccountKey } from '@kutup/crypto/accountRef'
 
 // A place list (docs/plans/maps.md, step 4): a Drive file named `*.kutupmap`,
 // like a map in Google My Maps. Edited live, it is a Yjs document whose
@@ -23,7 +24,11 @@ export interface Place {
   note: string
   lat: number
   lon: number
-  /** `user@server` of whoever added it. */
+  /**
+   * Who added it: their account, `aci:<uuid>@<server>` (never an address,
+   * which can later belong to someone else; the name is looked up when the
+   * place is shown). Empty when not known.
+   */
   addedBy: string
   /** RFC 3339. */
   addedAt: string
@@ -74,7 +79,7 @@ export function normalizePlace(value: unknown, idFor: () => string = () => crypt
     note: typeof v.note === 'string' ? clamp(v.note, MAX_NOTE) : '',
     lat,
     lon,
-    addedBy: typeof v.addedBy === 'string' ? clamp(v.addedBy, 320) : '',
+    addedBy: typeof v.addedBy === 'string' && isAccountKey(v.addedBy) ? v.addedBy : '',
     addedAt: typeof v.addedAt === 'string' && validTime(v.addedAt) ? v.addedAt : new Date(0).toISOString(),
   }
 }

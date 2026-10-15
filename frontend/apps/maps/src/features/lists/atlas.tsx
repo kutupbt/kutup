@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
+import { accountKeyOf } from '@kutup/crypto/accountRef'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
 import { TooManyDevicesError } from '@kutup/collab/currentDevice'
 import { filesKey } from '@kutup/drive-core/files'
@@ -151,10 +152,10 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
       showPlace,
       editable,
       write,
-      me: identity.data?.account ?? null,
+      me: identity.data ? accountKeyOf(identity.data.accountRef) : null,
       colorOf,
     }),
-    [lists, loading, error, placesOf, saved.loading, open, shown, editable, write, identity.data?.account, colorOf],
+    [lists, loading, error, placesOf, saved.loading, open, shown, editable, write, identity.data, colorOf],
   )
   return <AtlasContext.Provider value={atlas}>{children}</AtlasContext.Provider>
 }

@@ -21,7 +21,7 @@ const place = (id: string, name: string, at: string): Place => ({
   note: '',
   lat: 41.0,
   lon: 29.0,
-  addedBy: 'alice@example.org',
+  addedBy: 'aci:00000000-0000-4000-8000-000000000001@example.org',
   addedAt: at,
 })
 
@@ -52,6 +52,25 @@ describe('place lists', () => {
       }),
     )
     expect(parseListJson(bytes).map((p) => p.id)).toEqual(['ok'])
+  })
+
+  it('keeps who added a place only as an account, never as an address', () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        format: 'kutupmap',
+        version: 1,
+        places: [
+          { id: 'acct', name: 'By account', lat: 1, lon: 1, addedBy: 'aci:00000000-0000-4000-8000-000000000001@example.org' },
+          { id: 'addr', name: 'By address', lat: 2, lon: 2, addedBy: 'alice@example.org' },
+          { id: 'odd', name: 'Not canonical', lat: 3, lon: 3, addedBy: 'aci:00000000-0000-4000-8000-000000000001@Example.org' },
+        ],
+      }),
+    )
+    expect(Object.fromEntries(parseListJson(bytes).map((p) => [p.id, p.addedBy]))).toEqual({
+      acct: 'aci:00000000-0000-4000-8000-000000000001@example.org',
+      addr: '',
+      odd: '',
+    })
   })
 
   it('edits a live list and merges two editors', () => {

@@ -625,6 +625,16 @@ async function renamedStatus(me: DriveIdentity, account: string, error: unknown)
 }
 
 /**
+ * The name the list knows `account` by: the address it holds now as its own
+ * signed rename chain proves (or the one it was first met at). Null when the
+ * list does not know it.
+ */
+export async function pinnedNameOf(me: DriveIdentity, account: AccountRef): Promise<string | null> {
+  const pin = (await pinStore(me)).pins.list.pins.find((known) => sameAccount(known.account, account))
+  return (pin && pinAddress(pin)) ?? null
+}
+
+/**
  * Whether `account` is in the list (met before in Drive, Chat or the CLI).
  * Tells a Kutup account on another server from an ordinary email address
  * without asking that server: only a listed one is worth looking up.

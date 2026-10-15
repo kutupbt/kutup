@@ -100,6 +100,7 @@
     "removePlace": "Remove",
     "removed": "Removed {{name}}",
     "addedBy": "Added by {{name}} on {{date}}",
+    "addedOn": "Added on {{date}}",
     "tooMany": "This map has as many places as it can hold.",
     "mapLabel": "Map of {{title}}",
     "quota": "Your storage is full, so changes are no longer saved as versions.",

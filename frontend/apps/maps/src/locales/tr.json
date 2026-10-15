@@ -100,6 +100,7 @@
     "removePlace": "Kaldır",
     "removed": "{{name}} kaldırıldı",
     "addedBy": "{{name}} {{date}} tarihinde ekledi",
+    "addedOn": "{{date}} tarihinde eklendi",
     "tooMany": "Bu harita alabileceği kadar yer içeriyor.",
     "mapLabel": "{{title}} haritası",
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",

@@ -37,7 +37,7 @@ export interface Atlas {
   editable: (entry: ListEntry) => boolean
   /** Change a list: live when it is open, else by joining its session briefly. */
   write: (entry: ListEntry, change: (doc: Y.Doc) => void) => Promise<void>
-  /** This account, `user@server`, for who added a place. */
+  /** This account, `aci:<uuid>@<server>`, for who added a place. */
   me: string | null
   /** A list's colour on the map. */
   colorOf: (fileId: string) => string

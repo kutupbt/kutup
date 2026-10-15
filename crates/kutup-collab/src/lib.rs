@@ -83,7 +83,9 @@ pub struct Place {
     pub note: String,
     pub lat: f64,
     pub lon: f64,
-    /// `user@server` of whoever added it.
+    /// Who added it: their account's string form, `aci:<uuid>@<server>`
+    /// (never an address, which can later be someone else's); empty when
+    /// not known.
     pub added_by: String,
     /// RFC 3339.
     pub added_at: String,
@@ -248,7 +250,6 @@ impl TextDoc {
 pub const MAX_PLACES: usize = 5000;
 const MAX_NAME: usize = 200;
 const MAX_NOTE: usize = 2000;
-const MAX_ADDED_BY: usize = 320;
 /// `new Date(0).toISOString()`: the time of a place that has none.
 const NO_TIME: &str = "1970-01-01T00:00:00.000Z";
 
@@ -378,7 +379,10 @@ pub fn normalize_place(
         note: clamp(text("note").unwrap_or(""), MAX_NOTE),
         lat,
         lon,
-        added_by: clamp(text("addedBy").unwrap_or(""), MAX_ADDED_BY),
+        added_by: text("addedBy")
+            .filter(|by| by.parse::<kutup_crypto::account_ref::AccountRef>().is_ok())
+            .unwrap_or("")
+            .to_owned(),
         added_at: match text("addedAt") {
             Some(at) if valid_time(at) => at.to_owned(),
             _ => NO_TIME.to_owned(),
@@ -767,7 +771,7 @@ mod tests {
             lat,
             lon: 0.0,
             note: String::new(),
-            added_by: "a@b".into(),
+            added_by: "aci:00000000-0000-4000-8000-000000000001@a.test".into(),
             added_at: "2026-01-01T00:00:00Z".into(),
         };
         let (a, b) = (
