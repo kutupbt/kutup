@@ -887,8 +887,11 @@ fn drive_upload_body(
     ciphertext: &[u8],
 ) -> Vec<u8> {
     let mut body = Vec::new();
+    // Every file carries its name hash (the server refuses one without).
+    let name_hash = common::test_name_hash(file_id);
     for (name, value) in [
         ("fileId", file_id),
+        ("nameHash", name_hash.as_str()),
         ("metadataEnvelope", metadata_envelope),
         ("fileKeyEnvelope", file_key_envelope),
     ] {
