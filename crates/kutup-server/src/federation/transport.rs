@@ -1204,6 +1204,31 @@ mod tests {
         assert!(validate_request_spec(&spec).is_err());
     }
 
+    /// Renames are served under both features' namespaces: each feature's
+    /// requests go out on a path the transport sends for it.
+    #[test]
+    fn rename_paths_are_inside_each_features_namespace() {
+        for feature in [FederationFeature::ChatV2, FederationFeature::DriveV1] {
+            for path in [
+                crate::remote_renames::chains_path(feature, "alice"),
+                crate::remote_renames::announce_path(feature),
+            ] {
+                let spec = FederationRequestSpec {
+                    feature,
+                    method: Method::GET,
+                    path: path.clone(),
+                    query: None,
+                    content_type: "application/json".into(),
+                    body: vec![],
+                    request_id: Uuid::new_v4().to_string(),
+                    extra_headers: vec![],
+                    response_limit: 1024,
+                };
+                validate_request_spec(&spec).unwrap_or_else(|e| panic!("{feature}: {path}: {e}"));
+            }
+        }
+    }
+
     #[test]
     fn delegated_base_prefix_is_part_of_the_signed_path() {
         let url = operation_url(

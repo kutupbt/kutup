@@ -585,10 +585,12 @@ above:
 
 Migration `20261015010000_account_renames_federation`; `crate::remote_renames`.
 
-- **Feature header.** Renames are the account's, for Chat and Drive alike: requests go
-  out under `chat.v2` when the peer admits it, else `drive.v1`, and are taken under
-  whichever the signed request names, with that feature's admission policy. No new
-  federation feature.
+- **Feature and paths.** Renames are the account's, for Chat and Drive alike: requests
+  go out under `chat.v2` when the peer admits it, else `drive.v1`, and are taken under
+  whichever the signed request names, with that feature's admission policy. Each
+  feature's requests stay in its own namespace (the transport refuses others), so the
+  endpoints are served twice: `/api/fed/chat/accounts/…` and `/api/fed/drive/accounts/…`
+  (the plan's `/api/fed/accounts/…` above). No new federation feature.
 - **Announce.** In the rename's transaction, one outbox row per pinned peer not
   quarantined (`trust_state <> 'quarantined'`: "verified" in the trust table is the
   rare admin-verified state). A worker sends the whole chain every 30 seconds, with

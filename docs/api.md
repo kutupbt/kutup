@@ -3383,13 +3383,15 @@ server signature authenticates and destination-binds the originating
 homeserver; the separate profile access-key header remains the end-to-end
 capability. Wrong capabilities return `404`.
 
-### GET /api/fed/accounts/{username}/renames
+### GET /api/fed/{chat|drive}/accounts/{username}/renames
 
-Signed (under `chat.v2` or `drive.v1`, whichever the asker sends). Every
+Signed, under `chat.v2` at `/api/fed/chat/…` or `drive.v1` at
+`/api/fed/drive/…` (each feature's requests stay in its own namespace;
+servers send under whichever the peer admits). Every
 rename chain naming `username@<this server>`, in any spelling, as `GET
 /api/users/renames/:address` answers them; `?incarnationId=` narrows them.
 
-### POST /api/fed/accounts/renames
+### POST /api/fed/{chat|drive}/accounts/renames
 
 Signed (under `chat.v2` or `drive.v1`). A peer announces one of its accounts'
 renames: `{ "version": 1, "username", "incarnationId", "authorityPublicKey",

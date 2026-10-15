@@ -1815,12 +1815,22 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
+        // Renames, under Chat's and Drive's namespaces alike (the signed
+        // request's feature says which).
         .route(
-            "/api/fed/accounts/:username/renames",
+            "/api/fed/chat/accounts/:username/renames",
             get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/accounts/renames",
+            "/api/fed/drive/accounts/:username/renames",
+            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/accounts/renames",
+            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/fed/drive/accounts/renames",
             post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(

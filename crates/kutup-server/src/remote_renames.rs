@@ -44,7 +44,6 @@ pub const VERSION: u64 = 1;
 const MAX_PER_DOMAIN: i64 = 50_000;
 /// The most chains one answer may carry (a reused name is in several).
 const MAX_CHAINS_PER_ANSWER: usize = 50;
-const ANNOUNCE_PATH: &str = "/api/fed/accounts/renames";
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 /// A kept chain younger than this answers a lookup without asking its server.
 const FRESH_SECONDS: f64 = 24.0 * 3600.0;
@@ -55,6 +54,26 @@ const COALESCE_SECONDS: f64 = 60.0;
 const GIVE_UP_DAYS: i64 = 7;
 const ANNOUNCES_PER_PASS: i64 = 50;
 const FEATURE_HEADER: &str = "kutup-federation-feature";
+
+/// The endpoint namespace a feature's requests live under (the transport
+/// refuses any other): renames are served under both Chat's and Drive's.
+fn namespace(feature: FederationFeature) -> &'static str {
+    match feature {
+        FederationFeature::ChatV2 => "chat",
+        FederationFeature::DriveV1 => "drive",
+    }
+}
+
+pub(crate) fn chains_path(feature: FederationFeature, username: &str) -> String {
+    format!(
+        "/api/fed/{}/accounts/{username}/renames",
+        namespace(feature)
+    )
+}
+
+pub(crate) fn announce_path(feature: FederationFeature) -> String {
+    format!("/api/fed/{}/accounts/renames", namespace(feature))
+}
 
 /// One account incarnation's chain, as lookups and `409 renamed` carry it:
 /// the signed statements unaltered, with what the answering server says of it.
@@ -505,7 +524,7 @@ pub async fn lookup(state: &AppState, user_id: Uuid, address: &str) -> AppResult
             federation,
             domain,
             Method::GET,
-            format!("/api/fed/accounts/{username}/renames"),
+            |feature| chains_path(feature, username),
             Vec::new(),
         )
         .await
@@ -533,7 +552,7 @@ async fn send_any(
     federation: &FederationStack,
     domain: &str,
     method: Method,
-    path: String,
+    path: impl Fn(FederationFeature) -> String,
     body: Vec<u8>,
 ) -> anyhow::Result<AuthenticatedFederationResponse> {
     let mut last = None;
@@ -541,7 +560,7 @@ async fn send_any(
         let spec = FederationRequestSpec {
             feature,
             method: method.clone(),
-            path: path.clone(),
+            path: path(feature),
             query: None,
             content_type: JSON_CONTENT_TYPE.into(),
             body: body.clone(),
@@ -579,11 +598,11 @@ fn feature_of(headers: &HeaderMap) -> AppResult<FederationFeature> {
         .ok_or_else(|| AppError::unauthorized("federation feature missing"))
 }
 
-/// `GET /api/fed/accounts/{username}/renames[?incarnationId=]` — every chain
-/// naming `username@<this server>`, for a signed peer.
+/// `GET /api/fed/{chat|drive}/accounts/{username}/renames[?incarnationId=]`
+/// — every chain naming `username@<this server>`, for a signed peer.
 #[utoipa::path(
     get,
-    path = "/api/fed/accounts/{username}/renames",
+    path = "/api/fed/chat/accounts/{username}/renames",
     tag = "federation",
     params(("username" = String, Path, description = "A name on this server, any spelling")),
     responses((status = 200, description = "The chains naming it (an empty list when none does)"))
@@ -596,7 +615,7 @@ pub async fn publish(
 ) -> AppResult<Response> {
     let federation = configured(&state)?;
     let feature = feature_of(&headers)?;
-    let path = format!("/api/fed/accounts/{username}/renames");
+    let path = chains_path(feature, &username);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, query.as_deref(), &[], feature)
         .await?;
@@ -628,14 +647,14 @@ pub async fn publish(
     }
 }
 
-/// `POST /api/fed/accounts/renames` — a peer's account renamed: its chain,
+/// `POST /api/fed/{chat|drive}/accounts/renames` — a peer's account renamed: its chain,
 /// verified and kept (`204`), and this server's rows about that incarnation
 /// moved to its new address. `400` for a chain that does not verify or is not
 /// the peer's, `409` for one that does not extend the one kept, `429` past
 /// the per-domain cap.
 #[utoipa::path(
     post,
-    path = "/api/fed/accounts/renames",
+    path = "/api/fed/chat/accounts/renames",
     tag = "federation",
     request_body(content = Object, description = "AnnounceV1: the account's whole rename chain"),
     responses(
@@ -653,7 +672,14 @@ pub async fn announce(
     let federation = configured(&state)?;
     let feature = feature_of(&headers)?;
     let authenticated = federation
-        .authenticate_inbound(&headers, "POST", ANNOUNCE_PATH, None, &body, feature)
+        .authenticate_inbound(
+            &headers,
+            "POST",
+            &announce_path(feature),
+            None,
+            &body,
+            feature,
+        )
         .await?;
     let origin = authenticated.origin().to_owned();
     let result = async {
@@ -780,14 +806,7 @@ pub async fn deliver_due(state: &AppState) -> AppResult<usize> {
             chain,
         })
         .expect("serialisable");
-        let sent = send_any(
-            federation,
-            &destination,
-            Method::POST,
-            ANNOUNCE_PATH.into(),
-            body,
-        )
-        .await;
+        let sent = send_any(federation, &destination, Method::POST, announce_path, body).await;
         let failure = match sent {
             // Kept, or the peer holds as much or refuses it for good.
             Ok(response)
