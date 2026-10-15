@@ -1747,7 +1747,9 @@ fn drive_profile_key_exchange(
     let bob_sees = person(b, bob_token, alice_ref);
     assert_eq!(bob_sees["local"], false);
     // The address is a label beside the account, never its key.
-    assert_eq!(bob_sees["account"], "alicefed@a.test");
+    assert!(bob_sees["account"]
+        .as_str()
+        .is_some_and(|account| account.ends_with(&format!("@{}", alice_ref.server))));
     let received =
         ProfileKeyEnvelopeV1::decode_b64(bob_sees["receivedEnvelope"].as_str().unwrap()).unwrap();
     assert_eq!(
@@ -2940,6 +2942,342 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(found["account"], format!("{new}@{domain_a}"));
 }
 
+/// A two-server account as the common helpers take it, from its seeded keys.
+fn federated_user(
+    c: &Client,
+    base: &str,
+    email: &str,
+    username: &str,
+    token: &str,
+) -> common::User {
+    let me = json_response(
+        c.get(format!("{base}/api/user/me"))
+            .bearer_auth(token)
+            .send()
+            .unwrap(),
+        "me",
+    );
+    let master_key = test_master_key(email);
+    common::User {
+        id: me["id"].as_str().unwrap().to_owned(),
+        binding: test_binding(email),
+        username: username.into(),
+        password: PASSWORD.into(),
+        recovery_entropy: [0; 32],
+        token: token.to_owned(),
+        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
+        master_key,
+        person: AccountRef::new(
+            me["server"].as_str().unwrap(),
+            me["accountId"].as_str().unwrap(),
+        )
+        .unwrap(),
+        account: format!("{username}@{}", me["server"].as_str().unwrap()),
+    }
+}
+
+/// The capability in an invite link's fragment.
+fn invite_capability(invite_url: &str) -> String {
+    let invite = url::Url::parse(invite_url).unwrap();
+    url::form_urlencoded::parse(invite.fragment().unwrap().as_bytes())
+        .find(|(key, _)| key == "capability")
+        .map(|(_, value)| value.into_owned())
+        .unwrap()
+}
+
+/// Shares follow accounts, not names (docs/plans/account-ids.md): a folder
+/// and a file shared across servers keep opening, and profile keys keep
+/// passing, while both people rename; a name freed and taken by someone new
+/// inherits none of it.
+fn account_ids_phase(c: &Client, a: &str, b: &str) {
+    use kutup_crypto::named_share::FileShareEnvelopeV1;
+    let (owner_email, bob_email) = ("aid-owner@example.test", "aid-bob@example.test");
+    let (owner_token, _) = register_account(c, a, owner_email, "aid_owner");
+    let (bob_token, _) = register_account(c, b, bob_email, "aid_bob");
+    let mut owner = federated_user(c, a, owner_email, "aid_owner", &owner_token);
+    let mut bob = federated_user(c, b, bob_email, "aid_bob", &bob_token);
+    let (domain_a, domain_b) = (owner.person.server.clone(), bob.person.server.clone());
+
+    // The owner finds Bob by his name: his account and keys.
+    let found = json_response(
+        c.get(format!(
+            "{a}/api/drive/federation/users/aid_bob?server={domain_b}"
+        ))
+        .bearer_auth(&owner.token)
+        .send()
+        .unwrap(),
+        "find Bob",
+    );
+    assert_eq!(found["accountId"], bob.person.account_id.as_str());
+    let bob_hpke = bob.identity.drive_hpke_public_key();
+
+    // A folder and a file in it, each shared with Bob's account.
+    let folder = common::create_folder(c, a, &owner);
+    let named = NamedShareEnvelopeV1::seal(
+        &folder.key,
+        &folder.id,
+        1,
+        &owner.person,
+        &owner.identity.incarnation_id(),
+        owner.identity.drive_signing_key(),
+        &bob.person,
+        &bob.identity.incarnation_id(),
+        &bob_hpke,
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
+    let share_folder = |envelope: &str| {
+        c.post(format!(
+            "{a}/api/collections/{}/federated-shares",
+            folder.id
+        ))
+        .bearer_auth(&owner.token)
+        .json(&json!({
+            "recipientServer": domain_b,
+            "recipientAccountId": bob.person.account_id,
+            "namedShareEnvelope": envelope,
+            "canUpload": false,
+            "canDelete": false,
+            "uploadQuotaBytes": null,
+        }))
+        .send()
+        .unwrap()
+    };
+    let folder_invite = json_response(share_folder(&named), "share the folder");
+    let folder_capability = invite_capability(folder_invite["inviteUrl"].as_str().unwrap());
+    let sealed = common::seal_file(&folder, &Uuid::new_v4().to_string(), b"shared by account");
+    let uploaded = common::upload(c, a, &owner.token, &folder, &sealed);
+    assert!(
+        uploaded.status().is_success(),
+        "upload: {}",
+        uploaded.status()
+    );
+    let file_envelope = FileShareEnvelopeV1::seal(
+        &sealed.key,
+        &sealed.id,
+        1,
+        &owner.person,
+        &owner.identity.incarnation_id(),
+        owner.identity.drive_signing_key(),
+        &bob.person,
+        &bob.identity.incarnation_id(),
+        &bob_hpke,
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
+    let file_invite = json_response(
+        c.post(format!("{a}/api/files/{}/federated-shares", sealed.id))
+            .bearer_auth(&owner.token)
+            .json(&json!({
+                "recipientServer": domain_b,
+                "recipientAccountId": bob.person.account_id,
+                "shareEnvelope": file_envelope,
+                "canEdit": false,
+            }))
+            .send()
+            .unwrap(),
+        "share the file",
+    );
+    let file_capability = invite_capability(file_invite["inviteUrl"].as_str().unwrap());
+    // The listed recipient is the name Bob's server answers, not the client's.
+    let access = json_response(
+        c.get(format!("{a}/api/collections/{}/access", folder.id))
+            .bearer_auth(&owner.token)
+            .send()
+            .unwrap(),
+        "folder access",
+    );
+    assert_eq!(access["federatedShares"][0]["recipientUsername"], "aid_bob");
+    assert_eq!(
+        access["federatedShares"][0]["recipientAccountId"],
+        bob.person.account_id.as_str()
+    );
+
+    // Bob renames before he accepts: the invites are for his account.
+    let renamed = common::rename_account(c, b, &bob, "aid_bobby", false);
+    assert!(
+        renamed.status.is_success(),
+        "Bob's rename: {}",
+        renamed.body
+    );
+    bob.username = "aid_bobby".into();
+    let accepted = json_response(
+        c.post(format!("{b}/api/drive/federation/shares"))
+            .bearer_auth(&bob.token)
+            .json(&json!({ "server": domain_a, "capability": folder_capability }))
+            .send()
+            .unwrap(),
+        "accept the folder after Bob's rename",
+    );
+    let incoming_folder = accepted["id"].as_str().unwrap().to_owned();
+    let accepted_file = json_response(
+        c.post(format!("{b}/api/drive/federation/file-shares"))
+            .bearer_auth(&bob.token)
+            .json(&json!({ "server": domain_a, "capability": file_capability }))
+            .send()
+            .unwrap(),
+        "accept the file after Bob's rename",
+    );
+    let incoming_file = accepted_file["id"].as_str().unwrap().to_owned();
+
+    // The owner renames too: both still open, read again from A.
+    let renamed = common::rename_account(c, a, &owner, "aid_owner2", false);
+    assert!(
+        renamed.status.is_success(),
+        "owner's rename: {}",
+        renamed.body
+    );
+    owner.username = "aid_owner2".into();
+    let incoming = json_response(
+        c.get(format!("{b}/api/drive/federation/shares"))
+            .bearer_auth(&bob.token)
+            .send()
+            .unwrap(),
+        "Bob's shares after both renames",
+    );
+    let row = incoming
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == incoming_folder.as_str())
+        .expect("the folder share is still there");
+    let opened = NamedShareEnvelopeV1::decode_b64(row["namedShareEnvelope"].as_str().unwrap())
+        .unwrap()
+        .open(
+            &folder.id,
+            1,
+            &owner.person,
+            &owner.identity.incarnation_id(),
+            &owner.identity.drive_signing_public_key(),
+            &bob.person,
+            &bob.identity.incarnation_id(),
+            bob.identity.drive_hpke_private_key(),
+        )
+        .unwrap();
+    assert_eq!(opened.as_slice(), folder.key);
+    let file_now = json_response(
+        c.get(format!(
+            "{b}/api/drive/federation/file-shares/{incoming_file}"
+        ))
+        .bearer_auth(&bob.token)
+        .send()
+        .unwrap(),
+        "Bob's file after both renames",
+    );
+    let opened = FileShareEnvelopeV1::decode_b64(file_now["shareEnvelope"].as_str().unwrap())
+        .unwrap()
+        .open(
+            &sealed.id,
+            1,
+            &owner.person,
+            &owner.identity.incarnation_id(),
+            &owner.identity.drive_signing_public_key(),
+            &bob.person,
+            &bob.identity.incarnation_id(),
+            bob.identity.drive_hpke_private_key(),
+        )
+        .unwrap();
+    assert_eq!(opened.as_slice(), sealed.key);
+
+    // Profile keys pass between the two accounts after both renames.
+    drive_profile_key_exchange(
+        c,
+        a,
+        b,
+        &owner.token,
+        &bob.token,
+        (&owner.person, &owner.identity),
+        (&bob.person, &bob.identity),
+    );
+
+    // An invite Bob has not accepted yet, then his old name freed and taken
+    // by someone new on B.
+    let pending = json_response(share_folder(&named), "a second invite for Bob");
+    let pending_capability = invite_capability(pending["inviteUrl"].as_str().unwrap());
+    let admin_b = setup_admin(c, b, ADMIN_B_EMAIL, "adminb");
+    let freed = c
+        .post(format!("{b}/api/admin/names/aid_bob/free"))
+        .bearer_auth(&admin_b)
+        .send()
+        .unwrap();
+    assert_eq!(freed.status().as_u16(), 204, "free Bob's old name");
+    let carol_email = "aid-carol@example.test";
+    let (carol_token, _) = register_account(c, b, carol_email, "aid_bob");
+    let carol = federated_user(c, b, carol_email, "aid_bob", &carol_token);
+    assert_ne!(carol.person, bob.person, "a freed name is a new account");
+    // She has none of Bob's shares, profile keys or invites.
+    let carol_shares = json_response(
+        c.get(format!("{b}/api/drive/federation/shares"))
+            .bearer_auth(&carol.token)
+            .send()
+            .unwrap(),
+        "Carol's shares",
+    );
+    assert_eq!(carol_shares, json!([]), "{carol_shares}");
+    let carol_files = json_response(
+        c.get(format!("{b}/api/drive/federation/file-shares"))
+            .bearer_auth(&carol.token)
+            .send()
+            .unwrap(),
+        "Carol's files",
+    );
+    assert_eq!(carol_files, json!([]), "{carol_files}");
+    let carol_people = json_response(
+        c.get(format!("{b}/api/drive/people"))
+            .bearer_auth(&carol.token)
+            .send()
+            .unwrap(),
+        "Carol's people",
+    );
+    assert_eq!(carol_people["people"], json!([]), "{carol_people}");
+    let taken = c
+        .post(format!("{b}/api/drive/federation/shares"))
+        .bearer_auth(&carol.token)
+        .json(&json!({ "server": domain_a, "capability": pending_capability }))
+        .send()
+        .unwrap();
+    assert!(
+        taken.status().is_client_error(),
+        "Carol accepted Bob's invite: {}",
+        taken.status()
+    );
+    // The owner's share still names Bob's account; the name now leads to Carol.
+    let access = json_response(
+        c.get(format!("{a}/api/collections/{}/access", folder.id))
+            .bearer_auth(&owner.token)
+            .send()
+            .unwrap(),
+        "folder access after the name moved",
+    );
+    assert!(access["federatedShares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|share| share["recipientAccountId"] == bob.person.account_id.as_str()));
+    let now_found = json_response(
+        c.get(format!(
+            "{a}/api/drive/federation/users/aid_bob?server={domain_b}"
+        ))
+        .bearer_auth(&owner.token)
+        .send()
+        .unwrap(),
+        "find aid_bob again",
+    );
+    assert_eq!(now_found["accountId"], carol.person.account_id.as_str());
+    // Bob, by his id, is still Bob, under his new name.
+    let by_id = json_response(
+        c.get(format!("{a}/api/users/by-id/{}", bob.person.account_id))
+            .query(&[("server", domain_b.as_str())])
+            .bearer_auth(&owner.token)
+            .send()
+            .unwrap(),
+        "Bob by id",
+    );
+    assert_eq!(by_id["account"], format!("aid_bobby@{domain_b}"));
+}
+
 #[test]
 fn chat_federation_live() {
     let Ok(phase) = std::env::var("KUTUP_FEDERATION_PHASE") else {
@@ -2957,6 +3295,7 @@ fn chat_federation_live() {
         "verify-retry" => verify_retry_phase(&c, &a, &b),
         "calls" => calls_phase(&c, &a, &b),
         "renames" => renames_phase(&c, &a, &b),
+        "account-ids" => account_ids_phase(&c, &a, &b),
         _ => panic!("unknown KUTUP_FEDERATION_PHASE: {phase}"),
     }
 }
