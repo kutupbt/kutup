@@ -21,7 +21,7 @@ import {
   type GroupMailKey,
   type SealedMailKey,
 } from '@kutup/crypto'
-import { addressFolder } from '@kutup/crypto/accountRename'
+import { addressFolder, foldAddress } from '@kutup/crypto/accountRename'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
 import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-core/model'
@@ -834,6 +834,25 @@ export function useSearchAddresses(group?: string, enabled = true) {
 }
 
 const imageSendersKey = ['mail', 'image-senders'] as const
+
+/**
+ * A sender's address as the account's sender lists keep it: one of this
+ * server's folded (any spelling of a name is the one sender), any other
+ * lowercased.
+ */
+export function useSenderKey(address: string | null | undefined) {
+  const account = useMailAccount()
+  const domain = account.data?.domain.toLowerCase()
+  return useQuery({
+    queryKey: ['mail', 'sender-key', address?.trim().toLowerCase(), domain],
+    enabled: !!address && !!domain,
+    staleTime: Infinity,
+    queryFn: async () => {
+      const lower = address!.trim().toLowerCase()
+      return lower.endsWith(`@${domain}`) ? ((await foldAddress(lower)) ?? lower) : lower
+    },
+  })
+}
 
 /** Senders whose remote images always load (chosen when loading them). */
 export function useImageSenders() {

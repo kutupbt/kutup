@@ -10,7 +10,7 @@ use utoipa::ToSchema;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::mail::sender_rules::normalise;
+use crate::mail::sender_rules::normalise_for;
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -61,8 +61,8 @@ pub struct MailImageSenderAddress {
 }
 
 /// The lowercase address, or 400: one sender, not a domain.
-fn address(value: &str) -> AppResult<String> {
-    normalise(value)
+fn address(state: &AppState, value: &str) -> AppResult<String> {
+    normalise_for(&state.config.chat_server_name, value)
         .filter(|a| a.contains('@'))
         .ok_or_else(|| AppError::bad_request("not an address"))
 }
@@ -85,7 +85,7 @@ pub async fn add(
     Json(request): Json<MailImageSenderAddress>,
 ) -> AppResult<axum::http::StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let address = address(&request.address)?;
+    let address = address(&state, &request.address)?;
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM mail_image_senders WHERE user_id = $1")
             .bind(user_id)
@@ -119,7 +119,7 @@ pub async fn delete(
     Json(request): Json<MailImageSenderAddress>,
 ) -> AppResult<axum::http::StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let address = address(&request.address)?;
+    let address = address(&state, &request.address)?;
     sqlx::query("DELETE FROM mail_image_senders WHERE user_id = $1 AND address = $2")
         .bind(user_id)
         .bind(&address)

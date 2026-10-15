@@ -180,3 +180,18 @@ What landed, and where it differs from the note above:
   - `drive_profile_keys` keeps no address column. People's labels come from the shares and accounts when listed.
   - `federated_incoming_*_shares.owner_user_id` keeps its name: it already is the owner's account id, as `collections.owner_user_id` and the JSON `ownerUserId` are.
 - **Moved to the Chat slice:** `remote_account_renames.account_id`. Rename chains are display only, and the peer's account id arrives signed in the account manifest that slice changes.
+
+## Slice 2 as built (Mail)
+
+- **Key lists name no account.** `MailKeyListV1` signs the incarnation, the authority key id and the address only (Proton's SignedKeyList names keys). A rename never touches a list. Vectors re-signed (`mail-address-key-v1.json`, `KUTUP_WRITE_MAIL_VECTORS=lists`).
+- **Key-list writes by the address row.** `PUT /api/mail/addresses/:id/key-list` and new keys are authorized by the row's `user_id` (current or receiving address), and the address comes from the row. A renamed account still manages its old address's keys (marking one compromised).
+- **`/api/mail/keys` names the account** by `server` and `accountId` (absent for a shared mailbox), not by a username.
+- **Shared-mailbox key shares on the account key**, as specified above:
+  - HPKE to the member's Drive HPKE key; the AAD binds the group id, the group key fingerprint, the member's AccountRef and their incarnation.
+  - The share carries the incarnation, so the server checks it against the member's current keys (`keyChanged`) without opening anything. `mail_group_key_shares.member_incarnation_id` replaces the address-key fingerprint.
+  - Browsers look members up by id and check their Drive key binding before sealing.
+  - The group id is drawn by the creating browser (`id` on create, `idTaken`), since the shares bind it.
+  - The server already refuses a rotation that does not share to exactly the remaining members.
+  - Beyond the note: the incarnation is in the AAD, as for named shares.
+- **Audit entries** for mail groups name the group by id and members by account id; the address is a snapshot.
+- **This server's senders compare folded** in block, spam and allow lists, image senders and auto-reply records (any spelling of a name is one sender). Outside senders stay lowercased, as Proton keeps them.

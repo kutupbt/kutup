@@ -73,9 +73,12 @@ lists need no group key; only the shared mailbox does.
 
 - **A group address key** (OpenPGP, the same shape as personal address
   keys), made in the creating administrator's browser. Its secret part is
-  stored once per member, encrypted to that member's address key (an OpenPGP
-  message, like Proton's activation tokens); a member's browser opens it with
-  their own address key. The server never holds it in clear.
+  stored once per member, sealed to that member's account key (HPKE to their
+  Drive HPKE key, which their key binding ties to their account id, bound to
+  the group id, the group key, their account and its incarnation; one level
+  above addresses, as Proton wraps address keys to the user key, so a rename
+  keeps it: docs/plans/account-ids.md); a member's browser opens it with
+  their own account key. The server never holds it in clear.
 - **The group's key list** is signed by the server's identity key (the
   federation identity every Kutup server has), since a group has no account
   of its own. Kutup senders and WKD use the primary group key. This trusts
@@ -98,7 +101,7 @@ lists need no group key; only the shared mailbox does.
   removed member keeps whatever they already opened; nobody can take that
   back, as at Proton. They cannot read new mail.
 - **Members join:** a manager's browser seals every group key for the new
-  member's address key, so they read the whole mailbox, as at Exchange.
+  member's account key, so they read the whole mailbox, as at Exchange.
 
 ## Roles and rights
 
@@ -184,8 +187,8 @@ server to fan out from a group key instead; it is not in G1.
   can send as, added by, added at; primary key (group, user).
 - `mail_group_keys` (shared mailboxes): group, fingerprint, sha256
   fingerprint, public key, primary, flags, created at.
-- `mail_group_key_shares`: group key, user, the secret key encrypted to the
-  user's address key, the user's address key fingerprint it was made for.
+- `mail_group_key_shares`: group key, user, the secret key sealed to the
+  user's account key, the account incarnation it was sealed to.
 - `mail_group_key_lists`: group, sequence, data, signature (by the server
   identity), as `mail_key_lists`.
 - `mail_messages` gains `group_id` (a shared mailbox's rows, and a
@@ -259,7 +262,7 @@ log.
 2. **G1b shared mailboxes:** group keys, shares, server-signed lists, WKD,
    delivery, shared rows, sending as the group, key rotation on removal. Done: the
    group key is the address key shape for the group's address, its shares
-   OpenPGP messages to members' address keys (`seal_group_key_share`,
+   sealed to members' account keys (`seal_group_key_share`,
    `open_group_key_share`; WASM `generateMailGroupKey`,
    `reshareMailGroupKey`, `openMailGroupMessage`,
    `encryptMailMessageAsGroup`, `encryptMailPgpAsGroup`, the secret never in

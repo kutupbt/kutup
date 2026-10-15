@@ -72,6 +72,21 @@ fn local_address(recipient: &str, server_name: &str) -> Option<String> {
     typed_address(&format!("{local}@{server_name}"))
 }
 
+/// The form a sender's address is kept and compared in (block, spam and
+/// allow lists, image senders, auto-reply records): one of this server's
+/// addresses folded, as its names are (any spelling is the one account's,
+/// docs/plans/username-renames.md); any other lowercased, as Proton keeps
+/// outside senders.
+pub(crate) fn sender_key(server_name: &str, address: &str) -> String {
+    let lower = address.trim().to_lowercase();
+    match lower.rsplit_once('@') {
+        Some((_, domain)) if domain.eq_ignore_ascii_case(server_name) => {
+            kutup_crypto::names::fold_address(&lower).unwrap_or(lower)
+        }
+        _ => lower,
+    }
+}
+
 /// An address as a person types one of this server's: lowercased, its local
 /// part any spelling of a name (`.`, `_` and `-` anywhere, which lookups
 /// fold away: one account or group per folded name), or `None`.
@@ -688,6 +703,25 @@ pub async fn rcpt_hook(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn this_servers_senders_compare_folded_others_exactly() {
+        // Any spelling of one of this server's names is the one sender.
+        assert_eq!(
+            sender_key("kutup.dev", "Ada.L@Kutup.dev"),
+            sender_key("kutup.dev", "ada_l@kutup.dev")
+        );
+        assert_eq!(sender_key("kutup.dev", "ada-l@kutup.dev"), "adal@kutup.dev");
+        // Another server's addresses are only lowercased.
+        assert_eq!(
+            sender_key("kutup.dev", "J.Doe@Example.org"),
+            "j.doe@example.org"
+        );
+        assert_ne!(
+            sender_key("kutup.dev", "j.doe@example.org"),
+            sender_key("kutup.dev", "jdoe@example.org")
+        );
+    }
 
     #[test]
     fn local_addresses() {
