@@ -5047,19 +5047,47 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
         false,
     );
     assert!(renamed.status.is_success(), "rename: {}", renamed.body);
-    let compromised = MailKeyEntryV1 {
+
+    // After the rename, the old address gets a new key and its first key is
+    // marked compromised: the account's to do, by the address's row.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let new = mail_key::generate_address_key(&old.address, now).unwrap();
+    let envelope = mail_key::seal_address_key(
+        &alice.master_key,
+        &alice.binding,
+        &old.address,
+        &new.secret_key,
+    )
+    .unwrap();
+    let new_entry = MailKeyEntryV1 {
+        fingerprint: new.fingerprint,
+        sha256_fingerprint: new.sha256_fingerprint,
         primary: true,
+        flags: DEFAULT_FLAGS,
+    };
+    let compromised = MailKeyEntryV1 {
+        primary: false,
         flags: mail_key::FLAG_NOT_OBSOLETE,
         ..list.list.keys[0].clone()
     };
-    let r = bearer(
-        c.put(format!("{base}/api/mail/addresses/{old_id}/key-list")),
-        &alice.token,
-    )
-    .json(&json!({ "keyList": next_list(&alice, &list, vec![compromised]) }))
-    .send()
-    .unwrap();
-    assert_eq!(r.status(), 200, "mark the old address's key compromised");
+    let key_list = next_list(&alice, &list, vec![compromised, new_entry]);
+    let add = |token: &str| {
+        bearer(
+            c.post(format!("{base}/api/mail/addresses/{old_id}/keys")),
+            token,
+        )
+        .json(&json!({ "publicKey": b64(&new.public_key), "privateKeyEnvelope": b64(&envelope), "keyList": key_list }))
+        .send()
+        .unwrap()
+    };
+    // Someone else's account may not touch it.
+    let bob = register(&c, &base);
+    assert!(add(&bob.token).status().is_client_error());
+    let r = add(&alice.token);
+    assert_eq!(r.status(), 200, "the old address's new key");
     let lookup: Value = bearer(
         c.get(format!("{base}/api/mail/keys?email={}", old.address)),
         &alice.token,
@@ -5069,21 +5097,21 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
     .json()
     .unwrap();
     assert_eq!(
-        lookup["keys"][0]["flags"],
+        lookup["keys"][0]["fingerprint"],
+        hex::encode(new.fingerprint),
+        "{lookup}"
+    );
+    let first_key = lookup["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["fingerprint"] == hex::encode(list.list.keys[0].fingerprint))
+        .expect("the first key stays to open older mail");
+    assert_eq!(
+        first_key["flags"],
         mail_key::FLAG_NOT_OBSOLETE as i64,
         "{lookup}"
     );
-    // Someone else's account may not touch it.
-    let bob = register(&c, &base);
-    let (_, list) = current_list(&c, &base, &alice);
-    let r = bearer(
-        c.put(format!("{base}/api/mail/addresses/{old_id}/key-list")),
-        &bob.token,
-    )
-    .json(&json!({ "keyList": next_list(&bob, &list, vec![list.list.keys[0].clone()]) }))
-    .send()
-    .unwrap();
-    assert!(r.status().is_client_error(), "{}", r.status());
     common::purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
