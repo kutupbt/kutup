@@ -275,7 +275,6 @@ export function useShareFolder() {
       remote.accountIncarnationId,
     )
     const { data } = await api.post<{ inviteUrl: string }>(`/collections/${folder.id}/federated-shares`, {
-      recipientUsername: username,
       recipientServer: server,
       recipientAccountId: remote.accountId,
       namedShareEnvelope,

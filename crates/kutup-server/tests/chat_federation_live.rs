@@ -1177,7 +1177,6 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         ))
         .bearer_auth(alice_token)
         .json(&json!({
-            "recipientUsername": BOB_USERNAME,
             "recipientServer": "b.test",
             "recipientAccountId": bob_ref.account_id,
             "namedShareEnvelope": named_share,
@@ -1628,8 +1627,8 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         ))
         .bearer_auth(alice_token)
         .json(&json!({
-            "recipientUsername": BOB_USERNAME,
             "recipientServer": "http://b.test",
+            "recipientAccountId": Uuid::new_v4().to_string(),
             "namedShareEnvelope": "not-reached-because-the-domain-is-invalid",
             "canUpload": false,
             "canDelete": false

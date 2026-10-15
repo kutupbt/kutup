@@ -551,7 +551,6 @@ export function useShareFile() {
           if (remote.server !== server) throw new RecipientNotFound()
           const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
           const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
-            recipientUsername: username,
             recipientServer: server,
             recipientAccountId: remote.accountId,
             shareEnvelope,

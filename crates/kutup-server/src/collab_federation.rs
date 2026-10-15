@@ -207,6 +207,8 @@ struct RemoteAccess {
     /// The share's recipient: whose collaboration devices may send frames
     /// through it (docs/plans/device-registration.md, "Remote devices").
     recipient_username: String,
+    /// The share's recipient account (on the calling server).
+    recipient_account_id: Uuid,
     recipient_incarnation: String,
 }
 
@@ -226,9 +228,9 @@ async fn remote_access(
         .ok_or_else(|| AppError::not_found("Drive share not found"))?;
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
     let hash = capability_hash(capability);
-    let file: Option<(bool, String, String)> = sqlx::query_as(
+    let file: Option<(bool, String, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_edit AND s.key_generation = f.key_generation AND f.key_epoch = c.key_epoch,
-                s.recipient_username, s.recipient_incarnation_id
+                s.recipient_username, s.recipient_account_id, s.recipient_incarnation_id
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
@@ -239,16 +241,17 @@ async fn remote_access(
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    if let Some((can_write, recipient_username, incarnation)) = file {
+    if let Some((can_write, recipient_username, recipient_account_id, incarnation)) = file {
         return Ok(RemoteAccess {
             can_write,
             recipient_username,
+            recipient_account_id,
             recipient_incarnation: incarnation.trim().to_owned(),
         });
     }
-    let folder: Option<(bool, String, String)> = sqlx::query_as(
+    let folder: Option<(bool, String, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_upload AND f.key_epoch = c.key_epoch,
-                s.recipient_username, s.recipient_incarnation_id
+                s.recipient_username, s.recipient_account_id, s.recipient_incarnation_id
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN files f ON f.collection_id = c.id AND f.deleted_at IS NULL
@@ -261,9 +264,10 @@ async fn remote_access(
     .await?;
     folder
         .map(
-            |(can_write, recipient_username, incarnation)| RemoteAccess {
+            |(can_write, recipient_username, recipient_account_id, incarnation)| RemoteAccess {
                 can_write,
                 recipient_username,
+                recipient_account_id,
                 recipient_incarnation: incarnation.trim().to_owned(),
             },
         )
@@ -976,7 +980,11 @@ pub async fn versions_create(
         if !access.can_write {
             return Err(AppError::forbidden("this share does not allow editing"));
         }
-        // The author is someone on the calling server, by account id.
+        // The author is the share's recipient, the one account on the
+        // calling server it gives the right to save versions.
+        if request.author_account_id != access.recipient_account_id {
+            return Err(AppError::forbidden("the author is not this share's recipient"));
+        }
         let author = crate::account_ids::remote(
             authenticated.origin(),
             &request.author_account_id.to_string(),

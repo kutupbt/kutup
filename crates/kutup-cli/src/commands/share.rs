@@ -338,7 +338,6 @@ fn share_federated(
         .share_federated(
             collection_id,
             &FederatedShareRequest {
-                recipient_username: username.to_string(),
                 recipient_server: person.server.clone(),
                 recipient_account_id: person.account_id.clone(),
                 named_share_envelope: envelope.encode_b64()?,

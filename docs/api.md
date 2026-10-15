@@ -1372,7 +1372,6 @@ Create a domain-bound share for a user on a remote Kutup instance.
 **Request body:**
 ```json
 {
-  "recipientUsername": "bob",
   "recipientServer": "other.example.com",
   "recipientAccountId": "<uuid, from the lookup>",
   "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
@@ -1383,7 +1382,10 @@ Create a domain-bound share for a user on a remote Kutup instance.
 ```
 
 The named envelope is sealed to the account the lookup above returned
-(`other.example.com` and its `accountId`); `recipientUsername` is shown only.
+(`other.example.com` and its `accountId`). The origin asks the recipient's
+server for that account by id (`GET /api/fed/drive/accounts/:accountId`):
+the username the share lists is its answer, never the client's, and the
+envelope must be sealed to the incarnation it answers (`409 keyChanged`).
 Accepting compares the account id, so a rename on either side never breaks
 the share. The origin validates the sender signature and all
 routing bindings before storing it. The destination repeats that validation
@@ -3600,8 +3602,8 @@ are edited live through the recipient's server (see *Collaboration across
 servers* below).
 
 - **`POST /api/files/:id/federated-shares`**: owner only. **Body:**
-  `{ recipientUsername, recipientServer, recipientAccountId, shareEnvelope,
-  canEdit }`. The envelope is a `FileShareEnvelopeV1` at the file's current
+  `{ recipientServer, recipientAccountId, shareEnvelope, canEdit }` (the
+  recipient's username is taken from their server, as for folders). The envelope is a `FileShareEnvelopeV1` at the file's current
   generation, sealed to the remote account (`recipientServer` and
   `recipientAccountId`, looked up with
   `GET /api/drive/federation/users/:username`).

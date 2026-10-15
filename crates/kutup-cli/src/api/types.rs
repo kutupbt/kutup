@@ -379,8 +379,6 @@ pub struct ShareRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FederatedShareRequest {
-    /// Shown only: the recipient is their server and account id.
-    pub recipient_username: String,
     pub recipient_server: String,
     pub recipient_account_id: String,
     pub named_share_envelope: String,

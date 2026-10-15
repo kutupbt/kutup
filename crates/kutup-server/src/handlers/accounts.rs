@@ -131,27 +131,42 @@ pub async fn by_id(
             .map(|found| Json(found).into_response())
             .ok_or_else(|| AppError::not_found("no such account"));
     }
-    let slot = slot(&person);
+    remote_account(&state, &user.user_id, &person)
+        .await?
+        .map(|found| Json(found).into_response())
+        .ok_or_else(|| AppError::not_found("no such account"))
+}
+
+/// Another server's account by its id, for `caller` (a lookup, or a share
+/// naming its recipient): the fetch in flight or a fresh answer when there
+/// is one, else a fetch counted against the caller's limit for that peer.
+/// `None` when that server has no such account.
+pub(crate) async fn remote_account(
+    state: &AppState,
+    caller: &str,
+    person: &AccountRef,
+) -> AppResult<Option<RemoteDriveUserResponse>> {
+    let slot = slot(person);
     let mut kept = slot.lock().await;
     let fetched = match kept.as_ref() {
         Some((at, fetched)) if at.elapsed() < FRESH_FOR => fetched.clone(),
         _ => {
-            let limit_key = format!("{}|{}", user.user_id, person.server);
+            let limit_key = format!("{caller}|{}", person.server);
             if !crate::ratelimit::ACCOUNT_PEER_FETCHES.allow(&limit_key) {
                 return Err(
                     AppError::too_many_requests("too many lookups of that server")
                         .with_details(serde_json::json!({ "code": "rateLimited" })),
                 );
             }
-            let fetched = fetch(&state, &person).await?;
+            let fetched = fetch(state, person).await?;
             *kept = Some((Instant::now(), fetched.clone()));
             fetched
         }
     };
-    match fetched {
-        Fetched::Found(remote) => Ok(Json(*remote).into_response()),
-        Fetched::Missing => Err(AppError::not_found("no such account")),
-    }
+    Ok(match fetched {
+        Fetched::Found(remote) => Some(*remote),
+        Fetched::Missing => None,
+    })
 }
 
 /// Asks `person`'s server for them; an answer for anyone else is refused.

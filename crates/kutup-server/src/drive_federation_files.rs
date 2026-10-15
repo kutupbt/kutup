@@ -26,11 +26,10 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::drive_federation::{
-    canonical_domain, canonical_public_key, canonical_username, capability_hash, configured_stack,
-    drive_spec, ensure_ciphertext_digest, ensure_version_digest, gateway_error, signed_app_error,
-    signed_json, validate_capability, FederatedDriveFile, JSON_CONTENT_TYPE,
-    MAX_DIRECTORY_RESPONSE_BYTES, MAX_DRIVE_OBJECT_BYTES, OCTET_STREAM_CONTENT_TYPE,
-    SHARE_CAPABILITY_HEADER,
+    canonical_domain, canonical_public_key, capability_hash, configured_stack, drive_spec,
+    ensure_ciphertext_digest, ensure_version_digest, gateway_error, signed_app_error, signed_json,
+    validate_capability, FederatedDriveFile, JSON_CONTENT_TYPE, MAX_DIRECTORY_RESPONSE_BYTES,
+    MAX_DRIVE_OBJECT_BYTES, OCTET_STREAM_CONTENT_TYPE, SHARE_CAPABILITY_HEADER,
 };
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationDirection, FederationStack};
@@ -44,8 +43,6 @@ const MAX_STATE_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateFederatedFileShareRequest {
-    /// Shown only: the recipient is their server and account id.
-    pub recipient_username: String,
     pub recipient_server: String,
     /// The recipient's permanent account id, from the lookup of their name.
     pub recipient_account_id: String,
@@ -149,7 +146,6 @@ pub async fn create_federated_file_share(
     Json(request): Json<CreateFederatedFileShareRequest>,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let recipient_username = canonical_username(&request.recipient_username)?;
     let recipient_domain = canonical_domain(&request.recipient_server)?;
     if recipient_domain == federation.server_name() {
         return Err(AppError::bad_request(
@@ -201,6 +197,13 @@ pub async fn create_federated_file_share(
         .map_err(|_| {
             AppError::bad_request("the file share does not match the file or the person")
         })?;
+    let recipient_username = crate::drive_federation::recipient_label(
+        &state,
+        &user.user_id,
+        &recipient,
+        &envelope.recipient_incarnation_id,
+    )
+    .await?;
 
     let capability = random_token(32);
     sqlx::query(
@@ -212,7 +215,7 @@ pub async fn create_federated_file_share(
     )
     .bind(file_id)
     .bind(owner)
-    .bind(recipient_username)
+    .bind(&recipient_username)
     .bind(recipient_domain)
     .bind(&recipient_incarnation)
     .bind(&request.share_envelope)

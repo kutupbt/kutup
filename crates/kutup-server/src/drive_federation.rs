@@ -77,8 +77,6 @@ pub struct RemoteDriveUserResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFederatedShareRequest {
-    /// Shown only: the recipient is their server and account id.
-    pub recipient_username: String,
     pub recipient_server: String,
     /// The recipient's permanent account id, from the lookup of their name.
     pub recipient_account_id: String,
@@ -264,6 +262,27 @@ pub(crate) fn remote_keys_consistent(remote: &RemoteDriveUserResponse) -> bool {
         && canonical_public_key(&remote.drive_signing_public_key).is_ok()
         && remote.account_incarnation_id
             == kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
+}
+
+/// The username a share's recipient goes by now, from their server by their
+/// account id (shown only, never a client's word), once they are the account
+/// incarnation the envelope was sealed to.
+pub(crate) async fn recipient_label(
+    state: &AppState,
+    caller: &str,
+    recipient: &kutup_crypto::account_ref::AccountRef,
+    sealed_to: &[u8; 32],
+) -> AppResult<String> {
+    let remote = crate::handlers::accounts::remote_account(state, caller, recipient)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such account on that server"))?;
+    if remote.account_incarnation_id != hex::encode(sealed_to) {
+        return Err(
+            AppError::conflict("the recipient's keys changed; look them up again")
+                .with_details(serde_json::json!({ "code": "keyChanged" })),
+        );
+    }
+    Ok(remote.username)
 }
 
 pub(crate) fn canonical_public_key(value: &str) -> AppResult<Vec<u8>> {
@@ -468,7 +487,6 @@ pub async fn create_federated_share(
     Json(request): Json<CreateFederatedShareRequest>,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
-    let recipient_username = canonical_username(&request.recipient_username)?;
     let recipient_domain = canonical_domain(&request.recipient_server)?;
     if request.named_share_envelope.is_empty()
         || request.upload_quota_bytes.is_some_and(|quota| quota < 0)
@@ -530,6 +548,13 @@ pub async fn create_federated_share(
             &hex::encode(named_share.recipient_incarnation_id),
         )
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;
+    let recipient_username = recipient_label(
+        &state,
+        &user.user_id,
+        &recipient,
+        &named_share.recipient_incarnation_id,
+    )
+    .await?;
 
     let capability = random_token(32);
     let hash = capability_hash(&capability);
@@ -543,7 +568,7 @@ pub async fn create_federated_share(
     )
     .bind(collection_id)
     .bind(owner)
-    .bind(recipient_username)
+    .bind(&recipient_username)
     .bind(recipient_domain)
     .bind(&request.named_share_envelope)
     .bind(hash)
