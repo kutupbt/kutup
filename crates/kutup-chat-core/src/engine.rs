@@ -1985,7 +1985,10 @@ impl Engine {
                     Err(error) => Err(error),
                 }
             } else {
-                self.session.receive_envelope(&envelope, rng).await
+                match self.validate_inbound_identified_envelope(&envelope).await {
+                    Ok(()) => self.session.receive_envelope(&envelope, rng).await,
+                    Err(error) => Err(error),
+                }
             };
             match receive_result {
                 Ok(ReceiveOutcome::Message(message)) => {
@@ -2735,6 +2738,64 @@ impl Engine {
             &self.session.local_identity_public_key(),
             now_seconds,
         )
+    }
+
+    /// An identified envelope is taken only from a device of the sender's
+    /// verified account manifest, as a sealed one is: the device must be in
+    /// the manifest of the authority pinned for the sender (fetched and
+    /// verified when it is not known yet), and a session-starting message
+    /// must carry that device's identity key. Otherwise a server, or someone
+    /// now holding a name its peer left, could start a session in a pinned
+    /// person's name with a device of its own.
+    async fn validate_inbound_identified_envelope(
+        &mut self,
+        envelope: &kutup_chat_proto::DeliveredEnvelope,
+    ) -> Result<()> {
+        let sender = envelope.sender.as_deref().ok_or(ChatError::MissingSender)?;
+        let (sender, _) = self
+            .session
+            .resolve_delivered_sender(sender, envelope.sender_device_id)?;
+        let device_id = envelope.sender_device_id;
+        let peer = self.session.current_peer(&sender);
+        let mut identity = self.session.manifest_identity_key(&peer, device_id).await?;
+        if identity.is_none() {
+            match self.fetch_verified_bundles(&peer).await {
+                Ok(_) => {}
+                // A development server without manifests, as for sends.
+                Err(_)
+                    if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                        && self.session.manifest_trust(&peer).await?.is_none() =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+            let now = self.session.current_peer(&peer);
+            identity = self.session.manifest_identity_key(&now, device_id).await?;
+        }
+        let Some(identity) = identity else {
+            if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                && self.session.manifest_trust(&peer).await?.is_none()
+            {
+                return Ok(());
+            }
+            return Err(ChatError::Trust(
+                "sender device is absent from the account-manifest-verified manifest".into(),
+            ));
+        };
+        if envelope.envelope_type == kutup_chat_proto::EnvelopeType::PreKey {
+            let message =
+                crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)?;
+            if let libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) = message {
+                if message.identity_key().public_key().serialize() != identity.serialize() {
+                    return Err(ChatError::Trust(
+                        "session-starting identity key differs from the signed account manifest"
+                            .into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn validate_inbound_sealed_envelope(

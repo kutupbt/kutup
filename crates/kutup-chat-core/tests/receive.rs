@@ -30,14 +30,68 @@ fn test_rng() -> impl Rng + CryptoRng {
 }
 
 fn in_memory<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Session {
-    block_on(Session::generate(
+    let session = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
         user,
         device_id,
         10,
         rng,
     ))
-    .unwrap()
+    .unwrap();
+    publish_device(
+        user,
+        serve_bundle(session.registration().unwrap(), device_id),
+    );
+    session
+}
+
+thread_local! {
+    /// Every sender device a test made, by account: the mock server publishes
+    /// them in each account's signed manifest, as the real one would.
+    static DEVICES: RefCell<std::collections::BTreeMap<String, Vec<DevicePreKeyBundle>>> =
+        RefCell::new(std::collections::BTreeMap::new());
+}
+
+fn publish_device(user: &str, bundle: DevicePreKeyBundle) {
+    DEVICES.with(|devices| {
+        let mut devices = devices.borrow_mut();
+        let list = devices.entry(user.to_string()).or_default();
+        list.retain(|known| known.device_id != bundle.device_id);
+        list.push(bundle);
+        list.sort_by_key(|known| known.device_id);
+    });
+}
+
+/// `user`'s signed manifest and bundles, from the devices a test made.
+fn published(user: &str) -> UserPreKeyBundlesResponse {
+    let devices = DEVICES.with(|devices| devices.borrow().get(user).cloned().unwrap_or_default());
+    let seed = user
+        .bytes()
+        .fold(7u8, |acc, b| acc.wrapping_mul(31).wrapping_add(b));
+    let authority = kutup_chat_core::AccountAuthority::derive(&[seed; 32]).unwrap();
+    let manifest = authority
+        .sign_manifest(
+            user,
+            1,
+            None,
+            devices
+                .iter()
+                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV1 {
+                    device_id: bundle.device_id,
+                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    identity_key: bundle.identity_key.clone(),
+                    registration_id: bundle.registration_id,
+                    mls: None,
+                })
+                .collect(),
+            "2026-10-15T10:00:00Z",
+        )
+        .unwrap();
+    UserPreKeyBundlesResponse {
+        username: user.to_string(),
+        devices,
+        manifest: Some(manifest),
+    }
 }
 
 fn serve_bundle(reg: &RegisterChatDeviceRequest, device_id: u32) -> DevicePreKeyBundle {
@@ -115,8 +169,9 @@ impl ChatTransport for Mailbox {
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         unreachable!("receive path does not register")
     }
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
-        unreachable!("receive path does not fetch bundles")
+    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
+        // Only to verify a sender's devices before anything of theirs is read.
+        Ok(published(username))
     }
     async fn send(&self, _username: &str, _req: &SendMessagesRequest) -> Result<SendOutcome> {
         unreachable!("receive path does not send")
@@ -312,6 +367,8 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
 fn decrypt_failure_is_durable_and_never_silently_acked() {
     let mut rng = test_rng();
     let bob = in_memory("bob@example.test", 1, &mut rng);
+    // Alice's device is real; what it sent is not.
+    let _alice = in_memory("alice@example.test", 1, &mut rng);
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![DeliveredEnvelope {
         id: "broken-1".into(),
@@ -759,4 +816,72 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
         block_on(bob.unblock_contact("alice@example.test", "2026-07-16T12:03:00Z", &mut rng))
             .unwrap();
     assert_eq!(unblocked.state, ContactState::PendingIncoming);
+}
+
+/// Someone sending in a person's name from a device of their own (a server
+/// forging the sender, or whoever holds a name its peer left): refused like
+/// a sealed envelope from outside the manifest, never a new session.
+#[test]
+fn an_identified_message_is_taken_only_from_a_device_of_the_senders_manifest() {
+    let mut rng = test_rng();
+    let bob_db = TempDb::new();
+    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let mut bob = block_on(Session::generate(
+        bob_db.open(),
+        "bob@example.test",
+        1,
+        10,
+        &mut rng,
+    ))
+    .unwrap();
+    let bundle = serve_bundle(bob.registration().unwrap(), 1);
+    block_on(bob.complete_registration(1)).unwrap();
+    drop(bob);
+    // Alice's real device 1 is in her manifest.
+    let _alice = in_memory("alice@example.test", 1, &mut rng);
+    // Mallory's devices, never published for Alice: one under an id Alice
+    // does not have, one under Alice's own id with another identity key.
+    let mut envelopes = Vec::new();
+    for (device, cursor) in [(2u32, 1u64), (1, 2)] {
+        let mut mallory = block_on(Session::generate(
+            Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+            "alice@example.test",
+            device,
+            10,
+            &mut rng,
+        ))
+        .unwrap();
+        block_on(mallory.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+        let env = block_on(mallory.encrypt(
+            &bob_addr,
+            bundle.registration_id,
+            &ChatContent::text_with_id("forged", "t", 1, "it is me"),
+            &mut rng,
+        ))
+        .unwrap();
+        let mut delivered = deliver(
+            &env,
+            "alice@example.test",
+            &format!("forged-{cursor}"),
+            cursor,
+        );
+        delivered.sender_device_id = device;
+        envelopes.push(delivered);
+    }
+    let server = Rc::new(Mailbox::default());
+    server.deposit(envelopes);
+    let mut engine = block_on(Engine::open(
+        bob_db.open(),
+        server.clone(),
+        "bob@example.test",
+        1,
+    ))
+    .unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(
+        report.messages.is_empty(),
+        "nothing in Alice's name from Mallory's devices"
+    );
+    assert_eq!(report.errors.len(), 2);
+    assert!(server.acked().is_empty());
 }
