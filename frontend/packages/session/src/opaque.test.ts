@@ -38,13 +38,13 @@ beforeEach(() => {
 })
 
 describe('opaqueLogin', () => {
-  it('starts, finishes with the finalization, and keeps the sign-in open for the caller', async () => {
+  it('starts, finishes with the finalization, and keeps the sign-in open for the caller; a reauth names no account', async () => {
     post.mockImplementation((path: string) =>
       Promise.resolve({ data: path === '/auth/login/start' ? { loginId: 'L', credentialResponse: 'ke2', suite: 1 } : { grant: 'g' } }),
     )
-    const { data, signIn: opened } = await opaqueLogin<{ grant: string }>('alice', 'pw', { purpose: 'reauth', for: 'pass' })
+    const { data, signIn: opened } = await opaqueLogin<{ grant: string }>('pw', { purpose: 'reauth', for: 'pass' })
     expect(post.mock.calls).toEqual([
-      ['/auth/login/start', { name: 'alice', credentialRequest: 'ke1', purpose: 'reauth', for: 'pass' }],
+      ['/auth/login/start', { credentialRequest: 'ke1', purpose: 'reauth', for: 'pass' }],
       ['/auth/login/finish', { loginId: 'L', credentialFinalization: 'ke3-for-ke2' }],
     ])
     expect(data).toEqual({ grant: 'g' })
@@ -54,8 +54,9 @@ describe('opaqueLogin', () => {
   it('closes the sign-in when anything fails, and sends no finish for a wrong password', async () => {
     post.mockResolvedValueOnce({ data: { loginId: 'L', credentialResponse: 'ke2', suite: 1 } })
     signIn.finish.mockRejectedValueOnce(new Error('the password is not right'))
-    await expect(opaqueLogin('alice', 'wrong', { purpose: 'session' })).rejects.toThrow('not right')
+    await expect(opaqueLogin('wrong', { purpose: 'session', name: 'alice' })).rejects.toThrow('not right')
     expect(post).toHaveBeenCalledTimes(1)
+    expect(post.mock.calls[0]?.[1]).toMatchObject({ purpose: 'session', name: 'alice' })
     expect(signIn.close).toHaveBeenCalled()
   })
 })

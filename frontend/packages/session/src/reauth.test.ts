@@ -30,7 +30,7 @@ describe('accountGrant', () => {
     const close = vi.fn()
     opaqueLogin.mockResolvedValue({ data: { grant: 'kg1_x' }, signIn: { close } })
     await expect(accountGrant('pw', 'passwordChange')).resolves.toBe('kg1_x')
-    expect(opaqueLogin).toHaveBeenCalledWith('alice', 'pw', { purpose: 'reauth', for: 'passwordChange' })
+    expect(opaqueLogin).toHaveBeenCalledWith('pw', { purpose: 'reauth', for: 'passwordChange' })
     expect(close).toHaveBeenCalled()
   })
 
@@ -92,7 +92,7 @@ describe('verifyAccountPassword', () => {
     const close = vi.fn()
     opaqueLogin.mockResolvedValueOnce({ data: {}, signIn: { close } })
     await expect(verifyAccountPassword('pw')).resolves.toBe(true)
-    expect(opaqueLogin).toHaveBeenCalledWith('alice', 'pw', { purpose: 'reauth', for: 'verify' })
+    expect(opaqueLogin).toHaveBeenCalledWith('pw', { purpose: 'reauth', for: 'verify' })
     expect(close).toHaveBeenCalled()
     opaqueLogin.mockRejectedValueOnce(new OpaqueAuthFailed())
     await expect(verifyAccountPassword('pw')).resolves.toBe(false)

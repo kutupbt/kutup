@@ -104,7 +104,7 @@ async function driveKeyBindingFor(keys: AccountKeys, username: string): Promise<
  * `requiresSetup`; one with a second factor, `requiresTotp`.
  */
 export async function signIn(name: string, password: string): Promise<SignInResult> {
-  const { data, signIn: opened } = await opaqueLogin<LoginResponse>(name, password, { purpose: 'session' })
+  const { data, signIn: opened } = await opaqueLogin<LoginResponse>(password, { purpose: 'session', name })
   if (data.requiresSetup && data.setupToken) {
     opened.close()
     return { kind: 'setup', setup: { name, username: data.username, setupToken: data.setupToken } }

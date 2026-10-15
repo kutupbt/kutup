@@ -21,26 +21,26 @@ interface LoginStartResponse {
   suite: number
 }
 
+/** What a sign-in is for: a session for the account `name`, or a check of the signed-in account's own password. */
+export type LoginStart = { purpose: 'session'; name: string } | { purpose: 'reauth'; for: GrantPurpose | 'verify' }
+
 /**
- * Runs `login/start` and `login/finish` for `name` and `password`: the
- * server's answer to the finish, and the sign-in (holding the export key,
- * to open the master key with; close it when done). A wrong password throws
- * `OpaqueAuthFailed` before anything is sent to finish.
+ * Runs `login/start` and `login/finish` for `password`: the server's answer
+ * to the finish, and the sign-in (holding the export key, to open the master
+ * key with; close it when done). A wrong password throws `OpaqueAuthFailed`
+ * before anything is sent to finish. A reauth names no account: the server
+ * takes the session's own, so a name changed elsewhere (a rename) cannot
+ * make it fail.
  */
-export async function opaqueLogin<T>(
-  name: string,
-  password: string,
-  purpose: { purpose: 'session' } | { purpose: 'reauth'; for: GrantPurpose | 'verify' },
-): Promise<{ data: T; signIn: OpaqueSignIn }> {
+export async function opaqueLogin<T>(password: string, start: LoginStart): Promise<{ data: T; signIn: OpaqueSignIn }> {
   const signIn = await startOpaqueSignIn(password)
   try {
-    const { data: start } = await api.post<LoginStartResponse>('/auth/login/start', {
-      name,
+    const { data: started } = await api.post<LoginStartResponse>('/auth/login/start', {
+      ...start,
       credentialRequest: signIn.request,
-      ...purpose,
     })
-    const credentialFinalization = await signIn.finish(start.credentialResponse)
-    const { data } = await api.post<T>('/auth/login/finish', { loginId: start.loginId, credentialFinalization })
+    const credentialFinalization = await signIn.finish(started.credentialResponse)
+    const { data } = await api.post<T>('/auth/login/finish', { loginId: started.loginId, credentialFinalization })
     return { data, signIn }
   } catch (error) {
     signIn.close()
