@@ -62,8 +62,9 @@ export interface TotpChallenge {
 /** An administrator-created account signing in for the first time. */
 export interface PendingSetup {
   name: string
-  /** The account's username, which its new Drive key binding names. */
   username: string
+  /** The account's permanent id, which its new Drive key binding names. */
+  accountId: string
   setupToken: string
 }
 
@@ -80,21 +81,22 @@ async function activate(
   await persistKeys(response.sessionId, keys)
 }
 
-/** The address an account has on this server, which its binding names. */
-async function accountAddress(username: string): Promise<string> {
+/** This server's name: with an account id, who an account is (docs/plans/account-ids.md). */
+async function serverName(): Promise<string> {
   const settings = await loadServerSettings<{ chat?: { serverName?: string | null } }>()
   const server = settings.chat?.serverName
   if (!server) throw new Error('the server did not publish its name')
-  return `${username}@${server}`
+  return server
 }
 
 /**
  * The account's Drive key binding (docs/plans/drive-identity-pins.md): its
- * authority vouching for its Drive keys under its address, so the people it
- * shares with can check them. Sent with every new set of keys.
+ * authority vouching for its Drive keys as this account (its server and
+ * permanent id, never its name), so the people it shares with can check
+ * them. Sent with every new set of keys.
  */
-async function driveKeyBindingFor(keys: AccountKeys, username: string): Promise<string> {
-  return signDriveKeyBinding(toBase64(keys.masterKey), await accountAddress(username))
+async function driveKeyBindingFor(keys: AccountKeys, accountId: string): Promise<string> {
+  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId })
 }
 
 /**
@@ -107,7 +109,7 @@ export async function signIn(name: string, password: string): Promise<SignInResu
   const { data, signIn: opened } = await opaqueLogin<LoginResponse>(password, { purpose: 'session', name })
   if (data.requiresSetup && data.setupToken) {
     opened.close()
-    return { kind: 'setup', setup: { name, username: data.username, setupToken: data.setupToken } }
+    return { kind: 'setup', setup: { name, username: data.username, accountId: data.userId, setupToken: data.setupToken } }
   }
   if (data.requiresTotp && data.preAuthToken) {
     return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened } }
@@ -159,6 +161,9 @@ export interface AccountKeys extends AccountKeySet {
   opaqueRecord: string
   opaqueServerKeyId: number
   masterKeyEnvelope: string
+  /** The id register/start minted for a sign-up, and its proof (none for a setup). */
+  accountId?: string
+  accountIdProof?: string
   registrar: OpaqueRegistrar
   auth: RegistrationAuth
 }
@@ -280,17 +285,22 @@ const registered = new WeakMap<AccountKeys, { data: LoginResponse; keys: Account
 export async function registerAndSignIn(username: string, keys: AccountKeys, registrationCode?: string): Promise<void> {
   let done = registered.get(keys)
   if (!done) {
-    const driveKeyBinding = await driveKeyBindingFor(keys, username)
-    done = await sendKeys(keys, async (sent) =>
-      (
+    done = await sendKeys(keys, async (sent) => {
+      // The id register/start minted for these keys (a remade record has
+      // its own), which the binding names.
+      const { accountId, accountIdProof } = sent
+      if (!accountId || !accountIdProof) throw new Error('the server gave no account id for the sign-up')
+      return (
         await api.post<LoginResponse>('/auth/register', {
           username,
           ...(registrationCode ? { registrationCode } : {}),
           ...registrationBody(sent),
-          driveKeyBinding,
+          accountId,
+          accountIdProof,
+          driveKeyBinding: await driveKeyBindingFor(sent, accountId),
         })
-      ).data,
-    )
+      ).data
+    })
     registered.set(keys, done)
   }
   await activate(done.data, { ...sessionKeys(done.keys), userId: done.data.userId })
@@ -304,7 +314,7 @@ export async function registerAndSignIn(username: string, keys: AccountKeys, reg
 export async function completeSetup(setup: PendingSetup, keys: AccountKeys): Promise<void> {
   let done = registered.get(keys)
   if (!done) {
-    const driveKeyBinding = await driveKeyBindingFor(keys, setup.username)
+    const driveKeyBinding = await driveKeyBindingFor(keys, setup.accountId)
     done = await sendKeys(keys, async (sent) =>
       (
         await api.post<LoginResponse>(

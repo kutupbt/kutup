@@ -44,7 +44,11 @@ pub struct Session {
     /// What the account's sealed keys are bound to: its key binding, as the
     /// sign-in told it.
     pub envelope_binding: String,
+    /// The account's permanent id (`users.id`) and its server's name: who
+    /// this account is to everyone (docs/plans/account-ids.md).
     pub user_id: String,
+    pub server_name: String,
+    /// Shown only: the account's username, as `/user/me` last said.
     pub username: String,
     pub access_token: String,
     pub refresh_token: String,
@@ -63,6 +67,12 @@ impl Session {
     /// The string every seal and open uses (docs/plans/account-identity.md).
     pub fn binding(&self) -> &str {
         &self.envelope_binding
+    }
+
+    /// This account as every share and binding names it.
+    pub fn person(&self) -> Result<kutup_crypto::account_ref::AccountRef> {
+        kutup_crypto::account_ref::AccountRef::new(&self.server_name, &self.user_id)
+            .map_err(|_| anyhow!("this session's account is not known: run 'kutup login' again"))
     }
 }
 

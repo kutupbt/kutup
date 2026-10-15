@@ -56,10 +56,16 @@ export interface RegisteredPassword {
   opaqueRecord: string
   opaqueServerKeyId: number
   masterKeyEnvelope: string
+  /**
+   * A sign-up's account id, minted by the server, and its proof: sent back
+   * with the account (docs/plans/account-ids.md). Absent for anything else.
+   */
+  accountId?: string
+  accountIdProof?: string
 }
 
 /** A temporary password an administrator sets: no keys exist yet, so no envelope. */
-export type RegisteredTemporaryPassword = Omit<RegisteredPassword, 'masterKeyEnvelope'>
+export type RegisteredTemporaryPassword = Omit<RegisteredPassword, 'masterKeyEnvelope' | 'accountId' | 'accountIdProof'>
 
 /** The 409 `code` a request was refused with, if any (`opaqueKeyStale`, `keyBindingTaken`, …). */
 export function conflictCode(error: unknown): string | null {
@@ -94,7 +100,12 @@ export async function registerWith(
   auth: RegistrationAuth,
 ): Promise<RegisteredPassword | RegisteredTemporaryPassword> {
   const registration = await registrar.register()
-  const { data } = await api.post<{ registrationResponse: string; serverKeyId: number }>(
+  const { data } = await api.post<{
+    registrationResponse: string
+    serverKeyId: number
+    accountId?: string
+    accountIdProof?: string
+  }>(
     '/auth/opaque/register/start',
     {
       keyBinding,
@@ -106,7 +117,8 @@ export async function registerWith(
   const opaqueRecord = await registration.finish(data.registrationResponse)
   if (!masterKey) return { opaqueRecord, opaqueServerKeyId: data.serverKeyId }
   const masterKeyEnvelope = await registration.sealMasterKey(masterKey, keyBinding)
-  return { opaqueRecord, opaqueServerKeyId: data.serverKeyId, masterKeyEnvelope }
+  const minted = data.accountId && data.accountIdProof ? { accountId: data.accountId, accountIdProof: data.accountIdProof } : {}
+  return { opaqueRecord, opaqueServerKeyId: data.serverKeyId, masterKeyEnvelope, ...minted }
 }
 
 /** {@link registerWith} for a password given here, in a worker of its own that ends with it. */

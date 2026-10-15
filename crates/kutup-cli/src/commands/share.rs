@@ -20,6 +20,7 @@ use crate::context::{require_session, Ctx};
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
 use crate::errors::NotFound;
 use crate::session::Session;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
@@ -199,10 +200,9 @@ fn share_folder(
         .try_into()
         .context("master key must be 32 bytes")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
-    let (_, domain) = recipient
-        .account
-        .split_once('@')
-        .ok_or_else(|| anyhow!("recipient account is invalid"))?;
+    // The address led to this account (server-asserted): the share is to it.
+    let person = AccountRef::new(&recipient.server, &recipient.account_id)
+        .context("the lookup answered no account")?;
     let envelope = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
         &collection_key,
         collection_id,
@@ -212,10 +212,10 @@ fn share_folder(
             .find(|collection| collection.id == collection_id)
             .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?
             .key_epoch,
-        &format!("{}@{domain}", ctx.session.username),
+        &ctx.session.person()?,
         &identity.incarnation_id(),
         identity.drive_signing_key(),
-        &recipient.account,
+        &person,
         &recipient.account_incarnation_id,
         &b64()
             .decode(&recipient.drive_hpke_public_key)
@@ -313,15 +313,20 @@ fn share_federated(
         .try_into()
         .context("master key must be 32 bytes")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
-    let local_domain = ctx.client.settings()?.chat.server_name;
+    // The address led to this account on its server (server-asserted).
+    let person = AccountRef::new(&remote.server, &remote.account_id)
+        .context("the lookup answered no account")?;
+    if person.server != server {
+        bail!("the lookup of {target} answered for an account on another server");
+    }
     let envelope = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
         &collection_key,
         collection_id,
         collection.key_epoch,
-        &format!("{}@{local_domain}", ctx.session.username),
+        &ctx.session.person()?,
         &identity.incarnation_id(),
         identity.drive_signing_key(),
-        &remote.account,
+        &person,
         &remote.account_incarnation_id,
         &b64()
             .decode(&remote.drive_hpke_public_key)
@@ -333,8 +338,8 @@ fn share_federated(
         .share_federated(
             collection_id,
             &FederatedShareRequest {
-                recipient_username: username.to_string(),
-                recipient_server: server.to_string(),
+                recipient_server: person.server.clone(),
+                recipient_account_id: person.account_id.clone(),
                 named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
@@ -432,6 +437,7 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
         name_revision: s.name_revision,
         epoch_statement: s.epoch_statement.clone(),
         epoch_statement_hash: s.epoch_statement_hash.clone(),
+        owner_server: Some(s.remote_domain.clone()),
         owner_account: Some(s.owner_account.clone()),
         owner_incarnation_id: Some(s.owner_incarnation_id.clone()),
         owner_drive_signing_public_key: Some(s.owner_signing_public_key.clone()),
@@ -682,6 +688,7 @@ fn decrypt_incoming_name(s: &IncomingShare, sess: &Session) -> Result<String> {
         name_revision: s.name_revision,
         epoch_statement: s.epoch_statement.clone(),
         epoch_statement_hash: s.epoch_statement_hash.clone(),
+        owner_server: None,
         owner_account: None,
         owner_incarnation_id: None,
         owner_drive_signing_public_key: None,

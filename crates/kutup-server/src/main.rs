@@ -7,6 +7,7 @@
 //! handler slice lands.
 
 mod account_heads;
+mod account_ids;
 mod account_names;
 mod albums;
 mod auth_check;
@@ -608,8 +609,8 @@ async fn bootstrap_admin(
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
-            is_admin, is_first_login, storage_quota_bytes
-        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',true,true,$6)
+            is_admin, is_first_login, storage_quota_bytes, is_break_glass
+        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',true,true,$6,true)
         RETURNING id"#,
     )
     .bind(username)
@@ -1072,6 +1073,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/users/by-address/:address",
             get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/api/users/by-id/:accountId",
+            get(handlers::accounts::by_id).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
             "/api/users/drive-identities",
@@ -1832,6 +1837,11 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/drive/accounts/renames",
             post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/fed/drive/accounts/:accountId",
+            get(handlers::accounts::fed_by_id)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
             "/api/fed/drive/users/:username",

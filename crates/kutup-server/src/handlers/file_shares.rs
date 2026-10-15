@@ -107,8 +107,10 @@ pub struct LinkEnvelope {
 #[serde(rename_all = "camelCase")]
 pub struct FederatedFileMember {
     pub id: Uuid,
+    /// Shown only: the recipient is their server and account id.
     pub recipient_username: String,
     pub recipient_server: String,
+    pub recipient_account_id: Uuid,
     pub recipient_incarnation_id: String,
     pub can_edit: bool,
     /// The generation their envelope opens; below the file's, it waits.
@@ -195,11 +197,17 @@ pub struct SharedFile {
     /// not, or `key_generation` is behind the file's, the share waits for the
     /// owner: it can be read, not edited.
     pub folder_key_current: bool,
+    /// The server of the owner and the sharer (this one): with their user
+    /// ids, who they are; the envelope names them so.
+    pub server: String,
     pub owner_user_id: Uuid,
+    /// Shown only: the owner's address now.
     pub owner_account: String,
     pub owner_incarnation_id: String,
     pub owner_signing_public_key: String,
     /// Who sealed the envelope: the owner, or an editor the owner lets share.
+    pub sharer_user_id: Uuid,
+    /// Shown only: the sharer's address now.
     pub sharer_account: String,
     pub sharer_incarnation_id: String,
     pub sharer_signing_public_key: String,
@@ -210,7 +218,8 @@ pub struct SharedFile {
 }
 
 struct Party {
-    account: String,
+    /// Who: their server and account id.
+    person: kutup_crypto::account_ref::AccountRef,
     incarnation: String,
     signing_public_key: Option<String>,
 }
@@ -224,8 +233,8 @@ async fn party(pool: &PgPool, user_id: Uuid, domain: &str) -> AppResult<Party> {
     .fetch_optional(pool)
     .await?;
     match row {
-        Some((Some(username), incarnation, signing_public_key)) => Ok(Party {
-            account: format!("{username}@{domain}"),
+        Some((Some(_), incarnation, signing_public_key)) => Ok(Party {
+            person: crate::account_ids::local(domain, user_id)?,
             incarnation,
             signing_public_key,
         }),
@@ -304,10 +313,10 @@ fn verify_envelope(
             decoded.verify_binding_and_signature(
                 &file_id.to_string(),
                 u32::try_from(generation).unwrap_or(0),
-                &owner.account,
+                &owner.person,
                 &owner.incarnation,
                 &signing,
-                &recipient.account,
+                &recipient.person,
                 &recipient.incarnation,
             )
         })
@@ -576,10 +585,19 @@ async fn file_links(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FileLink>> {
 }
 
 async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<FederatedFileMember>> {
-    type Row = (Uuid, String, String, String, bool, i32, OffsetDateTime);
+    type Row = (
+        Uuid,
+        String,
+        String,
+        Uuid,
+        String,
+        bool,
+        i32,
+        OffsetDateTime,
+    );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, recipient_username, recipient_domain, recipient_incarnation_id,
-                can_edit, key_generation, created_at
+        "SELECT id, recipient_username, recipient_domain, recipient_account_id,
+                recipient_incarnation_id, can_edit, key_generation, created_at
          FROM federated_outgoing_file_shares WHERE file_id = $1 ORDER BY created_at",
     )
     .bind(file_id)
@@ -592,6 +610,7 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
                 id,
                 recipient_username,
                 recipient_server,
+                recipient_account_id,
                 recipient_incarnation_id,
                 can_edit,
                 key_generation,
@@ -601,6 +620,7 @@ async fn federated_members(pool: &PgPool, file_id: Uuid) -> AppResult<Vec<Federa
                     id,
                     recipient_username,
                     recipient_server,
+                    recipient_account_id,
                     recipient_incarnation_id,
                     can_edit,
                     key_generation,
@@ -621,19 +641,19 @@ async fn store_federated_envelopes(
     envelopes: &[FederatedEnvelope],
 ) -> AppResult<()> {
     for member in envelopes {
-        let target: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT recipient_username, recipient_domain, recipient_incarnation_id
+        let target: Option<(Uuid, String, String)> = sqlx::query_as(
+            "SELECT recipient_account_id, recipient_domain, recipient_incarnation_id
              FROM federated_outgoing_file_shares WHERE id = $1 AND file_id = $2",
         )
         .bind(member.id)
         .bind(file_id)
         .fetch_optional(&mut **tx)
         .await?;
-        let Some((username, domain, incarnation)) = target else {
+        let Some((account_id, domain, incarnation)) = target else {
             return Err(AppError::conflict("the file's access changed; reload"));
         };
         let recipient = Party {
-            account: format!("{username}@{domain}"),
+            person: crate::account_ids::stored(&domain, account_id)?,
             incarnation,
             signing_public_key: None,
         };
@@ -934,30 +954,37 @@ pub async fn shared_with_me(
         user_id,
     )
     .await?;
-    type Row = (
-        Uuid,
-        String,
-        bool,
-        i32,
-        bool,
-        OffsetDateTime,
-        Uuid,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-        Option<String>,
-        bool,
-    );
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        file_id: Uuid,
+        share_envelope: String,
+        can_edit: bool,
+        key_generation: i32,
+        folder_key_current: bool,
+        shared_at: OffsetDateTime,
+        owner_user_id: Uuid,
+        owner_username: Option<String>,
+        owner_incarnation_id: String,
+        owner_signing_public_key: Option<String>,
+        metadata_envelope: Option<String>,
+        metadata_revision: Option<i64>,
+        sharer_user_id: Uuid,
+        sharer_username: Option<String>,
+        sharer_incarnation_id: String,
+        sharer_signing_public_key: Option<String>,
+        editors_can_share: bool,
+    }
     let shares: Vec<Row> = sqlx::query_as(
         "SELECT fs.file_id, fs.share_envelope, fs.can_edit, fs.key_generation,
-                f.key_epoch = c.key_epoch, fs.created_at, c.owner_user_id,
-                o.username, o.account_incarnation_id, o.drive_signing_public_key,
-                h.previous_metadata_envelope, h.previous_metadata_revision,
-                s.username, s.account_incarnation_id, s.drive_signing_public_key,
+                f.key_epoch = c.key_epoch AS folder_key_current, fs.created_at AS shared_at,
+                c.owner_user_id, o.username AS owner_username,
+                o.account_incarnation_id AS owner_incarnation_id,
+                o.drive_signing_public_key AS owner_signing_public_key,
+                h.previous_metadata_envelope AS metadata_envelope,
+                h.previous_metadata_revision AS metadata_revision,
+                fs.sharer_user_id, s.username AS sharer_username,
+                s.account_incarnation_id AS sharer_incarnation_id,
+                s.drive_signing_public_key AS sharer_signing_public_key,
                 f.editors_can_share
          FROM file_shares fs
          JOIN files f ON f.id = fs.file_id
@@ -976,47 +1003,33 @@ pub async fn shared_with_me(
     .await?;
     let mut by_file: BTreeMap<String, Row> = shares
         .into_iter()
-        .map(|row| (row.0.to_string(), row))
+        .map(|row| (row.file_id.to_string(), row))
         .collect();
     Ok(Json(
         files
             .into_iter()
             .filter_map(|file| {
-                let (
-                    _,
-                    envelope,
-                    can_edit,
-                    key_generation,
-                    folder_key_current,
-                    shared_at,
-                    owner,
-                    username,
-                    incarnation,
-                    signing,
-                    metadata_envelope,
-                    metadata_revision,
-                    sharer_username,
-                    sharer_incarnation,
-                    sharer_signing,
-                    editors_can_share,
-                ) = by_file.remove(&file.id)?;
+                let row = by_file.remove(&file.id)?;
                 Some(SharedFile {
                     file,
-                    share_envelope: envelope,
-                    can_edit,
-                    key_generation,
-                    folder_key_current,
-                    owner_user_id: owner,
-                    owner_account: format!("{}@{domain}", username?),
-                    owner_incarnation_id: incarnation,
-                    owner_signing_public_key: signing?,
-                    sharer_account: format!("{}@{domain}", sharer_username?),
-                    sharer_incarnation_id: sharer_incarnation,
-                    sharer_signing_public_key: sharer_signing?,
-                    editors_can_share,
-                    shared_at,
-                    metadata_at_share: metadata_envelope
-                        .zip(metadata_revision)
+                    share_envelope: row.share_envelope,
+                    can_edit: row.can_edit,
+                    key_generation: row.key_generation,
+                    folder_key_current: row.folder_key_current,
+                    server: domain.to_owned(),
+                    owner_user_id: row.owner_user_id,
+                    owner_account: format!("{}@{domain}", row.owner_username?),
+                    owner_incarnation_id: row.owner_incarnation_id,
+                    owner_signing_public_key: row.owner_signing_public_key?,
+                    sharer_user_id: row.sharer_user_id,
+                    sharer_account: format!("{}@{domain}", row.sharer_username?),
+                    sharer_incarnation_id: row.sharer_incarnation_id,
+                    sharer_signing_public_key: row.sharer_signing_public_key?,
+                    editors_can_share: row.editors_can_share,
+                    shared_at: row.shared_at,
+                    metadata_at_share: row
+                        .metadata_envelope
+                        .zip(row.metadata_revision)
                         .map(|(envelope, revision)| MetadataAtShare { envelope, revision }),
                 })
             })

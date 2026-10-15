@@ -73,6 +73,32 @@ impl AccountRef {
     }
 }
 
+impl AccountRef {
+    /// Reads [`Self::bytes`] at the start of `bytes`: the person and how many
+    /// bytes they took.
+    pub fn read(bytes: &[u8]) -> Result<(Self, usize)> {
+        let len = bytes
+            .get(..2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]) as usize)
+            .ok_or_else(|| invalid("too short"))?;
+        let server = bytes.get(2..2 + len).ok_or_else(|| invalid("too short"))?;
+        let id = bytes
+            .get(2 + len..2 + len + 16)
+            .ok_or_else(|| invalid("too short"))?;
+        let server = std::str::from_utf8(server).map_err(|_| invalid("server is not text"))?;
+        let hex = hex::encode(id);
+        let account_id = format!(
+            "{}-{}-{}-{}-{}",
+            &hex[..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..]
+        );
+        Ok((Self::new(server, &account_id)?, 2 + len + 16))
+    }
+}
+
 impl fmt::Display for AccountRef {
     /// `aci:<uuid>@<server>`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -179,6 +205,9 @@ mod tests {
         assert_eq!(&bytes[..2], &[0, 6]);
         assert_eq!(&bytes[2..8], b"a.test");
         assert_eq!(bytes[8..].len(), 16);
-        assert_eq!(hex::encode(&bytes[8..]), ID.replace('-', ""),);
+        assert_eq!(hex::encode(&bytes[8..]), ID.replace('-', ""));
+        let (back, used) = AccountRef::read(&[bytes.as_slice(), b"rest"].concat()).unwrap();
+        assert_eq!((back, used), (person, bytes.len()));
+        assert!(AccountRef::read(&bytes[..bytes.len() - 1]).is_err());
     }
 }

@@ -42,6 +42,8 @@ Specific codes, where an app does something particular (a test in
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
+| `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
+| `accountIdTaken` | 409 | `register`: the account id is some account's, or was a deleted account's (ids are never reused): start again |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
 | `opaqueKeyStale` | 409 | An OPAQUE record made against a setup that is no longer the server's current one: register again |
 | `opaqueKeyMissing` | 500 | The account's record names an OPAQUE setup whose key is not in `OPAQUE_SETUP_KEYS`: the operator restores the key (the account can recover with its phrase meanwhile) |
@@ -203,6 +205,8 @@ uses admits exactly N accounts however many sign up at once.
 ```json
 {
   "username": "alice",
+  "accountId": "<uuid register/start minted>",
+  "accountIdProof": "<hex, from register/start>",
   "registrationCode": "7KQ2M-9XD4T-PAV3W-8HCNR",
   "keyBinding": "<lowercase UUID v4 drawn by the client>",
   "opaqueRecord": "<base64 OPAQUE RegistrationUpload>",
@@ -237,9 +241,15 @@ The complete account identity is fixed at registration: the account authority,
 incarnation, Drive X25519 key, and Drive Ed25519 share-signing key are persisted
 as one binding. A later account manifest must match all of them exactly; a
 self-signed first manifest cannot select a replacement authority.
-`driveKeyBinding` (required) is the authority's signature over the address
-`username@<server name>` and the Drive keys (`kutup_crypto::drive_key_binding`,
-docs/plans/drive-identity-pins.md); `400` when missing or not matching.
+The account's permanent id (`users.id`, docs/plans/account-ids.md) is the one
+`register/start` minted for this sign-up's key binding: `accountId` and
+`accountIdProof` come back unchanged (`400 accountIdInvalid` for anything
+else; `409 accountIdTaken` for an id some account has, or had: a deleted
+account's id is never given again). `driveKeyBinding` (required) is the
+authority's signature over the account (this server's name and `accountId`)
+and the Drive keys (`kutup_crypto::drive_key_binding`,
+docs/plans/drive-identity-pins.md); `400` when missing or not matching. It
+names no username, so a rename never signs it again.
 
 **Header:** `X-Kutup-Client` as for sign-in.
 
@@ -369,7 +379,7 @@ silently. Nobody's sign-in ends for that.
 
 **Response (2FA enabled):** `200` with `{"requiresTotp": true, "preAuthToken": "<jwt>"}` — proceed to `/api/auth/login/2fa`.
 
-**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (the username is what the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
+**Response (first login, an account an administrator created, or the `ADMIN_ACCOUNT` one, not yet set up):** `200` with `{"requiresSetup": true, "setupToken": "<jwt>", "userId": "<uuid>", "username": "alice"}` — proceed to `/api/auth/complete-setup` (`userId` is the account id the new keys' `driveKeyBinding` names). Its temporary password was registered by the administrator's client; the server never had it.
 
 **Response (a reauth):** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
 
@@ -452,7 +462,11 @@ grant is checked here and used at the request that stores the record.
 
 **Request body:** `{ "keyBinding": "<uuid v4>", "registrationRequest": "<base64>", "grant": null }`
 
-**Response:** `{ "registrationResponse": "<base64>", "serverKeyId": 1 }`.
+**Response:** `{ "registrationResponse": "<base64>", "serverKeyId": 1 }`;
+for a sign-up (no grant, no Bearer) also `"accountId"` and `"accountIdProof"`:
+the new account's permanent id, minted here (random, as Signal mints an ACI),
+and a proof bound to the key binding, both given back with
+`POST /api/auth/register`. Nothing is stored until then.
 
 ---
 
@@ -529,7 +543,9 @@ Called after first login by accounts created via `ADMIN_ACCOUNT` that haven't ye
 **Request body:** Same shape as `POST /api/auth/register` (the key bundle, the
 OPAQUE record of the person's own password under a key binding they drew now,
 registered with the setup token as Bearer, and the required `driveKeyBinding`
-for the account's address; `username` is ignored). The temporary password's
+for the account's id, the `userId` of the first sign-in; `username` is
+ignored, and `accountId`/`accountIdProof` are refused: the account has its
+id). The temporary password's
 record goes with it.
 
 **Response:** creates a session and issues tokens exactly as `/api/auth/login/finish` does (cookie for `web-account`, body for `cli`) — the encrypted key bundle just submitted is **not** echoed back.
@@ -665,6 +681,8 @@ Return the current user's profile (public key + storage stats). The encrypted ke
 ```json
 {
   "id": "<uuid>",
+  "accountId": "<uuid, the same: the account's permanent id>",
+  "server": "example.com",
   "address": "alice@example.com",
   "envelopeBinding": "<the account's key binding>",
   "username": "alice",
@@ -836,9 +854,9 @@ receiving nothing.
   taken back, the spelling it is taken back as (its address, keys and key
   lists name it so; another spelling is `renameInvalid` with `spelling`).
 - `POST /api/user/rename` → `{ "grant": "<a rename grant from a reauth>",
-  "rename": <AccountRenameV1>, "driveKeyBinding": "<re-signed for the new
-  address>", "mailAddress": { "publicKey", "privateKeyEnvelope", "keyList" }
-  }` → `200 { "username", "address", "sequence", "oldAddressReceivesUntil",
+  "rename": <AccountRenameV1>, "mailAddress": { "publicKey",
+  "privateKeyEnvelope", "keyList" } }` (the Drive key binding names the
+  account's id, so it stays as it is) → `200 { "username", "address", "sequence", "oldAddressReceivesUntil",
   "oldNameFreeAt" }`. `mailAddress` is the new address's first key and key
   list (sequence 1, that key primary), as `POST /api/mail/addresses/{id}/keys`
   takes them, stored in the rename's transaction so mail to the new address is
@@ -930,6 +948,8 @@ Look up another local user's registered Drive identity (used when sharing a coll
 ```json
 {
   "userId": "<uuid>",
+  "server": "example.com",
+  "accountId": "<uuid, the same as userId>",
   "account": "bob@example.com",
   "driveHpkePublicKey": "<canonical base64, 32 bytes>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
@@ -939,12 +959,38 @@ Look up another local user's registered Drive identity (used when sharing a coll
 }
 ```
 
-`driveKeyBinding` is the account authority's signature over the account's
-address and Drive keys (`kutup_crypto::drive_key_binding`); it is absent only
+The address leads to the account `{ server, accountId }` (docs/plans/account-ids.md):
+the answer is the server's word, a lookup handle only, and `account` is a
+label. Shares, pins and records name the account, never the address.
+`driveKeyBinding` is the account authority's signature over the account
+(server and id) and its Drive keys (`kutup_crypto::drive_key_binding`); it is absent only
 for an account an administrator wiped that has not finished its new first-login
 setup (and from a peer server that does not send one). Clients check it and pin the authority
 (docs/plans/drive-identity-pins.md); the federated lookup
 (`GET /api/drive/federation/users/:username`) returns the same two fields.
+
+### GET /api/users/by-id/:accountId
+
+An account by its permanent id (docs/plans/account-ids.md): its address now
+(server-asserted, a label) and its Drive identity, as the address lookup
+answers them. `?server=` names the account's server (this one when left
+out); another server's account is asked of that server through federation
+(`GET /api/fed/drive/accounts/:accountId`, the pinned peer, never a URL from
+the query). One fetch per account at a time; its answer (or its `404`)
+serves every lookup of that account for 30 seconds. Only a real fetch counts,
+at most `RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN` a minute per caller and
+peer. The answer must name the same server and id, with the incarnation its
+authority key stands for (`502` otherwise).
+
+**Auth:** Bearer JWT; counted with the user lookups
+(`RATE_LIMIT_USER_LOOKUP_PER_MIN`). `400` for an id that is not a lowercase
+hyphenated UUID or a server that is not a canonical name; `404` when no
+active, set-up account has it.
+
+**Response:** `{ "username", "server", "accountId", "account",
+"driveHpkePublicKey", "accountIncarnationId", "driveSigningPublicKey",
+"accountAuthorityPublicKey", "driveKeyBinding" }`. No rename chain: a client
+showing the address verifies it with `GET /api/users/renames/:address`.
 
 ### POST /api/users/drive-identities
 
@@ -1113,6 +1159,7 @@ envelope is returned in the other row type.
     "nameRevision": 1,
     "epochStatement": "<CollectionEpochStatementV1 base64>",
     "epochStatementHash": "<lowercase SHA-256 hex>",
+    "ownerServer": "example.com",
     "ownerAccount": "alice@example.com",
     "ownerIncarnationId": "<lowercase SHA-256 hex>",
     "ownerDriveSigningPublicKey": "<canonical base64, 32 bytes>",
@@ -1301,11 +1348,13 @@ the collection key.
 {
   "username": "bob",
   "server": "other.example.com",
+  "accountId": "<uuid>",
   "account": "bob@other.example.com",
   "driveHpkePublicKey": "<canonical base64, 32 bytes>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
   "driveSigningPublicKey": "<canonical base64, 32 bytes>",
-  "accountAuthorityPublicKey": "<canonical base64, 32 bytes>"
+  "accountAuthorityPublicKey": "<canonical base64, 32 bytes>",
+  "driveKeyBinding": "<canonical base64, 64 bytes>"
 }
 ```
 
@@ -1323,8 +1372,8 @@ Create a domain-bound share for a user on a remote Kutup instance.
 **Request body:**
 ```json
 {
-  "recipientUsername": "bob",
   "recipientServer": "other.example.com",
+  "recipientAccountId": "<uuid, from the lookup>",
   "namedShareEnvelope": "<NamedShareEnvelopeV1 base64>",
   "canUpload": true,
   "canDelete": false,
@@ -1332,8 +1381,13 @@ Create a domain-bound share for a user on a remote Kutup instance.
 }
 ```
 
-The named envelope is sealed to the exact `bob@other.example.com` identity
-returned by the lookup above. The origin validates the sender signature and all
+The named envelope is sealed to the account the lookup above returned
+(`other.example.com` and its `accountId`). The origin asks the recipient's
+server for that account by id (`GET /api/fed/drive/accounts/:accountId`):
+the username the share lists is its answer, never the client's, and the
+envelope must be sealed to the incarnation it answers (`409 keyChanged`).
+Accepting compares the account id, so a rename on either side never breaks
+the share. The origin validates the sender signature and all
 routing bindings before storing it. The destination repeats that validation
 against Bob's current registered incarnation and verifies the owner-signed epoch
 statement before accepting the invite. The origin stores the canonical
@@ -1373,6 +1427,8 @@ Everyone you share a folder with or who shares one with you:
 ```json
 {
   "people": [{
+    "server": "example.org",
+    "accountId": "<uuid>",
     "account": "bob@example.org",
     "local": true,
     "accountIncarnationId": "<hex>",
@@ -1384,8 +1440,9 @@ Everyone you share a folder with or who shares one with you:
 }
 ```
 
-For someone on another server (`local: false`) the three key fields are null:
-look them up with `GET /api/drive/federation/users/:username`. Open
+People are their server and account id; `account` is their address now,
+shown only. For someone on another server (`local: false`) the three key
+fields are null: look them up with `GET /api/users/by-id/:accountId?server=`. Open
 `receivedEnvelope` with your Drive key and check it with theirs; the profile
 key then fetches their profile through
 `GET /api/chat/users/:account/profile/:version`. When `sentProfileVersion` is
@@ -1397,7 +1454,8 @@ not your current profile version, give them your key again.
 
 ```json
 {
-  "recipientAccount": "bob@example.org",
+  "recipientServer": "example.org",
+  "recipientAccountId": "<uuid>",
   "envelope": "<ProfileKeyEnvelopeV1 base64>",
   "profileVersion": "<hex, the version the key opens>"
 }
@@ -2466,9 +2524,11 @@ through its shares.
   generation, or a file wrapped below its folder's epoch. The owner's Drive
   re-keys the file if needed and re-seals.
 - **`GET /api/shared-files`**: files shared with the caller. `[{ file:
-  FileRow, shareEnvelope, canEdit, keyGeneration, folderKeyCurrent,
+  FileRow, shareEnvelope, canEdit, keyGeneration, folderKeyCurrent, server,
   ownerUserId, ownerAccount, ownerIncarnationId, ownerSigningPublicKey,
-  sharedAt }]`. With `keyGeneration` below `file.keyGeneration`, the current
+  sharedAt }]`. The owner and the sharer are accounts on `server`, by their
+  user ids (as the envelope names them); `ownerAccount` and `sharerAccount`
+  are their addresses now, shown only. With `keyGeneration` below `file.keyGeneration`, the current
   metadata cannot be opened yet. With `folderKeyCurrent: false`, the file
   opens but edits wait.
 
@@ -2485,7 +2545,8 @@ rotation takes the folder's key). Envelopes the owner re-seals become the
 owner's.
 
 - `GET /api/shared-files` rows also carry the envelope's sender
-  (`sharerAccount`, `sharerIncarnationId`, `sharerSigningPublicKey`), which is
+  (`sharerUserId`, `sharerAccount`, `sharerIncarnationId`,
+  `sharerSigningPublicKey`), which is
   the owner or an editor, plus `editorsCanShare`. A share left at an older
   generation carries `metadataAtShare: { envelope, revision }`: the file's
   metadata as it was then, under the key the share opens.
@@ -3541,9 +3602,11 @@ are edited live through the recipient's server (see *Collaboration across
 servers* below).
 
 - **`POST /api/files/:id/federated-shares`**: owner only. **Body:**
-  `{ recipientUsername, recipientServer, shareEnvelope, canEdit }`. The envelope is a
-  `FileShareEnvelopeV1` at the file's current generation, sealed to the
-  remote account (looked up with `GET /api/drive/federation/users/:username`).
+  `{ recipientServer, recipientAccountId, shareEnvelope, canEdit }` (the
+  recipient's username is taken from their server, as for folders). The envelope is a `FileShareEnvelopeV1` at the file's current
+  generation, sealed to the remote account (`recipientServer` and
+  `recipientAccountId`, looked up with
+  `GET /api/drive/federation/users/:username`).
   **Response:** `201 { inviteUrl }`, of the form
   `…/invite#server=…&capability=…&kind=file`. Only the capability's hash is
   kept.
@@ -3607,10 +3670,17 @@ Return `{ "username", "server", "publicKey" }` for one active local user.
 ### PUT /api/fed/drive/profile-keys
 
 Signed server-to-server delivery of a profile key
-(`{ senderAccount, recipientAccount, envelope, profileVersion }`). The sender
+(`{ sender: { server, accountId }, recipient: { server, accountId },
+envelope, profileVersion }`). The sender
 must be on the calling server and the recipient here, the envelope must name
 both (and the recipient's current incarnation), and a share must exist
 between them. The recipient's client checks the sender's signature.
+
+### GET /api/fed/drive/accounts/:accountId
+
+Signed: one active local account by its permanent id, answered as
+`GET /api/users/by-id/:accountId` answers it (for a peer whose user holds
+the account). `404` when there is none.
 
 ### GET /api/fed/drive/invite
 

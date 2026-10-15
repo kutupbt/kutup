@@ -61,12 +61,17 @@ fn valid_admin_username(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// Whether `username` is the protected break-glass admin (case-insensitive) —
-/// mirrors `isBreakGlass`. The break-glass admin can never be demoted, disabled, or
-/// deleted.
-fn is_break_glass(state: &AppState, username: &str) -> bool {
-    let bg = &state.config.break_glass_admin_username;
-    !bg.is_empty() && bg.eq_ignore_ascii_case(username)
+/// Whether account `id` is the protected break-glass admin: the one
+/// `bootstrap_admin` made, recorded by its id. It can never be demoted,
+/// disabled, wiped or deleted.
+async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT is_break_glass FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+            .unwrap_or(false),
+    )
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -109,10 +114,11 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         bool,
         bool,
         OffsetDateTime,
+        bool,
     );
     let rows: Vec<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
-                  is_admin, is_active, totp_enabled, is_first_login, created_at
+                  is_admin, is_active, totp_enabled, is_first_login, created_at, is_break_glass
            FROM users ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.pool)
@@ -122,8 +128,18 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(id, username, quota, used, is_admin, is_active, totp, first, created)| {
-                let is_protected = is_break_glass(&state, &username);
+            |(
+                id,
+                username,
+                quota,
+                used,
+                is_admin,
+                is_active,
+                totp,
+                first,
+                created,
+                is_protected,
+            )| {
                 UserRow {
                     id,
                     username,
@@ -338,7 +354,7 @@ pub async fn update_user(
     let wants_disable = req.is_active == Some(false);
 
     // Break-glass admin is immutable: never demote or disable it.
-    if is_break_glass(&state, &target_username) && (wants_demote || wants_disable) {
+    if is_break_glass(&state, target).await? && (wants_demote || wants_disable) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -441,7 +457,7 @@ pub async fn delete_user(
             .fetch_optional(&state.pool)
             .await?
             .ok_or_else(|| AppError::not_found("not found"))?;
-    if is_break_glass(&state, target_username.as_deref().unwrap_or_default()) {
+    if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -468,6 +484,8 @@ pub async fn delete_user(
     .bind(hold_days as i32)
     .execute(&mut *tx)
     .await?;
+    // Its account id is never given to anyone again (docs/plans/account-ids.md).
+    crate::account_ids::retire(&mut tx, target).await?;
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
         .execute(&mut *tx)
@@ -2011,7 +2029,7 @@ pub async fn wipe_user(
     let Some(username) = row else {
         return Err(AppError::not_found("not found"));
     };
-    if is_break_glass(&state, username.as_deref().unwrap_or_default()) {
+    if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 

@@ -33,6 +33,12 @@ pub struct RegisterStarted {
     pub registration_response: String,
     /// The setup it is answered under: given back with the record.
     pub server_key_id: u16,
+    /// A sign-up's account id, minted by the server, and its proof: given
+    /// back with the record (docs/plans/account-ids.md).
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub account_id_proof: Option<String>,
 }
 
 impl RegisterStarted {

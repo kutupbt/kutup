@@ -42,10 +42,11 @@ pub struct VersionRow {
     /// The key generation it was sealed at: open it with that generation's
     /// file key.
     key_generation: i32,
-    /// Saved by someone on another server (`user@server`); the owner is
-    /// `authorUserId` then.
+    /// Saved by someone on another server, as `{ server, accountId }`
+    /// (docs/plans/account-ids.md); the owner is `authorUserId` then.
     #[serde(skip_serializing_if = "Option::is_none")]
-    remote_author: Option<String>,
+    #[schema(value_type = Option<Object>)]
+    remote_author: Option<kutup_crypto::account_ref::AccountRef>,
     /// A whole-file version: the version it replaced (`null`: the original
     /// upload, or not recorded).
     parent_version_id: Option<String>,
@@ -65,6 +66,7 @@ pub(crate) type VersionTuple = (
     i32,
     Option<String>,
     Option<Uuid>,
+    Option<Uuid>,
 );
 
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
@@ -80,9 +82,16 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         created,
         kind,
         key_generation,
-        remote_author,
+        remote_author_server,
+        remote_author_account_id,
         parent_version_id,
     ) = t;
+    let remote_author = match (remote_author_server, remote_author_account_id) {
+        (Some(server), Some(id)) => {
+            kutup_crypto::account_ref::AccountRef::new(&server, &id.to_string()).ok()
+        }
+        _ => None,
+    };
     VersionRow {
         id: id.to_string(),
         storage_path: path,
@@ -102,7 +111,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
 
 pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-       remote_author, parent_version_id
+       remote_author_server, remote_author_account_id, parent_version_id
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -408,12 +417,12 @@ pub async fn create(
 
 /// Stores a version from its form fields and sealed blob: checked, charged to
 /// `payer`, recorded, and the collaboration log trimmed up to its position.
-/// `remote_author` names an editor on another server (the owner pays then).
+/// `remote_author` is an editor on another server (the owner pays then).
 pub(crate) async fn store_version(
     state: &AppState,
     fid: Uuid,
     payer: Uuid,
-    remote_author: Option<&str>,
+    remote_author: Option<&kutup_crypto::account_ref::AccountRef>,
     fields: &std::collections::HashMap<String, String>,
     tmp_file: NamedTempFile,
     size: i64,
@@ -516,12 +525,12 @@ pub(crate) async fn store_version(
     let created: VersionTuple = sqlx::query_as(
         r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
-                                      key_generation, remote_author, parent_version_id,
-                                      created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, clock_timestamp())
+                                      key_generation, remote_author_server,
+                                      remote_author_account_id, parent_version_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp())
            RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
                      author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-                     remote_author, parent_version_id"#,
+                     remote_author_server, remote_author_account_id, parent_version_id"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -534,8 +543,9 @@ pub(crate) async fn store_version(
     .bind(keep_forever)
     .bind(kind)
     .bind(key_generation)
-    .bind(remote_author)
+    .bind(remote_author.map(|author| author.server.clone()))
     .bind(parent)
+    .bind(remote_author.map(|author| Uuid::parse_str(&author.account_id).expect("canonical")))
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { isAxiosError } from 'axios'
 import { generateKey, openFileMetadataV1, openFileShareEnvelope, rekeyFileRecordV1, sealFileShareEnvelope, sealPublicLinkFileKeyV1 } from '@kutup/crypto'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { openOwnerLinkKeyV1, sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
 import { useDriveIdentity, type DriveIdentity } from './identity'
@@ -29,11 +30,14 @@ interface SharedFileRow {
   canEdit: boolean
   keyGeneration: number
   folderKeyCurrent: boolean
+  /** The owner's and the sharer's server: with their user ids, who they are. */
+  server: string
   ownerUserId: string
   ownerAccount: string
   ownerIncarnationId: string
   ownerSigningPublicKey: string
   /** Who sealed the envelope: the owner, or an editor the owner lets share. */
+  sharerUserId: string
   sharerAccount: string
   sharerIncarnationId: string
   sharerSigningPublicKey: string
@@ -92,9 +96,9 @@ async function openShared(row: SharedFileRow, me: DriveIdentity, remoteShareId?:
         const fileKey = await openFileShareEnvelope(row.shareEnvelope, row.sharerSigningPublicKey, me.privateKey, {
           fileId: file.id,
           generation: row.keyGeneration,
-          senderAccount: row.sharerAccount,
+          sender: { server: row.server, accountId: row.sharerUserId },
           senderIncarnationId: row.sharerIncarnationId,
-          recipientAccount: me.account,
+          recipient: me.accountRef,
           recipientIncarnationId: me.incarnationId,
         })
         const metadata = current
@@ -187,10 +191,12 @@ async function openRemote(row: RemoteFileShareRow, me: DriveIdentity): Promise<S
         canEdit: data.canEdit,
         keyGeneration: data.keyGeneration,
         folderKeyCurrent: true,
+        server: data.remoteDomain,
         ownerUserId: data.ownerUserId,
         ownerAccount: data.ownerAccount,
         ownerIncarnationId: data.ownerIncarnationId,
         ownerSigningPublicKey: data.ownerSigningPublicKey,
+        sharerUserId: data.ownerUserId,
         sharerAccount: data.ownerAccount,
         sharerIncarnationId: data.ownerIncarnationId,
         sharerSigningPublicKey: data.ownerSigningPublicKey,
@@ -285,8 +291,10 @@ export interface FileLink {
 /** Someone on another server the file is shared with. */
 export interface FederatedFileMember {
   id: string
+  /** Shown only: the recipient is their server and account id. */
   recipientUsername: string
   recipientServer: string
+  recipientAccountId: string
   recipientIncarnationId: string
   canEdit: boolean
   keyGeneration: number
@@ -302,23 +310,42 @@ export interface FileAccess {
   publicLinks: FileLink[]
 }
 
+/** Someone on another server as their server describes them: their account and keys. */
 interface RemoteRecipient {
+  server: string
+  accountId: string
   account: string
   driveHpkePublicKey: string
   accountIncarnationId: string
 }
 
-/** Their Drive key through the signed federation lookup, still the same account incarnation. */
-async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientUsername' | 'recipientServer' | 'recipientIncarnationId'>): Promise<RemoteRecipient> {
-  const { data } = await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(member.recipientUsername)}`, {
+/** Their Drive key from their server, by their account id, still the same account incarnation. */
+async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServer' | 'recipientAccountId' | 'recipientIncarnationId'>): Promise<RemoteRecipient> {
+  const { data } = await api.get<RemoteRecipient>(`/users/by-id/${encodeURIComponent(member.recipientAccountId)}`, {
     params: { server: member.recipientServer },
   })
+  if (data.server !== member.recipientServer || data.accountId !== member.recipientAccountId) {
+    throw new Error('the lookup answered for another account')
+  }
   if (data.accountIncarnationId !== member.recipientIncarnationId) throw new RecipientChanged(data.account)
   return data
 }
 
 function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, generation: number, to: RemoteRecipient) {
-  return sealFor(me, file.id, key, generation, { account: to.account, accountIncarnationId: to.accountIncarnationId, drivePublicKey: to.driveHpkePublicKey })
+  return sealFor(me, file.id, key, generation, {
+    person: { server: to.server, accountId: to.accountId },
+    accountIncarnationId: to.accountIncarnationId,
+    drivePublicKey: to.driveHpkePublicKey,
+  })
+}
+
+/** Someone here the file is shared with: their account (user id here) and keys. */
+function memberTo(me: DriveIdentity, member: Pick<FileAccessMember, 'userId' | 'accountIncarnationId' | 'drivePublicKey'>): SealTo {
+  return {
+    person: { server: me.accountRef.server, accountId: member.userId },
+    accountIncarnationId: member.accountIncarnationId,
+    drivePublicKey: member.drivePublicKey,
+  }
 }
 
 /** A file link's key, from the owner's copy. */
@@ -384,13 +411,20 @@ export function useSetEditorsCanShare() {
   })
 }
 
-function sealFor(me: DriveIdentity, fileId: string, key: Uint8Array, generation: number, to: { account: string; accountIncarnationId: string; drivePublicKey: string }) {
+/** Whom a file's key is sealed to: an account, never an address. */
+interface SealTo {
+  person: AccountRef
+  accountIncarnationId: string
+  drivePublicKey: string
+}
+
+function sealFor(me: DriveIdentity, fileId: string, key: Uint8Array, generation: number, to: SealTo) {
   return sealFileShareEnvelope(key, me.masterKey, to.drivePublicKey, {
     fileId,
     generation,
-    senderAccount: me.account,
+    sender: me.accountRef,
     senderIncarnationId: me.incarnationId,
-    recipientAccount: to.account,
+    recipient: to.person,
     recipientIncarnationId: to.accountIncarnationId,
   })
 }
@@ -412,7 +446,7 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
     const members = await Promise.all(
       behind.map(async (m) => ({
         userId: m.userId,
-        shareEnvelope: await sealFor(me, fresh.id, fresh.fileKey!, fresh.keyGeneration, m),
+        shareEnvelope: await sealFor(me, fresh.id, fresh.fileKey!, fresh.keyGeneration, memberTo(me, m)),
       })),
     )
     const publicLinks = await Promise.all(
@@ -437,8 +471,11 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
   return fresh
 }
 
+/** Who an address leads to now (server-asserted): their account and keys. */
 interface LocalRecipient {
   userId: string
+  server: string
+  accountId: string
   account: string
   driveHpkePublicKey: string
   accountIncarnationId: string
@@ -511,10 +548,11 @@ export function useShareFile() {
           }
           await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
           const file = await bringFileSharesUpToDate(input.folder, input.file, me)
+          if (remote.server !== server) throw new RecipientNotFound()
           const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
           const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
-            recipientUsername: username,
             recipientServer: server,
+            recipientAccountId: remote.accountId,
             shareEnvelope,
             canEdit: input.canEdit,
           })
@@ -526,7 +564,7 @@ export function useShareFile() {
         // shares the key they hold (the server takes it only if it is current).
         const file = owner ? await bringFileSharesUpToDate(input.folder, input.file, me) : input.file
         const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
-          account: recipient.account,
+          person: { server: recipient.server, accountId: recipient.accountId },
           accountIncarnationId: recipient.accountIncarnationId,
           drivePublicKey: recipient.driveHpkePublicKey,
         })
@@ -552,11 +590,7 @@ export function useSetFileRole() {
       if (!canShareFile(input.folder, input.file)) throw new Error('only the owner changes what people may do')
       try {
         const file = await bringFileSharesUpToDate(input.folder, input.file, me)
-        const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, {
-          account: input.member.account,
-          accountIncarnationId: input.member.accountIncarnationId,
-          drivePublicKey: input.member.drivePublicKey,
-        })
+        const shareEnvelope = await sealFor(me, file.id, file.fileKey!, file.keyGeneration, memberTo(me, input.member))
         await api.post(`/files/${file.id}/share`, { recipientUserId: input.member.userId, shareEnvelope, canEdit: input.canEdit })
       } finally {
         await queryClient.invalidateQueries({ queryKey: fileAccessKey(input.file.id) })
@@ -598,7 +632,7 @@ export function useRemoveFileAccess() {
       const members = await Promise.all(
         access.members
           .filter((m) => !removed.includes(m.userId))
-          .map(async (m) => ({ userId: m.userId, shareEnvelope: await sealFor(me, file.id, next.fileKey, next.keyGeneration, m) })),
+          .map(async (m) => ({ userId: m.userId, shareEnvelope: await sealFor(me, file.id, next.fileKey, next.keyGeneration, memberTo(me, m)) })),
       )
       const publicLinks = await Promise.all(
         access.publicLinks

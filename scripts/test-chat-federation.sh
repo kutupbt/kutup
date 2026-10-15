@@ -130,6 +130,11 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
   "SELECT COUNT(*) FROM remote_account_renames WHERE domain='a.test' AND current_address LIKE 'ren_alicia@%'")"
 [[ "$kept_renames" == "1" ]] || { echo "B did not keep A's rename chain ($kept_renames)" >&2; exit 1; }
 
+# Shares follow accounts (docs/plans/account-ids.md): renames on both sides
+# with a folder and a file shared across, and a freed name taken by someone
+# new inheriting nothing.
+run_phase account-ids
+
 # Destination Chat-media state may contain the authenticated origin domain and
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.

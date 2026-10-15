@@ -1281,9 +1281,9 @@ pub fn seal_named_share_envelope(
     recipient_hpke_public_key_base64: &str,
     collection_id: &str,
     epoch: u32,
-    sender_account: &str,
+    sender: JsValue,
     sender_incarnation_id: &str,
-    recipient_account: &str,
+    recipient: JsValue,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let collection_key = decode_canonical_base64(collection_key_base64, "collection key")?;
@@ -1301,10 +1301,10 @@ pub fn seal_named_share_envelope(
         &collection_key,
         collection_id,
         epoch,
-        sender_account,
+        &account_arg(sender, "sender account")?,
         sender_incarnation_id,
         sender_identity.drive_signing_key(),
-        recipient_account,
+        &account_arg(recipient, "recipient account")?,
         recipient_incarnation_id,
         &recipient_public_key,
     )
@@ -1320,9 +1320,9 @@ pub fn open_named_share_envelope(
     recipient_hpke_private_key_base64: &str,
     expected_collection_id: &str,
     expected_epoch: u32,
-    expected_sender_account: &str,
+    expected_sender: JsValue,
     expected_sender_incarnation_id: &str,
-    expected_recipient_account: &str,
+    expected_recipient: JsValue,
     expected_recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let sender_signing_public_key = decode_canonical_base64(
@@ -1339,10 +1339,10 @@ pub fn open_named_share_envelope(
         .open(
             expected_collection_id,
             expected_epoch,
-            expected_sender_account,
+            &account_arg(expected_sender, "sender account")?,
             expected_sender_incarnation_id,
             &sender_signing_public_key,
-            expected_recipient_account,
+            &account_arg(expected_recipient, "recipient account")?,
             expected_recipient_incarnation_id,
             &recipient_private_key,
         )
@@ -1360,9 +1360,9 @@ pub fn seal_file_share_envelope(
     recipient_hpke_public_key_base64: &str,
     file_id: &str,
     generation: u32,
-    sender_account: &str,
+    sender: JsValue,
     sender_incarnation_id: &str,
-    recipient_account: &str,
+    recipient: JsValue,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
@@ -1380,10 +1380,10 @@ pub fn seal_file_share_envelope(
         &file_key,
         file_id,
         generation,
-        sender_account,
+        &account_arg(sender, "sender account")?,
         sender_incarnation_id,
         sender_identity.drive_signing_key(),
-        recipient_account,
+        &account_arg(recipient, "recipient account")?,
         recipient_incarnation_id,
         &recipient_public_key,
     )
@@ -1399,9 +1399,9 @@ pub fn open_file_share_envelope(
     recipient_hpke_private_key_base64: &str,
     expected_file_id: &str,
     expected_generation: u32,
-    expected_sender_account: &str,
+    expected_sender: JsValue,
     expected_sender_incarnation_id: &str,
-    expected_recipient_account: &str,
+    expected_recipient: JsValue,
     expected_recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let sender_signing_public_key = decode_canonical_base64(
@@ -1418,10 +1418,10 @@ pub fn open_file_share_envelope(
         .open(
             expected_file_id,
             expected_generation,
-            expected_sender_account,
+            &account_arg(expected_sender, "sender account")?,
             expected_sender_incarnation_id,
             &sender_signing_public_key,
-            expected_recipient_account,
+            &account_arg(expected_recipient, "recipient account")?,
             expected_recipient_incarnation_id,
             &recipient_private_key,
         )
@@ -1436,9 +1436,9 @@ pub fn seal_profile_key_envelope(
     profile_key_base64: &str,
     sender_master_key_base64: &str,
     recipient_hpke_public_key_base64: &str,
-    sender_account: &str,
+    sender: JsValue,
     sender_incarnation_id: &str,
-    recipient_account: &str,
+    recipient: JsValue,
     recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let profile_key = decode_canonical_base64(profile_key_base64, "profile key")?;
@@ -1455,9 +1455,9 @@ pub fn seal_profile_key_envelope(
     kutup_crypto::profile_key_share::ProfileKeyEnvelopeV1::seal(
         &profile_key,
         &kutup_crypto::profile_key_share::ProfileKeyParties {
-            sender_account,
+            sender: &account_arg(sender, "sender account")?,
             sender_incarnation_id,
-            recipient_account,
+            recipient: &account_arg(recipient, "recipient account")?,
             recipient_incarnation_id,
         },
         sender_identity.drive_signing_key(),
@@ -1473,9 +1473,9 @@ pub fn open_profile_key_envelope(
     envelope_base64: &str,
     sender_signing_public_key_base64: &str,
     recipient_hpke_private_key_base64: &str,
-    expected_sender_account: &str,
+    expected_sender: JsValue,
     expected_sender_incarnation_id: &str,
-    expected_recipient_account: &str,
+    expected_recipient: JsValue,
     expected_recipient_incarnation_id: &str,
 ) -> Result<String, JsValue> {
     let sender_signing_public_key = decode_canonical_base64(
@@ -1492,9 +1492,9 @@ pub fn open_profile_key_envelope(
     let key = envelope
         .open(
             &kutup_crypto::profile_key_share::ProfileKeyParties {
-                sender_account: expected_sender_account,
+                sender: &account_arg(expected_sender, "sender account")?,
                 sender_incarnation_id: expected_sender_incarnation_id,
-                recipient_account: expected_recipient_account,
+                recipient: &account_arg(expected_recipient, "recipient account")?,
                 recipient_incarnation_id: expected_recipient_incarnation_id,
             },
             &sender_signing_public_key,
@@ -1588,6 +1588,14 @@ fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue>
         return Err(js_error(&format!("{field} must be canonical base64")));
     }
     Ok(decoded)
+}
+
+/// An account reference from JavaScript: `{ server, accountId }`, checked.
+fn account_arg(
+    value: JsValue,
+    what: &str,
+) -> Result<kutup_crypto::account_ref::AccountRef, JsValue> {
+    serde_wasm_bindgen::from_value(value).map_err(|error| js_error(&format!("{what}: {error}")))
 }
 
 fn js_error(message: &str) -> JsValue {
@@ -2746,21 +2754,27 @@ fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {
         .map_err(|_| js_error(&format!("{what} must be 32 bytes")))
 }
 
-/// The account's Drive key binding: its authority vouching for its Drive keys.
+/// The account's Drive key binding: its authority vouching for its Drive keys
+/// as `account`'s (`{ server, accountId }`).
 #[wasm_bindgen(js_name = signDriveKeyBinding)]
-pub fn sign_drive_key_binding(master_key_base64: &str, account: &str) -> Result<String, JsValue> {
+pub fn sign_drive_key_binding(
+    master_key_base64: &str,
+    account: JsValue,
+) -> Result<String, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
-    let signature = kutup_crypto::drive_key_binding::sign(&identity, account)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let signature =
+        kutup_crypto::drive_key_binding::sign(&identity, &account_arg(account, "account account")?)
+            .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(signature))
 }
 
-/// Whether `authority` vouches for these Drive keys of `account`.
+/// Whether `authority` vouches for these Drive keys of `account`
+/// (`{ server, accountId }`).
 #[wasm_bindgen(js_name = verifyDriveKeyBinding)]
 pub fn verify_drive_key_binding(
-    account: &str,
+    account: JsValue,
     authority_public_key_base64: &str,
     drive_hpke_public_key_base64: &str,
     drive_signing_public_key_base64: &str,
@@ -2769,7 +2783,7 @@ pub fn verify_drive_key_binding(
     let check = || -> Result<(), JsValue> {
         let signature = decode_canonical_base64(binding_base64, "binding")?;
         kutup_crypto::drive_key_binding::verify(
-            account,
+            &account_arg(account, "account account")?,
             &public_key_32(authority_public_key_base64, "authority key")?,
             &public_key_32(drive_hpke_public_key_base64, "Drive HPKE key")?,
             &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,

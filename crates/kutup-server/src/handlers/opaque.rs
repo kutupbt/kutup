@@ -522,6 +522,13 @@ pub struct RegisterStartResponse {
     registration_response: String,
     /// The setup it is answered under: given back with the record.
     server_key_id: u16,
+    /// A sign-up's account id, minted now (docs/plans/account-ids.md), with
+    /// its proof: the client signs its Drive key binding for this id, and
+    /// gives both back with the registration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_id_proof: Option<String>,
 }
 
 async fn key_binding_unused(state: &AppState, key_binding: &str) -> AppResult<()> {
@@ -563,6 +570,7 @@ pub async fn register_start(
     if !crate::handlers::auth::is_key_binding(&req.key_binding) {
         return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
     }
+    let mut minted = None;
     match req.grant.as_deref() {
         Some(token) => {
             let (purpose, grant) = grants::peek(
@@ -623,6 +631,7 @@ pub async fn register_start(
                         .with_details(serde_json::json!({ "code": "registrationClosed" })));
                 }
                 key_binding_unused(&state, &req.key_binding).await?;
+                minted = Some(crate::account_ids::mint(&state, &req.key_binding).await?);
             }
         },
     }
@@ -630,9 +639,15 @@ pub async fn register_start(
     let response =
         kutup_crypto::opaque::server_registration_response(secrets, &request, &req.key_binding)
             .map_err(|_| AppError::bad_request("invalid registrationRequest"))?;
+    let (account_id, account_id_proof) = match minted {
+        Some((id, proof)) => (Some(id.to_string()), Some(proof)),
+        None => (None, None),
+    };
     Ok(Json(RegisterStartResponse {
         registration_response: STANDARD.encode(response),
         server_key_id,
+        account_id,
+        account_id_proof,
     })
     .into_response())
 }

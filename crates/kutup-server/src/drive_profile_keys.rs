@@ -6,7 +6,9 @@
 //! [`ProfileKeyEnvelopeV1`]: sealed to the recipient's Drive key and signed by
 //! the sender, so this server stores and forwards it without reading it. It
 //! is accepted only between two people with a share between them, in either
-//! direction; one key per pair, whatever the number of shared folders.
+//! direction; one key per pair, whatever the number of shared folders. People
+//! are their server and account id (docs/plans/account-ids.md), never their
+//! names: a rename on either side changes nothing here.
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -14,6 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::profile_key_share::{ProfileKeyEnvelopeV1, ProfileKeyParties};
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
@@ -23,10 +26,7 @@ use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::drive_federation::{
-    canonical_domain, canonical_username, configured_stack, gateway_error, signed_app_error,
-    signed_json,
-};
+use crate::drive_federation::{configured_stack, gateway_error, signed_app_error, signed_json};
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
 use crate::handlers::chat::canonical_profile_version;
@@ -39,10 +39,11 @@ const FED_PATH: &str = "/api/fed/drive/profile-keys";
 const MAX_ENVELOPE_CHARS: usize = 2048;
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PutProfileKeyRequest {
-    /// Canonical `user@server` of the person the key is for.
-    pub recipient_account: String,
+    /// The person the key is for: their server and account id.
+    pub recipient_server: String,
+    pub recipient_account_id: String,
     /// Base64 `ProfileKeyEnvelopeV1`.
     pub envelope: String,
     /// The version the key opens, so the sender can tell when it is stale.
@@ -53,7 +54,10 @@ pub struct PutProfileKeyRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DrivePerson {
-    /// Canonical `user@server`.
+    /// Who they are: their server and account id.
+    pub server: String,
+    pub account_id: String,
+    /// Their address now, to show (`user@server`).
     pub account: String,
     /// On this server; the keys below are then filled in. For someone on
     /// another server, look them up through `/api/drive/federation/users`.
@@ -79,24 +83,18 @@ pub struct DrivePeopleResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FederatedProfileKey {
-    pub sender_account: String,
-    pub recipient_account: String,
+    #[schema(value_type = Object)]
+    pub sender: AccountRef,
+    #[schema(value_type = Object)]
+    pub recipient: AccountRef,
     pub envelope: String,
     pub profile_version: String,
 }
 
 struct LocalUser {
     id: Uuid,
-    username: String,
     incarnation: String,
     signing_public_key: String,
-}
-
-fn split_account(account: &str) -> AppResult<(&str, &str)> {
-    let (username, domain) = account
-        .rsplit_once('@')
-        .ok_or_else(|| AppError::bad_request("invalid account"))?;
-    Ok((canonical_username(username)?, canonical_domain(domain)?))
 }
 
 fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
@@ -107,42 +105,25 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
         .map_err(|_| AppError::bad_request("invalid profile key envelope"))
 }
 
-async fn local_user_by_id(pool: &PgPool, id: Uuid) -> AppResult<LocalUser> {
-    let row: Option<(Uuid, Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, username, account_incarnation_id, drive_signing_public_key
+async fn local_user(pool: &PgPool, id: Uuid) -> AppResult<Option<LocalUser>> {
+    let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, account_incarnation_id, drive_signing_public_key
          FROM users WHERE id = $1 AND is_active = true",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    match row {
-        Some((id, Some(username), incarnation, Some(signing_public_key))) => Ok(LocalUser {
-            id,
-            username,
-            incarnation,
-            signing_public_key,
-        }),
-        _ => Err(AppError::conflict("account identity is unavailable")),
-    }
-}
-
-async fn local_user_by_name(pool: &PgPool, username: &str) -> AppResult<Option<LocalUser>> {
-    // Any spelling finds the account; it goes by its name as stored.
-    let row: Option<(Uuid, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, username, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE id = kutup_current_user($1) AND is_active = true",
-    )
-    .bind(username)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.and_then(|(id, username, incarnation, signing)| {
+    Ok(row.and_then(|(id, incarnation, signing)| {
         signing.map(|signing_public_key| LocalUser {
             id,
-            username,
             incarnation,
             signing_public_key,
         })
     }))
+}
+
+fn account_uuid(person: &AccountRef) -> Uuid {
+    Uuid::parse_str(&person.account_id).expect("an AccountRef holds a canonical UUID")
 }
 
 /// Whether two local people share a folder or a file, either way round.
@@ -167,44 +148,39 @@ async fn local_pair_shares(pool: &PgPool, a: Uuid, b: Uuid) -> AppResult<bool> {
 }
 
 /// Whether a local person and someone on another server share a folder,
-/// either way round.
-async fn remote_pair_shares(
-    pool: &PgPool,
-    local: Uuid,
-    remote_username: &str,
-    remote_domain: &str,
-) -> AppResult<bool> {
+/// either way round: matched by their account id, never their name.
+async fn remote_pair_shares(pool: &PgPool, local: Uuid, remote: &AccountRef) -> AppResult<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT 1 FROM federated_outgoing_shares s
             JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
-            WHERE s.sharer_user_id = $1 AND s.recipient_username = $2 AND s.recipient_domain = $3)
+            WHERE s.sharer_user_id = $1 AND s.recipient_domain = $2 AND s.recipient_account_id = $3)
          OR EXISTS (
             SELECT 1 FROM federated_incoming_shares
-            WHERE user_id = $1 AND remote_domain = $3 AND owner_account = $4)",
+            WHERE user_id = $1 AND remote_domain = $2 AND owner_user_id = $3)",
     )
     .bind(local)
-    .bind(remote_username)
-    .bind(remote_domain)
-    .bind(format!("{remote_username}@{remote_domain}"))
+    .bind(&remote.server)
+    .bind(account_uuid(remote))
     .fetch_one(pool)
     .await?)
 }
 
 async fn store(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     user_id: Uuid,
     direction: &str,
-    peer_account: &str,
+    peer: &AccountRef,
     peer_incarnation_id: &str,
     envelope: &str,
     profile_version: &str,
 ) -> AppResult<()> {
     sqlx::query(
         "INSERT INTO drive_profile_keys
-             (user_id, direction, peer_account, peer_incarnation_id, envelope, profile_version)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (user_id, direction, peer_account) DO UPDATE SET
+             (user_id, direction, peer_server, peer_account_id, peer_incarnation_id, envelope,
+              profile_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id, direction, peer_server, peer_account_id) DO UPDATE SET
              peer_incarnation_id = EXCLUDED.peer_incarnation_id,
              envelope = EXCLUDED.envelope,
              profile_version = EXCLUDED.profile_version,
@@ -212,11 +188,12 @@ async fn store(
     )
     .bind(user_id)
     .bind(direction)
-    .bind(peer_account)
+    .bind(&peer.server)
+    .bind(account_uuid(peer))
     .bind(peer_incarnation_id)
     .bind(envelope)
     .bind(profile_version)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
@@ -237,9 +214,9 @@ pub async fn list_people(
 ) -> AppResult<Json<DrivePeopleResponse>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let domain = state.config.chat_server_name.as_str();
-    type LocalRow = (String, String, String, Option<String>);
+    type LocalRow = (Uuid, String, String, String, Option<String>);
     let local: Vec<LocalRow> = sqlx::query_as(
-        "SELECT u.username, u.account_incarnation_id, u.public_key, u.drive_signing_public_key
+        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.drive_signing_public_key
          FROM users u
          WHERE u.is_active = true AND u.username IS NOT NULL AND u.id <> $1 AND u.id IN (
              SELECT cs.recipient_user_id FROM collection_shares cs
@@ -264,19 +241,25 @@ pub async fn list_people(
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
-    let remote: Vec<String> = sqlx::query_scalar(
-        "SELECT s.recipient_username || '@' || s.recipient_domain FROM federated_outgoing_shares s
-         JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
-         WHERE s.sharer_user_id = $1
-         UNION
-         SELECT owner_account FROM federated_incoming_shares WHERE user_id = $1
-         ORDER BY 1",
+    // Remote people by (server, account id), with the address each share
+    // last named them by (kept current by rename announces), to show.
+    let remote: Vec<(String, Uuid, String)> = sqlx::query_as(
+        "SELECT DISTINCT ON (server, account_id) server, account_id, account FROM (
+             SELECT s.recipient_domain AS server, s.recipient_account_id AS account_id,
+                    s.recipient_username || '@' || s.recipient_domain AS account
+               FROM federated_outgoing_shares s
+               JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
+              WHERE s.sharer_user_id = $1
+             UNION ALL
+             SELECT remote_domain, owner_user_id, owner_account
+               FROM federated_incoming_shares WHERE user_id = $1) people
+         ORDER BY server, account_id, account",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
-    let exchanged: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT direction, peer_account, envelope, profile_version
+    let exchanged: Vec<(String, String, Uuid, String, String)> = sqlx::query_as(
+        "SELECT direction, peer_server, peer_account_id, envelope, profile_version
          FROM drive_profile_keys WHERE user_id = $1",
     )
     .bind(user_id)
@@ -284,21 +267,23 @@ pub async fn list_people(
     .await?;
     let mut received = std::collections::HashMap::new();
     let mut sent = std::collections::HashMap::new();
-    for (direction, peer, envelope, version) in exchanged {
+    for (direction, server, account_id, envelope, version) in exchanged {
         if direction == "received" {
-            received.insert(peer, envelope);
+            received.insert((server, account_id), envelope);
         } else {
-            sent.insert(peer, version);
+            sent.insert((server, account_id), version);
         }
     }
     let mut people: Vec<DrivePerson> = local
         .into_iter()
-        .map(|(username, incarnation, public_key, signing)| {
-            let account = format!("{username}@{domain}");
+        .map(|(id, username, incarnation, public_key, signing)| {
+            let key = (domain.to_owned(), id);
             DrivePerson {
-                received_envelope: received.remove(&account),
-                sent_profile_version: sent.remove(&account),
-                account,
+                received_envelope: received.remove(&key),
+                sent_profile_version: sent.remove(&key),
+                server: domain.to_owned(),
+                account_id: id.to_string(),
+                account: format!("{username}@{domain}"),
                 local: true,
                 account_incarnation_id: Some(incarnation),
                 drive_public_key: Some(public_key),
@@ -306,15 +291,21 @@ pub async fn list_people(
             }
         })
         .collect();
-    people.extend(remote.into_iter().map(|account| DrivePerson {
-        received_envelope: received.remove(&account),
-        sent_profile_version: sent.remove(&account),
-        account,
-        local: false,
-        account_incarnation_id: None,
-        drive_public_key: None,
-        drive_signing_public_key: None,
+    people.extend(remote.into_iter().map(|(server, account_id, account)| {
+        let key = (server.clone(), account_id);
+        DrivePerson {
+            received_envelope: received.remove(&key),
+            sent_profile_version: sent.remove(&key),
+            server,
+            account_id: account_id.to_string(),
+            account,
+            local: false,
+            account_incarnation_id: None,
+            drive_public_key: None,
+            drive_signing_public_key: None,
+        }
     }));
+    people.sort_by(|a, b| a.account.cmp(&b.account));
     Ok(Json(DrivePeopleResponse { people }))
 }
 
@@ -340,12 +331,14 @@ pub async fn put_profile_key(
     if !canonical_profile_version(&request.profile_version) {
         return Err(AppError::bad_request("invalid profile version"));
     }
-    let me = local_user_by_id(&state.pool, trusted_uuid(&user.user_id)?).await?;
+    let me = local_user(&state.pool, trusted_uuid(&user.user_id)?)
+        .await?
+        .ok_or_else(|| AppError::conflict("account identity is unavailable"))?;
     let local_domain = state.config.chat_server_name.as_str();
-    let my_account = format!("{}@{local_domain}", me.username);
-    let (username, domain) = split_account(&request.recipient_account)?;
-    let recipient_account = format!("{username}@{domain}");
-    if recipient_account == my_account {
+    let mine = crate::account_ids::local(local_domain, me.id)?;
+    let recipient =
+        crate::account_ids::remote(&request.recipient_server, &request.recipient_account_id)?;
+    if recipient == mine {
         return Err(AppError::bad_request("a profile key goes to someone else"));
     }
 
@@ -358,76 +351,62 @@ pub async fn put_profile_key(
     envelope
         .verify(
             &ProfileKeyParties {
-                sender_account: &my_account,
+                sender: &mine,
                 sender_incarnation_id: &me.incarnation,
-                recipient_account: &recipient_account,
+                recipient: &recipient,
                 recipient_incarnation_id: &recipient_incarnation,
             },
             &signing,
         )
         .map_err(|_| AppError::bad_request("profile key envelope does not match"))?;
 
-    if domain == local_domain {
-        let recipient = local_user_by_name(&state.pool, username)
+    if recipient.server == local_domain {
+        let other = local_user(&state.pool, account_uuid(&recipient))
             .await?
-            .filter(|recipient| recipient.incarnation == recipient_incarnation)
+            .filter(|other| other.incarnation == recipient_incarnation)
             .ok_or_else(|| AppError::not_found("no share with that person"))?;
-        if !local_pair_shares(&state.pool, me.id, recipient.id).await? {
+        if !local_pair_shares(&state.pool, me.id, other.id).await? {
             return Err(AppError::not_found("no share with that person"));
         }
         let mut tx = state.pool.begin().await?;
-        for (user_id, direction, peer, peer_incarnation) in [
-            (
-                me.id,
-                "sent",
-                recipient_account.as_str(),
-                recipient_incarnation.as_str(),
-            ),
-            (
-                recipient.id,
-                "received",
-                my_account.as_str(),
-                me.incarnation.as_str(),
-            ),
-        ] {
-            sqlx::query(
-                "INSERT INTO drive_profile_keys
-                     (user_id, direction, peer_account, peer_incarnation_id, envelope,
-                      profile_version)
-                 VALUES ($1, $2, $3, $4, $5, $6)
-                 ON CONFLICT (user_id, direction, peer_account) DO UPDATE SET
-                     peer_incarnation_id = EXCLUDED.peer_incarnation_id,
-                     envelope = EXCLUDED.envelope,
-                     profile_version = EXCLUDED.profile_version,
-                     updated_at = now()",
-            )
-            .bind(user_id)
-            .bind(direction)
-            .bind(peer)
-            .bind(peer_incarnation)
-            .bind(&request.envelope)
-            .bind(&request.profile_version)
-            .execute(&mut *tx)
-            .await?;
-        }
+        store(
+            &mut tx,
+            me.id,
+            "sent",
+            &recipient,
+            &recipient_incarnation,
+            &request.envelope,
+            &request.profile_version,
+        )
+        .await?;
+        store(
+            &mut tx,
+            other.id,
+            "received",
+            &mine,
+            &me.incarnation,
+            &request.envelope,
+            &request.profile_version,
+        )
+        .await?;
         tx.commit().await?;
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
-    if !remote_pair_shares(&state.pool, me.id, username, domain).await? {
+    if !remote_pair_shares(&state.pool, me.id, &recipient).await? {
         return Err(AppError::not_found("no share with that person"));
     }
     let federation = configured_stack(&state)?;
     let body = serde_json::to_vec(&FederatedProfileKey {
-        sender_account: my_account,
-        recipient_account: recipient_account.clone(),
+        sender: mine,
+        recipient: recipient.clone(),
         envelope: request.envelope.clone(),
         profile_version: request.profile_version.clone(),
     })
     .map_err(|error| AppError::internal(format!("serialize profile key: {error}")))?;
     let response = federation
         .send(
-            domain,
+            &recipient.server,
             FederationRequestSpec {
                 feature: FederationFeature::DriveV1,
                 method: Method::PUT,
@@ -452,11 +431,12 @@ pub async fn put_profile_key(
             ))
         }
     }
+    let mut conn = state.pool.acquire().await?;
     store(
-        &state.pool,
+        &mut conn,
         me.id,
         "sent",
-        &recipient_account,
+        &recipient,
         &recipient_incarnation,
         &request.envelope,
         &request.profile_version,
@@ -501,32 +481,31 @@ pub async fn receive_profile_key(
         if !canonical_profile_version(&delivery.profile_version) {
             return Err(AppError::bad_request("invalid profile version"));
         }
-        let (sender_username, sender_domain) = split_account(&delivery.sender_account)?;
-        let (recipient_username, recipient_domain) = split_account(&delivery.recipient_account)?;
-        if sender_domain != authenticated.origin()
-            || recipient_domain != state.config.chat_server_name
+        if delivery.sender.server != authenticated.origin()
+            || delivery.recipient.server != state.config.chat_server_name
         {
             return Err(AppError::forbidden("profile key is for another server"));
         }
         let not_shared = || AppError::not_found("no share between them");
-        let recipient = local_user_by_name(&state.pool, recipient_username)
+        let recipient = local_user(&state.pool, account_uuid(&delivery.recipient))
             .await?
             .ok_or_else(not_shared)?;
         let envelope = decode_envelope(&delivery.envelope)?;
-        if envelope.sender_account != delivery.sender_account
-            || envelope.recipient_account != delivery.recipient_account
+        if envelope.sender != delivery.sender
+            || envelope.recipient != delivery.recipient
             || hex::encode(envelope.recipient_incarnation_id) != recipient.incarnation
         {
             return Err(AppError::bad_request("profile key envelope does not match"));
         }
-        if !remote_pair_shares(&state.pool, recipient.id, sender_username, sender_domain).await? {
+        if !remote_pair_shares(&state.pool, recipient.id, &delivery.sender).await? {
             return Err(not_shared());
         }
+        let mut conn = state.pool.acquire().await?;
         store(
-            &state.pool,
+            &mut conn,
             recipient.id,
             "received",
-            &delivery.sender_account,
+            &delivery.sender,
             &hex::encode(envelope.sender_incarnation_id),
             &delivery.envelope,
             &delivery.profile_version,

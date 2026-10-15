@@ -147,8 +147,6 @@ pub struct RenameRequest {
     /// The `AccountRenameV1` statement, as signed by the account authority.
     #[schema(value_type = Object)]
     rename: AccountRenameV1,
-    /// The Drive key binding re-signed for the new address (canonical base64).
-    drive_key_binding: String,
     /// The new address's first key and key list (as `POST
     /// /api/mail/addresses/{id}/keys` takes them), so mail to it is never
     /// deferred. None only when taking back a held name whose address still
@@ -204,10 +202,10 @@ pub async fn rename(
     let user_id = trusted_uuid(&user.user_id)?;
     let server = state.config.chat_server_name.to_ascii_lowercase();
     let mut tx = state.pool.begin().await?;
-    type Account = (String, String, String, String, String, bool);
-    let (username, incarnation, authority, hpke, signing, first_login): Account = sqlx::query_as(
+    type Account = (String, String, String, bool, bool);
+    let (username, incarnation, authority, first_login, break_glass): Account = sqlx::query_as(
         "SELECT COALESCE(username, ''), account_incarnation_id, account_authority_public_key,
-                public_key, drive_signing_public_key, is_first_login
+                is_first_login, is_break_glass
            FROM users WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
@@ -219,10 +217,7 @@ pub async fn rename(
             .with_details(json!({ "code": "setupRequired" })));
     }
     grants::take_for_session(&mut *tx, &req.grant, Purpose::Rename, &user).await?;
-    let break_glass = &state.config.break_glass_admin_username;
-    if !break_glass.is_empty()
-        && kutup_crypto::names::fold(break_glass) == kutup_crypto::names::fold(&username)
-    {
+    if break_glass {
         return Err(
             AppError::forbidden("the break-glass account keeps its name")
                 .with_details(json!({ "code": "breakGlassAccount" })),
@@ -331,7 +326,7 @@ pub async fn rename(
     let found = match account_names::available(
         &mut tx,
         &server,
-        break_glass,
+        &state.config.break_glass_admin_username,
         &new_name,
         Some((user_id, &incarnation)),
     )
@@ -366,14 +361,8 @@ pub async fn rename(
         )
         .with_details(json!({ "code": "tooManyHeldNames" })));
     }
-    crate::handlers::auth::verify_drive_key_binding(
-        &statement.current,
-        &authority,
-        &hpke,
-        &signing,
-        &req.drive_key_binding,
-    )
-    .map_err(|_| rename_invalid("the Drive key binding"))?;
+    // The Drive key binding names the account id, not the name
+    // (docs/plans/account-ids.md): a rename leaves it as it is.
 
     // In one transaction: the names, the account, the chain, the addresses.
     let (hold_days, receive_days) =
@@ -409,15 +398,12 @@ pub async fn rename(
             account_names::claim(&mut tx, &new_name, user_id, Some(&incarnation)).await?
         }
     }
-    sqlx::query(
-        "UPDATE users SET username = $2, drive_key_binding = $3, updated_at = now() WHERE id = $1",
-    )
-    .bind(user_id)
-    .bind(&new_name)
-    .bind(&req.drive_key_binding)
-    .execute(&mut *tx)
-    .await
-    .map_err(crate::handlers::auth::map_insert_conflict)?;
+    sqlx::query("UPDATE users SET username = $2, updated_at = now() WHERE id = $1")
+        .bind(user_id)
+        .bind(&new_name)
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::handlers::auth::map_insert_conflict)?;
     sqlx::query(
         "INSERT INTO account_renames
              (incarnation_id, sequence, user_id, authority_public_key, previous, current,
@@ -504,16 +490,6 @@ pub async fn rename(
           WHERE address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1 AND state <> 'active')",
     )
     .bind(user_id)
-    .execute(&mut *tx)
-    .await?;
-    // Profile key shares this server holds about the account, by incarnation.
-    sqlx::query(
-        "UPDATE drive_profile_keys SET peer_account = $2
-          WHERE peer_incarnation_id = $1 AND peer_account = $3",
-    )
-    .bind(&incarnation)
-    .bind(&statement.current)
-    .bind(&old_address)
     .execute(&mut *tx)
     .await?;
     security_events::record_names(

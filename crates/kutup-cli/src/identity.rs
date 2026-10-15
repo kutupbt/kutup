@@ -8,6 +8,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
 use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate, Recorded};
@@ -70,16 +71,20 @@ pub struct Claimed<'a> {
 
 /// A person as their server describes them.
 pub struct Published {
+    /// The address they were looked up by.
     pub account: String,
+    /// Who they are, for good: their server and account id.
+    pub account_ref: AccountRef,
     pub authority: String,
     pub hpke: String,
     pub signing: String,
     pub binding: Option<String>,
 }
 
-/// This account's address and keys.
+/// This account, by its id, and its keys.
 pub struct Me {
-    pub account: String,
+    /// This account, for good: the server and its id (`users.id`).
+    pub account_ref: AccountRef,
     /// The account's key binding, which its own seals (the pin list) bind.
     binding: String,
     pub identity: AccountIdentityKeysV1,
@@ -95,9 +100,15 @@ impl Me {
             .as_slice()
             .try_into()
             .context("master key must be 32 bytes")?;
-        let server = ctx.client.settings()?.chat.server_name;
+        // Who this account is, read with the session: by its id, never by
+        // the username the session last saw (a rename elsewhere changes it).
+        let current = ctx.client.me().context("read the account")?;
+        if current.account_id != ctx.session.user_id {
+            bail!("the server described another account than this session's");
+        }
         Ok(Me {
-            account: format!("{}@{server}", ctx.session.username),
+            account_ref: AccountRef::new(&current.server, &current.account_id)
+                .context("this session's account id is not valid")?,
             binding: ctx.session.binding().to_string(),
             identity: AccountIdentityKeysV1::derive(&master_key)?,
             master_key,
@@ -131,10 +142,13 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
     let (username, server) = account
         .split_once('@')
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
-    let local = me.account.split_once('@').map(|(_, s)| s) == Some(server);
+    let local = me.account_ref.server == server;
     let person = if local {
         let user = ctx.client.get_user_by_address(account)?;
         Published {
+            // On this server the account id is the user id.
+            account_ref: AccountRef::new(server, &user.user_id)
+                .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
             account: user.account,
             authority: user.account_authority_public_key,
             hpke: user.drive_hpke_public_key,
@@ -144,6 +158,8 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
     } else {
         let user = ctx.client.get_fed_pubkey(username, server)?;
         Published {
+            account_ref: AccountRef::new(server, &user.account_id)
+                .with_context(|| format!("{server} gave no valid account id for {account}"))?,
             account: user.account,
             authority: user.account_authority_public_key,
             hpke: user.drive_hpke_public_key,
@@ -155,6 +171,13 @@ pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
         bail!("the lookup for {account} answered for {}", person.account);
     }
     Ok(person)
+}
+
+/// This account itself, under any of its names, is trusted: by its account
+/// id only, never by an address. An address this account had may since be
+/// someone else's, and the lookup then answers for them.
+fn self_status(me: &AccountRef, person: &Published) -> Option<Status> {
+    (person.account_ref == *me).then_some(Status::Ok { verified: true })
 }
 
 fn key32(value: &str) -> Option<[u8; 32]> {
@@ -175,7 +198,7 @@ fn bound(person: &Published) -> bool {
     ) else {
         return false;
     };
-    drive_key_binding::verify(&person.account, &authority, &hpke, &signing, &binding).is_ok()
+    drive_key_binding::verify(&person.account_ref, &authority, &hpke, &signing, &binding).is_ok()
 }
 
 // ------------------------------------------------------------------ pins
@@ -306,10 +329,10 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) ->
 /// How far `account`'s `claimed` keys can be trusted; pins its authority the
 /// first time it is met with a valid binding.
 pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Status> {
-    if account == me.account {
-        return Ok(Status::Ok { verified: true });
-    }
     let person = published(ctx, me, account)?;
+    if let Some(status) = self_status(&me.account_ref, &person) {
+        return Ok(status);
+    }
     if claimed.hpke.is_some_and(|k| k != person.hpke)
         || claimed.signing.is_some_and(|k| k != person.signing)
     {
@@ -394,5 +417,35 @@ pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
             pin.account
         ),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn published(account: &str, account_id: &str) -> Published {
+        Published {
+            account: account.into(),
+            account_ref: AccountRef::new("kutup.test", account_id).unwrap(),
+            authority: String::new(),
+            hpke: String::new(),
+            signing: String::new(),
+            binding: None,
+        }
+    }
+
+    #[test]
+    fn this_account_is_known_by_its_id_never_by_an_address() {
+        let me = AccountRef::new("kutup.test", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
+        // The address this account had, now someone else's: not this account.
+        let taken = published("alice@kutup.test", "8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b");
+        assert_eq!(self_status(&me, &taken), None);
+        // This account under a new address: itself.
+        let renamed = published("alice2@kutup.test", &me.account_id);
+        assert_eq!(
+            self_status(&me, &renamed),
+            Some(Status::Ok { verified: true })
+        );
     }
 }

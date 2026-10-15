@@ -1,7 +1,8 @@
 // A new username (docs/plans/username-renames.md). The account keeps
 // everything but its name: the client signs the rename with the account
-// authority, re-signs the Drive key binding for the new address and, for a
-// name that has none, makes the new address's first mail key; the server
+// authority and, for a name that has none, makes the new address's first
+// mail key (its Drive key binding names its permanent id, so it stays,
+// docs/plans/account-ids.md); the server
 // moves the names in one transaction. The old name is held for the account:
 // it receives (only) for a while, then is freed.
 
@@ -9,7 +10,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { toBase64 } from '@kutup/crypto/base64'
 import { foldAddress, signAccountRename, type AccountRenameV1 } from '@kutup/crypto/accountRename'
-import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { firstAddressKey, type FirstAddressKey } from '@kutup/mail-core/addressKey'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
@@ -87,7 +87,6 @@ function refusal(error: unknown): NameRefusedError | null {
 interface RenameRequest {
   grant: string
   rename: AccountRenameV1
-  driveKeyBinding: string
   mailAddress?: FirstAddressKey
 }
 
@@ -115,7 +114,6 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
   const body: RenameRequest = {
     grant,
     rename: await signAccountRename(masterKey, me.renames.sequence + 1, me.address, address, Date.now()),
-    driveKeyBinding: await signDriveKeyBinding(masterKey, address),
     ...(needsKey ? { mailAddress: await firstAddressKey(session, address) } : {}),
   }
   try {

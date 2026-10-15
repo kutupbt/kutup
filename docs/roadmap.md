@@ -119,6 +119,17 @@ has Chat's link uses it.
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
 
+### Key transparency (after the wipe)
+
+Copy libsignal keytrans: a per-server append-only, verifiable log of
+address-hash → account id and account id → authority/key binding, plus rename
+chains. Clients verify inclusion and consistency on lookup and monitor their
+own entries, so a server showing different users different mappings is
+detectable. Federation: each server runs its own log; peers verify a peer's
+log for remote lookups. Needs no format change: it logs the already-signed
+account ids, key bindings and `AccountRenameV1` chains
+(docs/plans/account-ids.md).
+
 ### Security log: sign-ins and 2FA events (Proton parity)
 
 `account_security_events` (`GET /api/user/security-events`) records what

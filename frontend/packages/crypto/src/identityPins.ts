@@ -3,6 +3,7 @@
 // on other accounts' authorities. Rust owns both formats
 // (kutup-crypto drive_key_binding, identity_pins).
 
+import type { AccountRef } from './accountRef'
 import type { AccountRenameV1 } from './accountRename'
 import { getCryptoWasm } from './rustWasm'
 
@@ -40,14 +41,14 @@ export interface IdentityPins {
   [later: string]: unknown
 }
 
-/** The account's Drive key binding, signed with its authority. */
-export async function signDriveKeyBinding(masterKeyBase64: string, account: string): Promise<string> {
+/** The account's Drive key binding, signed with its authority for `account` (its server and id). */
+export async function signDriveKeyBinding(masterKeyBase64: string, account: AccountRef): Promise<string> {
   return (await getCryptoWasm()).signDriveKeyBinding(masterKeyBase64, account)
 }
 
 /** Whether `authority` vouches for these Drive keys of `account`. */
 export async function verifyDriveKeyBinding(
-  account: string,
+  account: AccountRef,
   authorityPublicKey: string,
   driveHpkePublicKey: string,
   driveSigningPublicKey: string,

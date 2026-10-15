@@ -72,6 +72,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
+# Permanent account ids (docs/plans/account-ids.md): minted at sign-up,
+# retired on delete, found by id, kept through a rename.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test account_ids_live -- --nocapture
 
 # Drive: names unique in a folder, as Proton Drive's hashes (required on
 # every write, restore under a new name, which names are free), moves, and

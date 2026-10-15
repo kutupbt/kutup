@@ -8,6 +8,7 @@ import {
   sealPublicLinkCollectionKeyV1,
   toBase64,
 } from '@kutup/crypto'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
@@ -185,14 +186,19 @@ export interface ShareInput {
 
 export type ShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
 
+/** Who an address leads to now (server-asserted): their account and keys. */
 interface LocalRecipient {
   userId: string
+  server: string
+  accountId: string
   account: string
   driveHpkePublicKey: string
   accountIncarnationId: string
 }
 
 interface RemoteRecipient {
+  server: string
+  accountId: string
   account: string
   driveHpkePublicKey: string
   accountIncarnationId: string
@@ -214,13 +220,14 @@ export function useShareFolder() {
       canDelete: input.canDelete,
       uploadQuotaBytes: input.canUpload ? input.uploadQuotaBytes : null,
     }
-    const seal = (publicKey: string, account: string, incarnationId: string) =>
+    // Sealed to the account the address leads to, never to the address.
+    const seal = (publicKey: string, to: AccountRef, incarnationId: string) =>
       sealNamedShareEnvelope(folder.key!, me.masterKey, publicKey, {
         collectionId: folder.id,
         epoch: folder.keyEpoch,
-        senderAccount: me.account,
+        sender: me.accountRef,
         senderIncarnationId: me.incarnationId,
-        recipientAccount: account,
+        recipient: to,
         recipientIncarnationId: incarnationId,
       })
 
@@ -236,7 +243,11 @@ export function useShareFolder() {
     }
     if (local) {
       await confirmRecipient(me, local.account, { driveHpkePublicKey: local.driveHpkePublicKey, incarnationId: local.accountIncarnationId }, input.identityConfirmed)
-      const namedShareEnvelope = await seal(local.driveHpkePublicKey, local.account, local.accountIncarnationId)
+      const namedShareEnvelope = await seal(
+        local.driveHpkePublicKey,
+        { server: local.server, accountId: local.accountId },
+        local.accountIncarnationId,
+      )
       await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.userId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
     }
@@ -257,10 +268,15 @@ export function useShareFolder() {
       throw await recipientError(me, recipient, error)
     }
     await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
-    const namedShareEnvelope = await seal(remote.driveHpkePublicKey, remote.account, remote.accountIncarnationId)
+    if (remote.server !== server) throw new RecipientNotFound()
+    const namedShareEnvelope = await seal(
+      remote.driveHpkePublicKey,
+      { server: remote.server, accountId: remote.accountId },
+      remote.accountIncarnationId,
+    )
     const { data } = await api.post<{ inviteUrl: string }>(`/collections/${folder.id}/federated-shares`, {
-      recipientUsername: username,
       recipientServer: server,
+      recipientAccountId: remote.accountId,
       namedShareEnvelope,
       ...(input.viewOnlyAcrossServers ? { canUpload: false, canDelete: false, uploadQuotaBytes: null } : permissions),
     })

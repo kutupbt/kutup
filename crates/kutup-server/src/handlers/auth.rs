@@ -62,8 +62,15 @@ pub struct RegisterRequest {
     #[serde(default)]
     recovery_proof: String,
     /// The account authority's signature over the Drive keys
-    /// (`kutup_crypto::drive_key_binding`), for `username@<server name>`.
+    /// (`kutup_crypto::drive_key_binding`), for the account as
+    /// (server name, account id).
     drive_key_binding: String,
+    /// A sign-up's account id and its proof, as `register/start` minted them
+    /// (an account an administrator made has its id already).
+    #[serde(default)]
+    account_id: Option<String>,
+    #[serde(default)]
+    account_id_proof: Option<String>,
 }
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
@@ -291,7 +298,10 @@ pub(crate) fn validate_account_envelope(
 }
 
 /// The Drive key binding, required, checked against the keys and `account`.
-fn checked_drive_key_binding(req: &RegisterRequest, account: &str) -> AppResult<String> {
+fn checked_drive_key_binding(
+    req: &RegisterRequest,
+    account: &kutup_crypto::account_ref::AccountRef,
+) -> AppResult<String> {
     if req.drive_key_binding.is_empty() {
         return Err(AppError::bad_request("driveKeyBinding is required"));
     }
@@ -307,7 +317,7 @@ fn checked_drive_key_binding(req: &RegisterRequest, account: &str) -> AppResult<
 
 /// Checks that the authority vouches for these Drive keys of `account`.
 pub(crate) fn verify_drive_key_binding(
-    account: &str,
+    account: &kutup_crypto::account_ref::AccountRef,
     authority: &str,
     hpke: &str,
     signing: &str,
@@ -601,16 +611,24 @@ pub async fn register(
         "drivePrivateKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
-    let drive_key_binding = checked_drive_key_binding(
-        &req,
-        &format!("{}@{}", req.username, state.config.chat_server_name),
-    )?;
 
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
+    // The account id this server minted for the sign-up (register/start),
+    // never one in use or ever used.
+    let (Some(account_id), Some(proof)) = (&req.account_id, &req.account_id_proof) else {
+        return Err(AppError::bad_request("a sign-up gives back its accountId")
+            .with_details(serde_json::json!({ "code": "accountIdInvalid" })));
+    };
+    let account_id =
+        crate::account_ids::redeem(&state, &mut tx, &req.key_binding, account_id, proof).await?;
+    let drive_key_binding = checked_drive_key_binding(
+        &req,
+        &crate::account_ids::local(&state.config.chat_server_name, account_id)?,
+    )?;
     // One account per folded name, against every name in use or held and
     // every address (docs/plans/username-renames.md, "Folded names").
     if let Err(unavailable) = crate::account_names::available(
@@ -632,8 +650,8 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
-            key_binding
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1)
+            key_binding, id
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1,$17)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -652,6 +670,7 @@ pub async fn register(
     .bind(&recovery_verifier)
     .bind(storage_quota_bytes)
     .bind(&drive_key_binding)
+    .bind(account_id)
     .fetch_one(&mut *tx)
     .await;
 
@@ -758,14 +777,16 @@ pub(crate) async fn signed_in_answer(
     }
     let user_id = user_id.to_string();
 
-    // First-login account — no key material yet. Its username comes along:
-    // the new keys' Drive key binding names the account's address.
+    // First-login account — no key material yet. Its account id comes along:
+    // the new keys' Drive key binding names the account by it (with this
+    // server's name), never by its username (docs/plans/account-ids.md).
     if is_first_login {
         let setup_token = jwt::generate_setup_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_setup: true,
             setup_token: Some(setup_token),
+            user_id,
             username,
             ..Default::default()
         })
@@ -1153,6 +1174,8 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
     .await?;
     Ok(Json(MeResponse {
         id: id.to_string(),
+        account_id: id.to_string(),
+        server: state.config.chat_server_name.clone(),
         address,
         envelope_binding,
         username,
@@ -1300,6 +1323,8 @@ pub async fn get_user_by_address(
     let domain = state.config.chat_server_name.as_str();
     Ok(Json(UserLookupResponse {
         user_id: id.to_string(),
+        server: domain.to_owned(),
+        account_id: id.to_string(),
         account: format!("{username}@{domain}"),
         drive_hpke_public_key: public_key,
         account_incarnation_id: incarnation_id,
@@ -1472,12 +1497,11 @@ pub async fn complete_setup(
     let (user_id, setup_epoch) = jwt::validate_setup_token(token, &state.config.jwt_secret)
         .map_err(|_| setup_token_invalid())?;
 
-    let account: Option<(bool, String)> =
-        sqlx::query_as("SELECT is_active, COALESCE(username, '') FROM users WHERE id = $1")
-            .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some((true, account_username)) = account else {
+    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
+        .bind(parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
+        .fetch_optional(&state.pool)
+        .await?;
+    let Some(true) = active else {
         return Err(AppError::unauthorized("account disabled"));
     };
 
@@ -1510,13 +1534,17 @@ pub async fn complete_setup(
         "drivePrivateKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
+    let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+    // The account has its id already (an administrator made it).
+    if req.account_id.is_some() || req.account_id_proof.is_some() {
+        return Err(AppError::bad_request("an account made for you has its id"));
+    }
     let drive_key_binding = checked_drive_key_binding(
         &req,
-        &format!("{account_username}@{}", state.config.chat_server_name),
+        &crate::account_ids::local(&state.config.chat_server_name, uid)?,
     )?;
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
 
-    let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     // Only while the account is still a first-login one — prevents replay
     // after setup completes.
     let mut tx = state.pool.begin().await?;

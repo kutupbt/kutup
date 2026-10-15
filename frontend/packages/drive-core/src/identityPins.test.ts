@@ -254,6 +254,7 @@ import type { DriveIdentity } from './identity'
 const me: DriveIdentity = {
   userId: 'me-id',
   account: 'me@kutup.dev',
+  accountRef: { server: 'kutup.dev', accountId: 'me-id' },
   binding: ME_BINDING,
   incarnationId: 'inc-ME',
   masterKey: new Uint8Array(32),

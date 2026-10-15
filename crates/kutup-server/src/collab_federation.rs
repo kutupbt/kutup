@@ -207,6 +207,8 @@ struct RemoteAccess {
     /// The share's recipient: whose collaboration devices may send frames
     /// through it (docs/plans/device-registration.md, "Remote devices").
     recipient_username: String,
+    /// The share's recipient account (on the calling server).
+    recipient_account_id: Uuid,
     recipient_incarnation: String,
 }
 
@@ -226,9 +228,9 @@ async fn remote_access(
         .ok_or_else(|| AppError::not_found("Drive share not found"))?;
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
     let hash = capability_hash(capability);
-    let file: Option<(bool, String, String)> = sqlx::query_as(
+    let file: Option<(bool, String, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_edit AND s.key_generation = f.key_generation AND f.key_epoch = c.key_epoch,
-                s.recipient_username, s.recipient_incarnation_id
+                s.recipient_username, s.recipient_account_id, s.recipient_incarnation_id
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
@@ -239,16 +241,17 @@ async fn remote_access(
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    if let Some((can_write, recipient_username, incarnation)) = file {
+    if let Some((can_write, recipient_username, recipient_account_id, incarnation)) = file {
         return Ok(RemoteAccess {
             can_write,
             recipient_username,
+            recipient_account_id,
             recipient_incarnation: incarnation.trim().to_owned(),
         });
     }
-    let folder: Option<(bool, String, String)> = sqlx::query_as(
+    let folder: Option<(bool, String, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_upload AND f.key_epoch = c.key_epoch,
-                s.recipient_username, s.recipient_incarnation_id
+                s.recipient_username, s.recipient_account_id, s.recipient_incarnation_id
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN files f ON f.collection_id = c.id AND f.deleted_at IS NULL
@@ -261,9 +264,10 @@ async fn remote_access(
     .await?;
     folder
         .map(
-            |(can_write, recipient_username, incarnation)| RemoteAccess {
+            |(can_write, recipient_username, recipient_account_id, incarnation)| RemoteAccess {
                 can_write,
                 recipient_username,
+                recipient_account_id,
                 recipient_incarnation: incarnation.trim().to_owned(),
             },
         )
@@ -940,8 +944,8 @@ pub async fn version_content(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CreateVersionBody {
     file_id: Uuid,
-    /// Who saved it, `user@server` on the calling server.
-    author: String,
+    /// Who saved it: their account id on the calling server.
+    author_account_id: Uuid,
     kind: String,
     seq_at_snapshot: i64,
     doc_key_id: i64,
@@ -976,14 +980,15 @@ pub async fn versions_create(
         if !access.can_write {
             return Err(AppError::forbidden("this share does not allow editing"));
         }
-        let author_ok = request.author.len() <= 320
-            && request
-                .author
-                .rsplit_once('@')
-                .is_some_and(|(user, server)| !user.is_empty() && server == authenticated.origin());
-        if !author_ok {
-            return Err(AppError::bad_request("invalid author"));
+        // The author is the share's recipient, the one account on the
+        // calling server it gives the right to save versions.
+        if request.author_account_id != access.recipient_account_id {
+            return Err(AppError::forbidden("the author is not this share's recipient"));
         }
+        let author = crate::account_ids::remote(
+            authenticated.origin(),
+            &request.author_account_id.to_string(),
+        )?;
         let blob = STANDARD
             .decode(&request.blob)
             .map_err(|_| AppError::bad_request("invalid blob"))?;
@@ -1013,7 +1018,7 @@ pub async fn versions_create(
             &state,
             request.file_id,
             owner,
-            Some(&request.author),
+            Some(&author),
             &fields,
             file,
             blob.len() as i64,
@@ -2102,11 +2107,6 @@ async fn relay_version_create(
         }
     }
     let blob = blob.ok_or_else(|| AppError::bad_request("missing file"))?;
-    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    let server = configured_stack(&state)?.server_name().to_owned();
     let number = |name: &str| {
         fields
             .get(name)
@@ -2119,7 +2119,7 @@ async fn relay_version_create(
         "/api/fed/drive/collab/versions/create",
         &CreateVersionBody {
             file_id: target.file_id,
-            author: format!("{}@{server}", username.unwrap_or_default()),
+            author_account_id: user_id,
             kind: fields.get("kind").cloned().unwrap_or_default(),
             seq_at_snapshot: number("seqAtSnapshot"),
             doc_key_id: number("docKeyId"),

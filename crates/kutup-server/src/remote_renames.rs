@@ -291,9 +291,10 @@ async fn store_capped(
     Ok(outcome)
 }
 
-/// Moves this server's rows about the account (`incarnation` on `domain`) to
-/// its current address, by incarnation only: a reused name's earlier owner is
-/// another incarnation, and keeps its rows.
+/// Moves the address this server shows for the account (`incarnation` on
+/// `domain`) to its current one, by incarnation only: a reused name's earlier
+/// owner is another incarnation, and keeps its rows. Records are keyed by the
+/// account id (docs/plans/account-ids.md); these are labels.
 async fn apply_rows(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     domain: &str,
@@ -331,39 +332,6 @@ async fn apply_rows(
             .execute(&mut **tx)
             .await?;
     }
-    // Profile keys are keyed by the peer's address: a row whose new address
-    // is already taken (a key exchanged with the new address already) stays
-    // under the old one until the next key exchange replaces it.
-    let collisions: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT d.user_id, d.direction, d.peer_account FROM drive_profile_keys d
-          WHERE d.peer_incarnation_id = $2 AND lower(split_part(d.peer_account, '@', 2)) = $1
-            AND d.peer_account <> $3
-            AND EXISTS (SELECT 1 FROM drive_profile_keys o
-                         WHERE o.user_id = d.user_id AND o.direction = d.direction
-                           AND o.peer_account = $3)",
-    )
-    .bind(domain)
-    .bind(incarnation)
-    .bind(current)
-    .fetch_all(&mut **tx)
-    .await?;
-    for (user_id, direction, peer) in &collisions {
-        tracing::warn!(%user_id, %direction, %peer, %current,
-            "a profile key stays under the old address: one for the new address exists");
-    }
-    sqlx::query(
-        "UPDATE drive_profile_keys d SET peer_account = $3
-          WHERE d.peer_incarnation_id = $2 AND lower(split_part(d.peer_account, '@', 2)) = $1
-            AND d.peer_account <> $3
-            AND NOT EXISTS (SELECT 1 FROM drive_profile_keys o
-                             WHERE o.user_id = d.user_id AND o.direction = d.direction
-                               AND o.peer_account = $3)",
-    )
-    .bind(domain)
-    .bind(incarnation)
-    .bind(current)
-    .execute(&mut **tx)
-    .await?;
     Ok(())
 }
 
@@ -497,7 +465,7 @@ fn renamed(entries: Vec<ChainEntry>) -> AppError {
 static FETCHES: LazyLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(Default::default);
 
-fn fetch_lock(folded: &str) -> Arc<tokio::sync::Mutex<()>> {
+pub(crate) fn fetch_lock(folded: &str) -> Arc<tokio::sync::Mutex<()>> {
     let mut fetches = FETCHES.lock().unwrap();
     fetches.retain(|_, lock| Arc::strong_count(lock) > 1);
     fetches.entry(folded.to_owned()).or_default().clone()
@@ -1163,49 +1131,38 @@ mod tests {
             forger.incarnation_id(),
         ];
         clean(&pool, &incarnations).await;
-        let local = Uuid::new_v4();
-        let tag = &local.simple().to_string()[..10];
-        sqlx::query(
-            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                drive_private_key_envelope, public_key, account_authority_public_key,
-                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '', '')",
-        )
-        .bind(local)
-        .bind(format!("local{tag}"))
-        .execute(&pool)
-        .await
-        .unwrap();
+        let tag = &Uuid::new_v4().simple().to_string()[..10];
         let name = format!("al{tag}");
         let address = format!("{name}@{PEER}");
-        // Profile keys this account exchanged with `address`: once with an
-        // earlier holder of the name, now with Alice.
-        for (direction, incarnation) in [
-            ("received", alice.incarnation_id()),
-            ("sent", earlier.incarnation_id()),
-        ] {
+        // Collaboration devices this server keeps for `address`: one of an
+        // earlier holder of the name, one of Alice's.
+        let device_base = i64::from(u32::from_str_radix(&tag[..8], 16).unwrap()) * 4;
+        for (offset, who) in [(0, &alice), (1, &earlier)] {
             sqlx::query(
-                "INSERT INTO drive_profile_keys
-                     (user_id, direction, peer_account, peer_incarnation_id, envelope, profile_version)
-                 VALUES ($1, $2, $3, $4, 'e', $5)",
+                "INSERT INTO remote_collab_devices
+                     (domain, device_id, incarnation_id, account, user_id, authority_public_key,
+                      public_signing, registration_challenge, registration_issued_at_ms,
+                      registration_signature)
+                 VALUES ($1, $2, $3, $4, 'u', 'a', $5, $6, 1, 's')",
             )
-            .bind(local)
-            .bind(direction)
+            .bind(PEER)
+            .bind(device_base + offset)
+            .bind(who.incarnation_id())
             .bind(&address)
-            .bind(incarnation)
-            .bind("0".repeat(64))
+            .bind(rand::random::<[u8; 32]>().to_vec())
+            .bind(vec![0u8; 32])
             .execute(&pool)
             .await
             .unwrap();
         }
-        let peer_of = |direction: &'static str| {
+        let shown = |offset: i64| {
             let pool = pool.clone();
             async move {
                 sqlx::query_scalar::<_, String>(
-                    "SELECT peer_account FROM drive_profile_keys WHERE user_id = $1 AND direction = $2",
+                    "SELECT account FROM remote_collab_devices WHERE domain = $1 AND device_id = $2",
                 )
-                .bind(local)
-                .bind(direction)
+                .bind(PEER)
+                .bind(device_base + offset)
                 .fetch_one(&pool)
                 .await
                 .unwrap()
@@ -1215,23 +1172,23 @@ mod tests {
         // own incarnation, moving nothing of Alice's or the earlier holder's.
         let forged = verify(PEER, entry(&forger, &[&name, &format!("mallory{tag}")])).unwrap();
         assert_eq!(store(&pool, PEER, &forged).await.unwrap(), Stored::Advanced);
-        assert_eq!(peer_of("received").await, address);
-        assert_eq!(peer_of("sent").await, address);
+        assert_eq!(shown(0).await, address);
+        assert_eq!(shown(1).await, address);
         // Alice's own chain moves her row only.
         let alicia = format!("alicia{tag}");
         let hers = verify(PEER, entry(&alice, &[&name, &alicia])).unwrap();
         assert_eq!(store(&pool, PEER, &hers).await.unwrap(), Stored::Advanced);
-        assert_eq!(peer_of("received").await, format!("{alicia}@{PEER}"));
-        assert_eq!(
-            peer_of("sent").await,
-            address,
-            "the earlier holder's row stays"
-        );
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(local)
-            .execute(&pool)
-            .await
-            .unwrap();
+        assert_eq!(shown(0).await, format!("{alicia}@{PEER}"));
+        assert_eq!(shown(1).await, address, "the earlier holder's row stays");
+        sqlx::query(
+            "DELETE FROM remote_collab_devices WHERE domain = $1 AND device_id IN ($2, $3)",
+        )
+        .bind(PEER)
+        .bind(device_base)
+        .bind(device_base + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
         clean(&pool, &incarnations).await;
     }
 }

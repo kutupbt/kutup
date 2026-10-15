@@ -113,6 +113,10 @@ pub struct RefreshResponse {
 #[serde(rename_all = "camelCase")]
 pub struct MeResponse {
     pub id: String,
+    /// The account's permanent id (= `id`), with `server` what names the
+    /// account everywhere (docs/plans/account-ids.md).
+    pub account_id: String,
+    pub server: String,
     /// The account's Kutup address (`username@<domain>`): its identity.
     pub address: String,
     /// What the account's envelopes carry now (docs/plans/account-identity.md).
@@ -166,6 +170,11 @@ pub struct TotpCodeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UserLookupResponse {
     pub user_id: String,
+    /// Who it is: the server and the permanent account id. The address is
+    /// what was asked for, server-asserted: a lookup handle, never a label
+    /// to keep on a pinned account (docs/plans/account-ids.md).
+    pub server: String,
+    pub account_id: String,
     pub account: String,
     pub drive_hpke_public_key: String,
     pub account_incarnation_id: String,
@@ -193,6 +202,11 @@ pub struct CollectionRow {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
+    /// A shared folder's owner: their server, with `owner_user_id` their
+    /// account id (the share's envelope names them by both).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_server: Option<String>,
+    /// Shown only: the owner's address now (server-asserted).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -537,6 +551,7 @@ mod tests {
             name_revision: 1,
             epoch_statement: "statement".into(),
             epoch_statement_hash: "11".repeat(32),
+            owner_server: None,
             owner_account: None,
             owner_incarnation_id: None,
             owner_drive_signing_public_key: None,

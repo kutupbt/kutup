@@ -169,6 +169,7 @@ pub(crate) async fn collection_rows(
                 name_revision: revision,
                 epoch_statement: statement,
                 epoch_statement_hash: statement_hash,
+                owner_server: None,
                 owner_account: None,
                 owner_incarnation_id: None,
                 owner_drive_signing_public_key: None,
@@ -244,6 +245,7 @@ pub(crate) async fn collection_rows(
             name_revision: row.name_revision,
             epoch_statement: row.epoch_statement,
             epoch_statement_hash: row.epoch_statement_hash,
+            owner_server: Some(domain.to_owned()),
             owner_account: Some(format!("{owner_username}@{domain}")),
             owner_incarnation_id: Some(row.owner_incarnation_id),
             owner_drive_signing_public_key: Some(row.owner_signing_public_key),
@@ -482,6 +484,7 @@ pub async fn get_collection(
             name_revision: revision,
             epoch_statement: statement,
             epoch_statement_hash: statement_hash,
+            owner_server: None,
             owner_account: None,
             owner_incarnation_id: None,
             owner_drive_signing_public_key: None,
@@ -547,6 +550,7 @@ pub async fn get_collection(
         name_revision: row.name_revision,
         epoch_statement: row.epoch_statement,
         epoch_statement_hash: row.epoch_statement_hash,
+        owner_server: Some(domain.to_owned()),
         owner_account: Some(format!("{owner_username}@{domain}")),
         owner_incarnation_id: Some(row.owner_incarnation_id),
         owner_drive_signing_public_key: Some(row.owner_signing_public_key),
@@ -801,22 +805,8 @@ pub async fn share_collection(
     .await?
     .ok_or_else(|| AppError::bad_request("invalid recipient"))?;
     let domain = state.config.chat_server_name.as_str();
-    let sender_account = format!(
-        "{}@{domain}",
-        sender
-            .0
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| AppError::conflict("sender identity is unavailable"))?
-    );
-    let recipient_account = format!(
-        "{}@{domain}",
-        recipient
-            .0
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| AppError::conflict("recipient identity is unavailable"))?
-    );
+    let sender_account = crate::account_ids::local(domain, sharer_id)?;
+    let recipient_account = crate::account_ids::local(domain, recipient_id)?;
     let sender_signing_key = decode_public_key(&sender.2)?;
     let named_share = NamedShareEnvelopeV1::decode_b64(&req.named_share_envelope)
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;

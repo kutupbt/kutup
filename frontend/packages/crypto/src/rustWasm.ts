@@ -35,7 +35,7 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
-  signDriveKeyBinding(masterKeyBase64: string, account: string): string
+  signDriveKeyBinding(masterKeyBase64: string, account: { server: string; accountId: string }): string
   signDeviceRegistration(
     masterKeyBase64: string,
     server: string,
@@ -68,7 +68,7 @@ export interface CryptoWasmModule {
   lookupIdentityPin(pinsJson: string, address: string, publishedAuthorityBase64?: string): unknown
   applyAccountRenameToPins(pinsJson: string, authorityPublicBase64: string, chainJson: string): unknown
   verifyDriveKeyBinding(
-    account: string,
+    account: { server: string; accountId: string },
     authorityPublicKeyBase64: string,
     driveHpkePublicKeyBase64: string,
     driveSigningPublicKeyBase64: string,
@@ -485,9 +485,9 @@ export interface CryptoWasmModule {
     recipientHpkePublicKeyBase64: string,
     collectionId: string,
     epoch: number,
-    senderAccount: string,
+    sender: { server: string; accountId: string },
     senderIncarnationId: string,
-    recipientAccount: string,
+    recipient: { server: string; accountId: string },
     recipientIncarnationId: string,
   ): string
   openNamedShareEnvelope(
@@ -496,9 +496,9 @@ export interface CryptoWasmModule {
     recipientHpkePrivateKeyBase64: string,
     expectedCollectionId: string,
     expectedEpoch: number,
-    expectedSenderAccount: string,
+    expectedSender: { server: string; accountId: string },
     expectedSenderIncarnationId: string,
-    expectedRecipientAccount: string,
+    expectedRecipient: { server: string; accountId: string },
     expectedRecipientIncarnationId: string,
   ): string
   sealFileShareEnvelope(
@@ -507,9 +507,9 @@ export interface CryptoWasmModule {
     recipientHpkePublicKeyBase64: string,
     fileId: string,
     generation: number,
-    senderAccount: string,
+    sender: { server: string; accountId: string },
     senderIncarnationId: string,
-    recipientAccount: string,
+    recipient: { server: string; accountId: string },
     recipientIncarnationId: string,
   ): string
   openFileShareEnvelope(
@@ -518,9 +518,9 @@ export interface CryptoWasmModule {
     recipientHpkePrivateKeyBase64: string,
     expectedFileId: string,
     expectedGeneration: number,
-    expectedSenderAccount: string,
+    expectedSender: { server: string; accountId: string },
     expectedSenderIncarnationId: string,
-    expectedRecipientAccount: string,
+    expectedRecipient: { server: string; accountId: string },
     expectedRecipientIncarnationId: string,
   ): string
   liveLocationSeal(
@@ -562,18 +562,18 @@ export interface CryptoWasmModule {
     profileKeyBase64: string,
     senderMasterKeyBase64: string,
     recipientHpkePublicKeyBase64: string,
-    senderAccount: string,
+    sender: { server: string; accountId: string },
     senderIncarnationId: string,
-    recipientAccount: string,
+    recipient: { server: string; accountId: string },
     recipientIncarnationId: string,
   ): string
   openProfileKeyEnvelope(
     envelopeBase64: string,
     senderSigningPublicKeyBase64: string,
     recipientHpkePrivateKeyBase64: string,
-    expectedSenderAccount: string,
+    expectedSender: { server: string; accountId: string },
     expectedSenderIncarnationId: string,
-    expectedRecipientAccount: string,
+    expectedRecipient: { server: string; accountId: string },
     expectedRecipientIncarnationId: string,
   ): string
 }
