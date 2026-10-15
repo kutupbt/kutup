@@ -619,3 +619,112 @@ fn five_old_names_receive_and_a_drop_makes_room() {
     user.username = new;
     purge_accounts(&c, &base, &[&user]);
 }
+
+fn profile_envelope(
+    account: &str,
+    version: &str,
+    revision: u64,
+    device: u32,
+    purpose: kutup_chat_proto::ProfileEnvelopePurpose,
+    len: usize,
+) -> String {
+    let context = kutup_chat_proto::ProfileEnvelopeContextV1::new(
+        purpose, account, version, revision, device,
+    )
+    .unwrap();
+    let mut envelope =
+        kutup_chat_proto::encode_profile_envelope_header(&context, &[7; 24], len as u32).unwrap();
+    envelope.extend(vec![7; len]);
+    b64(&envelope)
+}
+
+/// A Chat profile is sealed for the address the account had when it was
+/// published. After a rename the owner still reads it (and publishes it
+/// again under the new address); others asking for the new address get none
+/// until then.
+#[test]
+fn a_renamed_account_keeps_its_chat_profile_until_it_publishes_again() {
+    use kutup_chat_proto::ProfileEnvelopePurpose as Purpose;
+    use sha2::Digest as _;
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut user = register(&c, &base);
+    let reader = register(&c, &base);
+    let domain = server_domain(&c, &base);
+    // A Chat device (synthetic keys) to publish from.
+    let key = |n: u8| {
+        let mut bytes = [n; 33];
+        bytes[1..].copy_from_slice(&rand::random::<[u8; 32]>());
+        b64(&bytes)
+    };
+    let r = bearer(c.post(format!("{base}/api/chat/device")), &user.token)
+        .json(&json!({
+            "suite": 1, "registrationId": 4242, "identityKey": key(1),
+            "signedPreKey": { "keyId": 1, "publicKey": key(2), "signature": key(3) },
+            "lastResortKyberPreKey": { "keyId": 1, "publicKey": key(4), "signature": key(5) },
+            "oneTimePreKeys": [ { "keyId": 10, "publicKey": key(6) } ],
+            "oneTimeKyberPreKeys": [ { "keyId": 20, "publicKey": key(7), "signature": key(8) } ],
+            "name": "rename-test"
+        }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "device: {}", r.status());
+    let device = r.json::<Value>().unwrap()["deviceId"].as_u64().unwrap() as u32;
+    let access = [5u8; 16];
+    let profile = |account: &str, version: &str, revision: u64| {
+        json!({
+            "suite": 1, "account": account, "version": version, "revision": revision,
+            "sourceDeviceId": device,
+            "name": profile_envelope(account, version, revision, device, Purpose::DisplayName, 40),
+            "wrappedKey": profile_envelope(account, version, revision, device, Purpose::WrappedProfileKey, 48),
+            "accessKeyVerifier": hex::encode(sha2::Sha256::digest(access)),
+            "deliveryCapabilityVerifier": hex::encode(sha2::Sha256::digest([6u8; 16])),
+        })
+    };
+    let put = |body: Value| {
+        bearer(c.put(format!("{base}/api/chat/profile")), &user.token)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    let read = |name: &str, version: &str| {
+        bearer(
+            c.get(format!(
+                "{base}/api/chat/users/{name}@{domain}/profile/{version}"
+            )),
+            &reader.token,
+        )
+        .header("X-Kutup-Profile-Access-Key", b64(&access))
+        .send()
+        .unwrap()
+    };
+    let old = format!("{}@{domain}", user.username);
+    let (v1, v2) = ("12".repeat(32), "34".repeat(32));
+    assert!(put(profile(&old, &v1, 1)).status().is_success());
+
+    let new = name("chatty_");
+    assert_eq!(rename(&c, &base, &user, &new).0, StatusCode::OK);
+    user.username = new.clone();
+    // The owner reads it as it was published (not 400).
+    let own: Value = get(&c, &base, &user.token, "/api/chat/profile")
+        .json()
+        .unwrap();
+    assert_eq!(own["account"], json!(old), "{own}");
+    // Others asking for the new address: none until it is published again.
+    assert_eq!(read(&new, &v1).status(), StatusCode::NOT_FOUND);
+    // Published again under the new address: everyone's.
+    let current = format!("{new}@{domain}");
+    let r = put(profile(&current, &v2, 2));
+    assert!(r.status().is_success(), "republish: {}", r.status());
+    let own: Value = get(&c, &base, &user.token, "/api/chat/profile")
+        .json()
+        .unwrap();
+    assert_eq!(own["account"], json!(current));
+    let r = read(&new, &v2);
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.json::<Value>().unwrap()["account"], json!(current));
+    purge_accounts(&c, &base, &[&user, &reader]);
+}

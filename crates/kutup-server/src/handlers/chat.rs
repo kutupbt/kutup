@@ -922,7 +922,7 @@ pub async fn put_profile(
         ));
     }
 
-    let current = load_own_profile_in(&mut tx, user_id, &canonical_account, true).await?;
+    let current = load_own_profile_in(&mut tx, user_id, true).await?;
     if let Some(current) = current {
         let incoming_order = (profile.revision, profile.source_device_id);
         let current_order = (current.revision, current.source_device_id);
@@ -1019,12 +1019,11 @@ pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> A
         .bind(user_id)
         .fetch_one(&state.pool)
         .await?;
-    let username = username
+    username
         .filter(|value| !value.is_empty())
         .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
     let mut tx = state.pool.begin().await?;
-    let profile = load_own_profile_in(&mut tx, user_id, &canonical_account, false)
+    let profile = load_own_profile_in(&mut tx, user_id, false)
         .await?
         .ok_or_else(|| AppError::not_found("chat profile not found"))?;
     tx.commit().await?;
@@ -1129,8 +1128,14 @@ pub(crate) async fn load_public_profile(
     if !constant_time_eq(&verifier, &presented) {
         return Ok(None);
     }
-    // Any spelling finds the account; the answer names it as stored.
+    // Any spelling finds the account; the answer names it as stored. A
+    // profile still sealed for an address the account has left (renamed,
+    // not published again yet) is not this address's: not found, and the
+    // asker keeps the profile it has.
     let account = local_chat_account(&state.config.chat_server_name, &stored);
+    if !crate::account_names::same_address(&sealed_profile_account(&name)?, &account) {
+        return Ok(None);
+    }
     let suite = profile_suite_from_db(suite, "chat_profiles")?;
     let response = ChatProfileResponse {
         suite,
@@ -1146,10 +1151,23 @@ pub(crate) async fn load_public_profile(
     Ok(Some(response))
 }
 
+/// The account a stored profile was sealed for (its envelopes' context): the
+/// account's address when it was published, which a rename since leaves
+/// behind until the owner publishes again.
+fn sealed_profile_account(name_envelope: &str) -> AppResult<String> {
+    Ok(kutup_chat_proto::decode_profile_envelope(name_envelope)
+        .map_err(AppError::bad_request)?
+        .context
+        .account)
+}
+
+/// The account's current profile, as it was published: under the address the
+/// account had then (the row is the account's own, written by it), so a
+/// rename does not lock the account out of its profile; it publishes again
+/// under its new address.
 async fn load_own_profile_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
-    account: &str,
     lock: bool,
 ) -> AppResult<Option<OwnChatProfileResponse>> {
     let suffix = if lock { " FOR UPDATE" } else { "" };
@@ -1181,7 +1199,7 @@ async fn load_own_profile_in(
         )| {
             let profile = PutChatProfileRequest {
                 suite: profile_suite_from_db(suite, "chat_profiles")?,
-                account: account.to_string(),
+                account: sealed_profile_account(&name)?,
                 version,
                 revision: revision as u64,
                 source_device_id: source_device_id as u32,
