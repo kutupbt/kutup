@@ -233,7 +233,9 @@ import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import {
   acceptIdentity,
   checkIdentity,
+  currentAddressOf,
   personSafetyNumber,
+  pinnedVerdict,
   PinsRolledBack,
   recipientError,
   RecipientRenamed,
@@ -589,5 +591,37 @@ describe('renames (docs/plans/username-renames.md)', () => {
     expect(await recipientError(me, 'carol@kutup.dev', forged)).toBe(forged)
     const other = new Error('offline')
     expect(await recipientError(me, 'carol@kutup.dev', other)).toBe(other)
+  })
+})
+
+describe('pinnedVerdict (Mail’s key checks)', () => {
+  async function met(account: string, authority: string) {
+    publish(account, authority)
+    await checkIdentity(me, account)
+  }
+
+  it('says pinned, changed or unknown for an address', async () => {
+    await met('bob@kutup.dev', 'B')
+    expect(await pinnedVerdict(me, 'bob@kutup.dev', 'B')).toEqual({ kind: 'pinned' })
+    expect(await pinnedVerdict(me, 'bob@kutup.dev', 'M')).toEqual({ kind: 'changed' })
+    expect(await pinnedVerdict(me, 'carol@kutup.dev', 'C')).toEqual({ kind: 'unknown' })
+  })
+
+  it('takes an address the pinned person left only with a chain naming both', async () => {
+    await met('ada_lovelace@kutup.dev', 'A')
+    // Ada's old address, signed by her authority, which is pinned elsewhere.
+    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'changed' })
+    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev']))
+    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })
+    // A chain its authority did not sign covers nothing.
+    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev'], { by: 'M' }))
+    expect(await pinnedVerdict(me, 'ada_l@kutup.dev', 'A')).toEqual({ kind: 'changed' })
+  })
+
+  it('names where an old address’s account is now', async () => {
+    server.renames.set('ada_l@kutup.dev', chains('A', ['ada_l@kutup.dev', 'ada_lovelace@kutup.dev']))
+    expect(await currentAddressOf('ada_l@kutup.dev', 'A')).toBe('ada_lovelace@kutup.dev')
+    expect(await currentAddressOf('ada_l@kutup.dev', 'M')).toBe('ada_l@kutup.dev')
+    expect(await currentAddressOf('grace@kutup.dev', 'G')).toBe('grace@kutup.dev')
   })
 })

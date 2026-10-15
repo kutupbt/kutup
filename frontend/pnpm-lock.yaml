@@ -1182,6 +1182,9 @@ importers:
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../crypto
+      '@kutup/drive-core':
+        specifier: workspace:*
+        version: link:../drive-core
       '@kutup/session':
         specifier: workspace:*
         version: link:../session

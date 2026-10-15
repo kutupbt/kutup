@@ -398,6 +398,69 @@ export async function followRename(me: DriveIdentity, address: string, renames: 
   return null
 }
 
+/**
+ * Whether `authority` may speak for `address` as far as the pin list knows
+ * (Mail's key checks, docs/plans/username-renames.md):
+ * - `pinned`: the address is pinned to this authority;
+ * - `renamed`: the authority is pinned under another address of the same
+ *   account, and its verified rename chain names both (`now`: where it is);
+ * - `changed`: the list holds another authority for the address, or names
+ *   this authority elsewhere without a chain that covers both;
+ * - `unknown`: nobody the list knows (trusted on first use, as before).
+ */
+export type PinnedVerdict =
+  | { kind: 'pinned' }
+  | { kind: 'renamed'; now: string }
+  | { kind: 'changed' }
+  | { kind: 'unknown' }
+
+export async function pinnedVerdict(me: DriveIdentity, address: string, authority: string): Promise<PinnedVerdict> {
+  const pins = await pinStore(me)
+  const match = await lookupIdentityPin(pins.pins, address, authority)
+  if (match.kind === 'pinned') return match.sameAuthority ? { kind: 'pinned' } : { kind: 'changed' }
+  if (match.kind === 'replaced') return { kind: 'changed' }
+  if (match.kind !== 'renamed') return { kind: 'unknown' }
+  // The same account under another of its names: its chain must name both.
+  const renames = await fetchRenames(address).catch(() => null)
+  if (!renames || renames.version !== 1 || renames.unavailable) return { kind: 'changed' }
+  const [asked, pinned] = await Promise.all([foldAddress(address), foldAddress(match.pin.account)])
+  for (const entry of renames.chains) {
+    if (entry.authorityPublicKey !== authority) continue
+    try {
+      const view = await verifyAccountRenameChain(authority, entry.chain)
+      const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
+      if (asked !== null && pinned !== null && folded.includes(asked) && folded.includes(pinned)) {
+        return { kind: 'renamed', now: view.current }
+      }
+    } catch {
+      // Not a chain that covers them.
+    }
+  }
+  return { kind: 'changed' }
+}
+
+/**
+ * Where the account at `address` is now, by its verified rename chain
+ * (`authority` signs it), or `address` itself: an old address's links (Chat,
+ * calls) go to the account's current name.
+ */
+export async function currentAddressOf(address: string, authority: string): Promise<string> {
+  const renames = await fetchRenames(address).catch(() => null)
+  if (!renames || renames.version !== 1 || renames.unavailable) return address
+  const asked = await foldAddress(address)
+  for (const entry of renames.chains) {
+    if (entry.authorityPublicKey !== authority || entry.state !== 'current') continue
+    try {
+      const view = await verifyAccountRenameChain(authority, entry.chain)
+      const folded = await Promise.all(view.addresses.map((a) => foldAddress(a)))
+      if (asked !== null && folded.includes(asked)) return view.current
+    } catch {
+      // Not this account's chain.
+    }
+  }
+  return address
+}
+
 /** Two addresses of one account: equal once folded. */
 async function sameAddress(a: string, b: string): Promise<boolean> {
   const [x, y] = await Promise.all([foldAddress(a), foldAddress(b)])
