@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::drive_federation::{
     configured_stack, drive_spec, gateway_error, remote_keys_consistent, signed_app_error,
-    signed_json, RemoteDriveUserResponse, JSON_CONTENT_TYPE,
+    signed_json, AccountLookupResponse, JSON_CONTENT_TYPE,
 };
 use kutup_crypto::account_ref::AccountRef;
 
@@ -35,7 +35,10 @@ pub struct ByIdQuery {
 }
 
 /// This server's account `id`, as the identity lookups answer it.
-async fn local_identity(state: &AppState, id: Uuid) -> AppResult<Option<RemoteDriveUserResponse>> {
+pub(crate) async fn local_identity(
+    state: &AppState,
+    id: Uuid,
+) -> AppResult<Option<AccountLookupResponse>> {
     type Row = (String, String, String, String, String, Option<String>);
     let row: Option<Row> = sqlx::query_as(
         "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
@@ -47,7 +50,7 @@ async fn local_identity(state: &AppState, id: Uuid) -> AppResult<Option<RemoteDr
     .await?;
     let server = state.config.chat_server_name.clone();
     Ok(row.map(
-        |(username, hpke, incarnation, signing, authority, binding)| RemoteDriveUserResponse {
+        |(username, hpke, incarnation, signing, authority, binding)| AccountLookupResponse {
             account: format!("{username}@{server}"),
             username,
             server,
@@ -65,7 +68,7 @@ async fn local_identity(state: &AppState, id: Uuid) -> AppResult<Option<RemoteDr
 /// so the lookups made meanwhile, and just after, are answered from it.
 #[derive(Clone)]
 enum Fetched {
-    Found(Box<RemoteDriveUserResponse>),
+    Found(Box<AccountLookupResponse>),
     Missing,
 }
 
@@ -110,7 +113,7 @@ fn slot(person: &AccountRef) -> Slot {
     security(("BearerAuth" = [])),
     params(("accountId" = String, Path, description = "Permanent account id"), ByIdQuery),
     responses(
-        (status = 200, description = "The account", body = RemoteDriveUserResponse),
+        (status = 200, description = "The account", body = AccountLookupResponse),
         (status = 404, description = "No such account")
     )
 )]
@@ -145,7 +148,7 @@ pub(crate) async fn remote_account(
     state: &AppState,
     caller: &str,
     person: &AccountRef,
-) -> AppResult<Option<RemoteDriveUserResponse>> {
+) -> AppResult<Option<AccountLookupResponse>> {
     let slot = slot(person);
     let mut kept = slot.lock().await;
     let fetched = match kept.as_ref() {
@@ -195,7 +198,7 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
             format!("the other server answered {}", response.status),
         ));
     }
-    let remote: RemoteDriveUserResponse = serde_json::from_slice(&response.body)
+    let remote: AccountLookupResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid account"))?;
     if remote.server != person.server
         || remote.account_id != person.account_id
@@ -218,7 +221,7 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
     tag = "drive federation",
     params(("accountId" = String, Path)),
     responses(
-        (status = 200, description = "The account", body = RemoteDriveUserResponse),
+        (status = 200, description = "The account", body = AccountLookupResponse),
         (status = 404, description = "No such account")
     )
 )]

@@ -2152,7 +2152,13 @@ fn validate_transaction(
     if transaction.message.sender_device_id == 0 || transaction.message.sender_device_id > 127 {
         return Err(AppError::bad_request("sender device id is out of range"));
     }
-    // Both accounts parsed canonical (AccountRef refuses anything else).
+    check_accounts(transaction)
+}
+
+/// The sender is the origin's account (a peer speaks only for its own
+/// accounts) and the recipient the destination's. Both parsed canonical:
+/// AccountRef refuses anything else.
+fn check_accounts(transaction: &FederatedChatTransaction) -> AppResult<()> {
     if transaction.sender.server != transaction.origin {
         return Err(AppError::unauthorized(
             "federated sender does not belong to the origin server",
@@ -2254,6 +2260,37 @@ mod tests {
             None
         );
         assert_eq!(super::refused_sequence(b"not json"), None);
+    }
+
+    #[test]
+    fn a_peer_speaks_only_for_its_own_accounts() {
+        let account = |server: &str| {
+            kutup_chat_proto::AccountRef::new(server, "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap()
+        };
+        let transaction =
+            |sender: &str, recipient: &str| kutup_chat_proto::FederatedChatTransaction {
+                fed_version: super::CHAT_FEDERATION_PAYLOAD_VERSION,
+                transaction_id: Uuid::new_v4().to_string(),
+                sequence: 1,
+                origin: "a.example".into(),
+                destination: "b.example".into(),
+                recipient: account(recipient),
+                sender: account(sender),
+                message: kutup_chat_proto::SendMessagesRequest {
+                    sender_device_id: 1,
+                    send_id: Uuid::new_v4().to_string(),
+                    envelopes: Vec::new(),
+                    access_token: None,
+                },
+            };
+        assert!(super::check_accounts(&transaction("a.example", "b.example")).is_ok());
+        // A delivering a sender of C, or of the destination itself: refused.
+        let forged = super::check_accounts(&transaction("c.example", "b.example")).unwrap_err();
+        assert_eq!(forged.status, axum::http::StatusCode::UNAUTHORIZED);
+        assert!(super::check_accounts(&transaction("b.example", "b.example")).is_err());
+        // A recipient on another server than the destination: refused.
+        assert!(super::check_accounts(&transaction("a.example", "c.example")).is_err());
     }
 
     #[test]

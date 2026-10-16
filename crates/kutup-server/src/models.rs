@@ -165,28 +165,6 @@ pub struct TotpCodeRequest {
     pub code: String,
 }
 
-/// `GET /api/users/by-address/:address` — mirrors `handlers.UserLookupResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UserLookupResponse {
-    pub user_id: String,
-    /// Who it is: the server and the permanent account id. The address is
-    /// what was asked for, server-asserted: a lookup handle, never a label
-    /// to keep on a pinned account (docs/plans/account-ids.md).
-    pub server: String,
-    pub account_id: String,
-    pub account: String,
-    pub drive_hpke_public_key: String,
-    pub account_incarnation_id: String,
-    pub drive_signing_public_key: String,
-    /// The account authority, whose hash is the incarnation id.
-    pub account_authority_public_key: String,
-    /// The authority's signature over the Drive keys; absent for an account
-    /// that has not signed one yet.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub drive_key_binding: Option<String>,
-}
-
 /// Collection list/get row — mirrors `handlers.CollectionRow`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

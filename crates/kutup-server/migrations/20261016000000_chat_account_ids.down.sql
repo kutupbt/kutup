@@ -1,32 +1,3 @@
-ALTER TABLE chat_call_link_knocks DROP COLUMN account_id;
-ALTER TABLE chat_call_link_seats DROP COLUMN account_id;
-
-CREATE TABLE chat_mls_pending_requests (
-    request_id uuid NOT NULL PRIMARY KEY,
-    conversation_id uuid NOT NULL,
-    incarnation bigint NOT NULL CHECK (incarnation > 0),
-    sender_address text NOT NULL,
-    sender_origin text NOT NULL CHECK (sender_origin = lower(sender_origin)),
-    recipient_user_id uuid NOT NULL,
-    status text DEFAULT 'pending' NOT NULL
-        CHECK (status = ANY (ARRAY['pending', 'accepted', 'rejected', 'blocked', 'expired'])),
-    maximum_messages integer NOT NULL CHECK (maximum_messages BETWEEN 1 AND 128),
-    maximum_ciphertext_bytes bigint NOT NULL
-        CHECK (maximum_ciphertext_bytes BETWEEN 65536 AND 16777216),
-    message_count integer DEFAULT 0 NOT NULL CHECK (message_count >= 0),
-    ciphertext_bytes bigint DEFAULT 0 NOT NULL CHECK (ciphertext_bytes >= 0),
-    genesis jsonb NOT NULL CHECK (jsonb_typeof(genesis) = 'object'),
-    expires_at timestamp with time zone NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CHECK (message_count <= maximum_messages),
-    CHECK (ciphertext_bytes <= maximum_ciphertext_bytes)
-);
-CREATE UNIQUE INDEX chat_mls_one_pending_request_per_sender_idx
-    ON chat_mls_pending_requests (recipient_user_id, sender_address) WHERE status = 'pending';
-CREATE INDEX chat_mls_pending_requests_recipient_idx
-    ON chat_mls_pending_requests (recipient_user_id, status, created_at);
-
 DELETE FROM chat_mls_invitation_feedback_outbox;
 ALTER TABLE chat_mls_invitation_feedback_outbox
     DROP CONSTRAINT chat_mls_invitation_feedback_outbox_pkey,

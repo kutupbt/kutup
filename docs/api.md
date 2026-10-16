@@ -956,15 +956,13 @@ lookups always have.
 **Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
 **Param:** `:address` — the URL-encoded Kutup address (`username@<server>`). `404` when no active account has it.
 
-**Response** for an account here (another server's answers `username` in
-place of `userId`, with the same other fields):
-
-**Response:**
+**Response**, one shape for an account here or on another server (the same
+as `GET /api/users/by-id`; on this server `accountId` is the user id):
 ```json
 {
-  "userId": "<uuid>",
+  "username": "bob",
   "server": "example.com",
-  "accountId": "<uuid, the same as userId>",
+  "accountId": "<uuid>",
   "account": "bob@example.com",
   "driveHpkePublicKey": "<canonical base64, 32 bytes>",
   "accountIncarnationId": "<lowercase SHA-256 hex>",
@@ -979,8 +977,9 @@ the answer is the server's word, a lookup handle only, and `account` is a
 label. Shares, pins and records name the account, never the address.
 `driveKeyBinding` is the account authority's signature over the account
 (server and id) and its Drive keys (`kutup_crypto::drive_key_binding`); it is absent only
-for an account an administrator wiped that has not finished its new first-login
-setup (and from a peer server that does not send one). Clients check it and pin the authority
+from a peer server that does not send one. An account still in its first-login
+setup (new, or wiped by an administrator) has no keys to share to and answers `404`,
+as `by-id` does. Clients check the binding and pin the authority
 (docs/plans/drive-identity-pins.md); another server's answer carries the
 same two fields.
 

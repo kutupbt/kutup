@@ -420,15 +420,15 @@ pub struct PublicShareResponse {
     pub token: String,
 }
 
+/// An account and its keys, as `/users/by-address` and `/users/by-id` both
+/// answer it, here or on its server.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserByAddress {
-    #[serde(default)]
-    pub user_id: String,
-    /// The account the address leads to now (server-asserted): its server
-    /// and permanent id.
+pub struct AccountLookup {
+    /// Who it is: its server and permanent id (docs/plans/account-ids.md).
     pub server: String,
     pub account_id: String,
+    /// `name@server`, the label shown.
     #[serde(default)]
     pub account: String,
     #[serde(default)]
@@ -444,29 +444,6 @@ pub struct UserByAddress {
     pub account_authority_public_key: String,
     #[serde(default)]
     pub drive_key_binding: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FedPubKeyResponse {
-    #[serde(default)]
-    pub account: String,
-    /// The account's permanent id on its server (docs/plans/account-ids.md).
-    #[serde(default)]
-    pub account_id: String,
-    #[serde(default)]
-    pub drive_hpke_public_key: String,
-    #[serde(default)]
-    pub account_incarnation_id: String,
-    #[serde(default)]
-    pub drive_signing_public_key: String,
-    #[serde(default)]
-    pub account_authority_public_key: String,
-    #[serde(default)]
-    pub drive_key_binding: Option<String>,
-    /// The account's server (with `account_id`, who it is).
-    #[serde(default)]
-    pub server: String,
 }
 
 /// The account's sealed identity pin list (`GET/PUT /api/user/identity-pins`).

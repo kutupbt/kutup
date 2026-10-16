@@ -67,13 +67,3 @@ ALTER TABLE chat_mls_invitation_feedback_outbox
         CHECK (member_account ~ '^aci:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@[a-z0-9.-]+$'),
     ADD CONSTRAINT chat_mls_invitation_feedback_outbox_pkey
         PRIMARY KEY (destination, conversation_id, incarnation, member_account, invited_epoch);
-
--- Unused, and unique on an address.
-DROP TABLE chat_mls_pending_requests;
-
--- A meeting seat or knock keeps the account it belongs to; `account` stays
--- the name shown.
-ALTER TABLE chat_call_link_seats ADD COLUMN account_id text
-    CONSTRAINT chat_call_link_seats_account_id_check CHECK (account_id ~ '^aci:');
-ALTER TABLE chat_call_link_knocks ADD COLUMN account_id text
-    CONSTRAINT chat_call_link_knocks_account_id_check CHECK (account_id ~ '^aci:');

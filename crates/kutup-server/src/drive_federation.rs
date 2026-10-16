@@ -50,12 +50,17 @@ const MAX_MULTIPART_FIELD_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RemoteDriveUserResponse {
-    /// The address asked for, server-asserted: a lookup handle.
+/// An account and its keys, as every identity lookup answers it, here or on
+/// its server (`/api/users/by-address`, `/api/users/by-id`, and the signed
+/// federated lookups): one shape, so clients never tell local from remote.
+pub struct AccountLookupResponse {
+    /// The name the account goes by now on `server`, server-asserted: a
+    /// lookup handle and a label, never an identity.
     pub username: String,
     pub server: String,
     /// Who it is: the permanent account id on `server`.
     pub account_id: String,
+    /// `username@server`: the label shown.
     pub account: String,
     pub drive_hpke_public_key: String,
     pub account_incarnation_id: String,
@@ -247,7 +252,7 @@ pub(crate) fn canonical_domain(domain: &str) -> AppResult<&str> {
 
 /// A peer's account answer's keys: canonical, and its incarnation the one
 /// its authority key stands for.
-pub(crate) fn remote_keys_consistent(remote: &RemoteDriveUserResponse) -> bool {
+pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
     let Ok(authority) = canonical_public_key(&remote.account_authority_public_key) else {
         return false;
     };
@@ -395,7 +400,7 @@ pub(crate) async fn remote_user_by_name(
     caller: &str,
     username: &str,
     server: &str,
-) -> AppResult<RemoteDriveUserResponse> {
+) -> AppResult<AccountLookupResponse> {
     let username = canonical_username(username)?;
     let server = canonical_domain(server)?;
     if server == state.config.chat_server_name {
@@ -438,7 +443,7 @@ pub(crate) async fn remote_user_by_name(
             format!("remote Drive directory returned {}", response.status),
         ));
     }
-    let remote: RemoteDriveUserResponse = serde_json::from_slice(&response.body)
+    let remote: AccountLookupResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote Drive user"))?;
     // Another spelling of the asked name is the same account (one per
     // folded name); the answer's spelling is the one it goes by.
@@ -590,7 +595,7 @@ pub async fn create_federated_share(
     path = "/api/fed/drive/users/{username}",
     tag = "drive federation",
     params(("username" = String, Path)),
-    responses((status = 200, description = "Signed local Drive account", body = RemoteDriveUserResponse))
+    responses((status = 200, description = "Signed local Drive account", body = AccountLookupResponse))
 )]
 pub async fn get_user(
     State(state): State<AppState>,
@@ -640,7 +645,7 @@ pub async fn get_user(
             federation,
             &authenticated,
             StatusCode::OK,
-            &RemoteDriveUserResponse {
+            &AccountLookupResponse {
                 account: format!("{}@{}", stored, federation.server_name()),
                 username: stored,
                 server: federation.server_name().to_owned(),

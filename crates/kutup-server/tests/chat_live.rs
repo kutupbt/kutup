@@ -237,6 +237,60 @@ fn publish_manifest(
     previous_hash: Option<String>,
     devices: Vec<AccountManifestDeviceV1>,
 ) -> AccountManifestV1 {
+    let manifest = signed_manifest(
+        signing,
+        account,
+        drive_public_key,
+        drive_signing_public_key,
+        sequence,
+        previous_hash,
+        devices,
+    );
+    // Publication is idempotent, so a transient transport failure can retry
+    // the exact manifest without publishing different bytes.
+    let mut response = None;
+    for attempt in 0..3 {
+        let candidate = post_manifest(c, base, token, &manifest);
+        if candidate.status() != StatusCode::SERVICE_UNAVAILABLE || attempt == 2 {
+            response = Some(candidate);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let response = response.expect("manifest publication retry loop returns a response");
+    let response_status = response.status();
+    let response_body = response.text().unwrap();
+    assert!(
+        response_status.is_success(),
+        "publish manifest sequence {sequence}: {response_status}: {response_body}",
+    );
+    let published = serde_json::from_str::<AccountManifestPublicationV1>(&response_body).unwrap();
+    assert_eq!(published.manifest, manifest);
+    manifest
+}
+
+fn post_manifest(
+    c: &Client,
+    base: &str,
+    token: &str,
+    manifest: &AccountManifestV1,
+) -> reqwest::blocking::Response {
+    c.post(format!("{base}/api/chat/manifest"))
+        .bearer_auth(token)
+        .json(manifest)
+        .send()
+        .unwrap()
+}
+
+fn signed_manifest(
+    signing: &SigningKey,
+    account: &AccountRef,
+    drive_public_key: &str,
+    drive_signing_public_key: &str,
+    sequence: u64,
+    previous_hash: Option<String>,
+    devices: Vec<AccountManifestDeviceV1>,
+) -> AccountManifestV1 {
     let public = signing.verifying_key();
     let mut incarnation = Sha256::new();
     incarnation.update(b"kutup/account-incarnation/v1\0");
@@ -262,31 +316,6 @@ fn publish_manifest(
     };
     manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
     manifest.verify().unwrap();
-    // Publication is idempotent, so a transient transport failure can retry
-    // the exact manifest without publishing different bytes.
-    let mut response = None;
-    for attempt in 0..3 {
-        let candidate = c
-            .post(format!("{base}/api/chat/manifest"))
-            .bearer_auth(token)
-            .json(&manifest)
-            .send()
-            .unwrap();
-        if candidate.status() != StatusCode::SERVICE_UNAVAILABLE || attempt == 2 {
-            response = Some(candidate);
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(250));
-    }
-    let response = response.expect("manifest publication retry loop returns a response");
-    let response_status = response.status();
-    let response_body = response.text().unwrap();
-    assert!(
-        response_status.is_success(),
-        "publish manifest sequence {sequence}: {response_status}: {response_body}",
-    );
-    let published = serde_json::from_str::<AccountManifestPublicationV1>(&response_body).unwrap();
-    assert_eq!(published.manifest, manifest);
     manifest
 }
 
@@ -1160,6 +1189,33 @@ fn chat_v1_contract() {
     let (dev_b, reg_b, identity_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
 
+    // A manifest names the caller's own account: another account id here,
+    // or the caller's id on another server, is refused (and changes nothing).
+    let device_a = AccountManifestDeviceV1 {
+        device_id: dev_a,
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        identity_key: identity_a.clone(),
+        registration_id: reg_a,
+        mls: None,
+    };
+    for wrong in [
+        AccountRef::new(&domain, &Uuid::new_v4().to_string()).unwrap(),
+        AccountRef::new("elsewhere.example", &account_a.account_id).unwrap(),
+    ] {
+        let manifest = signed_manifest(
+            &authority_a,
+            &wrong,
+            &drive_a,
+            &drive_sign_a,
+            1,
+            None,
+            vec![device_a.clone()],
+        );
+        let refused = post_manifest(&c, &base, &ta, &manifest);
+        assert_eq!(refused.status(), StatusCode::CONFLICT, "{wrong}");
+    }
+    println!("ok  - a manifest naming another account is refused");
+
     let manifest_a1 = publish_manifest(
         &c,
         &base,
@@ -1178,6 +1234,30 @@ fn chat_v1_contract() {
             mls: None,
         }],
     );
+    // `?server=` naming this server is this server; a spelling that is not
+    // the canonical name is refused, never looked up elsewhere.
+    for query in ["", "?server=", "?server=UPPER"] {
+        let url = match query {
+            "?server=" => format!(
+                "{base}/api/chat/accounts/{}/manifest?server={domain}",
+                account_a.account_id
+            ),
+            "?server=UPPER" => format!(
+                "{base}/api/chat/accounts/{}/manifest?server={}",
+                account_a.account_id,
+                domain.to_uppercase()
+            ),
+            _ => format!("{base}/api/chat/accounts/{}/manifest", account_a.account_id),
+        };
+        let r = c.get(&url).bearer_auth(&tb).send().unwrap();
+        if query == "?server=UPPER" {
+            assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{url}");
+        } else {
+            assert_eq!(r.status(), StatusCode::OK, "{url}");
+            assert_eq!(r.json::<AccountManifestV1>().unwrap(), manifest_a1, "{url}");
+        }
+    }
+    println!("ok  - ?server= with this server's name resolves here");
     let devices_after_first_manifest: Value = c
         .get(format!("{base}/api/chat/device"))
         .bearer_auth(&ta)

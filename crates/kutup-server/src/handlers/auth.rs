@@ -23,7 +23,7 @@ use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::models::{
     MeResponse, MessageResponse, OkResponse, PreflightRecoverResponse, RefreshResponse,
-    SettingsResponse, TotpSetupResponse, UserLookupResponse,
+    SettingsResponse, TotpSetupResponse,
 };
 use crate::sessions::{self, ClientType};
 use crate::{jwt, ratelimit, totp, AppState};
@@ -1271,7 +1271,7 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "Target account's Kutup address (username@server)")),
-    responses((status = 200, description = "The account and its keys", body = UserLookupResponse), (status = 404, description = "No such account"))
+    responses((status = 200, description = "The account and its keys, here or on its server", body = crate::drive_federation::AccountLookupResponse), (status = 404, description = "No such account"))
 )]
 pub async fn get_user_by_address(
     State(state): State<AppState>,
@@ -1290,63 +1290,34 @@ pub async fn get_user_by_address(
             return Ok(Json(remote).into_response());
         }
     }
-    type Row = (
-        Uuid,
-        Option<String>,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-    );
-    // People are found by their Kutup address (docs/plans/account-identity.md).
-    let row: Option<Row> =
-        match local_account_username(&address, &state.config.chat_server_name) {
-            Some(username) => sqlx::query_as(
-                "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
-                        account_authority_public_key, drive_key_binding
-                 FROM users WHERE id = kutup_current_user($1) AND is_active = true",
-            )
-            .bind(&username)
-            .fetch_optional(&state.pool)
-            .await?,
-            None => None,
-        };
-    let Some((id, username, public_key, incarnation_id, signing_public_key, authority, binding)) =
-        row
-    else {
-        // An old name: where the account went (the chains), never its keys.
-        return Err(
-            match local_account_username(&address, &state.config.chat_server_name) {
-                Some(username) => {
-                    crate::account_names::renamed_or(
-                        &state.pool,
-                        &state.config.chat_server_name,
-                        &username,
-                        AppError::not_found("user not found"),
-                    )
-                    .await
-                }
-                None => AppError::not_found("user not found"),
-            },
-        );
+    // People are found by their Kutup address (docs/plans/account-identity.md);
+    // the answer is the account, in the one shape `by-id` gives too.
+    let local = local_account_username(&address, &state.config.chat_server_name);
+    let id: Option<Uuid> = match &local {
+        Some(username) => {
+            sqlx::query_scalar("SELECT kutup_current_user($1)")
+                .bind(username)
+                .fetch_one(&state.pool)
+                .await?
+        }
+        None => None,
     };
-    let username = username
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("recipient identity is unavailable"))?;
-    let domain = state.config.chat_server_name.as_str();
-    Ok(Json(UserLookupResponse {
-        user_id: id.to_string(),
-        server: domain.to_owned(),
-        account_id: id.to_string(),
-        account: format!("{username}@{domain}"),
-        drive_hpke_public_key: public_key,
-        account_incarnation_id: incarnation_id,
-        drive_signing_public_key: signing_public_key,
-        account_authority_public_key: authority,
-        drive_key_binding: binding,
-    })
-    .into_response())
+    let found = match id {
+        Some(id) => crate::handlers::accounts::local_identity(&state, id).await?,
+        None => None,
+    };
+    match (found, local) {
+        (Some(found), _) => Ok(Json(found).into_response()),
+        // An old name: where the account went (the chains), never its keys.
+        (None, Some(username)) => Err(crate::account_names::renamed_or(
+            &state.pool,
+            &state.config.chat_server_name,
+            &username,
+            AppError::not_found("user not found"),
+        )
+        .await),
+        (None, None) => Err(AppError::not_found("user not found")),
+    }
 }
 
 /// `POST /api/user/2fa/setup` — mirrors `SetupTOTP`.

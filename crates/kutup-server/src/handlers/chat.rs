@@ -993,13 +993,6 @@ pub async fn put_profile(
 )]
 pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    username
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
     let mut tx = state.pool.begin().await?;
     let profile = load_own_profile_in(&mut tx, user_id, false)
         .await?

@@ -150,35 +150,26 @@ impl Me {
     }
 }
 
-/// Looks `account` up: here, or through their server.
-pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
-    let (username, server) = account
+/// Looks `account` up, here or through its server: one lookup, one answer.
+pub fn published(ctx: &Ctx, account: &str) -> Result<Published> {
+    let (_, server) = account
         .split_once('@')
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
-    let local = me.account_ref.server == server;
-    let person = if local {
-        let user = ctx.client.get_user_by_address(account)?;
-        Published {
-            // On this server the account id is the user id.
-            account_ref: AccountRef::new(server, &user.user_id)
-                .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
-            account: user.account,
-            authority: user.account_authority_public_key,
-            hpke: user.drive_hpke_public_key,
-            signing: user.drive_signing_public_key,
-            binding: user.drive_key_binding,
-        }
-    } else {
-        let user = ctx.client.get_fed_pubkey(username, server)?;
-        Published {
-            account_ref: AccountRef::new(server, &user.account_id)
-                .with_context(|| format!("{server} gave no valid account id for {account}"))?,
-            account: user.account,
-            authority: user.account_authority_public_key,
-            hpke: user.drive_hpke_public_key,
-            signing: user.drive_signing_public_key,
-            binding: user.drive_key_binding,
-        }
+    let user = ctx.client.get_user_by_address(account)?;
+    if user.server != server {
+        bail!(
+            "the lookup for {account} answered for an account on {}",
+            user.server
+        );
+    }
+    let person = Published {
+        account_ref: AccountRef::new(&user.server, &user.account_id)
+            .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
+        account: user.account,
+        authority: user.account_authority_public_key,
+        hpke: user.drive_hpke_public_key,
+        signing: user.drive_signing_public_key,
+        binding: user.drive_key_binding,
     };
     if person.account != account {
         bail!("the lookup for {account} answered for {}", person.account);
@@ -349,7 +340,7 @@ fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Reco
 /// How far `account`'s `claimed` keys can be trusted; pins its authority the
 /// first time it is met with a valid binding.
 pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Status> {
-    let person = published(ctx, me, account)?;
+    let person = published(ctx, account)?;
     if let Some(status) = self_status(&me.account_ref, &person) {
         return Ok(status);
     }
@@ -441,7 +432,7 @@ pub fn safety(
     me: &Me,
     account: &str,
 ) -> Result<(safety_number::SafetyNumberV3, Published)> {
-    let person = published(ctx, me, account)?;
+    let person = published(ctx, account)?;
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet: nothing to compare");
     }
@@ -473,7 +464,7 @@ pub fn verify(ctx: &Ctx, me: &Me, account: &str, person: &Published) -> Result<(
 
 /// Trust `account`'s current identity from now on, without comparing it.
 pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
-    let person = published(ctx, me, account)?;
+    let person = published(ctx, account)?;
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet");
     }
