@@ -99,6 +99,16 @@ describe('an address’s keys against the pin list', () => {
     return addressKeys('ada_l@kutup.dev')
   }
 
+  it('holds no shared mailbox to the pin list: it is no person', async () => {
+    pins.verdict = { kind: 'changed' }
+    forgetKeys()
+    const group: Partial<Awaited<ReturnType<typeof lookupOf>>> = await lookupOf(master, binding, 'ada_l@kutup.dev')
+    delete group.accountId
+    get.mockResolvedValueOnce({ data: group })
+    const keys = await addressKeys('ada_l@kutup.dev')
+    expect(keys).not.toHaveProperty('accountRef')
+  })
+
   it('refuses another authority for a pinned person', async () => {
     await expect(lookedUp({ kind: 'changed' })).rejects.toBeInstanceOf(KeysIdentityChanged)
   })
