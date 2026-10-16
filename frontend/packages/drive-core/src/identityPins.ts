@@ -527,6 +527,18 @@ export async function pinnedVerdict(me: DriveIdentity, account: AccountRef, addr
 }
 
 /**
+ * Whether `account` is the one the pin list knows at `address`: pinned, at
+ * its own authority, and no one else the list knows holds the address. What
+ * is kept by address (an address book card) belongs to an account only then:
+ * someone who took a name another person left is not that person.
+ */
+export async function holdsAddress(me: DriveIdentity, account: AccountRef, address: string): Promise<boolean> {
+  const pin = (await pinStore(me)).pins.list.pins.find((known) => sameAccount(known.account, account))
+  if (!pin) return false
+  return (await pinnedVerdict(me, account, address, pin.authorityPublicKey)).kind === 'pinned'
+}
+
+/**
  * Where the account at `address` is now, by its verified rename chain
  * (`authority` signs it), or `address` itself: an old address's links (Chat,
  * calls) go to the account's current name.
@@ -570,7 +582,9 @@ async function formerOf(pin: IdentityPin, address: string): Promise<string | und
  * authority the first time it is met with a valid binding.
  */
 export async function checkIdentity(me: DriveIdentity, account: string, claimed: ClaimedKeys = {}): Promise<IdentityStatus> {
-  if (await sameAddress(account, me.account)) return { kind: 'ok', verified: true }
+  // Never "me" by address: an address can belong to someone else later (this
+  // account's own old name, once freed). Who is this account is settled by
+  // its permanent id, in checkPublished.
   let person: PublishedIdentity
   try {
     person = await publishedIdentity(me, account)
