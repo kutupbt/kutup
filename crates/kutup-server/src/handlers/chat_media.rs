@@ -5,7 +5,6 @@
 //! and attachment keys remain inside Direct/MLS ciphertext and ledger AEAD.
 
 use std::io::ErrorKind;
-use std::str::FromStr as _;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -15,10 +14,10 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountAddress,
-    ChatAttachmentLedgerDiffPageV1, ChatAttachmentLedgerPutReceiptV1,
-    ChatAttachmentLedgerPutRequestV1, ChatAttachmentLedgerWireEntityV1, ChatMediaDeliveryOfferV1,
-    ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1,
+    capability_hash, constant_time_capability_hash_eq, ChatAttachmentLedgerDiffPageV1,
+    ChatAttachmentLedgerPutReceiptV1, ChatAttachmentLedgerPutRequestV1,
+    ChatAttachmentLedgerWireEntityV1, ChatMediaDeliveryOfferV1, ChatMediaDeliveryStatusV1,
+    ChatMediaOfferResponseV1,
 };
 use kutup_crypto::chat_attachment_ledger;
 use kutup_crypto::chat_media::{
@@ -748,7 +747,8 @@ pub async fn deliver_local(
         .ok_or_else(|| AppError::bad_request("invalid Chat media delivery"))?;
     let attachment_id = canonical_uuid(&offer.attachment_id)
         .ok_or_else(|| AppError::bad_request("invalid Chat media delivery"))?;
-    let address = AccountAddress::from_str(&offer.recipient).map_err(|_| unavailable())?;
+    let recipient =
+        crate::chat_media_federation::recipient_account_id(&offer).map_err(|_| unavailable())?;
     let capability: [u8; 16] = STANDARD
         .decode(&offer.delivery_capability)
         .ok()
@@ -791,8 +791,8 @@ pub async fn deliver_local(
         }));
     }
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active=true")
-            .bind(&address.username)
+        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active=true")
+            .bind(recipient)
             .fetch_optional(&mut *transaction)
             .await?;
     let Some(recipient_user_id) = recipient_user_id else {

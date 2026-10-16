@@ -1127,10 +1127,6 @@ fn build_router(state: AppState) -> Router {
             get(collections::list_collections).post(collections::create_collection),
         )
         .route(
-            "/api/drive/federation/users/:username",
-            get(drive_federation::fetch_remote_user),
-        )
-        .route(
             "/api/collections/:id",
             get(collections::get_collection)
                 .put(collections::update_collection)
@@ -1306,15 +1302,15 @@ fn build_router(state: AppState) -> Router {
             get(sealed_sender_service::get_domain_policy),
         )
         .route(
-            "/api/chat/users/:username/profile/:version",
+            "/api/chat/accounts/:account_id/profile/:version",
             get(chat::get_user_profile),
         )
         .route(
-            "/api/chat/users/:username/manifest",
+            "/api/chat/accounts/:account_id/manifest",
             get(chat::get_user_manifest),
         )
         .route(
-            "/api/chat/users/:username/manifest-history",
+            "/api/chat/accounts/:account_id/manifest-history",
             get(chat::get_manifest_history).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route("/api/chat/keys", put(chat::replenish_keys))
@@ -1398,23 +1394,23 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/users/:username/keys",
+            "/api/chat/accounts/:account_id/keys",
             get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route(
-            "/api/chat/anonymous/users/:username/keys",
+            "/api/chat/anonymous/accounts/:account_id/keys",
             post(chat::get_anonymous_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/anonymous/users/:username/messages",
+            "/api/chat/anonymous/accounts/:account_id/messages",
             post(chat::send_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/users/:username/messages",
+            "/api/chat/accounts/:account_id/messages",
             post(chat::send_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
         )
         .route(
@@ -1694,12 +1690,12 @@ fn build_router(state: AppState) -> Router {
         // --- Server-to-server endpoints. Every feature uses the shared v2
         // identity, discovery, policy, pinning, replay, and signed transport. ---
         .route(
-            "/api/fed/chat/users/:username/keys",
+            "/api/fed/chat/accounts/:account_id/keys",
             get(chat_federation::get_user_bundles)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/users/:username/keys",
+            "/api/fed/chat/sealed/accounts/:account_id/keys",
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -1788,17 +1784,17 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/profile/:version",
+            "/api/fed/chat/accounts/:account_id/profile/:version",
             get(chat_federation::get_user_profile)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/manifest-history",
+            "/api/fed/chat/accounts/:account_id/manifest-history",
             get(chat_federation::get_manifest_history)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/manifest",
+            "/api/fed/chat/accounts/:account_id/manifest",
             get(chat_federation::get_manifest)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
@@ -1823,11 +1819,11 @@ fn build_router(state: AppState) -> Router {
         // Renames, under Chat's and Drive's namespaces alike (the signed
         // request's feature says which).
         .route(
-            "/api/fed/chat/accounts/:username/renames",
+            "/api/fed/chat/names/:username/renames",
             get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/drive/accounts/:username/renames",
+            "/api/fed/drive/names/:username/renames",
             get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

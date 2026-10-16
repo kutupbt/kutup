@@ -211,7 +211,7 @@ pub(crate) async fn federated_submit_anonymous_message(
     };
     let outcome = MlsRepository::new(state.pool.clone())
         .store_anonymous_submission(
-            &transaction.submission.recipient.username,
+            crate::account_ids::id_of(&transaction.submission.recipient)?,
             &transaction.submission,
             &capability,
             &policy.abuse_limits,
@@ -257,7 +257,11 @@ pub(crate) async fn federated_submit_anonymous_message(
     .await?;
     tx.commit().await?;
     if status == StatusCode::OK {
-        notify_mls_recipient_mailbox(&state, &transaction.submission.recipient.username).await;
+        notify_mls_recipient_mailbox(
+            &state,
+            crate::account_ids::id_of(&transaction.submission.recipient)?,
+        )
+        .await;
     }
     signed_federation_json(federation, &authenticated, status, &response)
 }

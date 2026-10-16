@@ -18,7 +18,7 @@ use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
     AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestPublicationV1, AccountManifestV1, AppendChatBackupSegmentRequestV1,
+    AccountManifestPublicationV1, AccountManifestV1, AccountRef, AppendChatBackupSegmentRequestV1,
     ChatBackupManifestV1, ChatBackupMediaReferenceV1, ChatBackupSignerAuthorizationV1,
     CommitChatBackupManifestRequestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1,
@@ -35,7 +35,7 @@ fn b64(b: &[u8]) -> String {
 }
 
 fn opaque_profile_envelope(
-    account: &str,
+    account: &AccountRef,
     version: &str,
     revision: u64,
     source_device_id: u32,
@@ -77,7 +77,15 @@ fn register_and_login(
     c: &Client,
     base: &str,
     tag: &str,
-) -> (String, String, String, String, SigningKey, String, [u8; 32]) {
+) -> (
+    String,
+    AccountRef,
+    String,
+    String,
+    SigningKey,
+    String,
+    [u8; 32],
+) {
     let user = common::register(c, base);
     let session = common::sign_in(c, base, &user.username, &user.password);
     let token = session["accessToken"]
@@ -89,7 +97,7 @@ fn register_and_login(
     let drive_signing_public_key = b64(&identity.drive_signing_public_key());
     (
         user.binding.clone(),
-        user.username.clone(),
+        user.person.clone(),
         token,
         b64(&identity.drive_hpke_public_key()),
         authority,
@@ -222,7 +230,7 @@ fn publish_manifest(
     base: &str,
     token: &str,
     signing: &SigningKey,
-    account: &str,
+    account: &AccountRef,
     drive_public_key: &str,
     drive_signing_public_key: &str,
     sequence: u64,
@@ -235,7 +243,7 @@ fn publish_manifest(
     incarnation.update(public.as_bytes());
     let mut manifest = AccountManifestV1 {
         manifest_version: 1,
-        account: account.into(),
+        account: account.clone(),
         incarnation_id: hex::encode(incarnation.finalize()),
         sequence,
         previous_hash,
@@ -1142,8 +1150,9 @@ fn chat_v1_contract() {
         .as_str()
         .expect("Chat capability has a server name")
         .to_string();
-    let account_a = format!("{ua}@{domain}");
-    let account_b = format!("{ub}@{domain}");
+    // Chat names accounts by id (docs/plans/account-ids.md).
+    let (account_a, account_b) = (ua, ub);
+    assert_eq!(account_a.server, domain);
     println!("ok  - two accounts registered + logged in");
 
     let (dev_a, reg_a, identity_a) = register_chat_device(&c, &base, &ta);
@@ -1226,7 +1235,7 @@ fn chat_v1_contract() {
     let profile_v1_version = "11".repeat(32);
     let profile_v1 = json!({
         "suite": 1,
-        "account": account_a,
+        "account": &account_a,
         "version": profile_v1_version,
         "revision": 1,
         "sourceDeviceId": dev_a,
@@ -1246,7 +1255,8 @@ fn chat_v1_contract() {
 
     let denied = c
         .get(format!(
-            "{base}/api/chat/users/{account_a}/profile/{}",
+            "{base}/api/chat/accounts/{}/profile/{}",
+            account_a.account_id,
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1257,7 +1267,8 @@ fn chat_v1_contract() {
 
     let visible_v1: Value = c
         .get(format!(
-            "{base}/api/chat/users/{account_a}/profile/{}",
+            "{base}/api/chat/accounts/{}/profile/{}",
+            account_a.account_id,
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1276,7 +1287,7 @@ fn chat_v1_contract() {
     let profile_v2_version = "12".repeat(32);
     let profile_v2 = json!({
         "suite": 1,
-        "account": account_a,
+        "account": &account_a,
         "version": profile_v2_version,
         "revision": 2,
         "sourceDeviceId": dev_a,
@@ -1302,7 +1313,8 @@ fn chat_v1_contract() {
     assert_eq!(owner, profile_v2);
     let old_still_visible = c
         .get(format!(
-            "{base}/api/chat/users/{account_a}/profile/{}",
+            "{base}/api/chat/accounts/{}/profile/{}",
+            account_a.account_id,
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1345,7 +1357,8 @@ fn chat_v1_contract() {
     );
     let sync_bundles_value: Value = c
         .get(format!(
-            "{base}/api/chat/users/{account_a}/keys?syncDeviceId={dev_a}"
+            "{base}/api/chat/accounts/{}/keys?syncDeviceId={dev_a}",
+            account_a.account_id
         ))
         .bearer_auth(&ta)
         .send()
@@ -1411,7 +1424,7 @@ fn chat_v1_contract() {
         .unwrap();
     let own_envelopes = own_page["envelopes"].as_array().unwrap();
     assert_eq!(own_envelopes.len(), 1);
-    assert_eq!(own_envelopes[0]["sender"], account_a);
+    assert_eq!(own_envelopes[0]["sender"], json!(account_a));
     assert_eq!(own_envelopes[0]["senderDeviceId"], dev_a);
     println!("ok  - encrypted transcript routed only to the linked device");
 
@@ -1430,7 +1443,10 @@ fn chat_v1_contract() {
 
     // A fetches B's bundles: kyber always present, one-time EC consumed.
     let bundles_value: Value = c
-        .get(format!("{base}/api/chat/users/{account_b}/keys"))
+        .get(format!(
+            "{base}/api/chat/accounts/{}/keys",
+            account_b.account_id
+        ))
         .bearer_auth(&ta)
         .send()
         .unwrap()
@@ -1452,16 +1468,19 @@ fn chat_v1_contract() {
     println!("ok  - bundle fetch + account-signed manifest binding");
 
     let send = |send_id: &str, dev: u32, reg: u32, content: &str| {
-        c.post(format!("{base}/api/chat/users/{account_b}/messages"))
-            .bearer_auth(&ta)
-            .json(&json!({
-                "senderDeviceId": dev_a,
-                "sendId": send_id,
-                "envelopes": [ { "deviceId": dev, "registrationId": reg,
-                                 "envelopeType": "message", "suite": 1, "content": content } ],
-            }))
-            .send()
-            .unwrap()
+        c.post(format!(
+            "{base}/api/chat/accounts/{}/messages",
+            account_b.account_id
+        ))
+        .bearer_auth(&ta)
+        .json(&json!({
+            "senderDeviceId": dev_a,
+            "sendId": send_id,
+            "envelopes": [ { "deviceId": dev, "registrationId": reg,
+                             "envelopeType": "message", "suite": 1, "content": content } ],
+        }))
+        .send()
+        .unwrap()
     };
 
     // Correct send.

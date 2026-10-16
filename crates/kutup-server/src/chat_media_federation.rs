@@ -4,7 +4,6 @@
 //! grant. The signed transaction, destination receipt, destination object,
 //! quota rows, and logs never contain the sender account or device.
 
-use std::str::FromStr as _;
 use std::time::Duration;
 
 use aws_sdk_s3::primitives::{ByteStream, Length};
@@ -15,7 +14,7 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountAddress, ChatMediaDeliveryOfferV1,
+    capability_hash, constant_time_capability_hash_eq, ChatMediaDeliveryOfferV1,
     ChatMediaDeliveryStatusV1, ChatMediaOfferResponseV1, FederatedChatMediaTransactionV1,
 };
 use kutup_federation_proto::{content_digest_sha256_from_digest, FederationFeature};
@@ -290,13 +289,13 @@ pub(crate) async fn stage_remote_delivery(
             .map_err(|_| AppError::internal("serialize Chat-media transaction"))?;
         sqlx::query(
             "INSERT INTO chat_media_federation_pull_grants
-                 (origin_user_id,destination,recipient,operation_id,attachment_id,
+                 (origin_user_id,destination,recipient_account_id,operation_id,attachment_id,
                   retrieval_token_hash,expires_at)
              VALUES ($1,$2,$3,$4,$5,$6,to_timestamp($7))",
         )
         .bind(origin_user_id)
         .bind(&destination)
-        .bind(&offer.recipient)
+        .bind(recipient_account_id(&offer)?)
         .bind(operation_id)
         .bind(attachment_id)
         .bind(token_hash.as_slice())
@@ -460,13 +459,13 @@ async fn receive_offer_inner(
     let attachment_id = canonical_uuid(&transaction.offer.attachment_id)
         .ok_or_else(|| AppError::bad_request("invalid Chat-media attachment"))?;
     let transaction_digest = hex::encode(Sha256::digest(body));
-    let address = AccountAddress::from_str(&transaction.offer.recipient)
-        .map_err(|_| chat_media::unavailable())?;
+    let recipient =
+        recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?;
     let reservation = reserve_inbound_offer(
         state,
         &transaction,
         &transaction_digest,
-        &address,
+        recipient,
         sequence,
         operation_id,
         attachment_id,
@@ -505,7 +504,7 @@ async fn reserve_inbound_offer(
     state: &AppState,
     transaction: &FederatedChatMediaTransactionV1,
     transaction_digest: &str,
-    address: &AccountAddress,
+    recipient: Uuid,
     sequence: i64,
     operation_id: Uuid,
     attachment_id: Uuid,
@@ -617,8 +616,8 @@ async fn reserve_inbound_offer(
         .and_then(|bytes| bytes.try_into().ok());
     let capability_digest = capability.as_ref().map(capability_hash).unwrap_or([0; 32]);
     let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active=true")
-            .bind(&address.username)
+        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active=true")
+            .bind(recipient)
             .fetch_optional(&mut *tx)
             .await?;
     let capability_matches = if let Some(recipient_user_id) = recipient_user_id {
@@ -1237,12 +1236,12 @@ async fn serve_object_inner(
                 o.ciphertext_sha256,o.suite
          FROM chat_media_federation_pull_grants g
          JOIN chat_media_objects o ON o.attachment_id=g.attachment_id
-         WHERE g.destination=$1 AND g.recipient=$2 AND g.operation_id=$3
+         WHERE g.destination=$1 AND g.recipient_account_id=$2 AND g.operation_id=$3
            AND g.attachment_id=$4 AND g.expires_at>now()
            AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id",
     )
     .bind(authenticated.origin())
-    .bind(&transaction.offer.recipient)
+    .bind(recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?)
     .bind(operation_id)
     .bind(attachment_id)
     .bind(federation.server_name())
@@ -1359,4 +1358,10 @@ async fn retry_once(state: &AppState) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+/// The recipient's account id in an offer (canonical: checked as it parsed).
+pub(crate) fn recipient_account_id(offer: &ChatMediaDeliveryOfferV1) -> AppResult<Uuid> {
+    Uuid::parse_str(&offer.recipient.account_id)
+        .map_err(|_| AppError::bad_request("the recipient's account id is not a UUID"))
 }

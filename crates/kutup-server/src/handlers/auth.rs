@@ -1260,22 +1260,36 @@ fn local_account_username(address: &str, server_name: &str) -> Option<String> {
     Some(username.to_ascii_lowercase())
 }
 
-/// `GET /api/users/by-address/:address` — an account here, by the address a
-/// person would type to share with it: its Kutup address
-/// (`username@<this server>`).
+/// `GET /api/users/by-address/:address` — an account by the address a
+/// person would type: its Kutup address, here or on another server. The one
+/// place a name becomes an account (docs/plans/account-ids.md); everything
+/// after takes the account id. Another server's account is asked of that
+/// server through federation (its pinned identity), as `by-id` asks.
 #[utoipa::path(
     get,
     path = "/api/users/by-address/{address}",
     tag = "auth",
     security(("BearerAuth" = [])),
     params(("address" = String, Path, description = "Target account's Kutup address (username@server)")),
-    responses((status = 200, description = "User id + public key", body = UserLookupResponse), (status = 404, description = "No such account here"))
+    responses((status = 200, description = "The account and its keys", body = UserLookupResponse), (status = 404, description = "No such account"))
 )]
 pub async fn get_user_by_address(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(address): Path<String>,
 ) -> AppResult<Response> {
+    if let Some((name, server)) = address.trim().rsplit_once('@') {
+        if !server.eq_ignore_ascii_case(&state.config.chat_server_name) {
+            let remote = crate::drive_federation::remote_user_by_name(
+                &state,
+                &user.user_id,
+                name,
+                &server.to_ascii_lowercase(),
+            )
+            .await?;
+            return Ok(Json(remote).into_response());
+        }
+    }
     type Row = (
         Uuid,
         Option<String>,

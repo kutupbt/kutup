@@ -6,9 +6,8 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountAddress, MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1,
-    PendingMlsInvitationV1, RespondMlsInvitationResponseV1, RespondMlsInvitationV1,
-    MLS_INVITATION_FEEDBACK_VERSION,
+    MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, PendingMlsInvitationV1,
+    RespondMlsInvitationResponseV1, RespondMlsInvitationV1, MLS_INVITATION_FEEDBACK_VERSION,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -21,7 +20,7 @@ use crate::middleware::AuthUser;
 use crate::telemetry;
 use crate::AppState;
 
-type InvitationResponseRow = (String, Option<OffsetDateTime>, i64, Option<String>, String);
+type InvitationResponseRow = (String, Option<OffsetDateTime>, i64, Option<String>, Uuid);
 
 pub(crate) async fn list_invitations(
     State(state): State<AppState>,
@@ -91,7 +90,7 @@ pub(crate) async fn respond_invitation(
     let mut tx = state.pool.begin().await?;
     let row: Option<InvitationResponseRow> = sqlx::query_as(
         "SELECT m.membership_status, m.invitation_expires_at, m.joined_epoch,
-                m.invited_by_domain, u.username
+                m.invited_by_domain, u.id
          FROM chat_mls_local_members m
          JOIN users u ON u.id = m.user_id
          WHERE m.conversation_id = $1 AND m.incarnation = $2
@@ -103,7 +102,7 @@ pub(crate) async fn respond_invitation(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (status, expires_at, invited_epoch, invited_by_domain, username) =
+    let (status, expires_at, invited_epoch, invited_by_domain, member_id) =
         row.ok_or_else(|| AppError::not_found("MLS invitation not found"))?;
     let requested_status = if request.accept { "active" } else { "rejected" };
     if status == requested_status {
@@ -125,7 +124,7 @@ pub(crate) async fn respond_invitation(
         let feedback = invitation_feedback(
             request.conversation_id,
             request.incarnation,
-            &username,
+            member_id,
             &local_domain,
             invited_epoch,
             MlsInvitationFeedbackDecisionV1::Expired,
@@ -187,7 +186,7 @@ pub(crate) async fn respond_invitation(
         let feedback = invitation_feedback(
             request.conversation_id,
             request.incarnation,
-            &username,
+            member_id,
             &local_domain,
             invited_epoch,
             MlsInvitationFeedbackDecisionV1::Rejected,
@@ -286,7 +285,7 @@ async fn expire_due_invitations(state: &AppState, local_domain: &str) -> AppResu
 
 async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str) -> AppResult<()> {
     let mut tx = state.pool.begin().await?;
-    let conversations: Vec<(Uuid, i64, i64, String, String)> = sqlx::query_as(
+    let conversations: Vec<(Uuid, i64, i64, String, Uuid)> = sqlx::query_as(
         "WITH expired AS (
              UPDATE chat_mls_local_members
              SET membership_status = 'rejected', invitation_expires_at = NULL
@@ -296,14 +295,14 @@ async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str)
                        invited_by_domain, user_id
          )
          SELECT expired.conversation_id, expired.incarnation,
-                expired.joined_epoch, expired.invited_by_domain, users.username
+                expired.joined_epoch, expired.invited_by_domain, users.id
          FROM expired
          JOIN users ON users.id = expired.user_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
-    for (conversation_id, incarnation, invited_epoch, invited_by_domain, username) in conversations
+    for (conversation_id, incarnation, invited_epoch, invited_by_domain, member_id) in conversations
     {
         let incarnation = u64::try_from(incarnation)
             .map_err(|_| AppError::internal("stored MLS incarnation is invalid"))?;
@@ -319,7 +318,7 @@ async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str)
         let feedback = invitation_feedback(
             conversation_id,
             incarnation,
-            &username,
+            member_id,
             local_domain,
             invited_epoch,
             MlsInvitationFeedbackDecisionV1::Expired,
@@ -333,14 +332,12 @@ async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str)
 fn invitation_feedback(
     conversation_id: Uuid,
     incarnation: u64,
-    username: &str,
+    member_id: Uuid,
     local_domain: &str,
     invited_epoch: i64,
     decision: MlsInvitationFeedbackDecisionV1,
 ) -> AppResult<MlsInvitationFeedbackV1> {
-    let member: AccountAddress = format!("{username}@{local_domain}")
-        .parse()
-        .map_err(|_| AppError::internal("stored MLS invitation account is invalid"))?;
+    let member = crate::account_ids::local(local_domain, member_id)?;
     let feedback = MlsInvitationFeedbackV1 {
         protocol_version: MLS_INVITATION_FEEDBACK_VERSION,
         conversation_id,

@@ -13,7 +13,12 @@ compose() {
   docker compose --project-name "$project" --file "$compose_file" "$@"
 }
 
+# What one phase learns that a later one needs while a server is down (the
+# accounts' ids: docs/plans/account-ids.md).
+state_file="$(mktemp)"
+
 run_phase() {
+  KUTUP_FEDERATION_STATE="$state_file" \
   KUTUP_FEDERATION_PHASE="$1" \
   KUTUP_FEDERATION_SERVER_A="http://127.0.0.1:$port_a" \
   KUTUP_FEDERATION_SERVER_B="http://127.0.0.1:$port_b" \
@@ -77,6 +82,7 @@ cleanup() {
       "$root_dir/scripts/collect-chat-e2e-diagnostics.sh" federation "$project" || true
   fi
   compose down --volumes --remove-orphans
+  rm -f "$state_file"
   exit "$status"
 }
 trap cleanup EXIT

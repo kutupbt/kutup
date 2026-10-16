@@ -52,7 +52,7 @@ impl MlsRepository {
         local_delivery: Option<&MlsMembershipDeliveryV1>,
         full_members: Option<&[MlsConversationMemberV1]>,
         all_deliveries: Option<&[MlsMembershipDeliveryV1]>,
-        creator: Option<(&kutup_chat_proto::AccountAddress, u32)>,
+        creator: Option<(&kutup_chat_proto::AccountRef, u32)>,
         maximum_group_members: u16,
         maximum_authorities: u16,
     ) -> AppResult<RecoverMlsConversationResponseV1> {
@@ -160,12 +160,11 @@ impl MlsRepository {
                     "local MLS recovery creator belongs to another server",
                 ));
             }
-            let submitted_username: String =
-                sqlx::query_scalar("SELECT username FROM users WHERE id = $1 FOR UPDATE")
-                    .bind(submitter)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            if creator.0.username != submitted_username {
+            sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+                .bind(submitter)
+                .execute(&mut *tx)
+                .await?;
+            if crate::account_ids::id_of(creator.0)? != submitter {
                 return Err(AppError::forbidden(
                     "authenticated MLS recovery owner differs from its creator",
                 ));
@@ -473,7 +472,7 @@ async fn apply_recovery_delivery(
     delivery: &MlsMembershipDeliveryV1,
     previous_incarnation: u64,
     local_submitter: Option<Uuid>,
-    creator: Option<(&kutup_chat_proto::AccountAddress, u32)>,
+    creator: Option<(&kutup_chat_proto::AccountRef, u32)>,
 ) -> AppResult<()> {
     let mut users = BTreeMap::<String, Uuid>::new();
     let mut required = BTreeSet::new();
@@ -482,11 +481,11 @@ async fn apply_recovery_delivery(
             "SELECT u.id
              FROM users u
              JOIN chat_mls_local_members m ON m.user_id = u.id
-             WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true
+             WHERE u.id = $1 AND u.is_active = true
                AND m.conversation_id = $2 AND m.incarnation = $3
                AND m.removed_epoch IS NULL AND m.membership_status = 'active'",
         )
-        .bind(&member.address.username)
+        .bind(crate::account_ids::id_of(&member.account)?)
         .bind(delivery.conversation_id)
         .bind(previous_incarnation as i64)
         .fetch_optional(&mut **tx)
@@ -498,7 +497,7 @@ async fn apply_recovery_delivery(
             .local_devices_after
             .iter()
             .filter_map(|device| {
-                (device.address == member.address).then_some(device.device_id as i32)
+                (device.account == member.account).then_some(device.device_id as i32)
             })
             .collect::<Vec<_>>();
         if device_ids.is_empty() {
@@ -527,13 +526,13 @@ async fn apply_recovery_delivery(
             }
             let omitted_creator = local_submitter == Some(user_id)
                 && creator.is_some_and(|(address, creator_device)| {
-                    address == &member.address && creator_device == device_id as u32
+                    address == &member.account && creator_device == device_id as u32
                 });
             if !omitted_creator {
-                required.insert((member.address.canonical(), device_id as u32));
+                required.insert((member.account.to_string(), device_id as u32));
             }
         }
-        users.insert(member.address.canonical(), user_id);
+        users.insert(member.account.to_string(), user_id);
     }
     let supplied = delivery
         .envelopes
@@ -544,7 +543,7 @@ async fn apply_recovery_delivery(
                     "MLS recovery delivery may contain only Welcome envelopes",
                 ));
             }
-            Ok((envelope.recipient.canonical(), envelope.device_id))
+            Ok((envelope.recipient.to_string(), envelope.device_id))
         })
         .collect::<AppResult<BTreeSet<_>>>()?;
     if supplied != required || supplied.len() != delivery.envelopes.len() {
@@ -554,7 +553,7 @@ async fn apply_recovery_delivery(
     }
 
     for member in &delivery.local_members_after {
-        let user_id = users[&member.address.canonical()];
+        let user_id = users[&member.account.to_string()];
         sqlx::query(
             "INSERT INTO chat_mls_local_members
                  (conversation_id, incarnation, user_id, is_admin, is_owner,
@@ -571,7 +570,7 @@ async fn apply_recovery_delivery(
         .await?;
     }
     for device in &delivery.local_devices_after {
-        let user_id = users[&device.address.canonical()];
+        let user_id = users[&device.account.to_string()];
         sqlx::query(
             "INSERT INTO chat_mls_local_member_devices
                  (conversation_id, incarnation, user_id, device_id, joined_epoch)
@@ -585,7 +584,7 @@ async fn apply_recovery_delivery(
         .await?;
     }
     for envelope in &delivery.envelopes {
-        let user_id = users[&envelope.recipient.canonical()];
+        let user_id = users[&envelope.recipient.to_string()];
         let opaque = base64::engine::general_purpose::STANDARD
             .decode(&envelope.opaque_message)
             .map_err(|_| AppError::bad_request("MLS recovery Welcome is invalid base64"))?;

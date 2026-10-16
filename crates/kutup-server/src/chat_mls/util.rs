@@ -63,7 +63,7 @@ pub(super) fn validate_participant_domains(
     if !members.is_empty() {
         let actual: BTreeSet<&str> = members
             .iter()
-            .map(|member| member.address.server.as_str())
+            .map(|member| member.account.server.as_str())
             .collect();
         let expected: BTreeSet<&str> = participant_domains.iter().map(String::as_str).collect();
         if actual != expected {

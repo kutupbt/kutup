@@ -73,14 +73,17 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Fetches a remote user's federation public key. Mirrors `GetFedPubKey`.
+    /// Another server's account by its name there: the one name lookup
+    /// (`/users/by-address`), which asks that server through this one.
     pub fn get_fed_pubkey(&self, username: &str, server: &str) -> Result<FedPubKeyResponse> {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/drive/federation/users/{}", super::path_segment(username)),
+                &format!(
+                    "/users/by-address/{}",
+                    super::path_segment(&format!("{username}@{server}"))
+                ),
             )
-            .query(&[("server", server)])
             .send()?;
         super::decode_json(resp)
     }
