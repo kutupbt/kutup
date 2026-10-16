@@ -70,7 +70,10 @@ fn decode(value: &str, field: &str) -> AppResult<Vec<u8>> {
 
 /// Checks each share is sealed to its member's current account incarnation
 /// (the server cannot open it, but can see whose keys it is for).
-pub async fn check_shares(pool: &PgPool, shares: &[ShareInput]) -> AppResult<Vec<CheckedShare>> {
+pub async fn check_shares(
+    conn: &mut sqlx::PgConnection,
+    shares: &[ShareInput],
+) -> AppResult<Vec<CheckedShare>> {
     let mut checked = Vec::with_capacity(shares.len());
     for input in shares {
         let user_id = Uuid::parse_str(&input.user_id)
@@ -81,7 +84,7 @@ pub async fn check_shares(pool: &PgPool, shares: &[ShareInput]) -> AppResult<Vec
               WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''",
         )
         .bind(user_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?;
         let Some(current) = current else {
             return Err(AppError::bad_request("a member has no account keys yet")

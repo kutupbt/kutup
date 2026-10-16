@@ -249,8 +249,10 @@ export interface OwnAddressRow {
 export function mailAccountOf(
   rows: readonly OwnAddressRow[],
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
-  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'userId' | 'privateKey'>,
+  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
+  /** The account itself, as `/user/me` names it: its server and id. */
+  self: AccountRef,
 ): MailAccount {
   const current = rows.find((row) => row.state === 'active')
   const primary = current?.keys.find((k) => k.primary)
@@ -286,9 +288,8 @@ export function mailAccountOf(
       const folded = fold(candidate)
       return folded !== null && own.has(folded)
     },
-    // The account's server is its address's.
     groupHolder: {
-      account: { server: current.address.split('@')[1] ?? '', accountId: session.userId },
+      account: { server: self.server, accountId: self.accountId },
       hpkePrivateKey: toBase64(session.privateKey),
     },
   }
@@ -316,7 +317,9 @@ export function useMailAccount() {
         .get<MailIdentity>('/mail/identity')
         .then((r) => r.data)
         .catch(() => null)
-      return mailAccountOf(data, identity, session, await addressFolder())
+      // The account as shares name it: by `/user/me`, never by a mail domain.
+      const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
+      return mailAccountOf(data, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
     },
   })
 }

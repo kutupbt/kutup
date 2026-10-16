@@ -17,6 +17,22 @@ const pins: { verdict: Verdict } = vi.hoisted(() => ({ verdict: { kind: 'unknown
 vi.mock('@kutup/drive-core/identityPins', () => ({ pinnedVerdict: vi.fn(() => Promise.resolve(pins.verdict)) }))
 vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn(() => Promise.resolve({})) }))
 vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me' }) }))
+// The device's revision guard, in memory: the highest key-list sequence seen per address and signer.
+const seen = vi.hoisted(() => new Map<string, number>())
+vi.mock('@kutup/crypto/revisionGuard', async (importActual) => {
+  const actual = await importActual<typeof import('@kutup/crypto/revisionGuard')>()
+  return {
+    ...actual,
+    revisionGuard: () => ({
+      accept: (scope: string, id: string, revision: number) => {
+        const before = seen.get(`${scope}/${id}`) ?? 0
+        if (revision < before) return Promise.reject(new actual.OlderThanSeenError(scope, revision, before))
+        seen.set(`${scope}/${id}`, revision)
+        return Promise.resolve()
+      },
+    }),
+  }
+})
 
 import { deriveAccountIdentityKeys, generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
 import { addressKeys, forgetKeys, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
@@ -96,5 +112,42 @@ describe('an address’s keys against the pin list', () => {
     await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
     await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
     await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+  })
+})
+
+describe('an address’s key lists against what this device has seen', () => {
+  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const binding = crypto.randomUUID()
+
+  it('refuses a chain shorter than one seen before (a rollback)', async () => {
+    pins.verdict = { kind: 'unknown' }
+    forgetKeys()
+    const first = await lookupOf(master, binding, 'roll_back@kutup.dev')
+    const key = await generateMailAddressKey(master, binding, 'roll_back@kutup.dev')
+    const { verifyMailKeyList } = await import('@kutup/crypto')
+    const one = await verifyMailKeyList(first.keyLists[0], first.accountAuthorityPublicKey)
+    const second = await signMailKeyList(master, {
+      address: 'roll_back@kutup.dev',
+      sequence: 2,
+      previousHash: one.hash,
+      issuedAt: '2026-10-15T12:00:00Z',
+      keys: [
+        { ...one.keys[0], primary: false },
+        { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete },
+      ].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1)),
+    })
+    const longer = {
+      ...first,
+      keys: [...first.keys, { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, publicKey: key.publicKey, primary: true, flags: 3 }].map((k) =>
+        k.fingerprint === key.fingerprint ? k : { ...k, primary: false },
+      ),
+      keyLists: [...first.keyLists, { data: second.data, signature: second.signature }],
+    }
+    get.mockResolvedValueOnce({ data: longer })
+    await expect(addressKeys('roll_back@kutup.dev')).resolves.toMatchObject({ sequence: 2 })
+    // The server hands back the first list alone: refused, not used.
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: first })
+    await expect(addressKeys('roll_back@kutup.dev')).rejects.toBeInstanceOf(UnverifiedKeys)
   })
 })

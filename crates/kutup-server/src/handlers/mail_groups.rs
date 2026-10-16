@@ -62,6 +62,11 @@ pub struct MailGroupMember {
     pub can_send_as: bool,
     /// An inactive account receives nothing.
     pub active: bool,
+    /// A shared mailbox's member whose share of its current key is missing
+    /// or sealed to keys they no longer have (an administrator reset them):
+    /// a manager's browser seals the mailbox's keys to them again, once the
+    /// manager confirms their new identity.
+    pub needs_keys: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -94,17 +99,34 @@ async fn group_row(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGr
 }
 
 async fn members(state: &AppState, id: Uuid) -> AppResult<Vec<MailGroupMember>> {
+    let mut conn = state.pool.acquire().await?;
+    members_in(&mut conn, &state.config.chat_server_name, id).await
+}
+
+/// The group's members as `conn` sees them (inside a change, under the
+/// group's row lock).
+async fn members_in(
+    conn: &mut sqlx::PgConnection,
+    server_name: &str,
+    id: Uuid,
+) -> AppResult<Vec<MailGroupMember>> {
     Ok(sqlx::query_as(
         "SELECT u.id AS user_id, COALESCE(u.username, '') AS username,
                 COALESCE(u.username, '') || '@' || $2 AS address,
-                m.role, m.can_send_as, u.is_active AS active
+                m.role, m.can_send_as, u.is_active AS active,
+                EXISTS (SELECT 1 FROM mail_group_keys k WHERE k.group_id = m.group_id AND k.is_primary)
+                AND NOT EXISTS (
+                    SELECT 1 FROM mail_group_keys k
+                      JOIN mail_group_key_shares s ON s.group_key_id = k.id
+                     WHERE k.group_id = m.group_id AND k.is_primary AND s.user_id = u.id
+                       AND s.member_incarnation_id = u.account_incarnation_id) AS needs_keys
            FROM mail_group_members m JOIN users u ON u.id = m.user_id
           WHERE m.group_id = $1
           ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'manager' THEN 1 ELSE 2 END, u.username",
     )
     .bind(id)
-    .bind(&state.config.chat_server_name)
-    .fetch_all(&state.pool)
+    .bind(server_name)
+    .fetch_all(&mut *conn)
     .await?)
 }
 
@@ -406,8 +428,36 @@ struct KeyChanges {
     removed: Vec<Uuid>,
 }
 
+/// Members whose share of the group key `key_id` is missing or sealed to an
+/// account incarnation they no longer have (an administrator reset them):
+/// what the key may be sealed to again.
+async fn stale_members(
+    conn: &mut sqlx::PgConnection,
+    key_fingerprint: &str,
+    group_id: Uuid,
+    members: &[Uuid],
+) -> AppResult<Vec<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT u.id FROM users u
+          WHERE u.id = ANY($3)
+            AND NOT EXISTS (
+                SELECT 1 FROM mail_group_key_shares s
+                  JOIN mail_group_keys k ON k.id = s.group_key_id
+                 WHERE k.group_id = $2 AND k.fingerprint = $1
+                   AND s.user_id = u.id AND s.member_incarnation_id = u.account_incarnation_id)",
+    )
+    .bind(key_fingerprint)
+    .bind(group_id)
+    .bind(members)
+    .fetch_all(&mut *conn)
+    .await?)
+}
+
+/// Checks a membership change's keys in `conn`, the transaction holding the
+/// group's row lock: the members it is checked against are the ones it
+/// changes, so no rotation or removal can slip in between.
 async fn check_key_changes(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
     group: &MailGroup,
     current: &[MailGroupMember],
     after: &[Uuid],
@@ -416,7 +466,7 @@ async fn check_key_changes(
     let keys: Vec<String> =
         sqlx::query_scalar("SELECT fingerprint FROM mail_group_keys WHERE group_id = $1")
             .bind(group.id)
-            .fetch_all(&state.pool)
+            .fetch_all(&mut *conn)
             .await?;
     let added: Vec<Uuid> = after
         .iter()
@@ -428,6 +478,11 @@ async fn check_key_changes(
         .filter(|m| !after.contains(&m.user_id))
         .map(|m| m.user_id)
         .collect();
+    let staying: Vec<Uuid> = after
+        .iter()
+        .filter(|id| !added.contains(id))
+        .copied()
+        .collect();
     if !removed.is_empty() && input.new_key.is_none() {
         return Err(
             AppError::bad_request("removing a member needs a new group key")
@@ -437,7 +492,9 @@ async fn check_key_changes(
     // Every joining member gets every existing key, unless a new key comes
     // with the change (someone without shares, such as an administrator who
     // is not a member, can only start the mailbox over with a new key: then
-    // joining members read mail from now on).
+    // joining members read mail from now on). A member whose shares no longer
+    // open (reset since: another incarnation) may be given them again; nobody
+    // else gets any.
     let mut shares = Vec::new();
     for key in &keys {
         let for_key: Vec<ShareInput> = input
@@ -451,20 +508,25 @@ async fn check_key_changes(
             .filter_map(|s| Uuid::parse_str(&s.user_id).ok())
             .collect();
         covered.sort();
-        let mut needed = added.clone();
-        needed.sort();
-        let complete = covered == needed;
-        let partial = covered.iter().all(|id| needed.contains(id));
-        if !complete && !(input.new_key.is_some() && partial) {
+        if covered.windows(2).any(|pair| pair[0] == pair[1]) || covered.len() != for_key.len() {
+            return Err(AppError::bad_request("one share per member and key")
+                .with_details(json!({ "code": "sharesNeeded" })));
+        }
+        let stale = stale_members(&mut *conn, key, group.id, &staying).await?;
+        let joining_covered = added.iter().all(|id| covered.contains(id));
+        let allowed = covered
+            .iter()
+            .all(|id| added.contains(id) || stale.contains(id));
+        if !allowed || !(joining_covered || input.new_key.is_some()) {
             return Err(AppError::bad_request(
-                "each joining member needs a share of every group key",
+                "each joining member needs a share of every group key, and only joining members or members whose keys changed get one",
             )
             .with_details(json!({ "code": "sharesNeeded" })));
         }
         if !for_key.is_empty() {
             shares.push((
                 key.clone(),
-                group_keys::check_shares(&state.pool, &for_key).await?,
+                group_keys::check_shares(&mut *conn, &for_key).await?,
             ));
         }
     }
@@ -487,7 +549,7 @@ async fn check_key_changes(
             }
             Some((
                 key.clone(),
-                group_keys::check_shares(&state.pool, &key.shares).await?,
+                group_keys::check_shares(&mut *conn, &key.shares).await?,
             ))
         }
         None => None,
@@ -568,7 +630,17 @@ pub async fn set_members(
     if group.system_role.is_none() && !wanted.iter().any(|(_, role, _)| role == "owner") {
         return Err(AppError::bad_request("a group needs at least one owner"));
     }
-    let current = members(&state, id).await?;
+    // The group's row lock first: the members and keys checked below are the
+    // ones changed, with no rotation or other change in between.
+    let authority = group_keys::authority(&state.pool)
+        .await
+        .map_err(|_| AppError::internal("mail-group authority"))?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM mail_groups WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let current = members_in(&mut tx, &state.config.chat_server_name, id).await?;
     if standing == Standing::Manager {
         // Owners stay exactly as they are, and nobody becomes one.
         let owners_before: Vec<Uuid> = current
@@ -593,24 +665,11 @@ pub async fn set_members(
     }
 
     let key_changes = if group.kind == "shared" {
-        Some(check_key_changes(&state, &group, &current, &ids, &input).await?)
+        Some(check_key_changes(&mut tx, &group, &current, &ids, &input).await?)
     } else {
         None
     };
-    let authority = match key_changes.as_ref().and_then(|c| c.new_key.as_ref()) {
-        Some(_) => Some(
-            group_keys::authority(&state.pool)
-                .await
-                .map_err(|_| AppError::internal("mail-group authority"))?,
-        ),
-        None => None,
-    };
 
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM mail_groups WHERE id = $1 FOR UPDATE")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
     sqlx::query("DELETE FROM mail_group_members WHERE group_id = $1 AND NOT (user_id = ANY($2))")
         .bind(id)
         .bind(&ids)
@@ -644,8 +703,8 @@ pub async fn set_members(
         for (fingerprint, shares) in &changes.shares {
             group_keys::add_shares(&mut tx, id, fingerprint, shares).await?;
         }
-        if let (Some((key, shares)), Some(authority)) = (&changes.new_key, &authority) {
-            group_keys::publish(&mut tx, authority, id, &group.address, key, shares).await?;
+        if let Some((key, shares)) = &changes.new_key {
+            group_keys::publish(&mut tx, &authority, id, &group.address, key, shares).await?;
         }
     }
     tx.commit().await?;
@@ -838,7 +897,8 @@ pub async fn admin_create(
                         .with_details(json!({ "code": "sharesNeeded" })),
                 );
             }
-            let shares = group_keys::check_shares(&state.pool, &key.shares).await?;
+            let mut conn = state.pool.acquire().await?;
+            let shares = group_keys::check_shares(&mut conn, &key.shares).await?;
             let authority = group_keys::authority(&state.pool)
                 .await
                 .map_err(|_| AppError::internal("mail-group authority"))?;
@@ -1167,7 +1227,17 @@ pub async fn rotate_group_key(
             "only owners and managers change a mailbox's key",
         ));
     }
-    let members: Vec<Uuid> = members(&state, id)
+    let authority = group_keys::authority(&state.pool)
+        .await
+        .map_err(|_| AppError::internal("mail-group authority"))?;
+    // The group's row lock first: the key is checked against the members it
+    // is published for, with no removal in between.
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM mail_groups WHERE id = $1 FOR UPDATE")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let members: Vec<Uuid> = members_in(&mut tx, &state.config.chat_server_name, id)
         .await?
         .iter()
         .map(|m| m.user_id)
@@ -1183,20 +1253,12 @@ pub async fn rotate_group_key(
     let mut needed = members.clone();
     needed.sort();
     if covered != needed || input.key.shares.len() != needed.len() {
-        return Err(
-            AppError::bad_request("the new key needs a share for every member")
-                .with_details(json!({ "code": "sharesNeeded" })),
-        );
+        return Err(AppError::bad_request(
+            "the new key needs a share for every member, and nobody else",
+        )
+        .with_details(json!({ "code": "sharesNeeded" })));
     }
-    let shares = group_keys::check_shares(&state.pool, &input.key.shares).await?;
-    let authority = group_keys::authority(&state.pool)
-        .await
-        .map_err(|_| AppError::internal("mail-group authority"))?;
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT id FROM mail_groups WHERE id = $1 FOR UPDATE")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let shares = group_keys::check_shares(&mut tx, &input.key.shares).await?;
     let fingerprint =
         group_keys::publish(&mut tx, &authority, id, &group.address, &input.key, &shares).await?;
     tx.commit().await?;

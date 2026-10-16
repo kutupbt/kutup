@@ -1,6 +1,7 @@
 import { foldAddress, fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
 import { driveIdentityOf } from '@kutup/drive-core/identity'
 import { pinnedVerdict } from '@kutup/drive-core/identityPins'
+import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 
@@ -30,6 +31,8 @@ interface KeyLookup {
 
 export interface AddressKeys {
   address: string
+  /** The newest key list's sequence, held to what this device has seen. */
+  sequence: number
   authorityPublicKey: string
   /** The key to encrypt to (base64). */
   primary: string
@@ -113,7 +116,31 @@ async function load(address: string): Promise<AddressKeys> {
     if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
-  return pinned(await verified(address, lookup))
+  return pinned(await notRolledBack(address, await verified(address, lookup)))
+}
+
+/** What the revision guard calls an address's key list. */
+export const KEY_LIST_GUARD_SCOPE = 'mail-key-list'
+
+/**
+ * Refuses a key list older than this device has seen for the same address
+ * under the same signer (a person's account authority, or a shared
+ * mailbox's mail-group authority): a server cannot hand back an earlier
+ * list, for instance one listing a key someone who left still holds. Another
+ * signer (a reset, a freed name now someone else's) starts its own count;
+ * the pin check after this says whether that signer is the one known.
+ */
+async function notRolledBack(address: string, keys: AddressKeys): Promise<AddressKeys> {
+  const session = getSession()
+  if (!session) return keys
+  const folded = (await foldAddress(keys.address)) ?? keys.address
+  try {
+    await revisionGuard(session).accept(KEY_LIST_GUARD_SCOPE, `${folded}:${keys.authorityPublicKey}`, keys.sequence)
+  } catch (error) {
+    if (error instanceof OlderThanSeenError) throw new UnverifiedKeys(address)
+    throw error
+  }
+  return keys
 }
 
 /**
@@ -143,6 +170,7 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
   if (!primary) throw new UnverifiedKeys(address)
   return {
     address: lookup.address,
+    sequence: newest.sequence,
     authorityPublicKey: lookup.accountAuthorityPublicKey,
     primary: primary.publicKey,
     // A key its owner marked compromised no longer vouches for anything.

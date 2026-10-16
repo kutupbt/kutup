@@ -3,6 +3,8 @@ import { Trash2, UserPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
+import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
 import type { GroupKeyHolderOf } from '../api'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -58,7 +60,11 @@ export function GroupDialog({
   const [adding, setAdding] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   const [withoutHistory, setWithoutHistory] = useState(false)
+  // A member whose identity is in doubt (their keys are not the ones pinned):
+  // nothing is sealed to them until the caller says to go on.
+  const [inDoubt, setInDoubt] = useState<IdentityNotConfirmed | null>(null)
   const [saving, setSaving] = useState(false)
+  const identity = useDriveIdentity()
 
   useEffect(() => {
     if (!detail.data || members) return
@@ -96,8 +102,8 @@ export function GroupDialog({
     }
   }
 
-  async function save(confirmedWithoutHistory: boolean) {
-    if (!group || !detail.data || !members) return
+  async function save(confirmedWithoutHistory: boolean, identityConfirmed = false) {
+    if (!group || !detail.data || !members || !identity.data) return
     setProblem(null)
     setSaving(true)
     try {
@@ -109,14 +115,18 @@ export function GroupDialog({
           ...(policyChanged ? { postPolicy } : {}),
         })
       }
+      // Members whose keys changed (reset) get the mailbox's keys again too.
       const changed =
         members.length !== detail.data.members.length ||
         members.some((m) => {
           const before = detail.data.members.find((c) => c.userId === m.userId)
-          return !before || before.role !== m.role || before.canSendAs !== m.canSendAs
+          return !before || before.role !== m.role || before.canSendAs !== m.canSendAs || before.needsKeys
         })
       if (changed) {
-        const { body, historyShared } = await membershipBody(group, detail.data.members, members, ownKeys)
+        const { body, historyShared } = await membershipBody(group, detail.data.members, members, ownKeys, {
+          me: identity.data,
+          confirmed: identityConfirmed,
+        })
         if (!historyShared && !confirmedWithoutHistory) {
           setWithoutHistory(true)
           return
@@ -128,6 +138,10 @@ export function GroupDialog({
       toast.success(t('mailGroups.saved'))
       onClose()
     } catch (error) {
+      if (error instanceof IdentityNotConfirmed) {
+        setInDoubt(error)
+        return
+      }
       setProblem(apiErrorMessage(error, t('mailGroups.saveFailed')))
     } finally {
       setSaving(false)
@@ -252,6 +266,14 @@ export function GroupDialog({
               {shared ? <p className="text-xs text-muted-foreground">{t('mailGroups.sharedKeysHint')}</p> : null}
             </section>
             {withoutHistory ? <Alert variant="warn">{t('mailGroups.withoutHistory')}</Alert> : null}
+            {inDoubt ? (
+              <Alert variant="error" title={t(`identityCheck.${inDoubt.status.kind}.title`, { name: inDoubt.account })}>
+                <p>{t('mailGroups.identityInDoubt', { account: inDoubt.account })}</p>
+                <Button className="mt-2" size="sm" variant="outline" onClick={() => void save(withoutHistory, true)}>
+                  {t('mailGroups.shareKeysAnyway')}
+                </Button>
+              </Alert>
+            ) : null}
             {problem ? <Alert variant="error">{problem}</Alert> : null}
           </div>
         )}

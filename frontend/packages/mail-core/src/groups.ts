@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { generateMailGroupKey, reshareMailGroupKey, type GroupKeyMember, type GroupMailKey } from '@kutup/crypto'
 import { incarnationIdOfAuthority, verifyDriveKeyBinding } from '@kutup/crypto/identityPins'
+import type { DriveIdentity } from '@kutup/drive-core/identity'
+import { confirmRecipient } from '@kutup/drive-core/identityPins'
 import api from '@kutup/session/client'
 import type { GroupKeyHolderOf } from './api'
 
@@ -38,6 +40,8 @@ export interface MailGroupMember {
   role: GroupRole
   canSendAs: boolean
   active: boolean
+  /** A shared mailbox's member whose keys changed (reset): the mailbox's keys go to them again. */
+  needsKeys: boolean
 }
 
 export interface MailGroupDetail {
@@ -119,6 +123,7 @@ export async function resolveAccount(address: string): Promise<AccountRef | null
 
 /** The member's account key, as their server gives it by their account id. */
 interface MemberIdentity {
+  username: string
   server: string
   accountId: string
   accountIncarnationId: string
@@ -135,27 +140,49 @@ export class MemberKeyUnproven extends Error {
   }
 }
 
+/** How the members' keys are trusted: the caller's identity, and whether they confirmed identities in doubt. */
+export interface MemberTrust {
+  me: DriveIdentity
+  /** The caller saw the warning for a member whose identity is in doubt and chose to go on. */
+  confirmed: boolean
+}
+
 /**
  * A member's account key (docs/plans/account-ids.md): looked up by their
- * account id and kept only when their account authority's Drive key binding
- * vouches for it, for that account.
+ * account id, kept only when their account authority's Drive key binding
+ * vouches for it, and checked against the caller's pins as Drive checks a
+ * recipient before sharing (`confirmRecipient`): someone never met is pinned
+ * on first use; another authority than the pinned one stops with
+ * `IdentityNotConfirmed` until the caller confirms. Nothing is sealed to keys
+ * the server alone vouches for.
  */
-async function memberKey(userId: string): Promise<GroupKeyMember> {
-  const { data } = await api.get<MemberIdentity>(`/users/by-id/${encodeURIComponent(userId)}`)
+async function memberKey(member: { userId: string }, trust: MemberTrust): Promise<GroupKeyMember> {
+  const { data } = await api.get<MemberIdentity>(`/users/by-id/${encodeURIComponent(member.userId)}`)
   const account = { server: data.server, accountId: data.accountId }
   const bound =
-    data.accountId === userId &&
+    data.accountId === member.userId &&
     !!data.driveKeyBinding &&
     (await verifyDriveKeyBinding(account, data.accountAuthorityPublicKey, data.driveHpkePublicKey, data.driveSigningPublicKey, data.driveKeyBinding))
   if (!bound || (await incarnationIdOfAuthority(data.accountAuthorityPublicKey)) !== data.accountIncarnationId) {
-    throw new MemberKeyUnproven(userId)
+    throw new MemberKeyUnproven(member.userId)
   }
+  await confirmRecipient(
+    trust.me,
+    `${data.username}@${data.server}`,
+    {
+      driveHpkePublicKey: data.driveHpkePublicKey,
+      driveSigningPublicKey: data.driveSigningPublicKey,
+      authorityPublicKey: data.accountAuthorityPublicKey,
+      incarnationId: data.accountIncarnationId,
+    },
+    trust.confirmed,
+  )
   return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveHpkePublicKey }
 }
 
 /** A new key for the shared mailbox `groupId` at `groupAddress`, with a share for each of `members`. */
-export async function newGroupKey(groupAddress: string, groupId: string, members: { userId: string }[]): Promise<NewGroupKey> {
-  const keys = await Promise.all(members.map((member) => memberKey(member.userId)))
+export async function newGroupKey(groupAddress: string, groupId: string, members: { userId: string }[], trust: MemberTrust): Promise<NewGroupKey> {
+  const keys = await Promise.all(members.map((member) => memberKey(member, trust)))
   const made = await generateMailGroupKey(groupAddress, groupId, keys)
   return {
     publicKey: made.publicKey,
@@ -189,27 +216,32 @@ export async function membershipBody(
   current: MailGroupMember[],
   next: MemberInput[],
   me: GroupKeyHolderOf | null,
+  trust: MemberTrust,
 ): Promise<{ body: MembershipBody; historyShared: boolean }> {
   const members = next.map(({ userId, role, canSendAs }) => ({ userId, role, canSendAs }))
   if (group.kind !== 'shared') return { body: { members }, historyShared: true }
-  const added = next.filter((m) => !current.some((c) => c.userId === m.userId))
+  // Joining members, and members staying whose keys changed (an
+  // administrator reset them): both get the mailbox's keys.
+  const joining = next.filter((m) => !current.some((c) => c.userId === m.userId))
+  const resealed = next.filter((m) => current.some((c) => c.userId === m.userId && c.needsKeys))
+  const added = [...joining, ...resealed]
   const removed = current.filter((c) => !next.some((m) => m.userId === c.userId))
   const rows = await groupKeys(group.id).catch(() => [] as MailGroupKeyRow[])
   const held = me ? heldKeys(rows, group.id, me) : []
   const holdsAll = rows.length > 0 && held.length === rows.length
   const body: MembershipBody = { members }
   if (added.length > 0 && holdsAll) {
-    const keys = await Promise.all(added.map((member) => memberKey(member.userId)))
+    const keys = await Promise.all(added.map((member) => memberKey(member, trust)))
     body.keyShares = []
     for (const key of held) {
       const shares = await reshareMailGroupKey(key, keys)
       added.forEach((member, i) => body.keyShares!.push({ groupFingerprint: key.fingerprint, userId: member.userId, share: shares[i] }))
     }
   }
-  if (removed.length > 0 || (added.length > 0 && !holdsAll)) {
-    body.newKey = await newGroupKey(group.address, group.id, next)
+  if (removed.length > 0 || (joining.length > 0 && !holdsAll)) {
+    body.newKey = await newGroupKey(group.address, group.id, next, trust)
   }
-  return { body, historyShared: added.length === 0 || holdsAll }
+  return { body, historyShared: joining.length === 0 || holdsAll }
 }
 
 export async function setMembers(groupId: string, body: MembershipBody): Promise<MailGroupDetail> {

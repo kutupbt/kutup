@@ -1,6 +1,7 @@
 -- Shared mailboxes' key shares sealed to each member's account key, not to
--- an address key (docs/plans/account-ids.md): a rename keeps them. The
--- shares so far were sealed to address keys; managers share again.
+-- an address key (docs/plans/account-ids.md): a rename keeps them. Every
+-- share made so far is deleted: they were sealed to address keys, a format
+-- no client reads now (before the wipe; managers share again).
 DELETE FROM mail_group_key_shares;
 ALTER TABLE mail_group_key_shares
     DROP CONSTRAINT mail_group_key_shares_member_fingerprint_check,

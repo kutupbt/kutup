@@ -271,7 +271,9 @@
     "openMailbox": "Aç",
     "sharedMailboxes": "Paylaşılan posta kutuları",
     "foldersOf": "{{name}} klasörleri",
-    "deleted": "Grup silindi."
+    "deleted": "Grup silindi.",
+    "identityInDoubt": "{{account}} için sunucunun verdiği anahtarlar bildiğiniz anahtarlar değil. Posta kutusunun anahtarları paylaşılmadı. Yalnızca {{account}} ile hesabının sıfırlandığını doğruladıysanız yine de paylaşın.",
+    "shareKeysAnyway": "Anahtarları yine de paylaş"
   },
   "nameDialog": {
     "label": "Ad",
