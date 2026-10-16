@@ -29,6 +29,7 @@ test('with groups off, Chat offers direct chats only and they work', async ({ br
   await pageA.getByRole('button', { name: 'New chat' }).first().click()
   await expect(pageA.getByRole('dialog').getByRole('button', { name: 'Note to Self' })).toBeVisible()
   await expect(pageA.getByRole('dialog').getByTestId('chat-create-group')).toHaveCount(0)
+  await expect(pageA.getByRole('dialog').getByTestId('chat-join-with-link')).toHaveCount(0)
   await pageA.keyboard.press('Escape')
 
   // Direct chat, both ways.

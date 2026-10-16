@@ -398,29 +398,31 @@ function MemberRow({
   onSaveContact?: () => void
 }) {
   const { t } = useTranslation()
-  const address = accountKey(member.account)
+  // The account's key names the row for tests; an address is what shows.
+  const key = accountKey(member.account)
+  const address = accountName(key)
   return (
-    <li className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted" data-testid={`chat-group-member-${address}`}>
-      <Avatar name={self ? address : name} size={32} />
+    <li className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted" data-testid={`chat-group-member-${key}`}>
+      <Avatar name={self ? (address ?? name) : name} size={32} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{name}</span>
         <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-          {name !== address && !self ? <span className="truncate">{address}</span> : null}
-          {member.ownerId ? <span data-testid={`chat-group-member-owner-${address}`}>{t('chat.group.owner')}</span> : null}
+          {address && name !== address && !self ? <span className="truncate">{address}</span> : null}
+          {member.ownerId ? <span data-testid={`chat-group-member-owner-${key}`}>{t('chat.group.owner')}</span> : null}
           {member.isAdmin ? <span>{t('chat.group.admin')}</span> : null}
           {leaving ? <span className="text-status-warn">{t('chat.group.leave.leaving')}</span> : null}
         </span>
         {feedback ? (
           <span
             className={feedback === 'accepted' ? 'block text-xs text-status-ok' : 'block text-xs text-status-warn'}
-            data-testid={`chat-group-invitation-feedback-${address}`}
+            data-testid={`chat-group-invitation-feedback-${key}`}
           >
             {t(`chat.group.feedback.${feedback === 'accepted' || feedback === 'rejected' ? feedback : 'expired'}`)}
           </span>
         ) : null}
       </span>
       {onSaveContact ? (
-        <Button size="icon" variant="ghost" onClick={onSaveContact} aria-label={t('chat.contacts.saveNamed', { name })} data-testid={`chat-group-save-contact-${address}`}>
+        <Button size="icon" variant="ghost" onClick={onSaveContact} aria-label={t('chat.contacts.saveNamed', { name })} data-testid={`chat-group-save-contact-${key}`}>
           <UserPlus />
         </Button>
       ) : null}
@@ -434,7 +436,7 @@ function MemberRow({
               onClick={onToggleOwner}
               aria-label={member.ownerId ? t('chat.group.removeOwner', { name }) : t('chat.group.makeOwner', { name })}
               aria-pressed={Boolean(member.ownerId)}
-              data-testid={`chat-group-owner-${address}`}
+              data-testid={`chat-group-owner-${key}`}
             >
               <Crown className={member.ownerId ? 'text-primary' : undefined} />
             </Button>
@@ -607,19 +609,19 @@ function LeaveGroupDialog({
             <p className="text-sm">{t('chat.group.leave.chooseAdmin')}</p>
             <ul className="max-h-56 space-y-1 overflow-y-auto" role="radiogroup" aria-label={t('chat.group.leave.chooseAdmin')}>
               {others.map((member) => {
-                const address = accountKey(member.account)
+                const key = accountKey(member.account)
                 return (
-                  <li key={address}>
+                  <li key={key}>
                     <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted">
                       <input
                         type="radio"
                         name="successor"
-                        value={address}
-                        checked={successor === address}
-                        onChange={() => setSuccessor(address)}
-                        data-testid={`chat-group-leave-successor-${address}`}
+                        value={key}
+                        checked={successor === key}
+                        onChange={() => setSuccessor(key)}
+                        data-testid={`chat-group-leave-successor-${key}`}
                       />
-                      <span className="truncate text-sm">{nameOf(address)}</span>
+                      <span className="truncate text-sm">{nameOf(key)}</span>
                     </label>
                   </li>
                 )
