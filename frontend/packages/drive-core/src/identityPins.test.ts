@@ -720,7 +720,7 @@ describe('renames (docs/plans/username-renames.md)', () => {
     await checkIdentity(me, 'bob@other.dev')
     server.people.clear()
     newPage()
-    server.heldNames.set('bob', chains('B', ['bob@other.dev', 'robert@other.dev']))
+    server.heldNames.set('bob@other.dev', chains('B', ['bob@other.dev', 'robert@other.dev']))
     expect(await checkIdentity(me, 'bob@other.dev')).toEqual({ kind: 'renamed', now: 'robert@other.dev', verified: false })
   })
 

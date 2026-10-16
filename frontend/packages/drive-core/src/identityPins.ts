@@ -125,7 +125,8 @@ async function fetchIdentity(me: DriveIdentity, account: string): Promise<Publis
   const data =
     server === me.account.split('@')[1]
       ? await localIdentity(account)
-      : (await api.get<PublishedIdentity>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })).data
+      // Another server's account: the same lookup, through this server.
+      : (await api.get<PublishedIdentity>(`/users/by-address/${encodeURIComponent(account)}`)).data
   if (data.account !== account) throw new Error('the lookup answered for another account')
   // An account lives on the server of its address.
   if (data.server !== server) throw new Error('the lookup answered for an account on another server')

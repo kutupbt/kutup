@@ -522,33 +522,28 @@ export function useShareFile() {
       const address = input.recipient.trim()
       const owner = canShareFile(input.folder, input.file)
       if (!owner && !(input.folder.source === 'file' && input.file.fileKey)) throw new Error('file is not open')
-      let recipient: LocalRecipient | null = null
+      // `user@server`, here or on another Kutup server: one lookup either way.
+      const at = address.lastIndexOf('@')
+      const server = address.slice(at + 1).toLowerCase()
+      if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
+      let found: LocalRecipient | RemoteRecipient
       try {
-        recipient = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
+        found = (await api.get<LocalRecipient | RemoteRecipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
       } catch (error) {
+        if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
         // A name its person left: `RecipientRenamed`, with where they are now.
-        if (!(isAxiosError(error) && error.response?.status === 404)) throw await recipientError(me, address, error)
+        throw await recipientError(me, address, error)
       }
+      // An account lives on the server of its address.
+      if (found.server !== server) throw new RecipientNotFound()
+      const recipient = 'userId' in found && found.server === me.accountRef.server ? found : null
       try {
         if (!recipient) {
-          // Not an account here: `user@server` on another Kutup server.
-          const at = address.lastIndexOf('@')
-          const username = address.slice(0, at)
-          const server = address.slice(at + 1).toLowerCase()
-          if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
+          // An account on another Kutup server.
           if (!owner) throw new OnlyOwnersShareAcross()
-          let remote: RemoteRecipient
-          try {
-            remote = (
-              await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
-            ).data
-          } catch (error) {
-            if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
-            throw await recipientError(me, address, error)
-          }
+          const remote = found
           await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
           const file = await bringFileSharesUpToDate(input.folder, input.file, me)
-          if (remote.server !== server) throw new RecipientNotFound()
           const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
           const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
             recipientServer: server,

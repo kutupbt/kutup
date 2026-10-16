@@ -231,17 +231,23 @@ export function useShareFolder() {
         recipientIncarnationId: incarnationId,
       })
 
-    let local: LocalRecipient | null = null
-    if (recipient.includes('@')) {
-      try {
-        local = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
-      } catch (error) {
-        const status = (error as { response?: { status?: number } }).response?.status
-        // A name its person left: `RecipientRenamed`, with where they are now.
-        if (status !== 404) throw await recipientError(me, recipient, error)
-      }
+    // `user@server`, here or on another Kutup server: one lookup either way.
+    const at = recipient.lastIndexOf('@')
+    const server = recipient.slice(at + 1).toLowerCase()
+    if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
+    let found: LocalRecipient | RemoteRecipient
+    try {
+      found = (await api.get<LocalRecipient | RemoteRecipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
+    } catch (error) {
+      const status = (error as { response?: { status?: number } }).response?.status
+      if (status === 404) throw new RecipientNotFound()
+      // A name its person left: `RecipientRenamed`, with where they are now.
+      throw await recipientError(me, recipient, error)
     }
-    if (local) {
+    // An account lives on the server of its address.
+    if (found.server !== server) throw new RecipientNotFound()
+    if ('userId' in found && found.server === me.accountRef.server) {
+      const local = found
       await confirmRecipient(me, local.account, { driveHpkePublicKey: local.driveHpkePublicKey, incarnationId: local.accountIncarnationId }, input.identityConfirmed)
       const namedShareEnvelope = await seal(
         local.driveHpkePublicKey,
@@ -252,23 +258,9 @@ export function useShareFolder() {
       return { kind: 'local', account: local.account }
     }
 
-    // Not an account here: `user@server` on another Kutup server.
-    const at = recipient.lastIndexOf('@')
-    const username = recipient.slice(0, at)
-    const server = recipient.slice(at + 1).toLowerCase()
-    if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-    let remote: RemoteRecipient
-    try {
-      remote = (
-        await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
-      ).data
-    } catch (error) {
-      const status = (error as { response?: { status?: number } }).response?.status
-      if (status === 404) throw new RecipientNotFound()
-      throw await recipientError(me, recipient, error)
-    }
+    // An account on another Kutup server.
+    const remote = found
     await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
-    if (remote.server !== server) throw new RecipientNotFound()
     const namedShareEnvelope = await seal(
       remote.driveHpkePublicKey,
       { server: remote.server, accountId: remote.accountId },
