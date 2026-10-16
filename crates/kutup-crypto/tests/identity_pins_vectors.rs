@@ -70,6 +70,28 @@ struct RuleVectors {
     /// A list with fields from a later version, at every level: read, kept,
     /// and written back unchanged (after the known fields, in name order).
     preserved: String,
+    /// Shared mailboxes: their chain checked and recorded against the pins.
+    groups: Vec<GroupCase>,
+}
+
+/// A shared mailbox's verified chain, as `verify_group_key_chain` gives it,
+/// looked up and recorded against `before`.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupCase {
+    case: String,
+    before: String,
+    server: String,
+    group_id: String,
+    /// Base64, oldest first.
+    signers: Vec<String>,
+    /// Hex, list 1 first.
+    digests: Vec<String>,
+    update: identity_pins::GroupUpdate,
+    since: String,
+    /// `lookup_group`'s answer, as JSON.
+    found: serde_json::Value,
+    after: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -559,6 +581,22 @@ fn rules() -> RuleVectors {
             pins: with(&|_| {}).replace(&dave.account_id, &dave.account_id.to_uppercase()),
         },
         RefusedList {
+            case: "a group pin with a group id in capitals".into(),
+            pins: format!(
+                r#"{{"pins":[],"groups":[{{"server":"kutup.dev","groupId":"2B3C4D5E-6F70-4182-93A4-B5C6D7E8F901","signerPublicKey":"{}","since":"2026-10-12T09:00:00Z","anchor":{{"sequence":1,"digest":"{}"}}}}]}}"#,
+                b64(&dave_keys),
+                "ab".repeat(32)
+            ),
+        },
+        RefusedList {
+            case: "a group pin anchored at sequence 0".into(),
+            pins: format!(
+                r#"{{"pins":[],"groups":[{{"server":"kutup.dev","groupId":"2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901","signerPublicKey":"{}","since":"2026-10-12T09:00:00Z","anchor":{{"sequence":0,"digest":"{}"}}}}]}}"#,
+                b64(&dave_keys),
+                "ab".repeat(32)
+            ),
+        },
+        RefusedList {
             case: "for a newer reader".into(),
             pins: r#"{"pins":[],"minReader":2}"#.into(),
         },
@@ -589,7 +627,85 @@ fn rules() -> RuleVectors {
             pins: preserved.replace("\":", "\": "),
         },
     ];
+    let (s1, s2, admin) = ([0x31u8; 32], [0x32u8; 32], [0x3fu8; 32]);
+    let (d1, d2, d3) = ([0x41u8; 32], [0x42u8; 32], [0x43u8; 32]);
+    let group = "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901";
+    let mut pinned = after.clone();
+    identity_pins::record_group(
+        &mut pinned,
+        "kutup.dev",
+        group,
+        &identity_pins::GroupChain {
+            signers: &[s1],
+            digests: &[d1, d2],
+        },
+        identity_pins::GroupUpdate::FirstSeen,
+        SINCE,
+    )
+    .unwrap();
+    let group_case =
+        |case: &str, list: &IdentityPinsV2, signers: &[[u8; 32]], digests: &[[u8; 32]], update| {
+            let chain = identity_pins::GroupChain { signers, digests };
+            let mut next = list.clone();
+            identity_pins::record_group(&mut next, "kutup.dev", group, &chain, update, SINCE)
+                .unwrap();
+            GroupCase {
+                case: case.into(),
+                before: json(list),
+                server: "kutup.dev".into(),
+                group_id: group.into(),
+                signers: signers.iter().map(|k| STANDARD.encode(k)).collect(),
+                digests: digests.iter().map(hex::encode).collect(),
+                update,
+                since: SINCE.into(),
+                found: serde_json::to_value(
+                    identity_pins::lookup_group(list, "kutup.dev", group, &chain).unwrap(),
+                )
+                .unwrap(),
+                after: json(&next),
+            }
+        };
+    use identity_pins::GroupUpdate::{Accepted, FirstSeen};
+    let groups = vec![
+        group_case("first met: pinned", &after, &[s1], &[d1, d2], FirstSeen),
+        group_case(
+            "the same chain: unchanged",
+            &pinned,
+            &[s1],
+            &[d1, d2],
+            FirstSeen,
+        ),
+        group_case(
+            "handed over and extended: moved forward",
+            &pinned,
+            &[s1, s2],
+            &[d1, d2, d3],
+            FirstSeen,
+        ),
+        group_case(
+            "restarted by an administrator: changed, kept",
+            &pinned,
+            &[admin],
+            &[[0x51u8; 32]],
+            FirstSeen,
+        ),
+        group_case(
+            "rolled back: changed, kept",
+            &pinned,
+            &[s1],
+            &[d1],
+            FirstSeen,
+        ),
+        group_case(
+            "restarted, accepted: pinned anew",
+            &pinned,
+            &[admin],
+            &[[0x51u8; 32]],
+            Accepted,
+        ),
+    ];
     RuleVectors {
+        groups,
         dave,
         rollback: chain[..1].to_vec(),
         chain,
@@ -813,6 +929,37 @@ fn check_rules(r: &RuleVectors) {
             "{}: the same content",
             case.case
         );
+    }
+    assert_eq!(r.groups.len(), want.groups.len());
+    for case in &r.groups {
+        let key = |b64: &String| -> [u8; 32] { STANDARD.decode(b64).unwrap().try_into().unwrap() };
+        let digest = |h: &String| -> [u8; 32] { hex::decode(h).unwrap().try_into().unwrap() };
+        let signers: Vec<[u8; 32]> = case.signers.iter().map(key).collect();
+        let digests: Vec<[u8; 32]> = case.digests.iter().map(digest).collect();
+        let chain = identity_pins::GroupChain {
+            signers: &signers,
+            digests: &digests,
+        };
+        let before = identity_pins::decode(case.before.as_bytes()).unwrap();
+        let found =
+            identity_pins::lookup_group(&before, &case.server, &case.group_id, &chain).unwrap();
+        assert_eq!(
+            serde_json::to_value(&found).unwrap(),
+            case.found,
+            "{}",
+            case.case
+        );
+        let mut next = before;
+        identity_pins::record_group(
+            &mut next,
+            &case.server,
+            &case.group_id,
+            &chain,
+            case.update,
+            &case.since,
+        )
+        .unwrap();
+        assert_eq!(json(&next), case.after, "{}", case.case);
     }
     assert_eq!(r.refused_lists.len(), want.refused_lists.len());
     for case in &r.refused_lists {

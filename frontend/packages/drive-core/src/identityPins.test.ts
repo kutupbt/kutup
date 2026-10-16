@@ -70,6 +70,19 @@ function holders(list: { pins: Pin[] }, account: Ref, address: string): Pin[] {
   return at(list, address).filter((other) => !sameRef(other.account, account) && holds(other, address))
 }
 
+interface GroupPinModel {
+  server: string
+  groupId: string
+  signerPublicKey: string
+  since: string
+  anchor: { sequence: number; digest: string }
+  replaced?: string[]
+}
+
+function continues(pin: GroupPinModel, chain: { signers: string[]; digests: string[] }): boolean {
+  return chain.signers.includes(pin.signerPublicKey) && chain.digests[pin.anchor.sequence - 1] === pin.anchor.digest
+}
+
 vi.mock('@kutup/crypto/accountRename', () => ({
   foldAddress: vi.fn((address: string) => Promise.resolve(fold(address))),
   verifyAccountRenameChain: vi.fn((authority: string, chain: Rename[]) => Promise.resolve(verifyChain(authority, chain))),
@@ -156,6 +169,24 @@ vi.mock('@kutup/crypto/identityPins', () => ({
     const list = { ...current.list, pins }
     const changed = JSON.stringify(list) !== JSON.stringify(current.list)
     return Promise.resolve({ pins: { text: JSON.stringify(changed ? list : current.list), list: changed ? list : current.list }, applied: { from, to: view.current, changed } })
+  }),
+  // Rust's lookup_group and record_group, modelled: a chain continues a pin
+  // when the pinned signer is in its line and the anchored list is in place.
+  lookupGroupPin: vi.fn((current: { list: { groups?: GroupPinModel[] } }, server: string, groupId: string, chain: { signers: string[]; digests: string[] }) => {
+    const pin = (current.list.groups ?? []).find((g) => g.server === server && g.groupId === groupId)
+    if (!pin) return Promise.resolve({ kind: 'new' })
+    return Promise.resolve({ kind: continues(pin, chain) ? 'same' : 'changed', pin })
+  }),
+  recordGroupPin: vi.fn((current: { list: { pins: Pin[]; groups?: GroupPinModel[] } }, server: string, groupId: string, chain: { signers: string[]; digests: string[] }, update: string, since: string) => {
+    const groups = (current.list.groups ?? []).map((g) => ({ ...g }))
+    const fresh = { server, groupId, signerPublicKey: chain.signers.at(-1)!, since, anchor: { sequence: chain.digests.length, digest: chain.digests.at(-1)! } }
+    const i = groups.findIndex((g) => g.server === server && g.groupId === groupId)
+    if (i < 0) groups.push(fresh)
+    else if (continues(groups[i], chain)) groups[i] = { ...groups[i], signerPublicKey: fresh.signerPublicKey, anchor: fresh.anchor }
+    else if (update === 'accepted') groups[i] = { ...fresh, replaced: [...(groups[i].replaced ?? []), groups[i].signerPublicKey] }
+    const list = { ...current.list, groups }
+    const changed = JSON.stringify(list) !== JSON.stringify(current.list)
+    return Promise.resolve({ pins: { text: JSON.stringify(changed ? list : current.list), list: changed ? list : current.list }, changed })
   }),
   EMPTY_PINS: { text: '{"pins":[]}', list: { pins: [] } },
   sealIdentityPins: vi.fn((_m: string, binding: string, revision: number, pins: { text: string }) =>
@@ -273,6 +304,8 @@ import {
   acceptIdentity,
   checkIdentity,
   confirmRecipient,
+  acceptGroup,
+  checkGroup,
   currentAddressOf,
   IdentityNotConfirmed,
   personSafetyNumber,
@@ -751,5 +784,34 @@ describe('pinnedVerdict (Mail’s key checks)', () => {
     expect(await currentAddressOf('ada_l@kutup.dev', 'A')).toBe('ada_lovelace@kutup.dev')
     expect(await currentAddressOf('ada_l@kutup.dev', 'M')).toBe('ada_l@kutup.dev')
     expect(await currentAddressOf('grace@kutup.dev', 'G')).toBe('grace@kutup.dev')
+  })
+})
+
+describe('shared mailboxes (Mail’s key checks)', () => {
+  const group = '2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901'
+  const storedGroups = () => (JSON.parse(server.pins!.envelope) as { list: { groups?: GroupPinModel[] } }).list.groups ?? []
+
+  it('pins a mailbox’s signer on first use and follows its own line', async () => {
+    expect(await checkGroup(me, 'kutup.dev', group, { signers: ['S1'], digests: ['d1', 'd2'] })).toEqual({ kind: 'new' })
+    expect(storedGroups()).toMatchObject([{ groupId: group, signerPublicKey: 'S1', anchor: { sequence: 2, digest: 'd2' } }])
+    // Handed over to a new signer and extended: the same mailbox.
+    expect(await checkGroup(me, 'kutup.dev', group, { signers: ['S1', 'S2'], digests: ['d1', 'd2', 'd3'] })).toEqual({ kind: 'pinned' })
+    expect(storedGroups()).toMatchObject([{ signerPublicKey: 'S2', anchor: { sequence: 3 } }])
+  })
+
+  it('says changed for a restarted chain, a rollback, or the old signer after its handover, until accepted', async () => {
+    await checkGroup(me, 'kutup.dev', group, { signers: ['S1', 'S2'], digests: ['d1', 'd2', 'd3'] })
+    const puts = server.puts
+    for (const chain of [
+      { signers: ['ADMIN'], digests: ['x1'] },
+      { signers: ['S1', 'S2'], digests: ['d1', 'd2'] },
+      { signers: ['S1'], digests: ['d1', 'd2', 'o3'] },
+    ]) {
+      expect(await checkGroup(me, 'kutup.dev', group, chain)).toEqual({ kind: 'changed' })
+    }
+    expect(server.puts).toBe(puts)
+    await acceptGroup(me, 'kutup.dev', group, { signers: ['ADMIN'], digests: ['x1'] })
+    expect(storedGroups()).toMatchObject([{ signerPublicKey: 'ADMIN', replaced: ['S2'] }])
+    expect(await checkGroup(me, 'kutup.dev', group, { signers: ['ADMIN'], digests: ['x1'] })).toEqual({ kind: 'pinned' })
   })
 })

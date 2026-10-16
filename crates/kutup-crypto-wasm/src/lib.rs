@@ -3221,6 +3221,92 @@ pub fn identity_pins_at(pins_json_text: &str, address: &str) -> Result<JsValue, 
         .map_err(|error| js_error(&format!("encode: {error}")))
 }
 
+/// A shared mailbox's signers and list digests, in order.
+type GroupChainParts = (Vec<[u8; 32]>, Vec<[u8; 32]>);
+
+/// A shared mailbox's verified chain from JavaScript: its signers (base64,
+/// oldest first) and one digest per list (hex, list 1 first).
+fn group_chain_args(
+    signers: Vec<String>,
+    digests: Vec<String>,
+) -> Result<GroupChainParts, JsValue> {
+    let signers = signers
+        .iter()
+        .map(|key| public_key_32(key, "group signer"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let digests = digests
+        .iter()
+        .map(|digest| {
+            hex::decode(digest)
+                .ok()
+                .filter(|bytes| hex::encode(bytes) == *digest)
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                .ok_or_else(|| js_error("a group key list digest is not 32 bytes of lowercase hex"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((signers, digests))
+}
+
+/// What the pin list says about the shared mailbox `groupId` on `server`,
+/// given its verified chain: `{ kind: "new" | "same" | "changed", pin? }`.
+#[wasm_bindgen(js_name = lookupGroupPin)]
+pub fn lookup_group_pin(
+    pins_json_text: &str,
+    server: &str,
+    group_id: &str,
+    signers: Vec<String>,
+    digests: Vec<String>,
+) -> Result<JsValue, JsValue> {
+    let list = pins_arg(pins_json_text)?;
+    let (signers, digests) = group_chain_args(signers, digests)?;
+    let chain = kutup_crypto::identity_pins::GroupChain {
+        signers: &signers,
+        digests: &digests,
+    };
+    kutup_crypto::identity_pins::lookup_group(&list, server, group_id, &chain)
+        .map_err(|error| js_error(&error.to_string()))?
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// Records what a sender learned about a shared mailbox (`update`:
+/// `firstSeen` or `accepted`): `{ pins, changed }`.
+#[wasm_bindgen(js_name = recordGroupPin)]
+pub fn record_group_pin(
+    pins_json_text: &str,
+    server: &str,
+    group_id: &str,
+    signers: Vec<String>,
+    digests: Vec<String>,
+    update: &str,
+    since: &str,
+) -> Result<JsValue, JsValue> {
+    #[derive(Serialize)]
+    struct Out {
+        pins: String,
+        changed: bool,
+    }
+    let mut list = pins_arg(pins_json_text)?;
+    let (signers, digests) = group_chain_args(signers, digests)?;
+    let update: kutup_crypto::identity_pins::GroupUpdate =
+        serde_json::from_value(serde_json::Value::String(update.to_owned()))
+            .map_err(|_| js_error("unknown group pin update"))?;
+    let chain = kutup_crypto::identity_pins::GroupChain {
+        signers: &signers,
+        digests: &digests,
+    };
+    let changed = kutup_crypto::identity_pins::record_group(
+        &mut list, server, group_id, &chain, update, since,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Out {
+        pins: pins_json(&list)?,
+        changed,
+    }
+    .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
 /// Follows a rename chain of `account`, signed by its pinned authority, at
 /// `since`: the chain's addresses become the pin's labels, the current one
 /// held now. `{ pins, from, to, changed }`; throws for a chain that does not

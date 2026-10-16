@@ -262,6 +262,10 @@ fn same(a: &str, b: &str) -> bool {
 pub struct IdentityPinsV2 {
     /// Sorted by account (server, then account id), one each.
     pub pins: Vec<IdentityPinV2>,
+    /// Shared mailboxes' key-list signers, sorted by (server, group id),
+    /// one each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupPinV1>,
     /// The lowest [`READER_VERSION`] that may read this list; absent: 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_reader: Option<u32>,
@@ -271,8 +275,20 @@ pub struct IdentityPinsV2 {
 
 impl IdentityPinsV2 {
     pub fn validate(&self) -> Result<()> {
-        if self.pins.len() > MAX_PINS {
+        if self.pins.len() > MAX_PINS || self.groups.len() > MAX_GROUPS {
             return Err(invalid("too many pins"));
+        }
+        for group in &self.groups {
+            group.validate()?;
+        }
+        if !self
+            .groups
+            .windows(2)
+            .all(|pair| pair[0].key() < pair[1].key())
+        {
+            return Err(invalid(
+                "group pins must be sorted by server and group id, one each",
+            ));
         }
         match self.min_reader {
             None => {}
@@ -305,6 +321,14 @@ impl IdentityPinsV2 {
             return Err(invalid("an authority is pinned for two accounts"));
         }
         Ok(())
+    }
+
+    /// The pin of the shared mailbox `group_id` on `server`.
+    pub fn group(&self, server: &str, group_id: &str) -> Option<&GroupPinV1> {
+        self.groups
+            .binary_search_by(|pin| pin.key().cmp(&(server, group_id)))
+            .ok()
+            .map(|i| &self.groups[i])
     }
 
     /// The pin of `account`.
@@ -737,6 +761,215 @@ pub fn apply_rename(
         to: view.current,
         changed: *list != before,
     })
+}
+
+// --- shared mailboxes --------------------------------------------------------
+// A shared mailbox (docs/plans/mail-groups.md) is no person: its key lists
+// are signed by its own group signing key, which its managers hold (Proton's
+// Signed Key List: never a server key). Every sender, inside the group or
+// not, pins that signer by the mailbox's permanent id on first use, with an
+// anchor at the newest list seen; a later chain must still descend from the
+// pinned signer (handed over, signed by it, `mail_key::verify_group_key_chain`)
+// and hold the anchored list at its sequence. Anything else (a chain
+// restarted by an administrator, another signer, a rollback, a fork) is a
+// change the sender is warned about, as for a person.
+
+/// The most shared mailboxes one list keeps.
+pub const MAX_GROUPS: usize = 10_000;
+
+/// One shared mailbox's key-list signer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupPinV1 {
+    /// The mailbox's server.
+    pub server: String,
+    /// Its permanent id: a lowercase hyphenated UUID.
+    pub group_id: String,
+    /// Canonical padded base64 of the 32-byte Ed25519 group signing key the
+    /// newest list seen was signed by.
+    pub signer_public_key: String,
+    /// When it was first pinned or last accepted: RFC 3339, UTC.
+    pub since: String,
+    /// The newest list seen: a later chain must hold it at `sequence`.
+    pub anchor: RenameAnchorV1,
+    /// Signers the user accepted a change away from, oldest first (base64).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced: Vec<String>,
+    #[serde(flatten)]
+    pub unknown: UnknownFields,
+}
+
+impl GroupPinV1 {
+    fn key(&self) -> (&str, &str) {
+        (self.server.as_str(), self.group_id.as_str())
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !crate::account_ref::valid_server(&self.server)
+            || !crate::account_ref::valid_account_id(&self.group_id)
+        {
+            return Err(invalid("a group pin names no canonical mailbox"));
+        }
+        authority_bytes(&self.signer_public_key)?;
+        if !rfc3339_utc(&self.since) {
+            return Err(invalid("since is not an RFC 3339 UTC time"));
+        }
+        if self.anchor.sequence == 0 || !is_lower_hex_32(&self.anchor.digest) {
+            return Err(invalid("the group anchor is invalid"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        if self.replaced.len() > MAX_REPLACED
+            || !self.replaced.iter().all(|key| {
+                authority_bytes(key).is_ok() && *key != self.signer_public_key && seen.insert(key)
+            })
+        {
+            return Err(invalid("replaced group signers are invalid"));
+        }
+        Ok(())
+    }
+
+    /// Whether `chain` continues this pin: the pinned signer is in its line
+    /// of signers, and the anchored list is in it at its sequence.
+    fn continued_by(&self, chain: &GroupChain<'_>) -> bool {
+        let pinned = STANDARD.decode(&self.signer_public_key).ok();
+        let index = self.anchor.sequence.checked_sub(1).map(|i| i as usize);
+        pinned.is_some_and(|pinned| chain.signers.iter().any(|s| s[..] == pinned[..]))
+            && index
+                .and_then(|i| chain.digests.get(i))
+                .is_some_and(|digest| hex::encode(digest) == self.anchor.digest)
+    }
+}
+
+/// A shared mailbox's verified key-list chain, as `verify_group_key_chain`
+/// gives it: its signers in order (the last signs the newest list), and one
+/// digest per list, list 1 first.
+#[derive(Clone, Copy, Debug)]
+pub struct GroupChain<'a> {
+    pub signers: &'a [[u8; 32]],
+    pub digests: &'a [[u8; 32]],
+}
+
+impl GroupChain<'_> {
+    fn check(&self) -> Result<()> {
+        if self.signers.is_empty() || self.digests.is_empty() {
+            return Err(invalid("a group key chain is empty"));
+        }
+        Ok(())
+    }
+
+    fn signer(&self) -> String {
+        STANDARD.encode(self.signers[self.signers.len() - 1])
+    }
+
+    fn anchor(&self) -> RenameAnchorV1 {
+        RenameAnchorV1 {
+            sequence: self.digests.len() as u64,
+            digest: hex::encode(self.digests[self.digests.len() - 1]),
+            unknown: UnknownFields::new(),
+        }
+    }
+}
+
+/// What the list says about a shared mailbox's chain.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GroupMatch {
+    /// Not pinned: trusted on first use.
+    New,
+    /// The chain continues the pin.
+    Same { pin: Box<GroupPinV1> },
+    /// It does not (another signer, a restarted chain, a rollback, a fork):
+    /// warned about until the user accepts it.
+    Changed { pin: Box<GroupPinV1> },
+}
+
+/// What the list says about the shared mailbox `group_id` on `server`, given
+/// its verified chain; see [`GroupMatch`].
+pub fn lookup_group(
+    list: &IdentityPinsV2,
+    server: &str,
+    group_id: &str,
+    chain: &GroupChain<'_>,
+) -> Result<GroupMatch> {
+    chain.check()?;
+    Ok(match list.group(server, group_id) {
+        None => GroupMatch::New,
+        Some(pin) if pin.continued_by(chain) => GroupMatch::Same {
+            pin: Box::new(pin.clone()),
+        },
+        Some(pin) => GroupMatch::Changed {
+            pin: Box::new(pin.clone()),
+        },
+    })
+}
+
+/// What a sender learned about a shared mailbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupUpdate {
+    /// Met: pinned if new, the pin moved forward if the chain continues it;
+    /// a chain that does not is left for the user ([`lookup_group`] says so).
+    FirstSeen,
+    /// The user accepted the chain published now in place of the pinned one.
+    Accepted,
+}
+
+/// Records `update` about the shared mailbox `group_id` on `server` with its
+/// verified `chain` at time `since`. Whether the list changed.
+pub fn record_group(
+    list: &mut IdentityPinsV2,
+    server: &str,
+    group_id: &str,
+    chain: &GroupChain<'_>,
+    update: GroupUpdate,
+    since: &str,
+) -> Result<bool> {
+    chain.check()?;
+    let fresh = GroupPinV1 {
+        server: server.to_owned(),
+        group_id: group_id.to_owned(),
+        signer_public_key: chain.signer(),
+        since: since.to_owned(),
+        anchor: chain.anchor(),
+        replaced: Vec::new(),
+        unknown: UnknownFields::new(),
+    };
+    fresh.validate()?;
+    let before = list.clone();
+    match list
+        .groups
+        .binary_search_by(|pin| pin.key().cmp(&(server, group_id)))
+    {
+        Err(at) => list.groups.insert(at, fresh),
+        Ok(i) => {
+            let pin = &mut list.groups[i];
+            if pin.continued_by(chain) {
+                // Forward along its own line: the newest signer and list.
+                pin.signer_public_key = fresh.signer_public_key;
+                if pin.anchor.sequence != fresh.anchor.sequence {
+                    pin.anchor = fresh.anchor;
+                }
+            } else if update == GroupUpdate::Accepted {
+                let old = std::mem::replace(&mut pin.signer_public_key, fresh.signer_public_key);
+                pin.replaced
+                    .retain(|key| *key != old && *key != pin.signer_public_key);
+                pin.replaced.push(old);
+                let excess = pin.replaced.len().saturating_sub(MAX_REPLACED);
+                pin.replaced.drain(..excess);
+                pin.anchor = fresh.anchor;
+                pin.since = fresh.since;
+            }
+        }
+    }
+    if let Err(error) = list.validate() {
+        *list = before;
+        return Err(error);
+    }
+    Ok(*list != before)
 }
 
 /// The list's canonical bytes.
@@ -1424,6 +1657,144 @@ mod tests {
             }
         }
         assert_eq!(list, before);
+    }
+
+    const GROUP: &str = "1a1b1c1d-2222-4333-8444-55555555555e";
+
+    fn chain<'a>(signers: &'a [[u8; 32]], digests: &'a [[u8; 32]]) -> GroupChain<'a> {
+        GroupChain { signers, digests }
+    }
+
+    fn group_match(
+        list: &IdentityPinsV2,
+        signers: &[[u8; 32]],
+        digests: &[[u8; 32]],
+    ) -> &'static str {
+        match lookup_group(list, "kutup.dev", GROUP, &chain(signers, digests)).unwrap() {
+            GroupMatch::New => "new",
+            GroupMatch::Same { .. } => "same",
+            GroupMatch::Changed { .. } => "changed",
+        }
+    }
+
+    #[test]
+    fn a_shared_mailbox_is_pinned_by_its_signer_and_must_continue_it() {
+        let (s1, s2, evil) = ([1u8; 32], [2u8; 32], [9u8; 32]);
+        let (d1, d2, d3, x3) = ([0x11u8; 32], [0x12u8; 32], [0x13u8; 32], [0x99u8; 32]);
+        let mut list = IdentityPinsV2::default();
+        // First met: trusted on first use, the signer and the newest list pinned.
+        assert_eq!(group_match(&list, &[s1], &[d1, d2]), "new");
+        assert!(record_group(
+            &mut list,
+            "kutup.dev",
+            GROUP,
+            &chain(&[s1], &[d1, d2]),
+            GroupUpdate::FirstSeen,
+            NOW
+        )
+        .unwrap());
+        let pin = list.group("kutup.dev", GROUP).unwrap();
+        assert_eq!(pin.signer_public_key, STANDARD.encode(s1));
+        assert_eq!(
+            (pin.anchor.sequence, pin.anchor.digest.as_str()),
+            (2, hex::encode(d2).as_str())
+        );
+        // The same chain, and one extended with a handover to a new signer:
+        // the same mailbox; the pin moves forward.
+        assert_eq!(group_match(&list, &[s1], &[d1, d2]), "same");
+        assert_eq!(group_match(&list, &[s1, s2], &[d1, d2, d3]), "same");
+        assert!(record_group(
+            &mut list,
+            "kutup.dev",
+            GROUP,
+            &chain(&[s1, s2], &[d1, d2, d3]),
+            GroupUpdate::FirstSeen,
+            NOW
+        )
+        .unwrap());
+        let pin = list.group("kutup.dev", GROUP).unwrap();
+        assert_eq!(
+            (pin.signer_public_key.clone(), pin.anchor.sequence),
+            (STANDARD.encode(s2), 3)
+        );
+        // An administrator's restart (a new chain from list 1, a signer not
+        // handed over to), a rollback, a fork: changed, and nothing moves.
+        let before = list.clone();
+        for (signers, digests, why) in [
+            (vec![evil], vec![[0x21u8; 32]], "restarted"),
+            (vec![evil], vec![d1, d2, d3, [0x14u8; 32]], "another signer"),
+            (vec![s1, s2], vec![d1, d2], "rolled back"),
+            // Lists chain by hash, so a fork changes the anchored list's digest.
+            (vec![s1, s2], vec![d1, d2, x3], "forked"),
+        ] {
+            assert_eq!(group_match(&list, &signers, &digests), "changed", "{why}");
+            assert!(
+                !record_group(
+                    &mut list,
+                    "kutup.dev",
+                    GROUP,
+                    &chain(&signers, &digests),
+                    GroupUpdate::FirstSeen,
+                    NOW
+                )
+                .unwrap(),
+                "{why}"
+            );
+            assert_eq!(list, before, "{why}");
+        }
+        // The old signer alone, after it handed over: not the line pinned now.
+        assert_eq!(group_match(&list, &[s1], &[d1, d2, d3]), "changed");
+        // Accepted by the user: the new chain pinned, the old signer kept.
+        assert!(record_group(
+            &mut list,
+            "kutup.dev",
+            GROUP,
+            &chain(&[evil], &[[0x21u8; 32]]),
+            GroupUpdate::Accepted,
+            LATER
+        )
+        .unwrap());
+        let pin = list.group("kutup.dev", GROUP).unwrap();
+        assert_eq!(pin.signer_public_key, STANDARD.encode(evil));
+        assert_eq!(pin.replaced, [STANDARD.encode(s2)]);
+        assert_eq!((pin.anchor.sequence, pin.since.as_str()), (1, LATER));
+        // Another mailbox, or the same id on another server: new.
+        assert!(matches!(
+            lookup_group(
+                &list,
+                "kutup.dev",
+                "1a1b1c1d-2222-4333-8444-55555555555f",
+                &chain(&[s1], &[d1])
+            )
+            .unwrap(),
+            GroupMatch::New
+        ));
+        assert!(matches!(
+            lookup_group(&list, "other.dev", GROUP, &chain(&[s1], &[d1])).unwrap(),
+            GroupMatch::New
+        ));
+        // An empty chain, or a mailbox that is not canonical: refused.
+        assert!(lookup_group(&list, "kutup.dev", GROUP, &chain(&[], &[d1])).is_err());
+        assert!(record_group(
+            &mut list,
+            "kutup.dev",
+            &GROUP.to_uppercase(),
+            &chain(&[s1], &[d1]),
+            GroupUpdate::FirstSeen,
+            NOW
+        )
+        .is_err());
+        assert!(record_group(
+            &mut list,
+            "Kutup.dev",
+            GROUP,
+            &chain(&[s1], &[d1]),
+            GroupUpdate::FirstSeen,
+            NOW
+        )
+        .is_err());
+        // Sealed and opened as part of the list.
+        assert_eq!(decode(&encode(&list).unwrap()).unwrap(), list);
     }
 
     #[test]

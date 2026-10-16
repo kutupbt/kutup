@@ -964,6 +964,14 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
     assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 9, refused.pins), undefined, refused.case)
     assert.throws(() => crypto.recordIdentityPin(refused.pins, r.dave, undefined, iv.authorityPublicKey, 'firstSeen', since), undefined, refused.case)
   }
+  // Shared mailboxes: the same rules as Rust (lookup_group, record_group).
+  for (const g of r.groups) {
+    assert.deepEqual(crypto.lookupGroupPin(g.before, g.server, g.groupId, g.signers, g.digests), g.found, g.case)
+    const out = crypto.recordGroupPin(g.before, g.server, g.groupId, g.signers, g.digests, g.update, g.since)
+    assert.equal(out.pins, g.after, g.case)
+    assert.equal(out.changed, g.after !== g.before, g.case)
+  }
+  assert.throws(() => crypto.lookupGroupPin(r.after, 'kutup.dev', r.groups[0].groupId, [], r.groups[0].digests))
   // An account reference, never an address, keys a pin.
   assert.throws(() => crypto.lookupIdentityPin(r.after, 'dave@kutup.dev', undefined, undefined))
 }

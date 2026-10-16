@@ -22,14 +22,17 @@ import {
   deriveSafetyNumber,
   identityPinsAt,
   incarnationIdOfAuthority,
+  lookupGroupPin,
   lookupIdentityPin,
   openIdentityPins,
   EMPTY_PINS,
   pinAddress,
+  recordGroupPin,
   recordIdentityPin,
   safetyQrMatches,
   sealIdentityPins,
   verifyDriveKeyBinding,
+  type GroupChain,
   type IdentityPin,
   type PinsText,
   type PinUpdate,
@@ -769,6 +772,37 @@ export async function verifyPerson(me: DriveIdentity, account: string, scanned: 
   if (!matches) throw new SafetyNumberMismatch()
   const recorded = await recordPin(me, person, 'verified')
   if (recorded.kind === 'authorityElsewhere' || recorded.kind === 'addressHeldByOthers') throw new SafetyNumberMismatch()
+}
+
+// ------------------------------------------------------ shared mailboxes
+
+/**
+ * Whether a shared mailbox's verified key-list chain (docs/plans/mail-groups.md)
+ * is the one the list knows (Mail's key checks): `pinned` (it continues the
+ * pinned signer and list; the pin moves forward), `new` (trusted on first
+ * use; pinned now), or `changed` (another signer, a restarted chain, a
+ * rollback, a fork): warned about until the user accepts it.
+ */
+export type GroupVerdict = { kind: 'pinned' } | { kind: 'new' } | { kind: 'changed' }
+
+export async function checkGroup(me: DriveIdentity, server: string, groupId: string, chain: GroupChain): Promise<GroupVerdict> {
+  const match = await lookupGroupPin((await pinStore(me)).pins, server, groupId, chain)
+  if (match.kind === 'changed') return { kind: 'changed' }
+  // Pinned on first use, or moved forward along its own line; a failure to
+  // store it leaves the check as it is.
+  await updatePins(me, async (list) => {
+    const result = await recordGroupPin(list, server, groupId, chain, 'firstSeen', now())
+    return result.changed ? result.pins : null
+  }).catch(() => undefined)
+  return match.kind === 'same' ? { kind: 'pinned' } : { kind: 'new' }
+}
+
+/** Trust a shared mailbox's chain as published now, in place of the pinned one (the user knows why it changed). */
+export async function acceptGroup(me: DriveIdentity, server: string, groupId: string, chain: GroupChain): Promise<void> {
+  await updatePins(me, async (list) => {
+    const result = await recordGroupPin(list, server, groupId, chain, 'accepted', now())
+    return result.changed ? result.pins : null
+  })
 }
 
 /** Test seam: forget what this page has looked up and pinned. */

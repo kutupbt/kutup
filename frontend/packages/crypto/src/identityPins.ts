@@ -39,9 +39,27 @@ export interface AddressLabel {
   [later: string]: unknown
 }
 
+/**
+ * One shared mailbox's key-list signer (Rust `GroupPinV1`): its own group
+ * signing key, which its managers hold, pinned by the mailbox's permanent id.
+ */
+export interface GroupPin {
+  server: string
+  groupId: string
+  /** Canonical padded base64 Ed25519 key. */
+  signerPublicKey: string
+  since: string
+  /** The newest list seen: a later chain must hold it at `sequence`. */
+  anchor: { sequence: number; digest: string; [later: string]: unknown }
+  replaced?: string[]
+  [later: string]: unknown
+}
+
 export interface IdentityPins {
   /** Sorted by account, one each. */
   pins: IdentityPin[]
+  /** Shared mailboxes, sorted by server and group id. */
+  groups?: GroupPin[]
   /** The lowest reader version that may read the list (absent: 1). */
   minReader?: number
   [later: string]: unknown
@@ -240,4 +258,38 @@ export async function applyAccountRenameToPins(
   const result = (await getCryptoWasm()).applyAccountRenameToPins(pins.text, account, JSON.stringify(chain), since)
   const { pins: text, ...applied } = result as RenameApplied & { pins: string }
   return { pins: pinsText(text), applied }
+}
+
+/** A shared mailbox's verified key-list chain: its signers (base64, oldest first) and list digests (hex, list 1 first). */
+export interface GroupChain {
+  signers: readonly string[]
+  digests: readonly string[]
+}
+
+/**
+ * What the list says about a shared mailbox's chain: `new` (trusted on first
+ * use), `same` (it continues the pin: the pinned signer in its line, the
+ * anchored list in place), or `changed` (another signer, a restarted chain, a
+ * rollback, a fork): warned about until the user accepts it.
+ */
+export type GroupMatch = { kind: 'new' } | { kind: 'same'; pin: GroupPin } | { kind: 'changed'; pin: GroupPin }
+
+export async function lookupGroupPin(pins: PinsText, server: string, groupId: string, chain: GroupChain): Promise<GroupMatch> {
+  return (await getCryptoWasm()).lookupGroupPin(pins.text, server, groupId, [...chain.signers], [...chain.digests]) as GroupMatch
+}
+
+/** Records what a sender learned about a shared mailbox: met (`firstSeen`), or a change the user `accepted`. */
+export async function recordGroupPin(
+  pins: PinsText,
+  server: string,
+  groupId: string,
+  chain: GroupChain,
+  update: 'firstSeen' | 'accepted',
+  since: string,
+): Promise<{ pins: PinsText; changed: boolean }> {
+  const out = (await getCryptoWasm()).recordGroupPin(pins.text, server, groupId, [...chain.signers], [...chain.digests], update, since) as {
+    pins: string
+    changed: boolean
+  }
+  return { pins: pinsText(out.pins), changed: out.changed }
 }
