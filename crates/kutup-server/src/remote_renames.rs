@@ -164,8 +164,15 @@ fn verify(domain: &str, mut entry: ChainEntry) -> Result<Verified, &'static str>
 /// Keeps a verified chain of `domain`: new, or replacing a shorter one of the
 /// same incarnation (rows then move to its current address); never a shorter
 /// or a different one.
+/// A chain that advanced (an announce, or one a lookup brought) also drops
+/// what was fetched of that account by id (`handlers::accounts`), so its new
+/// name shows at once rather than when that answer goes stale.
 async fn store(pool: &sqlx::PgPool, domain: &str, verified: &Verified) -> AppResult<Stored> {
-    store_capped(pool, domain, verified, MAX_PER_DOMAIN).await
+    let stored = store_capped(pool, domain, verified, MAX_PER_DOMAIN).await?;
+    if stored == Stored::Advanced {
+        crate::handlers::accounts::forget_remote(domain, &verified.entry.incarnation_id);
+    }
+    Ok(stored)
 }
 
 /// [`store`] with the per-domain cap given (tests use a small one).
@@ -873,12 +880,25 @@ async fn deliver_one(
     Ok(())
 }
 
-/// Sends announces every half minute, for as long as the server runs.
+/// Wakes the announcer at once (`announce_soon`).
+static ANNOUNCE_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Asks the announcer to send what is queued now: a rename just committed,
+/// and peers should show the new name at once, not within the half minute.
+pub fn announce_soon() {
+    ANNOUNCE_NOW.notify_one();
+}
+
+/// Sends announces every half minute, and at once when a rename asks
+/// (`announce_soon`), for as long as the server runs.
 pub fn spawn_announcer(state: AppState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = ANNOUNCE_NOW.notified() => {}
+            }
             if let Err(error) = deliver_due(&state).await {
                 tracing::warn!(error = %error.message, "rename announces failed");
             }
