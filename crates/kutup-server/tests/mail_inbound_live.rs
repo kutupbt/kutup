@@ -2216,6 +2216,34 @@ fn distribution_lists_and_role_groups() {
     assert_eq!(create(&name).status(), 200);
 }
 
+/// A shared mailbox's key list as a manager's browser signs it with the
+/// group's signing key: `keys` (the new one primary), after `previous`.
+fn group_list(
+    signer: &kutup_crypto::mail_group::GroupSigningKey,
+    address: &str,
+    previous: Option<&mail_key::SignedMailKeyListV1>,
+    keys: Vec<MailKeyEntryV1>,
+) -> mail_key::SignedMailKeyListV1 {
+    let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
+    let mut keys = keys;
+    keys.sort_by_key(|key| key.fingerprint);
+    MailKeyListV1 {
+        incarnation_id: hex32(
+            kutup_crypto::identity::incarnation_id_from_authority_public(&signer.public_key),
+        ),
+        authority_key_id: hex32(kutup_crypto::identity::authority_key_id_from_public(
+            &signer.public_key,
+        )),
+        address: address.to_string(),
+        sequence: previous.map_or(1, |list| list.list.sequence + 1),
+        previous_hash: previous.map(mail_key::SignedMailKeyListV1::hash),
+        issued_at: "2026-10-16T12:00:00Z".into(),
+        keys,
+    }
+    .sign(&signer.signing_key())
+    .unwrap()
+}
+
 /// A shared mailbox key share for `member`, as a browser makes it: sealed
 /// to their account key, for the group `group_id`.
 fn share_for(group_secret: &[u8], group_id: &str, member: &User) -> Value {
@@ -2280,14 +2308,42 @@ fn shared_mailboxes() {
             .unwrap()
     };
     assert_eq!(create(Value::Null).status(), 400);
-    let r = create(json!({
+    // Its key lists are signed by the group's own signing key, its owner's:
+    // never by the server.
+    let signer = kutup_crypto::mail_group::GroupSigningKey::generate();
+    let first_entry = MailKeyEntryV1 {
+        fingerprint: first.fingerprint,
+        sha256_fingerprint: first.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    };
+    let list1 = group_list(&signer, &hr, None, vec![first_entry.clone()]);
+    let incarnation = alice_user.identity.incarnation_id();
+    let first_key = json!({
         "publicKey": b64(&first.public_key),
         "shares": [share_for(&first.secret_key, &id, &alice_user)],
-    }));
+        "keyList": { "data": b64(&list1.data), "signature": b64(&list1.signature) },
+    });
+    // Without its signer: refused.
+    assert_eq!(create(first_key.clone()).status(), 400);
+    let mut with_signer = first_key;
+    with_signer["signer"] = json!({
+        "publicKey": b64(&signer.public_key),
+        "shares": [{
+            "userId": alice_user.id,
+            "share": b64(&kutup_crypto::mail_group::seal_group_signing_share(
+                &signer,
+                &id,
+                &mail_key::GroupShareMember { account: &alice_user.person, incarnation_id: &incarnation },
+                &alice_user.identity.drive_hpke_public_key(),
+            ).unwrap()),
+        }],
+    });
+    let r = create(with_signer);
     assert_eq!(r.status(), 200, "create shared mailbox");
     assert_eq!(r.json::<Value>().unwrap()["group"]["id"], id.as_str());
 
-    // Its key is published with a list the server signs.
+    // Its key is published with the chain its signer signed.
     let lookup: Value = bearer(
         c.get(format!("{base}/api/mail/keys?email={hr}")),
         &bob_user.token,
@@ -2296,19 +2352,19 @@ fn shared_mailboxes() {
     .unwrap()
     .json()
     .unwrap();
-    // A shared mailbox is no account: its lists are the server's.
+    // A shared mailbox is no account: its chain names its signer.
     assert!(lookup.get("accountId").is_none(), "{lookup}");
+    assert!(
+        lookup.get("accountAuthorityPublicKey").is_none(),
+        "{lookup}"
+    );
+    assert_eq!(lookup["groupId"], id.as_str());
+    assert_eq!(lookup["firstSigner"], b64(&signer.public_key));
     assert_eq!(
         lookup["keys"][0]["fingerprint"],
         hex::encode(first.fingerprint)
     );
-    let authority: [u8; 32] = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        lookup["accountAuthorityPublicKey"].as_str().unwrap(),
-    )
-    .unwrap()
-    .try_into()
-    .unwrap();
+    let authority = signer.public_key;
     let list_data = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         lookup["keyLists"][0]["data"].as_str().unwrap(),
@@ -2592,11 +2648,30 @@ fn shared_mailboxes() {
         std::thread::sleep(Duration::from_millis(200));
     };
     let second = mail_key::generate_address_key(&hr, later).unwrap();
+    let list2 = group_list(
+        &signer,
+        &hr,
+        Some(&list),
+        vec![
+            MailKeyEntryV1 {
+                primary: false,
+                flags: DEFAULT_FLAGS & !mail_key::FLAG_NOT_OBSOLETE,
+                ..first_entry
+            },
+            MailKeyEntryV1 {
+                fingerprint: second.fingerprint,
+                sha256_fingerprint: second.sha256_fingerprint,
+                primary: true,
+                flags: DEFAULT_FLAGS,
+            },
+        ],
+    );
     let r = set_members(
         alice_only,
         json!({ "newKey": {
             "publicKey": b64(&second.public_key),
             "shares": [share_for(&second.secret_key, &id, &alice_user)],
+            "keyList": { "data": b64(&list2.data), "signature": b64(&list2.signature) },
         } }),
     );
     assert_eq!(r.status(), 200, "remove with a new key");

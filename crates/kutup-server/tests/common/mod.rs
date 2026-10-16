@@ -857,6 +857,32 @@ pub fn temp_registration(
     json!({ "keyBinding": binding, "opaqueRecord": record, "opaqueServerKeyId": server_key_id })
 }
 
+/// An administrator wipes `user` (`KUTUP_LIVE_ADMIN` as `name:password`)
+/// and its owner sets it up again: new keys, a new incarnation, the same
+/// account id.
+#[allow(dead_code)]
+pub fn wipe_and_set_up(c: &Client, base: &str, admin: &str, user: &mut User) {
+    let (admin_name, admin_password) = admin.split_once(':').expect("username:password");
+    let admin_token = admin_token(c, base, admin_password, admin_name);
+    let grant = admin_reset_grant(c, base, &admin_token, admin_name, admin_password, &user.id);
+    let mut setup = temp_registration(c, base, "Temporary*Password123", &admin_token, Some(&grant));
+    setup["grant"] = json!(grant);
+    let r = bearer(
+        c.post(format!("{base}/api/admin/users/{}/wipe", user.id)),
+        &admin_token,
+    )
+    .json(&setup)
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "wipe: {}", r.status());
+    let first_login = sign_in(c, base, &user.username, "Temporary*Password123");
+    let (token, identity) =
+        complete_setup(c, base, &first_login, &user.username, "Another*Password456");
+    user.token = token;
+    user.identity = identity;
+    user.password = "Another*Password456".into();
+}
+
 /// An admin's grant to reset `target` (its reauth, then `reset-grant`).
 pub fn admin_reset_grant(
     c: &Client,

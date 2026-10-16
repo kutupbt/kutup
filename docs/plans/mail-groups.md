@@ -79,12 +79,23 @@ lists need no group key; only the shared mailbox does.
   above addresses, as Proton wraps address keys to the user key, so a rename
   keeps it: docs/plans/account-ids.md); a member's browser opens it with
   their own account key. The server never holds it in clear.
-- **The group's key list** is signed by the server's identity key (the
-  federation identity every Kutup server has), since a group has no account
-  of its own. Kutup senders and WKD use the primary group key. This trusts
-  the server for group keys, as distribution lists trust it for membership;
-  members' browsers check that the key they hold is the published one and
-  warn when not. Key transparency would remove that trust later.
+- **The group's key list** is signed by the group's own signing key
+  (Ed25519; Proton's Signed Key Lists are signed by the address's own key,
+  which its owners hold), never by the server (`kutup_crypto::mail_group`):
+  - made in a manager's browser and shared with each owner and manager,
+    sealed to their account keys as the group key is;
+  - each list is a `MailKeyListV1` signed with it (its `incarnation_id`
+    names that signer, not an account incarnation);
+  - when an owner or manager leaves or stops being one, a new signer takes
+    over: the outgoing one signs a `GroupSignerHandoverV1` naming it, linked
+    to the last list it signed; a list the old signer signs after that is
+    refused, by the server and by every client;
+  - an administrator who holds no share can start a new chain (no
+    handover); senders who pinned the old signer see a change;
+  - senders pin the chain's signer by (server, group id) on first sight and
+    check its continuity on every later lookup (the third session's pins),
+    and are warned of a change. Kutup senders and WKD use the primary group
+    key.
 - **Mail from outside** is encrypted on arrival to the group key and stored
   once. **Mail from Kutup users** is encrypted by their browser to the group
   key. **OpenPGP users outside** find the group key through WKD and write end
@@ -189,8 +200,13 @@ server to fan out from a group key instead; it is not in G1.
   fingerprint, public key, primary, flags, created at.
 - `mail_group_key_shares`: group key, user, the secret key sealed to the
   user's account key, the account incarnation it was sealed to.
-- `mail_group_key_lists`: group, sequence, data, signature (by the server
-  identity), as `mail_key_lists`.
+- `mail_group_key_lists`: group, sequence, data, signature (by the group's
+  signer in force), as `mail_key_lists`.
+- `mail_group_signers`: group, the sequence a signer starts at, its public
+  key, the handover from the one before (none for the first).
+- `mail_group_signing_shares`: group, signer, user (an owner or manager),
+  the signer's seed sealed to their account key, the incarnation it was
+  sealed to.
 - `mail_messages` gains `group_id` (a shared mailbox's rows, and a
   distribution list member's row) and `key_packet` (a list member's own key
   packet; the object then holds the shared data packet alone).
@@ -210,7 +226,8 @@ log.
   `GET/PUT /api/mail/groups/{id}/members`, `PATCH /api/mail/groups/{id}`
   (owners and managers: description, post policy, members, rights).
 - `POST /api/mail/groups/{id}/keys` (a new group key with its shares and the
-  next list, signed by the server once checked) and
+  next list, signed in the browser by the group's signer; the server checks
+  the whole chain and stores it) and
   `GET /api/mail/groups/{id}/key-shares` (the caller's shares).
 - `GET /api/mail/keys?email=` answers a group: `kind` `list` with members'
   keys, or `shared` with the group's key list.
@@ -266,9 +283,10 @@ log.
    `open_group_key_share`; WASM `generateMailGroupKey`,
    `reshareMailGroupKey`, `openMailGroupMessage`,
    `encryptMailMessageAsGroup`, `encryptMailPgpAsGroup`, the secret never in
-   JS); key lists signed by a server key of their own
-   (`server_generated_keys` `mail-group-authority`), so groups do not
-   depend on federation being on; `mail_messages.owner` (the account, or the
+   JS); key lists signed by the group's own signing key its owners and
+   managers hold (`mail_group`; the server's former mail-group authority is
+   gone), so groups do not depend on federation being on and the server
+   cannot change a group's keys; `mail_messages.owner` (the account, or the
    group for a shared mailbox's rows) scopes every read, filing and delete;
    `sent_by` and `sender_account` keep the sending limits on the member who
    sent as the group; delivery from outside encrypted to the group key,

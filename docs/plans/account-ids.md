@@ -194,4 +194,14 @@ What landed, and where it differs from the note above:
   - The server already refuses a rotation that does not share to exactly the remaining members.
   - Beyond the note: the incarnation is in the AAD, as for named shares.
 - **Audit entries** for mail groups name the group by id and members by account id; the address is a snapshot.
+- **Shared mailboxes' key lists are signed by the group's own signing key** (review, decided by the main session, copying Proton's Signed Key Lists):
+  - an Ed25519 key made in a manager's browser, shared with each owner and manager sealed to their account keys as the group key is; the server stores and serves the chain and never signs (its mail-group authority is deleted);
+  - lists stay `MailKeyListV1`, their `incarnation_id` naming the signer (not an account incarnation; nothing reads it as one);
+  - a signer change is a `GroupSignerHandoverV1` signed by the outgoing signer and linked to its last list; losing an owner or manager needs one; a list an old signer signs after its handover is refused by the server and every client;
+  - only an administrator may start a new chain (no handover); senders who pinned the old signer then see a change;
+  - senders pin the signer by (server, group id) on first sight (TOFU) and check continuity after: the third session's `groups` pin section, with the same vectors.
+- **Members are checked against the manager's pins before sealing** (`confirmRecipient`, as Drive sharing): someone never met is pinned on first use; a changed or invalid identity stops the sealing until the manager confirms.
+- **Changes are checked under the group's lock:** rotations and membership changes take the group row first, then read members and check coverage inside the transaction (a test forces a rotation to wait on a removal).
+- **Re-sealing after a reset:** a member whose shares no longer open (`needsKeys`) may be given the keys again, after the manager's confirmation of their new identity; nobody else gets a share that way.
+- **Key-list rollback guard:** each device keeps the highest key-list sequence seen per address and signer (revision guard); an older chain is refused.
 - **This server's senders compare folded** in block, spam and allow lists, image senders and auto-reply records (any spelling of a name is one sender). Outside senders stay lowercased, as Proton keeps them.

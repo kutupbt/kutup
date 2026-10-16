@@ -357,9 +357,13 @@ mod tests {
             GroupSignerHandoverV1::sign(&a, GROUP, 3, &two.hash(), &b.public_key).unwrap();
         let three = list(&b, 3, Some(&two), 3);
         let chain = [one.clone(), two.clone(), three.clone()];
-        let view =
-            verify_group_key_chain(GROUP, &a.public_key, &pairs(&chain), std::slice::from_ref(&handover))
-                .unwrap();
+        let view = verify_group_key_chain(
+            GROUP,
+            &a.public_key,
+            &pairs(&chain),
+            std::slice::from_ref(&handover),
+        )
+        .unwrap();
         assert_eq!(view.signers, vec![a.public_key, b.public_key]);
         assert_eq!((view.signer, view.sequence), (b.public_key, 3));
         assert_eq!(view.digests, vec![one.hash(), two.hash(), three.hash()]);
