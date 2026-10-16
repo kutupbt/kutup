@@ -14,13 +14,14 @@ import { getSession } from '@kutup/session/store'
  * or it is dismissed, which this device remembers, so it is not a toast
  * that is gone before it is read.
  */
-export function NotInContactsBanner({ address, name }: { address: string; name?: string }) {
+export function NotInContactsBanner({ peer, address, name }: { peer: string; address: string; name?: string }) {
   const { t } = useTranslation()
   const contacts = useContactLookup()
   const save = useSaveContact()
   const [dismissed, setDismissed] = useState(readDismissed)
-  const key = address.toLowerCase()
-  if (!contacts.ready || contacts.find(key) || dismissed.has(key)) return null
+  // Dismissed for the account (its key), saved and looked up by its address.
+  const key = peer
+  if (!contacts.ready || contacts.find(address) || dismissed.has(key)) return null
   return (
     <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-1.5 text-sm" data-testid="chat-not-in-contacts">
       <UserPlus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -71,11 +72,11 @@ function readDismissed(): Set<string> {
   }
 }
 
-function writeDismissed(addresses: Set<string>) {
+function writeDismissed(accounts: Set<string>) {
   const key = dismissedKey()
   if (!key) return
   try {
-    localStorage.setItem(key, JSON.stringify([...addresses].slice(-500)))
+    localStorage.setItem(key, JSON.stringify([...accounts].slice(-500)))
   } catch {
     // Private windows: dismissed for this page only.
   }

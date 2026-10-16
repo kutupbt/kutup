@@ -29,6 +29,7 @@ export function isVisibleChatMessage(message: ChatHistoryEntry, nowMs: number): 
       || message.content.pollVote || message.content.pollTerminate
       || message.content.groupCall || message.content.callLog
       || message.content.undecryptable
+      || message.content.safetyNumberChanged
       || message.content.liveLocationStop
       || (message.content.liveLocation && message.content.liveLocation.generation > 1)
       || isAccountControl(message)) return false

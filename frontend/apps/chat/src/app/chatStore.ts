@@ -1,10 +1,9 @@
 import { useSyncExternalStore } from 'react'
 import type { ChatBackupView } from '@kutup/chat-core/backup'
 import { fetchChatCapabilities, isSupportedChat } from '@kutup/chat-core/capabilities'
-import { canonicalAccountAddress, conversationKey } from '@kutup/chat-core/identity'
+import { accountKey, conversationKey, type AccountRef } from '@kutup/chat-core/identity'
 import { ChatService, ChatServiceError, type ChatConnectionStatus } from '@kutup/chat-core/service'
 import type {
-  AccountAddress,
   ChatCapabilities,
   ChatProfile,
   ChatTypingEvent,
@@ -21,6 +20,7 @@ import type { ChatData } from '../state/views'
 import { setSealedStorage } from '../state/sealedState'
 import { currentReadMarks } from '../state/readState'
 import { foldAccountState, mergeReadMarks } from '../state/accountState'
+import { startAccountNames, stopAccountNames } from '../state/accountNames'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
@@ -39,8 +39,11 @@ import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 export type ChatFailure = 'capabilities' | 'serverUnsupported' | 'browserUnsupported' | 'unreachable' | 'unavailable'
 
 export interface ChatSelf {
-  account: AccountAddress
-  /** Canonical `username@server`. */
+  /** This account: its server and permanent id. */
+  account: AccountRef
+  /** Its key, `aci:<uuid>@<server>`: how Chat names it (senders, Note to Self). Never shown. */
+  key: string
+  /** Its address now (`username@server`): shown only, never a key. */
   address: string
   /** The account's id: what this browser keys the account's local state by, never a name. */
   userId: string
@@ -75,6 +78,8 @@ export interface ChatState {
   typing: ReadonlyMap<string, ReadonlyMap<string, number>>
   /** This tab's link to the server. */
   connection: ChatConnectionStatus
+  /** Raised when an account's shown name arrives (`state/accountNames`). */
+  namesRevision: number
 }
 
 const TYPING_TTL_MS = 6_000
@@ -106,6 +111,7 @@ const initial: ChatState = {
   stale: false,
   typing: new Map(),
   connection: 'connecting',
+  namesRevision: 0,
 }
 
 let state: ChatState = initial
@@ -157,7 +163,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         // The live window, not the whole history (Phase 2b): read again only
         // for the conversations that changed.
         service.liveWindow((controls) => {
-          const self = state.self?.address ?? ''
+          const self = state.self?.key ?? ''
           return mergeReadMarks(currentReadMarks(), foldAccountState(controls, self).readThrough)
         }).then((window) => window.history),
         orPrevious(service.inboundAttention(), previous.attention),
@@ -252,7 +258,7 @@ export function openChat(session: Session): void {
       set({ status: 'failed', failure: 'unavailable', capabilities })
       return
     }
-    const account = { username: session.username, server: capabilities.serverName }
+    const account: AccountRef = { server: capabilities.serverName, accountId: session.userId }
     const mediaCache = privateCiphertextCacheForAccountV1(session.userId)
     void mediaCache.initialize().catch((error: unknown) => console.warn('chat: media cache unavailable', error))
     let service: ChatService
@@ -260,7 +266,8 @@ export function openChat(session: Session): void {
       service = await ChatService.open({
         userId: session.userId,
         envelopeBinding: session.envelopeBinding,
-        username: session.username,
+        account,
+        displayName: session.username,
         masterKey: session.masterKey,
         capabilities,
       })
@@ -296,9 +303,11 @@ export function openChat(session: Session): void {
       window.clearInterval(ticker)
       for (const unsubscribe of unsubscribers) unsubscribe()
       setSealedStorage(null)
+      stopAccountNames()
       service.dispose()
     }
-    forgetPlaintextChatState(canonicalAccountAddress(account), session.userId)
+    forgetPlaintextChatState(`${session.username}@${capabilities.serverName}`, session.userId)
+    startAccountNames(session, () => set({ namesRevision: state.namesRevision + 1 }))
     const sealed = service.sealedStorage
     setSealedStorage(sealed)
     reopenAttempt = 0
@@ -306,7 +315,12 @@ export function openChat(session: Session): void {
       status: 'ready',
       service,
       capabilities,
-      self: { account, address: canonicalAccountAddress(account), userId: session.userId },
+      self: {
+        account,
+        key: accountKey(account),
+        address: `${session.username}@${capabilities.serverName}`,
+        userId: session.userId,
+      },
       mediaCache,
       connection: service.connectionStatus(),
     })

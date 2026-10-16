@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { accountOfKey } from '@kutup/crypto/accountRef'
 import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
@@ -16,6 +17,17 @@ import type {
   PendingMlsInvitation,
   RecoverMlsConversationRequest,
 } from './types'
+
+/**
+ * A Chat route for one account, given as its `aci:<uuid>@<server>` string:
+ * `/chat/accounts/<accountId><suffix>` with the server as a parameter. The
+ * engine hands accounts only; an address never reaches a route.
+ */
+function accountRoute(account: string, suffix: string): { path: string; server: string } {
+  const ref = accountOfKey(account)
+  if (!ref) throw new Error('not an account reference')
+  return { path: `/chat/accounts/${encodeURIComponent(ref.accountId)}${suffix}`, server: ref.server }
+}
 
 function signedIn() {
   const session = getSession()
@@ -46,19 +58,21 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/device', request).then((response) => response.data)
   }
 
-  async fetchBundles(username: string): Promise<unknown> {
+  async fetchBundles(account: string): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/keys')
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/keys`)
+      .get(path, { params: { server } })
       .then((response) => response.data)
   }
 
   async fetchSyncBundles(
-    username: string,
+    account: string,
     currentDeviceId: number,
   ): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/keys')
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
-        params: { syncDeviceId: currentDeviceId },
+      .get(path, {
+        params: { syncDeviceId: currentDeviceId, server },
       })
       .then((response) => response.data)
   }
@@ -69,10 +83,11 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
-  async fetchManifest(username: string): Promise<unknown | null> {
+  async fetchManifest(account: string): Promise<unknown | null> {
+    const { path, server } = accountRoute(account, '/manifest')
     try {
       return await api
-        .get(`/chat/users/${encodeURIComponent(username)}/manifest`)
+        .get(path, { params: { server } })
         .then((response) => response.data)
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 404) return null
@@ -81,14 +96,16 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async fetchManifestHistory(
-    username: string,
+    account: string,
     fromSequence: string,
     toSequence: string,
     pageFromSequence: string,
   ): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/manifest-history')
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/manifest-history`, {
+      .get(path, {
         params: {
+          server,
           fromSequence,
           toSequence,
           pageFromSequence,
@@ -110,14 +127,15 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async fetchSealedBundles(
-    username: string,
+    account: string,
     capability: string,
   ): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/keys')
     return axios
       .post(
-        `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/keys`,
+        `${apiBase()}/chat/anonymous${path}`,
         { capability },
-        { withCredentials: false, headers: { Authorization: undefined } },
+        { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
       )
       .then((response) => response.data)
   }
@@ -197,15 +215,16 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async fetchProfile(
-    username: string,
+    account: string,
     version: string,
     accessKey: string,
   ): Promise<unknown | null> {
+    const { path, server } = accountRoute(account, `/profile/${encodeURIComponent(version)}`)
     try {
       return await api
         .get(
-          `/chat/users/${encodeURIComponent(username)}/profile/${encodeURIComponent(version)}`,
-          { headers: { 'X-Kutup-Profile-Access-Key': accessKey } },
+          path,
+          { params: { server }, headers: { 'X-Kutup-Profile-Access-Key': accessKey } },
         )
         .then((response) => response.data)
     } catch (error) {
@@ -414,17 +433,15 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async sendMessage(
-    username: string,
+    account: string,
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
   > {
+    const { path, server } = accountRoute(account, '/messages')
     try {
-      const response = await api.post(
-        `/chat/users/${encodeURIComponent(username)}/messages`,
-        request,
-      )
+      const response = await api.post(path, request, { params: { server } })
       return {
         kind: 'delivered',
         deduplicated: response.data?.deduplicated === true,
@@ -438,18 +455,19 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async sendSealedMessage(
-    username: string,
+    account: string,
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
     | { kind: 'refused' }
   > {
+    const { path, server } = accountRoute(account, '/messages')
     try {
       const response = await axios.post(
-        `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/messages`,
+        `${apiBase()}/chat/anonymous${path}`,
         request,
-        { withCredentials: false, headers: { Authorization: undefined } },
+        { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
       )
       return { kind: 'delivered', deduplicated: response.data?.deduplicated === true }
     } catch (error) {

@@ -15,13 +15,13 @@ export function MessageText({
   outgoing,
   mentions,
   nameOf,
-  selfAddress,
+  selfKey,
 }: {
   text: string
   outgoing: boolean
   mentions?: readonly ChatMentionV1[]
   nameOf?: (address: string) => string
-  selfAddress?: string
+  selfKey?: string
 }) {
   return (
     <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
@@ -31,7 +31,7 @@ export function MessageText({
             key={index}
             className={cn(
               'rounded px-0.5 font-semibold',
-              part.member === selfAddress
+              part.member === selfKey
                 ? outgoing
                   ? 'bg-primary-foreground/25'
                   : 'bg-primary/20 text-primary'

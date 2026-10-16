@@ -6,8 +6,8 @@ import { SafetyVerificationDialog } from './SafetyVerificationDialog'
 
 function safety(trust: SafetyNumberV1['trust'] = 'Tofu'): SafetyNumberV1 {
   return {
-    localAccount: 'alice@alpha.example',
-    peerAccount: 'bob@beta.example',
+    localAccount: 'aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example',
+    peerAccount: 'aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example',
     fingerprint: Array.from({ length: 16 }, (_, index) => String(index).padStart(5, '0')).join(' '),
     qrPayload: 'kutup://verify/chat/v1/exact-pair-bound-value',
     authorityKeyId: '11'.repeat(32),

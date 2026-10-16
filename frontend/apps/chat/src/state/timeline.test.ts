@@ -23,6 +23,7 @@ function view(id: string, at: number, author: string, extra: Partial<MessageView
     groupUpdate: null,
     callLog: null,
     undecryptable: null,
+    safetyChanged: false,
     groupCall: null,
     viewedOnce: null,
     poll: null,
@@ -76,11 +77,20 @@ describe('timelineRows', () => {
     expect(kinds(rows)).toEqual(['day', 'a', 'b', 'notice', 'c'])
   })
 
+  it('puts a safety number change on its own row, never counted unread', () => {
+    const rows = timelineRows(
+      [view('a', T0, 'bob'), view('s', T0 + 1_000, 'me', { safetyChanged: true }), view('b', T0 + 2_000, 'bob')],
+      { after: T0 - 1, openedAt: T0 + 10_000 },
+    )
+    expect(kinds(rows)).toEqual(['day', 'unread', 'a', 'notice', 'b'])
+    expect(rows.find((r) => r.kind === 'unread')).toMatchObject({ count: 2 })
+  })
+
   it('puts a group change on its own row, never joined or counted unread', () => {
     const rows = timelineRows(
       [
         view('a', T0, 'bob'),
-        view('n', T0 + 1_000, 'bob', { groupUpdate: { actor: 'bob', changes: [{ type: 'nameChanged', name: 'X' }] } }),
+        view('n', T0 + 1_000, 'bob', { groupUpdate: { actor: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' }, changes: [{ type: 'nameChanged', name: 'X' }] } }),
         view('b', T0 + 2_000, 'bob'),
       ],
       { after: T0 - 1, openedAt: T0 + 10_000 },

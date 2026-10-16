@@ -14,8 +14,8 @@ function entry(
 ): ChatHistoryEntry {
   return {
     id,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    sender: 'bob@b.test',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
+    sender: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
     direction: 'incoming',
     senderDeviceId: 1,
     timestampMs,
@@ -46,7 +46,7 @@ describe('disappearing Chat presentation', () => {
       disappearingTimer: {},
     })
 
-    const timer = reduceDisappearingTimers([disabled, enabled]).get('direct:bob@b.test')
+    const timer = reduceDisappearingTimers([disabled, enabled]).get('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@b.test')
     expect(timer?.message.id).toBe('timer-disabled')
     expect(timer?.durationSeconds).toBeUndefined()
   })

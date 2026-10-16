@@ -2,7 +2,7 @@ import { Copy, ExternalLink, Lock } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { contactUri } from '@kutup/chat-core/identity'
+import { contactUri, parseAddress } from '@kutup/chat-core/identity'
 import { appUrl } from '@kutup/session/apps'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
@@ -46,7 +46,7 @@ export function ProfileSettings() {
       <SettingsSection title={t('chat.contact.title')} description={t('chat.contact.description')}>
         <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
           <div className="rounded-xl border border-border bg-white p-3">
-            <QRCodeSVG value={contactUri(self!.account)} size={168} aria-label={t('chat.contact.qr')} />
+            <QRCodeSVG value={contactUri(parseAddress(address)!)} size={168} aria-label={t('chat.contact.qr')} />
           </div>
           <div className="space-y-3">
             <code className="block break-all rounded-md bg-muted px-3 py-2 font-mono text-sm">{address}</code>

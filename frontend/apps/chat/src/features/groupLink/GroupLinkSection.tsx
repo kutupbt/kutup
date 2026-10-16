@@ -8,6 +8,7 @@ import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
 import { personName } from '../../lib/names'
+import { accountName } from '../../state/accountNames'
 import { groupIdOf } from '../../state/views'
 import { Section } from '../details/DetailsPanel'
 import { GroupLinkDialog } from './GroupLinkDialog'
@@ -62,13 +63,15 @@ export function GroupLinkSection({ group, canManage }: { group: LocalMlsConversa
           <p className="mb-2 text-sm font-medium">{t('chat.groupLink.requestsTitle', { count: requests.length })}</p>
           <ul className="space-y-1">
             {requests.map((request) => {
-              const name = personName(request.requester, profiles, self!.address, t)
+              const name = personName(request.requester, profiles, self!.key, t)
               return (
                 <li key={request.requester} className="flex items-center gap-3 rounded-lg px-2 py-1.5">
                   <Avatar name={name} size={32} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{request.requester}</span>
+                    {accountName(request.requester) && accountName(request.requester) !== name ? (
+                      <span className="block truncate text-xs text-muted-foreground">{accountName(request.requester)}</span>
+                    ) : null}
                   </span>
                   <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => void decide(request.requester, false)} data-testid="chat-join-request-deny">
                     {t('chat.groupLink.deny')}

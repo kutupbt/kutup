@@ -1,15 +1,16 @@
+import { accountKey, type AccountRef } from '@kutup/chat-core/identity'
 import type { ChatMentionV1 } from '@kutup/chat-core/types'
 
 // Mentions as Signal does them: typing "@" in a group offers its members;
 // picking one puts "@Name" in the text and remembers who it is. The message
 // carries each mention as a range of the text (UTF-16 units, the way
-// JavaScript indexes strings) and the member's address, and readers show the
+// JavaScript indexes strings) and the member's account, and readers show the
 // member's current name there.
 
 /** A member picked in the composer: the text inserted for them, and who. */
 export interface MentionPick {
   label: string
-  member: string
+  member: AccountRef
 }
 
 /** The "@query" being typed just before the caret, if any. */
@@ -60,6 +61,7 @@ export function resolveMentions(text: string, picks: readonly MentionPick[]): Ch
   return mentions.sort((a, b) => a.start - b.start).slice(0, 64)
 }
 
+/** A mention's `member` is the account's key (`aci:<uuid>@<server>`). */
 export type MentionPart = { kind: 'text'; value: string } | { kind: 'mention'; member: string; value: string }
 
 /** Split text into plain runs and mentions (ranges that do not fit are ignored). */
@@ -71,14 +73,14 @@ export function splitMentions(text: string, mentions: readonly ChatMentionV1[] |
     const end = mention.start + mention.length
     if (mention.start < last || end > text.length || mention.length < 1) continue
     if (mention.start > last) parts.push({ kind: 'text', value: text.slice(last, mention.start) })
-    parts.push({ kind: 'mention', member: mention.member, value: text.slice(mention.start, end) })
+    parts.push({ kind: 'mention', member: accountKey(mention.member), value: text.slice(mention.start, end) })
     last = end
   }
   if (last < text.length) parts.push({ kind: 'text', value: text.slice(last) })
   return parts
 }
 
-/** Whether a message's mentions name `address`. */
-export function mentions(list: readonly ChatMentionV1[] | undefined, address: string): boolean {
-  return list?.some((mention) => mention.member === address) ?? false
+/** Whether a message's mentions name the account `key`. */
+export function mentions(list: readonly ChatMentionV1[] | undefined, key: string): boolean {
+  return list?.some((mention) => accountKey(mention.member) === key) ?? false
 }

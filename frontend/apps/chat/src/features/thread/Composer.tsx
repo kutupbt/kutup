@@ -5,6 +5,7 @@ import { formatVoiceNoteElapsed } from '@kutup/chat-core/voice-note'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
 import type { ChatLinkPreviewV1, ChatMessageExtras, ChatStickerV1 } from '@kutup/chat-core/types'
+import type { AccountRef } from '@kutup/chat-core/identity'
 import { StickerPicker } from '../stickers/StickerPicker'
 import { ComposerLinkPreview } from '../linkPreview/LinkPreviewCard'
 import { buildLinkPreview, firstPreviewableLink } from '../../lib/linkPreview'
@@ -20,8 +21,12 @@ import type { MessageView } from '../../state/views'
 
 /** Someone a group message can mention. */
 export interface MentionCandidate {
-  address: string
+  account: AccountRef
+  /** The account's key: a list key, never shown. */
+  key: string
   name: string
+  /** An address to tell members of one name apart (shown, searched); null when none is known. */
+  address: string | null
 }
 
 const TYPING_EVERY_MS = 4_000
@@ -114,7 +119,7 @@ export function Composer(props: ComposerProps) {
       ? props.members
           .filter((member) => {
             const query = mention.query.toLocaleLowerCase()
-            return member.name.toLocaleLowerCase().includes(query) || member.address.toLocaleLowerCase().startsWith(query)
+            return member.name.toLocaleLowerCase().includes(query) || Boolean(member.address?.toLocaleLowerCase().startsWith(query))
           })
           .slice(0, 6)
       : []
@@ -126,7 +131,7 @@ export function Composer(props: ComposerProps) {
     const next = insertMention(text, mention.start, element.selectionStart, label)
     pendingCaret.current = next.caret
     setText(next.text)
-    setPicks((current) => [...current, { label, member: member.address }])
+    setPicks((current) => [...current, { label, member: member.account }])
     setMention(null)
   }
 
@@ -375,7 +380,7 @@ export function Composer(props: ComposerProps) {
         >
           {matches.map((member, index) => (
             <li
-              key={member.address}
+              key={member.key}
               id={`chat-mention-${index}`}
               role="option"
               aria-selected={index === highlighted}
@@ -392,7 +397,7 @@ export function Composer(props: ComposerProps) {
             >
               <Avatar name={member.name} size={28} />
               <span className="min-w-0 flex-1 truncate">{member.name}</span>
-              {member.name !== member.address ? <span className="truncate text-xs text-muted-foreground">{member.address}</span> : null}
+              {member.address && member.name !== member.address ? <span className="truncate text-xs text-muted-foreground">{member.address}</span> : null}
             </li>
           ))}
         </ul>

@@ -3884,6 +3884,9 @@ struct ContentView {
     /// Stands where a message from the peer could not be read.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     undecryptable: bool,
+    /// The local line saying the peer's safety number changed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    safety_number_changed: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forwarded: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3914,6 +3917,7 @@ impl From<ChatContent> for ContentView {
         let sticker_removed = content.as_sticker_removed();
         let group_update = content.as_group_update();
         let undecryptable = content.is_undecryptable();
+        let safety_number_changed = content.is_safety_number_changed();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
@@ -3957,6 +3961,7 @@ impl From<ChatContent> for ContentView {
             mentions: extras.mentions,
             link_preview: extras.link_preview,
             undecryptable,
+            safety_number_changed,
             forwarded: extras.forwarded,
             view_once: extras.view_once,
             expires_after_seconds,

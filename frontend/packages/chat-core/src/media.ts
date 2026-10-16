@@ -31,8 +31,7 @@ import {
   type PreviewGenerationResultV1,
 } from '@kutup/files/mediaPreview'
 import api from '@kutup/session/client'
-import { canonicalAccountAddress } from './identity'
-import type { AccountAddress } from './types'
+import { accountKey, type AccountRef } from './identity'
 import type { ChatAttachmentDescriptorV1, ChatMediaClassV1 } from './types'
 import { encodeChatMediaPreviewV1 } from './media-preview'
 
@@ -106,20 +105,18 @@ export interface ChatMediaDeliveryResponseV1 {
  */
 export async function deliverChatMediaV1(
   descriptor: ChatAttachmentDescriptorV1,
-  recipient: AccountAddress,
+  recipient: AccountRef,
   deliveryCapability: string,
 ): Promise<ChatMediaDeliveryResponseV1> {
-  if (!recipient.server) throw new Error('Chat-media recipient has no canonical server')
-  const recipientText = canonicalAccountAddress(recipient)
   const operationId = await chatMediaDeliveryOperationId(
     descriptor.attachmentId,
-    recipientText,
+    accountKey(recipient),
   )
   const response = await api.post<ChatMediaDeliveryResponseV1>('/chat/media/deliveries', {
     version: 1,
     originDomain: descriptor.originDomain,
     destinationDomain: recipient.server,
-    recipient: recipientText,
+    recipient,
     operationId,
     attachmentId: descriptor.attachmentId,
     suite: descriptor.suite,

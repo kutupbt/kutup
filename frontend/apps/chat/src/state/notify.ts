@@ -1,5 +1,5 @@
 import { isVisibleChatMessage } from '@kutup/chat-core/disappearing'
-import { conversationKey } from '@kutup/chat-core/identity'
+import { accountKey, conversationKey } from '@kutup/chat-core/identity'
 import type { ChatHistoryEntry, ChatReactionV1 } from '@kutup/chat-core/types'
 import { isMuted, type ListState } from './accountState'
 import { messageActor, messageIdOf } from './views'
@@ -10,7 +10,7 @@ import { messageActor, messageIdOf } from './views'
 // and not in a muted chat unless the message mentions you.
 
 export interface NotifyContext {
-  selfAddress: string
+  selfKey: string
   nowMs: number
   lists: ReadonlyMap<string, ListState>
   readThrough: Readonly<Record<string, number>>
@@ -34,7 +34,7 @@ export function noticesFor(
   for (const entry of fresh) {
     if (entry.direction !== 'incoming') continue
     const key = conversationKey(entry.conversation)
-    const sender = messageActor(entry, context.selfAddress)
+    const sender = messageActor(entry, context.selfKey)
     if (!sender || context.blocked.has(sender) || key === context.focusedKey) continue
     const muted = isMuted(context.lists.get(key), context.nowMs)
     const reaction = entry.content.reaction
@@ -50,7 +50,7 @@ export function noticesFor(
     const callStart = entry.content.groupCall?.event === 'started'
     if (!callStart && !isVisibleChatMessage(entry, context.nowMs)) continue
     if (entry.timestampMs <= (context.readThrough[key] ?? 0)) continue
-    const mention = entry.content.mentions?.some((item) => item.member === context.selfAddress) ?? false
+    const mention = entry.content.mentions?.some((item) => accountKey(item.member) === context.selfKey) ?? false
     if (muted && !mention) continue
     notices.push({ kind: 'message', key, entry, sender, mention })
   }

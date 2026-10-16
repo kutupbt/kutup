@@ -63,7 +63,8 @@
       "view": "Güvenlik numarasını göster",
       "verifiedStatus": "Bu güvenlik numarasını doğruladın.",
       "changedStatus": "Güvenlik numarası değişti. Hassas bir şey paylaşmadan önce yeniden doğrula.",
-      "unverifiedStatus": "Arada kimse olmadığından emin olmak için güvenlik numarasını {{name}} ile yüz yüze ya da bir aramada karşılaştır."
+      "unverifiedStatus": "Arada kimse olmadığından emin olmak için güvenlik numarasını {{name}} ile yüz yüze ya da bir aramada karşılaştır.",
+      "changedNotice": "{{name}} ile güvenlik numaran değişti."
     },
     "groupSecurity": {
       "ownerTitle": "Sahip yetkilendirmesi",
@@ -221,7 +222,10 @@
       "capabilities": "Kutup bu sunucunun güvenli sohbet desteğini kontrol edemedi.",
       "unavailable": "Güvenli sohbet geçici olarak kullanılamıyor.",
       "invalidAddress": "Geçerli bir kullanıcı adı veya kullanıcı@sunucu adresi girin.",
-      "groupSend": "Mesaj gruba gönderilemedi. Yeniden dene."
+      "groupSend": "Mesaj gruba gönderilemedi. Yeniden dene.",
+      "notFound": "Bu adreste bir Kutup hesabı yok.",
+      "renamed": "{{address}} artık {{now}}.",
+      "lookupFailed": "Bu adres aranamadı. Yeniden dene."
     },
     "mutations": {
       "edit": "Mesajı düzenle",
@@ -287,6 +291,7 @@
       "settingDescription": "Yazarken bunu gösterin ve başkaları yazarken görün. Kapalıyken ne gönderirsiniz ne de görürsünüz."
     },
     "you": "Sen",
+    "someone": "Biri",
     "backToList": "Sohbetlere dön",
     "encryptedIntro": "Buradaki mesajlar ve dosyalar uçtan uca şifrelidir: yalnızca sohbetteki kişiler okuyabilir.",
     "nav": {

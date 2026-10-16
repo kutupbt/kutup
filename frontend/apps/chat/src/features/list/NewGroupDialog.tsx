@@ -3,7 +3,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { parseAccountAddress, parseAccountInput } from '@kutup/chat-core/identity'
+import { resolveTyped } from '../../lib/resolveAddress'
 import { MLS_GROUP_NAME_MAX_CHARS } from '@kutup/chat-core/types'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -36,15 +36,15 @@ export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
   async function create(event: FormEvent) {
     event.preventDefault()
-    const serverName = capabilities?.serverName
-    const member = serverName ? parseAccountInput(value, serverName) : parseAccountAddress(value)
-    if (!member || !service) {
-      setError(t('chat.errors.invalidAddress'))
-      return
-    }
+    if (!service) return
     setBusy(true)
     try {
-      const group = await service.createGroup(member, name.trim())
+      const member = await resolveTyped(value, capabilities?.serverName, t)
+      if ('error' in member) {
+        setError(member.error)
+        return
+      }
+      const group = await service.createGroup(member.account, name.trim())
       await refreshChat()
       close()
       toast.success(t('chat.group.created'))

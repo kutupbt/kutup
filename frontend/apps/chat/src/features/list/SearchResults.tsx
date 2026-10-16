@@ -8,6 +8,7 @@ import { foldSearchText, searchChatHistory } from '@kutup/chat-core/search'
 import { useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { conversationTitle, personName } from '../../lib/names'
+import { accountName } from '../../state/accountNames'
 import { formatShortTime } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { conversationList, foldMutations, messageIdOf } from '../../state/views'
@@ -24,24 +25,24 @@ export function SearchResults({ query }: { query: string }) {
   const profiles = useMemo(() => new Map(snapshot.profiles.map((p) => [p.peer, p])), [snapshot.profiles])
   const candidates = useSearchCandidates(query)
 
-  const all = useMemo(() => conversationList(snapshot, self.address, now), [snapshot, self.address, now])
+  const all = useMemo(() => conversationList(snapshot, self.key, now), [snapshot, self.key, now])
   const byKey = useMemo(() => new Map(all.map((c) => [c.key, c])), [all])
   const conversations = useMemo(() => {
     // Folded as messages are: "istanbul" finds "İstanbul Ekibi".
     const needle = foldSearchText(query.trim())
     if (!needle) return []
     return all.filter((item) => {
-      const title = conversationTitle(item.conversation, item.address, item.profile, self.address, t, item.groupInfo)
-      return foldSearchText(title).includes(needle) || foldSearchText(item.address ?? '').includes(needle)
+      const title = conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo)
+      return foldSearchText(title).includes(needle) || foldSearchText((item.peer && accountName(item.peer)) ?? '').includes(needle)
     })
-  }, [query, all, self.address, t])
+  }, [query, all, self.key, t])
 
   // The index proposes; edits, deletions and disappearing deadlines decide.
   const messages = useMemo(() => {
     if (!candidates) return []
     const visible = candidates.filter((m) => isVisibleChatMessage(m, now))
-    return searchChatHistory(visible, query, foldMutations(candidates, self.address)).reverse()
-  }, [query, candidates, self.address, now])
+    return searchChatHistory(visible, query, foldMutations(candidates, self.key)).reverse()
+  }, [query, candidates, self.key, now])
 
   if (conversations.length === 0 && messages.length === 0) {
     // Nothing to say before the index has answered once.
@@ -64,7 +65,7 @@ export function SearchResults({ query }: { query: string }) {
           </h2>
           <ul>
             {conversations.map((item) => {
-              const title = conversationTitle(item.conversation, item.address, item.profile, self.address, t, item.groupInfo)
+              const title = conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo)
               return (
                 <li key={item.key}>
                   <Link to={conversationPath(item.key)} className={row}>
@@ -87,8 +88,8 @@ export function SearchResults({ query }: { query: string }) {
               const key = conversationKey(message.conversation)
               const summary = byKey.get(key)
               const title = summary
-                ? conversationTitle(summary.conversation, summary.address, summary.profile, self.address, t, summary.groupInfo)
-                : conversationTitle(message.conversation, null, null, self.address, t)
+                ? conversationTitle(summary.conversation, summary.peer, summary.profile, self.key, t, summary.groupInfo)
+                : conversationTitle(message.conversation, null, null, self.key, t)
               const author = message.sender
               return (
                 <li key={message.id}>
@@ -105,7 +106,7 @@ export function SearchResults({ query }: { query: string }) {
                         </span>
                       </span>
                       <span className="line-clamp-2 text-[0.8125rem] text-muted-foreground">
-                        {message.conversation.kind === 'group' ? `${personName(author, profiles, self.address, t)}: ` : ''}
+                        {message.conversation.kind === 'group' ? `${personName(author, profiles, self.key, t)}: ` : ''}
                         {preview}
                       </span>
                     </span>

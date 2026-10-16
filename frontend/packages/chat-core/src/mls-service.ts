@@ -1,5 +1,5 @@
 import type {
-  AccountAddress,
+  AccountRef,
   AnonymousMlsDeviceEnvelope,
   AppliedInboundMlsCommit,
   AppliedInboundMlsApplication,
@@ -44,8 +44,9 @@ import type {
   WasmChatClientHandle,
 } from './types'
 import {
-  canonicalAccountAddress,
-  parseAccountAddress,
+  accountKey,
+  isAccount,
+  parseAccount,
 } from './identity'
 import { deliverChatMediaV1 } from './media'
 
@@ -133,7 +134,7 @@ export class MlsConversationService {
     private readonly transport: ChatTransportPort,
     private readonly withCryptoLock: CryptoLock,
     private readonly deviceId: number,
-    private readonly selfAddress?: AccountAddress,
+    private readonly selfAddress?: AccountRef,
   ) {}
 
   /**
@@ -142,7 +143,7 @@ export class MlsConversationService {
    * JavaScript only coordinates the resulting typed policies.
    */
   async createGroup(
-    creator: AccountAddress,
+    creator: AccountRef,
     authorityDomains: string[],
     name?: string,
   ): Promise<PreparedMlsGroupGenesis> {
@@ -226,14 +227,14 @@ export class MlsConversationService {
 
   async addMember(
     conversationId: string,
-    recipient: AccountAddress,
+    recipient: AccountRef,
   ): Promise<FinalizedMlsMembershipChange> {
     const conversation = await this.requireActiveConversation(conversationId)
       .catch(cause => { throw new MlsSendError('conversation', cause) })
     requireCanonicalAddress(recipient)
-    const canonical = canonicalAccountAddress(recipient)
+    const canonical = accountKey(recipient)
     if (conversation.currentRoster.some(
-      member => canonicalAccountAddress(member.address) === canonical,
+      member => accountKey(member.account) === canonical,
     )) {
       throw new Error('account is already an MLS group member')
     }
@@ -249,7 +250,7 @@ export class MlsConversationService {
       throw new Error('identified MLS KeyPackage claim returned no destination devices')
     }
     const nextRoster = [...conversation.currentRoster, {
-      address: recipient,
+      account: recipient,
       isAdmin: false,
     }].sort(compareMembers)
     return this.changeGroupMembership(conversationId, nextRoster, additions)
@@ -257,12 +258,12 @@ export class MlsConversationService {
 
   async removeMember(
     conversationId: string,
-    member: AccountAddress,
+    member: AccountRef,
   ): Promise<FinalizedMlsMembershipChange> {
     const conversation = await this.requireActiveConversation(conversationId)
-    const canonical = canonicalAccountAddress(requireCanonicalAddress(member))
+    const canonical = accountKey(requireCanonicalAddress(member))
     const nextRoster = conversation.currentRoster.filter(
-      current => canonicalAccountAddress(current.address) !== canonical,
+      current => accountKey(current.account) !== canonical,
     )
     if (nextRoster.length === conversation.currentRoster.length) {
       throw new Error('account is not an MLS group member')
@@ -272,14 +273,14 @@ export class MlsConversationService {
 
   async setAdministrator(
     conversationId: string,
-    member: AccountAddress,
+    member: AccountRef,
     isAdmin: boolean,
   ): Promise<FinalizedMlsMembershipChange> {
     const conversation = await this.requireActiveConversation(conversationId)
-    const canonical = canonicalAccountAddress(requireCanonicalAddress(member))
+    const canonical = accountKey(requireCanonicalAddress(member))
     let changed = false
     const nextRoster = conversation.currentRoster.map((current) => {
-      if (canonicalAccountAddress(current.address) !== canonical) return current
+      if (accountKey(current.account) !== canonical) return current
       changed = current.isAdmin !== isAdmin
       return { ...current, isAdmin }
     })
@@ -371,7 +372,7 @@ export class MlsConversationService {
     manifestDeviceIds: number[],
   ): Promise<FinalizedMlsMembershipChange[]> {
     const local = requireCanonicalAddress(this.selfAddress)
-    const localCanonical = canonicalAccountAddress(local)
+    const localCanonical = accountKey(local)
     const desired = new Set(manifestDeviceIds)
     if (
       desired.size !== manifestDeviceIds.length
@@ -395,7 +396,7 @@ export class MlsConversationService {
       validateGroupDevices(groupDevices)
       const localGroupIds = new Set(groupDevices
         .filter(device =>
-          canonicalAccountAddress(device.address) === localCanonical)
+          accountKey(device.account) === localCanonical)
         .map(device => device.deviceId))
       if (!localGroupIds.has(this.deviceId)) {
         throw new Error('local MLS state is not represented by its own group leaf')
@@ -467,7 +468,7 @@ export class MlsConversationService {
    */
   async reconcileMemberDevices(): Promise<FinalizedMlsMembershipChange[]> {
     if (!this.selfAddress) return []
-    const self = canonicalAccountAddress(this.selfAddress)
+    const self = accountKey(this.selfAddress)
     const finalized: FinalizedMlsMembershipChange[] = []
     const seen = new Set<string>()
     for (const conversation of await this.conversations()) {
@@ -485,15 +486,15 @@ export class MlsConversationService {
         continue
       }
       const leavesOf = (account: string) => groupDevices
-        .filter(device => canonicalAccountAddress(device.address) === account)
+        .filter(device => accountKey(device.account) === account)
         .map(device => device.deviceId)
       // A device that is not itself a leaf cannot commit anything.
       if (!leavesOf(self).includes(this.deviceId)) continue
       const roster = conversation.currentRoster
-        .map(member => canonicalAccountAddress(member.address))
+        .map(member => accountKey(member.account))
         .sort()
       for (const member of conversation.currentRoster) {
-        const account = canonicalAccountAddress(member.address)
+        const account = accountKey(member.account)
         if (account === self) continue
         const leaves = leavesOf(account)
         if (leaves.length === 0) continue
@@ -518,7 +519,7 @@ export class MlsConversationService {
           if (missing.length > 0) {
             const packages = await this.withCryptoLock(() =>
               this.client.fetchVerifiedIdentifiedMlsKeyPackages(
-                requireCanonicalAddress(member.address),
+                requireCanonicalAddress(member.account),
                 conversationId,
                 String(conversation.request.genesis.incarnation),
                 String(Math.floor(Date.now() / 1000)),
@@ -620,7 +621,7 @@ export class MlsConversationService {
    */
   async setOwners(
     conversationId: string,
-    owners: Array<{ address: AccountAddress; ownerId: string; publicKey: string }>,
+    owners: Array<{ account: AccountRef; ownerId: string; publicKey: string }>,
   ): Promise<FinalizedMlsOwnerChange | null> {
     const conversation = await this.requireActiveConversation(conversationId)
     if (owners.length < 1 || owners.length > MAX_MLS_GROUP_ACCOUNTS) {
@@ -628,7 +629,7 @@ export class MlsConversationService {
     }
     const byAddress = new Map<string, { ownerId: string; publicKey: string }>()
     for (const owner of owners) {
-      const address = canonicalAccountAddress(owner.address)
+      const address = accountKey(owner.account)
       if (
         byAddress.has(address)
         || !/^[0-9a-f]{64}$/.test(owner.ownerId)
@@ -639,14 +640,14 @@ export class MlsConversationService {
       byAddress.set(address, { ownerId: owner.ownerId, publicKey: owner.publicKey })
     }
     const rosterAddresses = new Set(
-      conversation.currentRoster.map(member => canonicalAccountAddress(member.address)),
+      conversation.currentRoster.map(member => accountKey(member.account)),
     )
     if ([...byAddress.keys()].some(address => !rosterAddresses.has(address))) {
       throw new Error('MLS owner candidate is not a current group member')
     }
     const nextRoster = conversation.currentRoster.map(member => ({
       ...member,
-      ownerId: byAddress.get(canonicalAccountAddress(member.address))?.ownerId,
+      ownerId: byAddress.get(accountKey(member.account))?.ownerId,
     }))
     const nextOwners = [...byAddress.values()]
       .sort((left, right) => left.ownerId.localeCompare(right.ownerId))
@@ -907,14 +908,14 @@ export class MlsConversationService {
         this.client.fetchVerifiedMlsOrderingPolicy(domain)))
     }
     const self = requireCanonicalAddress(this.selfAddress)
-    const selfCanonical = canonicalAccountAddress(self)
+    const selfCanonical = accountKey(self)
     const additions: VerifiedMlsKeyPackage[] = []
     const now = String(Math.floor(Date.now() / 1000))
     for (const member of conversation.currentRoster) {
-      const canonical = canonicalAccountAddress(requireCanonicalAddress(member.address))
+      const canonical = accountKey(requireCanonicalAddress(member.account))
       const packages = await this.withCryptoLock(() =>
         this.client.fetchVerifiedIdentifiedMlsKeyPackages(
-          member.address,
+          member.account,
           conversationId,
           String(conversation.request.genesis.incarnation),
           now,
@@ -1004,13 +1005,13 @@ export class MlsConversationService {
 
   async setOwnerRole(
     conversationId: string,
-    member: AccountAddress,
+    member: AccountRef,
     isOwner: boolean,
   ): Promise<FinalizedMlsOwnerChange | null> {
     const conversation = await this.requireActiveConversation(conversationId)
-    const canonical = canonicalAccountAddress(requireCanonicalAddress(member))
+    const canonical = accountKey(requireCanonicalAddress(member))
     const rosterMember = conversation.currentRoster.find(
-      current => canonicalAccountAddress(current.address) === canonical,
+      current => accountKey(current.account) === canonical,
     )
     if (!rosterMember) throw new Error('account is not an MLS group member')
     if (Boolean(rosterMember.ownerId) === isOwner) {
@@ -1023,22 +1024,22 @@ export class MlsConversationService {
       if (!current.ownerId) return []
       const owner = publicOwners.get(current.ownerId)
       if (!owner) throw new Error('MLS private owner mapping differs from the public owner set')
-      return [{ address: current.address, ...owner }]
+      return [{ account: current.account, ...owner }]
     })
     if (isOwner) {
       const candidate = (await this.ownerCandidates(conversationId)).find(
-        current => canonicalAccountAddress(current.account) === canonical,
+        current => accountKey(current.account) === canonical,
       )
       if (!candidate) {
         throw new Error('member must publish an authenticated MLS owner candidate first')
       }
       owners.push({
-        address: candidate.account,
+        account: candidate.account,
         ownerId: candidate.ownerId,
         publicKey: candidate.publicKey,
       })
     } else {
-      const index = owners.findIndex(owner => canonicalAccountAddress(owner.address) === canonical)
+      const index = owners.findIndex(owner => accountKey(owner.account) === canonical)
       if (index >= 0) owners.splice(index, 1)
     }
     return this.setOwners(conversationId, owners)
@@ -1121,14 +1122,10 @@ export class MlsConversationService {
   }
 
   async fetchVerifiedKeyPackages(
-    recipient: AccountAddress,
+    recipient: AccountRef,
     capability: Uint8Array,
   ): Promise<unknown[]> {
-    if (
-      !recipient.server
-      || recipient.username.length < 3
-      || capability.length !== 16
-    ) {
+    if (!isAccount(recipient) || capability.length !== 16) {
       throw new Error('anonymous MLS KeyPackage retrieval requires a canonical recipient')
     }
     return this.withCryptoLock(() =>
@@ -1219,8 +1216,8 @@ export class MlsConversationService {
     ).catch(cause => { throw new MlsSendError('encryption', cause) })
 
     for (const recipientText of entry.expectedRecipients) {
-      const recipient = parseAccountAddress(recipientText)
-      if (!recipient?.server || canonicalAccountAddress(recipient) !== recipientText) {
+      const recipient = parseAccount(recipientText)
+      if (!recipient?.server || accountKey(recipient) !== recipientText) {
         throw new MlsSendError('recipient', new Error('invalid media recipient'))
       }
       const derived = await this.withCryptoLock(() =>
@@ -1913,23 +1910,23 @@ export class MlsConversationService {
    */
   async reconcileDepartures(): Promise<void> {
     if (!this.selfAddress) return
-    const self = canonicalAccountAddress(this.selfAddress)
+    const self = accountKey(this.selfAddress)
     for (const conversation of await this.conversations()) {
       const departing = new Set(conversation.departingMembers ?? [])
       if (conversation.status !== 'active' || conversation.left || departing.size === 0) continue
       const staying = conversation.currentRoster.filter(
-        member => !departing.has(canonicalAccountAddress(member.address)),
+        member => !departing.has(accountKey(member.account)),
       )
       const remover = staying
         .filter(member => member.isAdmin)
-        .map(member => canonicalAccountAddress(member.address))
+        .map(member => accountKey(member.account))
         .sort()[0]
       if (remover !== self) continue
       for (const member of conversation.currentRoster) {
-        const address = canonicalAccountAddress(member.address)
+        const address = accountKey(member.account)
         if (!departing.has(address) || member.ownerId) continue
         try {
-          await this.removeMember(conversation.request.genesis.conversationId, member.address)
+          await this.removeMember(conversation.request.genesis.conversationId, member.account)
         } catch (error) {
           console.warn('chat: could not remove a member who left', error)
           break
@@ -2104,7 +2101,7 @@ export class MlsConversationService {
     const candidate = await this.withCryptoLock(() =>
       this.client.ensureMlsOwnerCandidate(groupId, now))
     const local = requireCanonicalAddress(this.selfAddress)
-    if (canonicalAccountAddress(candidate.account) !== canonicalAccountAddress(local)) {
+    if (accountKey(candidate.account) !== accountKey(local)) {
       throw new Error('local MLS owner candidate is bound to a different account')
     }
     const entry = await this.withCryptoLock(() =>
@@ -2214,7 +2211,7 @@ export class MlsConversationService {
     if (!this.selfAddress || conversation.status !== 'active') return
     const recipient = requireCanonicalAddress(this.selfAddress)
     if (!conversation.currentRoster.some(
-      member => canonicalAccountAddress(member.address) === canonicalAccountAddress(recipient),
+      member => accountKey(member.account) === accountKey(recipient),
     )) return
     const publicationKey =
       `${conversation.request.genesis.incarnation}:${conversation.lastFinalizedEpoch}`
@@ -2261,8 +2258,8 @@ export class MlsConversationService {
     for (const recipientText of entry.expectedRecipients) {
       const existing = entry.deliveries.find(delivery => delivery.recipient === recipientText)
       if (existing?.delivered) continue
-      const recipient = parseAccountAddress(recipientText)
-      if (!recipient?.server || canonicalAccountAddress(recipient) !== recipientText) {
+      const recipient = parseAccount(recipientText)
+      if (!recipient?.server || accountKey(recipient) !== recipientText) {
         throw new MlsSendError(
           'recipient',
           new Error('durable MLS recipient is not a canonical federated address'),
@@ -2671,7 +2668,7 @@ function hasValidInvitationReadiness(record: LocalMlsConversationRecord): boolea
     || !(record.acceptedInvitationEpochs instanceof Map)
   ) return false
   const roster = new Set(
-    record.currentRoster.map(member => canonicalAccountAddress(member.address)),
+    record.currentRoster.map(member => accountKey(member.account)),
   )
   const joined = [...record.memberJoinedEpochs.entries()]
   const accepted = [...record.acceptedInvitationEpochs.entries()]
@@ -2817,7 +2814,7 @@ function validateGroupDevices(devices: MlsConversationDevice[]): void {
   }
   let previous = ''
   for (const device of devices) {
-    const canonical = canonicalAccountAddress(requireCanonicalAddress(device.address))
+    const canonical = accountKey(requireCanonicalAddress(device.account))
     const key = `${canonical}#${String(device.deviceId).padStart(3, '0')}`
     if (
       !Number.isSafeInteger(device.deviceId)
@@ -3285,19 +3282,16 @@ function requireSafePositiveInteger(value: number, field: string): void {
   }
 }
 
-function requireCanonicalAddress(address: AccountAddress | undefined): AccountAddress {
-  if (!address?.server) throw new Error('MLS operation requires a federated account address')
-  const canonical = canonicalAccountAddress(address)
-  if (parseAccountAddress(canonical)?.server !== address.server) {
-    throw new Error('MLS account address is not canonical')
-  }
+function requireCanonicalAddress(address: AccountRef | undefined): AccountRef {
+  if (!address || !isAccount(address)) throw new Error('MLS operation requires a canonical account')
   return address
 }
 
+/** Rust's roster order: by the account's string form, compared as bytes. */
 function compareMembers(left: MlsConversationMember, right: MlsConversationMember): number {
-  return canonicalAccountAddress(left.address).localeCompare(
-    canonicalAccountAddress(right.address),
-  )
+  const a = accountKey(left.account)
+  const b = accountKey(right.account)
+  return a < b ? -1 : a > b ? 1 : 0
 }
 
 function encodeHex(bytes: number[]): string {

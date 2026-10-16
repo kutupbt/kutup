@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatContentView, ChatConversationStateV1, ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
-import { conversationKey } from '@kutup/chat-core/identity'
+import { accountKey, conversationKey } from '@kutup/chat-core/identity'
 import { DEFAULT_LIST_STATE, foldAccountState, isArchived, mergeReadMarks, nextListState } from './accountState'
 import { conversationList } from './views'
 
-const SELF = 'me@a.test'
-const bob: ConversationId = { kind: 'direct', address: { username: 'bob', server: 'a.test' } }
-const note: ConversationId = { kind: 'direct', address: { username: 'me', server: 'a.test' } }
+const SELF = 'aci:00000000-0000-4000-8000-00000000000e@a.test'
+const bob: ConversationId = { kind: 'direct', account: { server: 'a.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } }
+const note: ConversationId = { kind: 'direct', account: { server: 'a.test', accountId: '00000000-0000-4000-8000-00000000000e' } }
 const BOB = conversationKey(bob)
 
 let seq = 0
@@ -20,7 +20,7 @@ function entry(
   return {
     id: `e${seq}`,
     conversation,
-    sender: conversation.kind === 'direct' ? `${conversation.address.username}@${conversation.address.server}` : 'dan@a.test',
+    sender: conversation.kind === 'direct' ? accountKey(conversation.account) : 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@a.test',
     direction,
     senderDeviceId: 1,
     timestampMs: at,

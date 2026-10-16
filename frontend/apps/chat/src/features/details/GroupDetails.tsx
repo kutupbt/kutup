@@ -2,7 +2,9 @@ import { Crown, DoorOpen, Loader2, RefreshCw, Shield, Trash2, UserMinus, UserPlu
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { canonicalAccountAddress, parseAccountAddress, parseAccountInput } from '@kutup/chat-core/identity'
+import { accountKey, type AccountRef } from '@kutup/chat-core/identity'
+import { resolveTyped } from '../../lib/resolveAddress'
+import { accountName } from '../../state/accountNames'
 import type {
   LocalMlsConversationRecord,
   MlsAuthorityPolicyInspection,
@@ -39,7 +41,7 @@ const ACTION = { policy: 5, cryptography: 6, close: 7, recovery: 9 } as const
 export function GroupDetails({ model, group }: { model: ConversationModel; group: LocalMlsConversationRecord }) {
   const { t } = useTranslation()
   const { service, snapshot, self, capabilities } = useChat()
-  const selfAddress = self!.address
+  const selfKey = self!.key
   const contacts = useContactLookup()
   const saveContact = useSaveContact()
   const groupId = groupIdOf(group)
@@ -52,7 +54,7 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
   const [maxBytes, setMaxBytes] = useState('')
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
 
-  const me = group.currentRoster.find((m) => canonicalAccountAddress(m.address) === selfAddress)
+  const me = group.currentRoster.find((m) => accountKey(m.account) === selfKey)
   const closed = group.status === 'closed'
   const left = group.left === true
   const canManage = me?.isAdmin === true && !closed && !left
@@ -123,34 +125,34 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
         <ul className="space-y-1">
           {group.currentRoster.map((member) => (
             <MemberRow
-              key={canonicalAccountAddress(member.address)}
+              key={accountKey(member.account)}
               member={member}
-              name={personName(canonicalAccountAddress(member.address), profiles, selfAddress, t)}
-              self={canonicalAccountAddress(member.address) === selfAddress}
-              feedback={feedback.find((f) => canonicalAccountAddress(f.member) === canonicalAccountAddress(member.address))?.decision}
-              leaving={departing.has(canonicalAccountAddress(member.address))}
+              name={personName(accountKey(member.account), profiles, selfKey, t)}
+              self={accountKey(member.account) === selfKey}
+              feedback={feedback.find((f) => accountKey(f.member) === accountKey(member.account))?.decision}
+              leaving={departing.has(accountKey(member.account))}
               canManage={canManage}
               canOwn={isOwner}
               canDemote={member.isAdmin && !member.ownerId && adminCount > 1}
               busy={busy}
               onToggleAdmin={() =>
                 void run(
-                  () => service!.setGroupAdministrator(groupId, member.address, !member.isAdmin),
+                  () => service!.setGroupAdministrator(groupId, member.account, !member.isAdmin),
                   member.isAdmin ? t('chat.group.adminRemoved') : t('chat.group.adminAdded'),
                 )}
               onToggleOwner={() =>
                 void run(
-                  () => service!.setGroupOwner(groupId, member.address, !member.ownerId),
+                  () => service!.setGroupOwner(groupId, member.account, !member.ownerId),
                   t('chat.group.ownerUpdated'),
                   t('chat.group.approvalRequested'),
                 )}
-              onRemove={() => void run(() => service!.removeGroupMember(groupId, member.address), t('chat.group.memberRemoved'))}
+              onRemove={() => void run(() => service!.removeGroupMember(groupId, member.account), t('chat.group.memberRemoved'))}
               onSaveContact={
-                contacts.ready && canonicalAccountAddress(member.address) !== selfAddress && !contacts.find(canonicalAccountAddress(member.address))
+                contacts.ready && memberAddress(member) && accountKey(member.account) !== selfKey && !contacts.find(memberAddress(member))
                   ? () => {
-                      const address = canonicalAccountAddress(member.address)
-                      const name = personName(address, profiles, selfAddress, t)
-                      saveContact({ address, name: name === address ? undefined : name })
+                      const address = memberAddress(member)!
+                      const name = profiles.get(accountKey(member.account))?.displayName
+                      saveContact({ address, name })
                     }
                   : undefined
               }
@@ -291,8 +293,8 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
         open={leaving}
         onOpenChange={setLeaving}
         group={group}
-        selfAddress={selfAddress}
-        nameOf={(address) => personName(address, profiles, selfAddress, t)}
+        selfKey={selfKey}
+        nameOf={(address) => personName(address, profiles, selfKey, t)}
         busy={busy}
         onLeave={(successor) => {
           setLeaving(false)
@@ -330,9 +332,9 @@ export function GroupDetails({ model, group }: { model: ConversationModel; group
         open={adding}
         onOpenChange={setAdding}
         busy={busy}
-        onAdd={(address) =>
+        onAdd={(account) =>
           run(async () => {
-            await service!.addGroupMember(groupId, address)
+            await service!.addGroupMember(groupId, account)
             setAdding(false)
           }, t('chat.group.memberInvited'))
         }
@@ -396,7 +398,7 @@ function MemberRow({
   onSaveContact?: () => void
 }) {
   const { t } = useTranslation()
-  const address = canonicalAccountAddress(member.address)
+  const address = accountKey(member.account)
   return (
     <li className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted" data-testid={`chat-group-member-${address}`}>
       <Avatar name={self ? address : name} size={32} />
@@ -466,7 +468,8 @@ function ApprovalCard({
   onRespond: (approve: boolean) => void
 }) {
   const { t } = useTranslation()
-  const requester = canonicalAccountAddress(approval.requester)
+  const shown = (account: AccountRef) => accountName(accountKey(account)) ?? t('chat.someone')
+  const requester = shown(approval.requester)
   const kind = approval.request.proposal.actionType
   const key =
     kind === ACTION.close ? 'close' : kind === ACTION.recovery ? 'recovery' : kind === ACTION.policy ? 'policy' : kind === ACTION.cryptography ? 'cryptography' : 'owners'
@@ -476,7 +479,7 @@ function ApprovalCard({
       : key === 'cryptography'
         ? String(approval.request.nextCryptographicPolicy?.maximumApplicationPlaintextBytes ?? 0)
         : key === 'owners'
-          ? approval.request.nextRoster.filter((m) => m.ownerId).map((m) => canonicalAccountAddress(m.address)).join(', ')
+          ? approval.request.nextRoster.filter((m) => m.ownerId).map((m) => shown(m.account)).join(', ')
           : ''
   return (
     <div className="mx-6 mb-4 rounded-lg border border-primary/40 bg-accent/50 p-3" data-testid="chat-group-owner-approval">
@@ -505,34 +508,46 @@ function AddMemberDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   busy: boolean
-  onAdd: (address: { username: string; server: string }) => Promise<void>
+  onAdd: (account: AccountRef) => Promise<void>
   homeServer?: string
 }) {
   const { t } = useTranslation()
   const [value, setValue] = useState('')
-  const parsed = homeServer ? parseAccountInput(value, homeServer) : parseAccountAddress(value)
+  const [error, setError] = useState<string | undefined>()
+  const [looking, setLooking] = useState(false)
   return (
-    <Dialog open={open} onOpenChange={(next) => { onOpenChange(next); if (!next) setValue('') }}>
+    <Dialog open={open} onOpenChange={(next) => { onOpenChange(next); if (!next) { setValue(''); setError(undefined) } }}>
       <DialogContent className="sm:max-w-md">
         <form
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault()
-            if (parsed) void onAdd(parsed).then(() => setValue(''))
+            if (looking) return
+            setLooking(true)
+            void resolveTyped(value, homeServer, t)
+              .then(async (member) => {
+                if ('error' in member) {
+                  setError(member.error)
+                  return
+                }
+                await onAdd(member.account)
+                setValue('')
+              })
+              .finally(() => setLooking(false))
           }}
         >
           <DialogHeader>
             <DialogTitle>{t('chat.group.addMember')}</DialogTitle>
             <DialogDescription>{t('chat.group.addMemberDescription')}</DialogDescription>
           </DialogHeader>
-          <Field label={t('chat.group.memberAddress')}>
+          <Field label={t('chat.group.memberAddress')} error={error}>
             {(props) => (
-              <Input {...props} autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder={t('chat.username')} autoCapitalize="none" autoCorrect="off" />
+              <Input {...props} autoFocus value={value} onChange={(e) => { setValue(e.target.value); setError(undefined) }} placeholder={t('chat.username')} autoCapitalize="none" autoCorrect="off" />
             )}
           </Field>
           <DialogFooter>
-            <Button type="submit" disabled={!parsed || busy}>
-              {busy ? <Loader2 className="animate-spin" /> : null}
+            <Button type="submit" disabled={!value.trim() || busy || looking}>
+              {busy || looking ? <Loader2 className="animate-spin" /> : null}
               {t('chat.group.invite')}
             </Button>
           </DialogFooter>
@@ -552,7 +567,7 @@ function LeaveGroupDialog({
   open,
   onOpenChange,
   group,
-  selfAddress,
+  selfKey,
   nameOf,
   busy,
   onLeave,
@@ -560,14 +575,14 @@ function LeaveGroupDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   group: LocalMlsConversationRecord
-  selfAddress: string
+  selfKey: string
   nameOf: (address: string) => string
   busy: boolean
-  onLeave: (successor: MlsConversationMember['address'] | null) => void
+  onLeave: (successor: MlsConversationMember['account'] | null) => void
 }) {
   const { t } = useTranslation()
-  const me = group.currentRoster.find((m) => canonicalAccountAddress(m.address) === selfAddress)
-  const others = group.currentRoster.filter((m) => canonicalAccountAddress(m.address) !== selfAddress)
+  const me = group.currentRoster.find((m) => accountKey(m.account) === selfKey)
+  const others = group.currentRoster.filter((m) => accountKey(m.account) !== selfKey)
   const lastAdmin = me?.isAdmin === true && group.currentRoster.filter((m) => m.isAdmin).length === 1
   const [successor, setSuccessor] = useState('')
   useEffect(() => {
@@ -579,7 +594,7 @@ function LeaveGroupDialog({
       ? t('chat.group.leave.owner')
       : null
   const needsSuccessor = !blocked && lastAdmin
-  const chosen = others.find((m) => canonicalAccountAddress(m.address) === successor)
+  const chosen = others.find((m) => accountKey(m.account) === successor)
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="sm:max-w-md" data-testid="chat-group-leave-dialog">
@@ -592,7 +607,7 @@ function LeaveGroupDialog({
             <p className="text-sm">{t('chat.group.leave.chooseAdmin')}</p>
             <ul className="max-h-56 space-y-1 overflow-y-auto" role="radiogroup" aria-label={t('chat.group.leave.chooseAdmin')}>
               {others.map((member) => {
-                const address = canonicalAccountAddress(member.address)
+                const address = accountKey(member.account)
                 return (
                   <li key={address}>
                     <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted">
@@ -620,7 +635,7 @@ function LeaveGroupDialog({
             <Button
               variant="destructive"
               disabled={busy || (needsSuccessor && !chosen)}
-              onClick={() => onLeave(needsSuccessor && chosen ? chosen.address : null)}
+              onClick={() => onLeave(needsSuccessor && chosen ? chosen.account : null)}
               data-testid="chat-group-leave-confirm"
             >
               {t('chat.group.leave.action')}
@@ -630,4 +645,9 @@ function LeaveGroupDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/** An address to save a member under in the address book, once known. */
+function memberAddress(member: MlsConversationMember): string | null {
+  return accountName(accountKey(member.account))
 }

@@ -1,13 +1,28 @@
-import type { AccountAddress, ConversationId } from './types'
+import { accountKeyOf, accountOfKey, sameAccount, type AccountRef } from '@kutup/crypto/accountRef'
+import type { ConversationId } from './types'
+
+export type { AccountRef }
+export { sameAccount }
+
+// Who a chat is with is an account (docs/plans/account-ids.md): its server
+// and permanent id, Signal's ACI. An address is what a person types or
+// shares; it can change and can later belong to someone else, so it only
+// leads to an account (`resolveAddress`) and is never kept as one.
+
+/** An address as typed or shared, `username@server`: a lookup handle. */
+export interface TypedAddress {
+  username: string
+  server: string
+}
 
 const USERNAME = /^[a-z0-9_-]{3,32}$/
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
 /**
- * Parse Kutup's canonical account syntax, `username@server` (or a
- * `kutup://contact/` link to one). A bare username is not an account address.
+ * Parse an address, `username@server` (or a `kutup://contact/` link to
+ * one). A bare username is not an address.
  */
-export function parseAccountAddress(value: string): AccountAddress | null {
+export function parseAddress(value: string): TypedAddress | null {
   const trimmed = value.trim()
   let candidate = trimmed
   if (trimmed.startsWith('kutup://contact/')) {
@@ -38,33 +53,55 @@ export function parseAccountAddress(value: string): AccountAddress | null {
 
 /**
  * Read what a person typed: a full address, a contact link, or a bare
- * username, which names an account on this (home) server.
+ * username, which names an address on this (home) server.
  */
-export function parseAccountInput(value: string, homeServer: string): AccountAddress | null {
+export function parseAddressInput(value: string, homeServer: string): TypedAddress | null {
   const trimmed = value.trim()
-  return parseAccountAddress(
+  return parseAddress(
     trimmed.includes('@') || trimmed.startsWith('kutup://') ? trimmed : `${trimmed}@${homeServer}`,
   )
 }
 
-export function canonicalAccountAddress(address: AccountAddress): string {
+export function addressString(address: TypedAddress): string {
   return `${address.username}@${address.server}`
 }
 
-export function directConversation(address: AccountAddress): ConversationId {
-  return { kind: 'direct', address }
+/** A link that shares an address (what a QR code or a profile shows). */
+export function contactUri(address: TypedAddress): string {
+  return `kutup://contact/${encodeURIComponent(addressString(address))}`
+}
+
+/** An account's key, `aci:<uuid>@<server>`: store keys, routes, senders. Never shown. */
+export function accountKey(account: AccountRef): string {
+  return accountKeyOf(account)
+}
+
+/** Whether `account` is a canonical reference (lowercase id, valid server). */
+export function isAccount(account: AccountRef): boolean {
+  return parseAccount(`aci:${account.accountId}@${account.server}`) !== null
+}
+
+/** The account a key names; null for anything else, an address included. */
+export function parseAccount(value: string): AccountRef | null {
+  return accountOfKey(value)
+}
+
+export function directConversation(account: AccountRef): ConversationId {
+  return { kind: 'direct', account }
 }
 
 export function conversationKey(conversation: ConversationId): string {
   return conversation.kind === 'direct'
-    ? `direct:${canonicalAccountAddress(conversation.address)}`
+    ? `direct:${accountKeyOf(conversation.account)}`
     : `group:${conversation.groupId}`
 }
 
-export function directAddress(conversation: ConversationId): string | null {
-  return conversation.kind === 'direct' ? canonicalAccountAddress(conversation.address) : null
+/** The other account's key in a direct chat (`aci:<uuid>@<server>`); null for a group. */
+export function directKey(conversation: ConversationId): string | null {
+  return conversation.kind === 'direct' ? accountKeyOf(conversation.account) : null
 }
 
-export function contactUri(address: AccountAddress): string {
-  return `kutup://contact/${encodeURIComponent(canonicalAccountAddress(address))}`
+/** The other account of a direct chat; null for a group. */
+export function directAccount(conversation: ConversationId): AccountRef | null {
+  return conversation.kind === 'direct' ? conversation.account : null
 }

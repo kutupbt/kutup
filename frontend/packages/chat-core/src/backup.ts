@@ -152,8 +152,6 @@ export interface ChatBackupOptions {
   databaseName: string
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
-  username: string
-  serverName: string
   masterKey: Uint8Array
   deviceId: number
   history: () => Promise<ChatHistoryEntry[]>

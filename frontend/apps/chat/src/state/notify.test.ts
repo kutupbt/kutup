@@ -3,9 +3,10 @@ import { conversationKey } from '@kutup/chat-core/identity'
 import type { ChatContentView, ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
 import { DEFAULT_LIST_STATE } from './accountState'
 import { noticesFor, type NotifyContext } from './notify'
+import { parseAccount } from '@kutup/chat-core/identity'
 
-const SELF = 'me@a.test'
-const bob: ConversationId = { kind: 'direct', address: { username: 'bob', server: 'a.test' } }
+const SELF = 'aci:00000000-0000-4000-8000-00000000000e@a.test'
+const bob: ConversationId = { kind: 'direct', account: { server: 'a.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } }
 const group: ConversationId = { kind: 'group', groupId: 'g-1234567890' }
 const BOB = conversationKey(bob)
 const GROUP = conversationKey(group)
@@ -15,7 +16,7 @@ function entry(
   conversation: ConversationId,
   direction: 'incoming' | 'outgoing',
   content: Partial<ChatContentView>,
-  peer = 'bob@a.test',
+  peer = 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test',
 ): ChatHistoryEntry {
   seq += 1
   return {
@@ -33,7 +34,7 @@ function entry(
 
 function context(patch: Partial<NotifyContext> = {}): NotifyContext {
   return {
-    selfAddress: SELF,
+    selfKey: SELF,
     nowMs: 5000,
     lists: new Map(),
     readThrough: {},
@@ -55,21 +56,21 @@ describe('noticesFor', () => {
 
   it('skips blocked people, read chats and the chat in front of you', () => {
     const message = entry(bob, 'incoming', { text: 'hi' })
-    expect(noticesFor([message], [message], context({ blocked: new Set(['bob@a.test']) }))).toEqual([])
+    expect(noticesFor([message], [message], context({ blocked: new Set(['aci:00000000-0000-4000-8000-81b637d8fcd2@a.test']) }))).toEqual([])
     expect(noticesFor([message], [message], context({ readThrough: { [BOB]: message.timestampMs } }))).toEqual([])
     expect(noticesFor([message], [message], context({ focusedKey: BOB }))).toEqual([])
   })
 
   it('muted chats notify only mentions', () => {
     const lists = new Map([[GROUP, { ...DEFAULT_LIST_STATE, mutedUntilMs: 10_000 }]])
-    const plain = entry(group, 'incoming', { text: 'hello all' }, 'dan@d.test')
+    const plain = entry(group, 'incoming', { text: 'hello all' }, 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@d.test')
     const mention = entry(group, 'incoming', {
       text: '@me look',
-      mentions: [{ start: 0, length: 3, member: SELF }],
-    }, 'dan@d.test')
+      mentions: [{ start: 0, length: 3, member: parseAccount(SELF)! }],
+    }, 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@d.test')
     const notices = noticesFor([plain, mention], [plain, mention], context({ lists }))
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toMatchObject({ kind: 'message', mention: true, sender: 'dan@d.test' })
+    expect(notices[0]).toMatchObject({ kind: 'message', mention: true, sender: 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@d.test' })
   })
 
   it('notifies reactions to your own messages only', () => {
