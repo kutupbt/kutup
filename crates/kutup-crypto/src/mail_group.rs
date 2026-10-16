@@ -358,7 +358,7 @@ mod tests {
         let three = list(&b, 3, Some(&two), 3);
         let chain = [one.clone(), two.clone(), three.clone()];
         let view =
-            verify_group_key_chain(GROUP, &a.public_key, &pairs(&chain), &[handover.clone()])
+            verify_group_key_chain(GROUP, &a.public_key, &pairs(&chain), std::slice::from_ref(&handover))
                 .unwrap();
         assert_eq!(view.signers, vec![a.public_key, b.public_key]);
         assert_eq!((view.signer, view.sequence), (b.public_key, 3));
@@ -384,7 +384,7 @@ mod tests {
             GROUP,
             &a.public_key,
             &pairs(&[one.clone(), two.clone(), fork]),
-            &[handover.clone()]
+            std::slice::from_ref(&handover)
         )
         .is_err());
         // A handover signed by anyone else, for another group, or left over.

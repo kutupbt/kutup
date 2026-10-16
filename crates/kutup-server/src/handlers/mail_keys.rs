@@ -45,7 +45,7 @@ pub struct OwnMailKey {
 }
 
 /// A signed key list: canonical bytes and the authority's signature, base64.
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SignedKeyList {
     pub data: String,
@@ -592,14 +592,24 @@ pub struct MailKeyLookup {
     pub address: String,
     /// The account the address belongs to (server-asserted, as the address
     /// lookup's answer is): its server and permanent id. Absent for a shared
-    /// mailbox, whose lists this server's mail-group authority signs.
+    /// mailbox, which is no account.
     pub server: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
     /// The authority the lists must chain under, base64: the account's (a
-    /// client checks it against its pin of the account), or the server's
-    /// mail-group authority for a shared mailbox.
-    pub account_authority_public_key: String,
+    /// client checks it against its pin of the account). Absent for a
+    /// shared mailbox, whose chain names its signers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_authority_public_key: Option<String>,
+    /// A shared mailbox: its id, the first signer of its key-list chain
+    /// (base64) and the handovers between signers (base64
+    /// `GroupSignerHandoverV1`), for `mail_group::verify_group_key_chain`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_signer: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub signer_handovers: Vec<String>,
     pub keys: Vec<PublicMailKey>,
     pub key_lists: Vec<SignedKeyList>,
 }
@@ -720,7 +730,10 @@ pub(crate) async fn lookup_address(
         address: stored,
         server: state.config.chat_server_name.clone(),
         account_id: Some(account_id.to_string()),
-        account_authority_public_key: authority,
+        account_authority_public_key: Some(authority),
+        group_id: None,
+        first_signer: None,
+        signer_handovers: Vec::new(),
         keys,
         key_lists: lists
             .into_iter()
