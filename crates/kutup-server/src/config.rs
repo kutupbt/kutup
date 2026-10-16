@@ -121,9 +121,11 @@ pub struct Config {
     /// read after that: the stored mode is the only source
     /// (docs/plans/registration-codes.md).
     pub registration_mode: crate::registration::RegistrationMode,
-    /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
-    /// the server reports no groups, refuses the group routes, and the apps
-    /// show direct chats only; groups made earlier stay stored, unreachable.
+    /// Offer group chats and group calls (`CHAT_GROUPS`, default off: groups
+    /// return with the pairwise group design that replaces MLS, roadmap).
+    /// Off, the server reports no groups, refuses the group routes, and the
+    /// apps show direct chats only; groups made earlier stay stored,
+    /// unreachable.
     pub chat_groups: bool,
     /// Fetch pages for Chat link previews on behalf of this server's users
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
@@ -480,7 +482,7 @@ impl Config {
             federation_test_allow_private,
             rate_limits_relaxed,
             registration_mode,
-            chat_groups: get_env_bool("CHAT_GROUPS", true),
+            chat_groups: get_env_bool("CHAT_GROUPS", false),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
             chat_web_push_hosts: get_env(

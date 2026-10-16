@@ -169,6 +169,9 @@ jobs:
       RATE_LIMITS_RELAXED: "true"
       # Test stacks register their own accounts.
       REGISTRATION_MODE: "on"
+      # Groups are off by default (until the pairwise design); the group
+      # specs in this suite still run (36, 38, 48).
+      CHAT_GROUPS: "true"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443

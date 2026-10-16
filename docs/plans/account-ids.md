@@ -65,7 +65,7 @@ pre-wipe, nothing stored needs reading under the old layout.
 | Sealed-sender `SenderCertificate` | `sender_uuid` = address; no id | `sender_uuid` = `accountId`, plus `sender_server`; identity key as now | Signal `CertificateGenerator`: `sender_uuid` = ACI plus identity key |
 | Chat profile envelope | AAD header and HKDF info bind the address | bind `server`, `accountId` | Signal profile keys are per ACI |
 | Sealed delivery capability | HKDF salt = recipient address | salt = recipient `server`, `accountId` | as above |
-| MLS (frozen, but durable bindings): group delivery capability, anonymous-MLS AAD, roster commitment (sorted ids), owner candidate, membership delivery digest, private control roster, credential identity (`aci:<uuid>@<server>#<device>`) | addresses | account ids | Signal group membership by ACI |
+| MLS (frozen, but durable bindings): group delivery capability, anonymous-MLS AAD, roster commitment (sorted ids), owner candidate, membership delivery digest, private control roster, credential identity (`aci:<uuid>@<server>#<device>`) | addresses | not converted beyond what other formats need to build: groups are off until the pairwise design replaces MLS (docs/roadmap.md), which is keyed by account ids from the start | Signal group membership by ACI |
 | Federation delivery messages (`FederatedChatTransaction.sender/recipient`, sealed, media offer, anonymous MLS, key-package requests and bundles) | addresses | (`server`, `accountId`) | Signal routes by ServiceId (`MessageController`) |
 
 Unchanged:

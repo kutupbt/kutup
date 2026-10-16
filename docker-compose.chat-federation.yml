@@ -107,6 +107,9 @@ services:
       S3_BUCKET: kutup-federation-a
       S3_REGION: us-east-1
       APP_ENV: test
+      # Groups are off by default (until the pairwise design); this gate
+      # still exercises them.
+      CHAT_GROUPS: "true"
       SERVER_URL: http://a.test
       KUTUP_ACCOUNT_URL: http://account.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_DRIVE_URL: http://drive.a.test:${KUTUP_FED_A_PORT:-39081}
@@ -156,6 +159,9 @@ services:
       S3_BUCKET: kutup-federation-b
       S3_REGION: us-east-1
       APP_ENV: test
+      # Groups are off by default (until the pairwise design); this gate
+      # still exercises them.
+      CHAT_GROUPS: "true"
       SERVER_URL: http://b.test
       KUTUP_ACCOUNT_URL: http://account.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_DRIVE_URL: http://drive.b.test:${KUTUP_FED_B_PORT:-39082}
