@@ -73,6 +73,10 @@ name = "mail_group_share_vectors"
 required-features = ["mail"]
 
 [[test]]
+name = "group_pins_with_chains"
+required-features = ["mail"]
+
+[[test]]
 name = "mail_group_chain_vectors"
 required-features = ["mail"]
 
