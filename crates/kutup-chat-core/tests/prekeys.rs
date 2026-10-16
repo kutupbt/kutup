@@ -122,7 +122,7 @@ fn failed_upload_retries_the_exact_durable_keys_after_reopen() {
     let mut rng = test_rng();
     let mut session = block_on(Session::generate(
         db.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         2,
         &mut rng,
@@ -141,7 +141,12 @@ fn failed_upload_retries_the_exact_durable_keys_after_reopen() {
     drop(db);
 
     let reopened_db = db_file.open();
-    let reopened = block_on(Session::open(reopened_db.clone(), "alice@example.test", 1)).unwrap();
+    let reopened = block_on(Session::open(
+        reopened_db.clone(),
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+    ))
+    .unwrap();
     let mut engine = Engine::new(reopened, server.clone());
     let report = block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
 
@@ -167,7 +172,7 @@ fn the_signed_and_last_resort_pair_rotates_and_the_old_one_goes_after_retention(
     let mut rng = test_rng();
     let mut session = block_on(Session::generate(
         db.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         2,
         &mut rng,
@@ -218,7 +223,7 @@ fn a_server_that_keeps_mail_for_ever_keeps_replaced_keys_too() {
     let mut rng = test_rng();
     let mut session = block_on(Session::generate(
         db.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         2,
         &mut rng,
@@ -242,7 +247,7 @@ fn an_interrupted_rotation_publishes_the_same_pair_after_reopen() {
     let mut rng = test_rng();
     let mut session = block_on(Session::generate(
         db.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         2,
         &mut rng,
@@ -265,7 +270,12 @@ fn an_interrupted_rotation_publishes_the_same_pair_after_reopen() {
     drop(db);
 
     let reopened_db = db_file.open();
-    let reopened = block_on(Session::open(reopened_db.clone(), "alice@example.test", 1)).unwrap();
+    let reopened = block_on(Session::open(
+        reopened_db.clone(),
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+    ))
+    .unwrap();
     let mut engine = Engine::new(reopened, server.clone());
     block_on(engine.maintain_prekeys(2, 5, &mut rng)).unwrap();
     assert_eq!(

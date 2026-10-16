@@ -22,7 +22,7 @@ impl MlsClient {
         let local_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == local_address)
+            .find(|member| member.account.to_string() == local_address)
             .ok_or_else(|| {
                 ChatError::Trust("MLS invitation accepter is absent from the roster".into())
             })?;
@@ -50,8 +50,8 @@ impl MlsClient {
             .current_roster
             .iter()
             .filter_map(|member| {
-                let address = member.address.canonical();
-                if address == local_member.address.canonical() {
+                let address = member.account.to_string();
+                if address == local_member.account.to_string() {
                     return None;
                 }
                 let joined = conversation.member_joined_epochs.get(&address)?;
@@ -98,7 +98,7 @@ pub(super) fn record_invitation_acceptance(
         || !conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == sender)
+            .any(|member| member.account.to_string() == sender)
         || conversation.member_joined_epochs.get(sender) != Some(&acceptance.invited_epoch)
     {
         return Err(ChatError::Trust(

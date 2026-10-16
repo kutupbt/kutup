@@ -41,7 +41,7 @@ mod transport;
 mod wasm;
 mod wire;
 
-pub use address::ChatAddress;
+pub use address::{parse_account, ChatAddress};
 pub use call_link::{
     call_link_fragment, call_link_token_hash, new_call_link_nonce, open_joined_meeting,
     owner_call_link_host_token, owner_call_link_secret, parse_call_link_fragment,
@@ -69,7 +69,7 @@ pub use invite_link::{
     parse_invite_link_fragment, InviteLinkKeys,
 };
 pub use kutup_chat_proto::{
-    AccountAddress, ChatAttachmentDescriptorV1, ChatContent, ContactControlBody, ContactState,
+    AccountRef, ChatAttachmentDescriptorV1, ChatContent, ContactControlBody, ContactState,
     ConversationId, DeliveredEnvelope, OutgoingEnvelope, TextBody,
 };
 pub use manifest::{

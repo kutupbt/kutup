@@ -1552,7 +1552,9 @@ mod tests {
             crate::AccountAuthority::derive(&[seed; 32])
                 .unwrap()
                 .sign_manifest(
-                    "bob@chat.example",
+                    "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
+                        .parse()
+                        .unwrap(),
                     1,
                     None,
                     vec![AccountManifestDeviceV1 {
@@ -1569,8 +1571,8 @@ mod tests {
 
         fn pin(manifest: &AccountManifestV1, trust: AuthorityTrust) -> ManifestTrust {
             ManifestTrust {
-                peer: manifest.account.clone(),
-                account: manifest.account.clone(),
+                peer: manifest.account.to_string(),
+                account: manifest.account.to_string(),
                 incarnation_id: manifest.incarnation_id.clone(),
                 authority_key_id: manifest.authority_key_id.clone(),
                 self_authority_key: manifest.self_authority_key.clone(),
@@ -1588,12 +1590,12 @@ mod tests {
         let retained_manifest = manifest(3);
         let candidate_manifest = manifest(4);
         let retained_record = AccountManifestHistoryRecordV1 {
-            peer: retained_manifest.account.clone(),
+            peer: retained_manifest.account.to_string(),
             sequence: 1,
             manifest: retained_manifest.clone(),
         };
         let candidate_record = AccountManifestHistoryRecordV1 {
-            peer: candidate_manifest.account.clone(),
+            peer: candidate_manifest.account.to_string(),
             sequence: 1,
             manifest: candidate_manifest.clone(),
         };
@@ -1628,12 +1630,15 @@ mod tests {
         block_on(db.apply(&pending)).unwrap();
 
         assert_eq!(
-            block_on(db.load_manifest_trust("bob@chat.example")).unwrap(),
+            block_on(
+                db.load_manifest_trust("aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example")
+            )
+            .unwrap(),
             Some(retained)
         );
         assert_eq!(
             block_on(db.load_manifest_history(
-                "bob@chat.example",
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
                 &retained_manifest.incarnation_id,
                 1,
             ))
@@ -1642,7 +1647,7 @@ mod tests {
         );
         assert_eq!(
             block_on(db.load_manifest_history(
-                "bob@chat.example",
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
                 &candidate_manifest.incarnation_id,
                 1,
             ))

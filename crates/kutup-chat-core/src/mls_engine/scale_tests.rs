@@ -12,9 +12,12 @@ fn openmls_group_operates_with_256_accounts_and_2560_manifest_bound_leaves() {
     futures_executor::block_on(async {
         let creator_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let creator = MlsClient::new(creator_db);
-        let creator_public = creator.initialize("member0000@scale.test#1").await.unwrap();
+        let creator_public = creator
+            .initialize("aci:00000000-0000-4000-8000-000000000000@scale.test#1")
+            .await
+            .unwrap();
         let creator_credential = VerifiedMlsCredential::new(
-            "member0000@scale.test#1".into(),
+            "aci:00000000-0000-4000-8000-000000000000@scale.test#1".into(),
             creator_public.credential_public_key,
         )
         .unwrap();
@@ -28,7 +31,8 @@ fn openmls_group_operates_with_256_accounts_and_2560_manifest_bound_leaves() {
         for leaf_index in 1..V1_GROUP_LEAVES {
             let account_index = leaf_index / V1_DEVICES_PER_ACCOUNT;
             let device_id = (leaf_index % V1_DEVICES_PER_ACCOUNT) + 1;
-            let identity = format!("member{account_index:04}@scale.test#{device_id}");
+            let identity =
+                format!("aci:00000000-0000-4000-8000-{account_index:012}@scale.test#{device_id}");
             let member_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
             let member = MlsClient::new(member_db);
             let public = member.initialize(&identity).await.unwrap();

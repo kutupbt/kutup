@@ -4,8 +4,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
-    AccountAddress, AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestHistoryPageV1, AccountManifestV1, UserPreKeyBundlesResponse,
+    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
+    AccountManifestHistoryPageV1, AccountManifestV1, AccountRef, UserPreKeyBundlesResponse,
     ACCOUNT_MANIFEST_VERSION,
 };
 use serde::Serialize;
@@ -33,18 +33,22 @@ pub struct AccountAuthority {
 
 const MAX_SAFETY_QR_BYTES: usize = 1024;
 
-/// Human-verifiable binding between two canonical accounts and their stable
-/// account self-authority public keys. Both participants derive byte-for-byte
-/// identical output regardless of which side opens the comparison first.
+/// Human-verifiable binding between two accounts and their account
+/// self-authority public keys (kutup-crypto `safety_number`, Signal's
+/// fingerprint). Both participants show the same digits; each side's QR code
+/// carries its own half first, so a scan is compared with the other side's.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SafetyNumberV1 {
     pub local_account: String,
     pub peer_account: String,
-    /// Full 256-bit value rendered as sixteen lossless five-digit groups.
+    /// Twelve five-digit groups: both sides' halves, the lower first.
     pub fingerprint: String,
-    /// Versioned QR payload containing only canonical addresses and public keys.
+    /// This side's QR code: what the other side scans.
     pub qr_payload: String,
+    /// The other side's QR code: what a scan here must be.
+    #[serde(skip)]
+    peer_qr_payload: String,
     pub authority_key_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retained_authority_key_id: Option<String>,
@@ -55,13 +59,14 @@ pub struct SafetyNumberV1 {
 }
 
 impl SafetyNumberV1 {
-    /// Compare a scanned QR payload to the locally derived expectation. The QR
-    /// never adds trust on its own: only an exact pair/key binding succeeds.
+    /// Compare a scanned QR payload with the other side's, derived here. The
+    /// QR never adds trust on its own: only the exact pair of accounts and
+    /// keys succeeds.
     pub fn matches_qr_payload(&self, scanned: &str) -> bool {
         if scanned.len() > MAX_SAFETY_QR_BYTES {
             return false;
         }
-        constant_time_eq(self.qr_payload.as_bytes(), scanned.as_bytes())
+        constant_time_eq(self.peer_qr_payload.as_bytes(), scanned.as_bytes())
     }
 }
 
@@ -71,8 +76,8 @@ pub fn derive_safety_number(
     local_authority_public_key: &str,
     trust: &ManifestTrust,
 ) -> Result<SafetyNumberV1> {
-    let local = canonical_federated_account(local_account)?;
-    let peer = canonical_federated_account(&trust.account)?;
+    let local = crate::address::parse_account(local_account)?;
+    let peer = crate::address::parse_account(&trust.account)?;
     if local == peer {
         return Err(ChatError::Invalid(
             "Note to Self does not have a peer safety number".into(),
@@ -81,28 +86,24 @@ pub fn derive_safety_number(
     let local_key = decode_authority_key("local self-authority key", local_authority_public_key)?;
     let peer_key = decode_authority_key("peer self-authority key", &trust.self_authority_key)?;
     // One number for every app (kutup-crypto safety_number).
-    let shared = kutup_crypto::safety_number::derive(&local_key, &peer_key)
+    let shared = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
+        .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    let theirs = kutup_crypto::safety_number::derive(&peer, &peer_key, &local, &local_key)
         .map_err(|error| ChatError::Invalid(error.to_string()))?;
     let (fingerprint, qr_payload) = (shared.fingerprint, shared.qr_payload);
 
     Ok(SafetyNumberV1 {
-        local_account: local,
-        peer_account: peer,
+        local_account: local.to_string(),
+        peer_account: peer.to_string(),
         fingerprint,
         qr_payload,
+        peer_qr_payload: theirs.qr_payload,
         authority_key_id: trust.authority_key_id.clone(),
         retained_authority_key_id: None,
         trust: trust.trust,
         continuity_gap: trust.continuity_gap,
         quarantine_reason: trust.quarantine_reason.clone(),
     })
-}
-
-fn canonical_federated_account(value: &str) -> Result<String> {
-    let address: AccountAddress = value
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
-    Ok(address.canonical())
 }
 
 fn decode_authority_key(label: &str, value: &str) -> Result<[u8; 32]> {
@@ -149,7 +150,7 @@ impl AccountAuthority {
 
     pub fn sign_manifest(
         &self,
-        account: impl Into<String>,
+        account: AccountRef,
         sequence: u64,
         previous_hash: Option<String>,
         mut devices: Vec<AccountManifestDeviceV1>,
@@ -158,7 +159,7 @@ impl AccountAuthority {
         devices.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV1 {
             manifest_version: ACCOUNT_MANIFEST_VERSION,
-            account: account.into(),
+            account,
             incarnation_id: self.incarnation_id(),
             sequence,
             previous_hash,
@@ -210,7 +211,7 @@ pub fn verify_bundle_response(
         };
     };
     manifest.verify().map_err(ChatError::Trust)?;
-    if response.username != manifest.account {
+    if response.account != manifest.account {
         return Err(ChatError::Trust(
             "bundle routing identity does not match its account manifest".into(),
         ));
@@ -302,7 +303,7 @@ fn verify_manifest_trust(
                         .into(),
                 ));
             }
-            if prior.account != manifest.account
+            if prior.account != manifest.account.to_string()
                 || prior.drive_hpke_public_key != manifest.drive.hpke_public_key
                 || prior.drive_share_signing_public_key != manifest.drive.share_signing_public_key
             {
@@ -339,7 +340,7 @@ fn verify_manifest_trust(
 
     Ok(ManifestTrust {
         peer: expected_peer.to_string(),
-        account: manifest.account.clone(),
+        account: manifest.account.to_string(),
         incarnation_id: manifest.incarnation_id.clone(),
         authority_key_id: manifest.authority_key_id.clone(),
         self_authority_key: manifest.self_authority_key.clone(),
@@ -402,7 +403,7 @@ pub(crate) fn verify_manifest_history(
             }
             verify_manifest_trust(expected_peer, manifest, prior)?;
             let manifest_identity = (
-                manifest.account.clone(),
+                manifest.account.to_string(),
                 manifest.incarnation_id.clone(),
                 manifest.authority_key_id.clone(),
                 manifest.self_authority_key.clone(),
@@ -442,14 +443,10 @@ pub(crate) fn verify_manifest_history(
     Ok((trust, records))
 }
 
-fn match_expected_account(expected_peer: &str, authenticated_account: &str) -> Result<()> {
-    let expected: AccountAddress = expected_peer
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    let authenticated: AccountAddress = authenticated_account
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if expected != authenticated {
+fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRef) -> Result<()> {
+    let expected = crate::address::parse_account(expected_peer)
+        .map_err(|error| ChatError::Trust(error.to_string()))?;
+    if expected != *authenticated_account {
         return Err(ChatError::Trust(
             "account manifest belongs to another account".into(),
         ));
@@ -484,26 +481,34 @@ mod tests {
         let alice = AccountAuthority::derive(&[1u8; 32]).unwrap();
         let bob = AccountAuthority::derive(&[2u8; 32]).unwrap();
         let alice_view = derive_safety_number(
-            "alice@alpha.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             &alice.public_key_base64(),
-            &trust("bob@beta.example", &bob),
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
+                &bob,
+            ),
         )
         .unwrap();
         let bob_view = derive_safety_number(
-            "bob@beta.example",
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
             &bob.public_key_base64(),
-            &trust("alice@alpha.example", &alice),
+            &trust(
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
+                &alice,
+            ),
         )
         .unwrap();
 
         assert_eq!(alice_view.fingerprint, bob_view.fingerprint);
-        assert_eq!(alice_view.qr_payload, bob_view.qr_payload);
         let groups: Vec<_> = alice_view.fingerprint.split(' ').collect();
-        assert_eq!(groups.len(), 16);
+        assert_eq!(groups.len(), 12);
         assert!(groups
             .iter()
             .all(|group| group.len() == 5 && group.bytes().all(|byte| byte.is_ascii_digit())));
+        // Each side scans the other's code; its own does not match.
         assert!(alice_view.matches_qr_payload(&bob_view.qr_payload));
+        assert!(bob_view.matches_qr_payload(&alice_view.qr_payload));
+        assert!(!alice_view.matches_qr_payload(&alice_view.qr_payload));
     }
 
     #[test]
@@ -512,24 +517,33 @@ mod tests {
         let bob = AccountAuthority::derive(&[2u8; 32]).unwrap();
         let mallory = AccountAuthority::derive(&[3u8; 32]).unwrap();
         let expected = derive_safety_number(
-            "alice@alpha.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             &alice.public_key_base64(),
-            &trust("bob@beta.example", &bob),
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
+                &bob,
+            ),
         )
         .unwrap();
         let wrong = derive_safety_number(
-            "alice@alpha.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             &alice.public_key_base64(),
-            &trust("mallory@gamma.example", &mallory),
+            &trust(
+                "aci:00000000-0000-4000-8000-c0a497761b17@gamma.example",
+                &mallory,
+            ),
         )
         .unwrap();
 
         assert!(!expected.matches_qr_payload(&wrong.qr_payload));
         assert!(!expected.matches_qr_payload(&"x".repeat(MAX_SAFETY_QR_BYTES + 1)));
         assert!(derive_safety_number(
-            "alice@alpha.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             &alice.public_key_base64(),
-            &trust("alice@alpha.example", &alice),
+            &trust(
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
+                &alice
+            ),
         )
         .is_err());
     }

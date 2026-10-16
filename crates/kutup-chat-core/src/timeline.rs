@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kutup_chat_proto::content::kind;
-use kutup_chat_proto::{AccountAddress, ChatContent, ConversationId};
+use kutup_chat_proto::{ChatContent, ConversationId};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
@@ -126,10 +126,9 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 }
 
 pub(crate) fn direct(peer: &str) -> Result<ConversationId> {
-    let address = peer
-        .parse::<AccountAddress>()
+    let account = crate::address::parse_account(peer)
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
-    Ok(ConversationId::direct(address))
+    Ok(ConversationId::direct(account))
 }
 
 /// Kinds left out of the history of direct messages (as the full history
@@ -975,7 +974,7 @@ mod tests {
             incarnation: 1,
             mls_group_id: vec![1; 16],
             epoch: 1,
-            sender: "carol@a.test".into(),
+            sender: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
             sender_device_id: 1,
             outgoing: false,
             cursor: Some(ts as u64),
@@ -1046,9 +1045,11 @@ mod tests {
         let mut pending = Pending::default();
         for i in 0..700i64 {
             let ts = (i * 7919) % 1000 + 1_000;
-            pending
-                .messages
-                .push(inbox(&format!("in-{i}"), "alice@a.test", ts));
+            pending.messages.push(inbox(
+                &format!("in-{i}"),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                ts,
+            ));
         }
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
@@ -1056,7 +1057,7 @@ mod tests {
             block_on(load_directory(&db))
                 .unwrap()
                 .unwrap()
-                .conversations["direct:alice@a.test"]
+                .conversations["direct:aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"]
                 .chunks
                 .len()
                 > 2
@@ -1067,18 +1068,23 @@ mod tests {
         let mut pending = Pending::default();
         pending.sent_messages.insert(
             "out-1".into(),
-            sent("out-1", "alice@a.test", 1_500, text("hi")),
+            sent(
+                "out-1",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                1_500,
+                text("hi"),
+            ),
         );
         pending.sent_messages.insert(
             "read-1".into(),
             sent(
                 "read-1",
-                "myself@a.test",
+                "aci:00000000-0000-4000-8000-e06e309b66b3@a.test",
                 1_600,
                 control(
                     kind::READ_POSITION,
                     serde_json::json!({
-                        "conversation": {"kind": "direct", "address": {"username": "alice", "server": "a.test"}},
+                        "conversation": {"kind": "direct", "account": {"server": "a.test", "accountId": "00000000-0000-4000-8000-2bd806c97f0e"}},
                         "throughMessageId": "in-1",
                         "readThroughMs": 1_500
                     }),
@@ -1089,7 +1095,7 @@ mod tests {
             "typing-1".into(),
             sent(
                 "typing-1",
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 1_601,
                 control(kind::TYPING, serde_json::json!({"active": true})),
             ),
@@ -1101,16 +1107,21 @@ mod tests {
         }
         block_on(db.apply(&pending)).unwrap();
         let mut again = Pending::default();
-        let mut delivered = sent("out-1", "alice@a.test", 1_500, text("hi"));
+        let mut delivered = sent(
+            "out-1",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+            1_500,
+            text("hi"),
+        );
         delivered.delivered = true;
         again.sent_messages.insert("out-1".into(), delivered);
         block_on(db.apply(&again)).unwrap();
         let now = indexed(&db);
         assert_eq!(now, expected(&db));
-        let alice = &now["direct:alice@a.test"];
+        let alice = &now["direct:aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"];
         let read = alice.iter().find(|entry| entry.id == "read-1").unwrap();
         assert_eq!(read.flags & (ROUTED | VISIBLE), ROUTED, "routed, not shown");
-        let travelled = now["direct:myself@a.test"]
+        let travelled = now["direct:aci:00000000-0000-4000-8000-e06e309b66b3@a.test"]
             .iter()
             .find(|entry| entry.id == "read-1")
             .unwrap();
@@ -1137,11 +1148,12 @@ mod tests {
         block_on(db.apply(&deletes)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         let mut peer = Pending::default();
-        peer.delete_messages_for_peers.insert("alice@a.test".into());
+        peer.delete_messages_for_peers
+            .insert("aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into());
         block_on(db.apply(&peer)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         assert!(
-            !indexed(&db).contains_key("direct:myself@a.test"),
+            !indexed(&db).contains_key("direct:aci:00000000-0000-4000-8000-e06e309b66b3@a.test"),
             "an emptied conversation goes"
         );
 
@@ -1197,24 +1209,47 @@ mod tests {
             )
         };
         let mut pending = Pending::default();
-        pending
-            .sent_messages
-            .insert("t-1".into(), sent("t-1", "alice@a.test", 100, timer(30)));
-        pending
-            .sent_messages
-            .insert("t-2".into(), sent("t-2", "alice@a.test", 300, timer(60)));
-        pending.messages.push(inbox("in-1", "alice@a.test", 200));
+        pending.sent_messages.insert(
+            "t-1".into(),
+            sent(
+                "t-1",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                100,
+                timer(30),
+            ),
+        );
+        pending.sent_messages.insert(
+            "t-2".into(),
+            sent(
+                "t-2",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                300,
+                timer(60),
+            ),
+        );
+        pending.messages.push(inbox(
+            "in-1",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+            200,
+        ));
         block_on(db.apply(&pending)).unwrap();
         let header = |db: &SqliteChatDb| {
-            block_on(load_directory(db)).unwrap().unwrap().conversations["direct:alice@a.test"]
+            block_on(load_directory(db)).unwrap().unwrap().conversations
+                ["direct:aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"]
                 .clone()
         };
         assert_eq!(header(&db).timer.unwrap().id, "t-2");
 
         let mut older = Pending::default();
-        older
-            .sent_messages
-            .insert("t-0".into(), sent("t-0", "alice@a.test", 50, timer(5)));
+        older.sent_messages.insert(
+            "t-0".into(),
+            sent(
+                "t-0",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                50,
+                timer(5),
+            ),
+        );
         block_on(db.apply(&older)).unwrap();
         assert_eq!(
             header(&db).timer.unwrap().id,
@@ -1251,9 +1286,11 @@ mod tests {
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut pending = Pending::default();
         for i in 0..300i64 {
-            pending
-                .messages
-                .push(inbox(&format!("in-{i}"), "bob@a.test", 5_000 - i));
+            pending.messages.push(inbox(
+                &format!("in-{i}"),
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@a.test",
+                5_000 - i,
+            ));
         }
         // Written before the index existed: nothing indexed yet.
         block_on(db.apply(&pending)).unwrap();

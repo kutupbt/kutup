@@ -1295,8 +1295,8 @@ impl ReadPositionBody {
     }
 }
 
-/// One visible change an applied group Commit made. Members are canonical
-/// account addresses.
+/// One visible change an applied group Commit made. Members are accounts,
+/// never addresses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
 pub enum GroupUpdateChange {
@@ -1315,32 +1315,32 @@ pub enum GroupUpdateChange {
     },
     #[serde(rename_all = "camelCase")]
     MemberAdded {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     MemberRemoved {
-        member: String,
+        member: AccountRef,
     },
     /// A removal the member asked for.
     #[serde(rename_all = "camelCase")]
     MemberLeft {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     AdminGranted {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     AdminRevoked {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     OwnerAdded {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     OwnerRemoved {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     SendersChanged {

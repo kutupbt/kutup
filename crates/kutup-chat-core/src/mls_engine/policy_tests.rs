@@ -63,14 +63,19 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
         let now = crate::clock::unix_millis() / 1000;
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        let alice_public = client.initialize("alice@alpha.example#1").await.unwrap();
+        let alice_public = client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         let conversation_id = Uuid::from_u128(0xc1);
         let group_id = b"policy-group-id!";
         let prepared = client
             .prepare_group_genesis(
                 conversation_id,
                 group_id,
-                "alice@alpha.example".parse().unwrap(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 &[ordering_policy("alpha.example", &authority_signer)],
                 now,
             )
@@ -89,7 +94,10 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
         let active = client.local_conversations().await.unwrap().remove(0);
         let bob_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let bob = MlsClient::new(bob_db);
-        let bob_public = bob.initialize("bob@beta.example#1").await.unwrap();
+        let bob_public = bob
+            .initialize("aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example#1")
+            .await
+            .unwrap();
         let bob_package = bob
             .generate_key_package(1, 1, now, now + 86_400)
             .await
@@ -97,7 +105,7 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
         let bob_package = VerifiedMlsKeyPackage {
             wire: bob_package,
             credential: VerifiedMlsCredential::new(
-                "bob@beta.example#1".into(),
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example#1".into(),
                 bob_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -107,7 +115,9 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
         let next_roster = vec![
             active.current_roster[0].clone(),
             MlsConversationMemberV1 {
-                address: "bob@beta.example".parse().unwrap(),
+                account: "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example"
+                    .parse()
+                    .unwrap(),
                 is_admin: false,
                 owner_id: None,
             },
@@ -156,7 +166,7 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
         let welcome = BASE64.decode(&welcome_envelope.opaque_message).unwrap();
         let expected_roster = vec![
             VerifiedMlsCredential::new(
-                "alice@alpha.example#1".into(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1".into(),
                 alice_public.credential_public_key,
             )
             .unwrap(),
@@ -212,7 +222,10 @@ fn private_policy_changes_are_restart_safe_contiguous_and_enforced() {
         drop(db);
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        client.initialize("alice@alpha.example#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             client.pending_policy_changes().await.unwrap(),
             vec![pending.control.clone()]

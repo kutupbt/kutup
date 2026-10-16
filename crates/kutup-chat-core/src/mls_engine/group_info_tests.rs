@@ -123,7 +123,10 @@ async fn hikers() -> Pair {
     let authority_signer = SigningKey::from_bytes(&[91; 32]);
     let now = crate::clock::unix_millis() / 1000;
     let alice = MlsClient::new(Rc::new(SqliteChatDb::open_in_memory().unwrap()));
-    let alice_public = alice.initialize("alice@alpha.example#1").await.unwrap();
+    let alice_public = alice
+        .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+        .await
+        .unwrap();
     let conversation_id = Uuid::from_u128(0x91);
     let group_id = b"named-group-id!!";
 
@@ -132,7 +135,9 @@ async fn hikers() -> Pair {
         .prepare_group_genesis_with_info(
             conversation_id,
             group_id,
-            "alice@alpha.example".parse().unwrap(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                .parse()
+                .unwrap(),
             &[ordering_policy("alpha.example", &authority_signer)],
             now,
             Some(info(1, " spaced ")),
@@ -143,7 +148,9 @@ async fn hikers() -> Pair {
         .prepare_group_genesis_with_info(
             conversation_id,
             group_id,
-            "alice@alpha.example".parse().unwrap(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                .parse()
+                .unwrap(),
             &[ordering_policy("alpha.example", &authority_signer)],
             now,
             Some(info(1, "Hikers")),
@@ -168,14 +175,17 @@ async fn hikers() -> Pair {
 
     // Bob joins and learns the name from his Welcome.
     let bob = MlsClient::new(Rc::new(SqliteChatDb::open_in_memory().unwrap()));
-    let bob_public = bob.initialize("bob@beta.example#1").await.unwrap();
+    let bob_public = bob
+        .initialize("aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example#1")
+        .await
+        .unwrap();
     let bob_package = VerifiedMlsKeyPackage {
         wire: bob
             .generate_key_package(1, 1, now, now + 86_400)
             .await
             .unwrap(),
         credential: VerifiedMlsCredential::new(
-            "bob@beta.example#1".into(),
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example#1".into(),
             bob_public.credential_public_key.clone(),
         )
         .unwrap(),
@@ -184,14 +194,16 @@ async fn hikers() -> Pair {
     let roster = vec![
         active.current_roster[0].clone(),
         MlsConversationMemberV1 {
-            address: "bob@beta.example".parse().unwrap(),
+            account: "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example"
+                .parse()
+                .unwrap(),
             is_admin: false,
             owner_id: None,
         },
     ];
     let expected_roster = vec![
         VerifiedMlsCredential::new(
-            "alice@alpha.example#1".into(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1".into(),
             alice_public.credential_public_key.clone(),
         )
         .unwrap(),
@@ -379,13 +391,23 @@ fn group_information_is_named_at_creation_changed_by_its_editors_and_delivered()
             .find(|(_, update)| update.changes == expected_changes)
             .unwrap();
         assert!(alice_rename.0);
-        assert_eq!(alice_rename.1.actor, "alice@alpha.example");
+        assert_eq!(
+            alice_rename.1.actor,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                .parse::<kutup_chat_proto::AccountRef>()
+                .unwrap()
+        );
         let bob_rename = bob_notices
             .iter()
             .find(|(_, update)| update.changes == expected_changes)
             .unwrap();
         assert!(!bob_rename.0);
-        assert_eq!(bob_rename.1.actor, "alice@alpha.example");
+        assert_eq!(
+            bob_rename.1.actor,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                .parse::<kutup_chat_proto::AccountRef>()
+                .unwrap()
+        );
         // Applying the same Commit again writes nothing new.
         bob.apply_ordered_inbound_membership_commit(
             &context,
@@ -562,14 +584,18 @@ fn a_member_leaves_and_an_administrator_commits_the_removal() {
             .filter(|update| {
                 update.changes
                     == vec![kutup_chat_proto::GroupUpdateChange::MemberLeft {
-                        member: "bob@beta.example".into(),
+                        member: "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example"
+                            .parse()
+                            .unwrap(),
                     }]
             })
             .count();
         assert_eq!(bob_notices, 1, "Bob sees that he left, once");
 
         // Alice receives it.
-        let alice_address: AccountAddress = "alice@alpha.example".parse().unwrap();
+        let alice_address: AccountRef = "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+            .parse()
+            .unwrap();
         let alice_package = VerifiedMlsKeyPackage {
             wire: alice
                 .generate_key_package(1, 1, now, now + 86_400)
@@ -609,7 +635,7 @@ fn a_member_leaves_and_an_administrator_commits_the_removal() {
         let alice_record = alice.local_conversations().await.unwrap().remove(0);
         assert_eq!(
             alice_record.departing_members,
-            BTreeSet::from(["bob@beta.example".to_string()])
+            BTreeSet::from(["aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example".to_string()])
         );
 
         // Alice commits the removal; her timeline says Bob left.
@@ -650,7 +676,9 @@ fn a_member_leaves_and_an_administrator_commits_the_removal() {
         assert_eq!(
             left.changes,
             vec![kutup_chat_proto::GroupUpdateChange::MemberLeft {
-                member: "bob@beta.example".into()
+                member: "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example"
+                    .parse()
+                    .unwrap()
             }]
         );
     });

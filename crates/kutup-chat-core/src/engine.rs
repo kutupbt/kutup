@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountAddress, AccountManifestV1, AnonymousMlsKeyPackageRequestV1, ChatContent,
+    AccountManifestV1, AccountRef, AnonymousMlsKeyPackageRequestV1, ChatContent,
     ContactControlBody, ContactState, IdentifiedMlsKeyPackageRequestV1, MlsCipherSuiteId,
     MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse, SealedMessageSubmissionV1,
     SealedOutgoingEnvelopeV1, SendMessagesRequest, MLS_PROTOCOL_VERSION,
@@ -343,8 +343,14 @@ impl Engine {
         self.sealed_sender_enabled = enabled;
     }
 
+    /// This account's string form, `aci:<uuid>@<server>`: every store's key for it.
     fn canonical_self(&self) -> Result<String> {
-        Ok(self.session.user().to_owned())
+        Ok(self.self_account()?.to_string())
+    }
+
+    /// This account, as its manifest names it.
+    fn self_account(&self) -> Result<AccountRef> {
+        crate::address::parse_account(self.session.user())
     }
 
     /// Register a brand-new device end-to-end: generate keys, `POST` the
@@ -547,7 +553,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<LocalProfile> {
         let local = self.session.local_profile().await?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let remote = Rc::clone(&self.transport).fetch_own_profile().await?;
         let selected = match (local, remote) {
             (Some(local), Some(remote))
@@ -606,7 +612,7 @@ impl Engine {
             .local_profile()
             .await?
             .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let updated = crate::profile::update_local_profile(
             &current,
             crate::profile::LocalProfileUpdate {
@@ -641,7 +647,7 @@ impl Engine {
             .local_profile()
             .await?
             .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let rotated = crate::profile::rotate_local_profile(
             &current,
             self.session.device_id(),
@@ -664,7 +670,7 @@ impl Engine {
         sent_at: &str,
         rng: &mut R,
     ) -> Result<()> {
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         // A linked device may have published while this device was offline.
         // Rebase a still-pending local edit on the owner-only current row and
         // retry, while preserving rotation semantics. The exact rebased upload
@@ -866,7 +872,7 @@ impl Engine {
                 &send_id,
                 sent_at,
                 seq,
-                ContactControlBody::from(&contact),
+                ContactControlBody::try_from(&contact)?,
             );
             let user = self.session.user().to_string();
             self.send(&send_id, &user, &content, rng).await?;
@@ -912,7 +918,7 @@ impl Engine {
     ) -> Result<AccountManifestV1> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let mls_identity = format!("{canonical_self}#{}", self.session.device_id());
         let mls = crate::MlsClient::new(Rc::clone(self.session.db()))
             .initialize(&mls_identity)
@@ -980,7 +986,7 @@ impl Engine {
                 "server returned a different manifest after publication".into(),
             ));
         }
-        self.accept_current_manifest_evidence(&account, &published.manifest)
+        self.accept_current_manifest_evidence(&account.to_string(), &published.manifest)
             .await?;
         Ok(published.manifest)
     }
@@ -1007,7 +1013,7 @@ impl Engine {
             .await?
             .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
         current.verify().map_err(ChatError::Trust)?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         if current.account != canonical_self {
             return Err(ChatError::Trust(
                 "stored account manifest belongs to another account".into(),
@@ -1054,7 +1060,7 @@ impl Engine {
                 "server returned a different manifest after device revocation".into(),
             ));
         }
-        self.accept_current_manifest_evidence(&canonical_self, &published.manifest)
+        self.accept_current_manifest_evidence(&canonical_self.to_string(), &published.manifest)
             .await?;
         Ok(published.manifest)
     }
@@ -1253,7 +1259,7 @@ impl Engine {
     /// account-manifest-verified current device manifest.
     pub async fn fetch_verified_anonymous_mls_key_packages(
         &mut self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         capability: &[u8; 16],
         now_seconds: i64,
     ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
@@ -1263,7 +1269,7 @@ impl Engine {
                     .into(),
             ));
         }
-        let account = recipient.canonical();
+        let account = recipient.to_string();
         let request = AnonymousMlsKeyPackageRequestV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             recipient: recipient.clone(),
@@ -1282,7 +1288,7 @@ impl Engine {
     /// application delivery never uses this path.
     pub async fn fetch_verified_identified_mls_key_packages(
         &mut self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         conversation_id: uuid::Uuid,
         incarnation: u64,
         now_seconds: i64,
@@ -1293,7 +1299,7 @@ impl Engine {
                     .into(),
             ));
         }
-        let account = recipient.canonical();
+        let account = recipient.to_string();
         let request = IdentifiedMlsKeyPackageRequestV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             recipient: recipient.clone(),
@@ -1310,7 +1316,7 @@ impl Engine {
 
     async fn verify_mls_key_package_bundle(
         &mut self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         account: &str,
         response: MlsKeyPackageBundleV1,
         now_seconds: i64,
@@ -1903,9 +1909,9 @@ impl Engine {
                 };
             // The device a failed decryption can be repaired with: named on
             // an identified envelope, or proven by a sealed one's certificate.
-            let mut origin = envelope.sender.as_deref().and_then(|sender| {
+            let mut origin = envelope.sender.as_ref().and_then(|sender| {
                 self.session
-                    .resolve_delivered_sender(sender, envelope.sender_device_id)
+                    .resolve_delivered_sender(&sender.to_string(), envelope.sender_device_id)
                     .ok()
                     .map(|(sender, _)| (sender, envelope.sender_device_id))
             });
@@ -2632,13 +2638,8 @@ impl Engine {
             .as_slice()
             .try_into()
             .map_err(|_| ChatError::Trust("peer profile key has the wrong length".into()))?;
-        let address: kutup_chat_proto::AccountAddress =
-            peer.parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
-                    ChatError::Invalid(error.to_string())
-                })?;
-        let canonical_peer = address.canonical();
-        kutup_chat_proto::derive_delivery_capability(&profile_key, &canonical_peer)
+        let account = crate::address::parse_account(peer)?;
+        kutup_chat_proto::derive_delivery_capability(&profile_key, &account)
             .map(Some)
             .map_err(ChatError::Trust)
     }
@@ -2669,10 +2670,8 @@ impl Engine {
         envelope: &kutup_chat_proto::DeliveredEnvelope,
         inspection: &crate::session::SealedEnvelopeInspection,
     ) -> Result<libsignal_protocol::PublicKey> {
-        let sender_address: kutup_chat_proto::AccountAddress = inspection
-            .sender
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+        let sender_address = crate::address::parse_account(&inspection.sender)
+            .map_err(|error| ChatError::Trust(error.to_string()))?;
         let domain = sender_address.server.as_str();
 
         let mut manifest_identity = self
@@ -2852,23 +2851,19 @@ impl Engine {
 
 fn parse_mls_device_credential_identity(identity: &str) -> Result<(String, u32)> {
     let (account, device_id) = identity.rsplit_once('#').ok_or_else(|| {
-        ChatError::Trust("MLS credential identity must be account@server#device".into())
+        ChatError::Trust("MLS credential identity must be aci:<uuid>@<server>#<device>".into())
     })?;
-    let address: AccountAddress = account
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+    let address = crate::address::parse_account(account)
+        .map_err(|error| ChatError::Trust(error.to_string()))?;
     let device_id: u32 = device_id
         .parse()
         .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;
-    if device_id == 0
-        || device_id > 127
-        || format!("{}#{device_id}", address.canonical()) != identity
-    {
+    if device_id == 0 || device_id > 127 || format!("{address}#{device_id}") != identity {
         return Err(ChatError::Trust(
             "MLS credential identity is not canonical".into(),
         ));
     }
-    Ok((address.canonical(), device_id))
+    Ok((address.to_string(), device_id))
 }
 
 fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
@@ -2922,8 +2917,16 @@ mod tests {
             pending_upload: None,
             broadcast_pending: true,
         };
-        let first = profile_key_send_id("bob@example.test", &profile).unwrap();
-        let second = profile_key_send_id("bob@example.test", &profile).unwrap();
+        let first = profile_key_send_id(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            &profile,
+        )
+        .unwrap();
+        let second = profile_key_send_id(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            &profile,
+        )
+        .unwrap();
         let parsed = uuid::Uuid::parse_str(&first).unwrap();
 
         assert_eq!(first, second);
@@ -2931,22 +2934,32 @@ mod tests {
         assert_eq!(parsed.get_version_num(), 5);
         assert_ne!(
             first,
-            profile_key_send_id("carol@example.test", &profile).unwrap()
+            profile_key_send_id(
+                "aci:00000000-0000-4000-8000-4c26d9074c27@example.test",
+                &profile
+            )
+            .unwrap()
         );
     }
 
     #[test]
     fn mls_device_credential_identity_is_exact_and_canonical() {
         assert_eq!(
-            parse_mls_device_credential_identity("alice@example.test#127").unwrap(),
-            ("alice@example.test".into(), 127)
+            parse_mls_device_credential_identity(
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#127"
+            )
+            .unwrap(),
+            (
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test".into(),
+                127
+            )
         );
         for invalid in [
             "alice#1",
-            "alice@example.test",
-            "alice@example.test#0",
-            "alice@example.test#128",
-            "alice@example.test#01",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#0",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#128",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#01",
             "Alice@example.test#1",
             "alice@EXAMPLE.test#1",
             "alice@example.test#1#2",

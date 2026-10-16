@@ -1042,7 +1042,7 @@ pub(crate) mod bench {
                 let ts = (n as i64) * (SPAN_MS / count as i64);
                 InboxMessage {
                     id: format!("in-{n}"),
-                    peer: format!("peer{}@a.test", next() % 40),
+                    peer: format!("aci:00000000-0000-4000-8000-{:012}@a.test", next() % 40),
                     sender_device_id: 1,
                     cursor: n as u64,
                     content: content(&format!("m-{n}"), &words.join(" ")),
@@ -1217,7 +1217,7 @@ mod tests {
             incarnation: 1,
             mls_group_id: vec![1; 16],
             epoch: 1,
-            sender: "carol@a.test".into(),
+            sender: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
             sender_device_id: 1,
             outgoing: false,
             cursor: Some(ts as u64),
@@ -1347,9 +1347,9 @@ mod tests {
                 words_pool[(i as usize * 3) % 8]
             );
             let peer = if i % 2 == 0 {
-                "alice@a.test"
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"
             } else {
-                "bob@a.test"
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@a.test"
             };
             pending.messages.push(inbox(
                 &format!("in-{i}"),
@@ -1378,7 +1378,7 @@ mod tests {
             "out-1".into(),
             sent(
                 "out-1",
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 3_000,
                 text("m-out-1", "Rapor hazır"),
             ),
@@ -1387,7 +1387,7 @@ mod tests {
             "edit-1".into(),
             sent(
                 "edit-1",
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 3_001,
                 mutation("m-edit-1", "m-out-1", Some("Rapor yarın hazır")),
             ),
@@ -1396,7 +1396,7 @@ mod tests {
         let mut again = Pending::default();
         let mut delivered = sent(
             "out-1",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             3_000,
             text("m-out-1", "Rapor hazır"),
         );
@@ -1417,7 +1417,7 @@ mod tests {
         let mut pending = Pending::default();
         pending
             .delete_messages_for_peers
-            .insert("bob@a.test".into());
+            .insert("aci:00000000-0000-4000-8000-81b637d8fcd2@a.test".into());
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         assert!(!indexed(&db).values().flatten().any(|(_, id)| id == "in-1"));
@@ -1429,7 +1429,7 @@ mod tests {
         let mut pending = Pending::default();
         pending.messages.push(inbox(
             "in-1",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             1,
             text("m-1", "Merhaba dünya"),
         ));
@@ -1461,7 +1461,7 @@ mod tests {
         ] {
             pending.messages.push(inbox(
                 id,
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 ts,
                 text(&format!("m-{id}"), body),
             ));
@@ -1500,9 +1500,12 @@ mod tests {
 
         // The cache never hides a newer commit.
         let mut pending = Pending::default();
-        pending
-            .messages
-            .push(inbox("g", "alice@a.test", 7, text("m-g", "apple pie")));
+        pending.messages.push(inbox(
+            "g",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+            7,
+            text("m-g", "apple pie"),
+        ));
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(search(&db, &mut cache, "apple"), vec!["g", "e", "d"]);
     }
@@ -1515,19 +1518,19 @@ mod tests {
         let mut pending = Pending::default();
         pending.messages.push(inbox(
             "one",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             1,
             text("11111111-1111-4111-8111-111111111111", "eski metin"),
         ));
         pending.messages.push(inbox(
             "two",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             2,
             text("22222222-2222-4222-8222-222222222222", "silinecek metin"),
         ));
         pending.messages.push(inbox(
             "edit",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             3,
             mutation(
                 "33333333-3333-4333-8333-333333333333",
@@ -1537,7 +1540,7 @@ mod tests {
         ));
         pending.messages.push(inbox(
             "delete",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             4,
             mutation(
                 "44444444-4444-4444-8444-444444444444",
@@ -1583,7 +1586,7 @@ mod tests {
         for period in 0..4i64 {
             pending.messages.push(inbox(
                 &format!("old-{period}"),
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 period * BUCKET_MS + 5,
                 text(&format!("m-old-{period}"), "bir toplantı"),
             ));
@@ -1602,7 +1605,7 @@ mod tests {
         let mut pending = Pending::default();
         pending.messages.push(inbox(
             "new",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             3 * BUCKET_MS + 9,
             text("m-new", "bir toplantı daha"),
         ));
@@ -1665,7 +1668,7 @@ mod tests {
         let mut pending = Pending::default();
         pending.messages.push(inbox(
             "file",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             1,
             attachment(
                 "66666666-6666-4666-8666-666666666666",
@@ -1675,7 +1678,7 @@ mod tests {
         ));
         pending.messages.push(inbox(
             "place",
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             2,
             serde_json::to_vec(
                 &ChatContent::location_with_id(
@@ -1724,7 +1727,7 @@ mod tests {
             let word = format!("a{}{}x", letters[i / 26], letters[i % 26]);
             pending.messages.push(inbox(
                 &format!("w-{i}"),
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 i as i64,
                 text(&format!("m-w-{i}"), &word),
             ));
@@ -1769,9 +1772,12 @@ mod tests {
         let db = SqliteChatDb::open_in_memory().unwrap();
         block_on(crate::timeline::ensure_built(&db)).unwrap();
         let mut pending = Pending::default();
-        pending
-            .messages
-            .push(inbox("one", "alice@a.test", 1, text("m-1", "eski biçim")));
+        pending.messages.push(inbox(
+            "one",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+            1,
+            text("m-1", "eski biçim"),
+        ));
         block_on(db.apply(&pending)).unwrap();
 
         // As version 1 wrote it: a directory of named shards, each a map of
@@ -1833,7 +1839,7 @@ mod tests {
         for i in 0..1_000i64 {
             pending.messages.push(inbox(
                 &format!("in-{i}"),
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 i,
                 text(
                     &format!("33333333-3333-4333-8333-{i:012}"),

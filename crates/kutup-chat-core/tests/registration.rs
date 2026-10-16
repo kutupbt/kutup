@@ -72,7 +72,7 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
     let first = block_on(Engine::register(
         first_db,
         server.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         10,
         &mut OsRng.unwrap_err(),
     ));
@@ -82,7 +82,7 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
     let second = block_on(Engine::register(
         second_db.clone(),
         server.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         10,
         &mut OsRng.unwrap_err(),
     ))
@@ -108,7 +108,7 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
     let third = block_on(Engine::register(
         third_db.clone(),
         server.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         10,
         &mut OsRng.unwrap_err(),
     ))
@@ -121,7 +121,7 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
     let wrong_device = block_on(Engine::open(
         third_db,
         server.clone(),
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         8,
     ));
     assert!(matches!(

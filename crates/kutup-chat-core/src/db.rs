@@ -794,9 +794,13 @@ mod tests {
             content_digest: [3; 32],
             content: vec![4],
             ciphertext: vec![5],
-            expected_recipients: vec!["bob@example.test".into()],
+            expected_recipients: vec![
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test".into()
+            ],
             deliveries: vec![MlsOutboxDelivery {
-                recipient: "bob@example.test".into(),
+                recipient: "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+                    .parse()
+                    .unwrap(),
                 submission: vec![6],
                 attempts: 0,
                 delivered: false,
@@ -817,7 +821,7 @@ mod tests {
             incarnation: 1,
             mls_group_id: vec![2; 16],
             epoch: 1,
-            sender: "alice@example.test".into(),
+            sender: "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test".into(),
             sender_device_id: 7,
             outgoing: true,
             cursor: None,
