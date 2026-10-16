@@ -2682,6 +2682,82 @@ pub fn verify_mail_key_list(
         .map_err(|error| js_error(&format!("encode key list: {error}")))
 }
 
+/// A shared mailbox's key list, as its chain carries it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupChainListInput {
+    data: String,
+    signature: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupKeyChainViewJs {
+    first_signer: String,
+    signer: String,
+    signers: Vec<String>,
+    sequence: u64,
+    /// Each list's hash (hex), list 1's first.
+    digests: Vec<String>,
+    /// The newest list, as `verifyMailKeyList` shows one.
+    newest: SignedMailKeyListView,
+}
+
+/// Verifies a shared mailbox's whole key-list chain
+/// (`kutup_crypto::mail_group::verify_group_key_chain`): `firstSigner` and
+/// the signers as base64, `lists` as `[{ data, signature }]` (base64),
+/// `handovers` as base64 bytes.
+#[wasm_bindgen(js_name = verifyMailGroupKeyChain)]
+pub fn verify_mail_group_key_chain(
+    group_id: &str,
+    first_signer_base64: &str,
+    lists: JsValue,
+    handovers: Vec<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_group::{verify_group_key_chain, GroupSignerHandoverV1};
+    let first = public_key_32(first_signer_base64, "first signer")?;
+    let lists: Vec<GroupChainListInput> = serde_wasm_bindgen::from_value(lists)
+        .map_err(|error| js_error(&format!("key lists: {error}")))?;
+    let decoded = lists
+        .iter()
+        .map(|list| {
+            Ok((
+                decode_canonical_base64(&list.data, "key list")?,
+                decode_canonical_base64(&list.signature, "key list signature")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let pairs: Vec<(&[u8], &[u8])> = decoded
+        .iter()
+        .map(|(data, signature)| (data.as_slice(), signature.as_slice()))
+        .collect();
+    let handovers = handovers
+        .iter()
+        .map(|handover| {
+            GroupSignerHandoverV1::decode(&decode_canonical_base64(handover, "handover")?)
+                .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let view = verify_group_key_chain(group_id, &first, &pairs, &handovers)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (data, signature) = decoded.last().expect("verified: one list at least");
+    let newest = kutup_crypto::mail_key::SignedMailKeyListV1::verify(data, signature, &view.signer)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&GroupKeyChainViewJs {
+        first_signer: STANDARD.encode(view.first_signer),
+        signer: STANDARD.encode(view.signer),
+        signers: view
+            .signers
+            .iter()
+            .map(|signer| STANDARD.encode(signer))
+            .collect(),
+        sequence: view.sequence,
+        digests: view.digests.iter().map(hex::encode).collect(),
+        newest: signed_list_view(&newest),
+    })
+    .map_err(|error| js_error(&format!("encode key chain: {error}")))
+}
+
 // --- Drive identity (docs/plans/drive-identity-pins.md) ------------------------
 
 fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {

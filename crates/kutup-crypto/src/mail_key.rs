@@ -340,56 +340,54 @@ pub struct GroupShareMember<'a> {
 }
 
 fn group_share_aad(
+    domain: &[u8],
     group_id: &[u8; 16],
-    group_fingerprint: &[u8; FINGERPRINT_LEN],
+    bound: &[u8],
     member: &AccountRef,
     incarnation: &[u8; 32],
 ) -> Vec<u8> {
     let account = member.bytes();
-    let mut aad =
-        Vec::with_capacity(GROUP_SHARE_DOMAIN.len() + 16 + FINGERPRINT_LEN + account.len() + 32);
-    aad.extend_from_slice(GROUP_SHARE_DOMAIN);
+    let mut aad = Vec::with_capacity(domain.len() + 16 + bound.len() + account.len() + 32);
+    aad.extend_from_slice(domain);
     aad.extend_from_slice(group_id);
-    aad.extend_from_slice(group_fingerprint);
+    aad.extend_from_slice(bound);
     aad.extend_from_slice(&account);
     aad.extend_from_slice(incarnation);
     aad
 }
 
-/// A shared mailbox's key for one member (docs/plans/mail-groups.md, G1b;
-/// docs/plans/account-ids.md): the group's secret key sealed with HPKE to
-/// the member's account-level key (their Drive HPKE key, which their Drive
-/// key binding ties to their account id), bound to the group, the group
-/// key, the member's account and its incarnation. One level above their
-/// addresses, as Proton wraps address keys to the user key: a rename keeps
-/// the share. The bytes: version, the member's incarnation id, the HPKE
-/// encapsulated key, the ciphertext.
-pub fn seal_group_key_share(
-    group_secret_key: &[u8],
+/// A secret of a shared mailbox sealed with HPKE (`domain` as its info) to a
+/// member's account-level key, its AAD binding `domain`, the group, `bound`
+/// (what the secret is: a key's fingerprint or public key), the member's
+/// account and its incarnation. The bytes: version, the member's
+/// incarnation id, the HPKE encapsulated key, the ciphertext.
+pub(crate) fn seal_group_secret(
+    domain: &[u8],
+    secret: &[u8],
     group_id: &str,
+    bound: &[u8],
     member: &GroupShareMember<'_>,
     member_hpke_public_key: &[u8; 32],
 ) -> Result<Vec<u8>> {
-    let group_fingerprint = secret_key_fingerprint(group_secret_key)?;
     let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
     let incarnation =
         crate::named_share::parse_hex_32(member.incarnation_id, "member incarnation")?;
-    let aad = group_share_aad(&group_id, &group_fingerprint, member.account, &incarnation);
+    let aad = group_share_aad(domain, &group_id, bound, member.account, &incarnation);
     let mut hpke = crate::named_share::hpke_suite();
     let (encapsulated, ciphertext) = hpke
         .seal(
             &hpke_rs::HpkePublicKey::new(member_hpke_public_key.to_vec()),
-            GROUP_SHARE_DOMAIN,
+            domain,
             &aad,
-            group_secret_key,
+            secret,
             None,
             None,
             None,
         )
-        .map_err(|error| CryptoError::Backend(format!("group key share HPKE seal: {error}")))?;
+        .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
     if encapsulated.len() != 32 {
         return Err(CryptoError::Backend(
-            "group key share: encapsulated key length".into(),
+            "group share: encapsulated key length".into(),
         ));
     }
     let mut out = Vec::with_capacity(GROUP_SHARE_HEADER_LEN + ciphertext.len());
@@ -400,9 +398,63 @@ pub fn seal_group_key_share(
     Ok(out)
 }
 
-/// The account incarnation a group key share is sealed to (lowercase hex),
-/// read without opening it: what the server checks against the member's
-/// current keys.
+/// Opens [`seal_group_secret`]'s share for `member` with their account-level
+/// HPKE private key.
+pub(crate) fn open_group_secret(
+    domain: &[u8],
+    share: &[u8],
+    group_id: &str,
+    bound: &[u8],
+    member: &AccountRef,
+    member_hpke_private_key: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    group_key_share_incarnation(share)?;
+    let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
+    let incarnation: [u8; 32] = share[1..33].try_into().expect("32 bytes");
+    let aad = group_share_aad(domain, &group_id, bound, member, &incarnation);
+    let hpke = crate::named_share::hpke_suite();
+    Ok(Zeroizing::new(
+        hpke.open(
+            &share[33..GROUP_SHARE_HEADER_LEN],
+            &hpke_rs::HpkePrivateKey::new(member_hpke_private_key.to_vec()),
+            domain,
+            &aad,
+            &share[GROUP_SHARE_HEADER_LEN..],
+            None,
+            None,
+            None,
+        )
+        .map_err(|_| CryptoError::AuthFailed)?,
+    ))
+}
+
+/// A shared mailbox's key for one member (docs/plans/mail-groups.md, G1b;
+/// docs/plans/account-ids.md): the group's secret key sealed with HPKE to
+/// the member's account-level key (their Drive HPKE key, which their Drive
+/// key binding ties to their account id), bound to the group, the group
+/// key, the member's account and its incarnation. One level above their
+/// addresses, as Proton wraps address keys to the user key: a rename keeps
+/// the share.
+pub fn seal_group_key_share(
+    group_secret_key: &[u8],
+    group_id: &str,
+    member: &GroupShareMember<'_>,
+    member_hpke_public_key: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let group_fingerprint = secret_key_fingerprint(group_secret_key)?;
+    seal_group_secret(
+        GROUP_SHARE_DOMAIN,
+        group_secret_key,
+        group_id,
+        &group_fingerprint,
+        member,
+        member_hpke_public_key,
+    )
+}
+
+/// The account incarnation a group share (of a group key or of a group
+/// signing key) is sealed to (lowercase hex), read without opening it: what
+/// the server checks against the member's current keys.
 pub fn group_key_share_incarnation(share: &[u8]) -> Result<String> {
     if share.len() <= GROUP_SHARE_HEADER_LEN || share[0] != GROUP_SHARE_VERSION {
         return Err(CryptoError::InvalidInput("not a group key share".into()));
@@ -419,24 +471,14 @@ pub fn open_group_key_share(
     member: &AccountRef,
     member_hpke_private_key: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
-    group_key_share_incarnation(share)?;
-    let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
-    let incarnation: [u8; 32] = share[1..33].try_into().expect("32 bytes");
-    let aad = group_share_aad(&group_id, group_fingerprint, member, &incarnation);
-    let hpke = crate::named_share::hpke_suite();
-    let secret = Zeroizing::new(
-        hpke.open(
-            &share[33..GROUP_SHARE_HEADER_LEN],
-            &hpke_rs::HpkePrivateKey::new(member_hpke_private_key.to_vec()),
-            GROUP_SHARE_DOMAIN,
-            &aad,
-            &share[GROUP_SHARE_HEADER_LEN..],
-            None,
-            None,
-            None,
-        )
-        .map_err(|_| CryptoError::AuthFailed)?,
-    );
+    let secret = open_group_secret(
+        GROUP_SHARE_DOMAIN,
+        share,
+        group_id,
+        group_fingerprint,
+        member,
+        member_hpke_private_key,
+    )?;
     if secret_key_fingerprint(&secret)? != *group_fingerprint {
         return Err(CryptoError::AuthFailed);
     }

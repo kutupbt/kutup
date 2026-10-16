@@ -63,6 +63,8 @@ pub mod key_binding;
 pub mod live_location;
 pub mod local_state;
 #[cfg(feature = "mail")]
+pub mod mail_group;
+#[cfg(feature = "mail")]
 pub mod mail_key;
 pub mod mail_names;
 pub mod mail_search;

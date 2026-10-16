@@ -73,5 +73,9 @@ name = "mail_group_share_vectors"
 required-features = ["mail"]
 
 [[test]]
+name = "mail_group_chain_vectors"
+required-features = ["mail"]
+
+[[test]]
 name = "mail_pgp_gnupg"
 required-features = ["mail"]
