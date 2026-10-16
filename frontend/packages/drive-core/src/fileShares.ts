@@ -311,7 +311,8 @@ export interface FileAccess {
 }
 
 /** Someone on another server as their server describes them: their account and keys. */
-interface RemoteRecipient {
+/** An account a lookup answered for (by-address or by-id: one shape for every server). */
+interface Recipient {
   server: string
   accountId: string
   account: string
@@ -320,8 +321,8 @@ interface RemoteRecipient {
 }
 
 /** Their Drive key from their server, by their account id, still the same account incarnation. */
-async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServer' | 'recipientAccountId' | 'recipientIncarnationId'>): Promise<RemoteRecipient> {
-  const { data } = await api.get<RemoteRecipient>(`/users/by-id/${encodeURIComponent(member.recipientAccountId)}`, {
+async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServer' | 'recipientAccountId' | 'recipientIncarnationId'>): Promise<Recipient> {
+  const { data } = await api.get<Recipient>(`/users/by-id/${encodeURIComponent(member.recipientAccountId)}`, {
     params: { server: member.recipientServer },
   })
   if (data.server !== member.recipientServer || data.accountId !== member.recipientAccountId) {
@@ -331,7 +332,7 @@ async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServe
   return data
 }
 
-function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, generation: number, to: RemoteRecipient) {
+function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, generation: number, to: Recipient) {
   return sealFor(me, file.id, key, generation, {
     person: { server: to.server, accountId: to.accountId },
     accountIncarnationId: to.accountIncarnationId,
@@ -472,15 +473,6 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
 }
 
 /** Who an address leads to now (server-asserted): their account and keys. */
-interface LocalRecipient {
-  userId: string
-  server: string
-  accountId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
 export class CannotShareWithSelf extends Error {
   constructor() {
     super('a file is shared with someone else')
@@ -526,9 +518,9 @@ export function useShareFile() {
       const at = address.lastIndexOf('@')
       const server = address.slice(at + 1).toLowerCase()
       if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-      let found: LocalRecipient | RemoteRecipient
+      let found: Recipient
       try {
-        found = (await api.get<LocalRecipient | RemoteRecipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
+        found = (await api.get<Recipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
       } catch (error) {
         if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
         // A name its person left: `RecipientRenamed`, with where they are now.
@@ -536,7 +528,7 @@ export function useShareFile() {
       }
       // An account lives on the server of its address.
       if (found.server !== server) throw new RecipientNotFound()
-      const recipient = 'userId' in found && found.server === me.accountRef.server ? found : null
+      const recipient = found.server === me.accountRef.server ? found : null
       try {
         if (!recipient) {
           // An account on another Kutup server.
@@ -553,7 +545,7 @@ export function useShareFile() {
           })
           return { kind: 'federated', account: remote.account, inviteUrl: data.inviteUrl }
         }
-        if (recipient.userId === me.userId) throw new CannotShareWithSelf()
+        if (recipient.accountId === me.userId) throw new CannotShareWithSelf()
         await confirmRecipient(me, recipient.account, { driveHpkePublicKey: recipient.driveHpkePublicKey, incarnationId: recipient.accountIncarnationId }, input.identityConfirmed)
         // The owner first brings the file and its shares up to date; an editor
         // shares the key they hold (the server takes it only if it is current).
@@ -563,7 +555,7 @@ export function useShareFile() {
           accountIncarnationId: recipient.accountIncarnationId,
           drivePublicKey: recipient.driveHpkePublicKey,
         })
-        await api.post(`/files/${file.id}/share`, { recipientUserId: recipient.userId, shareEnvelope, canEdit: input.canEdit })
+        await api.post(`/files/${file.id}/share`, { recipientUserId: recipient.accountId, shareEnvelope, canEdit: input.canEdit })
         return { kind: 'local', account: recipient.account }
       } finally {
         await queryClient.invalidateQueries({ queryKey: fileAccessKey(input.file.id) })

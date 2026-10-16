@@ -187,16 +187,8 @@ export interface ShareInput {
 export type ShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
 
 /** Who an address leads to now (server-asserted): their account and keys. */
-interface LocalRecipient {
-  userId: string
-  server: string
-  accountId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
-interface RemoteRecipient {
+/** An account a lookup answered for (by-address or by-id: one shape for every server). */
+interface Recipient {
   server: string
   accountId: string
   account: string
@@ -235,9 +227,9 @@ export function useShareFolder() {
     const at = recipient.lastIndexOf('@')
     const server = recipient.slice(at + 1).toLowerCase()
     if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-    let found: LocalRecipient | RemoteRecipient
+    let found: Recipient
     try {
-      found = (await api.get<LocalRecipient | RemoteRecipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
+      found = (await api.get<Recipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
     } catch (error) {
       const status = (error as { response?: { status?: number } }).response?.status
       if (status === 404) throw new RecipientNotFound()
@@ -246,7 +238,7 @@ export function useShareFolder() {
     }
     // An account lives on the server of its address.
     if (found.server !== server) throw new RecipientNotFound()
-    if ('userId' in found && found.server === me.accountRef.server) {
+    if (found.server === me.accountRef.server) {
       const local = found
       await confirmRecipient(me, local.account, { driveHpkePublicKey: local.driveHpkePublicKey, incarnationId: local.accountIncarnationId }, input.identityConfirmed)
       const namedShareEnvelope = await seal(
@@ -254,7 +246,7 @@ export function useShareFolder() {
         { server: local.server, accountId: local.accountId },
         local.accountIncarnationId,
       )
-      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.userId, namedShareEnvelope, ...permissions })
+      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.accountId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
     }
 
