@@ -81,9 +81,9 @@ pub struct ReceiveReport {
     pub synced: Vec<String>,
     /// Mailbox ids containing authenticated linked-device contact controls.
     pub contact_synced: Vec<String>,
-    /// Canonical peers whose invisible profile-key control was processed.
+    /// Peer accounts whose invisible profile-key control was processed.
     pub profile_key_updated: Vec<String>,
-    /// Canonical peers whose encrypted server profile was refreshed.
+    /// Peer accounts whose encrypted server profile was refreshed.
     pub profiles_refreshed: Vec<String>,
     /// Mailbox ids decrypted and acknowledged without retaining plaintext
     /// because the sender is locally blocked.
@@ -130,6 +130,11 @@ pub enum ChatEvent {
     MessageSynced(Box<SentMessage>),
     MessageSent(SendSummary),
     IdentityChanged(Vec<crate::ChatAddress>),
+    /// A peer's pinned identity was quarantined for another one: its thread
+    /// has the "safety number changed" line (`peer` is the account key).
+    SafetyNumberChanged {
+        peer: String,
+    },
     InboundNeedsAttention {
         id: String,
         kind: InboundFailureKind,
@@ -274,9 +279,15 @@ impl Engine {
                 self.session.mark_authority_verified(peer).await?;
             }
             Ok(Reconcile::Quarantine) => {
-                self.session
+                let (_, changed) = self
+                    .session
                     .quarantine_authority(peer, DIFFERS_FROM_SYNCED, None)
                     .await?;
+                if changed {
+                    self.events.push_back(ChatEvent::SafetyNumberChanged {
+                        peer: peer.to_string(),
+                    });
+                }
                 return Err(ChatError::Trust(DIFFERS_FROM_SYNCED.into()));
             }
             Err(_) => return Ok(()),
@@ -1938,7 +1949,10 @@ impl Engine {
                     Err(error) => Err(error),
                 }
             } else {
-                self.session.receive_envelope(&envelope, rng).await
+                match self.validate_inbound_identified_envelope(&envelope).await {
+                    Ok(()) => self.session.receive_envelope(&envelope, rng).await,
+                    Err(error) => Err(error),
+                }
             };
             match receive_result {
                 Ok(ReceiveOutcome::Message(message)) => {
@@ -2665,6 +2679,81 @@ impl Engine {
         )
     }
 
+    /// An identified envelope is taken only from a device of the sender's
+    /// verified account manifest, as a sealed one is: the device must be in
+    /// the manifest of the authority pinned for the sender account (fetched
+    /// and verified when it is not known yet; this account's own devices are
+    /// checked against its own verified manifest), and a session-starting
+    /// message must carry that device's identity key. Otherwise a server
+    /// could start a session in a pinned person's name, or a "new own
+    /// device", with a device of its own.
+    async fn validate_inbound_identified_envelope(
+        &mut self,
+        envelope: &kutup_chat_proto::DeliveredEnvelope,
+    ) -> Result<()> {
+        let sender = envelope
+            .sender
+            .as_ref()
+            .ok_or(ChatError::MissingSender)?
+            .to_string();
+        let device_id = envelope.sender_device_id;
+        // This account's own devices: only against the manifest this device
+        // verified under its own authority, never one a server offers first.
+        if sender == self.canonical_self()? && self.session.manifest_trust(&sender).await?.is_none()
+        {
+            if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment {
+                return Ok(());
+            }
+            return Err(ChatError::Trust(
+                "this account's own manifest is not verified on this device yet".into(),
+            ));
+        }
+        let mut identity = self
+            .session
+            .manifest_identity_key(&sender, device_id)
+            .await?;
+        if identity.is_none() {
+            match self.fetch_verified_bundles(&sender).await {
+                Ok(_) => {}
+                // A development server without manifests, as for sends.
+                Err(_)
+                    if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                        && self.session.manifest_trust(&sender).await?.is_none() =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+            identity = self
+                .session
+                .manifest_identity_key(&sender, device_id)
+                .await?;
+        }
+        let Some(identity) = identity else {
+            if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                && self.session.manifest_trust(&sender).await?.is_none()
+            {
+                return Ok(());
+            }
+            return Err(ChatError::Trust(
+                "sender device is absent from the account-manifest-verified manifest".into(),
+            ));
+        };
+        if envelope.envelope_type == kutup_chat_proto::EnvelopeType::PreKey {
+            let message =
+                crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)?;
+            if let libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) = message {
+                if message.identity_key().public_key().serialize() != identity.serialize() {
+                    return Err(ChatError::Trust(
+                        "session-starting identity key differs from the signed account manifest"
+                            .into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn validate_inbound_sealed_envelope(
         &mut self,
         envelope: &kutup_chat_proto::DeliveredEnvelope,
@@ -2842,9 +2931,15 @@ impl Engine {
                 }
             }
         }
-        self.session
+        let (_, changed) = self
+            .session
             .quarantine_authority(peer, reason, pending_reset)
             .await?;
+        if changed {
+            self.events.push_back(ChatEvent::SafetyNumberChanged {
+                peer: peer.to_string(),
+            });
+        }
         Ok(())
     }
 }

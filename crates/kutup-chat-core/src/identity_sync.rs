@@ -2,12 +2,15 @@
 //!
 //! Chat keeps its own, stricter pins (the signed manifest chain, quarantine
 //! until an in-person comparison). The account also keeps one list for all of
-//! its apps (Drive, Office, Photos): the authority it met for every address,
-//! and which were compared in person. Chat reads and writes that list so an
-//! identity means the same everywhere:
+//! its apps (Drive, Office, Photos): the authority it met for every account
+//! (server and permanent account id, never an address), and which were
+//! compared in person. Chat reads and writes that list so an identity means
+//! the same everywhere:
 //!
-//! - a contact Chat meets for the first time whose address the list holds with
-//!   another authority is quarantined, not trusted on first use;
+//! - a contact Chat meets for the first time whose account the list holds
+//!   with another authority is quarantined, not trusted on first use;
+//! - an authority the list holds for another account is quarantined, never
+//!   written for this one;
 //! - an authority the list holds as verified is verified in Chat too;
 //! - an authority verified in Chat is verified in the list;
 //! - a contact the list does not know yet is added to it.

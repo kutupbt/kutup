@@ -112,7 +112,7 @@ pub(crate) struct SendAmendment<'a> {
 /// A decrypted inbound message handed up to the app.
 #[derive(Debug, Clone)]
 pub struct ReceivedMessage {
-    /// The sender device (`user`/`user@domain` + device id).
+    /// The sender device (account + device id).
     pub from: ChatAddress,
     pub content: ChatContent,
     /// The mailbox cursor (monotonic order + dedup key).
@@ -1132,8 +1132,9 @@ impl Session {
             .await
     }
 
-    /// A delivered envelope's sender: always a canonical `username@server`
-    /// address; anything else is refused before any ratchet is chosen.
+    /// A delivered envelope's sender: always an account's canonical string
+    /// form (`aci:<uuid>@<server>`); anything else is refused before any
+    /// ratchet is chosen.
     pub(crate) fn resolve_delivered_sender(
         &self,
         sender: &str,
@@ -2236,24 +2237,62 @@ impl Session {
         Ok(trust)
     }
 
+    /// Quarantines `peer`'s pinned identity and, once per change, writes the
+    /// local "safety number changed" line into its thread (true when it did).
     pub(crate) async fn quarantine_authority(
         &mut self,
         peer: &str,
         reason: &str,
         pending_reset: Option<crate::PendingAccountIdentityResetV1>,
-    ) -> Result<ManifestTrust> {
+    ) -> Result<(ManifestTrust, bool)> {
         let mut trust = self
             .manifest_trust(peer)
             .await?
             .ok_or_else(|| ChatError::Trust(format!("no authority is pinned for {peer}")))?;
+        // The line in the thread, once per change: the first quarantine of
+        // the pinned identity, and each new identity offered in its place.
+        let offered = pending_reset
+            .as_ref()
+            .map(|reset| reset.candidate.incarnation_id.clone());
+        let earlier = trust
+            .pending_reset
+            .as_ref()
+            .map(|reset| reset.candidate.incarnation_id.clone());
+        let line =
+            trust.trust != AuthorityTrust::Quarantined || (offered.is_some() && offered != earlier);
         trust.trust = AuthorityTrust::Quarantined;
         trust.quarantine_reason = Some(reason.chars().take(256).collect());
         if let Some(pending_reset) = pending_reset {
             trust.pending_reset = Some(Box::new(pending_reset));
         }
         self.store.stage_manifest_trust(trust.clone());
-        self.store.commit().await?;
-        Ok(trust)
+        if line {
+            let now = now_millis();
+            let content = ChatContent::safety_number_changed_with_id(
+                format!(
+                    "safety:{}:{}",
+                    trust.incarnation_id,
+                    offered.as_deref().unwrap_or("-")
+                ),
+                crate::clock::rfc3339(now),
+            );
+            self.store.stage_sent_message(SentMessage {
+                send_id: content.message_id.clone(),
+                peer: peer.to_string(),
+                sender_device_id: self.device_id(),
+                content: serde_json::to_vec(&content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: now,
+                delivered_at: Some(now),
+                delivered: true,
+                deduplicated: false,
+            });
+        }
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
+        Ok((trust, line))
     }
 
     pub(crate) async fn accept_authority_reset(&mut self, peer: &str) -> Result<ManifestTrust> {

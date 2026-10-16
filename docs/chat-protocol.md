@@ -172,14 +172,22 @@ history. The browser and native bindings derive the expected QR in Rust. Only
 an exact scan atomically promotes the candidate and keeps the old incarnation
 history. A network status label or blind “verify” button cannot promote trust.
 
-The shared safety encoding sorts the two raw account authority keys, encodes
-them under `kutup/safety-number/v2`, hashes with SHA-256, and renders the full
-digest as sixteen lossless five-digit groups. The QR is a versioned
-`kutup://verify/v2/…` encoding of the canonical public payload. It names no
-address, as Signal's names only the ACI and identity key: a rename keeps the
-number, and any other account under a name (a new incarnation, a new holder of
-a released name) has another authority and so another number
-(docs/plans/username-renames.md).
+The first quarantine of a pinned identity, and each new identity offered in
+its place after that, writes a local-only `safetyNumberChanged` line into the
+peer's thread (one per change; its id names the pinned and the offered
+incarnation), as Signal shows the change in the conversation. Native clients
+also get a `SafetyNumberChanged` engine event.
+
+The safety number is Signal's fingerprint (version 2 of libsignal's
+`NumericFingerprintGenerator`, 5200 iterations of SHA-512 per side): each
+side's stable id is the account's `AccountRef` bytes (server and permanent
+account id) and its identity key the raw Ed25519 account authority key; the
+two 30-digit halves show as twelve five-digit groups, the lower half first.
+The QR is `kutup://verify/v3/` and the base64url `CombinedFingerprints`
+protobuf, this side's half first, so a scan is compared with the other side's
+code. It names no address, as Signal's names only the ACI and identity key: a
+rename keeps the number, and another account under a name (a new incarnation,
+a new holder of a released name) has another authority and so another number.
 The derivation lives in `kutup-crypto` (`safety_number`), so Drive and the CLI
 show the same number.
 
@@ -187,8 +195,10 @@ Chat also keeps to the account's synced identity pins, the list Drive, Office,
 Photos and the CLI share (docs/plans/drive-identity-pins.md). Right after the
 engine accepts a contact's identity, and before anything is sealed to them:
 
-- a first-seen contact whose address the list holds with another authority is
+- a first-seen contact whose account the list holds with another authority is
   quarantined (the send fails with a trust error), not trusted on first use;
+- an authority the list holds for another account is quarantined, and never
+  written for this one;
 - an authority the list holds as verified (compared in person in another app
   or on another device) becomes `Verified` here;
 - a contact new to the list is added to it, and one verified here is written
@@ -340,6 +350,18 @@ does not consume a second set of claimed one-time KeyPackages. Stale durable
 typing outboxes are discarded after ten seconds rather than delivered late.
 The homeservers and MLS ordering authorities see only the ordinary padded
 ciphertext delivery, never the typing kind or state.
+
+### Which devices a message is taken from
+
+An identified envelope is read only when its sender device is in the
+verified signed manifest of the authority pinned for the sender account, as
+for a sealed one (whose certificate must also match it). An unknown sender's
+manifest is fetched and verified first. A session-starting (PreKey) message
+must carry that device's identity key. This account's own devices are checked
+against the manifest this device verified under its own authority, never one
+a server offers first. Otherwise a server could start a session in a pinned
+person's name, or as a "new own device" (a transcript or a contact control),
+with a device of its own. A refused envelope is kept for retry, not acked.
 
 ### Unreadable messages and session repair
 
@@ -500,7 +522,8 @@ receive path (Direct, sync transcript, MLS):
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
-local-only record of a finished call, like `groupUpdate` and `undecryptable`:
+local-only record of a finished call, like `groupUpdate`, `undecryptable` and
+`safetyNumberChanged`:
 none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
 (`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).

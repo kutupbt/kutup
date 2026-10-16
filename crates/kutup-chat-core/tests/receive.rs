@@ -13,12 +13,12 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    ChatAddress, ChatContent, ChatTransport, ContactState, Engine, EngineState, InboundFailureKind,
-    InboundState, Result, SendOutcome, Session, SqliteChatDb,
+    AccountAuthority, ChatAddress, ChatContent, ChatTransport, ContactState, Engine, EngineState,
+    InboundFailureKind, InboundState, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    AccountAddress, ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage,
-    OutgoingEnvelope, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
+    RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -30,14 +30,72 @@ fn test_rng() -> impl Rng + CryptoRng {
 }
 
 fn in_memory<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Session {
-    block_on(Session::generate(
+    let session = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
         user,
         device_id,
         10,
         rng,
     ))
-    .unwrap()
+    .unwrap();
+    publish_device(
+        user,
+        serve_bundle(session.registration().unwrap(), device_id),
+    );
+    session
+}
+
+thread_local! {
+    /// Every sender device a test made, by account: the mock server publishes
+    /// them in each account's signed manifest, as the real one would.
+    static DEVICES: RefCell<std::collections::BTreeMap<String, Vec<DevicePreKeyBundle>>> =
+        RefCell::new(std::collections::BTreeMap::new());
+}
+
+fn publish_device(user: &str, bundle: DevicePreKeyBundle) {
+    DEVICES.with(|devices| {
+        let mut devices = devices.borrow_mut();
+        let list = devices.entry(user.to_string()).or_default();
+        list.retain(|known| known.device_id != bundle.device_id);
+        list.push(bundle);
+        list.sort_by_key(|known| known.device_id);
+    });
+}
+
+/// The authority of `user`'s account in these tests.
+fn authority_of(user: &str) -> AccountAuthority {
+    let seed = user
+        .bytes()
+        .fold(7u8, |acc, b| acc.wrapping_mul(31).wrapping_add(b));
+    AccountAuthority::derive(&[seed; 32]).unwrap()
+}
+
+/// `user`'s signed manifest and bundles, from the devices a test made.
+fn published(user: &str) -> UserPreKeyBundlesResponse {
+    let devices = DEVICES.with(|devices| devices.borrow().get(user).cloned().unwrap_or_default());
+    let manifest = authority_of(user)
+        .sign_manifest(
+            user.parse().unwrap(),
+            1,
+            None,
+            devices
+                .iter()
+                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV1 {
+                    device_id: bundle.device_id,
+                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    identity_key: bundle.identity_key.clone(),
+                    registration_id: bundle.registration_id,
+                    mls: None,
+                })
+                .collect(),
+            "2026-10-15T10:00:00Z",
+        )
+        .unwrap();
+    UserPreKeyBundlesResponse {
+        account: user.parse().unwrap(),
+        devices,
+        manifest: Some(manifest),
+    }
 }
 
 fn serve_bundle(reg: &RegisterChatDeviceRequest, device_id: u32) -> DevicePreKeyBundle {
@@ -99,6 +157,9 @@ impl Drop for TempDb {
 struct Mailbox {
     inbox: RefCell<Vec<DeliveredEnvelope>>,
     acked: RefCell<Vec<String>>,
+    /// The manifest this account's device published (its own, signed with
+    /// its own authority).
+    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV1>>,
 }
 
 impl Mailbox {
@@ -115,8 +176,32 @@ impl ChatTransport for Mailbox {
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         unreachable!("receive path does not register")
     }
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
-        unreachable!("receive path does not fetch bundles")
+    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
+        // Only to verify a sender's devices before anything of theirs is read.
+        Ok(published(account))
+    }
+    async fn fetch_sync_bundles(
+        &self,
+        account: &str,
+        _current_device_id: u32,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        // What this server claims about the account's own devices.
+        Ok(published(account))
+    }
+    async fn fetch_manifest(
+        &self,
+        _account: &str,
+    ) -> Result<Option<kutup_chat_proto::AccountManifestV1>> {
+        Ok(self.own_manifest.borrow().clone())
+    }
+    async fn publish_manifest(
+        &self,
+        manifest: &kutup_chat_proto::AccountManifestV1,
+    ) -> Result<kutup_chat_proto::AccountManifestPublicationV1> {
+        *self.own_manifest.borrow_mut() = Some(manifest.clone());
+        Ok(kutup_chat_proto::AccountManifestPublicationV1 {
+            manifest: manifest.clone(),
+        })
     }
     async fn send(&self, _username: &str, _req: &SendMessagesRequest) -> Result<SendOutcome> {
         unreachable!("receive path does not send")
@@ -375,6 +460,12 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
     let mut rng = test_rng();
     let bob = in_memory(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
+    // Alice's device is real; what it sent is not.
+    let _alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         &mut rng,
     );
@@ -919,4 +1010,106 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     ))
     .unwrap();
     assert_eq!(unblocked.state, ContactState::PendingIncoming);
+}
+
+const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
+const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
+
+/// Bob's registered device in a reopenable store, and its bundle.
+fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle) {
+    let db = TempDb::new();
+    let mut bob = block_on(Session::generate(db.open(), BOB, 1, 10, rng)).unwrap();
+    let bundle = serve_bundle(bob.registration().unwrap(), 1);
+    block_on(bob.complete_registration(1)).unwrap();
+    (db, bundle)
+}
+
+/// Messages to Bob in `sender`'s name from devices nobody published for
+/// `sender`: one under device id 2, one under id 1 with another identity key.
+fn forged_from<R: Rng + CryptoRng>(
+    sender: &str,
+    bundle: &DevicePreKeyBundle,
+    rng: &mut R,
+) -> (Vec<DeliveredEnvelope>, Vec<DevicePreKeyBundle>) {
+    let bob_addr = ChatAddress::from_sender(BOB, 1).unwrap();
+    let mut envelopes = Vec::new();
+    let mut devices = Vec::new();
+    for (device, cursor) in [(2u32, 1u64), (1, 2)] {
+        let mut mallory = block_on(Session::generate(
+            Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+            sender,
+            device,
+            10,
+            rng,
+        ))
+        .unwrap();
+        devices.push(serve_bundle(mallory.registration().unwrap(), device));
+        block_on(mallory.establish(&bob_addr, bundle, rng)).unwrap();
+        let env = block_on(mallory.encrypt(
+            &bob_addr,
+            bundle.registration_id,
+            &ChatContent::text_with_id("forged", "t", 1, "it is me"),
+            rng,
+        ))
+        .unwrap();
+        let mut delivered = deliver(&env, sender, &format!("forged-{cursor}"), cursor);
+        delivered.sender_device_id = device;
+        envelopes.push(delivered);
+    }
+    (envelopes, devices)
+}
+
+/// A server sending in a pinned person's name from a device of its own:
+/// refused like a sealed envelope from outside the manifest, never a new
+/// session, and kept for retry.
+#[test]
+fn an_identified_message_is_taken_only_from_a_device_of_the_senders_manifest() {
+    let mut rng = test_rng();
+    let (bob_db, bundle) = bob_device(&mut rng);
+    // Alice's real device 1 is in her manifest.
+    let _alice = in_memory(ALICE, 1, &mut rng);
+    let server = Rc::new(Mailbox::default());
+    server.deposit(forged_from(ALICE, &bundle, &mut rng).0);
+    let mut engine = block_on(Engine::open(bob_db.open(), server.clone(), BOB, 1)).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(
+        report.messages.is_empty(),
+        "nothing in Alice's name from devices outside her manifest"
+    );
+    assert_eq!(report.errors.len(), 2);
+    assert!(server.acked().is_empty());
+}
+
+/// A "new own device" the server made up: before this device verified its
+/// own manifest nothing in this account's name is taken; afterwards only
+/// devices of that manifest are, and a server-offered manifest under
+/// another authority does not add any.
+#[test]
+fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manifest() {
+    let mut rng = test_rng();
+    let (bob_db, bundle) = bob_device(&mut rng);
+    let server = Rc::new(Mailbox::default());
+    let (forged, devices) = forged_from(BOB, &bundle, &mut rng);
+    // The server lists Bob's device and a forged one in a manifest under an
+    // authority of its own.
+    publish_device(BOB, bundle.clone());
+    publish_device(BOB, devices[0].clone());
+
+    // No own manifest verified here yet.
+    server.deposit(forged.clone());
+    let mut engine = block_on(Engine::open(bob_db.open(), server.clone(), BOB, 1)).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    assert_eq!(report.errors.len(), 2);
+    assert!(server.acked().is_empty());
+
+    // Bob's own manifest under his own authority: device 1 only.
+    let authority = AccountAuthority::derive(&[42u8; 32]).unwrap();
+    block_on(engine.sync_own_manifest(&authority, "2026-10-16T10:00:00Z")).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(
+        report.messages.is_empty(),
+        "nothing from devices outside Bob's own verified manifest"
+    );
+    assert!(server.acked().is_empty());
 }

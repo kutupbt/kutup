@@ -31,8 +31,6 @@ pub struct AccountAuthority {
     identity: kutup_crypto::identity::AccountIdentityKeysV1,
 }
 
-const MAX_SAFETY_QR_BYTES: usize = 1024;
-
 /// Human-verifiable binding between two accounts and their account
 /// self-authority public keys (kutup-crypto `safety_number`, Signal's
 /// fingerprint). Both participants show the same digits; each side's QR code
@@ -46,9 +44,10 @@ pub struct SafetyNumberV1 {
     pub fingerprint: String,
     /// This side's QR code: what the other side scans.
     pub qr_payload: String,
-    /// The other side's QR code: what a scan here must be.
+    /// The derivation, which knows the other side's QR code: what a scan
+    /// here must be.
     #[serde(skip)]
-    peer_qr_payload: String,
+    derived: kutup_crypto::safety_number::SafetyNumberV3,
     pub authority_key_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retained_authority_key_id: Option<String>,
@@ -63,10 +62,7 @@ impl SafetyNumberV1 {
     /// QR never adds trust on its own: only the exact pair of accounts and
     /// keys succeeds.
     pub fn matches_qr_payload(&self, scanned: &str) -> bool {
-        if scanned.len() > MAX_SAFETY_QR_BYTES {
-            return false;
-        }
-        constant_time_eq(self.peer_qr_payload.as_bytes(), scanned.as_bytes())
+        kutup_crypto::safety_number::matches_qr_payload(&self.derived, scanned)
     }
 }
 
@@ -86,18 +82,15 @@ pub fn derive_safety_number(
     let local_key = decode_authority_key("local self-authority key", local_authority_public_key)?;
     let peer_key = decode_authority_key("peer self-authority key", &trust.self_authority_key)?;
     // One number for every app (kutup-crypto safety_number).
-    let shared = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
+    let derived = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
         .map_err(|error| ChatError::Invalid(error.to_string()))?;
-    let theirs = kutup_crypto::safety_number::derive(&peer, &peer_key, &local, &local_key)
-        .map_err(|error| ChatError::Invalid(error.to_string()))?;
-    let (fingerprint, qr_payload) = (shared.fingerprint, shared.qr_payload);
 
     Ok(SafetyNumberV1 {
         local_account: local.to_string(),
         peer_account: peer.to_string(),
-        fingerprint,
-        qr_payload,
-        peer_qr_payload: theirs.qr_payload,
+        fingerprint: derived.fingerprint.clone(),
+        qr_payload: derived.qr_payload.clone(),
+        derived,
         authority_key_id: trust.authority_key_id.clone(),
         retained_authority_key_id: None,
         trust: trust.trust,
@@ -118,15 +111,6 @@ fn decode_authority_key(label: &str, value: &str) -> Result<[u8; 32]> {
     decoded
         .try_into()
         .map_err(|_| ChatError::Trust(format!("{label} must be 32 bytes")))
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    let mut difference = left.len() ^ right.len();
-    let common = left.len().min(right.len());
-    for index in 0..common {
-        difference |= usize::from(left[index] ^ right[index]);
-    }
-    difference == 0
 }
 
 impl AccountAuthority {
@@ -536,7 +520,8 @@ mod tests {
         .unwrap();
 
         assert!(!expected.matches_qr_payload(&wrong.qr_payload));
-        assert!(!expected.matches_qr_payload(&"x".repeat(MAX_SAFETY_QR_BYTES + 1)));
+        assert!(!expected
+            .matches_qr_payload(&"x".repeat(kutup_crypto::safety_number::MAX_QR_BYTES + 1)));
         assert!(derive_safety_number(
             "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             &alice.public_key_base64(),

@@ -991,6 +991,14 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
     .unwrap();
     assert_eq!(quarantined.trust, AuthorityTrust::Quarantined);
     assert_eq!(quarantined.authority_key_id, new_manifest.authority_key_id);
+    // The thread says so once, however often the new identity is met.
+    assert_eq!(
+        safety_lines(
+            &reopened,
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+        ),
+        1
+    );
     assert_eq!(
         quarantined.retained_authority_key_id.as_deref(),
         Some(old_manifest.authority_key_id.as_str())
@@ -3218,4 +3226,29 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     ))
     .unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Quarantined);
+    assert_eq!(
+        safety_lines(
+            &alice,
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+        ),
+        1
+    );
+    assert!(alice.take_events().iter().any(|event| matches!(
+        event,
+        kutup_chat_core::ChatEvent::SafetyNumberChanged { peer }
+            if peer == "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+    )));
+}
+
+/// The "safety number changed" lines in `peer`'s thread.
+fn safety_lines(engine: &Engine, peer: &str) -> usize {
+    block_on(engine.session().sent_history())
+        .unwrap()
+        .iter()
+        .filter(|message| message.peer == peer)
+        .filter(|message| {
+            serde_json::from_slice::<ChatContent>(&message.content)
+                .is_ok_and(|content| content.is_safety_number_changed())
+        })
+        .count()
 }

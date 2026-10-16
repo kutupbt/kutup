@@ -104,6 +104,10 @@ pub mod kind {
     /// A message from the peer arrived but could not be read; written by this
     /// device's engine in its place. Never travels. [IMPL]
     pub const UNDECRYPTABLE: &str = "undecryptable";
+    /// The peer's safety number changed (another account authority or
+    /// incarnation than the one pinned): the line in the thread, written by
+    /// this device's engine once per change. Never travels. [IMPL]
+    pub const SAFETY_NUMBER_CHANGED: &str = "safetyNumberChanged";
     /// A message sent once more, at the request of a device that could not
     /// read it, wrapped whole. [IMPL]
     pub const RESEND: &str = "resend";
@@ -590,6 +594,29 @@ impl ChatContent {
             .insert(DEVICE_LIST_VERSION_FIELD.to_string(), version.into());
     }
 
+    /// The local line saying the peer's safety number changed.
+    pub fn safety_number_changed_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::SAFETY_NUMBER_CHANGED.to_string(),
+            sent_at: sent_at.into(),
+            seq: 0,
+            message_id: message_id.into(),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::Value::Object(serde_json::Map::new()),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    pub fn is_safety_number_changed(&self) -> bool {
+        self.kind == kind::SAFETY_NUMBER_CHANGED && self.v == Self::VERSION
+    }
+
     pub fn is_undecryptable(&self) -> bool {
         self.kind == kind::UNDECRYPTABLE && self.v == Self::VERSION
     }
@@ -885,7 +912,10 @@ impl ChatContent {
 
     /// Kinds only this device's engine writes; they never travel.
     pub fn is_local_only_kind(kind: &str) -> bool {
-        kind == kind::GROUP_UPDATE || kind == kind::CALL_LOG || kind == kind::UNDECRYPTABLE
+        kind == kind::GROUP_UPDATE
+            || kind == kind::CALL_LOG
+            || kind == kind::UNDECRYPTABLE
+            || kind == kind::SAFETY_NUMBER_CHANGED
     }
 
     pub fn group_update_with_id(
@@ -1003,6 +1033,7 @@ impl ChatContent {
                     | kind::GROUP_UPDATE
                     | kind::SESSION_CONTROL
                     | kind::UNDECRYPTABLE
+                    | kind::SAFETY_NUMBER_CHANGED
                     | kind::RESEND
             )
     }
