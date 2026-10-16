@@ -27,6 +27,8 @@ import { recordSafeCheckpoint } from '../safe-diagnostics'
 
 /** An identified (not sealed) Direct send: POST /api/chat/accounts/<id>/messages. */
 const IDENTIFIED_SEND = /^\/api\/chat\/accounts\/[0-9a-f-]{36}\/messages$/
+/** A sealed send: POST /api/chat/anonymous/accounts/<id>/messages. */
+const ANONYMOUS_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/messages$/
 /** A sealed bundle fetch or send: POST /api/chat/anonymous/accounts/<id>/{keys,messages}. */
 const ANONYMOUS_KEYS_OR_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/(keys|messages)$/
 
@@ -378,7 +380,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-typing-indicator')).toContainText(bob.username, { timeout: 45_000 })
     await expect(pageA.getByText(typingDraft)).toHaveCount(0)
 
-    const sealedReplyResponse = posted(pageB, /\/api\/chat\/anonymous\/users\/.+\/messages$/)
+    const sealedReplyResponse = posted(pageB, ANONYMOUS_SEND)
     const reply = `sealed-reply-${tag}`
     await send(pageB, reply)
     expect((await sealedReplyResponse).ok()).toBe(true)
@@ -447,7 +449,7 @@ test.describe('two-server secure chat', () => {
         .catch(() => {})
     })
     identifiedToBob.length = 0
-    const sealedSendResponse = posted(pageA, /\/api\/chat\/anonymous\/users\/.+\/messages$/)
+    const sealedSendResponse = posted(pageA, ANONYMOUS_SEND)
     const sealed = `sealed-second-${tag}`
     await send(pageA, sealed)
     expect((await sealedSendResponse).ok()).toBe(true)

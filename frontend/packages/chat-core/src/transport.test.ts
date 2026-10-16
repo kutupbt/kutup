@@ -223,6 +223,26 @@ describe('ApiChatTransport', () => {
     )
   })
 
+  it('sends sealed bundle fetches and messages to the anonymous account routes, unauthenticated', async () => {
+    const base = await resolveApiBase()
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: {} } as never)
+    const transport = new ApiChatTransport()
+    const anonymous = { withCredentials: false, headers: { Authorization: undefined } }
+
+    await transport.fetchSealedBundles(BOB, 'Y2Fw')
+    expect(post).toHaveBeenLastCalledWith(
+      `${base}/chat/anonymous/accounts/00000000-0000-4000-8000-81b637d8fcd2/keys`,
+      { capability: 'Y2Fw' },
+      { params: { server: 'b.test' }, ...anonymous },
+    )
+    await transport.sendSealedMessage(BOB, { sendId: 's-0' })
+    expect(post).toHaveBeenLastCalledWith(
+      `${base}/chat/anonymous/accounts/00000000-0000-4000-8000-81b637d8fcd2/messages`,
+      { sendId: 's-0' },
+      { params: { server: 'b.test' }, ...anonymous },
+    )
+  })
+
   it('reports only the server\'s own sealed refusal as refused', async () => {
     await resolveApiBase()
     const refusal = (data: unknown) => new axios.AxiosError('failed', '404', undefined, undefined, { status: 404, data } as never)

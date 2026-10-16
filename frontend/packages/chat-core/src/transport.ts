@@ -23,10 +23,14 @@ import type {
  * `/chat/accounts/<accountId><suffix>` with the server as a parameter. The
  * engine hands accounts only; an address never reaches a route.
  */
-export function accountRoute(account: string, suffix: string): { path: string; server: string } {
+export function accountRoute(
+  account: string,
+  suffix: string,
+  scope: '/chat' | '/chat/anonymous' = '/chat',
+): { path: string; server: string } {
   const ref = accountOfKey(account)
   if (!ref) throw new Error('not an account reference')
-  return { path: `/chat/accounts/${encodeURIComponent(ref.accountId)}${suffix}`, server: ref.server }
+  return { path: `${scope}/accounts/${encodeURIComponent(ref.accountId)}${suffix}`, server: ref.server }
 }
 
 function signedIn() {
@@ -130,10 +134,10 @@ export class ApiChatTransport implements ChatTransportPort {
     account: string,
     capability: string,
   ): Promise<unknown> {
-    const { path, server } = accountRoute(account, '/keys')
+    const { path, server } = accountRoute(account, '/keys', '/chat/anonymous')
     return axios
       .post(
-        `${apiBase()}/chat/anonymous${path}`,
+        `${apiBase()}${path}`,
         { capability },
         { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
       )
@@ -462,10 +466,10 @@ export class ApiChatTransport implements ChatTransportPort {
     | { kind: 'mismatch'; mismatch: unknown }
     | { kind: 'refused' }
   > {
-    const { path, server } = accountRoute(account, '/messages')
+    const { path, server } = accountRoute(account, '/messages', '/chat/anonymous')
     try {
       const response = await axios.post(
-        `${apiBase()}/chat/anonymous${path}`,
+        `${apiBase()}${path}`,
         request,
         { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
       )
