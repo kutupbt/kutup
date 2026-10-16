@@ -66,6 +66,8 @@ if [[ "$generate" == "--generate" ]]; then
     dump --schema-only -d chain | grep -vE '^(SET |SELECT pg_catalog.set_config|\\(un)?restrict )'
     dump --data-only --inserts -d chain | grep -vE '^(SET |SELECT pg_catalog.set_config|\\(un)?restrict )'
   } > "$baseline.up.sql"
+  # pg_dump ends with blank lines; a file ends at its last line.
+  sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$baseline.up.sql"
   cat > "$baseline.down.sql" <<'DOWN'
 -- The baseline cannot be undone into the old chain: drop everything.
 DROP SCHEMA public CASCADE;
