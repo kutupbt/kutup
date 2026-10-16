@@ -10,7 +10,7 @@ import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { opensInOffice } from './editorKind'
-import { confirmRecipient, recipientError, type ClaimedKeys } from './identityPins'
+import { confirmRecipient, lookupAddress, type AccountAnswer, type ClaimedKeys } from './identityPins'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -311,18 +311,9 @@ export interface FileAccess {
 }
 
 /** Someone on another server as their server describes them: their account and keys. */
-/** An account a lookup answered for (by-address or by-id: one shape for every server). */
-interface Recipient {
-  server: string
-  accountId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
 /** Their Drive key from their server, by their account id, still the same account incarnation. */
-async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServer' | 'recipientAccountId' | 'recipientIncarnationId'>): Promise<Recipient> {
-  const { data } = await api.get<Recipient>(`/users/by-id/${encodeURIComponent(member.recipientAccountId)}`, {
+async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServer' | 'recipientAccountId' | 'recipientIncarnationId'>): Promise<AccountAnswer> {
+  const { data } = await api.get<AccountAnswer>(`/users/by-id/${encodeURIComponent(member.recipientAccountId)}`, {
     params: { server: member.recipientServer },
   })
   if (data.server !== member.recipientServer || data.accountId !== member.recipientAccountId) {
@@ -332,7 +323,7 @@ async function remoteRecipient(member: Pick<FederatedFileMember, 'recipientServe
   return data
 }
 
-function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, generation: number, to: Recipient) {
+function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, generation: number, to: AccountAnswer) {
   return sealFor(me, file.id, key, generation, {
     person: { server: to.server, accountId: to.accountId },
     accountIncarnationId: to.accountIncarnationId,
@@ -518,23 +509,18 @@ export function useShareFile() {
       const at = address.lastIndexOf('@')
       const server = address.slice(at + 1).toLowerCase()
       if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-      let found: Recipient
-      try {
-        found = (await api.get<Recipient>(`/users/by-address/${encodeURIComponent(address)}`)).data
-      } catch (error) {
-        if (isAxiosError(error) && error.response?.status === 404) throw new RecipientNotFound()
-        // A name its person left: `RecipientRenamed`, with where they are now.
-        throw await recipientError(me, address, error)
-      }
+      // A name its person left throws `RecipientRenamed`, with where they are now.
+      const found = await lookupAddress(me, address)
       // An account lives on the server of its address.
-      if (found.server !== server) throw new RecipientNotFound()
+      if (!found || found.server !== server) throw new RecipientNotFound()
       const recipient = found.server === me.accountRef.server ? found : null
       try {
         if (!recipient) {
           // An account on another Kutup server.
           if (!owner) throw new OnlyOwnersShareAcross()
           const remote = found
-          await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
+          // Checked by the address as typed, and sealed to exactly this answer.
+          await confirmRecipient(me, address, remote, input.identityConfirmed)
           const file = await bringFileSharesUpToDate(input.folder, input.file, me)
           const shareEnvelope = await sealForRemote(me, file, file.fileKey!, file.keyGeneration, remote)
           const { data } = await api.post<{ inviteUrl: string }>(`/files/${file.id}/federated-shares`, {
@@ -546,7 +532,7 @@ export function useShareFile() {
           return { kind: 'federated', account: remote.account, inviteUrl: data.inviteUrl }
         }
         if (recipient.accountId === me.userId) throw new CannotShareWithSelf()
-        await confirmRecipient(me, recipient.account, { driveHpkePublicKey: recipient.driveHpkePublicKey, incarnationId: recipient.accountIncarnationId }, input.identityConfirmed)
+        await confirmRecipient(me, address, recipient, input.identityConfirmed)
         // The owner first brings the file and its shares up to date; an editor
         // shares the key they hold (the server takes it only if it is current).
         const file = owner ? await bringFileSharesUpToDate(input.folder, input.file, me) : input.file

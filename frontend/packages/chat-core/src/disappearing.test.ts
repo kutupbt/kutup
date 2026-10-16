@@ -25,6 +25,21 @@ function entry(
   }
 }
 
+describe('local timeline records', () => {
+  it('a safety number line is never a visible message (no unread, no preview)', () => {
+    const line = entry('safety', 1_000, {
+      version: 1,
+      kind: 'safetyNumberChanged',
+      sentAt: '2026-10-16T00:00:00Z',
+      seq: '0',
+      messageId: 'safety:inc-a:inc-b',
+      body: {},
+      safetyNumberChanged: true,
+    })
+    expect(isVisibleChatMessage(line, 2_000)).toBe(false)
+  })
+})
+
 describe('disappearing Chat presentation', () => {
   it('reduces encrypted timer controls deterministically and preserves off', () => {
     const enabled = entry('timer-enabled', 1_000, {

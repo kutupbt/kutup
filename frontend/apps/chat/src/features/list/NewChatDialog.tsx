@@ -10,7 +10,9 @@ import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput
 import { useChat } from '../../app/chatStore'
 import { openJoinLink } from '../../lib/joinLink'
 import { NewGroupDialog } from './NewGroupDialog'
+import type { AccountRef } from '@kutup/chat-core/identity'
 import { resolveTyped } from '../../lib/resolveAddress'
+import { SomeoneElseNotice } from '../contacts/SomeoneElseNotice'
 import { pathForAccount } from './paths'
 
 /**
@@ -26,11 +28,14 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const [error, setError] = useState<string | undefined>()
   const [group, setGroup] = useState(false)
   const [looking, setLooking] = useState(false)
+  /** The address typed leads to someone else than the person known there: opened only on a second press. */
+  const [warned, setWarned] = useState<{ value: string; account: AccountRef; text: string } | null>(null)
 
   function close() {
     onOpenChange(false)
     setValue('')
     setError(undefined)
+    setWarned(null)
   }
 
   async function start(event: FormEvent) {
@@ -42,16 +47,26 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       return
     }
     // The address leads to an account; the conversation is the account's.
-    setLooking(true)
-    const resolved = await resolveTyped(value, chat.capabilities?.serverName, t).finally(() => setLooking(false))
-    if ('error' in resolved) {
-      setError(resolved.error)
-      return
+    let account: AccountRef
+    if (warned && warned.value === value) {
+      account = warned.account
+    } else {
+      setLooking(true)
+      const resolved = await resolveTyped(value, chat.capabilities?.serverName, t).finally(() => setLooking(false))
+      if ('error' in resolved) {
+        setError(resolved.error)
+        return
+      }
+      if (resolved.warning) {
+        setWarned({ value, account: resolved.account, text: resolved.warning })
+        return
+      }
+      account = resolved.account
     }
     close()
     // Someone not in the address book is offered Save to contacts in the
     // conversation itself, where it stays until saved or dismissed.
-    void navigate(pathForAccount(resolved.account))
+    void navigate(pathForAccount(account))
   }
 
   return (
@@ -73,10 +88,12 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                 onValueChange={(next) => {
                   setValue(next)
                   setError(undefined)
+                  setWarned(null)
                 }}
               />
             )}
           </Field>
+          {warned ? <SomeoneElseNotice text={warned.text} /> : null}
           <DialogFooter className="gap-2 sm:justify-between">
             <span className="flex flex-wrap gap-1">
               <Button
@@ -120,7 +137,7 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               ) : null}
             </span>
             <Button type="submit" disabled={!value.trim() || looking}>
-              {t('chat.start')}
+              {warned ? t('chat.someoneElse.openAnyway') : t('chat.start')}
             </Button>
           </DialogFooter>
         </form>

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { fromBase64, openProfileKeyEnvelope, sealProfileKeyEnvelope, toBase64 } from '@kutup/crypto'
+import { accountRoute } from '@kutup/chat-core/transport'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import type { ProfileLookup } from '@kutup/chat-core/types'
 import { accountKeyOf, type AccountRef } from '@kutup/crypto/accountRef'
@@ -157,11 +158,14 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
   })
   const wasm = await loadChatWasm()
   const lookup = wasm.profileLookup(toBase64(key))
-  const { data } = await api.get<unknown>(
-    `/chat/users/${encodeURIComponent(person.account)}/profile/${lookup.version}`,
-    { headers: { 'x-kutup-profile-access-key': lookup.accessKey } },
-  )
-  const view = wasm.profileOpenPeer(person.account, data, lookup.key)
+  // The profile is the account's, sealed for it: fetched and opened by its key.
+  const account = accountKeyOf(refOf(person))
+  const { path, server } = accountRoute(account, `/profile/${encodeURIComponent(lookup.version)}`)
+  const { data } = await api.get<unknown>(path, {
+    params: { server },
+    headers: { 'x-kutup-profile-access-key': lookup.accessKey },
+  })
+  const view = wasm.profileOpenPeer(account, data, lookup.key)
   if (!view.displayName && !view.avatar) return null
   return {
     displayName: view.displayName,

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { accountKey, type AccountRef } from '@kutup/chat-core/identity'
 import { resolveTyped } from '../../lib/resolveAddress'
+import { SomeoneElseNotice } from '../contacts/SomeoneElseNotice'
 import { accountName } from '../../state/accountNames'
 import type {
   LocalMlsConversationRecord,
@@ -517,8 +518,10 @@ function AddMemberDialog({
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | undefined>()
   const [looking, setLooking] = useState(false)
+  /** The address typed leads to someone else than the person known there: added only on a second press. */
+  const [warned, setWarned] = useState<{ value: string; account: AccountRef; text: string } | null>(null)
   return (
-    <Dialog open={open} onOpenChange={(next) => { onOpenChange(next); if (!next) { setValue(''); setError(undefined) } }}>
+    <Dialog open={open} onOpenChange={(next) => { onOpenChange(next); if (!next) { setValue(''); setError(undefined); setWarned(null) } }}>
       <DialogContent className="sm:max-w-md">
         <form
           className="space-y-4"
@@ -526,14 +529,20 @@ function AddMemberDialog({
             event.preventDefault()
             if (looking) return
             setLooking(true)
-            void resolveTyped(value, homeServer, t)
+            const confirmed = warned && warned.value === value ? warned.account : null
+            void (confirmed ? Promise.resolve({ account: confirmed }) : resolveTyped(value, homeServer, t))
               .then(async (member) => {
                 if ('error' in member) {
                   setError(member.error)
                   return
                 }
+                if ('warning' in member && member.warning) {
+                  setWarned({ value, account: member.account, text: member.warning })
+                  return
+                }
                 await onAdd(member.account)
                 setValue('')
+                setWarned(null)
               })
               .finally(() => setLooking(false))
           }}
@@ -544,13 +553,14 @@ function AddMemberDialog({
           </DialogHeader>
           <Field label={t('chat.group.memberAddress')} error={error}>
             {(props) => (
-              <Input {...props} autoFocus value={value} onChange={(e) => { setValue(e.target.value); setError(undefined) }} placeholder={t('chat.username')} autoCapitalize="none" autoCorrect="off" />
+              <Input {...props} autoFocus value={value} onChange={(e) => { setValue(e.target.value); setError(undefined); setWarned(null) }} placeholder={t('chat.username')} autoCapitalize="none" autoCorrect="off" />
             )}
           </Field>
+          {warned ? <SomeoneElseNotice text={warned.text} /> : null}
           <DialogFooter>
             <Button type="submit" disabled={!value.trim() || busy || looking}>
               {busy || looking ? <Loader2 className="animate-spin" /> : null}
-              {t('chat.group.invite')}
+              {warned ? t('chat.someoneElse.continueAnyway') : t('chat.group.invite')}
             </Button>
           </DialogFooter>
         </form>

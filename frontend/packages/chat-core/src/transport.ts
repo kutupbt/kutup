@@ -23,7 +23,7 @@ import type {
  * `/chat/accounts/<accountId><suffix>` with the server as a parameter. The
  * engine hands accounts only; an address never reaches a route.
  */
-function accountRoute(account: string, suffix: string): { path: string; server: string } {
+export function accountRoute(account: string, suffix: string): { path: string; server: string } {
   const ref = accountOfKey(account)
   if (!ref) throw new Error('not an account reference')
   return { path: `/chat/accounts/${encodeURIComponent(ref.accountId)}${suffix}`, server: ref.server }

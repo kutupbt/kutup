@@ -163,6 +163,8 @@ export async function resolveAccount(address: string): Promise<AccountRef | null
 /** The member's account key, as their server gives it by their account id. */
 interface MemberIdentity {
   username: string
+  /** `username@server`: the label shown. */
+  account: string
   server: string
   accountId: string
   accountIncarnationId: string
@@ -205,17 +207,7 @@ async function memberKey(member: { userId: string }, trust: MemberTrust): Promis
   if (!bound || (await incarnationIdOfAuthority(data.accountAuthorityPublicKey)) !== data.accountIncarnationId) {
     throw new MemberKeyUnproven(member.userId)
   }
-  await confirmRecipient(
-    trust.me,
-    `${data.username}@${data.server}`,
-    {
-      driveHpkePublicKey: data.driveHpkePublicKey,
-      driveSigningPublicKey: data.driveSigningPublicKey,
-      authorityPublicKey: data.accountAuthorityPublicKey,
-      incarnationId: data.accountIncarnationId,
-    },
-    trust.confirmed,
-  )
+  await confirmRecipient(trust.me, `${data.username}@${data.server}`, data, trust.confirmed)
   return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveHpkePublicKey }
 }
 

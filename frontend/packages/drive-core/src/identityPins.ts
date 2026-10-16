@@ -104,6 +104,12 @@ export interface PublishedIdentity {
   driveKeyBinding?: string | null
 }
 
+/** An account as a single lookup answers it (`/users/by-address`, `/users/by-id`). */
+export interface AccountAnswer extends PublishedIdentity {
+  username: string
+  accountIncarnationId: string
+}
+
 // ------------------------------------------------------------ lookups
 
 const published = new Map<string, Promise<PublishedIdentity>>()
@@ -519,6 +525,24 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   } catch (error) {
     return (await renamedStatus(me, account, error)) ?? { kind: 'unknown' }
   }
+  return checkPublished(me, account, person, claimed)
+}
+
+/**
+ * `checkIdentity` for one lookup answer already in hand: `person` is what the
+ * server said `address` (as typed) leads to. The pins are asked about the
+ * typed address, so an address a known person holds that leads to anyone
+ * else is `someoneElse`, whatever label the answer carries.
+ */
+async function checkPublished(
+  me: DriveIdentity,
+  account: string,
+  person: PublishedIdentity,
+  claimed: ClaimedKeys = {},
+): Promise<IdentityStatus> {
+  if (sameAccount(refOf(person), me.accountRef)) return { kind: 'ok', verified: true }
+  // An account lives on the server of its address.
+  if (person.server !== account.slice(account.lastIndexOf('@') + 1).toLowerCase()) return { kind: 'invalid' }
   // The keys in use must be the ones the person's server publishes...
   if (
     (claimed.driveHpkePublicKey && claimed.driveHpkePublicKey !== person.driveHpkePublicKey) ||
@@ -562,7 +586,8 @@ export async function checkIdentity(me: DriveIdentity, account: string, claimed:
   }
   // First met: trusted from now on, at the address they were met at, unless
   // the list knew someone else there (then only when the user accepts).
-  const recorded = await recordPin(me, person, 'firstSeen').catch((): Recorded => ({ kind: 'unchanged' }))
+  // Pinned at the address it was met at: the one typed, not the answer's label.
+  const recorded = await recordPin(me, { ...person, account }, 'firstSeen').catch((): Recorded => ({ kind: 'unchanged' }))
   // Another account's authority handed out for this one.
   if (recorded.kind === 'authorityElsewhere') return { kind: 'invalid' }
   if (recorded.kind === 'addressHadOthers') return someoneElse(recorded.pins[0], account)
@@ -680,23 +705,48 @@ export class IdentityNotConfirmed extends Error {
 }
 
 /**
- * Before sealing anything to `account`: its keys checked as `checkIdentity`
- * does. A changed or invalid identity, or someone else at a known person's
- * address, stops the share with
- * `IdentityNotConfirmed` until the user confirms (`confirmed`): Drive warns,
- * it does not refuse.
+ * Before sealing anything to `person`, the account a lookup of `address`
+ * (as the user typed it) answered: checked as `checkIdentity` checks, against
+ * the pins by the typed address. Seal to exactly `person` afterwards, never
+ * to a second answer. A changed or invalid identity, or someone else at a
+ * known person's address, stops the share with `IdentityNotConfirmed` until
+ * the user confirms (`confirmed`): Drive warns, it does not refuse.
  */
 export async function confirmRecipient(
   me: DriveIdentity,
-  account: string,
-  claimed: ClaimedKeys,
+  address: string,
+  person: AccountAnswer,
   confirmed = false,
 ): Promise<IdentityStatus> {
-  const status = await checkIdentity(me, account, claimed)
+  const status = await checkAnswer(me, address, person)
   if ((status.kind === 'changed' || status.kind === 'invalid' || status.kind === 'someoneElse') && !confirmed) {
-    throw new IdentityNotConfirmed(account, status)
+    throw new IdentityNotConfirmed(address, status)
   }
   return status
+}
+
+/**
+ * How far one lookup answer for `address` (as typed) can be trusted, checked
+ * against the pins by that address (`checkIdentity`'s verdicts). Whatever is
+ * then done is done to exactly this answer.
+ */
+export function checkAnswer(me: DriveIdentity, address: string, answer: AccountAnswer): Promise<IdentityStatus> {
+  // The incarnation is the one its authority names.
+  return checkPublished(me, address, answer, { incarnationId: answer.accountIncarnationId })
+}
+
+/**
+ * The account `address` leads to, here or on another server: one lookup
+ * (`/users/by-address`). Not found is `RecipientNotFound`-worthy (null); a
+ * name its person left is `RecipientRenamed`.
+ */
+export async function lookupAddress(me: DriveIdentity, address: string): Promise<AccountAnswer | null> {
+  try {
+    return (await api.get<AccountAnswer>(`/users/by-address/${encodeURIComponent(address)}`)).data
+  } catch (error) {
+    if ((error as { response?: { status?: number } }).response?.status === 404) return null
+    throw await recipientError(me, address, error)
+  }
 }
 
 /**

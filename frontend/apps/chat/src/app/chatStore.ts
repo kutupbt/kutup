@@ -140,6 +140,11 @@ export function useChat(): ChatState {
   return useSyncExternalStore(subscribe, getChatState)
 }
 
+/** Whether this server offers groups (CHAT_GROUPS): one boolean, so a message re-renders only when it changes. */
+export function useGroupsEnabled(): boolean {
+  return useSyncExternalStore(subscribe, () => state.capabilities?.mlsGroups === true)
+}
+
 /** The open service; only for components rendered once the chat is ready. */
 export function useChatService(): ChatService {
   const { service } = useChat()

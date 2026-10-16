@@ -744,7 +744,8 @@
         "unnamed": "Give the group a name before turning on its link."
       },
       "bannerRequests_one": "{{count}} person wants to join",
-      "bannerRequests_other": "{{count}} people want to join"
+      "bannerRequests_other": "{{count}} people want to join",
+      "groupsOff": "Group chats are not available on this server."
     },
     "notifications": {
       "appName": "Kutup Chat",
@@ -1075,7 +1076,12 @@
       "inContacts": "In your contacts.",
       "view": "View contact"
     },
-    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does."
+    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does.",
+    "someoneElse": {
+      "knownAs": "It is the account you know as {{name}}.",
+      "openAnyway": "Open anyway",
+      "continueAnyway": "Continue anyway"
+    }
   },
   "boot": {
     "opening": "Opening Chat…",

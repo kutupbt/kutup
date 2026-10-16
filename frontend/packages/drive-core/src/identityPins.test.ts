@@ -308,6 +308,7 @@ import {
   checkGroup,
   currentAddressOf,
   IdentityNotConfirmed,
+  type AccountAnswer,
   personSafetyNumber,
   pinnedVerdict,
   PinsRolledBack,
@@ -540,6 +541,47 @@ describe('checkIdentity', () => {
   })
 })
 
+/** One lookup answer for `address`: the account of `authority`, under the label the server gives. */
+function answer(address: string, authority: string, label = address): AccountAnswer {
+  return {
+    username: label.split('@')[0],
+    account: label,
+    server: address.split('@')[1],
+    accountId: `acct-${authority}`,
+    accountIncarnationId: `inc-${authority}`,
+    accountAuthorityPublicKey: authority,
+    driveHpkePublicKey: `${authority}-hpke`,
+    driveSigningPublicKey: `${authority}-sign`,
+    driveKeyBinding: `bound-by-${authority}`,
+  }
+}
+
+describe('a share is checked by the address typed, against the one answer it seals to', () => {
+  it('stops a pinned person’s address answered with another account under its own label, writing nothing', async () => {
+    publish('ada@kutup.dev', 'A')
+    await checkIdentity(me, 'ada@kutup.dev')
+    newPage()
+    const puts = server.puts
+    // The server answers ada@ with Mal's account, labelled as Mal.
+    const error = await confirmRecipient(me, 'ada@kutup.dev', answer('ada@kutup.dev', 'M', 'mal@kutup.dev')).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(IdentityNotConfirmed)
+    expect((error as IdentityNotConfirmed).status.kind).toBe('someoneElse')
+    expect(server.puts).toBe(puts)
+  })
+
+  it('refuses an answer whose incarnation its authority does not name, or on another server', async () => {
+    const forged = { ...answer('bob@kutup.dev', 'B'), accountIncarnationId: 'inc-X' }
+    await expect(confirmRecipient(me, 'bob@kutup.dev', forged)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+    const elsewhere = { ...answer('bob@kutup.dev', 'B'), server: 'other.dev' }
+    await expect(confirmRecipient(me, 'bob@kutup.dev', elsewhere)).rejects.toMatchObject({ status: { kind: 'invalid' } })
+  })
+
+  it('takes a first-met account and pins it at the typed address', async () => {
+    await expect(confirmRecipient(me, 'cat@kutup.dev', answer('cat@kutup.dev', 'C'))).resolves.toEqual({ kind: 'ok', verified: false })
+    expect(storedPins()).toMatchObject([{ id: 'acct-C', addresses: ['cat@kutup.dev'] }])
+  })
+})
+
 describe('an address only finds an account (Signal’s model)', () => {
   it('shows an account found at someone else’s address by its own name, with their notice, and writes nothing', async () => {
     publish('ada@kutup.dev', 'A')
@@ -551,7 +593,7 @@ describe('an address only finds an account (Signal’s model)', () => {
     // The server says ada@ is Mal's.
     publish('ada@kutup.dev', 'M')
     expect(await checkIdentity(me, 'ada@kutup.dev')).toEqual({ kind: 'someoneElse', name: 'mal@kutup.dev' })
-    await expect(confirmRecipient(me, 'ada@kutup.dev', {})).rejects.toBeInstanceOf(IdentityNotConfirmed)
+    await expect(confirmRecipient(me, 'ada@kutup.dev', answer('ada@kutup.dev', 'M'))).rejects.toBeInstanceOf(IdentityNotConfirmed)
     expect(server.puts).toBe(puts)
     expect(storedPins()).toMatchObject([
       { id: 'acct-A', addresses: ['ada@kutup.dev'] },

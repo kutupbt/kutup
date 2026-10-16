@@ -523,7 +523,8 @@ export function ConversationView({
             return (
               <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-safety-changed-notice">
                 <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-                <span>{t('chat.safety.changedNotice', { name: model.title })}</span>
+                {/* Whose number: the person of a direct chat (the line is only written there). */}
+                <span>{t('chat.safety.changedNotice', { name: model.peer ? personName(model.peer, profiles, self.key, t) : nameOf(row.view) })}</span>
               </p>
             )
           }

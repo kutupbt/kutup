@@ -1,6 +1,7 @@
 import type { ChatMentionV1 } from '@kutup/chat-core/types'
 import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { cn } from '@kutup/ui/lib/cn'
+import { useGroupsEnabled } from '../../app/chatStore'
 import { openJoinLink } from '../../lib/joinLink'
 import { splitMentions } from '../../lib/mentions'
 import { linkify } from './linkify'
@@ -23,6 +24,8 @@ export function MessageText({
   nameOf?: (address: string) => string
   selfKey?: string
 }) {
+  // Without groups a group link is only text: there is nothing to join.
+  const groups = useGroupsEnabled()
   return (
     <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
       {splitMentions(text, mentions).map((part, index) =>
@@ -46,7 +49,7 @@ export function MessageText({
           </span>
         ) : (
           linkify(part.value).map((piece, pieceIndex) =>
-            piece.kind === 'link' ? (
+            piece.kind === 'link' && (groups || !inviteFragmentFromUrl(piece.href)) ? (
               <a
                 key={`${index}:${pieceIndex}`}
                 href={piece.href}
