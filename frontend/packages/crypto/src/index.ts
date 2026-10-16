@@ -72,7 +72,6 @@ export {
   signMailKeyList,
   verifyMailCleartext,
   verifyMailDetachedSignature,
-  verifyMailGroupKeyChain,
   verifyMailKeyList,
   encryptMailMessageUnsigned,
   encryptMailPgpUnsigned,

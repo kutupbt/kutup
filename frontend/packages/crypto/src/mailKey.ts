@@ -206,34 +206,6 @@ export async function verifyMailKeyList(
   )
 }
 
-/**
- * A shared mailbox's key-list chain, verified (Rust
- * `mail_group::verify_group_key_chain`): every list signed by the signer in
- * force, each handover signed by the outgoing one.
- */
-export interface MailGroupKeyChain {
-  /** Base64. */
-  firstSigner: string
-  /** The signer of the newest list, base64. */
-  signer: string
-  /** Every signer in order, base64. */
-  signers: string[]
-  sequence: number
-  /** Each list's hash, hex, list 1 first. */
-  digests: string[]
-  newest: SignedMailKeyList
-}
-
-/** Verifies a shared mailbox's whole key-list chain; throws for one that does not hold. */
-export async function verifyMailGroupKeyChain(
-  groupId: string,
-  firstSigner: string,
-  lists: { data: string; signature: string }[],
-  handovers: string[],
-): Promise<MailGroupKeyChain> {
-  return (await getCryptoWasm()).verifyMailGroupKeyChain(groupId, firstSigner, lists, handovers)
-}
-
 /** An address key as its owner holds it: sealed, opened only inside WASM. */
 export interface SealedMailKey {
   masterKeyBase64: string
