@@ -345,7 +345,7 @@ fn variant_spellings_find_the_current_account_as_stored() {
         );
         assert_eq!(r.status(), StatusCode::OK, "{at}");
         let found: Value = r.json().unwrap();
-        assert_eq!(found["userId"], json!(user.id), "{at}");
+        assert_eq!(found["accountId"], json!(user.id), "{at}");
         assert_eq!(
             found["account"],
             json!(format!("{stored}@{domain}")),
