@@ -1,3 +1,4 @@
+ALTER TABLE mail_groups DROP COLUMN needs_new_signer;
 DROP TABLE mail_group_signing_shares;
 DROP TABLE mail_group_signers;
 DELETE FROM mail_group_key_shares;

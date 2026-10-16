@@ -8,6 +8,9 @@
 //!   the members it is published for, under the group's lock;
 //! - a member whose account was reset gets the keys sealed again, and no
 //!   share sealed to their old keys is taken or served.
+//! - an owner or manager deleted or deactivated may still hold the signer's
+//!   seed: nothing is published until a handover to a new signer for the
+//!   active owners and managers.
 //!
 //! Needs `KUTUP_LIVE_SERVER`, `KUTUP_LIVE_ADMIN` and `KUTUP_LIVE_DATABASE_URL`.
 
@@ -636,4 +639,135 @@ fn a_reset_member_gets_the_keys_sealed_again() {
         "sharesNeeded"
     );
     purge_accounts(&live.c, &live.base, &[&alice, &bob]);
+}
+
+fn needs_new_signer(live: &Live, by: &User, id: &str) -> bool {
+    let detail: Value = bearer(
+        live.c.get(format!("{}/api/mail/groups/{id}", live.base)),
+        &by.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    detail["group"]["needsNewSigner"].as_bool().unwrap()
+}
+
+#[test]
+fn a_deleted_or_deactivated_manager_means_a_new_signer() {
+    let Some(live) = live() else { return };
+    let (alice, bob, carol) = (
+        register(&live.c, &live.base),
+        register(&live.c, &live.base),
+        register(&live.c, &live.base),
+    );
+    let (id, address, k1, a, mut chain) = shared_mailbox(&live, &alice);
+    let with_managers = json!([
+        { "userId": alice.id, "role": "owner", "canSendAs": true },
+        { "userId": bob.id, "role": "manager" },
+        { "userId": carol.id, "role": "manager" },
+    ]);
+    let k1_for = |user: &User| {
+        let mut share = key_share(&k1, &id, user);
+        share["groupFingerprint"] = json!(hex::encode(k1.fingerprint));
+        share
+    };
+    let r = members(
+        &live,
+        &alice,
+        &id,
+        json!({
+            "members": with_managers,
+            "keyShares": [k1_for(&bob), k1_for(&carol)],
+            "signerShares": [signer_share(&a, &id, &bob), signer_share(&a, &id, &carol)],
+        }),
+    );
+    assert_eq!(r.status(), StatusCode::OK, "two managers join");
+    assert!(!needs_new_signer(&live, &alice, &id));
+    let key_signed_by =
+        |list: &SignedMailKeyListV1, key: &GeneratedAddressKey, sharers: &[&User]| {
+            json!({
+                "publicKey": b64(&key.public_key),
+                "shares": sharers.iter().map(|user| key_share(key, &id, user)).collect::<Vec<_>>(),
+                "keyList": list_json(list),
+            })
+        };
+
+    // Carol is deactivated: she may still hold the signer's seed.
+    let r = bearer(
+        live.c
+            .put(format!("{}/api/admin/users/{}", live.base, carol.id)),
+        &live.admin_token,
+    )
+    .json(&json!({ "isActive": false }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK, "deactivate Carol");
+    assert!(needs_new_signer(&live, &alice, &id));
+    // Nothing is published under the old signer, nor is it shared further.
+    let k2 = new_key(&address);
+    let same_signer = chain.next(&a, &k2, false);
+    assert_eq!(
+        code(rotate(
+            &live,
+            &alice.token,
+            &id,
+            key_signed_by(&same_signer, &k2, &[&alice, &bob])
+        )),
+        (400, "newSignerNeeded".into())
+    );
+    // A handover to a signer for the active owners and managers: the new key
+    // goes to them, not to Carol, who gets it again if she comes back.
+    let b = GroupSigningKey::generate();
+    let two = chain.next(&b, &k2, false);
+    let handover =
+        GroupSignerHandoverV1::sign(&a, &id, 2, &chain.lists[0].hash(), &b.public_key).unwrap();
+    let mut handed_over = key_signed_by(&two, &k2, &[&alice, &bob]);
+    handed_over["signer"] = json!({
+        "publicKey": b64(&b.public_key),
+        "shares": [signer_share(&b, &id, &alice), signer_share(&b, &id, &bob)],
+        "handover": b64(&handover.encode()),
+    });
+    assert_eq!(
+        rotate(&live, &alice.token, &id, handed_over).status(),
+        StatusCode::OK,
+        "handed over to the managers who remain"
+    );
+    chain.lists.push(two);
+    assert!(!needs_new_signer(&live, &alice, &id));
+    assert_eq!(
+        served_chain(&live, &address, &id),
+        (vec![a.public_key, b.public_key], 2)
+    );
+
+    // Bob's account is deleted: the same, until the next handover.
+    purge_accounts(&live.c, &live.base, &[&bob]);
+    assert!(needs_new_signer(&live, &alice, &id));
+    let k3 = new_key(&address);
+    let three = chain.next(&b, &k3, false);
+    assert_eq!(
+        code(rotate(
+            &live,
+            &alice.token,
+            &id,
+            key_signed_by(&three, &k3, &[&alice])
+        )),
+        (400, "newSignerNeeded".into())
+    );
+    let c = GroupSigningKey::generate();
+    let three = chain.next(&c, &k3, false);
+    let handover =
+        GroupSignerHandoverV1::sign(&b, &id, 3, &chain.lists[1].hash(), &c.public_key).unwrap();
+    let mut handed_over = key_signed_by(&three, &k3, &[&alice]);
+    handed_over["signer"] = json!({
+        "publicKey": b64(&c.public_key),
+        "shares": [signer_share(&c, &id, &alice)],
+        "handover": b64(&handover.encode()),
+    });
+    assert_eq!(
+        rotate(&live, &alice.token, &id, handed_over).status(),
+        StatusCode::OK
+    );
+    assert!(!needs_new_signer(&live, &alice, &id));
+    purge_accounts(&live.c, &live.base, &[&alice, &carol]);
 }

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import {
   DEFAULT_MAIL_KEY_FLAGS,
+  foldAddress,
   generateMailGroupKey,
   MAIL_KEY_FLAGS,
   newMailGroupSigner,
@@ -46,6 +47,12 @@ export interface MailGroup {
   myRole: GroupRole | null
   /** Whether the signed-in account may send as it. */
   myCanSendAs: boolean
+  /**
+   * A shared mailbox whose owner or manager was deleted or deactivated: they
+   * may still hold its signer's seed, so its keys change only with a new
+   * signer (a manager hands over; an administrator starts a new chain).
+   */
+  needsNewSigner: boolean
 }
 
 export interface MailGroupMember {
@@ -229,7 +236,11 @@ interface GroupChainAnswer {
 export async function groupChain(group: { id: string; address: string }): Promise<GroupKeyChainView> {
   const { data } = await api.get<GroupChainAnswer>('/mail/keys', { params: { email: group.address } })
   if (data.groupId !== group.id) throw new Error('the server answered for another group')
-  return verifyMailGroupKeyChain(group.id, data.firstSigner, data.keyLists, data.signerHandovers ?? [])
+  const chain = await verifyMailGroupKeyChain(group.id, data.firstSigner, data.keyLists, data.signerHandovers ?? [])
+  // The chain must be this mailbox's: its newest list names the address asked.
+  const asked = await foldAddress(group.address)
+  if (!asked || asked !== (await foldAddress(chain.newest.address))) throw new Error('the key lists are for another address')
+  return chain
 }
 
 /**
@@ -351,14 +362,21 @@ export async function membershipBody(
       added.forEach((member, i) => body.keyShares!.push({ groupFingerprint: key.fingerprint, userId: member.userId, share: shares[i] }))
     }
   }
-  // The signing key's holders: the owners and managers. Losing one means a
-  // new signer, handed over by the one in force (the caller's, if they hold
-  // it; an administrator without it starts a new chain).
-  const holdersBefore = current.filter((c) => signs(c.role)).map((c) => c.userId)
-  const holdersAfter = next.filter((m) => signs(m.role))
-  const lost = holdersBefore.some((id) => !holdersAfter.some((h) => h.userId === id))
+  // A deactivated account gets no share; a manager seals the keys to it
+  // again if it comes back.
+  const active = (m: { userId: string }) => current.find((c) => c.userId === m.userId)?.active !== false
+  // The signing key's holders: the active owners and managers. Losing one,
+  // or one deleted or deactivated (`needsNewSigner`), means a new signer,
+  // handed over by the one in force (the caller's, if they hold it; an
+  // administrator without it starts a new chain). So does gaining one when
+  // the caller has no share of the signer to give.
+  const holdersBefore = current.filter((c) => signs(c.role) && c.active).map((c) => c.userId)
+  const holdersAfter = next.filter((m) => signs(m.role) && active(m))
   const signer: GroupSignerHolder | null =
     me && answer.signer && answer.signingShare ? { ...me, groupId: group.id, signer: answer.signer, signingShare: answer.signingShare } : null
+  const gained = holdersAfter.some((h) => !holdersBefore.includes(h.userId))
+  const lost =
+    holdersBefore.some((id) => !holdersAfter.some((h) => h.userId === id)) || group.needsNewSigner || (gained && !signer)
   if (removed.length > 0 || (joining.length > 0 && !holdsAll) || lost) {
     const chain = await groupChain(group)
     const signing: GroupSigning = lost
@@ -368,7 +386,7 @@ export async function membershipBody(
       : signer
         ? { kind: 'current', holder: signer, chain }
         : { kind: 'restart', holders: holdersAfter, chain }
-    body.newKey = await newGroupKey(group.address, group.id, next, trust, signing)
+    body.newKey = await newGroupKey(group.address, group.id, next.filter(active), trust, signing)
   }
   if (!body.newKey?.signer && signer) {
     // Owners and managers joining, promoted, or reset since get the signer in force.

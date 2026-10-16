@@ -46,7 +46,7 @@ Specific codes, where an app does something particular (a test in
 | `accountIdTaken` | 409 | `register`: the account id is some account's, or was a deleted account's (ids are never reused): start again |
 | `keyListInvalid` | 400 | A shared mailbox's next key list the chain refuses: not signed by its signer in force, an old signer after its handover, a gap, or other keys than the group's |
 | `handoverNeeded` | 403 | A shared mailbox's new signer without a handover from the one in force: only an administrator starts a group's key lists over |
-| `newSignerNeeded` | 400 | Someone who held a shared mailbox's signing key no longer may (removed, or no longer an owner or manager): the change needs a new signer |
+| `newSignerNeeded` | 400 | Someone who held a shared mailbox's signing key no longer may (removed, no longer an owner or manager, or their account deleted or deactivated): the change needs a new signer |
 | `idTaken` | 409 | Creating a group: the id the browser drew is some group's: draw another |
 | `noAccountKey` | 400 | A shared mailbox's key share for an account not set up yet (no account keys to seal it to) |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
@@ -1839,6 +1839,11 @@ active administrator.
     signer in force's seed for owners and managers who lack it: joining,
     promoted, or reset since). Losing an owner or manager (removed, or no
     longer one) needs `newKey` with a new `signer` (`400 newSignerNeeded`).
+    So does a group whose owner or manager was deleted or deactivated
+    (`needsNewSigner: true` on the group; every publish, by members or
+    rotation, without a new signer is refused, and the signer in force is
+    shared with nobody new). Shares, of a key or the signer, go to active
+    accounts only.
     Keys may be sealed again to a member whose shares no longer open (reset
     since: `needsKeys` in the group's detail), and to nobody else. The
     changes are checked under the group's lock, against the members they

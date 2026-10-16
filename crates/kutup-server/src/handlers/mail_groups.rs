@@ -49,6 +49,11 @@ pub struct MailGroup {
     /// Whether the caller may send as it (a shared mailbox's owners and
     /// managers always may).
     pub my_can_send_as: bool,
+    /// A shared mailbox whose owner or manager was deleted or deactivated:
+    /// they may still hold its signer's seed, so its key lists change only
+    /// with a new signer (a manager hands over, or an administrator starts a
+    /// new chain).
+    pub needs_new_signer: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
@@ -62,8 +67,9 @@ pub struct MailGroupMember {
     pub can_send_as: bool,
     /// An inactive account receives nothing.
     pub active: bool,
-    /// A shared mailbox's member whose share of its current key is missing
-    /// or sealed to keys they no longer have (an administrator reset them):
+    /// A shared mailbox's active member whose share of its current key is
+    /// missing or sealed to keys they no longer have (an administrator reset
+    /// them, or they were deactivated when the key changed):
     /// a manager's browser seals the mailbox's keys to them again, once the
     /// manager confirms their new identity.
     pub needs_keys: bool,
@@ -85,7 +91,8 @@ const GROUP_COLUMNS: &str = "g.id, g.address, g.display_name, g.description, g.k
     g.created_at,
     (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role,
     COALESCE((SELECT r.can_send_as OR r.role IN ('owner', 'manager') FROM mail_group_members r
-               WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as";
+               WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as,
+    g.needs_new_signer";
 
 async fn group_row(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup> {
     sqlx::query_as(&format!(
@@ -114,7 +121,8 @@ async fn members_in(
         "SELECT u.id AS user_id, COALESCE(u.username, '') AS username,
                 COALESCE(u.username, '') || '@' || $2 AS address,
                 m.role, m.can_send_as, u.is_active AS active,
-                EXISTS (SELECT 1 FROM mail_group_keys k WHERE k.group_id = m.group_id AND k.is_primary)
+                u.is_active
+                AND EXISTS (SELECT 1 FROM mail_group_keys k WHERE k.group_id = m.group_id AND k.is_primary)
                 AND (NOT EXISTS (
                     SELECT 1 FROM mail_group_keys k
                       JOIN mail_group_key_shares s ON s.group_key_id = k.id
@@ -505,6 +513,26 @@ async fn without_signing_share(
     .await?)
 }
 
+/// The active accounts among `ids`, sorted: a deactivated account gets no
+/// share (it holds no live keys to seal to); a manager seals the keys to it
+/// again if it comes back.
+async fn active_of(conn: &mut sqlx::PgConnection, ids: &[Uuid]) -> AppResult<Vec<Uuid>> {
+    let mut active: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE id = ANY($1) AND is_active")
+            .bind(ids)
+            .fetch_all(&mut *conn)
+            .await?;
+    active.sort();
+    Ok(active)
+}
+
+fn new_signer_needed() -> AppError {
+    AppError::bad_request(
+        "someone who held the signing key no longer may: the group needs a new signer",
+    )
+    .with_details(json!({ "code": "newSignerNeeded" }))
+}
+
 fn sorted_ids(shares: &[ShareInput]) -> AppResult<Vec<Uuid>> {
     let mut ids = shares
         .iter()
@@ -522,10 +550,11 @@ fn sorted_ids(shares: &[ShareInput]) -> AppResult<Vec<Uuid>> {
 }
 
 /// The signing key's holders after a change (`after`: each member and their
-/// role) are exactly the owners and managers. Losing one (removed, or no
-/// longer an owner or manager) needs a new signer; gaining one needs a share
-/// of the signer in force (or of the new one). In `conn`, under the group's
-/// row lock.
+/// role) are exactly the active owners and managers. Losing one (removed, or
+/// no longer an owner or manager) needs a new signer, as does a group whose
+/// owner or manager was deleted or deactivated (`needs_new_signer`); gaining
+/// one needs a share of the signer in force (or of the new one). In `conn`,
+/// under the group's row lock.
 async fn check_signer_changes(
     conn: &mut sqlx::PgConnection,
     group: &MailGroup,
@@ -536,15 +565,21 @@ async fn check_signer_changes(
 ) -> AppResult<SignerChanges> {
     let before: Vec<Uuid> = current
         .iter()
-        .filter(|member| signs(&member.role))
+        .filter(|member| signs(&member.role) && member.active)
         .map(|member| member.user_id)
         .collect();
-    let mut holders: Vec<Uuid> = after
+    let signing: Vec<Uuid> = after
         .iter()
         .filter(|(_, role)| signs(role))
         .map(|(id, _)| *id)
         .collect();
-    holders.sort();
+    let holders = active_of(&mut *conn, &signing).await?;
+    // Read under the row lock: an account deletion sets it while holding it.
+    let needs_new_signer: bool =
+        sqlx::query_scalar("SELECT needs_new_signer FROM mail_groups WHERE id = $1")
+            .bind(group.id)
+            .fetch_one(&mut *conn)
+            .await?;
     let lost = before.iter().any(|id| !holders.contains(id));
     let needed = || {
         AppError::bad_request(
@@ -570,18 +605,16 @@ async fn check_signer_changes(
         }
         return Err(needed());
     };
-    if lost {
-        return Err(AppError::bad_request(
-            "someone who held the signing key no longer may: the group needs a new signer",
-        )
-        .with_details(json!({ "code": "newSignerNeeded" })));
-    }
-    let lacking = without_signing_share(&mut *conn, group.id, &signer, &holders).await?;
     let gained: Vec<Uuid> = holders
         .iter()
         .filter(|id| !before.contains(id))
         .copied()
         .collect();
+    // A signer someone gone may hold is shared with nobody new.
+    if lost || (needs_new_signer && (!gained.is_empty() || !signer_shares.is_empty())) {
+        return Err(new_signer_needed());
+    }
+    let lacking = without_signing_share(&mut *conn, group.id, &signer, &holders).await?;
     let covered = sorted_ids(signer_shares)?;
     if !gained.iter().all(|id| covered.contains(id))
         || !covered.iter().all(|id| lacking.contains(id))
@@ -680,13 +713,12 @@ async fn check_key_changes(
                 .collect();
             covered.sort();
             covered.dedup();
-            let mut needed = after.to_vec();
-            needed.sort();
+            let needed = active_of(&mut *conn, after).await?;
             if covered != needed || key.shares.len() != needed.len() {
-                return Err(
-                    AppError::bad_request("the new key needs a share for every member")
-                        .with_details(json!({ "code": "sharesNeeded" })),
-                );
+                return Err(AppError::bad_request(
+                    "the new key needs a share for every active member",
+                )
+                .with_details(json!({ "code": "sharesNeeded" })));
             }
             Some((
                 key.clone(),
@@ -1461,7 +1493,11 @@ pub async fn rotate_group_key(
         .execute(&mut *tx)
         .await?;
     let current = members_in(&mut tx, &state.config.chat_server_name, id).await?;
-    let members: Vec<Uuid> = current.iter().map(|m| m.user_id).collect();
+    let members: Vec<Uuid> = current
+        .iter()
+        .filter(|m| m.active)
+        .map(|m| m.user_id)
+        .collect();
     let mut covered: Vec<Uuid> = input
         .key
         .shares
@@ -1474,7 +1510,7 @@ pub async fn rotate_group_key(
     needed.sort();
     if covered != needed || input.key.shares.len() != needed.len() {
         return Err(AppError::bad_request(
-            "the new key needs a share for every member, and nobody else",
+            "the new key needs a share for every active member, and nobody else",
         )
         .with_details(json!({ "code": "sharesNeeded" })));
     }
@@ -1484,7 +1520,7 @@ pub async fn rotate_group_key(
         Some(signer) => {
             let mut holders: Vec<Uuid> = current
                 .iter()
-                .filter(|member| signs(&member.role))
+                .filter(|member| signs(&member.role) && member.active)
                 .map(|member| member.user_id)
                 .collect();
             holders.sort();

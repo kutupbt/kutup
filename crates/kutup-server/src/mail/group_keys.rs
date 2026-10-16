@@ -235,6 +235,19 @@ pub async fn publish(
         flags: DEFAULT_FLAGS,
     });
     expected.sort_by_key(|key| key.fingerprint);
+    // An owner or manager deleted or deactivated may hold the signer's seed:
+    // only a new signer publishes, and it ends that.
+    let needs_new_signer: bool =
+        sqlx::query_scalar("SELECT needs_new_signer FROM mail_groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if needs_new_signer && key.signer.is_none() {
+        return Err(AppError::bad_request(
+            "someone who held the signing key no longer may: the group needs a new signer",
+        )
+        .with_details(serde_json::json!({ "code": "newSignerNeeded" })));
+    }
     let data = decode(&key.key_list.data, "keyList.data")?;
     let signature = decode(&key.key_list.signature, "keyList.signature")?;
     append_link(
@@ -249,6 +262,13 @@ pub async fn publish(
         &expected,
     )
     .await?;
+
+    if key.signer.is_some() {
+        sqlx::query("UPDATE mail_groups SET needs_new_signer = false WHERE id = $1")
+            .bind(group_id)
+            .execute(&mut **tx)
+            .await?;
+    }
 
     // Older keys stay to open older mail, but nobody encrypts to them any
     // more: someone who left may hold them.
@@ -558,4 +578,28 @@ fn hex_array<const N: usize>(value: &str) -> AppResult<[u8; N]> {
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| AppError::internal("stored fingerprint is not hex"))
+}
+
+/// Marks the shared mailboxes `user` signs for (an owner or manager, or a
+/// holder of a signing share) as needing a new signer, before their account
+/// is deleted or deactivated: they may still hold the signer's seed. Locks
+/// each group's row, as every change to its keys does.
+pub async fn signer_leaving(conn: &mut sqlx::PgConnection, user: Uuid) -> AppResult<()> {
+    sqlx::query(
+        "UPDATE mail_groups SET needs_new_signer = true
+          WHERE id IN (
+                SELECT g.id FROM mail_groups g
+                 WHERE g.kind = 'shared'
+                   AND (EXISTS (SELECT 1 FROM mail_group_members m
+                                 WHERE m.group_id = g.id AND m.user_id = $1
+                                   AND m.role IN ('owner', 'manager'))
+                        OR EXISTS (SELECT 1 FROM mail_group_signing_shares s
+                                    WHERE s.group_id = g.id AND s.user_id = $1))
+                 ORDER BY g.id
+                 FOR UPDATE)",
+    )
+    .bind(user)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }

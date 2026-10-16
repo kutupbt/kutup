@@ -160,7 +160,8 @@ export const KEY_LIST_GUARD_SCOPE = 'mail-key-list'
 /**
  * Refuses a key list older than this device has seen for the same address
  * under the same signer (a person's account authority, or a shared
- * mailbox's mail-group authority): a server cannot hand back an earlier
+ * mailbox's chain from its first signer, across handovers): a server cannot
+ * hand back an earlier
  * list, for instance one listing a key someone who left still holds. Another
  * signer (a reset, a freed name now someone else's) starts its own count;
  * the pin check after this says whether that signer is the one known.

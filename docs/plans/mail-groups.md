@@ -276,7 +276,7 @@ log.
    names, member rights, delivery from outside and from Kutup, duplicates,
    post policy, a full group, release on delete, the role fallback and
    security.txt.
-2. **G1b shared mailboxes:** group keys, shares, server-signed lists, WKD,
+2. **G1b shared mailboxes:** group keys, shares, signed lists, WKD,
    delivery, shared rows, sending as the group, key rotation on removal. Done: the
    group key is the address key shape for the group's address, its shares
    sealed to members' account keys (`seal_group_key_share`,
@@ -286,7 +286,9 @@ log.
    JS); key lists signed by the group's own signing key its owners and
    managers hold (`mail_group`; the server's former mail-group authority is
    gone), so groups do not depend on federation being on and the server
-   cannot change a group's keys; `mail_messages.owner` (the account, or the
+   cannot change a group's keys (an owner or manager deleted or
+   deactivated means a new signer before any list is published,
+   `needsNewSigner`; docs/plans/account-ids.md); `mail_messages.owner` (the account, or the
    group for a shared mailbox's rows) scopes every read, filing and delete;
    `sent_by` and `sender_account` keep the sending limits on the member who
    sent as the group; delivery from outside encrypted to the group key,
@@ -327,7 +329,8 @@ log.
 - Rust: fan-out with one data packet and per-member key packets, the last
   row removing the object, group quota (full → 452), post policies at RCPT
   and at send, role fallback when empty or all inactive, shared mailbox
-  shares and rotation, server-signed group key lists.
+  shares and rotation, group key lists signed by the group's signers (handovers,
+  a new signer after an owner or manager is deleted or deactivated).
 - Browser: an administrator creates `hr@` (shared) and `team@` (list), adds
   members; outside mail to each arrives for the right people; one member
   reads in `hr@` and the other sees it read; a member answers as `hr@`; a

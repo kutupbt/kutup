@@ -48,3 +48,8 @@ CREATE TABLE mail_group_signing_shares (
     PRIMARY KEY (group_id, signer_public_key, user_id)
 );
 CREATE INDEX mail_group_signing_shares_user ON mail_group_signing_shares (user_id);
+
+-- Set when an owner or manager's account is deleted or deactivated: they may
+-- still hold the signer's seed, so no list is published until a manager
+-- hands over to a new signer (or an administrator starts a new chain).
+ALTER TABLE mail_groups ADD COLUMN needs_new_signer boolean NOT NULL DEFAULT false;

@@ -116,7 +116,9 @@ export function GroupDialog({
         })
       }
       // Members whose keys changed (reset) get the mailbox's keys again too.
+      // A mailbox needing a new signer gets one on save.
       const changed =
+        (shared && group.needsNewSigner) ||
         members.length !== detail.data.members.length ||
         members.some((m) => {
           const before = detail.data.members.find((c) => c.userId === m.userId)
@@ -164,6 +166,7 @@ export function GroupDialog({
         ) : (
           <div className="max-h-[60vh] space-y-4 overflow-y-auto">
             {detail.data.goesToAdministrators ? <Alert>{t('mailGroups.goesToAdministrators')}</Alert> : null}
+            {shared && canEdit && detail.data.group.needsNewSigner ? <Alert variant="warn">{t('mailGroups.needsNewSigner')}</Alert> : null}
             {canEdit ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label={t('mailGroups.displayName')}>
