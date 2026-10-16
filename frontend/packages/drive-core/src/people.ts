@@ -122,7 +122,8 @@ async function ownLookup(me: DriveIdentity): Promise<ProfileLookup | null> {
     throw error
   }
   const wasm = await loadChatWasm()
-  return wasm.accountProfileKey(me.masterKey, sealed, me.account, me.binding)
+  // Sealed for the account, never its address.
+  return wasm.accountProfileKey(me.masterKey, sealed, accountKeyOf(me.accountRef), me.binding)
 }
 
 /** Give someone your current profile key, if they do not have it yet. */
@@ -173,7 +174,7 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
   }
 }
 
-async function loadPeople(me: DriveIdentity): Promise<People> {
+export async function loadPeople(me: DriveIdentity): Promise<People> {
   const { data } = await api.get<{ people: DrivePerson[] }>('/drive/people')
   const people: People = { byAccount: new Map(), accountAt: new Map() }
   for (const person of data.people) {
