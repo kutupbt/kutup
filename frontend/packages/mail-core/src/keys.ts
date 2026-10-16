@@ -1,4 +1,4 @@
-import { foldAddress, fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
+import { foldAddress, fromBase64, inspectExternalMailKey, inspectMailAddressPublicKey, MAIL_KEY_FLAGS, verifyMailGroupKeyChain, verifyMailKeyList, type SignedMailKeyList } from '@kutup/crypto'
 import { driveIdentityOf } from '@kutup/drive-core/identity'
 import { pinnedVerdict } from '@kutup/drive-core/identityPins'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
@@ -19,20 +19,50 @@ interface PublicKeyRow {
   flags: number
 }
 
-interface KeyLookup {
+/** A person's address: lists signed by their account authority. */
+interface PersonKeyLookup {
   address: string
-  /** The account the address belongs to (server-asserted; absent for a shared mailbox). */
+  /** The account the address belongs to (server-asserted). */
   server: string
-  accountId?: string
+  accountId: string
   accountAuthorityPublicKey: string
   keys: PublicKeyRow[]
   keyLists: { data: string; signature: string }[]
+}
+
+/** A shared mailbox: lists signed by its own group signer (docs/plans/mail-groups.md). */
+interface GroupKeyLookup {
+  address: string
+  server: string
+  groupId: string
+  /** Base64: the chain's first signer, bound by the lists' key id. */
+  firstSigner: string
+  keys: PublicKeyRow[]
+  keyLists: { data: string; signature: string }[]
+  /** Base64 handovers to each next signer; absent when none. */
+  signerHandovers?: string[]
+}
+
+type KeyLookup = PersonKeyLookup | GroupKeyLookup
+
+function isGroupLookup(lookup: KeyLookup): lookup is GroupKeyLookup {
+  return 'groupId' in lookup
+}
+
+/** A shared mailbox's verified chain, as the pin list checks it. */
+export interface GroupChainOf {
+  server: string
+  groupId: string
+  signers: string[]
+  digests: string[]
 }
 
 export interface AddressKeys {
   address: string
   /** The newest key list's sequence, held to what this device has seen. */
   sequence: number
+  /** A shared mailbox: its verified chain, held to the pin list by its id. */
+  group?: GroupChainOf
   authorityPublicKey: string
   /** The key to encrypt to (base64). */
   primary: string
@@ -79,7 +109,12 @@ export class KeysIdentityChanged extends UnverifiedKeys {
 async function pinned(keys: AddressKeys): Promise<AddressKeys> {
   const session = getSession()
   if (!session?.username) return keys
-  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, keys.authorityPublicKey)
+  // A shared mailbox is no person: the first signer of its chain is pinned
+  // at its address (a handover keeps it; an administrator's new chain does
+  // not, and shows as a change). Pinned by the mailbox's id once the pin
+  // list knows groups (docs/plans/account-ids.md).
+  const pinnedKey = keys.group ? keys.group.signers[0] : keys.authorityPublicKey
+  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, pinnedKey)
   if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address, verdict.now)
   return keys
 }
@@ -134,8 +169,13 @@ async function notRolledBack(address: string, keys: AddressKeys): Promise<Addres
   const session = getSession()
   if (!session) return keys
   const folded = (await foldAddress(keys.address)) ?? keys.address
+  // A person's list is counted per authority; a shared mailbox's per mailbox
+  // and chain (its first signer: a handover stays in one chain, while an
+  // administrator's new chain starts its own count, and the pin check after
+  // this says it changed).
+  const id = keys.group ? `${folded}:group:${keys.group.groupId}:${keys.group.signers[0]}` : `${folded}:${keys.authorityPublicKey}`
   try {
-    await revisionGuard(session).accept(KEY_LIST_GUARD_SCOPE, `${folded}:${keys.authorityPublicKey}`, keys.sequence)
+    await revisionGuard(session).accept(KEY_LIST_GUARD_SCOPE, id, keys.sequence)
   } catch (error) {
     if (error instanceof OlderThanSeenError) throw new UnverifiedKeys(address)
     throw error
@@ -151,11 +191,28 @@ async function notRolledBack(address: string, keys: AddressKeys): Promise<Addres
 export async function verified(address: string, lookup: KeyLookup): Promise<AddressKeys> {
   const asked = await foldAddress(address)
   if (!asked || asked !== (await foldAddress(lookup.address))) throw new UnverifiedKeys(address)
-  let previous: { data: string; signature: string } | undefined
+  // An account lives on the server of its address.
+  if (lookup.server !== lookup.address.slice(lookup.address.lastIndexOf('@') + 1).toLowerCase()) throw new UnverifiedKeys(address)
   let newest: SignedMailKeyList | null = null
-  for (const list of lookup.keyLists) {
-    newest = await verifyMailKeyList(list, lookup.accountAuthorityPublicKey, previous)
-    previous = list
+  let group: GroupChainOf | undefined
+  let signer: string
+  try {
+    if (isGroupLookup(lookup)) {
+      const chain = await verifyMailGroupKeyChain(lookup.groupId, lookup.firstSigner, lookup.keyLists, lookup.signerHandovers ?? [])
+      newest = chain.newest
+      signer = chain.signer
+      group = { server: lookup.server, groupId: lookup.groupId, signers: chain.signers, digests: chain.digests }
+    } else {
+      let previous: { data: string; signature: string } | undefined
+      for (const list of lookup.keyLists) {
+        newest = await verifyMailKeyList(list, lookup.accountAuthorityPublicKey, previous)
+        previous = list
+      }
+      signer = lookup.accountAuthorityPublicKey
+    }
+  } catch {
+    // A list or chain that does not verify: these keys are not the owner's.
+    throw new UnverifiedKeys(address)
   }
   if (!newest || newest.address !== lookup.address) {
     throw new UnverifiedKeys(address)
@@ -171,7 +228,8 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
   return {
     address: lookup.address,
     sequence: newest.sequence,
-    authorityPublicKey: lookup.accountAuthorityPublicKey,
+    ...(isGroupLookup(lookup) ? { group } : {}),
+    authorityPublicKey: signer,
     primary: primary.publicKey,
     // A key its owner marked compromised no longer vouches for anything.
     all: [primary, ...kept.filter((k) => k !== primary)].filter((k) => k.flags & MAIL_KEY_FLAGS.notCompromised).map((k) => k.publicKey),

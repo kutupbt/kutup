@@ -2481,7 +2481,7 @@ fn shared_mailboxes() {
     .unwrap();
     let share = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
-        keys[0]["share"].as_str().unwrap(),
+        keys["keys"][0]["share"].as_str().unwrap(),
     )
     .unwrap();
     let bobs_key = mail_key::open_group_key_share(
@@ -2513,7 +2513,7 @@ fn shared_mailboxes() {
     .unwrap();
     let share = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
-        keys[0]["share"]
+        keys["keys"][0]["share"]
             .as_str()
             .expect("Bob keeps his share after renaming"),
     )

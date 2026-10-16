@@ -151,3 +151,64 @@ describe('an address’s key lists against what this device has seen', () => {
     await expect(addressKeys('roll_back@kutup.dev')).rejects.toBeInstanceOf(UnverifiedKeys)
   })
 })
+
+describe('a shared mailbox’s key lists', () => {
+  it('are its signers’ chain, and a chain cut back to before a handover is refused', async () => {
+    const { deriveAccountIdentityKeys: derive, generateMailGroupKey, newMailGroupSigner, signMailGroupKeyList } = await import('@kutup/crypto')
+    pins.verdict = { kind: 'unknown' }
+    forgetKeys()
+    const groupId = crypto.randomUUID()
+    const address = 'hr_team@kutup.dev'
+    const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+    const owner = await derive(master)
+    const account = { server: 'kutup.dev', accountId: crypto.randomUUID() }
+    const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveHpkePublicKey }
+    const k1 = await generateMailGroupKey(address, groupId, [member])
+    const entry = (key: { fingerprint: string; sha256Fingerprint: string }, primary: boolean) => ({
+      fingerprint: key.fingerprint,
+      sha256Fingerprint: key.sha256Fingerprint,
+      primary,
+      flags: primary ? MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete : MAIL_KEY_FLAGS.notCompromised,
+    })
+    const first = await newMailGroupSigner(groupId, [member], { address, sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [entry(k1, true)] })
+    const holder = { account, hpkePrivateKey: owner.driveHpkePrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
+    const k2 = await generateMailGroupKey(address, groupId, [member])
+    const keysAfter = [entry(k1, false), entry(k2, true)].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1))
+    const second = await signMailGroupKeyList(holder, { address, sequence: 2, previousHash: first.keyList.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter })
+    // A handover to a new signer at list 3.
+    const third = await newMailGroupSigner(
+      groupId,
+      [member],
+      { address, sequence: 3, previousHash: second.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter },
+      { holder, previousListHash: second.hash },
+    )
+    const row = (key: { fingerprint: string; sha256Fingerprint: string; publicKey: string }, primary: boolean) => ({
+      fingerprint: key.fingerprint,
+      sha256Fingerprint: key.sha256Fingerprint,
+      publicKey: key.publicKey,
+      primary,
+      flags: 3,
+    })
+    const lookup = (lists: { data: string; signature: string }[], handovers: string[]) => ({
+      address,
+      server: 'kutup.dev',
+      groupId,
+      firstSigner: first.publicKey,
+      keys: [row(k2, true), row(k1, false)],
+      keyLists: lists,
+      ...(handovers.length ? { signerHandovers: handovers } : {}),
+    })
+    const full = lookup([first.keyList, second, third.keyList], [third.handover!])
+    get.mockResolvedValueOnce({ data: full })
+    const keys = await addressKeys(address)
+    expect(keys.sequence).toBe(3)
+    expect(keys.group?.signers).toEqual([first.publicKey, third.publicKey])
+    // The server serves the chain cut back to before the handover: older than seen.
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: lookup([first.keyList, second], []) })
+    await expect(addressKeys(address)).rejects.toBeInstanceOf(UnverifiedKeys)
+    // A list from the old signer after its handover never verifies.
+    const fork = await signMailGroupKeyList(holder, { address, sequence: 3, previousHash: second.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter })
+    await expect(verified(address, lookup([first.keyList, second, fork], [third.handover!]))).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+})
