@@ -778,10 +778,17 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   service) proved fragile on the first live server when devices changed, and
   the plan is to rebuild them on an architecture that heals by itself in a
   federation of browsers (see the research report "Self healing encrypted
-  group chat"). Until then a server can run without them (`CHAT_GROUPS=false`:
-  direct chats only, no group calls), and direct chats get the self-healing
-  first: pushed device-list changes, healing on send, undecryptable messages
-  as placeholders that fill in, automatic session repair.
+  group chat"). The beta launches with groups off (`CHAT_GROUPS` defaults to
+  false: direct chats only, no group calls; meeting links stay), and direct
+  chats get the self-healing first: pushed device-list changes, healing on
+  send, undecryptable messages as placeholders that fill in, automatic
+  session repair.
+- **Pairwise groups replace MLS (after the wipe).** Groups come back on the
+  pairwise, self-healing design (each member's devices reached one to one,
+  as Signal's groups before MLS), keyed by account ids from the start. MLS
+  is frozen until then: it gets only what other formats need to build, no
+  new work, and its routes stay refused while `CHAT_GROUPS` is off. When the
+  pairwise design ships, the MLS code, tables and routes are removed.
 - **Networks that block WebSockets: what is left.** Calls get out over TLS
   on port 443 (`turn.` and `sfu-turn.`), Chat reads its mailbox every few
   seconds when its socket cannot open, and a document opens read-only with

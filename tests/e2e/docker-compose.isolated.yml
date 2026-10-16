@@ -16,6 +16,9 @@ services:
   # ceilings are raised as in docker-compose.chat-federation.yml.
   backend:
     environment:
+      # Groups are off by default (until the pairwise design); the group
+      # specs (36, 38, 48) still run here. Spec 39 covers them off.
+      CHAT_GROUPS: "true"
       RATE_LIMIT_LOGIN_PER_MIN: 1000
       # Outside sending on at first, for spec 58's pause notice (no Stalwart
       # here); spec 59 turns it off and back on in Administration → Mail sending.

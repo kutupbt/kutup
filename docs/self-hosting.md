@@ -104,6 +104,12 @@ name) stops it with exit code 2 and the full list of problems, never a silent
 default. `kutup-server check-config` runs that check alone (no database, no
 migrations); run it against a new image and your `.env` before switching over.
 
+**Chat groups are off by default** (`CHAT_GROUPS=false`): Chat offers direct
+chats, calls and meeting links, but no group chats or group calls; the
+server reports none and refuses the group routes. Groups return with the
+pairwise group design that replaces them (docs/roadmap.md). `CHAT_GROUPS=true`
+switches the current groups on, for testing only.
+
 Keep `CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, and the public host in
 `SERVER_URL` aligned before creating accounts; changing an established account
 address or federation identity is a protocol migration, not a DNS-only edit.

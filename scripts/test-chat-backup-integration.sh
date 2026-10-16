@@ -65,6 +65,11 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test chat_live chat_v1_contract -- --exact --nocapture
+# Groups off by default (CHAT_GROUPS unset on this stack): no groups, no
+# group calls, every group and MLS route refused.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test chat_groups_off_live -- --nocapture
 
 # One identity per account (docs/plans/account-identity.md): sign-in by
 # name, the key binding, fake answers, temporary passwords.
