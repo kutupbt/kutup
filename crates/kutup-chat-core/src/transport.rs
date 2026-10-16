@@ -70,16 +70,20 @@ pub trait ChatTransport {
     /// `POST /api/chat/device` — returns the server-assigned device id.
     async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32>;
 
-    /// `GET /api/chat/users/{username}/keys` — every active device's bundle
+    /// Every method naming an account takes its string form,
+    /// `aci:<uuid>@<server>` (docs/plans/account-ids.md): the transport routes
+    /// by `server` and `accountId`, never by an address.
+    ///
+    /// `GET /api/chat/accounts/{accountId}/keys` — every active device's bundle
     /// (consumes one one-time prekey per device server-side).
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse>;
+    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse>;
 
     /// Fetch the local account's complete signed bundle set for an encrypted
     /// linked-device sync. The server does not consume one-time prekeys for
     /// `current_device_id`, because the engine never encrypts to itself.
     async fn fetch_sync_bundles(
         &self,
-        _username: &str,
+        _account: &str,
         _current_device_id: u32,
     ) -> Result<UserPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
@@ -100,7 +104,7 @@ pub trait ChatTransport {
     }
 
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
-    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, _account: &str) -> Result<Option<AccountManifestV1>> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))
@@ -109,7 +113,7 @@ pub trait ChatTransport {
     /// Fetch one page of a complete signed manifest interval.
     async fn fetch_manifest_history(
         &self,
-        _username: &str,
+        _account: &str,
         _from_sequence: u64,
         _to_sequence: u64,
         _page_from_sequence: u64,
@@ -159,7 +163,7 @@ pub trait ChatTransport {
 
     async fn fetch_sealed_bundles(
         &self,
-        _username: &str,
+        _account: &str,
         _capability: &[u8; 16],
     ) -> Result<UserPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
@@ -169,7 +173,7 @@ pub trait ChatTransport {
 
     async fn send_sealed(
         &self,
-        _username: &str,
+        _account: &str,
         _request: &kutup_chat_proto::SealedMessageSubmissionV1,
     ) -> Result<SendOutcome> {
         Err(crate::ChatError::Transport(
@@ -223,7 +227,7 @@ pub trait ChatTransport {
     /// Capability-gated local or federated peer profile read.
     async fn fetch_profile(
         &self,
-        _username: &str,
+        _account: &str,
         _version: &str,
         _access_key: &[u8],
     ) -> Result<Option<ChatProfileResponse>> {
@@ -250,8 +254,8 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `POST /api/chat/users/{username}/messages` — multi-device send.
-    async fn send(&self, username: &str, req: &SendMessagesRequest) -> Result<SendOutcome>;
+    /// `POST /api/chat/accounts/{accountId}/messages` — multi-device send.
+    async fn send(&self, account: &str, req: &SendMessagesRequest) -> Result<SendOutcome>;
 
     /// `POST /api/chat/sync/messages` — encrypted transcript delivery to every
     /// other active device of the authenticated account.

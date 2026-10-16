@@ -31,16 +31,30 @@ is independently authenticated.
 Kutup does not fork or copy selected pieces of libsignal or OpenMLS. Their
 types do not cross Kutup's public API boundary.
 
-## 2. Addresses and conversation types
+## 2. Accounts, addresses and conversation types
 
-The stable address is canonical lowercase `username@server`. It is the only
-account form: on the wire (JSON `{"username", "server"}` with both required,
-or the `username@server` string), in the server mailbox (`chat_mailbox.sender`
-of an identified envelope), in sealed federation transactions (`recipient`)
-and in client stores. A bare username is refused wherever an account is
-decoded; a client qualifies what a person types (a bare name means the home
-server) before it reaches Chat. Display names and avatars are encrypted,
-mutable and non-unique; they are never routing keys.
+A person is their **account**: the pair `{server, accountId}`, where
+`accountId` is the permanent random id the server minted with the account
+(Signal's ACI; docs/plans/account-ids.md). It survives renames, password
+changes, recovery and an administrator's reset, and ends only with the
+account. It is the key of every durable Chat record: the direct
+conversation (`{"kind": "direct", "account": {"server", "accountId"}}`,
+key `direct:aci:<uuid>@<server>`), the libsignal `ProtocolAddress` name,
+the local stores, contact state (a block follows the person), sent
+transcripts (`peer`, Signal's `destinationServiceId`), mentions, group
+actors, view-once senders, invite join requests, the attachment ledger and
+backup records. Where one string is needed it is `aci:<uuid>@<server>`,
+which no address parser accepts and which is never shown to a person.
+
+An **address**, canonical lowercase `username@server`, is a handle: what a
+person types to find someone and what the app shows. It can change (a
+rename) and, once freed, belong to someone else, so no durable record keys
+on it or carries it. A client resolves an address to an account once, when
+a person starts a conversation; everything after uses the account. A bare
+username is refused wherever an address is decoded; a client qualifies what
+a person types (a bare name means the home server) before it reaches Chat.
+Display names and avatars are encrypted, mutable and non-unique; they are
+never routing keys.
 
 V1 conversation types are:
 
@@ -158,14 +172,22 @@ history. The browser and native bindings derive the expected QR in Rust. Only
 an exact scan atomically promotes the candidate and keeps the old incarnation
 history. A network status label or blind “verify” button cannot promote trust.
 
-The shared safety encoding sorts the two raw account authority keys, encodes
-them under `kutup/safety-number/v2`, hashes with SHA-256, and renders the full
-digest as sixteen lossless five-digit groups. The QR is a versioned
-`kutup://verify/v2/…` encoding of the canonical public payload. It names no
-address, as Signal's names only the ACI and identity key: a rename keeps the
-number, and any other account under a name (a new incarnation, a new holder of
-a released name) has another authority and so another number
-(docs/plans/username-renames.md).
+The first quarantine of a pinned identity, and each new identity offered in
+its place after that, writes a local-only `safetyNumberChanged` line into the
+peer's thread (one per change; its id names the pinned and the offered
+incarnation), as Signal shows the change in the conversation. Native clients
+also get a `SafetyNumberChanged` engine event.
+
+The safety number is Signal's fingerprint (version 2 of libsignal's
+`NumericFingerprintGenerator`, 5200 iterations of SHA-512 per side): each
+side's stable id is the account's `AccountRef` bytes (server and permanent
+account id) and its identity key the raw Ed25519 account authority key; the
+two 30-digit halves show as twelve five-digit groups, the lower half first.
+The QR is `kutup://verify/v3/` and the base64url `CombinedFingerprints`
+protobuf, this side's half first, so a scan is compared with the other side's
+code. It names no address, as Signal's names only the ACI and identity key: a
+rename keeps the number, and another account under a name (a new incarnation,
+a new holder of a released name) has another authority and so another number.
 The derivation lives in `kutup-crypto` (`safety_number`), so Drive and the CLI
 show the same number.
 
@@ -173,8 +195,10 @@ Chat also keeps to the account's synced identity pins, the list Drive, Office,
 Photos and the CLI share (docs/plans/drive-identity-pins.md). Right after the
 engine accepts a contact's identity, and before anything is sealed to them:
 
-- a first-seen contact whose address the list holds with another authority is
+- a first-seen contact whose account the list holds with another authority is
   quarantined (the send fails with a trust error), not trusted on first use;
+- an authority the list holds for another account is quarantined, and never
+  written for this one;
 - an authority the list holds as verified (compared in person in another app
   or on another device) becomes `Verified` here;
 - a contact new to the list is added to it, and one verified here is written
@@ -202,10 +226,10 @@ Relevant routes:
 | `POST/GET /api/chat/backup/media[/{id}]` | upload or lazily restore backup-media ciphertext |
 | `POST /api/chat/backup/media/reconciliation` | page the exact next restore-point media reference set |
 | `POST /api/chat/manifest` | publish exact next signed manifest |
-| `GET /api/chat/users/{username}/manifest` | current local/federated manifest |
-| `GET /api/chat/users/{username}/manifest-history` | bounded complete history page |
-| `GET /api/fed/chat/users/{username}/manifest` | signed-federation current manifest |
-| `GET /api/fed/chat/users/{username}/manifest-history` | signed-federation history page |
+| `GET /api/chat/accounts/{accountId}/manifest?server=` | current local/federated manifest |
+| `GET /api/chat/accounts/{accountId}/manifest-history?server=` | bounded complete history page |
+| `GET /api/fed/chat/accounts/{accountId}/manifest` | signed-federation current manifest |
+| `GET /api/fed/chat/accounts/{accountId}/manifest-history` | signed-federation history page |
 
 ## 6. Direct Chat and Note to Self
 
@@ -326,6 +350,30 @@ does not consume a second set of claimed one-time KeyPackages. Stale durable
 typing outboxes are discarded after ten seconds rather than delivered late.
 The homeservers and MLS ordering authorities see only the ordinary padded
 ciphertext delivery, never the typing kind or state.
+
+### Renames
+
+A thread is keyed by the peer's account, so a username change keeps it. The
+app follows a direct peer to the address its server says it has now along
+the peer's own rename chain (signed by the authority pinned for them,
+extending the chain the pin list holds), and for each rename issued since
+the list first met them writes a local-only `peerRenamed` line (`{previous,
+current, sequence}`), once per rename: its id names the account and the
+sequence. A few peers are checked per pass, newest conversations first, at
+most every five minutes each. Someone who later takes the old name is
+another account and another thread.
+
+### Which devices a message is taken from
+
+An identified envelope is read only when its sender device is in the
+verified signed manifest of the authority pinned for the sender account, as
+for a sealed one (whose certificate must also match it). An unknown sender's
+manifest is fetched and verified first. A session-starting (PreKey) message
+must carry that device's identity key. This account's own devices are checked
+against the manifest this device verified under its own authority, never one
+a server offers first. Otherwise a server could start a session in a pinned
+person's name, or as a "new own device" (a transcript or a contact control),
+with a device of its own. A refused envelope is kept for retry, not acked.
 
 ### Unreadable messages and session repair
 
@@ -474,7 +522,7 @@ receive path (Direct, sync transcript, MLS):
 
 | Field | On | Rule |
 | --- | --- | --- |
-| `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` a canonical address. Readers show "@" and the member's current name. |
+| `mentions` | text | 1–64 ordered, non-overlapping `{start, length, member}` ranges in UTF-16 units of the text; `member` an account `{server, accountId}`. Readers show "@" and the member's current name. |
 | `linkPreview` | text | `{url, title, description?, image?}`: an `https://` URL that appears in the text, title ≤ 300 and description ≤ 1000 characters, an optional JPEG/PNG/WebP image ≤ 24 KiB inline. Made by the sender; recipients never contact the site. |
 | `forwarded` | text, attachment | `true` or absent. A forwarded attachment is a new upload, since the original is on its sender's server. |
 | `viewOnce` | photo or video attachment | `true` or absent. Sent without a thumbnail; never enters the backup; the recipient opens it once, and closing the viewer sends `viewOnceOpened` to their own devices. Like Signal's, this is a courtesy against casual re-viewing, not protection from a screenshot or a modified client. |
@@ -486,7 +534,8 @@ receive path (Direct, sync transcript, MLS):
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
-local-only record of a finished call, like `groupUpdate` and `undecryptable`:
+local-only record of a finished call, like `groupUpdate`, `undecryptable`,
+`safetyNumberChanged` and `peerRenamed`:
 none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
 (`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).

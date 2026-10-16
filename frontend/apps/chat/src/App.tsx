@@ -13,6 +13,7 @@ import { SettingsPage } from './features/settings/SettingsPage'
 import { LinkCallRoute } from './features/callLinks/LinkCallRoute'
 import { MeetingsPage } from './features/callLinks/MeetingsPage'
 import { JoinLinkRoute } from './features/groupLink/JoinLinkRoute'
+import { OpenAddressRoute } from './features/list/OpenAddressRoute'
 import { SharePlaceRoute } from './features/location/SharePlaceRoute'
 import { NotFoundPage } from './NotFoundPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -37,6 +38,7 @@ function SignedIn() {
           <Route element={<ChatShell />}>
             <Route index element={<ChatsPage />} />
             <Route path="/c/:key" element={<ChatsPage />} />
+            <Route path="/to/:address" element={<OpenAddressRoute />} />
             <Route path="/meetings" element={<MeetingsPage />} />
             <Route path="/join" element={<JoinLinkRoute />} />
             <Route path="/share-place" element={<SharePlaceRoute />} />

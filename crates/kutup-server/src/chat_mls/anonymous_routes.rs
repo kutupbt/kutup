@@ -108,18 +108,18 @@ pub(super) async fn claim_local_anonymous_key_packages(
     limits: &kutup_chat_proto::MlsAbuseLimitsV1,
 ) -> AppResult<MlsKeyPackageBundleV1> {
     let capability = decode_capability(&request.capability)?;
-    let username = request.recipient.username.clone();
+    let recipient = crate::account_ids::id_of(&request.recipient)?;
     let now = OffsetDateTime::now_utc();
     let repository = MlsRepository::new(state.pool.clone());
     let (user_id, manifest_version) = repository
-        .authorize_anonymous_key_package_claim(&username, &capability, limits, now)
+        .authorize_anonymous_key_package_claim(recipient, &capability, limits, now)
         .await?;
     let manifest = crate::handlers::chat::load_account_manifest(state, user_id).await?;
     if manifest.sequence != manifest_version {
         return Err(unavailable());
     }
     let key_packages = repository
-        .claim_anonymous_key_packages(&username, &capability, user_id, manifest_version, now)
+        .claim_anonymous_key_packages(recipient, &capability, user_id, manifest_version, now)
         .await?;
     let response = MlsKeyPackageBundleV1 {
         recipient: request.recipient.clone(),
@@ -164,15 +164,15 @@ pub(crate) async fn submit_anonymous_message(
         .bind(destination)
         .fetch_one(&mut *tx)
         .await?;
-        let canonical_recipient = submission.recipient.canonical();
+        let recipient_id = crate::account_ids::id_of(&submission.recipient)?;
         let existing: Option<(i64, Value)> = sqlx::query_as(
             "SELECT sequence, transaction
              FROM chat_mls_federation_outbox
-             WHERE destination = $1 AND recipient = $2 AND send_id = $3
+             WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3
              FOR UPDATE",
         )
         .bind(destination)
-        .bind(&canonical_recipient)
+        .bind(recipient_id)
         .bind(submission.send_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -200,12 +200,12 @@ pub(crate) async fn submit_anonymous_message(
             sqlx::query(
                 "INSERT INTO chat_mls_federation_outbox
                      (destination, sequence, sender_user_id, sender_device_id,
-                      recipient, send_id, transaction)
+                      recipient_account_id, send_id, transaction)
                  VALUES ($1,$2,NULL,NULL,$3,$4,$5)",
             )
             .bind(destination)
             .bind(next_sequence)
-            .bind(&canonical_recipient)
+            .bind(recipient_id)
             .bind(submission.send_id)
             .bind(&value)
             .execute(&mut *tx)
@@ -306,14 +306,14 @@ pub(crate) async fn submit_anonymous_message(
     let capability = decode_capability(&submission.capability)?;
     let response = MlsRepository::new(state.pool.clone())
         .store_anonymous_submission(
-            &submission.recipient.username,
+            crate::account_ids::id_of(&submission.recipient)?,
             &submission,
             &capability,
             &policy.abuse_limits,
             OffsetDateTime::now_utc(),
         )
         .await?;
-    notify_mls_recipient_mailbox(&state, &submission.recipient.username).await;
+    notify_mls_recipient_mailbox(&state, crate::account_ids::id_of(&submission.recipient)?).await;
     telemetry::mls_anonymous_delivery_event(
         "local_destination",
         if response.deduplicated {

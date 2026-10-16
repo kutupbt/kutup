@@ -21,16 +21,16 @@ describe('federated send answers', () => {
   it('a final refusal leaves the queue; a server without chat.v2 says so', async () => {
     const transport = new ApiChatTransport()
     post.mockRejectedValueOnce(answer(502, { error: 'refused', code: 'peerRefused' }))
-    await expect(transport.sendSealedMessage('bob@b.example', {})).resolves.toEqual({ kind: 'refused' })
+    await expect(transport.sendSealedMessage('aci:00000000-0000-4000-8000-81b637d8fcd2@b.example', {})).resolves.toEqual({ kind: 'refused' })
 
     post.mockRejectedValueOnce(answer(503, { error: 'waits', code: PEER_UNSUPPORTED }))
-    await expect(transport.sendSealedMessage('bob@b.example', {})).rejects.toThrow(PEER_UNSUPPORTED)
+    await expect(transport.sendSealedMessage('aci:00000000-0000-4000-8000-81b637d8fcd2@b.example', {})).rejects.toThrow(PEER_UNSUPPORTED)
 
     post.mockRejectedValueOnce(answer(503, { error: 'waits', code: PEER_UNSUPPORTED }))
-    await expect(transport.sendMessage('bob@b.example', {})).rejects.toThrow(PEER_UNSUPPORTED)
+    await expect(transport.sendMessage('aci:00000000-0000-4000-8000-81b637d8fcd2@b.example', {})).rejects.toThrow(PEER_UNSUPPORTED)
 
     // A plain 503 stays what it was.
     post.mockRejectedValueOnce(answer(503, { error: 'busy' }))
-    await expect(transport.sendMessage('bob@b.example', {})).rejects.toBeInstanceOf(AxiosError)
+    await expect(transport.sendMessage('aci:00000000-0000-4000-8000-81b637d8fcd2@b.example', {})).rejects.toBeInstanceOf(AxiosError)
   })
 })

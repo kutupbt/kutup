@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatContentView, ChatHistoryEntry, ContactRecord, ConversationId } from '@kutup/chat-core/types'
 import { conversationList, foldMutations, foldPolls, foldReceipts, messageRequests, threadView, unreadCounts, type ChatData } from './views'
+import { accountKey } from '@kutup/chat-core/identity'
 
-const SELF = 'me@a.test'
-const bob: ConversationId = { kind: 'direct', address: { username: 'bob', server: 'a.test' } }
-const carol: ConversationId = { kind: 'direct', address: { username: 'carol', server: 'b.test' } }
-const note: ConversationId = { kind: 'direct', address: { username: 'me', server: 'a.test' } }
+const SELF = 'aci:00000000-0000-4000-8000-00000000000e@a.test'
+const bob: ConversationId = { kind: 'direct', account: { server: 'a.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } }
+const carol: ConversationId = { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-4c26d9074c27' } }
+const note: ConversationId = { kind: 'direct', account: { server: 'a.test', accountId: '00000000-0000-4000-8000-00000000000e' } }
 const group: ConversationId = { kind: 'group', groupId: 'g1' }
 
 let seq = 0
@@ -18,7 +19,7 @@ function entry(
   // direct chat's address) or a group member.
   sender = direction === 'outgoing'
     ? SELF
-    : conversation.kind === 'direct' ? `${conversation.address.username}@${conversation.address.server}` : 'dan@a.test',
+    : conversation.kind === 'direct' ? accountKey(conversation.account) : 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@a.test',
 ): ChatHistoryEntry {
   seq += 1
   return {
@@ -49,14 +50,14 @@ describe('conversationList', () => {
       entry(note, 'outgoing', 30, { messageId: 'n1', text: 'todo' }),
       entry(carol, 'incoming', 20, { messageId: 'c1', text: 'hello?' }),
     ]
-    const list = conversationList(data(history, [contact('carol@b.test', 'pendingIncoming')]), SELF, 100)
+    const list = conversationList(data(history, [contact('aci:00000000-0000-4000-8000-4c26d9074c27@b.test', 'pendingIncoming')]), SELF, 100)
     expect(list.map((c) => [c.key, c.kind, c.contact?.state])).toEqual([
-      ['direct:me@a.test', 'note', undefined],
-      ['direct:carol@b.test', 'direct', 'pendingIncoming'],
-      ['direct:bob@a.test', 'direct', undefined],
+      ['direct:aci:00000000-0000-4000-8000-00000000000e@a.test', 'note', undefined],
+      ['direct:aci:00000000-0000-4000-8000-4c26d9074c27@b.test', 'direct', 'pendingIncoming'],
+      ['direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', 'direct', undefined],
     ])
-    const rejected = conversationList(data(history, [contact('carol@b.test', 'rejected')]), SELF, 100)
-    expect(rejected.map((c) => c.key)).not.toContain('direct:carol@b.test')
+    const rejected = conversationList(data(history, [contact('aci:00000000-0000-4000-8000-4c26d9074c27@b.test', 'rejected')]), SELF, 100)
+    expect(rejected.map((c) => c.key)).not.toContain('direct:aci:00000000-0000-4000-8000-4c26d9074c27@b.test')
   })
 
   it('keeps a group whose live record is gone as protected history', () => {
@@ -76,9 +77,9 @@ describe('conversationList', () => {
 describe('messageRequests', () => {
   it('lists pending incoming contacts with their latest message', () => {
     const history = [entry(carol, 'incoming', 20, { messageId: 'c1', text: 'hello?' })]
-    const requests = messageRequests(data(history, [contact('carol@b.test', 'pendingIncoming', 20)]), 100)
+    const requests = messageRequests(data(history, [contact('aci:00000000-0000-4000-8000-4c26d9074c27@b.test', 'pendingIncoming', 20)]), 100)
     expect(requests).toHaveLength(1)
-    expect(requests[0]).toMatchObject({ address: 'carol@b.test', key: 'direct:carol@b.test' })
+    expect(requests[0]).toMatchObject({ peer: 'aci:00000000-0000-4000-8000-4c26d9074c27@b.test', key: 'direct:aci:00000000-0000-4000-8000-4c26d9074c27@b.test' })
     expect(requests[0]?.last?.content.text).toBe('hello?')
   })
 })
@@ -119,12 +120,12 @@ describe('threadView', () => {
       entry(bob, 'outgoing', 4, { disappearingTimer: { durationSeconds: 3600 } }),
       entry(bob, 'incoming', 5, { messageId: 'gone', text: 'expired', expiresAtMs: 50 }),
     ]
-    const view = threadView(history, 'direct:bob@a.test', SELF, 100)
+    const view = threadView(history, 'direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', SELF, 100)
     expect(view.map((m) => m.id)).toEqual(['m1', 'm2', history[3].id])
     expect(view[1]?.replyTo?.content.text).toBe('question')
     expect(view[1]?.reactions[0]).toMatchObject({ emoji: '❤️', count: 1 })
     expect(view[2]?.timerChange).toEqual({ seconds: 3600 })
-    expect(view[0]?.author).toBe('bob@a.test')
+    expect(view[0]?.author).toBe('aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')
     expect(view[1]?.author).toBe(SELF)
   })
 })
@@ -137,15 +138,15 @@ describe('an unreadable message', () => {
       entry(bob, 'incoming', 3, { kind: 'undecryptable', messageId: 'asked', undecryptable: true, body: { sendId: 's1' } }),
       entry(bob, 'incoming', 4, { kind: 'undecryptable', messageId: 'given-up', undecryptable: true, body: { sendId: 's2', lost: true } }),
     ]
-    const view = threadView(history, 'direct:bob@a.test', SELF, 100)
+    const view = threadView(history, 'direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', SELF, 100)
     expect(view.map((m) => [m.id, m.undecryptable, m.author])).toEqual([
-      ['m1', null, 'bob@a.test'],
-      ['lost', 'lost', 'bob@a.test'],
-      ['asked', 'waiting', 'bob@a.test'],
-      ['given-up', 'lost', 'bob@a.test'],
+      ['m1', null, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'],
+      ['lost', 'lost', 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'],
+      ['asked', 'waiting', 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'],
+      ['given-up', 'lost', 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'],
     ])
     expect(conversationList(data(history), SELF, 100)[0]?.last?.content.undecryptable).toBe(true)
-    expect(unreadCounts(history, {}, 100).get('direct:bob@a.test')).toBe(1)
+    expect(unreadCounts(history, {}, 100).get('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')).toBe(1)
   })
 })
 
@@ -157,8 +158,8 @@ describe('unreadCounts', () => {
       entry(bob, 'incoming', 21, { reaction: { targetMessageId: 'b', emoji: '👍', active: true } }),
       entry(bob, 'outgoing', 22, { messageId: 'c', text: 'mine' }),
     ]
-    expect(unreadCounts(history, { 'direct:bob@a.test': 10 }, 100).get('direct:bob@a.test')).toBe(1)
-    expect(unreadCounts(history, {}, 100).get('direct:bob@a.test')).toBe(2)
+    expect(unreadCounts(history, { 'direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test': 10 }, 100).get('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')).toBe(1)
+    expect(unreadCounts(history, {}, 100).get('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')).toBe(2)
   })
 })
 
@@ -167,27 +168,27 @@ describe('foldPolls', () => {
   it("counts each voter's latest valid vote until the author ends it", () => {
     const history = [
       entry(group, 'outgoing', 10, { kind: 'poll', messageId: 'p1', poll }),
-      entry(group, 'incoming', 20, { kind: 'pollVote', seq: '1', pollVote: { targetMessageId: 'p1', options: [0] } }, 'bob@a.test'),
-      entry(group, 'incoming', 30, { kind: 'pollVote', seq: '2', pollVote: { targetMessageId: 'p1', options: [2] } }, 'bob@a.test'),
+      entry(group, 'incoming', 20, { kind: 'pollVote', seq: '1', pollVote: { targetMessageId: 'p1', options: [0] } }, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'),
+      entry(group, 'incoming', 30, { kind: 'pollVote', seq: '2', pollVote: { targetMessageId: 'p1', options: [2] } }, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'),
       // Two answers in a single-choice poll, or a missing option: ignored.
-      entry(group, 'incoming', 31, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [0, 1] } }, 'carol@b.test'),
-      entry(group, 'incoming', 32, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [7] } }, 'dan@a.test'),
+      entry(group, 'incoming', 31, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [0, 1] } }, 'aci:00000000-0000-4000-8000-4c26d9074c27@b.test'),
+      entry(group, 'incoming', 32, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [7] } }, 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@a.test'),
       entry(group, 'outgoing', 40, { kind: 'pollVote', pollVote: { targetMessageId: 'p1', options: [2] } }),
       // Someone else cannot end it; its author can.
-      entry(group, 'incoming', 45, { kind: 'pollTerminate', pollTerminate: { targetMessageId: 'p1' } }, 'bob@a.test'),
+      entry(group, 'incoming', 45, { kind: 'pollTerminate', pollTerminate: { targetMessageId: 'p1' } }, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'),
       entry(group, 'outgoing', 50, { kind: 'pollTerminate', pollTerminate: { targetMessageId: 'p1' } }),
-      entry(group, 'incoming', 60, { kind: 'pollVote', seq: '3', pollVote: { targetMessageId: 'p1', options: [1] } }, 'bob@a.test'),
+      entry(group, 'incoming', 60, { kind: 'pollVote', seq: '3', pollVote: { targetMessageId: 'p1', options: [1] } }, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'),
     ]
     const state = foldPolls(history, SELF).get('p1')!
     expect(state.ended).toBe(true)
-    expect(Object.fromEntries(state.votes)).toEqual({ 'bob@a.test': [2], [SELF]: [2] })
+    expect(Object.fromEntries(state.votes)).toEqual({ 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test': [2], [SELF]: [2] })
   })
 
   it('takes a vote back with an empty choice', () => {
     const history = [
       entry(group, 'outgoing', 10, { kind: 'poll', messageId: 'p2', poll: { ...poll, allowMultiple: true } }),
-      entry(group, 'incoming', 20, { kind: 'pollVote', seq: '1', pollVote: { targetMessageId: 'p2', options: [0, 1] } }, 'bob@a.test'),
-      entry(group, 'incoming', 30, { kind: 'pollVote', seq: '2', pollVote: { targetMessageId: 'p2', options: [] } }, 'bob@a.test'),
+      entry(group, 'incoming', 20, { kind: 'pollVote', seq: '1', pollVote: { targetMessageId: 'p2', options: [0, 1] } }, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'),
+      entry(group, 'incoming', 30, { kind: 'pollVote', seq: '2', pollVote: { targetMessageId: 'p2', options: [] } }, 'aci:00000000-0000-4000-8000-81b637d8fcd2@a.test'),
     ]
     expect(foldPolls(history, SELF).get('p2')!.votes.size).toBe(0)
   })

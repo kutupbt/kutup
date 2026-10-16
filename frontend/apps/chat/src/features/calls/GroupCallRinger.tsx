@@ -73,7 +73,7 @@ export function GroupCallRinger() {
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
   const group = ringing ? snapshot.groups.find((g) => g.request.genesis.conversationId === ringing.groupId) : undefined
   const title = ringing ? groupTitle(ringing.groupId, t, group?.currentGroupInfo) : ''
-  const starter = ringing ? personName(ringing.starter, profiles, self?.address ?? '', t) : ''
+  const starter = ringing ? personName(ringing.starter, profiles, self?.key ?? '', t) : ''
 
   useEffect(() => {
     if (!ringing) return

@@ -70,10 +70,7 @@ fn namespace(feature: FederationFeature) -> &'static str {
 }
 
 pub(crate) fn chains_path(feature: FederationFeature, username: &str) -> String {
-    format!(
-        "/api/fed/{}/accounts/{username}/renames",
-        namespace(feature)
-    )
+    format!("/api/fed/{}/names/{username}/renames", namespace(feature))
 }
 
 pub(crate) fn announce_path(feature: FederationFeature) -> String {
@@ -603,11 +600,11 @@ fn feature_of(headers: &HeaderMap) -> AppResult<FederationFeature> {
         .ok_or_else(|| AppError::unauthorized("federation feature missing"))
 }
 
-/// `GET /api/fed/{chat|drive}/accounts/{username}/renames[?incarnationId=]`
+/// `GET /api/fed/{chat|drive}/names/{username}/renames[?incarnationId=]`
 /// — every chain naming `username@<this server>`, for a signed peer.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/accounts/{username}/renames",
+    path = "/api/fed/chat/names/{username}/renames",
     tag = "federation",
     params(("username" = String, Path, description = "A name on this server, any spelling")),
     responses((status = 200, description = "The chains naming it (an empty list when none does)"))

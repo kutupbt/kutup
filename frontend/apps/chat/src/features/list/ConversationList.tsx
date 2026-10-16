@@ -46,12 +46,12 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
   const typingIndicators = useTypingIndicators()
   const { snapshot } = chat
 
-  const items = useMemo(() => conversationList(snapshot, self.address, now), [snapshot, self.address, now])
-  const mutations = useMemo(() => foldMutations(snapshot.history, self.address), [snapshot.history, self.address])
+  const items = useMemo(() => conversationList(snapshot, self.key, now), [snapshot, self.key, now])
+  const mutations = useMemo(() => foldMutations(snapshot.history, self.key), [snapshot.history, self.key])
   const unread = useMemo(() => unreadCounts(snapshot.history, readThrough, now), [snapshot.history, readThrough, now])
   const mentioned = useMemo(
-    () => unreadMentions(snapshot.history, readThrough, self.address, now),
-    [snapshot.history, readThrough, self.address, now],
+    () => unreadMentions(snapshot.history, readThrough, self.key, now),
+    [snapshot.history, readThrough, self.key, now],
   )
   const profiles = useMemo(() => new Map(snapshot.profiles.map((p) => [p.peer, p])), [snapshot.profiles])
 
@@ -104,7 +104,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
                 state={state}
                 muted={isMuted(state, now)}
                 selected={item.key === selectedKey}
-                title={conversationTitle(item.conversation, item.address, item.profile, self.address, t, item.groupInfo)}
+                title={conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo)}
                 snippet={snippet(item)}
                 time={item.last || item.activityMs ? formatShortTime(item.last?.timestampMs ?? item.activityMs, now, i18n.language, t) : ''}
                 unread={count}
@@ -170,15 +170,15 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
     if (!item.last) {
       return { text: item.kind === 'group' ? t('chat.list.newGroup') : '' }
     }
-    const nameOf = (address: string) => personName(address, profiles, self.address, t)
+    const nameOf = (address: string) => personName(address, profiles, self.key, t)
     const preview = messagePreview(item.last, mutations.get(item.last.content.messageId), t, {
-      self: self.address,
+      self: self.key,
       nameOf,
     })
     if (item.last.content.groupUpdate || item.last.content.callLog || item.last.content.undecryptable || item.last.content.groupCall) return { text: preview }
     if (item.conversation.kind === 'group') {
       const author = item.last.sender
-      return { text: t('chat.list.byAuthor', { author: personName(author, profiles, self.address, t), text: preview }) }
+      return { text: t('chat.list.byAuthor', { author: personName(author, profiles, self.key, t), text: preview }) }
     }
     return { text: preview }
   }

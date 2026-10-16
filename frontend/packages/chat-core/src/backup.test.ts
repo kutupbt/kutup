@@ -19,13 +19,30 @@ const bytesJson = (bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(byt
 const bytesBase64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64')
 const base64Bytes = (value: string) => new Uint8Array(Buffer.from(value, 'base64'))
 
+/** Refuses what Rust's backup format refuses here: a `sender` that is not `{ server, accountId }`. */
+function rustShaped(value: unknown): unknown {
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk)
+    if (!node || typeof node !== 'object') return
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'sender' && (typeof child !== 'object' || !child || !('accountId' in child) || !('server' in child))) {
+        throw new Error(`invalid type: ${typeof child} ${JSON.stringify(child)}, expected struct Wire`)
+      }
+      walk(child)
+    }
+  }
+  walk(value)
+  return value
+}
+
 vi.mock('@kutup/crypto/rustWasm', () => ({
   getCryptoWasm: vi.fn(async () => ({
     verifyChatBackupMetadata: (_authorization: unknown, manifest?: { baseCiphertextSha256: string }) => ({
       signerAuthorizationDigest: '1'.repeat(64),
       manifestDigest: manifest?.baseCiphertextSha256,
     }),
-    encodeChatBackupPlaintext: (value: unknown) => jsonBytes(value),
+    // As Rust's format does: a record's sender is an AccountRef, never a string.
+    encodeChatBackupPlaintext: (value: unknown) => jsonBytes(rustShaped(value)),
     decodeChatBackupPlaintext: (value: string) => bytesJson(base64Bytes(value)),
     sealChatBackupObject: (plaintext: Uint8Array) => bytesBase64(plaintext),
     openChatBackupObject: (ciphertext: string) => ciphertext,
@@ -182,8 +199,8 @@ function historyEntry(): ChatHistoryEntry {
   return {
     id: '33333333-3333-4333-8333-333333333333',
     // Outgoing to someone else, so the chat and the sender differ.
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'kutup.dev' } },
-    sender: 'user@kutup.dev',
+    conversation: { kind: 'direct', account: { server: 'kutup.dev', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
+    sender: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
     direction: 'outgoing',
     senderDeviceId: 9,
     timestampMs: 1_700_000_000_000,
@@ -257,9 +274,7 @@ async function open(
 ) {
   const coordinator = await ChatBackupCoordinator.open({
     databaseName,
-    envelopeBinding: 'user@kutup.dev',
-    username: 'user',
-    serverName: 'kutup.dev',
+    envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
     masterKey: new Uint8Array(32).fill(3),
     deviceId,
     history,
@@ -381,8 +396,8 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(history).toHaveLength(1)
     expect(history[0].senderDeviceId).toBe(9)
     expect(history[0].delivered).toBe(true)
-    expect(history[0].sender).toBe('user@kutup.dev')
-    expect(history[0].conversation).toEqual({ kind: 'direct', address: { username: 'bob', server: 'kutup.dev' } })
+    expect(history[0].sender).toBe('aci:00000000-0000-4000-8000-04f8996da763@kutup.dev')
+    expect(history[0].conversation).toEqual({ kind: 'direct', account: { server: 'kutup.dev', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } })
   })
 
   it('accepts a second device deleting a record another device already deleted', async () => {
@@ -850,7 +865,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       ...entry,
       id: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`,
       conversation: { kind: 'group', groupId: conversation },
-      sender: 'user@kutup.dev',
+      sender: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
       timestampMs: 1_700_000_000_000 + id,
       content: { ...entry.content, messageId: `10000000-0000-4000-8000-${String(id).padStart(12, '0')}`, body: { text }, text, ...extra },
     }
@@ -882,9 +897,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
       const base = runtime(transport)
       const coordinator = await ChatBackupCoordinator.open({
         databaseName: database,
-        envelopeBinding: 'user@kutup.dev',
-        username: 'user',
-        serverName: 'kutup.dev',
+        envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
         masterKey: new Uint8Array(32).fill(3),
         deviceId: 9,
         history: async () => history,

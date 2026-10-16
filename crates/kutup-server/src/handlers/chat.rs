@@ -28,16 +28,16 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountAddress, AccountManifestDeviceV1,
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AckRequest,
-    AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage, ChatWsServerMessage,
-    ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
-    DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope,
-    OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose,
-    ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
-    RenameChatDeviceRequest, ReplenishKeysRequest, SealedDeliveryResponseV1,
-    SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
-    UserPreKeyBundlesResponse,
+    capability_hash, constant_time_capability_hash_eq, AccountManifestDeviceV1,
+    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AccountRef,
+    AckRequest, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage,
+    ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
+    DevicePreKeyBundle, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
+    OutgoingEnvelope, OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequest,
+    RegisterChatDeviceResponse, RenameChatDeviceRequest, ReplenishKeysRequest,
+    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
+    SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -117,7 +117,6 @@ type PublicProfileRow = (
     Option<String>,
     Option<String>,
     Vec<u8>,
-    String,
 );
 type OwnProfileRow = (
     i16,
@@ -134,16 +133,47 @@ type OwnProfileRow = (
 
 /// An account on this Chat server is local. Federation is only involved when
 /// the address names a different server.
-fn is_remote_chat_address(local_server_name: &str, address: &AccountAddress) -> bool {
-    address.server != local_server_name
+/// `?server=` beside a Chat path's `:accountId`: the account's server, this
+/// one when absent (docs/plans/account-ids.md).
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub struct AccountServerQuery {
+    /// The account's server; this server when absent.
+    pub server: Option<String>,
 }
 
-fn local_chat_account(local_server_name: &str, username: &str) -> String {
-    format!("{username}@{local_server_name}")
+/// The account a Chat path names: one of ours (its user id), or another
+/// server's, asked of that server through federation.
+pub(crate) enum NamedAccount {
+    Local(Uuid),
+    Remote(AccountRef),
+}
+
+/// The account `:accountId` and `?server=` name. Ours must be an active
+/// account (`404` otherwise); another server's needs federation.
+pub(crate) async fn named_account(
+    state: &AppState,
+    account_id: &str,
+    server: Option<&str>,
+) -> AppResult<NamedAccount> {
+    let local = &state.config.chat_server_name;
+    let account = crate::account_ids::named(local, account_id, server)?;
+    if account.server != *local {
+        state
+            .federation
+            .as_ref()
+            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
+        return Ok(NamedAccount::Remote(account));
+    }
+    let user = crate::account_ids::local_user(&state.pool, local, &account)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such account"))?;
+    Ok(NamedAccount::Local(user))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ManifestHistoryQuery {
+    /// The account's server; this server when absent.
+    pub server: Option<String>,
     #[serde(rename = "fromSequence")]
     pub from_sequence: u64,
     #[serde(rename = "toSequence")]
@@ -217,9 +247,10 @@ fn validate_manifest(manifest: &AccountManifestV1) -> AppResult<()> {
 
 fn validate_profile(
     profile: &PutChatProfileRequest,
-    expected_account: &str,
+    expected_account: &AccountRef,
 ) -> AppResult<(Vec<u8>, Vec<u8>)> {
-    if profile.suite != ProfileSuiteId::XChaCha20Poly1305V1 || profile.account != expected_account {
+    if profile.suite != ProfileSuiteId::XChaCha20Poly1305V1 || profile.account != *expected_account
+    {
         return Err(AppError::bad_request(
             "profile suite or account does not match the authenticated account",
         ));
@@ -289,7 +320,7 @@ fn validate_profile_envelope(
 fn validate_profile_envelope_context(
     encoded: &str,
     purpose: ProfileEnvelopePurpose,
-    account: &str,
+    account: &AccountRef,
     version: &str,
     revision: u64,
     source_device_id: u32,
@@ -511,8 +542,8 @@ pub async fn publish_manifest(
     // This is the common serialization point for every device-set mutation and
     // observation. It also locks the first-manifest case, where selecting the
     // (not-yet-existent) manifest row `FOR UPDATE` cannot lock anything.
-    let account: (Option<String>, String, String, String, String, String) = sqlx::query_as(
-        "SELECT username, public_key, account_authority_public_key,
+    let account: (String, String, String, String, String) = sqlx::query_as(
+        "SELECT public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key
          FROM users WHERE id = $1 FOR UPDATE",
     )
@@ -520,18 +551,15 @@ pub async fn publish_manifest(
     .fetch_one(&mut *tx)
     .await?;
     let (
-        username,
         drive_public_key,
         authority_public_key,
         authority_key_id,
         incarnation_id,
         drive_signing_public_key,
     ) = account;
-    let username = username
-        .filter(|username| !username.is_empty())
-        .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
-    if manifest.account != canonical_account {
+    // The manifest names this account by its permanent id, never a name
+    // (docs/plans/account-ids.md).
+    if manifest.account != crate::account_ids::local(&state.config.chat_server_name, user_id)? {
         return Err(AppError::conflict(
             "manifest account does not match the authenticated account",
         ));
@@ -573,10 +601,10 @@ pub async fn publish_manifest(
             } else if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
                 return Err(AppError::conflict("manifest previousHash mismatch"));
             }
-            // The account may move to its current address after a rename
-            // (checked above: a manifest names the caller's current address),
-            // nothing else of the identity (docs/plans/username-renames.md).
-            if manifest.incarnation_id != current_manifest.incarnation_id
+            // Nothing of the identity changes inside one incarnation; the
+            // account is its id, which never changes either.
+            if manifest.account != current_manifest.account
+                || manifest.incarnation_id != current_manifest.incarnation_id
                 || manifest.authority_key_id != current_manifest.authority_key_id
                 || manifest.self_authority_key != current_manifest.self_authority_key
                 || manifest.drive != current_manifest.drive
@@ -689,15 +717,17 @@ pub async fn publish_manifest(
     Ok(Json(AccountManifestPublicationV1 { manifest }).into_response())
 }
 
-/// `GET /api/chat/users/{username}/manifest` — fetch an account's latest
-/// signed device manifest without consuming any one-time prekeys.
+/// `GET /api/chat/accounts/{accountId}/manifest?server=` — fetch an
+/// account's latest signed device manifest without consuming any one-time
+/// prekeys.
 #[utoipa::path(
     get,
-    path = "/api/chat/users/{username}/manifest",
+    path = "/api/chat/accounts/{accountId}/manifest",
     tag = "chat",
     operation_id = "getChatAccountManifestV1",
     params(
-        ("username" = String, Path, description = "Local username or canonical federated account")
+        ("accountId" = String, Path, description = "Permanent account id"),
+        AccountServerQuery
     ),
     responses(
         (status = 200, description = "Latest signed manifest", body = AccountManifestV1),
@@ -708,46 +738,18 @@ pub async fn publish_manifest(
 pub async fn get_user_manifest(
     State(state): State<AppState>,
     _auth: AuthUser,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
+    Query(query): Query<AccountServerQuery>,
 ) -> AppResult<Response> {
-    let address: AccountAddress =
-        username
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        let manifest = crate::chat_federation::fetch_remote_manifest(&state, &address).await?;
-        return Ok(Json(manifest).into_response());
+    match named_account(&state, &account_id, query.server.as_deref()).await? {
+        NamedAccount::Remote(account) => {
+            let manifest = crate::chat_federation::fetch_remote_manifest(&state, &account).await?;
+            Ok(Json(manifest).into_response())
+        }
+        NamedAccount::Local(user_id) => {
+            Ok(Json(load_account_manifest(&state, user_id).await?).into_response())
+        }
     }
-    let value: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT m.manifest
-         FROM chat_device_manifests m
-         JOIN users u ON u.id = m.user_id
-         WHERE u.id = kutup_current_user($1) AND u.is_active = true",
-    )
-    .bind(&address.username)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(value) = value else {
-        return Err(crate::account_names::renamed_or(
-            &state.pool,
-            &state.config.chat_server_name,
-            &address.username,
-            AppError::not_found("chat manifest not found"),
-        )
-        .await);
-    };
-    let manifest: AccountManifestV1 = serde_json::from_value(value)
-        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
-    manifest
-        .verify()
-        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
-    Ok(Json(manifest).into_response())
 }
 
 pub(crate) async fn load_account_manifest(
@@ -775,7 +777,7 @@ pub(crate) async fn load_account_manifest(
 pub async fn get_manifest_history(
     State(state): State<AppState>,
     _auth: AuthUser,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
     Query(query): Query<ManifestHistoryQuery>,
 ) -> AppResult<Response> {
     if query.from_sequence == 0
@@ -786,35 +788,14 @@ pub async fn get_manifest_history(
     {
         return Err(AppError::bad_request("invalid manifest history bounds"));
     }
-    let address: AccountAddress =
-        username
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        let page =
-            crate::chat_federation::fetch_remote_manifest_history(&state, &address, &query).await?;
-        return Ok(Json(page).into_response());
-    }
-    let target_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
-    )
-    .bind(&address.username)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(target_id) = target_id else {
-        return Err(crate::account_names::renamed_or(
-            &state.pool,
-            &state.config.chat_server_name,
-            &address.username,
-            AppError::not_found("chat manifest not found"),
-        )
-        .await);
+    let target_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
+        NamedAccount::Remote(account) => {
+            let page =
+                crate::chat_federation::fetch_remote_manifest_history(&state, &account, &query)
+                    .await?;
+            return Ok(Json(page).into_response());
+        }
+        NamedAccount::Local(user_id) => user_id,
     };
     let incarnation_id: Option<String> = sqlx::query_scalar(
         "SELECT manifest->>'incarnationId' FROM chat_device_manifests WHERE user_id = $1",
@@ -894,16 +875,13 @@ pub async fn put_profile(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
     let mut tx = state.pool.begin().await?;
-    let username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    let username = username
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
-    let canonical_account = local_chat_account(&state.config.chat_server_name, &username);
-    let (verifier, delivery_verifier) = validate_profile(&profile, &canonical_account)?;
+    // The account's row is the lock every profile write takes.
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let account = crate::account_ids::local(&state.config.chat_server_name, user_id)?;
+    let (verifier, delivery_verifier) = validate_profile(&profile, &account)?;
     // The account app edits the profile too, without being a chat device
     // (docs/plans/unified-profile.md); any other source must be one.
     let device_exists: Option<i32> =
@@ -1015,13 +993,6 @@ pub async fn put_profile(
 )]
 pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    username
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::conflict("account requires a username for chat"))?;
     let mut tx = state.pool.begin().await?;
     let profile = load_own_profile_in(&mut tx, user_id, false)
         .await?
@@ -1030,17 +1001,18 @@ pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> A
     Ok(Json(profile).into_response())
 }
 
-/// `GET /api/chat/users/{username}/profile/{version}` — fetch a capability-
-/// gated local or federated encrypted peer profile. The access key is carried
-/// in a header so it does not enter URL logs.
+/// `GET /api/chat/accounts/{accountId}/profile/{version}?server=` — fetch a
+/// capability-gated local or federated encrypted peer profile. The access
+/// key is carried in a header so it does not enter URL logs.
 #[utoipa::path(
     get,
-    path = "/api/chat/users/{username}/profile/{version}",
+    path = "/api/chat/accounts/{accountId}/profile/{version}",
     tag = "chat",
     operation_id = "getChatProfile",
     params(
-        ("username" = String, Path, description = "Canonical local or federated account"),
-        ("version" = String, Path, description = "Profile-key-derived version")
+        ("accountId" = String, Path, description = "Permanent account id"),
+        ("version" = String, Path, description = "Profile-key-derived version"),
+        AccountServerQuery
     ),
     responses(
         (status = 200, description = "Opaque encrypted profile", body = ChatProfileResponse),
@@ -1051,41 +1023,30 @@ pub async fn get_own_profile(State(state): State<AppState>, auth: AuthUser) -> A
 pub async fn get_user_profile(
     State(state): State<AppState>,
     _auth: AuthUser,
-    Path((username, version)): Path<(String, String)>,
+    Path((account_id, version)): Path<(String, String)>,
+    Query(query): Query<AccountServerQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     if !canonical_profile_version(&version) {
         return Err(AppError::not_found("chat profile not found"));
     }
     let access_key = profile_access_key_from_headers(&headers)?;
-    let address: AccountAddress =
-        username
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        let profile =
-            crate::chat_federation::fetch_remote_profile(&state, &address, &version, &access_key)
-                .await?;
-        return Ok(Json(profile).into_response());
+    match named_account(&state, &account_id, query.server.as_deref()).await? {
+        NamedAccount::Remote(account) => {
+            let profile = crate::chat_federation::fetch_remote_profile(
+                &state,
+                &account,
+                &version,
+                &access_key,
+            )
+            .await?;
+            Ok(Json(profile).into_response())
+        }
+        NamedAccount::Local(user_id) => load_public_profile(&state, user_id, &version, &access_key)
+            .await?
+            .map(|profile| Json(profile).into_response())
+            .ok_or_else(|| AppError::not_found("chat profile not found")),
     }
-    let Some(profile) =
-        load_public_profile(&state, &address.username, &version, &access_key).await?
-    else {
-        return Err(crate::account_names::renamed_or(
-            &state.pool,
-            &state.config.chat_server_name,
-            &address.username,
-            AppError::not_found("chat profile not found"),
-        )
-        .await);
-    };
-    Ok(Json(profile).into_response())
 }
 
 fn profile_access_key_from_headers(headers: &HeaderMap) -> AppResult<Vec<u8>> {
@@ -1104,23 +1065,22 @@ fn profile_access_key_from_headers(headers: &HeaderMap) -> AppResult<Vec<u8>> {
 
 pub(crate) async fn load_public_profile(
     state: &AppState,
-    username: &str,
+    user_id: Uuid,
     version: &str,
     access_key: &[u8],
 ) -> AppResult<Option<ChatProfileResponse>> {
     let row: Option<PublicProfileRow> = sqlx::query_as(
         "SELECT p.suite, p.version, p.revision, p.source_device_id, p.name_ciphertext,
-                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier, u.username
+                p.avatar_ciphertext, p.about_ciphertext, p.access_key_verifier
          FROM chat_profiles p
          JOIN users u ON u.id = p.user_id
-         WHERE u.id = kutup_current_user($1) AND u.is_active = true AND p.version = $2",
+         WHERE u.id = $1 AND u.is_active = true AND p.version = $2",
     )
-    .bind(username)
+    .bind(user_id)
     .bind(version)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier, stored)) =
-        row
+    let Some((suite, version, revision, source_device_id, name, avatar, about, verifier)) = row
     else {
         return Ok(None);
     };
@@ -1128,13 +1088,12 @@ pub(crate) async fn load_public_profile(
     if !constant_time_eq(&verifier, &presented) {
         return Ok(None);
     }
-    // Any spelling finds the account; the answer names it as stored. A
-    // profile still sealed for an address the account has left (renamed,
-    // not published again yet) is not this address's: not found, and the
-    // asker keeps the profile it has.
-    let account = local_chat_account(&state.config.chat_server_name, &stored);
-    if !crate::account_names::same_address(&sealed_profile_account(&name)?, &account) {
-        return Ok(None);
+    // Sealed for the account's permanent id: a rename leaves it valid.
+    let account = crate::account_ids::local(&state.config.chat_server_name, user_id)?;
+    if sealed_profile_account(&name)? != account {
+        return Err(AppError::internal(
+            "a stored profile is sealed for another account",
+        ));
     }
     let suite = profile_suite_from_db(suite, "chat_profiles")?;
     let response = ChatProfileResponse {
@@ -1151,20 +1110,15 @@ pub(crate) async fn load_public_profile(
     Ok(Some(response))
 }
 
-/// The account a stored profile was sealed for (its envelopes' context): the
-/// account's address when it was published, which a rename since leaves
-/// behind until the owner publishes again.
-fn sealed_profile_account(name_envelope: &str) -> AppResult<String> {
+/// The account a stored profile was sealed for (its envelopes' context).
+fn sealed_profile_account(name_envelope: &str) -> AppResult<AccountRef> {
     Ok(kutup_chat_proto::decode_profile_envelope(name_envelope)
         .map_err(AppError::bad_request)?
         .context
         .account)
 }
 
-/// The account's current profile, as it was published: under the address the
-/// account had then (the row is the account's own, written by it), so a
-/// rename does not lock the account out of its profile; it publishes again
-/// under its new address.
+/// The account's current profile, as it was published.
 async fn load_own_profile_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -1417,6 +1371,8 @@ pub struct BundleQuery {
     /// verification, but its one-time keys are not consumed.
     #[serde(rename = "syncDeviceId")]
     pub(crate) sync_device_id: Option<i32>,
+    /// The account's server; this server when absent.
+    pub(crate) server: Option<String>,
 }
 
 /// Asserts the (user, device) pair exists; used by the device-scoped endpoints.
@@ -1556,17 +1512,18 @@ pub async fn prekey_count(
     .into_response())
 }
 
-/// `GET /api/chat/users/{username}/keys` — PQXDH prekey bundles for every chat device
-/// of `username`. Consumes one one-time EC and one one-time Kyber prekey per device
+/// `GET /api/chat/accounts/{accountId}/keys?server=` — PQXDH prekey bundles for
+/// every chat device of the account. Consumes one one-time EC and one one-time Kyber prekey per device
 /// (falling back to the last-resort Kyber prekey — a bundle is never non-PQ).
 /// Rate-limited (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) because fetches consume pool keys.
 #[utoipa::path(
     get,
-    path = "/api/chat/users/{username}/keys",
+    path = "/api/chat/accounts/{accountId}/keys",
     tag = "chat",
     operation_id = "chatUserPreKeyBundles",
     params(
-        ("username" = String, Path, description = "Local or canonical federated username"),
+        ("accountId" = String, Path, description = "Permanent account id"),
+        ("server" = Option<String>, Query, description = "The account's server; this server when absent"),
         ("syncDeviceId" = Option<u32>, Query, description = "Authenticated current device for own-account sync")
     ),
     responses(
@@ -1578,7 +1535,7 @@ pub async fn prekey_count(
 pub async fn get_user_bundles(
     State(state): State<AppState>,
     auth: AuthUser,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
     Query(query): Query<BundleQuery>,
 ) -> AppResult<Response> {
     if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
@@ -1587,51 +1544,24 @@ pub async fn get_user_bundles(
             "too many chat key requests for this account",
         ));
     }
-    let address: AccountAddress =
-        username
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        if query.sync_device_id.is_some() {
-            return Err(AppError::forbidden(
-                "linked-device key fetch is limited to the local account",
-            ));
+    let target_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
+        NamedAccount::Remote(account) => {
+            if query.sync_device_id.is_some() {
+                return Err(AppError::forbidden(
+                    "linked-device key fetch is limited to the local account",
+                ));
+            }
+            let bundles = crate::chat_federation::fetch_remote_bundles(&state, &account).await?;
+            return Ok(Json(bundles).into_response());
         }
-        let bundles = crate::chat_federation::fetch_remote_bundles(&state, &address).await?;
-        return Ok(Json(bundles).into_response());
+        NamedAccount::Local(user_id) => user_id,
+    };
+    if query.sync_device_id.is_some() && trusted_uuid(&auth.user_id)? != target_id {
+        return Err(AppError::forbidden(
+            "linked-device key fetch is limited to the caller's account",
+        ));
     }
-
-    if query.sync_device_id.is_some() {
-        let caller_id = trusted_uuid(&auth.user_id)?;
-        let target_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
-        )
-        .bind(&address.username)
-        .fetch_optional(&state.pool)
-        .await?;
-        if Some(caller_id) != target_id {
-            return Err(AppError::forbidden(
-                "linked-device key fetch is limited to the caller's account",
-            ));
-        }
-    }
-
-    let response_account = local_chat_account(&state.config.chat_server_name, &address.username);
-    let bundles = load_user_bundles(
-        &state,
-        &address.username,
-        &response_account,
-        query.sync_device_id,
-        true,
-        None,
-    )
-    .await?;
+    let bundles = load_user_bundles(&state, target_id, query.sync_device_id, true, None).await?;
     Ok(Json(bundles).into_response())
 }
 
@@ -1639,35 +1569,26 @@ pub async fn get_user_bundles(
 /// invalid/stale capabilities deliberately share the exact response.
 pub async fn get_anonymous_bundles(
     State(state): State<AppState>,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
+    Query(query): Query<AccountServerQuery>,
     Json(request): Json<AnonymousPreKeyRequestV1>,
 ) -> AppResult<Response> {
-    let capability = request
-        .capability_bytes()
-        .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
+    let unavailable = || AppError::not_found("sealed delivery unavailable");
+    let capability = request.capability_bytes().map_err(|_| unavailable())?;
     let capability_hash = capability_hash(&capability);
-    let address: AccountAddress = username
-        .parse()
-        .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    let local = &state.config.chat_server_name;
+    let account = crate::account_ids::named(local, &account_id, query.server.as_deref())
+        .map_err(|_| unavailable())?;
+    if account.server != *local {
+        state.federation.as_ref().ok_or_else(unavailable)?;
         let bundles =
-            crate::chat_federation::fetch_remote_sealed_bundles(&state, &address, &request).await?;
+            crate::chat_federation::fetch_remote_sealed_bundles(&state, &account, &request).await?;
         return Ok(Json(bundles).into_response());
     }
-    let response_account = local_chat_account(&state.config.chat_server_name, &address.username);
-    let bundles = load_user_bundles(
-        &state,
-        &address.username,
-        &response_account,
-        None,
-        true,
-        Some(&capability_hash),
-    )
-    .await?;
+    let target_id = crate::account_ids::local_user(&state.pool, local, &account)
+        .await?
+        .ok_or_else(unavailable)?;
+    let bundles = load_user_bundles(&state, target_id, None, true, Some(&capability_hash)).await?;
     Ok(Json(bundles).into_response())
 }
 
@@ -1716,37 +1637,32 @@ pub(crate) async fn consume_anonymous_rate(
 /// Load one local account's signed device directory. Local client fetches
 /// consume one-time keys. Federated server reads intentionally serve only the
 /// reusable last-resort PQ key so replay cannot exhaust a user's prekey pool.
+/// The bundles of `target_id`, an account of this server, one per active
+/// device. With `delivery_capability` (contacts-only sealed delivery), an
+/// account that is not active and a wrong capability get the same answer.
 pub(crate) async fn load_user_bundles(
     state: &AppState,
-    username: &str,
-    response_username: &str,
+    target_id: Uuid,
     sync_device_id: Option<i32>,
     consume_one_time: bool,
     delivery_capability: Option<&[u8; 32]>,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let mut tx = state.pool.begin().await?;
-    let target: Option<(Uuid, String, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT u.id, u.username, c.capability_hash
+    let target: Option<Option<Vec<u8>>> = sqlx::query_scalar(
+        "SELECT c.capability_hash
          FROM users u
          LEFT JOIN chat_delivery_capabilities c ON c.user_id = u.id
-         WHERE u.id = kutup_current_user($1) AND u.is_active = true",
+         WHERE u.id = $1 AND u.is_active = true",
     )
-    .bind(username)
+    .bind(target_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((target_id, stored_name, stored_capability)) = target else {
-        drop(tx);
-        return Err(crate::account_names::renamed_or(
-            &state.pool,
-            &state.config.chat_server_name,
-            username,
-            AppError::not_found(if delivery_capability.is_some() {
-                "sealed delivery unavailable"
-            } else {
-                "user not found"
-            }),
-        )
-        .await);
+    let Some(stored_capability) = target else {
+        return Err(AppError::not_found(if delivery_capability.is_some() {
+            "sealed delivery unavailable"
+        } else {
+            "user not found"
+        }));
     };
     if let Some(capability) = delivery_capability {
         let Some(stored) = stored_capability.and_then(|value| <[u8; 32]>::try_from(value).ok())
@@ -1759,12 +1675,7 @@ pub(crate) async fn load_user_bundles(
         consume_anonymous_rate(&mut tx, "capability_bundle", capability, 30, 60).await?;
     }
 
-    // Any spelling finds the account; the answer names it as stored.
-    let response_username = match response_username.rsplit_once('@') {
-        Some((_, server)) => format!("{stored_name}@{server}"),
-        None => stored_name,
-    };
-    let response_username = response_username.as_str();
+    let account = crate::account_ids::local(&state.config.chat_server_name, target_id)?;
     // Hold a stable account/device/manifest snapshot until the one-time keys
     // have been allocated. Writers take `FOR UPDATE` on this same row.
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
@@ -1900,7 +1811,7 @@ pub(crate) async fn load_user_bundles(
     tx.commit().await?;
 
     Ok(UserPreKeyBundlesResponse {
-        username: response_username.to_string(),
+        account,
         devices: bundles,
         manifest,
     })
@@ -1912,10 +1823,13 @@ pub(crate) async fn load_user_bundles(
 /// [`DeviceListMismatch`] so clients can't silently skip a device.
 #[utoipa::path(
     post,
-    path = "/api/chat/users/{username}/messages",
+    path = "/api/chat/accounts/{accountId}/messages",
     tag = "chat",
     operation_id = "chatSendMessages",
-    params(("username" = String, Path, description = "Recipient (local username)")),
+    params(
+        ("accountId" = String, Path, description = "Recipient's permanent account id"),
+        AccountServerQuery
+    ),
     request_body = SendMessagesRequest,
     responses(
         (status = 200, description = "Stored (and pushed to live sockets)"),
@@ -1927,52 +1841,39 @@ pub(crate) async fn load_user_bundles(
 pub async fn send_messages(
     State(state): State<AppState>,
     auth: AuthUser,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
+    Query(query): Query<AccountServerQuery>,
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
     validate_send_request(&req, false, None)?;
-    let address: AccountAddress =
-        username
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::bad_request("chat federation is not configured"))?;
-        let envelope_count = req.envelopes.len();
-        return match crate::chat_federation::enqueue_send(&state, sender_id, &address, req).await? {
-            crate::chat_federation::FederatedSendOutcome::Delivered { deduplicated } => Ok(Json(
-                json!({ "stored": envelope_count, "deduplicated": deduplicated }),
-            )
-            .into_response()),
-            crate::chat_federation::FederatedSendOutcome::Mismatch(mismatch) => {
-                Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
-            }
-            crate::chat_federation::FederatedSendOutcome::Rejected(_) => {
-                Err(AppError::not_found("remote chat recipient is unavailable"))
-            }
-            crate::chat_federation::FederatedSendOutcome::Pending => Err(AppError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "federated send is durably queued for retry",
-            )),
-            crate::chat_federation::FederatedSendOutcome::PeerUnsupported => {
-                Err(crate::chat_federation::peer_unsupported_error())
-            }
-        };
-    }
-    let recipient: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true")
-            .bind(&address.username)
-            .fetch_optional(&state.pool)
-            .await?;
-    let Some((recipient_id,)) = recipient else {
-        return Err(AppError::not_found("user not found"));
+    let recipient_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
+        NamedAccount::Local(user_id) => user_id,
+        NamedAccount::Remote(account) => {
+            let envelope_count = req.envelopes.len();
+            return match crate::chat_federation::enqueue_send(&state, sender_id, &account, req)
+                .await?
+            {
+                crate::chat_federation::FederatedSendOutcome::Delivered { deduplicated } => Ok(
+                    Json(json!({ "stored": envelope_count, "deduplicated": deduplicated }))
+                        .into_response(),
+                ),
+                crate::chat_federation::FederatedSendOutcome::Mismatch(mismatch) => {
+                    Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
+                }
+                crate::chat_federation::FederatedSendOutcome::Rejected(_) => {
+                    Err(AppError::not_found("remote chat recipient is unavailable"))
+                }
+                crate::chat_federation::FederatedSendOutcome::Pending => Err(AppError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "federated send is durably queued for retry",
+                )),
+                crate::chat_federation::FederatedSendOutcome::PeerUnsupported => {
+                    Err(crate::chat_federation::peer_unsupported_error())
+                }
+            };
+        }
     };
-
     deliver_messages(&state, sender_id, recipient_id, req, None).await
 }
 
@@ -1981,20 +1882,19 @@ pub async fn send_messages(
 /// returned to the client as-is.
 pub async fn send_sealed_messages(
     State(state): State<AppState>,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
+    Query(query): Query<AccountServerQuery>,
     Json(request): Json<SealedMessageSubmissionV1>,
 ) -> AppResult<Response> {
     request.validate().map_err(AppError::bad_request)?;
-    let address: AccountAddress = username
-        .parse()
-        .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if is_remote_chat_address(&state.config.chat_server_name, &address) {
-        state
-            .federation
-            .as_ref()
-            .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    let unavailable = || AppError::not_found("sealed delivery unavailable");
+    let local = &state.config.chat_server_name;
+    let account = crate::account_ids::named(local, &account_id, query.server.as_deref())
+        .map_err(|_| unavailable())?;
+    if account.server != *local {
+        state.federation.as_ref().ok_or_else(unavailable)?;
         let outcome =
-            crate::chat_federation::enqueue_sealed_send(&state, &address, request).await?;
+            crate::chat_federation::enqueue_sealed_send(&state, &account, request).await?;
         return match outcome {
             crate::chat_federation::FederatedSealedOutcome::Delivered(response) => {
                 Ok(Json(response).into_response())
@@ -2012,8 +1912,14 @@ pub async fn send_sealed_messages(
         };
     }
 
+    // An account that is not ours, or not active, gets the same answer as a
+    // wrong capability.
+    let recipient = match Uuid::parse_str(&account.account_id) {
+        Ok(id) => id,
+        Err(_) => return Err(unavailable()),
+    };
     let mut tx = state.pool.begin().await?;
-    let outcome = store_sealed_messages(&mut tx, &address.username, &request, None).await?;
+    let outcome = store_sealed_messages(&mut tx, recipient, &request, None).await?;
     match outcome {
         SealedStoreOutcome::Mismatch(mismatch) => {
             tx.rollback().await?;
@@ -2038,7 +1944,7 @@ pub(crate) enum SealedStoreOutcome {
 #[tracing::instrument(name = "chat.sealed_sender.store", skip_all)]
 pub(crate) async fn store_sealed_messages(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    username: &str,
+    recipient: Uuid,
     request: &SealedMessageSubmissionV1,
     federation_origin: Option<&str>,
 ) -> AppResult<SealedStoreOutcome> {
@@ -2071,10 +1977,10 @@ pub(crate) async fn store_sealed_messages(
         "SELECT u.id, c.capability_hash
          FROM users u
          JOIN chat_delivery_capabilities c ON c.user_id = u.id
-         WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true
+         WHERE u.id = $1 AND u.is_active = true
          FOR SHARE OF u, c",
     )
-    .bind(username)
+    .bind(recipient)
     .fetch_optional(&mut **tx)
     .await?;
     let Some((recipient_id, stored_hash)) = target else {
@@ -2178,9 +2084,9 @@ pub(crate) async fn store_sealed_messages(
     for envelope in &request.envelopes {
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
-                (recipient_user_id, recipient_device_id, sender, sealed_sender,
+                (recipient_user_id, recipient_device_id, sealed_sender,
                  sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,NULL,true,0,$3,$4,$5,$6)
+             VALUES ($1,$2,true,0,$3,$4,$5,$6)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
@@ -2318,27 +2224,18 @@ async fn deliver_messages(
         .await?;
 
     // The sender must address from one of their own registered chat devices.
-    let sender_username: Option<Option<String>> = sqlx::query_scalar(
-        "UPDATE chat_devices d SET last_seen_at = now()
-         FROM users u
-         WHERE d.user_id = $1 AND d.device_id = $2 AND u.id = d.user_id
-         RETURNING u.username",
+    let device: Option<i32> = sqlx::query_scalar(
+        "UPDATE chat_devices SET last_seen_at = now()
+         WHERE user_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_id)
     .bind(req.sender_device_id as i32)
     .fetch_optional(&mut *tx)
     .await?;
-    let sender_username = sender_username
-        .ok_or_else(|| AppError::not_found("no such chat device"))?
-        .ok_or_else(|| AppError::forbidden("a chat sender needs a username"))?;
-    // Mailbox rows and delivered envelopes name the sender by its full
-    // `username@server` address, never a bare local username.
-    let sender_address = kutup_chat_proto::AccountAddress::federated(
-        &sender_username,
-        &state.config.chat_server_name,
-    )
-    .map_err(|error| AppError::internal(format!("local chat sender address: {error}")))?
-    .canonical();
+    device.ok_or_else(|| AppError::not_found("no such chat device"))?;
+    // Mailbox rows and delivered envelopes name the sender by its account
+    // (server and permanent id), never a name.
+    let sender = crate::account_ids::local(&state.config.chat_server_name, sender_id)?;
 
     // Claim before validating the *current* recipient device set. A retry of a
     // send that was already accepted must return the same success even if a
@@ -2395,14 +2292,15 @@ async fn deliver_messages(
 
     for e in &req.envelopes {
         let (id, cursor, ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
-            "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender,
-                 sender_device_id, envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender_server,
+                 sender_account_id, sender_device_id, envelope_type, suite, content, send_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
         .bind(e.device_id as i32)
-        .bind(&sender_address)
+        .bind(&sender.server)
+        .bind(sender_id)
         .bind(req.sender_device_id as i32)
         .bind(envelope_type_code(e.envelope_type))
         .bind(e.suite.as_u16() as i16)
@@ -2416,7 +2314,7 @@ async fn deliver_messages(
             DeliveredEnvelope {
                 id: id.to_string(),
                 cursor: cursor as u64,
-                sender: Some(sender_address.clone()),
+                sender: Some(sender.clone()),
                 sealed_sender: false,
                 sender_device_id: req.sender_device_id,
                 envelope_type: e.envelope_type,
@@ -2556,6 +2454,7 @@ pub async fn drain_mailbox(
         Uuid,
         i64,
         Option<String>,
+        Option<Uuid>,
         bool,
         i32,
         i16,
@@ -2564,7 +2463,8 @@ pub async fn drain_mailbox(
         OffsetDateTime,
         Option<String>,
     )> = sqlx::query_as(
-        "SELECT id, cursor, sender, sealed_sender, sender_device_id, envelope_type, suite, content, server_ts, send_id
+        "SELECT id, cursor, sender_server, sender_account_id, sealed_sender, sender_device_id,
+                envelope_type, suite, content, server_ts, send_id
              FROM chat_mailbox
              WHERE recipient_user_id = $1 AND recipient_device_id = $2
                AND ($4::BIGINT IS NULL OR cursor > $4)
@@ -2586,7 +2486,8 @@ pub async fn drain_mailbox(
             |(
                 id,
                 cursor,
-                sender,
+                sender_server,
+                sender_account_id,
                 sealed_sender,
                 sender_dev,
                 etype,
@@ -2595,6 +2496,12 @@ pub async fn drain_mailbox(
                 ts,
                 send_id,
             )| {
+                let sender = match (sender_server, sender_account_id) {
+                    (Some(server), Some(account_id)) => {
+                        Some(crate::account_ids::stored(&server, account_id)?)
+                    }
+                    _ => None,
+                };
                 Ok(DeliveredEnvelope {
                     id: id.to_string(),
                     cursor: cursor as u64,
@@ -2841,11 +2748,13 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
 mod tests {
     use super::*;
 
-    const PROFILE_TEST_ACCOUNT: &str = "alice@example.test";
+    fn profile_test_account() -> AccountRef {
+        crate::account_ids::local("example.test", Uuid::from_u128(7)).unwrap()
+    }
 
     fn opaque_profile_envelope(purpose: ProfileEnvelopePurpose, ciphertext_len: usize) -> String {
         let context =
-            ProfileEnvelopeContextV1::new(purpose, PROFILE_TEST_ACCOUNT, &"01".repeat(32), 1, 1)
+            ProfileEnvelopeContextV1::new(purpose, &profile_test_account(), &"01".repeat(32), 1, 1)
                 .unwrap();
         let mut envelope = kutup_chat_proto::encode_profile_envelope_header(
             &context,
@@ -2860,7 +2769,7 @@ mod tests {
     fn valid_profile() -> PutChatProfileRequest {
         PutChatProfileRequest {
             suite: ProfileSuiteId::XChaCha20Poly1305V1,
-            account: PROFILE_TEST_ACCOUNT.into(),
+            account: profile_test_account(),
             version: "01".repeat(32),
             revision: 1,
             source_device_id: 1,
@@ -2890,17 +2799,15 @@ mod tests {
     }
 
     #[test]
-    fn canonical_local_accounts_do_not_require_federation() {
-        assert!("alice".parse::<AccountAddress>().is_err());
-        let local: AccountAddress = "alice@kutup.local".parse().unwrap();
-        let remote: AccountAddress = "alice@remote.test".parse().unwrap();
-
-        assert!(!is_remote_chat_address("kutup.local", &local));
-        assert!(is_remote_chat_address("kutup.local", &remote));
-        assert_eq!(
-            local_chat_account("kutup.local", "alice"),
-            "alice@kutup.local"
-        );
+    fn a_path_names_an_account_on_this_server_unless_it_says_otherwise() {
+        let id = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        let local = crate::account_ids::named("kutup.local", id, None).unwrap();
+        assert_eq!(local.to_string(), format!("aci:{id}@kutup.local"));
+        let remote = crate::account_ids::named("kutup.local", id, Some("remote.test")).unwrap();
+        assert_eq!(remote.server, "remote.test");
+        // A name is not an account id.
+        assert!(crate::account_ids::named("kutup.local", "alice", None).is_err());
+        assert!(crate::account_ids::named("kutup.local", id, Some("Remote.Test")).is_err());
     }
 
     #[test]
@@ -2971,7 +2878,7 @@ mod tests {
     fn encrypted_profile_validation_accepts_only_bounded_opaque_fields() {
         let profile = valid_profile();
         assert_eq!(
-            validate_profile(&profile, PROFILE_TEST_ACCOUNT).unwrap(),
+            validate_profile(&profile, &profile_test_account()).unwrap(),
             (vec![2u8; 32], vec![3u8; 32])
         );
 
@@ -2984,7 +2891,7 @@ mod tests {
         decoded_avatar.push(0);
         oversized_avatar.avatar = Some(STANDARD.encode(decoded_avatar));
         assert_eq!(
-            validate_profile(&oversized_avatar, PROFILE_TEST_ACCOUNT)
+            validate_profile(&oversized_avatar, &profile_test_account())
                 .unwrap_err()
                 .status,
             StatusCode::BAD_REQUEST
@@ -2993,7 +2900,7 @@ mod tests {
         let mut noncanonical_version = profile;
         noncanonical_version.version = "AA".repeat(32);
         assert_eq!(
-            validate_profile(&noncanonical_version, PROFILE_TEST_ACCOUNT)
+            validate_profile(&noncanonical_version, &profile_test_account())
                 .unwrap_err()
                 .status,
             StatusCode::BAD_REQUEST

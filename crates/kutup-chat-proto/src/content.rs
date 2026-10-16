@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{ChatAttachmentDescriptorV1, ConversationId};
+use kutup_crypto::account_ref::AccountRef;
 
 /// Reserved `kind` values. [`TEXT`] is user-visible content and
 /// [`SENT_TRANSCRIPT`] is the encrypted linked-device synchronization wrapper;
@@ -103,6 +104,14 @@ pub mod kind {
     /// A message from the peer arrived but could not be read; written by this
     /// device's engine in its place. Never travels. [IMPL]
     pub const UNDECRYPTABLE: &str = "undecryptable";
+    /// The peer's safety number changed (another account authority or
+    /// incarnation than the one pinned): the line in the thread, written by
+    /// this device's engine once per change. Never travels. [IMPL]
+    pub const SAFETY_NUMBER_CHANGED: &str = "safetyNumberChanged";
+    /// The peer changed their username, as their own verified rename chain
+    /// says (docs/plans/account-ids.md): the line in the thread, written by
+    /// this device once per rename. Never travels. [IMPL]
+    pub const PEER_RENAMED: &str = "peerRenamed";
     /// A message sent once more, at the request of a device that could not
     /// read it, wrapped whole. [IMPL]
     pub const RESEND: &str = "resend";
@@ -589,6 +598,59 @@ impl ChatContent {
             .insert(DEVICE_LIST_VERSION_FIELD.to_string(), version.into());
     }
 
+    /// The local line saying the peer's safety number changed.
+    pub fn safety_number_changed_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind::SAFETY_NUMBER_CHANGED.to_string(),
+            sent_at: sent_at.into(),
+            seq: 0,
+            message_id: message_id.into(),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::Value::Object(serde_json::Map::new()),
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    pub fn is_safety_number_changed(&self) -> bool {
+        self.kind == kind::SAFETY_NUMBER_CHANGED && self.v == Self::VERSION
+    }
+
+    /// The local line saying the peer changed their username.
+    pub fn peer_renamed_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        body: &PeerRenamedBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::PEER_RENAMED.to_string(),
+            sent_at: sent_at.into(),
+            seq: 0,
+            message_id: message_id.into(),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(body).map_err(|error| error.to_string())?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_peer_renamed(&self) -> Option<PeerRenamedBody> {
+        if self.kind != kind::PEER_RENAMED || self.v != Self::VERSION {
+            return None;
+        }
+        let body: PeerRenamedBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     pub fn is_undecryptable(&self) -> bool {
         self.kind == kind::UNDECRYPTABLE && self.v == Self::VERSION
     }
@@ -884,7 +946,11 @@ impl ChatContent {
 
     /// Kinds only this device's engine writes; they never travel.
     pub fn is_local_only_kind(kind: &str) -> bool {
-        kind == kind::GROUP_UPDATE || kind == kind::CALL_LOG || kind == kind::UNDECRYPTABLE
+        kind == kind::GROUP_UPDATE
+            || kind == kind::CALL_LOG
+            || kind == kind::UNDECRYPTABLE
+            || kind == kind::SAFETY_NUMBER_CHANGED
+            || kind == kind::PEER_RENAMED
     }
 
     pub fn group_update_with_id(
@@ -903,7 +969,7 @@ impl ChatContent {
     /// later, ordinary sent-message synchronization.
     pub fn sent_transcript(
         send_id: impl Into<String>,
-        peer: impl Into<String>,
+        peer: AccountRef,
         timestamp_ms: i64,
         content: ChatContent,
     ) -> Self {
@@ -918,7 +984,7 @@ impl ChatContent {
             profile_suite: content.profile_suite,
             body: serde_json::to_value(SentTranscriptBody {
                 send_id: send_id.into(),
-                peer: peer.into(),
+                peer,
                 timestamp_ms,
                 content: Box::new(content),
             })
@@ -1002,6 +1068,8 @@ impl ChatContent {
                     | kind::GROUP_UPDATE
                     | kind::SESSION_CONTROL
                     | kind::UNDECRYPTABLE
+                    | kind::SAFETY_NUMBER_CHANGED
+                    | kind::PEER_RENAMED
                     | kind::RESEND
             )
     }
@@ -1148,6 +1216,39 @@ pub struct ResendBody {
     pub content: Box<ChatContent>,
 }
 
+/// Body of a local [`kind::PEER_RENAMED`] line: one step of the peer's own
+/// verified rename chain. The addresses are labels shown, never keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerRenamedBody {
+    /// The address before, `username@server`.
+    pub previous: String,
+    /// The address after.
+    pub current: String,
+    /// The rename's place in the chain: 1 for the first.
+    pub sequence: u64,
+}
+
+impl PeerRenamedBody {
+    pub fn validate(&self) -> Result<(), String> {
+        let address = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 320
+                && value
+                    .split_once('@')
+                    .is_some_and(|(name, server)| !name.is_empty() && !server.is_empty())
+        };
+        if !address(&self.previous)
+            || !address(&self.current)
+            || self.previous == self.current
+            || self.sequence == 0
+        {
+            return Err("peer rename line is not one rename".into());
+        }
+        Ok(())
+    }
+}
+
 /// Body of a local [`kind::UNDECRYPTABLE`] record.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1196,15 +1297,8 @@ impl DisappearingExpiryStartBody {
 
 fn validate_control_conversation(conversation: &ConversationId, what: &str) -> Result<(), String> {
     match conversation {
-        ConversationId::Direct { address } => {
-            let canonical = address.canonical();
-            let reparsed: crate::AccountAddress = canonical
-                .parse()
-                .map_err(|_| format!("Chat {what} conversation is invalid"))?;
-            if &reparsed != address {
-                return Err(format!("Chat {what} conversation is not canonical"));
-            }
-        }
+        // An account reference is checked whole when it is read.
+        ConversationId::Direct { .. } => {}
         ConversationId::Group { group_id } => {
             let parsed = Uuid::parse_str(group_id)
                 .map_err(|_| format!("Chat {what} group must be a UUID"))?;
@@ -1301,8 +1395,8 @@ impl ReadPositionBody {
     }
 }
 
-/// One visible change an applied group Commit made. Members are canonical
-/// account addresses.
+/// One visible change an applied group Commit made. Members are accounts,
+/// never addresses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
 pub enum GroupUpdateChange {
@@ -1321,32 +1415,32 @@ pub enum GroupUpdateChange {
     },
     #[serde(rename_all = "camelCase")]
     MemberAdded {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     MemberRemoved {
-        member: String,
+        member: AccountRef,
     },
     /// A removal the member asked for.
     #[serde(rename_all = "camelCase")]
     MemberLeft {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     AdminGranted {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     AdminRevoked {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     OwnerAdded {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     OwnerRemoved {
-        member: String,
+        member: AccountRef,
     },
     #[serde(rename_all = "camelCase")]
     SendersChanged {
@@ -1374,7 +1468,8 @@ pub enum GroupUpdateChange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupUpdateBody {
-    pub actor: String,
+    /// Who made the change.
+    pub actor: AccountRef,
     pub changes: Vec<GroupUpdateChange>,
 }
 
@@ -1432,8 +1527,8 @@ pub struct StickerRemovedBody {
 pub struct ViewOnceOpenedBody {
     pub conversation: ConversationId,
     pub message_id: String,
-    /// Canonical address of the sender.
-    pub sender: String,
+    /// Who sent it.
+    pub sender: AccountRef,
     pub timestamp_ms: i64,
     pub video: bool,
 }
@@ -1442,13 +1537,6 @@ impl ViewOnceOpenedBody {
     pub fn validate(&self) -> Result<(), String> {
         validate_control_conversation(&self.conversation, "view-once")?;
         validate_message_id(&self.message_id, "view-once message")?;
-        let sender: crate::AccountAddress = self
-            .sender
-            .parse()
-            .map_err(|_| "Chat view-once sender is invalid".to_string())?;
-        if sender.canonical() != self.sender {
-            return Err("Chat view-once sender must be canonical".into());
-        }
         if self.timestamp_ms <= 0 || self.timestamp_ms > MAX_SAFE_CLOCK_MS {
             return Err("Chat view-once clock is out of range".into());
         }
@@ -1542,7 +1630,9 @@ pub enum ContactState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactControlBody {
-    pub peer: String,
+    /// The contact: an account, so a block or an accept follows the person,
+    /// never a name someone else may hold later.
+    pub peer: AccountRef,
     pub state: ContactState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_state: Option<ContactState>,
@@ -1558,9 +1648,9 @@ pub struct ContactControlBody {
 pub struct SentTranscriptBody {
     /// Stable logical id used to deduplicate outgoing history across devices.
     pub send_id: String,
-    /// Conversation key. Note to Self uses the local username; future ordinary
-    /// sent transcripts use the remote peer username.
-    pub peer: String,
+    /// Whom it was sent to: the peer's account, or this account's own for
+    /// Note to Self (Signal's `destinationServiceId`).
+    pub peer: AccountRef,
     /// Original local history timestamp in Unix-epoch milliseconds.
     pub timestamp_ms: i64,
     /// The actual user-visible content, not another transcript wrapper.
@@ -1838,13 +1928,18 @@ mod tests {
     fn sent_transcript_round_trips_without_exposing_content_metadata() {
         let original =
             ChatContent::text_with_id(MESSAGE, "2026-07-16T10:00:00Z", 8, "private note");
-        let wrapper = ChatContent::sent_transcript("note-1", "alice", 1234, original.clone());
+        let wrapper = ChatContent::sent_transcript("note-1", acct(1), 1234, original.clone());
         assert_eq!(wrapper.kind, kind::SENT_TRANSCRIPT);
         assert_eq!(wrapper.sent_at, original.sent_at);
         assert_eq!(wrapper.seq, original.seq);
         let body = wrapper.as_sent_transcript().unwrap();
         assert_eq!(body.send_id, "note-1");
-        assert_eq!(body.peer, "alice");
+        assert_eq!(body.peer, acct(1));
+        // The peer is an account: an address is not read.
+        let mut value = serde_json::to_value(&wrapper).unwrap();
+        value["body"]["peer"] = serde_json::json!("alice@example.org");
+        let wire: ChatContent = serde_json::from_value(value).unwrap();
+        assert!(wire.as_sent_transcript().is_none());
         assert_eq!(body.timestamp_ms, 1234);
         assert_eq!(*body.content, original);
     }
@@ -1852,7 +1947,7 @@ mod tests {
     #[test]
     fn contact_control_round_trips_as_a_known_non_rendered_kind() {
         let body = ContactControlBody {
-            peer: "bob@example.org".into(),
+            peer: acct(2),
             state: ContactState::Blocked,
             previous_state: Some(ContactState::Accepted),
             revision: 4,
@@ -1890,14 +1985,23 @@ mod tests {
     const MESSAGE: &str = "0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b";
     const OTHER: &str = "6c1d7e2f-9a3b-4c5d-8e7f-1a2b3c4d5e6f";
 
-    fn direct(address: &str) -> ConversationId {
-        ConversationId::direct(address.parse().unwrap())
+    /// Account `n` on example.org.
+    fn acct(n: u8) -> AccountRef {
+        AccountRef::new(
+            "example.org",
+            &format!("00000000-0000-4000-8000-0000000000{n:02x}"),
+        )
+        .unwrap()
+    }
+
+    fn direct(n: u8) -> ConversationId {
+        ConversationId::direct(acct(n))
     }
 
     #[test]
     fn conversation_state_round_trips_and_bounds_its_fields() {
         let body = ConversationStateBody {
-            conversation: direct("bob@example.org"),
+            conversation: direct(2),
             revision: 3,
             source_device_id: 2,
             updated_at_ms: 1_000,
@@ -1953,7 +2057,7 @@ mod tests {
             "t",
             1,
             ConversationStateBody {
-                conversation: direct("bob@example.org"),
+                conversation: direct(2),
                 revision: 1,
                 source_device_id: 1,
                 updated_at_ms: 1,
@@ -2011,7 +2115,7 @@ mod tests {
     #[test]
     fn delete_for_me_names_one_to_64_unique_messages() {
         let body = DeleteForMeBody {
-            conversation: direct("bob@example.org"),
+            conversation: direct(2),
             message_ids: vec![MESSAGE.into(), OTHER.into()],
         };
         let content = ChatContent::delete_for_me_with_id(OTHER, "t", 3, body.clone()).unwrap();

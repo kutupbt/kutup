@@ -1,7 +1,8 @@
 //! Who other people are (docs/plans/drive-identity-pins.md), as Drive on the
 //! web and Chat see it: a key the server hands out is trusted only as far as
 //! the person's account authority signed it (the Drive key binding) and that
-//! authority is the one this account pinned for the address. The pins are the
+//! authority is the one this account pinned for the person's account (its
+//! permanent id, docs/plans/account-ids.md; an address only finds it). The pins are the
 //! account's synced list, shared with every app; the CLI reads and writes the
 //! same one. A doubt warns and asks, as the apps do; it does not refuse.
 
@@ -11,7 +12,9 @@ use base64::Engine as _;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
-use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinState, PinUpdate, Recorded};
+use kutup_crypto::identity_pins::{
+    self, AuthorityCheck, IdentityPinsV2, PinMatch, PinState, PinUpdate, Recorded,
+};
 use kutup_crypto::safety_number;
 
 use crate::api::types::IdentityPinsWrite;
@@ -29,11 +32,17 @@ pub enum Status {
     Invalid,
     /// Another authority than the one this account met before.
     Changed,
+    /// The address is one the list knows another account holds: whoever the
+    /// server says is there is not them.
+    SomeoneElse,
 }
 
 impl Status {
     pub fn in_doubt(self) -> bool {
-        matches!(self, Status::Invalid | Status::Changed)
+        matches!(
+            self,
+            Status::Invalid | Status::Changed | Status::SomeoneElse
+        )
     }
 
     /// One word for tables and JSON.
@@ -44,6 +53,7 @@ impl Status {
             Status::Unproven => "unproven",
             Status::Invalid => "invalid",
             Status::Changed => "changed",
+            Status::SomeoneElse => "someone-else",
         }
     }
 
@@ -55,6 +65,9 @@ impl Status {
             ),
             Status::Invalid => format!(
                 "the keys the server gave for {account} are not signed by their account; the server may be able to read what is shared with them, or this may not come from them."
+            ),
+            Status::SomeoneElse => format!(
+                "{account} belongs to someone else now: it is not the person you knew there. Check who they are before sharing ('kutup identity show {account}')."
             ),
             _ => String::new(),
         }
@@ -137,35 +150,26 @@ impl Me {
     }
 }
 
-/// Looks `account` up: here, or through their server.
-pub fn published(ctx: &Ctx, me: &Me, account: &str) -> Result<Published> {
-    let (username, server) = account
+/// Looks `account` up, here or through its server: one lookup, one answer.
+pub fn published(ctx: &Ctx, account: &str) -> Result<Published> {
+    let (_, server) = account
         .split_once('@')
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
-    let local = me.account_ref.server == server;
-    let person = if local {
-        let user = ctx.client.get_user_by_address(account)?;
-        Published {
-            // On this server the account id is the user id.
-            account_ref: AccountRef::new(server, &user.user_id)
-                .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
-            account: user.account,
-            authority: user.account_authority_public_key,
-            hpke: user.drive_hpke_public_key,
-            signing: user.drive_signing_public_key,
-            binding: user.drive_key_binding,
-        }
-    } else {
-        let user = ctx.client.get_fed_pubkey(username, server)?;
-        Published {
-            account_ref: AccountRef::new(server, &user.account_id)
-                .with_context(|| format!("{server} gave no valid account id for {account}"))?,
-            account: user.account,
-            authority: user.account_authority_public_key,
-            hpke: user.drive_hpke_public_key,
-            signing: user.drive_signing_public_key,
-            binding: user.drive_key_binding,
-        }
+    let user = ctx.client.get_user_by_address(account)?;
+    if user.server != server {
+        bail!(
+            "the lookup for {account} answered for an account on {}",
+            user.server
+        );
+    }
+    let person = Published {
+        account_ref: AccountRef::new(&user.server, &user.account_id)
+            .with_context(|| format!("the lookup for {account} gave no valid account id"))?,
+        account: user.account,
+        authority: user.account_authority_public_key,
+        hpke: user.drive_hpke_public_key,
+        signing: user.drive_signing_public_key,
+        binding: user.drive_key_binding,
     };
     if person.account != account {
         bail!("the lookup for {account} answered for {}", person.account);
@@ -215,7 +219,7 @@ fn read_pins(
     ctx: &Ctx,
     me: &Me,
     index: &crate::account_head::Index,
-) -> Result<(u64, IdentityPinsV1)> {
+) -> Result<(u64, IdentityPinsV2)> {
     let key = identity_pins::derive_key(&me.master_key)?;
     let guard = me.guard()?;
     let (revision, list) = match ctx.client.get_identity_pins()? {
@@ -224,7 +228,7 @@ fn read_pins(
                 bail!("the server returned no identity pin list, though this device has seen one");
             }
             index.expect_listing([])?;
-            (0, IdentityPinsV1::default())
+            (0, IdentityPinsV2::default())
         }
         Some(record) => {
             let sealed = STANDARD
@@ -245,7 +249,7 @@ fn read_pins(
 
 /// The account's pin list and its revision, held to the account head (read
 /// again once when a write landed between the two reads).
-pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV1)> {
+pub fn load_pins(ctx: &Ctx, me: &Me) -> Result<(u64, IdentityPinsV2)> {
     let mut head = me.head(ctx)?;
     let index = |head: &mut crate::account_head::CliHead<'_>| match head.index(HEAD_SCOPE) {
         Ok(index) => Ok(index),
@@ -281,10 +285,10 @@ fn now_seconds() -> u64 {
         .unwrap_or(0)
 }
 
-/// Records `update` about `account` at `authority` (the rules every app shares:
+/// Records `update` about `person` (the rules every app shares:
 /// `identity_pins::record`) with the next account head; merges with whatever
 /// another app stored meanwhile.
-fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) -> Result<Recorded> {
+fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Recorded> {
     let key = identity_pins::derive_key(&me.master_key)?;
     let guard = me.guard()?;
     let guard = &guard;
@@ -294,7 +298,14 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) ->
         let (revision, mut list) = read_pins(ctx, me, index)?;
         let before = list.clone();
         let since = identity_pins::since_from_unix(now_seconds());
-        let recorded = identity_pins::record(&mut list, account, authority, update, &since)?;
+        let recorded = identity_pins::record(
+            &mut list,
+            &person.account_ref,
+            Some(&person.account),
+            &person.authority,
+            update,
+            &since,
+        )?;
         outcome = Some(recorded.clone());
         if list == before {
             return Ok(None);
@@ -329,7 +340,7 @@ fn pin(ctx: &Ctx, me: &Me, account: &str, authority: &str, update: PinUpdate) ->
 /// How far `account`'s `claimed` keys can be trusted; pins its authority the
 /// first time it is met with a valid binding.
 pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Status> {
-    let person = published(ctx, me, account)?;
+    let person = published(ctx, account)?;
     if let Some(status) = self_status(&me.account_ref, &person) {
         return Ok(status);
     }
@@ -348,10 +359,15 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
         return Ok(Status::Invalid);
     }
     let (_, list) = load_pins(ctx, me)?;
-    let pinned = list.pins.iter().find(|p| p.account == account);
+    let found = identity_pins::lookup(
+        &list,
+        &person.account_ref,
+        Some(account),
+        Some(&person.authority),
+    );
     if person.binding.is_none() {
         // A binding is never withdrawn: a pinned account without one is a server leaving it out.
-        return Ok(if pinned.is_some() {
+        return Ok(if matches!(found, PinMatch::Pinned { .. }) {
             Status::Invalid
         } else {
             Status::Unproven
@@ -360,24 +376,53 @@ pub fn check(ctx: &Ctx, me: &Me, account: &str, claimed: &Claimed) -> Result<Sta
     if !bound(&person) {
         return Ok(Status::Invalid);
     }
-    match pinned {
-        Some(p) if p.authority_public_key == person.authority => Ok(Status::Ok {
-            verified: p.state == PinState::Verified,
-        }),
-        Some(_) => Ok(Status::Changed),
-        None => match pin(ctx, me, account, &person.authority, PinUpdate::FirstSeen)? {
-            // Someone the user knew had this address and is elsewhere now: this
-            // is another person (accept with `kutup identity trust`).
-            Recorded::FormerAddressTaken { .. } => Ok(Status::Changed),
-            // An identity the user replaced, turning up again: its trust is
-            // revoked (accept it with `kutup identity trust`, or verify it).
-            Recorded::ReplacedIdentity { .. } => Ok(Status::Changed),
-            // The same account, pinned under another of its names.
-            Recorded::KnownElsewhere { pin } => Ok(Status::Ok {
+    match found {
+        // Someone the list knows holds this address: whoever is found there
+        // is not them.
+        PinMatch::Pinned { others, .. } if !others.is_empty() => Ok(Status::SomeoneElse),
+        PinMatch::SomeoneElse { .. } => {
+            pin_new(ctx, me, &person)?;
+            Ok(Status::SomeoneElse)
+        }
+        PinMatch::Pinned {
+            pin,
+            authority,
+            known_at,
+            ..
+        } => {
+            if authority != AuthorityCheck::Same {
+                return Ok(Status::Changed);
+            }
+            // The account found is shown by its own name, never by the
+            // address it was found at (as Signal shows the account's profile).
+            if let Some(name) = pin.address().filter(|_| !known_at) {
+                eprintln!("note: {account} is the account you know as {name}");
+            }
+            Ok(Status::Ok {
                 verified: pin.state == PinState::Verified,
-            }),
-            Recorded::Pinned | Recorded::Unchanged => Ok(Status::Ok { verified: false }),
-        },
+            })
+        }
+        PinMatch::New => {
+            pin_new(ctx, me, &person)?;
+            Ok(Status::Ok { verified: false })
+        }
+    }
+}
+
+/// Pins an account met for the first time (trust on first use).
+fn pin_new(ctx: &Ctx, me: &Me, person: &Published) -> Result<()> {
+    match pin(ctx, me, person, PinUpdate::FirstSeen)? {
+        // Another account's authority handed out for this one.
+        Recorded::AuthorityElsewhere { .. } => bail!(
+            "the keys given for {} belong to another account: do not trust them",
+            person.account
+        ),
+        // Someone else at an address the list knew: told as such, not pinned
+        // until the user trusts them.
+        Recorded::AddressHadOthers { .. }
+        | Recorded::AddressHeldByOthers { .. }
+        | Recorded::Updated
+        | Recorded::Unchanged => Ok(()),
     }
 }
 
@@ -386,35 +431,51 @@ pub fn safety(
     ctx: &Ctx,
     me: &Me,
     account: &str,
-) -> Result<(safety_number::SafetyNumberV2, Published)> {
-    let person = published(ctx, me, account)?;
+) -> Result<(safety_number::SafetyNumberV3, Published)> {
+    let person = published(ctx, account)?;
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet: nothing to compare");
     }
     let authority =
         key32(&person.authority).ok_or_else(|| anyhow!("{account}'s authority key is invalid"))?;
-    Ok((safety_number::derive(&me.authority(), &authority)?, person))
+    let number = safety_number::derive(
+        &me.account_ref,
+        &me.authority(),
+        &person.account_ref,
+        &authority,
+    )?;
+    Ok((number, person))
 }
 
 /// Mark `account` verified (the user compared the safety number with them);
 /// a changed identity is accepted with it.
 pub fn verify(ctx: &Ctx, me: &Me, account: &str, person: &Published) -> Result<()> {
-    pin(ctx, me, account, &person.authority, PinUpdate::Verified).map(drop)
+    match pin(ctx, me, person, PinUpdate::Verified)? {
+        Recorded::AuthorityElsewhere { .. } => {
+            bail!("the keys given for {account} belong to another account: do not trust them")
+        }
+        Recorded::AddressHeldByOthers { pins } => bail!(
+            "{account} is someone else's address ({}): open the person you mean by their own address to trust a new identity",
+            pins.first().and_then(|pin| pin.address()).unwrap_or(account)
+        ),
+        _ => Ok(()),
+    }
 }
 
 /// Trust `account`'s current identity from now on, without comparing it.
 pub fn trust(ctx: &Ctx, me: &Me, account: &str) -> Result<()> {
-    let person = published(ctx, me, account)?;
+    let person = published(ctx, account)?;
     if !bound(&person) {
         bail!("{account} has not signed their Drive keys yet");
     }
     // A new identity is trusted as seen, never as verified.
-    match pin(ctx, me, account, &person.authority, PinUpdate::Accepted)? {
-        // The same person under another address: renamed. Following their
-        // rename moves the pin; trusting it here would pin them twice.
-        Recorded::KnownElsewhere { pin } => bail!(
-            "the identity at {account} is someone you already know as {}: their address changed, and it is followed once their rename is confirmed",
-            pin.account
+    match pin(ctx, me, &person, PinUpdate::Accepted)? {
+        Recorded::AuthorityElsewhere { .. } => {
+            bail!("the keys given for {account} belong to another account: do not trust them")
+        }
+        Recorded::AddressHeldByOthers { pins } => bail!(
+            "{account} is someone else's address ({}): open the person you mean by their own address to trust a new identity",
+            pins.first().and_then(|pin| pin.address()).unwrap_or(account)
         ),
         _ => Ok(()),
     }

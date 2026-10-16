@@ -44,9 +44,9 @@ const TEXTS: Record<string, string> = {
 }
 
 const PLACES: Place[] = [
-  { id: 'p1', name: 'Galata Kulesi', note: 'sunset', lat: 41.0256, lon: 28.9741, addedBy: 'ali@kutup.dev', addedAt: '2026-01-02T10:00:00.000Z' },
-  { id: 'p2', name: 'Kız Kulesi 🗼', note: '', lat: 41.021, lon: 29.0041, addedBy: 'ali@kutup.dev', addedAt: '2026-01-02T11:00:00.000Z' },
-  { id: 'p3', name: 'Zero', note: 'integers', lat: 41, lon: 29, addedBy: 'ali@kutup.dev', addedAt: '2026-01-03T00:00:00.000Z' },
+  { id: 'p1', name: 'Galata Kulesi', note: 'sunset', lat: 41.0256, lon: 28.9741, addedBy: 'aci:00000000-0000-4000-8000-0000000000a1@kutup.dev', addedAt: '2026-01-02T10:00:00.000Z' },
+  { id: 'p2', name: 'Kız Kulesi 🗼', note: '', lat: 41.021, lon: 29.0041, addedBy: 'aci:00000000-0000-4000-8000-0000000000a1@kutup.dev', addedAt: '2026-01-02T11:00:00.000Z' },
+  { id: 'p3', name: 'Zero', note: 'integers', lat: 41, lon: 29, addedBy: 'aci:00000000-0000-4000-8000-0000000000a1@kutup.dev', addedAt: '2026-01-03T00:00:00.000Z' },
 ]
 
 const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex')

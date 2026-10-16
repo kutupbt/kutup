@@ -8,7 +8,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use crate::content::{kind, ChatContent};
-use crate::AccountAddress;
+use kutup_crypto::account_ref::AccountRef;
 
 const MENTIONS_FIELD: &str = "mentions";
 const LINK_PREVIEW_FIELD: &str = "linkPreview";
@@ -24,8 +24,9 @@ const STICKER_FIELD: &str = "sticker";
 pub struct MentionV1 {
     pub start: u32,
     pub length: u32,
-    /// Canonical `username@server`.
-    pub member: String,
+    /// The member mentioned: their account, so the mention keeps naming them
+    /// after a rename and never names whoever takes their old name.
+    pub member: AccountRef,
 }
 
 /// A preview of a link in the text, made by the sender (so recipients never
@@ -154,13 +155,6 @@ fn validate_mentions(mentions: &[MentionV1], text: &str) -> Result<(), String> {
             return Err("Chat mentions must be ordered, non-overlapping ranges of the text".into());
         }
         previous_end = end;
-        let address: AccountAddress = mention
-            .member
-            .parse()
-            .map_err(|_| "Chat mention names an invalid account".to_string())?;
-        if address.canonical() != mention.member {
-            return Err("Chat mention must name a canonical account".into());
-        }
     }
     Ok(())
 }
@@ -276,6 +270,14 @@ mod tests {
 
     const ID: &str = "0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b";
 
+    fn ali() -> AccountRef {
+        AccountRef::new("a.test", "00000000-0000-4000-8000-000000000001").unwrap()
+    }
+
+    fn bob() -> AccountRef {
+        AccountRef::new("b.test", "00000000-0000-4000-8000-000000000002").unwrap()
+    }
+
     fn text(body: &str) -> ChatContent {
         ChatContent::text_with_id(ID, "t", 1, body)
     }
@@ -287,7 +289,7 @@ mod tests {
             mentions: vec![MentionV1 {
                 start: 3,
                 length: 4,
-                member: "ali@a.test".into(),
+                member: ali(),
             }],
             ..Default::default()
         };
@@ -299,22 +301,12 @@ mod tests {
             MentionV1 {
                 start: 3,
                 length: 40,
-                member: "ali@a.test".into(),
+                member: ali(),
             },
             MentionV1 {
                 start: 3,
                 length: 0,
-                member: "ali@a.test".into(),
-            },
-            MentionV1 {
-                start: 3,
-                length: 4,
-                member: "Ali@A.test".into(),
-            },
-            MentionV1 {
-                start: 3,
-                length: 4,
-                member: "ali".into(),
+                member: ali(),
             },
         ] {
             let extras = VisibleMessageExtrasV1 {
@@ -328,17 +320,22 @@ mod tests {
                 MentionV1 {
                     start: 0,
                     length: 4,
-                    member: "ali@a.test".into(),
+                    member: ali(),
                 },
                 MentionV1 {
                     start: 2,
                     length: 4,
-                    member: "bob@b.test".into(),
+                    member: bob(),
                 },
             ],
             ..Default::default()
         };
         assert!(text("@Ali @Bob").with_extras(&overlapping).is_err());
+        // A mention names an account: an address in its place is malformed.
+        let mut wire = serde_json::to_value(&content).unwrap();
+        wire["mentions"][0]["member"] = serde_json::json!("ali@a.test");
+        let wire: ChatContent = serde_json::from_value(wire).unwrap();
+        assert!(wire.extras().is_err());
     }
 
     #[test]

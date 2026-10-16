@@ -31,7 +31,7 @@ impl MlsClient {
         let me = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == local_address)
+            .find(|member| member.account.to_string() == local_address)
             .ok_or_else(|| ChatError::Trust("this account is not a member of the group".into()))?;
         if conversation.current_roster.len() == 1 {
             return Err(ChatError::Invalid(
@@ -74,7 +74,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &local_address)
             .collect::<Vec<_>>();
         let entry = self

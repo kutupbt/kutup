@@ -85,8 +85,19 @@ export interface CryptoWasmModule {
     devicePublicBase64: string,
     revokedAtMs: number,
   ): string
-  deriveSafetyNumber(localAuthorityBase64: string, peerAuthorityBase64: string): { fingerprint: string; qrPayload: string }
-  safetyQrMatches(localAuthorityBase64: string, peerAuthorityBase64: string, scanned: string): boolean
+  deriveSafetyNumber(
+    local: { server: string; accountId: string },
+    localAuthorityBase64: string,
+    peer: { server: string; accountId: string },
+    peerAuthorityBase64: string,
+  ): { fingerprint: string; qrPayload: string }
+  safetyQrMatches(
+    local: { server: string; accountId: string },
+    localAuthorityBase64: string,
+    peer: { server: string; accountId: string },
+    peerAuthorityBase64: string,
+    scanned: string,
+  ): boolean
   foldName(name: string): string
   /** `aci:<uuid>@<server>` → `{ server, accountId }`; throws for anything else. */
   parseAccountRef(value: string): { server: string; accountId: string }
@@ -99,9 +110,24 @@ export interface CryptoWasmModule {
     chainJson: string,
     knownDigestsJson?: string | null,
   ): { incarnationId: string; first: string; current: string; addresses: string[]; sequence: number; digests: string[] }
-  recordIdentityPin(pinsJson: string, account: string, authorityPublicBase64: string, update: string, since: string): unknown
-  lookupIdentityPin(pinsJson: string, address: string, publishedAuthorityBase64?: string): unknown
-  applyAccountRenameToPins(pinsJson: string, authorityPublicBase64: string, chainJson: string): unknown
+  recordIdentityPin(
+    pinsJson: string,
+    account: { server: string; accountId: string },
+    address: string | undefined,
+    authorityPublicBase64: string,
+    update: string,
+    since: string,
+  ): unknown
+  lookupIdentityPin(
+    pinsJson: string,
+    account: { server: string; accountId: string },
+    address?: string,
+    publishedAuthorityBase64?: string,
+  ): unknown
+  identityPinsAt(pinsJson: string, address: string): unknown
+  lookupGroupPin(pinsJson: string, server: string, groupId: string, signers: string[], digests: string[]): unknown
+  recordGroupPin(pinsJson: string, server: string, groupId: string, signers: string[], digests: string[], update: string, since: string): unknown
+  applyAccountRenameToPins(pinsJson: string, account: { server: string; accountId: string }, chainJson: string, since: string): unknown
   verifyDriveKeyBinding(
     account: { server: string; accountId: string },
     authorityPublicKeyBase64: string,

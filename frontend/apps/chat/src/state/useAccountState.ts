@@ -6,7 +6,7 @@ import { useReadMarks } from './readState'
 /** This account's synced list state and read positions, from the loaded history. */
 export function useAccountState(): AccountState {
   const { snapshot, self } = useChat()
-  const address = self?.address ?? ''
+  const address = self?.key ?? ''
   return useMemo(() => foldAccountState(snapshot.history, address), [snapshot.history, address])
 }
 

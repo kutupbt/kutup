@@ -51,7 +51,7 @@ impl NativeChatClient {
         self.device_id
     }
 
-    /// The canonical `username@server` account this client runs as.
+    /// The account this client runs as: `aci:<uuid>@<server>`.
     pub fn user(&self) -> String {
         self.user.clone()
     }
@@ -191,8 +191,7 @@ impl Drop for NativeChatClient {
 pub async fn open_native_chat_client(
     database_path: String,
     database_key: Vec<u8>,
-    user: String,
-    server_name: String,
+    account: String,
     master_key: Vec<u8>,
     binding: String,
     http: Arc<dyn ChatHttpClient>,
@@ -202,12 +201,12 @@ pub async fn open_native_chat_client(
             message: "database path is empty".into(),
         });
     }
-    // The device's account is its full `username@server` address.
-    let user = kutup_chat_proto::AccountAddress::federated(&user, &server_name)
+    // The device's account, for good: its string form `aci:<uuid>@<server>`.
+    let user = kutup_chat_core::parse_account(&account)
         .map_err(|error| KutupChatError::InvalidInput {
             message: error.to_string(),
         })?
-        .canonical();
+        .to_string();
     let database_key = take_key(database_key, "database key")?;
     let master_key = take_key(master_key, "account master key")?;
     let (commands, receiver) = mpsc::channel();
@@ -258,7 +257,7 @@ struct WorkerConfig {
     database_key: [u8; 32],
     master_key: [u8; 32],
     binding: String,
-    /// The canonical `username@server` account.
+    /// The account: `aci:<uuid>@<server>`.
     user: String,
     http: Arc<dyn ChatHttpClient>,
 }

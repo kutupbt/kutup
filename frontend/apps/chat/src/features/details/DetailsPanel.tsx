@@ -104,9 +104,9 @@ function DetailsBody({ model }: { model: ConversationModel }) {
       </div>
 
       {model.canSetTimer ? <DisappearingSection model={model} /> : null}
-      {model.address && !model.note ? <SafetySection model={model} /> : null}
+      {model.peer && !model.note ? <SafetySection model={model} /> : null}
       {model.group ? <GroupDetails model={model} group={model.group} /> : null}
-      {model.address && !model.note && model.contact ? <BlockSection model={model} /> : null}
+      {model.peer && !model.note && model.contact ? <BlockSection model={model} /> : null}
     </div>
   )
 }
@@ -174,7 +174,7 @@ function SafetySection({ model }: { model: ConversationModel }) {
   const { service } = useChat()
   const [safety, setSafety] = useState<SafetyNumberV1 | null>(null)
   const [open, setOpen] = useState(false)
-  const peer = model.address!
+  const peer = model.peer!
   useEffect(() => {
     let cancelled = false
     setSafety(null)
@@ -205,7 +205,7 @@ function SafetySection({ model }: { model: ConversationModel }) {
         <SafetyVerificationDialog
           open={open}
           onOpenChange={setOpen}
-          peer={peer}
+          peer={model.title}
           safety={safety}
           onVerify={async (payload: string) => {
             const next = await service!.verifySafetyNumber(peer, payload)
@@ -224,7 +224,7 @@ function BlockSection({ model }: { model: ConversationModel }) {
   const { service } = useChat()
   const [busy, setBusy] = useState(false)
   const blocked = model.contact?.state === 'blocked'
-  const peer = model.address!
+  const peer = model.peer!
   async function toggle() {
     if (!service) return
     setBusy(true)

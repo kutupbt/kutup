@@ -1160,7 +1160,7 @@ mod tests {
             "alice".into(),
             ManifestTrust {
                 peer: "alice".into(),
-                account: "alice@a.test".into(),
+                account: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
                 incarnation_id: "incarnation".into(),
                 authority_key_id: "authority".into(),
                 self_authority_key: "key".into(),

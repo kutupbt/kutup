@@ -87,9 +87,11 @@ export function newAccount(prefix: string, password: string, server: Server = 'p
  */
 export async function registerAccount(context: BrowserContext, account: Account): Promise<string> {
   const page = await context.newPage()
+  const learned = learnAccountId(page, account)
   await page.goto(appUrl('account', '/register', account.server))
   await page.getByLabel('Username', { exact: true }).fill(account.username)
   const phrase = await finishNewKeys(page, account.password)
+  await learned()
   await page.close()
   return phrase
 }
@@ -149,16 +151,51 @@ export async function signInAsAdmin(context: BrowserContext): Promise<void> {
   await page.close()
 }
 
+/** Each signed-in account's permanent id (users.id), as its sign-in answered. */
+const accountIds = new Map<string, string>()
+
+/**
+ * The account's key, `aci:<uuid>@<server>`: how Chat names it (test ids,
+ * routes). Known once the account signed in here.
+ */
+export function accountKey(account: Account): string {
+  const id = accountIds.get(account.address)
+  if (!id) throw new Error(`${account.address} has not signed in in this run`)
+  return `aci:${id}@${addressDomain(account.server)}`
+}
+
 /** Signs in through the account app; the context's apps then fork from it. */
 export async function signIn(context: BrowserContext, account: Account): Promise<void> {
   const page = await context.newPage()
+  const learned = learnAccountId(page, account)
   await page.goto(appUrl('account', '/login', account.server))
   await page.getByLabel('Username', { exact: true }).fill(account.username)
   await page.getByLabel('Password', { exact: true }).fill(account.password)
   // The launcher greets in the account's language, which may be Turkish.
   await submitThroughRateLimit(page, 'Sign in', page.getByRole('heading', { name: /Welcome|Hoş geldiniz/ }))
   await sessionSaved(page)
+  await learned()
   await page.close()
+}
+
+/** Keeps the id the sign-in or sign-up on `page` answers for `account`; await the result before closing it. */
+function learnAccountId(page: Page, account: Account): () => Promise<void> {
+  const answers: Promise<void>[] = []
+  page.on('response', (response) => {
+    const path = new URL(response.url()).pathname
+    if (!response.ok() || !(path.endsWith('/api/auth/login/finish') || path.endsWith('/api/auth/register'))) return
+    answers.push(
+      response.json().then(
+        (body: { userId?: unknown }) => {
+          if (typeof body.userId === 'string') accountIds.set(account.address, body.userId)
+        },
+        () => {},
+      ),
+    )
+  })
+  return async () => {
+    await Promise.all(answers)
+  }
 }
 
 /** Failures the account app reports that no retry here can fix. */

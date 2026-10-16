@@ -15,9 +15,9 @@ function operation(
   const reaction = { targetMessageId, emoji, active }
   const message: ChatHistoryEntry = {
     id: `${reactor}-${timestampMs}-${seq}-${senderDeviceId}`,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    sender: 'bob@b.test',
-    direction: reactor === 'alice@a.test' ? 'outgoing' : 'incoming',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
+    sender: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
+    direction: reactor === 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test' ? 'outgoing' : 'incoming',
     senderDeviceId,
     timestampMs,
     delivered: true,
@@ -38,32 +38,32 @@ function operation(
 describe('aggregateLatestReactions', () => {
   it('keeps only each person’s latest emoji on a message', () => {
     const result = aggregateLatestReactions([
-      operation('alice@a.test', '👍', true, 1_000, '1'),
-      operation('bob@b.test', '👍', true, 1_100, '1'),
-      operation('alice@a.test', '❤️', true, 1_200, '2'),
-    ], new Set([targetMessageId]), 'alice@a.test')
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '👍', true, 1_000, '1'),
+      operation('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', '👍', true, 1_100, '1'),
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '❤️', true, 1_200, '2'),
+    ], new Set([targetMessageId]), 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')
 
     expect(result.get(targetMessageId)).toEqual([
-      { emoji: '👍', count: 1, reactedBySelf: false, reactors: ['bob@b.test'] },
-      { emoji: '❤️', count: 1, reactedBySelf: true, reactors: ['alice@a.test'] },
+      { emoji: '👍', count: 1, reactedBySelf: false, reactors: ['aci:00000000-0000-4000-8000-81b637d8fcd2@b.test'] },
+      { emoji: '❤️', count: 1, reactedBySelf: true, reactors: ['aci:00000000-0000-4000-8000-2bd806c97f0e@a.test'] },
     ])
   })
 
   it('uses a newer inactive operation to remove the person’s current reaction', () => {
     const result = aggregateLatestReactions([
-      operation('alice@a.test', '👍', true, 1_000, '1'),
-      operation('alice@a.test', '❤️', true, 1_100, '2'),
-      operation('alice@a.test', '❤️', false, 1_200, '3'),
-    ], new Set([targetMessageId]), 'alice@a.test')
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '👍', true, 1_000, '1'),
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '❤️', true, 1_100, '2'),
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '❤️', false, 1_200, '3'),
+    ], new Set([targetMessageId]), 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')
 
     expect(result.has(targetMessageId)).toBe(false)
   })
 
   it('resolves linked-device ties deterministically', () => {
     const result = aggregateLatestReactions([
-      operation('alice@a.test', '👍', true, 1_000, '7', 1),
-      operation('alice@a.test', '😂', true, 1_000, '7', 2),
-    ], new Set([targetMessageId]), 'alice@a.test')
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '👍', true, 1_000, '7', 1),
+      operation('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', '😂', true, 1_000, '7', 2),
+    ], new Set([targetMessageId]), 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')
 
     expect(result.get(targetMessageId)?.map(reaction => reaction.emoji)).toEqual(['😂'])
   })

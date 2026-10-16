@@ -529,7 +529,7 @@ impl MlsOwnerApprovalRequestV1 {
                         return Err("MLS owner approval roster repeats an owner id".to_string());
                     }
                 }
-                Ok::<String, String>(member.address.server.clone())
+                Ok::<String, String>(member.account.server.clone())
             })
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
@@ -1271,7 +1271,7 @@ pub fn verify_mls_client_control_history(
     let private_genesis_domains = private_state
         .genesis_roster
         .iter()
-        .map(|member| Ok::<String, String>(member.address.server.clone()))
+        .map(|member| Ok::<String, String>(member.account.server.clone()))
         .collect::<Result<BTreeSet<_>, _>>()?
         .into_iter()
         .collect::<Vec<_>>();
@@ -1307,7 +1307,7 @@ pub fn verify_mls_client_control_history(
     let current_domains = private_state
         .roster
         .iter()
-        .map(|member| Ok::<String, String>(member.address.server.clone()))
+        .map(|member| Ok::<String, String>(member.account.server.clone()))
         .collect::<Result<BTreeSet<_>, _>>()?
         .into_iter()
         .collect::<Vec<_>>();

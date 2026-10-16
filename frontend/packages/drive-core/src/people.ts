@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { fromBase64, openProfileKeyEnvelope, sealProfileKeyEnvelope, toBase64 } from '@kutup/crypto'
+import { accountRoute } from '@kutup/chat-core/transport'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import type { ProfileLookup } from '@kutup/chat-core/types'
-import type { AccountRef } from '@kutup/crypto/accountRef'
+import { accountKeyOf, type AccountRef } from '@kutup/crypto/accountRef'
 import api from '@kutup/session/client'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 
@@ -15,6 +16,11 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
  * with its own, and reads the other's profile with the key it got. Anyone
  * who has not given theirs yet (or whose key is out of date) shows as their
  * address.
+ *
+ * Profiles are kept by account (docs/plans/account-ids.md). The address the
+ * server says each account has now is only an index for callers that hold
+ * an address: as Signal's username lookup, it finds an account, and the
+ * profile shown is that account's own.
  */
 
 export interface PersonProfile {
@@ -50,6 +56,14 @@ interface Keys {
   incarnationId: string
   hpkePublicKey: string
   signingPublicKey: string
+}
+
+/** Everyone you share with: profiles by account, and the address each has now. */
+export interface People {
+  /** By the account's string form, `aci:<uuid>@<server>`. */
+  byAccount: Map<string, PersonProfile>
+  /** The address each account has now, as its server says: a lookup index, never a key. */
+  accountAt: Map<string, string>
 }
 
 export const peopleKey = ['drive-people'] as const
@@ -108,7 +122,8 @@ async function ownLookup(me: DriveIdentity): Promise<ProfileLookup | null> {
     throw error
   }
   const wasm = await loadChatWasm()
-  return wasm.accountProfileKey(me.masterKey, sealed, me.account, me.binding)
+  // Sealed for the account, never its address.
+  return wasm.accountProfileKey(me.masterKey, sealed, accountKeyOf(me.accountRef), me.binding)
 }
 
 /** Give someone your current profile key, if they do not have it yet. */
@@ -144,11 +159,14 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
   })
   const wasm = await loadChatWasm()
   const lookup = wasm.profileLookup(toBase64(key))
-  const { data } = await api.get<unknown>(
-    `/chat/users/${encodeURIComponent(person.account)}/profile/${lookup.version}`,
-    { headers: { 'x-kutup-profile-access-key': lookup.accessKey } },
-  )
-  const view = wasm.profileOpenPeer(person.account, data, lookup.key)
+  // The profile is the account's, sealed for it: fetched and opened by its key.
+  const account = accountKeyOf(refOf(person))
+  const { path, server } = accountRoute(account, `/profile/${encodeURIComponent(lookup.version)}`)
+  const { data } = await api.get<unknown>(path, {
+    params: { server },
+    headers: { 'x-kutup-profile-access-key': lookup.accessKey },
+  })
+  const view = wasm.profileOpenPeer(account, data, lookup.key)
   if (!view.displayName && !view.avatar) return null
   return {
     displayName: view.displayName,
@@ -156,12 +174,19 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
   }
 }
 
-async function loadPeople(me: DriveIdentity): Promise<Map<string, PersonProfile>> {
+export async function loadPeople(me: DriveIdentity): Promise<People> {
   const { data } = await api.get<{ people: DrivePerson[] }>('/drive/people')
-  const profiles = new Map<string, PersonProfile>()
+  const people: People = { byAccount: new Map(), accountAt: new Map() }
+  for (const person of data.people) {
+    try {
+      people.accountAt.set(person.account.toLowerCase(), accountKeyOf(refOf(person)))
+    } catch {
+      // Not a canonical account: nobody to show for it.
+    }
+  }
   // Nobody to exchange with: the Chat runtime (megabytes of WASM) is not
   // needed at all (docs/research/18-web-performance.md).
-  if (data.people.length === 0) return profiles
+  if (data.people.length === 0) return people
   const own = await ownLookup(me).catch(() => null)
   await Promise.all(
     data.people.map(async (person) => {
@@ -172,13 +197,13 @@ async function loadPeople(me: DriveIdentity): Promise<Map<string, PersonProfile>
       await Promise.all([
         own ? give(person, keys, own, me).catch(() => undefined) : undefined,
         read(person, keys, me).then(
-          (profile) => profile && profiles.set(person.account, profile),
+          (profile) => profile && people.byAccount.set(accountKeyOf(refOf(person)), profile),
           () => undefined,
         ),
       ])
     }),
   )
-  return profiles
+  return people
 }
 
 /**
@@ -190,7 +215,7 @@ export function usePeople() {
   const identity = useDriveIdentity()
   const idle = useIdle()
   return useQuery({
-    queryKey: [...peopleKey, identity.data?.account],
+    queryKey: [...peopleKey, identity.data?.accountRef.server, identity.data?.accountRef.accountId],
     // After the page's own first work: the exchange can load the Chat
     // runtime, which should not compete with the first listing.
     enabled: Boolean(identity.data) && idle,
@@ -214,11 +239,28 @@ function useIdle(): boolean {
   return idle
 }
 
-/** How to show someone: their name and picture once they gave you their key, else their address. */
-export function personOf(
-  people: Map<string, PersonProfile> | undefined,
-  account: string,
+/**
+ * How to show someone found by an address: the profile of the account that
+ * address belongs to now, once it gave you its key, else the address.
+ */
+export function personOf(people: People | undefined, address: string): { name: string; profile: PersonProfile | null } {
+  const key = people?.accountAt.get(address.toLowerCase())
+  const profile = (key && people?.byAccount.get(key)) || null
+  return { name: profile?.displayName || address, profile }
+}
+
+/** How to show an account: its profile once it gave you its key, else `fallback` (its address, when known). */
+export function personOfAccount(
+  people: People | undefined,
+  account: AccountRef,
+  fallback: string,
 ): { name: string; profile: PersonProfile | null } {
-  const profile = people?.get(account) ?? null
-  return { name: profile?.displayName || account, profile }
+  let key: string
+  try {
+    key = accountKeyOf(account)
+  } catch {
+    return { name: fallback, profile: null }
+  }
+  const profile = people?.byAccount.get(key) ?? null
+  return { name: profile?.displayName || fallback, profile }
 }

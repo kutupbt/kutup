@@ -70,7 +70,7 @@ fn metadata_value(value: &str) -> String {
 }
 
 fn opaque_profile_envelope(
-    account: &str,
+    account: &AccountRef,
     version: &str,
     purpose: ProfileEnvelopePurpose,
     ciphertext_len: usize,
@@ -87,13 +87,13 @@ fn publish_direct_delivery_capability(
     c: &Client,
     base: &str,
     token: &str,
-    account: &str,
+    account: &AccountRef,
     capability: &[u8; 16],
 ) {
     let version = "71".repeat(32);
     let profile = PutChatProfileRequest {
         suite: ProfileSuiteId::XChaCha20Poly1305V1,
-        account: account.into(),
+        account: account.clone(),
         version: version.clone(),
         revision: 1,
         source_device_id: 1,
@@ -133,13 +133,7 @@ fn chat_media_round_trip(
     admin_b: &str,
 ) {
     let capability = [0x6a; 16];
-    publish_direct_delivery_capability(
-        c,
-        b,
-        bob_token,
-        &format!("{BOB_USERNAME}@b.test"),
-        &capability,
-    );
+    publish_direct_delivery_capability(c, b, bob_token, &account_of(c, b, bob_token), &capability);
     let attachment_id = "50000000-0000-4000-8000-000000000001";
     let attachment_key = [0x51; 32];
     let retrieval_token = [0x52; 32];
@@ -674,12 +668,10 @@ fn update_feature_policy(
 }
 
 fn drive_remote_user(c: &Client, base: &str, token: &str) -> Response {
-    c.get(format!(
-        "{base}/api/drive/federation/users/{BOB_USERNAME}?server=b.test"
-    ))
-    .bearer_auth(token)
-    .send()
-    .unwrap()
+    c.get(format!("{base}/api/users/by-address/{BOB_USERNAME}@b.test"))
+        .bearer_auth(token)
+        .send()
+        .unwrap()
 }
 
 fn update_federation_mode(c: &Client, base: &str, admin: &str, mode: &str) -> Value {
@@ -796,7 +788,7 @@ fn publish_manifest(
     base: &str,
     token: &str,
     identity: &AccountIdentityKeysV1,
-    account: &str,
+    account: &AccountRef,
     drive_public_key: &str,
     sequence: u64,
     previous_hash: Option<String>,
@@ -805,7 +797,7 @@ fn publish_manifest(
     let public = identity.authority_signing_key().verifying_key();
     let mut manifest = AccountManifestV1 {
         manifest_version: 1,
-        account: account.into(),
+        account: account.clone(),
         incarnation_id: identity.incarnation_id(),
         sequence,
         previous_hash,
@@ -846,23 +838,65 @@ fn envelope(device_id: u32, registration_id: u32, content: &[u8]) -> Value {
     })
 }
 
+/// Kept for a later phase (`KUTUP_FEDERATION_STATE`, a file the gate
+/// script makes): what it needs to know while a server is down.
+fn remember(key: &str, value: Value) {
+    let path = std::env::var("KUTUP_FEDERATION_STATE").expect("KUTUP_FEDERATION_STATE");
+    let mut state: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| json!({}));
+    state[key] = value;
+    std::fs::write(&path, state.to_string()).unwrap();
+}
+
+fn recall(key: &str) -> Value {
+    let path = std::env::var("KUTUP_FEDERATION_STATE").expect("KUTUP_FEDERATION_STATE");
+    let state: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    state[key].clone()
+}
+
+/// Bob's account, as the setup phase found it.
+fn bob_account() -> AccountRef {
+    serde_json::from_value(recall("bob")).expect("the setup phase kept Bob's account")
+}
+
+/// The signed-in account (server and permanent id), as Chat names it.
+fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
+    let me = json_response(
+        c.get(format!("{base}/api/user/me"))
+            .bearer_auth(token)
+            .send()
+            .unwrap(),
+        "own account",
+    );
+    AccountRef::new(
+        me["server"].as_str().unwrap(),
+        me["accountId"].as_str().unwrap(),
+    )
+    .unwrap()
+}
+
 fn send(
     c: &Client,
     base: &str,
     token: &str,
-    recipient: &str,
+    recipient: &AccountRef,
     send_id: &str,
     envelopes: Vec<Value>,
 ) -> Response {
-    c.post(format!("{base}/api/chat/users/{recipient}/messages"))
-        .bearer_auth(token)
-        .json(&json!({
-            "senderDeviceId": 1,
-            "sendId": send_id,
-            "envelopes": envelopes
-        }))
-        .send()
-        .unwrap()
+    c.post(format!(
+        "{base}/api/chat/accounts/{}/messages?server={}",
+        recipient.account_id, recipient.server
+    ))
+    .bearer_auth(token)
+    .json(&json!({
+        "senderDeviceId": 1,
+        "sendId": send_id,
+        "envelopes": envelopes
+    }))
+    .send()
+    .unwrap()
 }
 
 fn mailbox(c: &Client, base: &str, token: &str, device_id: u32) -> Vec<Value> {
@@ -2018,7 +2052,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         b,
         &bob_token,
         &bob_identity,
-        "bobfed@b.test",
+        &account_of(c, b, &bob_token),
         &bob_drive_public,
         1,
         None,
@@ -2042,20 +2076,24 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     // The local server signs this lookup, B authenticates A through discovery,
     // and replay-safe remote reads do not consume B's one-time prekeys.
-    let remote_address = format!("{BOB_USERNAME}@b.test");
+    let remote_address = account_of(c, b, &bob_token);
+    remember("bob", json!(remote_address));
     let fetch = || {
         json_response(
-            c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-                .bearer_auth(&alice_token)
-                .send()
-                .unwrap(),
+            c.get(format!(
+                "{a}/api/chat/accounts/{}/keys?server=b.test",
+                remote_address.account_id
+            ))
+            .bearer_auth(&alice_token)
+            .send()
+            .unwrap(),
             "remote bundle fetch",
         )
     };
     let bundles_first = fetch();
     let bundles_second = fetch();
     assert_eq!(bundles_first, bundles_second);
-    assert_eq!(bundles_first["username"], remote_address);
+    assert_eq!(bundles_first["account"], json!(remote_address));
     assert_eq!(bundles_first["devices"][0]["deviceId"], 1);
     assert!(bundles_first["devices"][0].get("oneTimePreKey").is_none());
 
@@ -2155,12 +2193,15 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(stopped_evidence, drive_evidence);
     assert_eq!(
-        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap()
-            .status()
-            .as_u16(),
+        c.get(format!(
+            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            remote_address.account_id
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16(),
         403
     );
     assert_eq!(drive_remote_user(c, a, &alice_token).status().as_u16(), 403);
@@ -2272,12 +2313,15 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "Drive remains enabled while Chat is disabled",
     );
     assert_eq!(
-        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap()
-            .status()
-            .as_u16(),
+        c.get(format!(
+            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            remote_address.account_id
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16(),
         403
     );
 
@@ -2291,12 +2335,15 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(reenabled_capabilities["chat"]["mlsGroups"], true);
     assert_eq!(
-        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap()
-            .status()
-            .as_u16(),
+        c.get(format!(
+            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            remote_address.account_id
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16(),
         403
     );
     upsert_federation_rule(c, a, &admin_a, "b.test", "inherit", "allow");
@@ -2313,12 +2360,15 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "blocklist"
     );
     assert_eq!(
-        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap()
-            .status()
-            .as_u16(),
+        c.get(format!(
+            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            remote_address.account_id
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16(),
         403
     );
     upsert_federation_rule(c, a, &admin_a, "b.test", "inherit", "inherit");
@@ -2330,12 +2380,15 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     upsert_federation_rule(c, b, &admin_b, "a.test", "block", "inherit");
     assert_eq!(
-        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap()
-            .status()
-            .as_u16(),
+        c.get(format!(
+            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            remote_address.account_id
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16(),
         502
     );
     upsert_federation_rule(c, b, &admin_b, "a.test", "allow", "inherit");
@@ -2405,7 +2458,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .iter()
         .find(|message| message["content"] == b64(direct_content))
         .unwrap();
-    assert_eq!(direct["sender"], "alicefed@a.test");
+    assert_eq!(direct["sender"], json!(account_of(c, a, &alice_token)));
 
     assert_eq!(
         register_device(c, b, &bob_token, BOB_REGISTRATION_ID_2, 30),
@@ -2416,7 +2469,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         b,
         &bob_token,
         &bob_identity,
-        "bobfed@b.test",
+        &account_of(c, b, &bob_token),
         &bob_drive_public,
         2,
         Some(bob_manifest_v1.manifest_hash().unwrap()),
@@ -2426,10 +2479,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         ],
     );
     let refreshed_bundles = json_response(
-        c.get(format!("{a}/api/chat/users/{remote_address}/keys"))
-            .bearer_auth(&alice_token)
-            .send()
-            .unwrap(),
+        c.get(format!(
+            "{a}/api/chat/accounts/{}/keys?server=b.test",
+            remote_address.account_id
+        ))
+        .bearer_auth(&alice_token)
+        .send()
+        .unwrap(),
         "remote bundle manifest refresh",
     );
     let typed_refreshed: UserPreKeyBundlesResponse =
@@ -2451,14 +2507,17 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             b,
             &bob_token,
             &bob_identity,
-            "bobfed@b.test",
+            &account_of(c, b, &bob_token),
             &bob_drive_public,
             version,
             Some(latest_manifest.manifest_hash().unwrap()),
             bob_devices.clone(),
         );
     }
-    let history_url = format!("{a}/api/chat/users/{remote_address}/manifest-history");
+    let history_url = format!(
+        "{a}/api/chat/accounts/{}/manifest-history?server=b.test",
+        remote_address.account_id
+    );
     let first_page: AccountManifestHistoryPageV1 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
@@ -2530,7 +2589,8 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         c,
         a,
         &alice_token,
-        "missing@b.test",
+        // An account id nobody has on B.
+        &AccountRef::new("b.test", "00000000-0000-4000-8000-00000000dead").unwrap(),
         "10000000-0000-4000-8000-000000000003",
         vec![envelope(1, 999, b"unavailable")],
     );
@@ -2557,7 +2617,10 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     chat_media_round_trip(c, a, b, &alice_token, &bob_token, &admin_b);
 
     let unsigned = c
-        .get(format!("{b}/api/fed/chat/users/{BOB_USERNAME}/keys"))
+        .get(format!(
+            "{b}/api/fed/chat/accounts/{}/keys",
+            account_of(c, b, &bob_token).account_id
+        ))
         .send()
         .unwrap();
     assert_eq!(unsigned.status().as_u16(), 401);
@@ -2729,7 +2792,7 @@ fn queue_phase(c: &Client, a: &str) {
         c,
         a,
         &alice_token,
-        &format!("{BOB_USERNAME}@b.test"),
+        &bob_account(),
         "10000000-0000-4000-8000-000000000005",
         vec![
             envelope(1, BOB_REGISTRATION_ID_1, b"queued-during-outage"),
@@ -2830,7 +2893,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
             c,
             a,
             &alice_token,
-            &format!("{BOB_USERNAME}@b.test"),
+            &bob_account(),
             "10000000-0000-4000-8000-000000000006",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, follow_up),
@@ -2856,12 +2919,10 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
     let (token_b, _) = register_account(c, b, "renames-bob@example.test", "ren_bob");
     let domain_a = server_name(c, a);
     let drive_user = |name: &str| {
-        c.get(format!(
-            "{b}/api/drive/federation/users/{name}?server={domain_a}"
-        ))
-        .bearer_auth(&token_b)
-        .send()
-        .unwrap()
+        c.get(format!("{b}/api/users/by-address/{name}@{domain_a}"))
+            .bearer_auth(&token_b)
+            .send()
+            .unwrap()
     };
     // B finds Alice by her name, and in another spelling as stored.
     let found = json_response(drive_user(old), "drive user before");
@@ -3000,12 +3061,10 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
 
     // The owner finds Bob by his name: his account and keys.
     let found = json_response(
-        c.get(format!(
-            "{a}/api/drive/federation/users/aid_bob?server={domain_b}"
-        ))
-        .bearer_auth(&owner.token)
-        .send()
-        .unwrap(),
+        c.get(format!("{a}/api/users/by-address/aid_bob@{domain_b}"))
+            .bearer_auth(&owner.token)
+            .send()
+            .unwrap(),
         "find Bob",
     );
     assert_eq!(found["accountId"], bob.person.account_id.as_str());
@@ -3257,12 +3316,10 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
         .iter()
         .all(|share| share["recipientAccountId"] == bob.person.account_id.as_str()));
     let now_found = json_response(
-        c.get(format!(
-            "{a}/api/drive/federation/users/aid_bob?server={domain_b}"
-        ))
-        .bearer_auth(&owner.token)
-        .send()
-        .unwrap(),
+        c.get(format!("{a}/api/users/by-address/aid_bob@{domain_b}"))
+            .bearer_auth(&owner.token)
+            .send()
+            .unwrap(),
         "find aid_bob again",
     );
     assert_eq!(now_found["accountId"], carol.person.account_id.as_str());

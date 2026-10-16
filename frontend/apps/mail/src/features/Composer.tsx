@@ -27,7 +27,7 @@ import {
   type SendAs,
   type SendRecipient,
 } from '@kutup/mail-core/api'
-import { GroupNotAllowed, KeysIdentityChanged } from '@kutup/mail-core/keys'
+import { acceptGroupKeys, GroupKeysChanged, GroupNotAllowed, KeysIdentityChanged } from '@kutup/mail-core/keys'
 import { foldAddress } from '@kutup/crypto/accountRename'
 import { armorMailPublicKey } from '@kutup/crypto'
 import { attachmentPart, describePart, inlineContentId, partContent, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
@@ -636,7 +636,26 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
       else if (error instanceof NoGroupShare) toast.error(t('compose.noGroupShare'))
       else if (error instanceof GroupNotAllowed) toast.error(t('compose.groupNotAllowed', { address: error.address }))
-      else if (error instanceof KeysIdentityChanged) {
+      else if (error instanceof GroupKeysChanged) {
+        // A shared mailbox's keys are not signed by the signer met before:
+        // never sent there silently. The sender may trust the new keys (an
+        // administrator set the mailbox up again), then send again.
+        const changed = error
+        toast.error(t(changed.chain ? 'compose.groupKeysChanged' : 'compose.groupKeysUnverified', { address: changed.address }), {
+          ...(changed.chain
+            ? {
+                action: {
+                  label: t('compose.trustGroupKeys'),
+                  onClick: () =>
+                    void acceptGroupKeys(changed).then(
+                      () => toast.success(t('compose.groupKeysTrusted', { address: changed.address })),
+                      () => toast.error(t('compose.groupKeysTrustFailed')),
+                    ),
+                },
+              }
+            : {}),
+        })
+      } else if (error instanceof KeysIdentityChanged) {
         // Someone else holds an address a person the account knows left (a
         // freed name taken): never sent there silently. When the list knows
         // where that person is now, offer to write there instead.

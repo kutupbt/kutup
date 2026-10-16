@@ -526,7 +526,7 @@ impl MlsClient {
         let remaining = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .collect::<BTreeSet<_>>();
         conversation
             .departing_members

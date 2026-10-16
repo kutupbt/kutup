@@ -180,6 +180,9 @@ importers:
       '@kutup/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto
+      '@kutup/drive-core':
+        specifier: workspace:*
+        version: link:../../packages/drive-core
       '@kutup/files':
         specifier: workspace:*
         version: link:../../packages/files
@@ -1222,6 +1225,9 @@ importers:
 
   packages/map:
     dependencies:
+      '@kutup/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@kutup/session':
         specifier: workspace:*
         version: link:../session

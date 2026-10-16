@@ -14,8 +14,8 @@ function entry(
 ): ChatHistoryEntry {
   return {
     id,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    sender: 'bob@b.test',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
+    sender: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
     direction: 'incoming',
     senderDeviceId: 1,
     timestampMs,
@@ -24,6 +24,34 @@ function entry(
     content,
   }
 }
+
+describe('local timeline records', () => {
+  it('a safety number line is never a visible message (no unread, no preview)', () => {
+    const line = entry('safety', 1_000, {
+      version: 1,
+      kind: 'safetyNumberChanged',
+      sentAt: '2026-10-16T00:00:00Z',
+      seq: '0',
+      messageId: 'safety:inc-a:inc-b',
+      body: {},
+      safetyNumberChanged: true,
+    })
+    expect(isVisibleChatMessage(line, 2_000)).toBe(false)
+  })
+
+  it('a rename line is never a visible message', () => {
+    const line = entry('rename', 1_000, {
+      version: 1,
+      kind: 'peerRenamed',
+      sentAt: '2026-10-16T00:00:00Z',
+      seq: '0',
+      messageId: 'rename:aci:00000000-0000-4000-8000-81b637d8fcd2@b.test:1',
+      body: { previous: 'bob@b.test', current: 'bobby@b.test', sequence: 1 },
+      peerRenamed: { previous: 'bob@b.test', current: 'bobby@b.test', sequence: 1 },
+    })
+    expect(isVisibleChatMessage(line, 2_000)).toBe(false)
+  })
+})
 
 describe('disappearing Chat presentation', () => {
   it('reduces encrypted timer controls deterministically and preserves off', () => {
@@ -46,7 +74,7 @@ describe('disappearing Chat presentation', () => {
       disappearingTimer: {},
     })
 
-    const timer = reduceDisappearingTimers([disabled, enabled]).get('direct:bob@b.test')
+    const timer = reduceDisappearingTimers([disabled, enabled]).get('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@b.test')
     expect(timer?.message.id).toBe('timer-disabled')
     expect(timer?.durationSeconds).toBeUndefined()
   })

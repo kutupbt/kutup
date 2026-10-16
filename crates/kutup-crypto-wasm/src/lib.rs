@@ -3004,15 +3004,20 @@ struct SafetyNumberView {
     qr_payload: String,
 }
 
-/// The safety number of two accounts, given their authority keys (the same
-/// one Chat shows; no address, so a rename keeps it).
+/// The safety number this account (`local`) and `peer` compare, given both
+/// accounts (`{ server, accountId }`) and their raw Ed25519 authority keys
+/// (the same one Chat shows; a rename keeps it).
 #[wasm_bindgen(js_name = deriveSafetyNumber)]
 pub fn derive_safety_number(
+    local: JsValue,
     local_authority_base64: &str,
+    peer: JsValue,
     peer_authority_base64: &str,
 ) -> Result<JsValue, JsValue> {
     let number = kutup_crypto::safety_number::derive(
+        &account_arg(local, "local account")?,
         &public_key_32(local_authority_base64, "local authority key")?,
+        &account_arg(peer, "peer account")?,
         &public_key_32(peer_authority_base64, "peer authority key")?,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -3023,20 +3028,24 @@ pub fn derive_safety_number(
     .map_err(|error| js_error(&format!("encode safety number: {error}")))
 }
 
-/// Whether a scanned safety QR is exactly the one for these two authorities.
+/// Whether a scanned safety QR is the peer's own code for exactly this pair.
 #[wasm_bindgen(js_name = safetyQrMatches)]
 pub fn safety_qr_matches(
+    local: JsValue,
     local_authority_base64: &str,
+    peer: JsValue,
     peer_authority_base64: &str,
     scanned: &str,
 ) -> bool {
-    let (Ok(local), Ok(peer)) = (
+    let (Ok(local), Ok(local_key), Ok(peer), Ok(peer_key)) = (
+        account_arg(local, "local account"),
         public_key_32(local_authority_base64, "local authority key"),
+        account_arg(peer, "peer account"),
         public_key_32(peer_authority_base64, "peer authority key"),
     ) else {
         return false;
     };
-    kutup_crypto::safety_number::derive(&local, &peer)
+    kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
         .is_ok_and(|number| kutup_crypto::safety_number::matches_qr_payload(&number, scanned))
 }
 
@@ -3059,7 +3068,7 @@ pub fn seal_identity_pins(
     pins_json: &str,
 ) -> Result<String, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
-    let list: kutup_crypto::identity_pins::IdentityPinsV1 = serde_json::from_str(pins_json)
+    let list: kutup_crypto::identity_pins::IdentityPinsV2 = serde_json::from_str(pins_json)
         .map_err(|error| js_error(&format!("identity pins: {error}")))?;
     let key = kutup_crypto::identity_pins::derive_key(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
@@ -3109,15 +3118,15 @@ pub fn open_identity_pins(
     revisioned(json, revision)
 }
 
-fn pins_arg(pins_json: &str) -> Result<kutup_crypto::identity_pins::IdentityPinsV1, JsValue> {
-    let list: kutup_crypto::identity_pins::IdentityPinsV1 = serde_json::from_str(pins_json)
+fn pins_arg(pins_json: &str) -> Result<kutup_crypto::identity_pins::IdentityPinsV2, JsValue> {
+    let list: kutup_crypto::identity_pins::IdentityPinsV2 = serde_json::from_str(pins_json)
         .map_err(|error| js_error(&format!("identity pins: {error}")))?;
     list.validate()
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(list)
 }
 
-fn pins_json(list: &kutup_crypto::identity_pins::IdentityPinsV1) -> Result<String, JsValue> {
+fn pins_json(list: &kutup_crypto::identity_pins::IdentityPinsV2) -> Result<String, JsValue> {
     String::from_utf8(
         kutup_crypto::identity_pins::encode(list).map_err(|error| js_error(&error.to_string()))?,
     )
@@ -3141,26 +3150,30 @@ struct RecordedJs {
     result: kutup_crypto::identity_pins::Recorded,
 }
 
-/// Records what a client learned about `account` (`update`: `firstSeen`,
-/// `accepted` or `verified`), by the rules every app shares:
-/// `{ pins, changed, result: { kind: "pinned" | "unchanged" |
-/// "formerAddressTaken" | "knownElsewhere", … } }`.
+/// Records what a client learned about `account` (`{ server, accountId }`),
+/// met at `address` (or null) with an authority (`update`: `firstSeen`,
+/// `accepted` or `verified`), by the rules every app shares: `{ pins,
+/// changed, result: { kind: "updated" | "unchanged" | "authorityElsewhere",
+/// … } }`. The address is kept only on a pin made now.
 #[wasm_bindgen(js_name = recordIdentityPin)]
 pub fn record_identity_pin(
     pins_json_text: &str,
-    account: &str,
+    account: JsValue,
+    address: Option<String>,
     authority_public_base64: &str,
     update: &str,
     since: &str,
 ) -> Result<JsValue, JsValue> {
     let mut list = pins_arg(pins_json_text)?;
     let before = list.clone();
+    let account = account_arg(account, "account")?;
     let update: kutup_crypto::identity_pins::PinUpdate =
         serde_json::from_value(serde_json::Value::String(update.to_owned()))
             .map_err(|_| js_error("unknown pin update"))?;
     let result = kutup_crypto::identity_pins::record(
         &mut list,
-        account,
+        &account,
+        address.as_deref(),
         authority_public_base64,
         update,
         since,
@@ -3177,38 +3190,139 @@ pub fn record_identity_pin(
     .map_err(|error| js_error(&format!("encode: {error}")))
 }
 
-/// What the pin list says about `address`, given the authority its server
-/// publishes now (absent: nobody, or not looked up): `{ kind: "pinned" |
-/// "renamed" | "moved" | "new", pin?, sameAuthority? }`.
+/// What the pin list says about `account`, met at `address` (or null), given
+/// the authority published for it now (or null): `{ kind: "pinned" (with
+/// `authority` and `others`) | "someoneElse" | "new", … }`.
 #[wasm_bindgen(js_name = lookupIdentityPin)]
 pub fn lookup_identity_pin(
     pins_json_text: &str,
-    address: &str,
+    account: JsValue,
+    address: Option<String>,
     published_authority_base64: Option<String>,
 ) -> Result<JsValue, JsValue> {
     let list = pins_arg(pins_json_text)?;
-    let found =
-        kutup_crypto::identity_pins::lookup(&list, address, published_authority_base64.as_deref());
-    found
+    let account = account_arg(account, "account")?;
+    kutup_crypto::identity_pins::lookup(
+        &list,
+        &account,
+        address.as_deref(),
+        published_authority_base64.as_deref(),
+    )
+    .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// The pins of every account met at `address`, newest holder first.
+#[wasm_bindgen(js_name = identityPinsAt)]
+pub fn identity_pins_at(pins_json_text: &str, address: &str) -> Result<JsValue, JsValue> {
+    let list = pins_arg(pins_json_text)?;
+    list.at(address)
         .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
         .map_err(|error| js_error(&format!("encode: {error}")))
 }
 
-/// Follows a rename chain of the account whose authority is given: its pin
-/// moves to the chain's current address, with its trust and history.
-/// `{ pins, from, to, changed, displaced }`; throws for a chain that does not
-/// verify, concerns no pinned account, or rolls back the one pinned.
+/// A shared mailbox's signers and list digests, in order.
+type GroupChainParts = (Vec<[u8; 32]>, Vec<[u8; 32]>);
+
+/// A shared mailbox's verified chain from JavaScript: its signers (base64,
+/// oldest first) and one digest per list (hex, list 1 first).
+fn group_chain_args(
+    signers: Vec<String>,
+    digests: Vec<String>,
+) -> Result<GroupChainParts, JsValue> {
+    let signers = signers
+        .iter()
+        .map(|key| public_key_32(key, "group signer"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let digests = digests
+        .iter()
+        .map(|digest| {
+            hex::decode(digest)
+                .ok()
+                .filter(|bytes| hex::encode(bytes) == *digest)
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                .ok_or_else(|| js_error("a group key list digest is not 32 bytes of lowercase hex"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((signers, digests))
+}
+
+/// What the pin list says about the shared mailbox `groupId` on `server`,
+/// given its verified chain: `{ kind: "new" | "same" | "changed", pin? }`.
+#[wasm_bindgen(js_name = lookupGroupPin)]
+pub fn lookup_group_pin(
+    pins_json_text: &str,
+    server: &str,
+    group_id: &str,
+    signers: Vec<String>,
+    digests: Vec<String>,
+) -> Result<JsValue, JsValue> {
+    let list = pins_arg(pins_json_text)?;
+    let (signers, digests) = group_chain_args(signers, digests)?;
+    let chain = kutup_crypto::identity_pins::GroupChain {
+        signers: &signers,
+        digests: &digests,
+    };
+    kutup_crypto::identity_pins::lookup_group(&list, server, group_id, &chain)
+        .map_err(|error| js_error(&error.to_string()))?
+        .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+        .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// Records what a sender learned about a shared mailbox (`update`:
+/// `firstSeen` or `accepted`): `{ pins, changed }`.
+#[wasm_bindgen(js_name = recordGroupPin)]
+pub fn record_group_pin(
+    pins_json_text: &str,
+    server: &str,
+    group_id: &str,
+    signers: Vec<String>,
+    digests: Vec<String>,
+    update: &str,
+    since: &str,
+) -> Result<JsValue, JsValue> {
+    #[derive(Serialize)]
+    struct Out {
+        pins: String,
+        changed: bool,
+    }
+    let mut list = pins_arg(pins_json_text)?;
+    let (signers, digests) = group_chain_args(signers, digests)?;
+    let update: kutup_crypto::identity_pins::GroupUpdate =
+        serde_json::from_value(serde_json::Value::String(update.to_owned()))
+            .map_err(|_| js_error("unknown group pin update"))?;
+    let chain = kutup_crypto::identity_pins::GroupChain {
+        signers: &signers,
+        digests: &digests,
+    };
+    let changed = kutup_crypto::identity_pins::record_group(
+        &mut list, server, group_id, &chain, update, since,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Out {
+        pins: pins_json(&list)?,
+        changed,
+    }
+    .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
+    .map_err(|error| js_error(&format!("encode: {error}")))
+}
+
+/// Follows a rename chain of `account`, signed by its pinned authority, at
+/// `since`: the chain's addresses become the pin's labels, the current one
+/// held now. `{ pins, from, to, changed }`; throws for a chain that does not
+/// verify against the pinned authority, an account not pinned, or a rollback.
 #[wasm_bindgen(js_name = applyAccountRenameToPins)]
 pub fn apply_account_rename_to_pins(
     pins_json_text: &str,
-    authority_public_base64: &str,
+    account: JsValue,
     chain_json: &str,
+    since: &str,
 ) -> Result<JsValue, JsValue> {
     let mut list = pins_arg(pins_json_text)?;
-    let authority = public_key_32(authority_public_base64, "authority key")?;
+    let account = account_arg(account, "account")?;
     let chain: Vec<kutup_crypto::account_rename::AccountRenameV1> =
         serde_json::from_str(chain_json).map_err(|_| js_error("invalid rename chain"))?;
-    let applied = kutup_crypto::identity_pins::apply_rename(&mut list, &authority, &chain)
+    let applied = kutup_crypto::identity_pins::apply_rename(&mut list, &account, &chain, since)
         .map_err(|error| js_error(&error.to_string()))?;
     PinsChanged {
         pins: pins_json(&list)?,

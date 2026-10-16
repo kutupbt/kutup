@@ -10,6 +10,7 @@
     "./useKutupMap": "./src/useKutupMap.ts"
   },
   "dependencies": {
+    "@kutup/crypto": "workspace:*",
     "@kutup/session": "workspace:*",
     "@tanstack/react-query": "^5",
     "maplibre-gl": "^6.13.0",

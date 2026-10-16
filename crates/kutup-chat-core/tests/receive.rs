@@ -13,12 +13,12 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use futures_executor::block_on;
 use kutup_chat_core::{
-    ChatAddress, ChatContent, ChatTransport, ContactState, Engine, EngineState, InboundFailureKind,
-    InboundState, Result, SendOutcome, Session, SqliteChatDb,
+    AccountAuthority, ChatAddress, ChatContent, ChatTransport, ContactState, Engine, EngineState,
+    InboundFailureKind, InboundState, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    AccountAddress, ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage,
-    OutgoingEnvelope, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
+    RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -30,14 +30,72 @@ fn test_rng() -> impl Rng + CryptoRng {
 }
 
 fn in_memory<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Session {
-    block_on(Session::generate(
+    let session = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
         user,
         device_id,
         10,
         rng,
     ))
-    .unwrap()
+    .unwrap();
+    publish_device(
+        user,
+        serve_bundle(session.registration().unwrap(), device_id),
+    );
+    session
+}
+
+thread_local! {
+    /// Every sender device a test made, by account: the mock server publishes
+    /// them in each account's signed manifest, as the real one would.
+    static DEVICES: RefCell<std::collections::BTreeMap<String, Vec<DevicePreKeyBundle>>> =
+        RefCell::new(std::collections::BTreeMap::new());
+}
+
+fn publish_device(user: &str, bundle: DevicePreKeyBundle) {
+    DEVICES.with(|devices| {
+        let mut devices = devices.borrow_mut();
+        let list = devices.entry(user.to_string()).or_default();
+        list.retain(|known| known.device_id != bundle.device_id);
+        list.push(bundle);
+        list.sort_by_key(|known| known.device_id);
+    });
+}
+
+/// The authority of `user`'s account in these tests.
+fn authority_of(user: &str) -> AccountAuthority {
+    let seed = user
+        .bytes()
+        .fold(7u8, |acc, b| acc.wrapping_mul(31).wrapping_add(b));
+    AccountAuthority::derive(&[seed; 32]).unwrap()
+}
+
+/// `user`'s signed manifest and bundles, from the devices a test made.
+fn published(user: &str) -> UserPreKeyBundlesResponse {
+    let devices = DEVICES.with(|devices| devices.borrow().get(user).cloned().unwrap_or_default());
+    let manifest = authority_of(user)
+        .sign_manifest(
+            user.parse().unwrap(),
+            1,
+            None,
+            devices
+                .iter()
+                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV1 {
+                    device_id: bundle.device_id,
+                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    identity_key: bundle.identity_key.clone(),
+                    registration_id: bundle.registration_id,
+                    mls: None,
+                })
+                .collect(),
+            "2026-10-15T10:00:00Z",
+        )
+        .unwrap();
+    UserPreKeyBundlesResponse {
+        account: user.parse().unwrap(),
+        devices,
+        manifest: Some(manifest),
+    }
 }
 
 fn serve_bundle(reg: &RegisterChatDeviceRequest, device_id: u32) -> DevicePreKeyBundle {
@@ -60,7 +118,7 @@ fn deliver(env: &OutgoingEnvelope, sender: &str, id: &str, cursor: u64) -> Deliv
     DeliveredEnvelope {
         id: id.to_string(),
         cursor,
-        sender: Some(sender.to_string()),
+        sender: Some(sender.parse().unwrap()),
         sealed_sender: false,
         sender_device_id: 1,
         envelope_type: env.envelope_type,
@@ -99,6 +157,9 @@ impl Drop for TempDb {
 struct Mailbox {
     inbox: RefCell<Vec<DeliveredEnvelope>>,
     acked: RefCell<Vec<String>>,
+    /// The manifest this account's device published (its own, signed with
+    /// its own authority).
+    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV1>>,
 }
 
 impl Mailbox {
@@ -115,8 +176,32 @@ impl ChatTransport for Mailbox {
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         unreachable!("receive path does not register")
     }
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
-        unreachable!("receive path does not fetch bundles")
+    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
+        // Only to verify a sender's devices before anything of theirs is read.
+        Ok(published(account))
+    }
+    async fn fetch_sync_bundles(
+        &self,
+        account: &str,
+        _current_device_id: u32,
+    ) -> Result<UserPreKeyBundlesResponse> {
+        // What this server claims about the account's own devices.
+        Ok(published(account))
+    }
+    async fn fetch_manifest(
+        &self,
+        _account: &str,
+    ) -> Result<Option<kutup_chat_proto::AccountManifestV1>> {
+        Ok(self.own_manifest.borrow().clone())
+    }
+    async fn publish_manifest(
+        &self,
+        manifest: &kutup_chat_proto::AccountManifestV1,
+    ) -> Result<kutup_chat_proto::AccountManifestPublicationV1> {
+        *self.own_manifest.borrow_mut() = Some(manifest.clone());
+        Ok(kutup_chat_proto::AccountManifestPublicationV1 {
+            manifest: manifest.clone(),
+        })
     }
     async fn send(&self, _username: &str, _req: &SendMessagesRequest) -> Result<SendOutcome> {
         unreachable!("receive path does not send")
@@ -152,13 +237,15 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     let bob_db = TempDb::new();
 
     // Alice encrypts two messages to Bob (as the server would have stored them).
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
     let (env1, env2) = {
         // Generate Bob's device into bob_db (keys persist there); the Session itself
         // is only needed to serve the bundle, then dropped.
         let mut bob = block_on(Session::generate(
             bob_db.open(),
-            "bob@example.test",
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
             1,
             10,
             &mut rng,
@@ -167,7 +254,11 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
         let bundle = serve_bundle(bob.registration().unwrap(), 1);
         block_on(bob.complete_registration(1)).unwrap();
 
-        let mut alice = in_memory("alice@example.test", 1, &mut rng);
+        let mut alice = in_memory(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            1,
+            &mut rng,
+        );
         block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
         let e1 = block_on(alice.encrypt(
             &bob_addr,
@@ -188,15 +279,25 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
 
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![
-        deliver(&env1, "alice@example.test", "mbx-1", 1),
-        deliver(&env2, "alice@example.test", "mbx-2", 2),
+        deliver(
+            &env1,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "mbx-1",
+            1,
+        ),
+        deliver(
+            &env2,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "mbx-2",
+            2,
+        ),
     ]);
 
     // Bob reopens his device and drains.
     let mut bob = block_on(Engine::open(
         bob_db.open(),
         server.clone(),
-        "bob@example.test",
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
     ))
     .unwrap();
@@ -207,7 +308,8 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     assert_eq!(report.messages[1].content.as_text().unwrap().text, "second");
     assert_eq!(
         report.messages[0].from,
-        ChatAddress::from_sender("alice@example.test", 1).unwrap()
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test", 1)
+            .unwrap()
     );
     assert!(report.errors.is_empty() && report.undecodable.is_empty());
     assert_eq!(
@@ -222,7 +324,12 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
     drop(bob);
 
     // History (and the drain cursor) survive a reopen.
-    let reopened = block_on(Session::open(bob_db.open(), "bob@example.test", 1)).unwrap();
+    let reopened = block_on(Session::open(
+        bob_db.open(),
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+    ))
+    .unwrap();
     let history = block_on(reopened.history()).unwrap();
     assert_eq!(history.len(), 2);
     let texts: Vec<String> = history
@@ -242,12 +349,22 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
 #[test]
 fn dedups_a_redelivered_cursor() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
 
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
 
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let env = block_on(alice.encrypt(
         &bob_addr,
@@ -262,8 +379,18 @@ fn dedups_a_redelivered_cursor() {
     // ratchet couldn't repeat it).
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![
-        deliver(&env, "alice@example.test", "twin-a", 1),
-        deliver(&env, "alice@example.test", "twin-b", 1),
+        deliver(
+            &env,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "twin-a",
+            1,
+        ),
+        deliver(
+            &env,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "twin-b",
+            1,
+        ),
     ]);
 
     let mut bob = Engine::new(bob_session, server.clone());
@@ -282,10 +409,20 @@ fn dedups_a_redelivered_cursor() {
 #[test]
 fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let env = block_on(alice.encrypt(
         &bob_addr,
@@ -296,8 +433,18 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
     .unwrap();
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![
-        deliver(&env, "alice@example.test", "replay-a", 1),
-        deliver(&env, "alice@example.test", "replay-b", 2),
+        deliver(
+            &env,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "replay-a",
+            1,
+        ),
+        deliver(
+            &env,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "replay-b",
+            2,
+        ),
     ]);
 
     let mut bob = Engine::new(bob_session, server.clone());
@@ -311,12 +458,26 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
 #[test]
 fn decrypt_failure_is_durable_and_never_silently_acked() {
     let mut rng = test_rng();
-    let bob = in_memory("bob@example.test", 1, &mut rng);
+    let bob = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
+    // Alice's device is real; what it sent is not.
+    let _alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![DeliveredEnvelope {
         id: "broken-1".into(),
         cursor: 1,
-        sender: Some("alice@example.test".into()),
+        sender: Some(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test"
+                .parse()
+                .unwrap(),
+        ),
         sealed_sender: false,
         sender_device_id: 1,
         envelope_type: kutup_chat_proto::EnvelopeType::Message,
@@ -362,14 +523,26 @@ fn decrypt_failure_is_durable_and_never_silently_acked() {
 #[test]
 fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let wrapper = ChatContent::sent_transcript(
         "forged-note",
-        "bob@example.test",
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+            .parse()
+            .unwrap(),
         1,
         ChatContent::text_with_id("m5", "2026-07-16T12:00:00Z", 1, "not Bob's note"),
     );
@@ -378,7 +551,7 @@ fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![deliver(
         &encrypted,
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "forged-1",
         1,
     )]);
@@ -394,10 +567,20 @@ fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
 #[test]
 fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let contents = [
         ChatContent::typing_with_id(
@@ -430,7 +613,7 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
 
     server.deposit(vec![deliver(
         &encrypted[0],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "typing-1",
         1,
     )]);
@@ -442,16 +625,21 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
 
     server.deposit(vec![deliver(
         &encrypted[1],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "request-2",
         2,
     )]);
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
-    block_on(bob.accept_contact("alice@example.test", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
+    block_on(bob.accept_contact(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        "2026-08-10T12:00:02Z",
+        &mut rng,
+    ))
+    .unwrap();
 
     server.deposit(vec![deliver(
         &encrypted[2],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "typing-3",
         3,
     )]);
@@ -471,10 +659,20 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
 #[test]
 fn a_call_from_someone_not_accepted_does_not_ring() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let offer = ChatContent::call_with_id(
         "66666666-6666-4666-8666-666666666666",
@@ -492,7 +690,12 @@ fn a_call_from_someone_not_accepted_does_not_ring() {
         block_on(alice.encrypt(&bob_addr, bundle.registration_id, &offer, &mut rng)).unwrap();
     let server = Rc::new(Mailbox::default());
     let mut bob = Engine::new(bob_session, server.clone());
-    server.deposit(vec![deliver(&encrypted, "alice@example.test", "call-1", 1)]);
+    server.deposit(vec![deliver(
+        &encrypted,
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        "call-1",
+        1,
+    )]);
     let report = block_on(bob.receive(&mut rng)).unwrap();
     assert!(report.messages.is_empty());
     assert_eq!(report.suppressed, vec!["call-1"]);
@@ -503,10 +706,20 @@ fn a_call_from_someone_not_accepted_does_not_ring() {
 #[test]
 fn disappearing_timer_is_durable_only_for_established_conversations() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let contents = [
         ChatContent::disappearing_timer_with_id(
@@ -541,7 +754,7 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
 
     server.deposit(vec![deliver(
         &encrypted[0],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "timer-1",
         1,
     )]);
@@ -553,16 +766,21 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
 
     server.deposit(vec![deliver(
         &encrypted[1],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "request-2",
         2,
     )]);
     assert_eq!(block_on(bob.receive(&mut rng)).unwrap().messages.len(), 1);
-    block_on(bob.accept_contact("alice@example.test", "2026-08-10T12:00:02Z", &mut rng)).unwrap();
+    block_on(bob.accept_contact(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        "2026-08-10T12:00:02Z",
+        &mut rng,
+    ))
+    .unwrap();
 
     server.deposit(vec![deliver(
         &encrypted[2],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "timer-3",
         3,
     )]);
@@ -585,16 +803,30 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
 #[test]
 fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let control = ChatContent::disappearing_expiry_start_with_id(
         "44444444-4444-4444-8444-444444444444",
         "2026-08-10T12:00:03Z",
         1,
-        ConversationId::direct("alice@example.test".parse::<AccountAddress>().unwrap()),
+        ConversationId::direct(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test"
+                .parse::<kutup_chat_core::AccountRef>()
+                .unwrap(),
+        ),
         "55555555-5555-4555-8555-555555555555",
         1,
     )
@@ -604,7 +836,7 @@ fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
     let server = Rc::new(Mailbox::default());
     server.deposit(vec![deliver(
         &encrypted,
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "forged-expiry-start",
         1,
     )]);
@@ -621,10 +853,20 @@ fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
 #[test]
 fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let mut rng = test_rng();
-    let bob_addr = ChatAddress::from_sender("bob@example.test", 1).unwrap();
-    let bob_session = in_memory("bob@example.test", 1, &mut rng);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let bob_session = in_memory(
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        1,
+        &mut rng,
+    );
     let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
-    let mut alice = in_memory("alice@example.test", 1, &mut rng);
+    let mut alice = in_memory(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+        &mut rng,
+    );
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let unknown_key = base64::engine::general_purpose::STANDARD.encode([6u8; 32]);
     let first_key = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
@@ -660,7 +902,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     // An unsolicited control cannot manufacture an empty message request.
     server.deposit(vec![deliver(
         &encrypted[0],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "profile-1",
         1,
     )]);
@@ -671,7 +913,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
 
     server.deposit(vec![deliver(
         &encrypted[1],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "request-2",
         2,
     )]);
@@ -680,14 +922,17 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     let contact = block_on(bob.contacts()).unwrap().pop().unwrap();
     assert_eq!(contact.state, ContactState::PendingIncoming);
     let request_profile = block_on(bob.peer_profiles()).unwrap().pop().unwrap();
-    assert_eq!(request_profile.peer, "alice@example.test");
+    assert_eq!(
+        request_profile.peer,
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test"
+    );
     assert_eq!(request_profile.key, [7u8; 32]);
 
     // A dedicated profile update is never a visible message and cannot grant
     // itself permission while the sender is still only an incoming request.
     server.deposit(vec![deliver(
         &encrypted[2],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "profile-3",
         3,
     )]);
@@ -698,7 +943,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     assert!(matches!(
         block_on(bob.send(
             "reply-before-accept",
-            "alice@example.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
             &ChatContent::text_with_id(
                 "reply-before-accept",
                 "2026-07-16T12:00:30Z",
@@ -711,15 +956,18 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
             if message.contains("accept the message request")
     ));
 
-    let rejected =
-        block_on(bob.reject_contact("alice@example.test", "2026-07-16T12:01:00Z", &mut rng))
-            .unwrap();
+    let rejected = block_on(bob.reject_contact(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        "2026-07-16T12:01:00Z",
+        &mut rng,
+    ))
+    .unwrap();
     assert_eq!(rejected.state, ContactState::Rejected);
     assert!(block_on(bob.session().history()).unwrap().is_empty());
 
     server.deposit(vec![deliver(
         &encrypted[3],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "request-4",
         4,
     )]);
@@ -735,7 +983,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     );
 
     let blocked = block_on(bob.block_contact(
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         &[0; 32],
         "2026-07-16T12:02:00Z",
         &mut rng,
@@ -745,7 +993,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));
     server.deposit(vec![deliver(
         &encrypted[4],
-        "alice@example.test",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         "blocked-5",
         5,
     )]);
@@ -755,8 +1003,162 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
     assert_eq!(block_on(bob.session().history()).unwrap().len(), 1);
     assert!(server.acked().contains(&"blocked-5".to_string()));
 
-    let unblocked =
-        block_on(bob.unblock_contact("alice@example.test", "2026-07-16T12:03:00Z", &mut rng))
-            .unwrap();
+    let unblocked = block_on(bob.unblock_contact(
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        "2026-07-16T12:03:00Z",
+        &mut rng,
+    ))
+    .unwrap();
     assert_eq!(unblocked.state, ContactState::PendingIncoming);
+}
+
+const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
+const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
+
+/// Bob's registered device in a reopenable store, and its bundle.
+fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle) {
+    let db = TempDb::new();
+    let mut bob = block_on(Session::generate(db.open(), BOB, 1, 10, rng)).unwrap();
+    let bundle = serve_bundle(bob.registration().unwrap(), 1);
+    block_on(bob.complete_registration(1)).unwrap();
+    (db, bundle)
+}
+
+/// Messages to Bob in `sender`'s name from devices nobody published for
+/// `sender`: one under device id 2, one under id 1 with another identity key.
+fn forged_from<R: Rng + CryptoRng>(
+    sender: &str,
+    bundle: &DevicePreKeyBundle,
+    rng: &mut R,
+) -> (Vec<DeliveredEnvelope>, Vec<DevicePreKeyBundle>) {
+    let bob_addr = ChatAddress::from_sender(BOB, 1).unwrap();
+    let mut envelopes = Vec::new();
+    let mut devices = Vec::new();
+    for (device, cursor) in [(2u32, 1u64), (1, 2)] {
+        let mut mallory = block_on(Session::generate(
+            Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+            sender,
+            device,
+            10,
+            rng,
+        ))
+        .unwrap();
+        devices.push(serve_bundle(mallory.registration().unwrap(), device));
+        block_on(mallory.establish(&bob_addr, bundle, rng)).unwrap();
+        let env = block_on(mallory.encrypt(
+            &bob_addr,
+            bundle.registration_id,
+            &ChatContent::text_with_id("forged", "t", 1, "it is me"),
+            rng,
+        ))
+        .unwrap();
+        let mut delivered = deliver(&env, sender, &format!("forged-{cursor}"), cursor);
+        delivered.sender_device_id = device;
+        envelopes.push(delivered);
+    }
+    (envelopes, devices)
+}
+
+/// A server sending in a pinned person's name from a device of its own:
+/// refused like a sealed envelope from outside the manifest, never a new
+/// session, and kept for retry.
+#[test]
+fn an_identified_message_is_taken_only_from_a_device_of_the_senders_manifest() {
+    let mut rng = test_rng();
+    let (bob_db, bundle) = bob_device(&mut rng);
+    // Alice's real device 1 is in her manifest.
+    let _alice = in_memory(ALICE, 1, &mut rng);
+    let server = Rc::new(Mailbox::default());
+    server.deposit(forged_from(ALICE, &bundle, &mut rng).0);
+    let mut engine = block_on(Engine::open(bob_db.open(), server.clone(), BOB, 1)).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(
+        report.messages.is_empty(),
+        "nothing in Alice's name from devices outside her manifest"
+    );
+    assert_eq!(report.errors.len(), 2);
+    assert!(server.acked().is_empty());
+}
+
+/// A "new own device" the server made up: before this device verified its
+/// own manifest nothing in this account's name is taken; afterwards only
+/// devices of that manifest are, and a server-offered manifest under
+/// another authority does not add any.
+#[test]
+fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manifest() {
+    let mut rng = test_rng();
+    let (bob_db, bundle) = bob_device(&mut rng);
+    let server = Rc::new(Mailbox::default());
+    let (forged, devices) = forged_from(BOB, &bundle, &mut rng);
+    // The server lists Bob's device and a forged one in a manifest under an
+    // authority of its own.
+    publish_device(BOB, bundle.clone());
+    publish_device(BOB, devices[0].clone());
+
+    // No own manifest verified here yet.
+    server.deposit(forged.clone());
+    let mut engine = block_on(Engine::open(bob_db.open(), server.clone(), BOB, 1)).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    assert_eq!(report.errors.len(), 2);
+    assert!(server.acked().is_empty());
+
+    // Bob's own manifest under his own authority: device 1 only.
+    let authority = AccountAuthority::derive(&[42u8; 32]).unwrap();
+    block_on(engine.sync_own_manifest(&authority, "2026-10-16T10:00:00Z")).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(
+        report.messages.is_empty(),
+        "nothing from devices outside Bob's own verified manifest"
+    );
+    assert!(server.acked().is_empty());
+}
+
+/// The line saying a peer changed their username: written once per rename
+/// (a second sighting of the same step neither repeats nor moves it), never
+/// for anything but an account, and one more for each later rename.
+#[test]
+fn a_peer_rename_line_is_written_once_per_rename() {
+    let mut rng = test_rng();
+    let mut bob = in_memory(BOB, 1, &mut rng);
+    let first = kutup_chat_proto::PeerRenamedBody {
+        previous: "ada@example.test".into(),
+        current: "ada.new@example.test".into(),
+        sequence: 1,
+    };
+    assert!(block_on(bob.record_peer_renamed(ALICE, &first)).unwrap());
+    let lines = |bob: &Session| -> Vec<(String, i64)> {
+        block_on(bob.sent_history())
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                serde_json::from_slice::<ChatContent>(&message.content)
+                    .is_ok_and(|content| content.as_peer_renamed().is_some())
+            })
+            .map(|message| (message.peer, message.created_at))
+            .collect()
+    };
+    let once = lines(&bob);
+    assert_eq!(once.len(), 1);
+    assert_eq!(once[0].0, ALICE);
+    assert!(!block_on(bob.record_peer_renamed(ALICE, &first)).unwrap());
+    assert_eq!(
+        lines(&bob),
+        once,
+        "the same rename neither repeats nor moves"
+    );
+    let second = kutup_chat_proto::PeerRenamedBody {
+        previous: "ada.new@example.test".into(),
+        current: "ada.newer@example.test".into(),
+        sequence: 2,
+    };
+    assert!(block_on(bob.record_peer_renamed(ALICE, &second)).unwrap());
+    assert_eq!(lines(&bob).len(), 2);
+    // Only an account's thread; and only one rename, not a no-op.
+    assert!(block_on(bob.record_peer_renamed("ada@example.test", &first)).is_err());
+    let same = kutup_chat_proto::PeerRenamedBody {
+        current: first.previous.clone(),
+        ..first.clone()
+    };
+    assert!(block_on(bob.record_peer_renamed(ALICE, &same)).is_err());
 }

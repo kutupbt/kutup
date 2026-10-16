@@ -381,8 +381,8 @@ const backupSegment = {
     version: 1,
     recordId: '55555555-5555-4555-8555-555555555555',
     mutationSequence: 1,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    sender: 'alice@a.test',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-000000000002' } },
+    sender: { server: 'a.test', accountId: '00000000-0000-4000-8000-000000000001' },
     senderDeviceId: 1,
     outgoing: true,
     content: {
@@ -897,10 +897,10 @@ assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.bindi
 assert.throws(() => crypto.sealMailName(nameVectors.masterKey, 'alice@kutup.dev', 'label', nameVectors.id, 5, nameVectors.name))
 
 // Drive identity (docs/plans/drive-identity-pins.md): the Drive key binding
-// names the account, its server and id (a statement to others); the pin list
-// binds the key binding.
+// names the account, its server and id (a statement to others); the pin
+// list, keyed by account id, binds the key binding.
 const identityVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v2.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v3.json`, 'utf8'),
 )
 const iv = identityVectors
 const ivAccount = crypto.parseAccountRef(iv.account)
@@ -923,48 +923,64 @@ assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 0, iv.pins
 assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
-// Renames followed in the pin list (docs/plans/username-renames.md): the same
-// rules as Rust (record, lookup, apply_rename), and the lists refused.
+// What every app does with the list: the same rules as Rust (record, lookup,
+// identityPinsAt, apply_rename), and the lists refused.
 {
-  const r = iv.renames
+  const r = iv.rules
   const chain = JSON.stringify(r.chain)
-  const { pins, ...applied } = crypto.applyAccountRenameToPins(r.before, r.authorityPublicKey, chain)
+  const since = '2026-10-13T12:00:00Z'
+  const { pins, ...applied } = crypto.applyAccountRenameToPins(r.before, r.dave, chain, since)
   assert.equal(pins, r.after)
   assert.deepEqual(applied, r.applied)
-  const again = crypto.applyAccountRenameToPins(r.after, r.authorityPublicKey, chain)
+  const again = crypto.applyAccountRenameToPins(r.after, r.dave, chain, since)
   assert.equal(again.changed, false)
   assert.equal(again.pins, r.after)
-  assert.throws(() => crypto.applyAccountRenameToPins(r.after, r.authorityPublicKey, JSON.stringify(r.rollback)))
-  for (const lookup of r.replacedLookups) {
-    assert.deepEqual(crypto.lookupIdentityPin(r.replacedList, lookup.address, lookup.published ?? undefined), lookup.result, lookup.address)
-  }
+  assert.throws(() => crypto.applyAccountRenameToPins(r.after, r.dave, JSON.stringify(r.rollback), since))
   for (const lookup of r.lookups) {
-    assert.deepEqual(crypto.lookupIdentityPin(r.after, lookup.address, lookup.published ?? undefined), lookup.result, lookup.address)
+    assert.deepEqual(
+      crypto.lookupIdentityPin(r.after, lookup.account, lookup.address ?? undefined, lookup.published ?? undefined),
+      lookup.result,
+      lookup.case,
+    )
   }
+  const at = crypto.identityPinsAt(r.after, 'david@kutup.dev')
+  assert.equal(at.length, 2)
   for (const record of r.records) {
-    const out = crypto.recordIdentityPin(record.before, record.account, record.authority, record.update, record.since)
+    const out = crypto.recordIdentityPin(record.before, record.account, record.address ?? undefined, record.authority, record.update, record.since)
     assert.equal(out.pins, record.after, record.case)
     assert.deepEqual(out.result, record.result, record.case)
     assert.equal(out.changed, record.after !== record.before, record.case)
   }
   // Fields from a later version are kept through an update.
-  const kept = crypto.recordIdentityPin(r.preserved, 'dave@kutup.dev', JSON.parse(r.preserved).pins[0].authorityPublicKey, 'verified', '2026-10-13T12:00:00Z')
+  const kept0 = JSON.parse(r.preserved).pins[0]
+  const kept = crypto.recordIdentityPin(r.preserved, kept0.account, undefined, kept0.authorityPublicKey, 'verified', since)
   assert.equal(kept.changed, true)
   const keptList = JSON.parse(kept.pins)
   assert.equal(keptList.pins[0].colour, 'blue')
   assert.equal(keptList.pins[0].renames.signedBy, 'x')
+  assert.equal(keptList.pins[0].addresses[0].via, 'chain')
   assert.deepEqual(keptList.laterList, { a: [1, 2] })
-  assert.equal(keptList.detached[0].note, null)
   for (const refused of r.refusedLists) {
     assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 9, refused.pins), undefined, refused.case)
-    assert.throws(() => crypto.recordIdentityPin(refused.pins, 'x@kutup.dev', iv.authorityPublicKey, 'firstSeen', '2026-10-13T12:00:00Z'), undefined, refused.case)
+    assert.throws(() => crypto.recordIdentityPin(refused.pins, r.dave, undefined, iv.authorityPublicKey, 'firstSeen', since), undefined, refused.case)
   }
+  // Shared mailboxes: the same rules as Rust (lookup_group, record_group).
+  for (const g of r.groups) {
+    assert.deepEqual(crypto.lookupGroupPin(g.before, g.server, g.groupId, g.signers, g.digests), g.found, g.case)
+    const out = crypto.recordGroupPin(g.before, g.server, g.groupId, g.signers, g.digests, g.update, g.since)
+    assert.equal(out.pins, g.after, g.case)
+    assert.equal(out.changed, g.after !== g.before, g.case)
+  }
+  assert.throws(() => crypto.lookupGroupPin(r.after, 'kutup.dev', r.groups[0].groupId, [], r.groups[0].digests))
+  // An account reference, never an address, keys a pin.
+  assert.throws(() => crypto.lookupIdentityPin(r.after, 'dave@kutup.dev', undefined, undefined))
 }
 
 // Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
 
-// The safety number every app shows (kutup-crypto safety_number, V2): the
-// two authorities only, so a rename keeps it and a new incarnation changes it.
+// The safety number every app shows (kutup-crypto safety_number, V3): Signal's
+// fingerprint over each account and its authority, so a rename keeps it and a
+// reset, or another account, changes it.
 {
   for (const [name, folded] of vectors.nameFold.names) {
     assert.equal(crypto.foldName(name), folded, name)
@@ -977,13 +993,20 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
     assert.throws(() => crypto.parseAccountRef(bad), bad)
   }
   const v = vectors.safetyNumber
-  const safety = crypto.deriveSafetyNumber(v.localAuthority, v.peerAuthority)
-  assert.equal(safety.fingerprint, v.fingerprint)
-  assert.equal(safety.qrPayload, v.qrPayload)
-  assert.deepEqual(crypto.deriveSafetyNumber(v.peerAuthority, v.localAuthority), safety)
-  assert.equal(crypto.safetyQrMatches(v.peerAuthority, v.localAuthority, safety.qrPayload), true)
-  assert.equal(crypto.deriveSafetyNumber(v.localAuthority, v.newIncarnationAuthority).fingerprint, v.newIncarnationFingerprint)
-  assert.equal(crypto.safetyQrMatches(v.localAuthority, v.newIncarnationAuthority, safety.qrPayload), false)
+  const local = crypto.parseAccountRef(v.localAccount)
+  const peer = crypto.parseAccountRef(v.peerAccount)
+  const mine = crypto.deriveSafetyNumber(local, v.localAuthority, peer, v.peerAuthority)
+  const theirs = crypto.deriveSafetyNumber(peer, v.peerAuthority, local, v.localAuthority)
+  assert.equal(mine.fingerprint, v.fingerprint)
+  assert.equal(theirs.fingerprint, v.fingerprint)
+  assert.equal(mine.qrPayload, v.localQrPayload)
+  assert.equal(theirs.qrPayload, v.peerQrPayload)
+  assert.equal(crypto.safetyQrMatches(local, v.localAuthority, peer, v.peerAuthority, v.peerQrPayload), true)
+  assert.equal(crypto.safetyQrMatches(local, v.localAuthority, peer, v.peerAuthority, v.localQrPayload), false)
+  assert.equal(crypto.deriveSafetyNumber(local, v.localAuthority, peer, v.resetAuthority).fingerprint, v.resetFingerprint)
+  const other = crypto.parseAccountRef(v.otherAccount)
+  assert.equal(crypto.deriveSafetyNumber(local, v.localAuthority, other, v.peerAuthority).fingerprint, v.otherAccountFingerprint)
+  assert.throws(() => crypto.deriveSafetyNumber('alice@kutup.dev', v.localAuthority, peer, v.peerAuthority))
 }
 
 // Account renames (kutup-crypto account_rename): a chain signed by the

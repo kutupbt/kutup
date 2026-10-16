@@ -2,9 +2,10 @@
 //! named `kutup.localhost`: Drive key bindings, required at registration,
 //! in person lookups, and the synced identity pin list.
 
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::AccountIdentityKeysV1;
-use kutup_crypto::identity_pins::{self, IdentityPinV1, IdentityPinsV1, PinState};
+use kutup_crypto::identity_pins::{self, AddressLabelV1, IdentityPinV2, IdentityPinsV2, PinState};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -110,16 +111,20 @@ fn identity_pins_sync_by_revision() {
     let binding = owner.binding.clone();
     let key = identity_pins::derive_key(&owner.master_key).unwrap();
     let friend = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
-    let list = IdentityPinsV1 {
-        pins: vec![IdentityPinV1 {
-            account: "friend@kutup.localhost".into(),
+    let list = IdentityPinsV2 {
+        pins: vec![IdentityPinV2 {
+            account: AccountRef::new("kutup.localhost", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap(),
             authority_public_key: b64(&friend.authority_public_key()),
             state: PinState::Seen,
             since: "2026-10-10T12:00:00Z".into(),
             replaced: vec![],
-            formerly: vec![],
+            addresses: vec![AddressLabelV1 {
+                address: "friend@kutup.localhost".into(),
+                seen_at: "2026-10-10T12:00:00Z".into(),
+                unknown: Default::default(),
+            }],
             renames: None,
-            detached_by: None,
             unknown: Default::default(),
         }],
         ..Default::default()

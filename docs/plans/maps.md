@@ -259,6 +259,11 @@ goes beyond Signal parity.
      - a time must be strict RFC 3339 with a real calendar day, or it becomes
        1970-01-01;
      - names are trimmed as JavaScript trims;
+     - who added a place is their account's string form,
+       `aci:<uuid>@<server>` (docs/plans/account-ids.md), never an address,
+       which can later belong to someone else; anything else becomes empty.
+       The app shows the account's name now (the pin list's, or what its
+       server says), or only the date when nobody can say;
      - a place without a usable id gets `<file id without dashes>-<index>` in
        a file's first content, so every peer seeding it makes the same items.
    - The Maps app (`apps/maps`):

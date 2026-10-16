@@ -226,7 +226,8 @@ fn share_folder(
         .share_collection(
             collection_id,
             &ShareRequest {
-                recipient_user_id: recipient.user_id,
+                // On this server the account id is the user id.
+                recipient_user_id: recipient.account_id,
                 named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
@@ -281,7 +282,7 @@ fn share_federated(
     delete: bool,
     share_anyway: bool,
 ) -> Result<()> {
-    let (username, server) = target
+    let (_, server) = target
         .rsplit_once('@')
         .filter(|(u, _)| !u.is_empty())
         .ok_or_else(|| anyhow!("format must be username@server (e.g. alice@other.example)"))?;
@@ -291,7 +292,7 @@ fn share_federated(
 
     let remote = ctx
         .client
-        .get_fed_pubkey(username, server)
+        .get_user_by_address(target)
         .context("fetch remote public key")?;
     confirm_recipient(
         &ctx,

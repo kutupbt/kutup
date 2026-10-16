@@ -1,6 +1,6 @@
 import type { ChatService } from '@kutup/chat-core/service'
 import type { ChatCallMedia, ChatGroupCall, LocalMlsConversationRecord } from '@kutup/chat-core/types'
-import { canonicalAccountAddress } from '@kutup/chat-core/identity'
+import { accountKey } from '@kutup/chat-core/identity'
 import type { SfuParticipant, SfuRoom } from './sfuRoom'
 
 // Group calls through the SFU of the server that started them, end-to-end
@@ -177,7 +177,7 @@ export class GroupCallController {
 
   private roster(groupId: string): string[] {
     const group = this.groups().find((record) => record.request.genesis.conversationId === groupId)
-    return group?.currentRoster.map((member) => canonicalAccountAddress(member.address)) ?? []
+    return group?.currentRoster.map((member) => accountKey(member.account)) ?? []
   }
 
   /** Take the key of the group's current epoch, when it changed. */

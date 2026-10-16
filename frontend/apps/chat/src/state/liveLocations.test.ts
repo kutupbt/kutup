@@ -28,10 +28,10 @@ describe('foldLiveLocations', () => {
   it('follows the sharer’s newer streams and stop, not anyone else’s', () => {
     const shares = foldLiveLocations(
       [
-        entry('m1', 'alice@a.test', { liveLocation: live(1, 'aa') }),
-        entry('m2', 'alice@a.test', { liveLocation: live(2, 'bb', 99_999) }),
-        entry('m3', 'mallory@a.test', { liveLocation: live(3, 'cc') }),
-        entry('m4', 'mallory@a.test', { liveLocationStop: { shareId: SHARE } }, 5),
+        entry('m1', 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', { liveLocation: live(1, 'aa') }),
+        entry('m2', 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', { liveLocation: live(2, 'bb', 99_999) }),
+        entry('m3', 'aci:00000000-0000-4000-8000-c0a497761b17@a.test', { liveLocation: live(3, 'cc') }),
+        entry('m4', 'aci:00000000-0000-4000-8000-c0a497761b17@a.test', { liveLocationStop: { shareId: SHARE } }, 5),
       ],
       actor,
     )
@@ -44,12 +44,12 @@ describe('foldLiveLocations', () => {
 
   it('ends at the stop or the end time', () => {
     const shares = foldLiveLocations(
-      [entry('m1', 'alice@a.test', { liveLocation: live(1, 'aa') }), entry('m2', 'alice@a.test', { liveLocationStop: { shareId: SHARE } }, 7)],
+      [entry('m1', 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', { liveLocation: live(1, 'aa') }), entry('m2', 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', { liveLocationStop: { shareId: SHARE } }, 7)],
       actor,
     )
     expect(shares.get('m1')!.stoppedAtMs).toBe(7)
     expect(liveShareEnded(shares.get('m1')!, 1)).toBe(true)
-    const running = foldLiveLocations([entry('m1', 'alice@a.test', { liveLocation: live(1, 'aa') })], actor).get('m1')!
+    const running = foldLiveLocations([entry('m1', 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', { liveLocation: live(1, 'aa') })], actor).get('m1')!
     expect(liveShareEnded(running, 9_999)).toBe(false)
     expect(liveShareEnded(running, 10_000)).toBe(true)
   })

@@ -18,7 +18,9 @@ fn envelope(device_id: u32, ciphertext_bytes: usize) -> AnonymousMlsDeviceEnvelo
 fn valid_submission() -> AnonymousMlsSubmissionV1 {
     AnonymousMlsSubmissionV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
-        recipient: "recipient@example.test".parse().unwrap(),
+        recipient: "aci:4ec1b1e0-0000-4000-8000-000000000006@example.test"
+            .parse()
+            .unwrap(),
         send_id: Uuid::from_u128(1),
         capability: BASE64.encode([0x33; 16]),
         suite: MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,

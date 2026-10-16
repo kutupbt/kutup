@@ -28,7 +28,7 @@ use wasm_bindgen::prelude::*;
 use zeroize::Zeroize as _;
 
 use crate::{
-    AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatAttachmentDescriptorV1,
+    AccountAuthority, AccountRef, AnonymousMlsRecipientDevice, ChatAttachmentDescriptorV1,
     ChatContent, ChatError, ChatTransport, ConversationId, Engine, InboundEnvelope,
     IndexedDbChatDb, MlsApplicationEnvelopeContext, MlsClient, MlsControlEnvelopeContext,
     ReceiveReport, Result, SendOutcome, VerifiedMlsCredential, VerifiedMlsKeyPackage,
@@ -38,29 +38,29 @@ use crate::{
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
-  fetchBundles(username: string): Promise<unknown>;
-  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>;
+  fetchBundles(account: string): Promise<unknown>;
+  fetchSyncBundles(account: string, currentDeviceId: number): Promise<unknown>;
   fetchMlsOrderingPolicy(domain: string): Promise<unknown>;
-  fetchManifest(username: string): Promise<unknown | null>;
-  fetchManifestHistory(username: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
+  fetchManifest(account: string): Promise<unknown | null>;
+  fetchManifestHistory(account: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
   fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
-  fetchSealedBundles(username: string, capability: string): Promise<unknown>;
+  fetchSealedBundles(account: string, capability: string): Promise<unknown>;
   publishManifest(manifest: unknown): Promise<unknown>;
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>;
   storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
-  fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
+  fetchProfile(account: string, version: string, accessKey: string): Promise<unknown | null>;
   prekeyCount(deviceId: number): Promise<unknown>;
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>;
-  sendMessage(username: string, request: unknown): Promise<
+  sendMessage(account: string, request: unknown): Promise<
     | { kind: "delivered"; deduplicated?: boolean }
     | { kind: "mismatch"; mismatch: unknown }
   >;
-  sendSealedMessage(username: string, request: unknown): Promise<
+  sendSealedMessage(account: string, request: unknown): Promise<
     | { kind: "delivered"; deduplicated?: boolean }
     | { kind: "mismatch"; mismatch: unknown }
   >;
@@ -109,19 +109,20 @@ export interface KutupChatContentView {
   expiresAtMs?: number;
 }
 
-export interface KutupChatAccountAddress {
-  username: string;
+/** An account, for good (docs/plans/account-ids.md): never an address. */
+export interface KutupChatAccount {
   server: string;
+  accountId: string;
 }
 
 export type KutupChatConversationId =
-  | { kind: "direct"; address: KutupChatAccountAddress }
+  | { kind: "direct"; account: KutupChatAccount }
   | { kind: "group"; groupId: string };
 
 export interface KutupChatHistoryEntry {
   id: string;
   conversation: KutupChatConversationId;
-  /** Who wrote it: an account's canonical `username@server` (this account's own when outgoing). Which chat: `conversation`. */
+  /** Who wrote it: an account's string form, `aci:<uuid>@<server>` (this account's own when outgoing). Which chat: `conversation`. */
   sender: string;
   direction: "incoming" | "outgoing";
   senderDeviceId?: number;
@@ -175,13 +176,13 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchBundles)]
     async fn js_fetch_bundles(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchSyncBundles)]
     async fn js_fetch_sync_bundles(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         current_device_id: u32,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -194,13 +195,13 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
     async fn js_fetch_manifest(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchManifestHistory)]
     async fn js_fetch_manifest_history(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         from_sequence: &str,
         to_sequence: &str,
         page_from_sequence: &str,
@@ -233,7 +234,7 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchSealedBundles)]
     async fn js_fetch_sealed_bundles(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         capability: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -266,7 +267,7 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchProfile)]
     async fn js_fetch_profile(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         version: &str,
         access_key: &str,
     ) -> std::result::Result<JsValue, JsValue>;
@@ -287,14 +288,14 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = sendMessage)]
     async fn js_send_message(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = sendSealedMessage)]
     async fn js_send_sealed_message(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -349,10 +350,10 @@ impl ChatTransport for BrowserTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_bundles(username)
+                .js_fetch_bundles(account)
                 .await
                 .map_err(transport_error)?,
         )
@@ -360,12 +361,12 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_sync_bundles(
         &self,
-        username: &str,
+        account: &str,
         current_device_id: u32,
     ) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_sync_bundles(username, current_device_id)
+                .js_fetch_sync_bundles(account, current_device_id)
                 .await
                 .map_err(transport_error)?,
         )
@@ -383,10 +384,10 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest(&self, username: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV1>> {
         from_transport(
             self.js
-                .js_fetch_manifest(username)
+                .js_fetch_manifest(account)
                 .await
                 .map_err(transport_error)?,
         )
@@ -394,7 +395,7 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_manifest_history(
         &self,
-        username: &str,
+        account: &str,
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
@@ -402,7 +403,7 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_fetch_manifest_history(
-                    username,
+                    account,
                     &from_sequence.to_string(),
                     &to_sequence.to_string(),
                     &page_from_sequence.to_string(),
@@ -462,12 +463,12 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_sealed_bundles(
         &self,
-        username: &str,
+        account: &str,
         capability: &[u8; 16],
     ) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_sealed_bundles(username, &STANDARD.encode(capability))
+                .js_fetch_sealed_bundles(account, &STANDARD.encode(capability))
                 .await
                 .map_err(transport_error)?,
         )
@@ -526,13 +527,13 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_profile(
         &self,
-        username: &str,
+        account: &str,
         version: &str,
         access_key: &[u8],
     ) -> Result<Option<ChatProfileResponse>> {
         from_transport(
             self.js
-                .js_fetch_profile(username, version, &STANDARD.encode(access_key))
+                .js_fetch_profile(account, version, &STANDARD.encode(access_key))
                 .await
                 .map_err(transport_error)?,
         )
@@ -559,10 +560,10 @@ impl ChatTransport for BrowserTransport {
         Ok(())
     }
 
-    async fn send(&self, username: &str, req: &SendMessagesRequest) -> Result<SendOutcome> {
+    async fn send(&self, account: &str, req: &SendMessagesRequest) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
-                .js_send_message(username, to_transport(req)?)
+                .js_send_message(account, to_transport(req)?)
                 .await
                 .map_err(transport_error)?,
         )?;
@@ -581,12 +582,12 @@ impl ChatTransport for BrowserTransport {
 
     async fn send_sealed(
         &self,
-        username: &str,
+        account: &str,
         request: &kutup_chat_proto::SealedMessageSubmissionV1,
     ) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
-                .js_send_sealed_message(username, to_transport(request)?)
+                .js_send_sealed_message(account, to_transport(request)?)
                 .await
                 .map_err(transport_error)?,
         )?;
@@ -812,13 +813,15 @@ struct ConversationPageView {
 impl WasmChatClient {
     /// Open or restart-safely register the local device, then publish its
     /// account-signed manifest. The database name must be account scoped;
-    /// `binding` is the account's key binding (`session.envelopeBinding`),
-    /// which its own seals bind.
+    /// `account` is this account's string form, `aci:<uuid>@<server>`;
+    /// `display_name` is the name a first profile starts with (the
+    /// username); `binding` is the account's key binding
+    /// (`session.envelopeBinding`), which its own seals bind.
     #[wasm_bindgen(js_name = open)]
     pub async fn open(
         database_name: String,
-        user: String,
-        server_name: String,
+        account: String,
+        display_name: String,
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
         binding: String,
@@ -837,10 +840,10 @@ impl WasmChatClient {
         );
         let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
         let mut rng = OsRng.unwrap_err();
-        // The device's account is its full `username@server` address.
-        let account = kutup_chat_proto::AccountAddress::federated(&user, &server_name)
-            .map_err(|error| js_error(&error.to_string()))?
-            .canonical();
+        // The device's account, for good: its string form.
+        let account = crate::address::parse_account(&account)
+            .map_err(chat_error)?
+            .to_string();
         let mut engine = Engine::register(db, transport, account, 50, &mut rng)
             .await
             .map_err(chat_error)?;
@@ -854,7 +857,7 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         engine
-            .initialize_profile(&profile_wrapping_key, &user, &mut rng)
+            .initialize_profile(&profile_wrapping_key, &display_name, &mut rng)
             .await
             .map_err(chat_error)?;
         Ok(Self {
@@ -932,7 +935,7 @@ impl WasmChatClient {
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("invalid MLS conversation id"))?;
-        let creator: AccountAddress = from_transport(creator).map_err(chat_error)?;
+        let creator: AccountRef = from_transport(creator).map_err(chat_error)?;
         let authority_policies: Vec<kutup_chat_proto::MlsOrderingServicePolicyV1> =
             from_transport(authority_policies).map_err(chat_error)?;
         let group_info: Option<kutup_chat_proto::MlsGroupInfoV1> =
@@ -1890,7 +1893,7 @@ impl WasmChatClient {
         capability: Vec<u8>,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let capability: [u8; 16] = capability.try_into().map_err(|_| {
             chat_error(ChatError::Invalid(
                 "MLS delivery capability must contain exactly 16 bytes".into(),
@@ -1916,7 +1919,7 @@ impl WasmChatClient {
         incarnation: String,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
         let verified = self
@@ -2407,7 +2410,7 @@ impl WasmChatClient {
         packages: JsValue,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let capability: [u8; 16] = capability
             .try_into()
             .map_err(|_| js_error("MLS delivery capability must be 16 bytes"))?;
@@ -2462,7 +2465,7 @@ impl WasmChatClient {
         send_id: String,
         envelope: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let send_id = uuid::Uuid::parse_str(&send_id)
             .map_err(|_| js_error("MLS application send id must be a UUID"))?;
         let envelope: AnonymousMlsDeviceEnvelopeV1 =
@@ -2510,7 +2513,7 @@ impl WasmChatClient {
                 .map_err(|_| js_error("MLS mailbox send id must be a UUID"))?,
             server_timestamp: parse_i64_string("MLS server timestamp", &server_timestamp)?,
         };
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let envelope: AnonymousMlsDeviceEnvelopeV1 =
             from_transport(envelope).map_err(chat_error)?;
         let expected_sender: VerifiedMlsCredential =
@@ -2572,7 +2575,7 @@ impl WasmChatClient {
         incarnation: String,
         recipient: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
         let capability = self
@@ -2597,7 +2600,7 @@ impl WasmChatClient {
         devices: JsValue,
         mls_ciphertext: Vec<u8>,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let send_id = uuid::Uuid::parse_str(&send_id)
             .map_err(|_| js_error("anonymous MLS send id must be a UUID"))?;
         let capability: [u8; 16] = capability
@@ -2620,7 +2623,7 @@ impl WasmChatClient {
         send_id: String,
         envelope: JsValue,
     ) -> std::result::Result<Vec<u8>, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let send_id = uuid::Uuid::parse_str(&send_id)
             .map_err(|_| js_error("anonymous MLS send id must be a UUID"))?;
         let envelope: AnonymousMlsDeviceEnvelopeV1 =
@@ -2894,6 +2897,36 @@ impl WasmChatClient {
         self.engine
             .session_mut()
             .record_local_notice(&peer, &content)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The line saying `peer` (an account key) changed their username from
+    /// `previous` to `current`, step `sequence` of their own verified rename
+    /// chain; written once. True when it was written now.
+    #[wasm_bindgen(js_name = recordPeerRenamed)]
+    pub async fn record_peer_renamed(
+        &mut self,
+        peer: String,
+        previous: String,
+        current: String,
+        sequence: f64,
+    ) -> std::result::Result<bool, JsValue> {
+        if !(sequence.is_finite()
+            && sequence >= 1.0
+            && sequence.fract() == 0.0
+            && sequence <= 9_007_199_254_740_991.0)
+        {
+            return Err(js_error("a rename sequence is a positive integer"));
+        }
+        let body = kutup_chat_proto::PeerRenamedBody {
+            previous,
+            current,
+            sequence: sequence as u64,
+        };
+        self.engine
+            .session_mut()
+            .record_peer_renamed(&peer, &body)
             .await
             .map_err(chat_error)
     }
@@ -3881,6 +3914,12 @@ struct ContentView {
     /// Stands where a message from the peer could not be read.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     undecryptable: bool,
+    /// The local line saying the peer's safety number changed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    safety_number_changed: bool,
+    /// The local line saying the peer changed their username.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_renamed: Option<kutup_chat_proto::PeerRenamedBody>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forwarded: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3911,6 +3950,8 @@ impl From<ChatContent> for ContentView {
         let sticker_removed = content.as_sticker_removed();
         let group_update = content.as_group_update();
         let undecryptable = content.is_undecryptable();
+        let safety_number_changed = content.is_safety_number_changed();
+        let peer_renamed = content.as_peer_renamed();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
@@ -3954,6 +3995,8 @@ impl From<ChatContent> for ContentView {
             mentions: extras.mentions,
             link_preview: extras.link_preview,
             undecryptable,
+            safety_number_changed,
+            peer_renamed,
             forwarded: extras.forwarded,
             view_once: extras.view_once,
             expires_after_seconds,
@@ -3987,7 +4030,7 @@ fn parse_receipt_state(
 struct HistoryEntry {
     id: String,
     conversation: ConversationId,
-    /// Who wrote it: an account's canonical `username@server`, this
+    /// Who wrote it: an account's string form, `aci:<uuid>@<server>`, this
     /// account's own for an outgoing entry. Which chat it belongs to is
     /// `conversation`.
     sender: String,
@@ -4111,10 +4154,9 @@ impl HistoryEntry {
 }
 
 fn direct_conversation(peer: &str) -> Result<ConversationId> {
-    let address = peer
-        .parse::<AccountAddress>()
+    let account = crate::address::parse_account(peer)
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
-    Ok(ConversationId::direct(address))
+    Ok(ConversationId::direct(account))
 }
 
 /// Content that does not decode is no control: it shows as unsupported.
@@ -4544,8 +4586,13 @@ pub fn account_profile_open(
     let master_key = master_key_input(master_key)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
-    let profile = crate::profile::open_account_profile(&master_key, &current, &account, &binding)
-        .map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(
+        &master_key,
+        &current,
+        &crate::address::parse_account(&account).map_err(chat_error)?,
+        &binding,
+    )
+    .map_err(chat_error)?;
     to_output(&AccountProfileView {
         display_name: profile.display_name,
         about: profile.about,
@@ -4585,8 +4632,13 @@ pub fn account_profile_key(
     let master_key = master_key_input(master_key)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
-    let profile = crate::profile::open_account_profile(&master_key, &current, &account, &binding)
-        .map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(
+        &master_key,
+        &current,
+        &crate::address::parse_account(&account).map_err(chat_error)?,
+        &binding,
+    )
+    .map_err(chat_error)?;
     to_output(&profile_lookup_of(&profile.key)?)
 }
 
@@ -4652,7 +4704,7 @@ pub fn account_profile_seal(
             avatar_content_type: update.avatar_content_type,
             about: update.about,
         },
-        &account,
+        &crate::address::parse_account(&account).map_err(chat_error)?,
         &binding,
         &mut rng,
     )

@@ -103,7 +103,7 @@ describe('Chat attachment ledger Rust/WASM envelope', () => {
     const entry = {
       version: 1,
       conversationKind: 'direct',
-      conversationReference: 'bob@example.test',
+      conversationReference: 'aci:00000000-0000-4000-8000-000000000002@example.test',
       messageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       attachmentId,
       storageReferenceId: '44444444-4444-4444-8444-444444444444',
@@ -116,9 +116,9 @@ describe('Chat attachment ledger Rust/WASM envelope', () => {
     const canonical = await encodeChatAttachmentLedgerEntry(entry)
     expect(canonical.length).toBeGreaterThan(64)
     expect(await decodeChatAttachmentLedgerEntry(canonical)).toEqual(entry)
-    await expect(encodeChatAttachmentLedgerEntry({
-      ...entry,
-      conversationReference: 'Bob@example.test',
-    })).rejects.toThrow()
+    // A direct conversation is an account, never an address.
+    for (const conversationReference of ['bob@example.test', 'aci:00000000-0000-4000-8000-000000000002@Example.test']) {
+      await expect(encodeChatAttachmentLedgerEntry({ ...entry, conversationReference })).rejects.toThrow()
+    }
   })
 })

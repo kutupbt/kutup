@@ -3,7 +3,6 @@ import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
 import type {
-  AccountAddress,
   ChatCapabilities,
   ChangeMark,
   ChatAttachmentDescriptorV1,
@@ -56,9 +55,11 @@ import {
 } from './liveTimeline'
 import { isSupportedChat } from './capabilities'
 import {
-  canonicalAccountAddress,
+  accountKey,
   conversationKey,
-  parseAccountAddress,
+  directConversation,
+  parseAccount,
+  type AccountRef,
 } from './identity'
 import { matchesWords, searchableText, searchWords } from './search'
 import { MlsConversationService, MlsSendError } from './mls-service'
@@ -137,7 +138,10 @@ export interface ChatServiceOptions {
   userId: string
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
-  username: string
+  /** This account: its server and permanent id. */
+  account: AccountRef
+  /** The name a first profile starts with (the username). */
+  displayName: string
   masterKey: Uint8Array
   capabilities: ChatCapabilities
 }
@@ -223,7 +227,7 @@ export class ChatService {
     channelName: string,
     capabilities: ChatCapabilities,
     private readonly transport: ApiChatTransport,
-    private readonly username: string,
+    private readonly account: AccountRef,
     private readonly attachmentLedger: ChatAttachmentLedger | null,
     inviteCrypto: InviteLinkCrypto,
     sealedStorage: SealedStorage,
@@ -253,7 +257,7 @@ export class ChatService {
       },
       (entry) => entry,
       (conversation) => ({ key: conversationKey(conversation), conversation }),
-      conversationKey({ kind: 'direct', address: { username, server: capabilities.serverName! } }),
+      conversationKey(directConversation(account)),
     )
     this.deviceId = client.deviceId
     this.lockName = lockName
@@ -269,7 +273,7 @@ export class ChatService {
           transport,
           operation => this.withLock(operation),
           this.deviceId,
-          { username, server: capabilities.serverName! },
+          account,
         )
       : null
     this.invites = this.mls
@@ -277,7 +281,7 @@ export class ChatService {
           this.mls,
           transport,
           inviteCrypto,
-          { username, server: capabilities.serverName! },
+          account,
           localStorageOrNull(),
         )
       : null
@@ -328,8 +332,8 @@ export class ChatService {
       client = await engineLock.run(async (tookOver) => {
         const handle = await wasm.WasmChatClient.open(
           databaseName,
-          options.username,
-          capabilities.serverName!,
+          accountKey(options.account),
+          options.displayName,
           capabilities.sealedSender,
           options.masterKey,
           options.envelopeBinding,
@@ -362,7 +366,7 @@ export class ChatService {
       channelName,
       capabilities,
       transport,
-      options.username,
+      options.account,
       attachmentLedger,
       wasm,
       new SealedStorage(wasm, options.masterKey, scope),
@@ -372,8 +376,6 @@ export class ChatService {
         service.backup = await ChatBackupCoordinator.open({
           databaseName,
           envelopeBinding: options.envelopeBinding,
-          username: options.username,
-          serverName: capabilities.serverName!,
           masterKey: options.masterKey,
           deviceId: service.deviceId,
           history: () => service.liveHistory(),
@@ -793,7 +795,7 @@ export class ChatService {
         ),
       )
     }
-    const peer = canonicalAccountAddress(conversation.address)
+    const peer = accountKey(conversation.account)
     const sendId = crypto.randomUUID()
     const summary = await this.withLock(() =>
       this.client.sendText(
@@ -838,9 +840,9 @@ export class ChatService {
         ),
       )
     }
-    const address = conversation.address
-    const peer = canonicalAccountAddress(address)
-    const self = `${this.username}@${this.capabilities.serverName}`
+    const address = conversation.account
+    const peer = accountKey(address)
+    const self = this.selfKey()
     const capability = peer === self
       ? null
       : await this.withLock(() => this.client.mediaDeliveryCapability(peer))
@@ -922,7 +924,7 @@ export class ChatService {
         this.requireMls().sendPollContent(conversation.groupId, kind, body, expiresAfterSeconds),
       )
     }
-    const peer = canonicalAccountAddress(conversation.address)
+    const peer = accountKey(conversation.account)
     const summary = await this.withLock(() =>
       this.client.sendPollContent(crypto.randomUUID(), peer, new Date().toISOString(), kind, body, expiresAfterSeconds),
     )
@@ -946,7 +948,7 @@ export class ChatService {
         ),
       )
     }
-    const peer = canonicalAccountAddress(conversation.address)
+    const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendReaction(
       crypto.randomUUID(),
       peer,
@@ -977,7 +979,7 @@ export class ChatService {
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
-    const peer = canonicalAccountAddress(conversation.address)
+    const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendMessageMutation(
       crypto.randomUUID(),
       peer,
@@ -1002,7 +1004,7 @@ export class ChatService {
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
-    const peer = canonicalAccountAddress(conversation.address)
+    const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendReceipt(
       crypto.randomUUID(),
       peer,
@@ -1021,8 +1023,8 @@ export class ChatService {
       )
       return
     }
-    const peer = canonicalAccountAddress(conversation.address)
-    const self = `${this.username}@${this.capabilities.serverName}`
+    const peer = accountKey(conversation.account)
+    const self = this.selfKey()
     if (peer === self) return
     await this.withLock(() => this.client.sendTyping(
       crypto.randomUUID(),
@@ -1065,8 +1067,8 @@ export class ChatService {
   }
 
   /** Send one call signal to `peer` (its devices; see docs/chat-calls.md). */
-  async sendCallSignal(peer: AccountAddress, call: ChatCallSignal): Promise<void> {
-    const address = canonicalAccountAddress(peer)
+  async sendCallSignal(peer: AccountRef, call: ChatCallSignal): Promise<void> {
+    const address = accountKey(peer)
     await this.withLock(() => this.client.sendCallSignal(
       crypto.randomUUID(),
       address,
@@ -1076,10 +1078,21 @@ export class ChatService {
   }
 
   /** Put a finished call into `peer`'s timeline on this device. */
-  async recordCallLog(peer: AccountAddress, body: ChatCallLog): Promise<void> {
-    const address = canonicalAccountAddress(peer)
+  async recordCallLog(peer: AccountRef, body: ChatCallLog): Promise<void> {
+    const address = accountKey(peer)
     await this.withLock(() => this.client.recordCallLog(address, body))
     this.notifyPeers()
+  }
+
+  /**
+   * Put the line saying `peer` changed their username into their thread on
+   * this device: one step of their own verified rename chain, written once.
+   */
+  async recordPeerRenamed(peer: AccountRef, rename: { from: string; to: string; sequence: number }): Promise<boolean> {
+    const written = await this.withLock(() =>
+      this.client.recordPeerRenamed(accountKey(peer), rename.from, rename.to, rename.sequence))
+    if (written) this.notifyPeers()
+    return written
   }
 
   /** ICE servers for a call: STUN, and TURN with fresh credentials when the server has a relay. */
@@ -1133,7 +1146,7 @@ export class ChatService {
       this.notifyPeers()
       return { ...summary, safetyNumberChanges: [] }
     }
-    const peer = canonicalAccountAddress(conversation.address)
+    const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendDisappearingTimer(
       crypto.randomUUID(),
       peer,
@@ -1301,9 +1314,9 @@ export class ChatService {
   ): Promise<void> {
     if (!this.attachmentLedger) throw new Error('Chat attachment ledger is unavailable')
     const address = conversation.kind === 'direct'
-      ? canonicalAccountAddress(conversation.address)
+      ? accountKey(conversation.account)
       : conversation.groupId
-    const self = `${this.username}@${this.capabilities.serverName}`
+    const self = this.selfKey()
     await this.attachmentLedger.create({
       version: 1,
       conversationKind: conversation.kind === 'group'
@@ -1375,7 +1388,7 @@ export class ChatService {
         for (const message of report.messages ?? []) {
           if (message.conversation.kind !== 'direct' || !message.content.call) continue
           this.emitCall({
-            peer: canonicalAccountAddress(message.conversation.address),
+            peer: accountKey(message.conversation.account),
             senderDeviceId: message.senderDeviceId,
             sentAt: message.content.sentAt,
             call: message.content.call,
@@ -1383,10 +1396,10 @@ export class ChatService {
         }
         const directTyping = (report.messages ?? []).flatMap((message): ChatTypingEvent[] => {
           if (message.conversation.kind !== 'direct' || message.content.call) return []
-          const address = message.conversation.address
+          const account = message.conversation.account
           return [{
-            conversation: { kind: 'direct', address },
-            sender: canonicalAccountAddress(address),
+            conversation: directConversation(account),
+            sender: accountKey(account),
             // A real encrypted message clears the sender's prior typing state
             // without adding a second control event.
             active: message.content.typing?.active ?? false,
@@ -1441,20 +1454,12 @@ export class ChatService {
   }
 
   /** A new group, named from the start when `name` is given (Signal asks for one). */
-  async createGroup(initialMember?: AccountAddress, name?: string): Promise<LocalMlsConversationRecord> {
+  async createGroup(initialMember?: AccountRef, name?: string): Promise<LocalMlsConversationRecord> {
     const result = await this.withMlsWorkflow(async () => {
       const mls = this.requireMls()
-      const self: AccountAddress = {
-        username: this.currentUsername(),
-        server: this.capabilities.serverName!,
-      }
-      const authorities = new Set([self.server!])
-      if (initialMember) {
-        const member = initialMember
-        if (!member.server) throw new Error('group member requires a server')
-        authorities.add(member.server)
-        initialMember = member
-      }
+      const self = this.account
+      const authorities = new Set([self.server])
+      if (initialMember) authorities.add(initialMember.server)
       const created = await mls.createGroup(self, [...authorities].sort(), name)
       return initialMember
         ? await mls.addMember(created.conversation.request.genesis.conversationId, initialMember)
@@ -1474,7 +1479,7 @@ export class ChatService {
     this.notifyPeers()
   }
 
-  async addGroupMember(conversationId: string, member: AccountAddress): Promise<void> {
+  async addGroupMember(conversationId: string, member: AccountRef): Promise<void> {
     await this.withMlsWorkflow(() =>
       this.requireMls().addMember(
         conversationId,
@@ -1484,7 +1489,7 @@ export class ChatService {
     this.notifyPeers()
   }
 
-  async removeGroupMember(conversationId: string, member: AccountAddress): Promise<void> {
+  async removeGroupMember(conversationId: string, member: AccountRef): Promise<void> {
     await this.withMlsWorkflow(() =>
       this.requireMls().removeMember(
         conversationId,
@@ -1496,7 +1501,7 @@ export class ChatService {
 
   async setGroupAdministrator(
     conversationId: string,
-    member: AccountAddress,
+    member: AccountRef,
     isAdmin: boolean,
   ): Promise<void> {
     await this.withMlsWorkflow(() =>
@@ -1528,7 +1533,7 @@ export class ChatService {
 
   async setGroupOwner(
     conversationId: string,
-    member: AccountAddress,
+    member: AccountRef,
     isOwner: boolean,
   ): Promise<boolean> {
     const finalized = await this.withMlsWorkflow(() =>
@@ -1750,21 +1755,14 @@ export class ChatService {
   }
 
   async safetyNumber(peer: string): Promise<SafetyNumberV1> {
-    const address = parseAccountAddress(peer)
-    if (!address) throw new Error('invalid chat account address')
-    return this.withLock(() =>
-      this.client.safetyNumber(canonicalAccountAddress(address)),
-    )
+    const account = requireAccountKey(peer)
+    return this.withLock(() => this.client.safetyNumber(account))
   }
 
   async verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1> {
-    const address = parseAccountAddress(peer)
-    if (!address) throw new Error('invalid chat account address')
+    const account = requireAccountKey(peer)
     const verified = await this.withLock(() =>
-      this.client.verifySafetyNumber(
-        canonicalAccountAddress(address),
-        scannedPayload,
-      ),
+      this.client.verifySafetyNumber(account, scannedPayload),
     )
     this.notifyPeers()
     return verified
@@ -1840,7 +1838,7 @@ export class ChatService {
     const accepted = new Set(
       contacts.filter(contact => contact.state === 'accepted').map(contact => contact.peer),
     )
-    const self = `${this.username}@${this.capabilities.serverName}`
+    const self = this.selfKey()
     await this.withAttachmentLedgerLock(async () => {
       await this.attachmentLedger!.sync()
       // An expiry revision is durable and account-private. Retry its opaque
@@ -1859,7 +1857,7 @@ export class ChatService {
           continue
         }
         if (message.conversation.kind === 'direct') {
-          const peer = canonicalAccountAddress(message.conversation.address)
+          const peer = accountKey(message.conversation.account)
           if (peer !== self && !accepted.has(peer)) continue
         }
         try {
@@ -1949,8 +1947,9 @@ export class ChatService {
     return this.mls
   }
 
-  private currentUsername(): string {
-    return this.username
+  /** This account's key, `aci:<uuid>@<server>` (Note to Self's peer). */
+  private selfKey(): string {
+    return accountKey(this.account)
   }
 
   private backupMediaSources(): BackupMediaSource[] {
@@ -1982,9 +1981,7 @@ export class ChatService {
     peer: string,
     action: (corePeer: string) => Promise<ContactRecord>,
   ): Promise<ContactRecord> {
-    const address = parseAccountAddress(peer)
-    if (!address) throw new Error('invalid chat account address')
-    const corePeer = canonicalAccountAddress(address)
+    const corePeer = requireAccountKey(peer)
     const result = await this.withLock(() => action(corePeer))
     this.notifyPeers()
     return result
@@ -2232,19 +2229,25 @@ function parseTypingBroadcast(value: unknown): ChatTypingEvent | null {
     return event as ChatTypingEvent
   }
   if (event.conversation?.kind === 'direct') {
-    const address = (event.conversation as { address?: unknown }).address
-    if (address && typeof address === 'object') {
-      const candidate = address as { username?: unknown; server?: unknown }
+    const account = (event.conversation as { account?: unknown }).account
+    if (account && typeof account === 'object') {
+      const candidate = account as { server?: unknown; accountId?: unknown }
       if (
-        typeof candidate.username === 'string'
-        && (candidate.server === undefined || typeof candidate.server === 'string')
-        && parseAccountAddress(canonicalAccountAddress(candidate as AccountAddress))
+        typeof candidate.server === 'string'
+        && typeof candidate.accountId === 'string'
+        && parseAccount(`aci:${candidate.accountId}@${candidate.server}`)
       ) {
         return event as ChatTypingEvent
       }
     }
   }
   return null
+}
+
+/** A peer given as its account key; anything else (an address too) is refused. */
+function requireAccountKey(peer: string): string {
+  if (!parseAccount(peer)) throw new Error('not a chat account')
+  return peer
 }
 
 function requireManifestSequence(value: unknown): number {

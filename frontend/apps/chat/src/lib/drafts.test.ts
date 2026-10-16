@@ -26,11 +26,11 @@ describe('drafts', () => {
   afterEach(() => setSealedStorage(null))
 
   it('keeps a draft per conversation, sealed, until it is emptied', () => {
-    setDraft('direct:bob@a.test', { text: 'half a thought', picks: [] })
-    expect(getDraft('direct:bob@a.test')?.text).toBe('half a thought')
+    setDraft('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', { text: 'half a thought', picks: [] })
+    expect(getDraft('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')?.text).toBe('half a thought')
     expect(window.localStorage.getItem(storage.key('drafts'))).not.toContain('half a thought')
-    setDraft('direct:bob@a.test', { text: '   ', picks: [] })
-    expect(getDraft('direct:bob@a.test')).toBeUndefined()
+    setDraft('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', { text: '   ', picks: [] })
+    expect(getDraft('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')).toBeUndefined()
   })
 
   it('belongs to the open account only, and goes on sign-out', () => {
@@ -46,8 +46,8 @@ describe('drafts', () => {
 
   it('keeps nothing while no account is open', () => {
     setSealedStorage(null)
-    setDraft('direct:bob@a.test', { text: 'lost', picks: [] })
+    setDraft('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', { text: 'lost', picks: [] })
     setSealedStorage(storage)
-    expect(getDraft('direct:bob@a.test')).toBeUndefined()
+    expect(getDraft('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@a.test')).toBeUndefined()
   })
 })

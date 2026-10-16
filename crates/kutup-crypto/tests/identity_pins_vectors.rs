@@ -1,27 +1,27 @@
-//! Checked-in vectors for Drive identity (docs/plans/drive-identity-pins.md):
-//! an account's Drive key binding (bound to its address, a statement to
-//! others), and a sealed identity pin list (suite 2, bound to the account's
-//! key binding), with the values that must be refused, and how every app follows
-//! a rename (docs/plans/username-renames.md): `record`, `lookup` and
-//! `apply_rename` over plain lists, and the lists the format refuses. Regenerate
-//! only for a
-//! deliberate format change:
+//! Checked-in vectors for Drive identity (docs/plans/drive-identity-pins.md,
+//! docs/plans/account-ids.md): an account's Drive key binding (a statement to
+//! others), and a sealed identity pin list (suite 3: pins keyed by account
+//! id, bound to the owner's key binding), with the values that must be
+//! refused; and how every app records, looks up and follows a rename:
+//! `record`, `lookup` and `apply_rename` over plain lists, and the lists the
+//! format refuses. Regenerate only for a deliberate format change:
 //! `KUTUP_WRITE_IDENTITY_VECTORS=1 cargo test -p kutup-crypto --test identity_pins_vectors -- --ignored`.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::account_rename::{self, AccountRenameV1};
 use kutup_crypto::drive_key_binding;
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::identity_pins::{
-    self, IdentityPinV1, IdentityPinsV1, PinMatch, PinState, PinUpdate, RenameAnchorV1,
+    self, AddressLabelV1, IdentityPinV2, IdentityPinsV2, PinState, PinUpdate, RenameAnchorV1,
 };
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/identity-pins-v2.json"
+    "/tests/vectors/identity-pins-v3.json"
 );
 
 #[derive(Serialize, Deserialize)]
@@ -42,15 +42,15 @@ struct Vectors {
     sealed: String,
     /// Values that must not open: each with the binding and revision tried.
     refused: Vec<Refused>,
-    renames: RenameVectors,
+    rules: RuleVectors,
 }
 
-/// A rename followed: plain (unsealed) canonical lists.
+/// What every app does with a list: plain (unsealed) canonical lists.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RenameVectors {
-    /// The renamed account's authority.
-    authority_public_key: String,
+struct RuleVectors {
+    /// Dave's rename chain, signed by his pinned authority.
+    dave: AccountRef,
     chain: Vec<AccountRenameV1>,
     before: String,
     after: String,
@@ -61,10 +61,6 @@ struct RenameVectors {
     rollback: Vec<AccountRenameV1>,
     /// `lookup` against `after`.
     lookups: Vec<LookupCase>,
-    /// A list where the user replaced Frank's identity, and `lookup` of it
-    /// at its old address and another: replaced, both.
-    replaced_list: String,
-    replaced_lookups: Vec<LookupCase>,
     records: Vec<RecordCase>,
     /// Lists the format refuses.
     refused_lists: Vec<RefusedList>,
@@ -74,12 +70,36 @@ struct RenameVectors {
     /// A list with fields from a later version, at every level: read, kept,
     /// and written back unchanged (after the known fields, in name order).
     preserved: String,
+    /// Shared mailboxes: their chain checked and recorded against the pins.
+    groups: Vec<GroupCase>,
+}
+
+/// A shared mailbox's verified chain, as `verify_group_key_chain` gives it,
+/// looked up and recorded against `before`.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupCase {
+    case: String,
+    before: String,
+    server: String,
+    group_id: String,
+    /// Base64, oldest first.
+    signers: Vec<String>,
+    /// Hex, list 1 first.
+    digests: Vec<String>,
+    update: identity_pins::GroupUpdate,
+    since: String,
+    /// `lookup_group`'s answer, as JSON.
+    found: serde_json::Value,
+    after: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LookupCase {
-    address: String,
+    case: String,
+    account: AccountRef,
+    address: Option<String>,
     published: Option<String>,
     /// `lookup`'s answer, as JSON.
     result: serde_json::Value,
@@ -90,7 +110,8 @@ struct LookupCase {
 struct RecordCase {
     case: String,
     before: String,
-    account: String,
+    account: AccountRef,
+    address: Option<String>,
     authority: String,
     update: PinUpdate,
     since: String,
@@ -117,9 +138,6 @@ struct Refused {
 
 const BINDING: &str = "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d";
 const OTHER_BINDING: &str = "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0";
-/// The same list as suite 1 sealed it (bound to `alice@kutup.dev`, revision 7):
-/// no longer read.
-const SUITE_1_SEALED: &str = "S1VUSVAxAAAAAUREREREREREREREREREREREREREREREROUZuOGzIGeJ+2idGGW9o5mztCqfGsWL09FEhMBoOCd+VuGuFcWXQEfc0V1Jt641IDC3je2OLpq3JjHBld+CeSRn0VX20dpk4Y5zBADJDOQUlTqMnal4XnidpixX5i7dWl/IDTWQyY92EBc70OrE7DV6axGTzCXIba5g0Ed7BTCmY3WwmqZTL5NGLnFLZYsfLznsBLlFk5g30uNbU54LL7WJTsqbxR4AB1Y0u9HqOsm62PYtD9W67uk/qRVoDILdzcieXIbgK5zfaHnTNAkZcv3KLIYlZlS7JljpgRAGe13rCJHwW8miT37mu2VMiLghR4XoXLbaH1eVcu7rpnTac4MBqxvXN/S7ezuc3tdJWv5LAbPT2UpZC2cex3NGIG+jbQMJrVUn43JTYjF9iN7bsA6Jr5aRlA2I+Y/akTiq8vNbCKI51+VJtc1ukFtkoFJasFhn+RSFlBkV7AHCG3HaF8c1bRXkI9QjUcaQxfHo6tHU3OehWcVH0+QWOXryok64bcnGI32szt2Ok9+VqY3i0ASW0Q==";
 
 fn refused(sealed: &[u8]) -> Vec<Refused> {
     let case = |case: &str, binding: &str, revision: u64, sealed: &[u8]| Refused {
@@ -129,16 +147,15 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
         sealed: STANDARD.encode(sealed),
     };
     let mut magic = sealed.to_vec();
-    magic[5] = b'1';
+    magic[5] = b'2';
     let mut suite = sealed.to_vec();
-    suite[9] = 1;
+    suite[9] = 2;
     let mut relabelled = sealed.to_vec();
     relabelled[17] = 8;
     let mut nonce = sealed.to_vec();
     nonce[18] ^= 1;
     let mut tag = sealed.to_vec();
     *tag.last_mut().unwrap() ^= 1;
-    let old = STANDARD.decode(SUITE_1_SEALED).unwrap();
     vec![
         case("another account's key binding", OTHER_BINDING, 7, sealed),
         case(
@@ -148,17 +165,10 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
             sealed,
         ),
         case("relabelled as another revision", BINDING, 8, &relabelled),
-        case("magic changed", BINDING, 7, &magic),
-        case("suite changed", BINDING, 7, &suite),
+        case("magic of suite 2", BINDING, 7, &magic),
+        case("suite 2", BINDING, 7, &suite),
         case("nonce changed", BINDING, 7, &nonce),
         case("ciphertext changed", BINDING, 7, &tag),
-        case("suite 1, bound to the address", BINDING, 7, &old),
-        case(
-            "suite 1, opened with the address",
-            "alice@kutup.dev",
-            7,
-            &old,
-        ),
     ]
 }
 
@@ -166,20 +176,35 @@ fn b64(identity: &AccountIdentityKeysV1) -> String {
     STANDARD.encode(identity.authority_public_key())
 }
 
-fn json(list: &IdentityPinsV1) -> String {
+fn json(list: &IdentityPinsV2) -> String {
     String::from_utf8(identity_pins::encode(list).unwrap()).unwrap()
 }
 
-fn plain(pin: (&str, &AccountIdentityKeysV1, PinState)) -> IdentityPinV1 {
-    IdentityPinV1 {
-        account: pin.0.into(),
-        authority_public_key: b64(pin.1),
-        state: pin.2,
+fn acct(server: &str, id: &str) -> AccountRef {
+    AccountRef::new(server, id).unwrap()
+}
+
+fn plain(
+    account: &AccountRef,
+    who: &AccountIdentityKeysV1,
+    state: PinState,
+    addresses: &[&str],
+) -> IdentityPinV2 {
+    IdentityPinV2 {
+        account: account.clone(),
+        authority_public_key: b64(who),
+        state,
         since: "2026-10-12T09:00:00Z".into(),
         replaced: vec![],
-        formerly: vec![],
+        addresses: addresses
+            .iter()
+            .map(|a| AddressLabelV1 {
+                address: a.to_string(),
+                seen_at: "2026-10-12T09:00:00Z".into(),
+                unknown: Default::default(),
+            })
+            .collect(),
         renames: None,
-        detached_by: None,
         unknown: Default::default(),
     }
 }
@@ -187,266 +212,389 @@ fn plain(pin: (&str, &AccountIdentityKeysV1, PinState)) -> IdentityPinV1 {
 const T: i64 = 1_791_800_000_000;
 const SINCE: &str = "2026-10-13T12:00:00Z";
 
-fn renames() -> RenameVectors {
-    let dave = AccountIdentityKeysV1::derive(&[0x55u8; 32]).unwrap();
-    let erin = AccountIdentityKeysV1::derive(&[0x66u8; 32]).unwrap();
-    let frank = AccountIdentityKeysV1::derive(&[0x77u8; 32]).unwrap();
-    let stranger = AccountIdentityKeysV1::derive(&[0x88u8; 32]).unwrap();
+fn rules() -> RuleVectors {
+    let dave_keys = AccountIdentityKeysV1::derive(&[0x55u8; 32]).unwrap();
+    let erin_keys = AccountIdentityKeysV1::derive(&[0x66u8; 32]).unwrap();
+    let frank_keys = AccountIdentityKeysV1::derive(&[0x77u8; 32]).unwrap();
+    let stranger_keys = AccountIdentityKeysV1::derive(&[0x88u8; 32]).unwrap();
+    let dave = acct("kutup.dev", "5a1f0c3e-2b4d-4e6f-8a0b-1c2d3e4f5a6b");
+    let erin = acct("kutup.dev", "6b2e1d4f-3c5e-4f70-9b1c-2d3e4f5a6b7c");
+    let frank = acct("example.org", "7c3f2e50-4d6f-4081-8c2d-3e4f5a6b7c8d");
+    let stranger = acct("kutup.dev", "8d40e3f1-5e70-4192-9d3e-4f5a6b7c8d9e");
     let chain = vec![
-        account_rename::sign(&dave, 1, "dave@kutup.dev", "davey@kutup.dev", T).unwrap(),
-        account_rename::sign(&dave, 2, "davey@kutup.dev", "david@kutup.dev", T + 1000).unwrap(),
+        account_rename::sign(&dave_keys, 1, "dave@kutup.dev", "davey@kutup.dev", T).unwrap(),
+        account_rename::sign(
+            &dave_keys,
+            2,
+            "davey@kutup.dev",
+            "david@kutup.dev",
+            T + 1000,
+        )
+        .unwrap(),
     ];
     // Dave is verified; the name he moves to was Erin's, who left it.
-    let before = IdentityPinsV1 {
+    let mut before = IdentityPinsV2 {
         pins: vec![
-            plain(("dave@kutup.dev", &dave, PinState::Verified)),
-            plain(("david@kutup.dev", &erin, PinState::Seen)),
-            plain(("frank@example.org", &frank, PinState::Seen)),
+            plain(&dave, &dave_keys, PinState::Verified, &["dave@kutup.dev"]),
+            plain(&erin, &erin_keys, PinState::Seen, &["david@kutup.dev"]),
+            plain(&frank, &frank_keys, PinState::Seen, &["frank@example.org"]),
         ],
         ..Default::default()
     };
+    before.pins.sort_by(|a, b| a.account.cmp(&b.account));
     let mut after = before.clone();
-    let applied =
-        identity_pins::apply_rename(&mut after, &dave.authority_public_key(), &chain).unwrap();
-    let lookups = [
-        ("david@kutup.dev", Some(b64(&dave))),
-        ("dave@kutup.dev", Some(b64(&stranger))),
-        ("davey@kutup.dev", None),
-        ("frank@example.org", Some(b64(&stranger))),
-        ("dave2@kutup.dev", Some(b64(&dave))),
-        ("nobody@kutup.dev", Some(b64(&stranger))),
-        // Erin, detached from david@, seen at a new address: renamed.
-        ("erin@kutup.dev", Some(b64(&erin))),
-        // Another spelling of a pinned address is that pin (one account per
-        // folded name), and of a former one, that former address.
-        ("da-vid@kutup.dev", Some(b64(&dave))),
-        ("d.a.v.e@kutup.dev", Some(b64(&stranger))),
-    ]
-    .into_iter()
-    .map(|(address, published)| LookupCase {
-        address: address.into(),
-        result: serde_json::to_value(identity_pins::lookup(&after, address, published.as_deref()))
-            .unwrap(),
+    let applied = identity_pins::apply_rename(&mut after, &dave, &chain, SINCE).unwrap();
+    let lookup_case = |case: &str,
+                       list: &IdentityPinsV2,
+                       account: &AccountRef,
+                       address: Option<&str>,
+                       published: Option<String>| LookupCase {
+        case: case.into(),
+        account: account.clone(),
+        address: address.map(str::to_owned),
+        result: serde_json::to_value(identity_pins::lookup(
+            list,
+            account,
+            address,
+            published.as_deref(),
+        ))
+        .unwrap(),
         published,
-    })
-    .collect();
-    let record_case =
-        |case: &str, list: &IdentityPinsV1, account: &str, who: &AccountIdentityKeysV1, update| {
-            let mut next = list.clone();
-            let result =
-                identity_pins::record(&mut next, account, &b64(who), update, SINCE).unwrap();
-            RecordCase {
-                case: case.into(),
-                before: json(list),
-                account: account.into(),
-                authority: b64(who),
-                update,
-                since: SINCE.into(),
-                after: json(&next),
-                result: serde_json::to_value(result).unwrap(),
-            }
-        };
-    // Dave not yet verified, before the rename.
-    let mut before_seen = before.clone();
-    before_seen.pins[0].state = PinState::Seen;
-    // Dave moved on from david@: Erin, detached from it, is met there again.
-    let mut without_david = after.clone();
-    without_david
-        .pins
-        .retain(|pin| pin.account != "david@kutup.dev");
-    // Frank verified, then replaced by the user with another identity, which
-    // has since left the address.
-    let mut frank_replaced = after.clone();
+    };
+    let lookups = vec![
+        lookup_case(
+            "Dave at his new name, which Erin held: pinned, the same, with her notice",
+            &after,
+            &dave,
+            Some("david@kutup.dev"),
+            Some(b64(&dave_keys)),
+        ),
+        lookup_case(
+            "Dave by account, no address: pinned",
+            &after,
+            &dave,
+            None,
+            Some(b64(&dave_keys)),
+        ),
+        lookup_case(
+            "Dave reset, at a name Erin held: pinned, changed, with her notice",
+            &after,
+            &dave,
+            Some("david@kutup.dev"),
+            Some(b64(&stranger_keys)),
+        ),
+        lookup_case(
+            "a stranger at a name Dave left: someone else",
+            &after,
+            &stranger,
+            Some("dave@kutup.dev"),
+            Some(b64(&stranger_keys)),
+        ),
+        lookup_case(
+            "Frank found at Dave's name: Frank, by his own name, with Dave's notice",
+            &after,
+            &frank,
+            Some("david@kutup.dev"),
+            Some(b64(&frank_keys)),
+        ),
+        lookup_case(
+            "Frank found at a name nobody known has: Frank, by his own name",
+            &after,
+            &frank,
+            Some("frankie@kutup.dev"),
+            Some(b64(&frank_keys)),
+        ),
+        lookup_case(
+            "a stranger at a name Dave and Erin had: both, Dave first",
+            &after,
+            &stranger,
+            Some("david@kutup.dev"),
+            Some(b64(&stranger_keys)),
+        ),
+        lookup_case(
+            "another spelling of a known name: someone else",
+            &after,
+            &stranger,
+            Some("d-a-v-e@kutup.dev"),
+            Some(b64(&stranger_keys)),
+        ),
+        lookup_case(
+            "a stranger at a new name: new",
+            &after,
+            &stranger,
+            Some("nobody@kutup.dev"),
+            Some(b64(&stranger_keys)),
+        ),
+        lookup_case(
+            "a stranger with no address: new",
+            &after,
+            &stranger,
+            None,
+            None,
+        ),
+        lookup_case(
+            "Frank, not looked up: pinned, authority unknown",
+            &after,
+            &frank,
+            Some("frank@example.org"),
+            None,
+        ),
+    ];
+    let record_case = |case: &str,
+                       list: &IdentityPinsV2,
+                       account: &AccountRef,
+                       address: Option<&str>,
+                       who: &AccountIdentityKeysV1,
+                       update| {
+        let mut next = list.clone();
+        let result =
+            identity_pins::record(&mut next, account, address, &b64(who), update, SINCE).unwrap();
+        RecordCase {
+            case: case.into(),
+            before: json(list),
+            account: account.clone(),
+            address: address.map(str::to_owned),
+            authority: b64(who),
+            update,
+            since: SINCE.into(),
+            after: json(&next),
+            result: serde_json::to_value(result).unwrap(),
+        }
+    };
+    let mut seen_after = after.clone();
+    for pin in &mut seen_after.pins {
+        pin.state = PinState::Seen;
+    }
+    let mut frank_reset = after.clone();
     identity_pins::record(
-        &mut frank_replaced,
-        "frank@example.org",
-        &b64(&frank),
-        PinUpdate::Verified,
-        SINCE,
-    )
-    .unwrap();
-    identity_pins::record(
-        &mut frank_replaced,
-        "frank@example.org",
-        &b64(&stranger),
+        &mut frank_reset,
+        &frank,
+        None,
+        &b64(&stranger_keys),
         PinUpdate::Accepted,
         SINCE,
     )
     .unwrap();
-    frank_replaced
-        .pins
-        .retain(|pin| pin.account != "frank@example.org");
-    // The renamed pin as only seen: verifying it keeps its former addresses.
-    let mut seen_after = after.clone();
-    seen_after.pins[0].state = PinState::Seen;
+    let gina = acct("kutup.dev", "9e51f402-6f81-42a3-8e4f-5a6b7c8d9eaf");
+    let gina_keys = AccountIdentityKeysV1::derive(&[0x99u8; 32]).unwrap();
     let records = vec![
         record_case(
-            "first met: pinned",
+            "first met: pinned with its address",
             &after,
-            "gina@kutup.dev",
-            &stranger,
+            &gina,
+            Some("gina@kutup.dev"),
+            &gina_keys,
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "first met again, another authority: kept",
+            "first met with no address: pinned",
             &after,
-            "frank@example.org",
-            &stranger,
+            &gina,
+            None,
+            &gina_keys,
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "verified, same authority: history kept",
+            "met again, another authority: kept",
+            &after,
+            &frank,
+            Some("frank@example.org"),
+            &gina_keys,
+            PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "found at another name: nothing written",
+            &after,
+            &dave,
+            Some("dai@kutup.dev"),
+            &dave_keys,
+            PinUpdate::FirstSeen,
+        ),
+        record_case(
+            "verified, same authority, opened as the account",
             &seen_after,
-            "david@kutup.dev",
             &dave,
+            None,
+            &dave_keys,
             PinUpdate::Verified,
         ),
         record_case(
-            "first met, the renamed pin: unchanged",
+            "accepted, another authority, opened as the account: replaced, history kept",
             &after,
-            "david@kutup.dev",
             &dave,
-            PinUpdate::FirstSeen,
-        ),
-        record_case(
-            "accepted, another authority: replaced, the old one detached",
-            &after,
-            "frank@example.org",
-            &stranger,
+            None,
+            &gina_keys,
             PinUpdate::Accepted,
         ),
         record_case(
-            "first met at a former address: not pinned",
-            &after,
-            "dave@kutup.dev",
-            &stranger,
-            PinUpdate::FirstSeen,
-        ),
-        record_case(
-            "accepted at a former address: pinned",
-            &after,
-            "dave@kutup.dev",
-            &stranger,
-            PinUpdate::Accepted,
-        ),
-        record_case(
-            "first met under a name not followed yet: known elsewhere",
-            &before,
-            "davey@kutup.dev",
-            &dave,
-            PinUpdate::FirstSeen,
-        ),
-        record_case(
-            "verified under a name not followed yet: that pin verified",
-            &before_seen,
-            "davey@kutup.dev",
-            &dave,
+            "the earlier authority verified again",
+            &frank_reset,
+            &frank,
+            None,
+            &frank_keys,
             PinUpdate::Verified,
         ),
         record_case(
-            "the holder a rename pushed off, met at its last address: back with its trust",
-            &without_david,
-            "david@kutup.dev",
-            &erin,
+            "first met at a name others had: not pinned",
+            &after,
+            &gina,
+            Some("dave@kutup.dev"),
+            &gina_keys,
             PinUpdate::FirstSeen,
         ),
         record_case(
-            "an identity the user replaced, met at its address again: replacedIdentity",
-            &frank_replaced,
-            "frank@example.org",
-            &frank,
-            PinUpdate::FirstSeen,
-        ),
-        record_case(
-            "an identity the user replaced, met at another address: replacedIdentity",
-            &frank_replaced,
-            "frank2@example.org",
-            &frank,
-            PinUpdate::FirstSeen,
-        ),
-        record_case(
-            "an identity the user replaced, accepted again: only seen",
-            &frank_replaced,
-            "frank@example.org",
-            &frank,
+            "accepted at a name others had: pinned as itself",
+            &after,
+            &gina,
+            Some("dave@kutup.dev"),
+            &gina_keys,
             PinUpdate::Accepted,
+        ),
+        record_case(
+            "a key change accepted through another's name: refused",
+            &after,
+            &frank,
+            Some("david@kutup.dev"),
+            &gina_keys,
+            PinUpdate::Accepted,
+        ),
+        record_case(
+            "a known account accepted at another's name: refused, nothing written",
+            &after,
+            &frank,
+            Some("david@kutup.dev"),
+            &frank_keys,
+            PinUpdate::Accepted,
+        ),
+        record_case(
+            "an authority pinned for another account: refused",
+            &after,
+            &gina,
+            Some("gina@kutup.dev"),
+            &dave_keys,
+            PinUpdate::Verified,
         ),
     ];
-    let anchored = |formerly: &[&str], anchor: Option<(u64, String)>| {
-        let mut pin = plain(("david@kutup.dev", &dave, PinState::Seen));
-        pin.formerly = formerly.iter().map(|a| a.to_string()).collect();
-        pin.renames = anchor.map(|(sequence, digest)| RenameAnchorV1 {
-            sequence,
-            digest,
-            unknown: Default::default(),
-        });
-        // Built by hand: these do not pass `encode`.
-        serde_json::to_string(&IdentityPinsV1 {
+    let one = |pin: IdentityPinV2| {
+        serde_json::to_string(&IdentityPinsV2 {
             pins: vec![pin],
             ..Default::default()
         })
         .unwrap()
     };
-    let digest = || "ab".repeat(32);
+    let labels = |addresses: &[&str]| -> Vec<AddressLabelV1> {
+        plain(&dave, &dave_keys, PinState::Seen, addresses).addresses
+    };
+    let with = |change: &dyn Fn(&mut IdentityPinV2)| {
+        let mut pin = plain(&dave, &dave_keys, PinState::Seen, &["dave@kutup.dev"]);
+        change(&mut pin);
+        // Built by hand: these do not pass `encode`.
+        one(pin)
+    };
     let refused_lists = vec![
         RefusedList {
-            case: "its own address as a former one".into(),
-            pins: anchored(&["david@kutup.dev"], Some((1, digest()))),
+            case: "an address twice".into(),
+            pins: with(&|p| p.addresses = labels(&["dave@kutup.dev", "dave@kutup.dev"])),
         },
         RefusedList {
-            case: "a former address on another server".into(),
-            pins: anchored(&["dave@other.dev"], Some((1, digest()))),
+            case: "an address twice, folded".into(),
+            pins: with(&|p| p.addresses = labels(&["dave@kutup.dev", "d_ave@kutup.dev"])),
         },
         RefusedList {
-            case: "a former address twice".into(),
-            pins: anchored(&["dave@kutup.dev", "dave@kutup.dev"], Some((2, digest()))),
+            case: "an address not canonical".into(),
+            pins: with(&|p| p.addresses = labels(&["Dave@kutup.dev"])),
         },
         RefusedList {
-            case: "a former address not canonical".into(),
-            pins: anchored(&["Dave@kutup.dev"], Some((1, digest()))),
+            case: "an address seen at no valid time".into(),
+            pins: with(&|p| p.addresses[0].seen_at = "yesterday".into()),
         },
         RefusedList {
-            case: "former addresses without an anchor".into(),
-            pins: anchored(&["dave@kutup.dev"], None),
+            case: "an account reference as an address".into(),
+            pins: with(&|p| p.addresses = labels(&[&dave.to_string()])),
         },
         RefusedList {
             case: "anchor sequence 0".into(),
-            pins: anchored(&["dave@kutup.dev"], Some((0, digest()))),
+            pins: with(&|p| {
+                p.renames = Some(RenameAnchorV1 {
+                    sequence: 0,
+                    digest: "ab".repeat(32),
+                    unknown: Default::default(),
+                })
+            }),
         },
         RefusedList {
             case: "anchor digest in capitals".into(),
-            pins: anchored(&["dave@kutup.dev"], Some((1, "AB".repeat(32)))),
+            pins: with(&|p| {
+                p.renames = Some(RenameAnchorV1 {
+                    sequence: 1,
+                    digest: "AB".repeat(32),
+                    unknown: Default::default(),
+                })
+            }),
         },
         RefusedList {
-            case: "one account pinned twice".into(),
-            pins: serde_json::to_string(&IdentityPinsV1 {
+            case: "its own incarnation as replaced".into(),
+            pins: with(&|p| p.replaced = vec![dave_keys.incarnation_id()]),
+        },
+        RefusedList {
+            case: "one authority pinned for two accounts".into(),
+            pins: serde_json::to_string(&IdentityPinsV2 {
                 pins: vec![
-                    plain(("dave@kutup.dev", &dave, PinState::Seen)),
-                    plain(("david@kutup.dev", &dave, PinState::Seen)),
+                    plain(&dave, &dave_keys, PinState::Seen, &[]),
+                    plain(&erin, &dave_keys, PinState::Seen, &[]),
                 ],
                 ..Default::default()
             })
             .unwrap(),
         },
         RefusedList {
-            case: "pinned and detached at once".into(),
-            pins: serde_json::to_string(&IdentityPinsV1 {
-                pins: vec![plain(("dave@kutup.dev", &dave, PinState::Seen))],
-                detached: vec![plain(("david@kutup.dev", &dave, PinState::Seen))],
+            case: "one account pinned twice".into(),
+            pins: serde_json::to_string(&IdentityPinsV2 {
+                pins: vec![
+                    plain(&dave, &dave_keys, PinState::Seen, &[]),
+                    plain(&dave, &erin_keys, PinState::Seen, &[]),
+                ],
                 ..Default::default()
             })
             .unwrap(),
         },
         RefusedList {
-            case: "a replaced identity remembered and pinned at once".into(),
-            pins: {
-                let mut list = IdentityPinsV1 {
-                    pins: vec![plain(("dave@kutup.dev", &dave, PinState::Seen))],
-                    ..Default::default()
-                };
-                list.replaced_ids = vec![dave.incarnation_id()];
-                serde_json::to_string(&list).unwrap()
-            },
+            case: "pins out of account order".into(),
+            pins: serde_json::to_string(&IdentityPinsV2 {
+                pins: vec![
+                    plain(&erin, &erin_keys, PinState::Seen, &[]),
+                    plain(&dave, &dave_keys, PinState::Seen, &[]),
+                ],
+                ..Default::default()
+            })
+            .unwrap(),
+        },
+        RefusedList {
+            case: "the account as one string".into(),
+            pins: with(&|_| {}).replace(
+                &serde_json::to_string(&dave).unwrap(),
+                &format!("\"{dave}\""),
+            ),
+        },
+        RefusedList {
+            case: "an account id in capitals".into(),
+            pins: with(&|_| {}).replace(&dave.account_id, &dave.account_id.to_uppercase()),
+        },
+        RefusedList {
+            case: "a group pin with a group id in capitals".into(),
+            pins: format!(
+                r#"{{"pins":[],"groups":[{{"server":"kutup.dev","groupId":"2B3C4D5E-6F70-4182-93A4-B5C6D7E8F901","signerPublicKey":"{}","since":"2026-10-12T09:00:00Z","anchor":{{"sequence":1,"digest":"{}"}}}}]}}"#,
+                b64(&dave_keys),
+                "ab".repeat(32)
+            ),
+        },
+        RefusedList {
+            case: "a group pin anchored at sequence 0".into(),
+            pins: format!(
+                r#"{{"pins":[],"groups":[{{"server":"kutup.dev","groupId":"2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901","signerPublicKey":"{}","since":"2026-10-12T09:00:00Z","anchor":{{"sequence":0,"digest":"{}"}}}}]}}"#,
+                b64(&dave_keys),
+                "ab".repeat(32)
+            ),
         },
         RefusedList {
             case: "for a newer reader".into(),
@@ -458,17 +606,17 @@ fn renames() -> RenameVectors {
         },
     ];
     let preserved = format!(
-        r#"{{"pins":[{{"account":"dave@kutup.dev","authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","formerly":["davey@kutup.dev"],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"detached":[{{"account":"frank@example.org","authorityPublicKey":"{}","state":"verified","since":"2026-10-12T09:00:00Z","detachedBy":"replaced","note":null}}],"laterList":{{"a":[1,2]}}}}"#,
-        b64(&dave),
-        digest(),
-        b64(&frank)
+        r#"{{"pins":[{{"account":{},"authorityPublicKey":"{}","state":"seen","since":"2026-10-12T09:00:00Z","addresses":[{{"address":"davey@kutup.dev","seenAt":"2026-10-12T09:00:00Z","via":"chain"}}],"renames":{{"sequence":1,"digest":"{}","signedBy":"x"}},"colour":"blue","zone":7}}],"laterList":{{"a":[1,2]}}}}"#,
+        serde_json::to_string(&dave).unwrap(),
+        b64(&dave_keys),
+        "ab".repeat(32),
     );
     let noncanonical = vec![
         RefusedList {
             case: "a later field before the known ones".into(),
             pins: preserved
                 .replace(r#","colour":"blue","zone":7"#, r#","zone":7"#)
-                .replace(r#"{"account":"dave"#, r#"{"colour":"blue","account":"dave"#),
+                .replace(r#"{"account":"#, r#"{"colour":"blue","account":"#),
         },
         RefusedList {
             case: "later fields out of name order".into(),
@@ -479,23 +627,86 @@ fn renames() -> RenameVectors {
             pins: preserved.replace("\":", "\": "),
         },
     ];
-    let replaced_lookups = ["frank@example.org", "frank2@example.org"]
-        .into_iter()
-        .map(|address| LookupCase {
-            address: address.into(),
-            result: serde_json::to_value(identity_pins::lookup(
-                &frank_replaced,
-                address,
-                Some(&b64(&frank)),
-            ))
-            .unwrap(),
-            published: Some(b64(&frank)),
-        })
-        .collect();
-    RenameVectors {
-        replaced_list: json(&frank_replaced),
-        replaced_lookups,
-        authority_public_key: b64(&dave),
+    let (s1, s2, admin) = ([0x31u8; 32], [0x32u8; 32], [0x3fu8; 32]);
+    let (d1, d2, d3) = ([0x41u8; 32], [0x42u8; 32], [0x43u8; 32]);
+    let group = "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901";
+    let mut pinned = after.clone();
+    identity_pins::record_group(
+        &mut pinned,
+        "kutup.dev",
+        group,
+        &identity_pins::GroupChain {
+            signers: &[s1],
+            digests: &[d1, d2],
+        },
+        identity_pins::GroupUpdate::FirstSeen,
+        SINCE,
+    )
+    .unwrap();
+    let group_case =
+        |case: &str, list: &IdentityPinsV2, signers: &[[u8; 32]], digests: &[[u8; 32]], update| {
+            let chain = identity_pins::GroupChain { signers, digests };
+            let mut next = list.clone();
+            identity_pins::record_group(&mut next, "kutup.dev", group, &chain, update, SINCE)
+                .unwrap();
+            GroupCase {
+                case: case.into(),
+                before: json(list),
+                server: "kutup.dev".into(),
+                group_id: group.into(),
+                signers: signers.iter().map(|k| STANDARD.encode(k)).collect(),
+                digests: digests.iter().map(hex::encode).collect(),
+                update,
+                since: SINCE.into(),
+                found: serde_json::to_value(
+                    identity_pins::lookup_group(list, "kutup.dev", group, &chain).unwrap(),
+                )
+                .unwrap(),
+                after: json(&next),
+            }
+        };
+    use identity_pins::GroupUpdate::{Accepted, FirstSeen};
+    let groups = vec![
+        group_case("first met: pinned", &after, &[s1], &[d1, d2], FirstSeen),
+        group_case(
+            "the same chain: unchanged",
+            &pinned,
+            &[s1],
+            &[d1, d2],
+            FirstSeen,
+        ),
+        group_case(
+            "handed over and extended: moved forward",
+            &pinned,
+            &[s1, s2],
+            &[d1, d2, d3],
+            FirstSeen,
+        ),
+        group_case(
+            "restarted by an administrator: changed, kept",
+            &pinned,
+            &[admin],
+            &[[0x51u8; 32]],
+            FirstSeen,
+        ),
+        group_case(
+            "rolled back: changed, kept",
+            &pinned,
+            &[s1],
+            &[d1],
+            FirstSeen,
+        ),
+        group_case(
+            "restarted, accepted: pinned anew",
+            &pinned,
+            &[admin],
+            &[[0x51u8; 32]],
+            Accepted,
+        ),
+    ];
+    RuleVectors {
+        groups,
+        dave,
         rollback: chain[..1].to_vec(),
         chain,
         before: json(&before),
@@ -509,56 +720,45 @@ fn renames() -> RenameVectors {
     }
 }
 
-fn pins() -> IdentityPinsV1 {
+fn pins() -> IdentityPinsV2 {
     let bob = AccountIdentityKeysV1::derive(&[0x22u8; 32]).unwrap();
+    let cara = AccountIdentityKeysV1::derive(&[0x23u8; 32]).unwrap();
     let carol = AccountIdentityKeysV1::derive(&[0x33u8; 32]).unwrap();
     let carol_before = AccountIdentityKeysV1::derive(&[0x34u8; 32]).unwrap();
-    IdentityPinsV1 {
+    let mut cara_pin = plain(
+        &acct("kutup.dev", "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f"),
+        &cara,
+        PinState::Verified,
+        &["cora@kutup.dev", "corinne@kutup.dev", "cara@kutup.dev"],
+    );
+    cara_pin.renames = Some(RenameAnchorV1 {
+        sequence: 2,
+        digest: "5f".repeat(32),
+        unknown: Default::default(),
+    });
+    let mut carol_pin = plain(
+        &acct("example.org", "3d4e5f6a-7b8c-4d9e-8f1a-2b3c4d5e6f7a"),
+        &carol,
+        PinState::Verified,
+        &["carol@example.org"],
+    );
+    carol_pin.since = "2026-10-11T08:30:00.250Z".into();
+    carol_pin.replaced = vec![carol_before.incarnation_id()];
+    let mut list = IdentityPinsV2 {
         pins: vec![
-            IdentityPinV1 {
-                account: "bob@kutup.dev".into(),
-                authority_public_key: STANDARD.encode(bob.authority_public_key()),
-                state: PinState::Seen,
-                since: "2026-10-10T12:00:00Z".into(),
-                replaced: vec![],
-                formerly: vec![],
-                renames: None,
-                detached_by: None,
-                unknown: Default::default(),
-            },
-            IdentityPinV1 {
-                account: "cara@kutup.dev".into(),
-                authority_public_key: STANDARD.encode(
-                    AccountIdentityKeysV1::derive(&[0x23u8; 32])
-                        .unwrap()
-                        .authority_public_key(),
-                ),
-                state: PinState::Verified,
-                since: "2026-10-12T09:00:00Z".into(),
-                replaced: vec![],
-                formerly: vec!["cora@kutup.dev".into(), "corinne@kutup.dev".into()],
-                renames: Some(RenameAnchorV1 {
-                    sequence: 2,
-                    digest: "5f".repeat(32),
-                    unknown: Default::default(),
-                }),
-                detached_by: None,
-                unknown: Default::default(),
-            },
-            IdentityPinV1 {
-                account: "carol@example.org".into(),
-                authority_public_key: STANDARD.encode(carol.authority_public_key()),
-                state: PinState::Verified,
-                since: "2026-10-11T08:30:00.250Z".into(),
-                replaced: vec![carol_before.incarnation_id()],
-                formerly: vec![],
-                renames: None,
-                detached_by: None,
-                unknown: Default::default(),
-            },
+            plain(
+                &acct("kutup.dev", "1b2c3d4e-5f6a-4b7c-8d9e-0f1a2b3c4d5e"),
+                &bob,
+                PinState::Seen,
+                &["bob@kutup.dev"],
+            ),
+            cara_pin,
+            carol_pin,
         ],
         ..Default::default()
-    }
+    };
+    list.pins.sort_by(|a, b| a.account.cmp(&b.account));
+    list
 }
 
 #[test]
@@ -585,11 +785,11 @@ fn write_vectors() {
         drive_key_binding: STANDARD.encode(binding),
         pins_key: STANDARD.encode(*key),
         revision: 7,
-        pins: String::from_utf8(identity_pins::encode(&pins()).unwrap()).unwrap(),
+        pins: json(&pins()),
         nonce: STANDARD.encode(nonce),
         refused: refused(&sealed),
         sealed: STANDARD.encode(sealed),
-        renames: renames(),
+        rules: rules(),
     };
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
 }
@@ -630,10 +830,7 @@ fn checked_in_vectors_hold() {
 
     let key = identity_pins::derive_key(&master).unwrap();
     assert_eq!(STANDARD.encode(*key), v.pins_key);
-    assert_eq!(
-        String::from_utf8(identity_pins::encode(&pins()).unwrap()).unwrap(),
-        v.pins
-    );
+    assert_eq!(json(&pins()), v.pins);
     let nonce: [u8; 24] = STANDARD.decode(&v.nonce).unwrap().try_into().unwrap();
     let sealed =
         identity_pins::seal_with_nonce(&key, &v.binding, v.revision, &pins(), &nonce).unwrap();
@@ -659,52 +856,47 @@ fn checked_in_vectors_hold() {
     }
     // The address is not a key binding, so nothing seals to it either.
     assert!(identity_pins::seal_with_nonce(&key, &v.account, v.revision, &pins(), &nonce).is_err());
-    check_renames(&v.renames);
+    check_rules(&v.rules);
 }
 
-fn check_renames(r: &RenameVectors) {
-    let want = renames();
-    let authority = key32(&r.authority_public_key);
+fn check_rules(r: &RuleVectors) {
+    let want = rules();
     assert_eq!(r.chain, want.chain);
     assert_eq!(r.before, want.before);
     let mut list = identity_pins::decode(r.before.as_bytes()).unwrap();
-    let applied = identity_pins::apply_rename(&mut list, &authority, &r.chain).unwrap();
+    let applied = identity_pins::apply_rename(&mut list, &r.dave, &r.chain, SINCE).unwrap();
     assert_eq!(serde_json::to_value(&applied).unwrap(), r.applied);
     assert_eq!(json(&list), r.after);
     // Once more: nothing changes; the shorter chain is a rollback.
-    let again = identity_pins::apply_rename(&mut list, &authority, &r.chain).unwrap();
-    assert!(!again.changed);
+    assert!(
+        !identity_pins::apply_rename(&mut list, &r.dave, &r.chain, SINCE)
+            .unwrap()
+            .changed
+    );
     assert_eq!(json(&list), r.after);
-    assert!(identity_pins::apply_rename(&mut list, &authority, &r.rollback).is_err());
-    let replaced = identity_pins::decode(r.replaced_list.as_bytes()).unwrap();
-    for case in &r.replaced_lookups {
-        let found = identity_pins::lookup(&replaced, &case.address, case.published.as_deref());
-        assert_eq!(
-            serde_json::to_value(&found).unwrap(),
-            case.result,
-            "{}",
-            case.address
-        );
-        assert!(matches!(found, identity_pins::PinMatch::Replaced { .. }));
-    }
+    assert!(identity_pins::apply_rename(&mut list, &r.dave, &r.rollback, SINCE).is_err());
     for case in &r.lookups {
-        let found = identity_pins::lookup(&list, &case.address, case.published.as_deref());
+        let list = identity_pins::decode(r.after.as_bytes()).unwrap();
+        let found = identity_pins::lookup(
+            &list,
+            &case.account,
+            case.address.as_deref(),
+            case.published.as_deref(),
+        );
         assert_eq!(
             serde_json::to_value(&found).unwrap(),
             case.result,
             "{}",
-            case.address
+            case.case
         );
     }
-    assert!(matches!(
-        identity_pins::lookup(&list, "dave@kutup.dev", r.lookups[1].published.as_deref()),
-        PinMatch::Moved { .. }
-    ));
+    assert_eq!(r.records.len(), want.records.len());
     for case in &r.records {
         let mut next = identity_pins::decode(case.before.as_bytes()).unwrap();
         let result = identity_pins::record(
             &mut next,
             &case.account,
+            case.address.as_deref(),
             &case.authority,
             case.update,
             &case.since,
@@ -730,7 +922,7 @@ fn check_renames(r: &RenameVectors) {
             "{} opened",
             case.case
         );
-        let parsed: IdentityPinsV1 = serde_json::from_str(&case.pins).unwrap();
+        let parsed: IdentityPinsV2 = serde_json::from_str(&case.pins).unwrap();
         assert_eq!(
             json(&parsed),
             r.preserved,
@@ -738,9 +930,40 @@ fn check_renames(r: &RenameVectors) {
             case.case
         );
     }
+    assert_eq!(r.groups.len(), want.groups.len());
+    for case in &r.groups {
+        let key = |b64: &String| -> [u8; 32] { STANDARD.decode(b64).unwrap().try_into().unwrap() };
+        let digest = |h: &String| -> [u8; 32] { hex::decode(h).unwrap().try_into().unwrap() };
+        let signers: Vec<[u8; 32]> = case.signers.iter().map(key).collect();
+        let digests: Vec<[u8; 32]> = case.digests.iter().map(digest).collect();
+        let chain = identity_pins::GroupChain {
+            signers: &signers,
+            digests: &digests,
+        };
+        let before = identity_pins::decode(case.before.as_bytes()).unwrap();
+        let found =
+            identity_pins::lookup_group(&before, &case.server, &case.group_id, &chain).unwrap();
+        assert_eq!(
+            serde_json::to_value(&found).unwrap(),
+            case.found,
+            "{}",
+            case.case
+        );
+        let mut next = before;
+        identity_pins::record_group(
+            &mut next,
+            &case.server,
+            &case.group_id,
+            &chain,
+            case.update,
+            &case.since,
+        )
+        .unwrap();
+        assert_eq!(json(&next), case.after, "{}", case.case);
+    }
     assert_eq!(r.refused_lists.len(), want.refused_lists.len());
     for case in &r.refused_lists {
-        let parsed: Result<IdentityPinsV1, _> = serde_json::from_str(&case.pins);
+        let parsed: Result<IdentityPinsV2, _> = serde_json::from_str(&case.pins);
         assert!(
             parsed.map_or(true, |list| list.validate().is_err()),
             "{} accepted",

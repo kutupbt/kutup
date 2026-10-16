@@ -15,7 +15,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
-import { messagePreview } from '../../lib/names'
+import { messagePreview, personName } from '../../lib/names'
 import { formatClock } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import type { MessageView } from '../../state/views'
@@ -52,7 +52,7 @@ export function MessageBubble({
   joinedBelow,
   highlighted,
   profiles,
-  selfAddress,
+  selfKey,
   selfName,
   actions,
   attachment,
@@ -67,7 +67,7 @@ export function MessageBubble({
   joinedBelow: boolean
   highlighted: boolean
   profiles: ReadonlyMap<string, { displayName: string }>
-  selfAddress: string
+  selfKey: string
   /** This account's profile name, for mentions of you. */
   selfName?: string
   actions: BubbleActions
@@ -158,7 +158,7 @@ export function MessageBubble({
                   <span className="block font-semibold">
                     {view.replyTo.direction === 'outgoing'
                       ? t('chat.you')
-                      : profiles.get(view.replyTo.sender)?.displayName || view.replyTo.sender}
+                      : personName(view.replyTo.sender, profiles, selfKey, t)}
                   </span>
                   <span className="line-clamp-2 opacity-90">{messagePreview(view.replyTo, view.replyToMutation, t)}</span>
                 </>
@@ -188,8 +188,8 @@ export function MessageBubble({
                 outgoing={outgoing}
                 // An edit replaces the text its mentions were ranges of.
                 mentions={edited ? undefined : entry.content.mentions}
-                nameOf={(address) => (address === selfAddress ? selfName : profiles.get(address)?.displayName) || address}
-                selfAddress={selfAddress}
+                nameOf={(key) => (key === selfKey && selfName) || personName(key, profiles, selfKey, t)}
+                selfKey={selfKey}
               />
             </>
           )}
@@ -213,7 +213,7 @@ export function MessageBubble({
           <Reactions
             reactions={view.reactions}
             outgoing={outgoing}
-            selfAddress={selfAddress}
+            selfKey={selfKey}
             profiles={profiles}
             onReact={actions.onReact}
           />
@@ -321,13 +321,13 @@ function PendingStatus({ sentAtMs }: { sentAtMs: number }) {
 function Reactions({
   reactions,
   outgoing,
-  selfAddress,
+  selfKey,
   profiles,
   onReact,
 }: {
   reactions: ReactionAggregate[]
   outgoing: boolean
-  selfAddress: string
+  selfKey: string
   profiles: ReadonlyMap<string, { displayName: string }>
   onReact?: (emoji: ChatReactionEmoji, active: boolean) => void
 }) {
@@ -360,7 +360,7 @@ function Reactions({
               {reaction.emoji} {t('chat.reactions.reactedWith')}
             </div>
             {reaction.reactors.map((reactor) => {
-              const mine = reactor === selfAddress
+              const mine = reactor === selfKey
               const label = mine ? t('chat.reactions.you') : profiles.get(reactor)?.displayName || reactor
               if (mine && reaction.reactedBySelf && onReact) {
                 return (

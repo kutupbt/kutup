@@ -52,7 +52,7 @@ pub struct LocalIdentity {
 pub struct InboxMessage {
     /// Mailbox id (the server's ack handle) — primary key, so redelivery is idempotent.
     pub id: String,
-    /// Sender username (`user@domain` once federation lands).
+    /// The sender's account (`aci:<uuid>@<server>`).
     pub peer: String,
     pub sender_device_id: u32,
     /// The mailbox cursor (monotonic order + dedup key).
@@ -83,7 +83,7 @@ pub struct OutboxSyncLeg {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OutboxEntry {
     pub send_id: String,
-    /// Recipient username (`user@domain` once federation lands).
+    /// The recipient's account (`aci:<uuid>@<server>`).
     pub peer: String,
     /// `serde_json` of the `ChatContent` plaintext.
     pub content: Vec<u8>,
@@ -538,15 +538,15 @@ pub struct Pending {
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
-    /// Peer username → latest accepted signed-manifest trust record.
+    /// Peer account → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
     /// `(peer, incarnation, version)` → immutable complete signed manifest.
     pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecordV1>,
-    /// Canonical peer → local contact/request state.
+    /// Peer account → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
     /// The local account's profile singleton.
     pub(crate) local_profile: Option<LocalProfile>,
-    /// Canonical peer → harvested/decrypted profile state.
+    /// Peer account → harvested/decrypted profile state.
     pub(crate) peer_profiles: HashMap<String, PeerProfile>,
     /// Reject deletes the request plaintext in the same transaction as the
     /// state change, without touching libsignal session/identity state.
@@ -735,9 +735,9 @@ pub trait ChatDb {
 
     /// The local account's encrypted-profile source state.
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>>;
-    /// One peer profile by canonical address.
+    /// One peer profile by account.
     async fn load_peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>>;
-    /// Every peer profile ordered by canonical address.
+    /// Every peer profile ordered by account.
     async fn list_peer_profiles(&self) -> Result<Vec<PeerProfile>>;
 
     /// Durable prekey publication request, if a prior upload is unconfirmed.
@@ -794,9 +794,13 @@ mod tests {
             content_digest: [3; 32],
             content: vec![4],
             ciphertext: vec![5],
-            expected_recipients: vec!["bob@example.test".into()],
+            expected_recipients: vec![
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test".into()
+            ],
             deliveries: vec![MlsOutboxDelivery {
-                recipient: "bob@example.test".into(),
+                recipient: "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+                    .parse()
+                    .unwrap(),
                 submission: vec![6],
                 attempts: 0,
                 delivered: false,
@@ -817,7 +821,7 @@ mod tests {
             incarnation: 1,
             mls_group_id: vec![2; 16],
             epoch: 1,
-            sender: "alice@example.test".into(),
+            sender: "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test".into(),
             sender_device_id: 7,
             outgoing: true,
             cursor: None,

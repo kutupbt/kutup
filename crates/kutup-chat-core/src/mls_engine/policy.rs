@@ -270,7 +270,7 @@ impl MlsClient {
         let local_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == local_address)
+            .find(|member| member.account.to_string() == local_address)
             .ok_or_else(|| {
                 ChatError::Trust("local account is absent from the MLS roster".into())
             })?;

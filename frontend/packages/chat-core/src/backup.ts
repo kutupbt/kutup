@@ -26,7 +26,7 @@ import type {
   StoredBackupMedia,
   StoredBackupRecord,
 } from './backup-store'
-import { conversationKey } from './identity'
+import { accountKey, conversationKey, parseAccount, type AccountRef } from './identity'
 import type { ChangeMark, ChatAttachmentDescriptorV1, ChatHistoryEntry } from './types'
 
 type ChatContent = ChatHistoryEntry['content']
@@ -120,7 +120,8 @@ interface BackupDisplayRecord {
   recordId: string
   mutationSequence: number
   conversation: ChatHistoryEntry['conversation']
-  sender: string
+  /** Who wrote it (Rust's backup format: an AccountRef, never a string). */
+  sender: AccountRef
   senderDeviceId: number
   outgoing: boolean
   content?: ChatHistoryEntry['content']
@@ -152,8 +153,6 @@ export interface ChatBackupOptions {
   databaseName: string
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
-  username: string
-  serverName: string
   masterKey: Uint8Array
   deviceId: number
   history: () => Promise<ChatHistoryEntry[]>
@@ -985,12 +984,15 @@ export class ChatBackupCoordinator {
             content.attachment.backupMediaReferenceId = media.referenceId
           }
         }
+        const sender = parseAccount(entry.sender)
+        // Every history entry names its sender by account; one that does not is not backed up.
+        if (!sender) continue
         const record: BackupDisplayRecord = {
           version: 1,
           recordId,
           mutationSequence: previous?.record.mutationSequence ?? 1,
           conversation: entry.conversation,
-          sender: entry.sender,
+          sender,
           senderDeviceId: entry.senderDeviceId ?? this.options.deviceId,
           outgoing: entry.direction === 'outgoing',
           content,
@@ -1604,7 +1606,7 @@ function entryOf(record: BackupDisplayRecord): ChatHistoryEntry {
   return {
     id: record.recordId,
     conversation: record.conversation,
-    sender: record.sender,
+    sender: accountKey(record.sender),
     direction: record.outgoing ? 'outgoing' : 'incoming',
     senderDeviceId: record.senderDeviceId || undefined,
     timestampMs: record.timestampMs,

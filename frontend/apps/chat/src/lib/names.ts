@@ -3,35 +3,39 @@ import type { ChatHistoryEntry, ConversationId, MlsGroupInfo, PeerChatProfile } 
 import { undecryptableState, type MessageMutationState } from '../state/views'
 import { callLogText } from './callText'
 import { groupUpdateSentences } from './groupUpdate'
+import { accountName } from '../state/accountNames'
 
 /** A group's name; one never named shows "Group" and the start of its id. */
 export function groupTitle(groupId: string, t: TFunction, info?: MlsGroupInfo | null): string {
   return info?.name || t('chat.group.untitled', { id: groupId.slice(0, 8) })
 }
 
-/** What to call a person: "You", their profile name, else their address. */
+/**
+ * What to call a person (`key`: their account): "You", their profile name,
+ * else an address for the account (`accountName`), never the key itself.
+ */
 export function personName(
-  address: string,
-  profiles: ReadonlyMap<string, PeerChatProfile>,
-  selfAddress: string,
+  key: string,
+  profiles: ReadonlyMap<string, Pick<PeerChatProfile, 'displayName'>>,
+  selfKey: string,
   t: TFunction,
 ): string {
-  if (address === selfAddress) return t('chat.you')
-  return profiles.get(address)?.displayName || address
+  if (key === selfKey) return t('chat.you')
+  return profiles.get(key)?.displayName || accountName(key) || t('chat.someone')
 }
 
 /** A conversation's title. */
 export function conversationTitle(
   conversation: ConversationId,
-  address: string | null,
+  key: string | null,
   profile: PeerChatProfile | null,
-  selfAddress: string,
+  selfKey: string,
   t: TFunction,
   groupInfo?: MlsGroupInfo | null,
 ): string {
   if (conversation.kind === 'group') return groupTitle(conversation.groupId, t, groupInfo)
-  if (address === selfAddress) return t('chat.noteToSelf')
-  return profile?.displayName || address || ''
+  if (key === selfKey) return t('chat.noteToSelf')
+  return profile?.displayName || (key && accountName(key)) || t('chat.someone')
 }
 
 /**
@@ -42,7 +46,7 @@ export function messagePreview(
   entry: ChatHistoryEntry,
   mutation: MessageMutationState | null | undefined,
   t: TFunction,
-  notice?: { self: string; nameOf: (address: string) => string },
+  notice?: { self: string; nameOf: (key: string) => string },
 ): string {
   if (entry.content.groupUpdate && entry.conversation.kind === 'group' && notice) {
     return groupUpdateSentences(entry.content.groupUpdate, notice.self, notice.nameOf, t)[0] ?? ''

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { insertMention, mentionQuery, resolveMentions, splitMentions } from './mentions'
+import { parseAccount } from '@kutup/chat-core/identity'
+
+const acct = (key: string) => parseAccount(key)!
 
 describe('mentions', () => {
   it('finds the @query being typed', () => {
@@ -15,28 +18,28 @@ describe('mentions', () => {
 
   it('resolves picks to UTF-16 ranges and drops edited-away ones', () => {
     const picks = [
-      { label: '@Ali', member: 'ali@a.test' },
-      { label: '@Bob', member: 'bob@b.test' },
+      { label: '@Ali', member: acct('aci:00000000-0000-4000-8000-94419b99b12c@a.test') },
+      { label: '@Bob', member: acct('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test') },
     ]
     expect(resolveMentions('🙂 @Ali and @Bob', picks)).toEqual([
-      { start: 3, length: 4, member: 'ali@a.test' },
-      { start: 12, length: 4, member: 'bob@b.test' },
+      { start: 3, length: 4, member: acct('aci:00000000-0000-4000-8000-94419b99b12c@a.test') },
+      { start: 12, length: 4, member: acct('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test') },
     ])
-    expect(resolveMentions('@Alice and @Bob', picks)).toEqual([{ start: 11, length: 4, member: 'bob@b.test' }])
+    expect(resolveMentions('@Alice and @Bob', picks)).toEqual([{ start: 11, length: 4, member: acct('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test') }])
     // The same person twice: both occurrences.
     const twice = [...picks.slice(0, 1), picks[0]]
     expect(resolveMentions('@Ali, @Ali!', twice)).toEqual([
-      { start: 0, length: 4, member: 'ali@a.test' },
-      { start: 6, length: 4, member: 'ali@a.test' },
+      { start: 0, length: 4, member: acct('aci:00000000-0000-4000-8000-94419b99b12c@a.test') },
+      { start: 6, length: 4, member: acct('aci:00000000-0000-4000-8000-94419b99b12c@a.test') },
     ])
   })
 
   it('splits text around mentions', () => {
-    expect(splitMentions('hi @Ali!', [{ start: 3, length: 4, member: 'ali@a.test' }])).toEqual([
+    expect(splitMentions('hi @Ali!', [{ start: 3, length: 4, member: acct('aci:00000000-0000-4000-8000-94419b99b12c@a.test') }])).toEqual([
       { kind: 'text', value: 'hi ' },
-      { kind: 'mention', member: 'ali@a.test', value: '@Ali' },
+      { kind: 'mention', member: 'aci:00000000-0000-4000-8000-94419b99b12c@a.test', value: '@Ali' },
       { kind: 'text', value: '!' },
     ])
-    expect(splitMentions('short', [{ start: 3, length: 40, member: 'x@y.test' }])).toEqual([{ kind: 'text', value: 'short' }])
+    expect(splitMentions('short', [{ start: 3, length: 40, member: acct('aci:00000000-0000-4000-8000-0000000000aa@y.test') }])).toEqual([{ kind: 'text', value: 'short' }])
   })
 })

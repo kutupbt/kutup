@@ -122,19 +122,6 @@ pub async fn renamed(
     ))
 }
 
-/// Whether two addresses name one account here: equal once folded (one
-/// account per folded name). What a lookup answers may spell the name as the
-/// account stores it, not as it was asked.
-pub fn same_address(a: &str, b: &str) -> bool {
-    match (
-        kutup_crypto::names::fold_address(a),
-        kutup_crypto::names::fold_address(b),
-    ) {
-        (Some(a), Some(b)) => a == b,
-        _ => false,
-    }
-}
-
 /// Why a name cannot be had.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unavailable {

@@ -268,6 +268,11 @@
     "contactGroup_other": "Kişi grubu · {{count}} üye",
     "addressTaken": "{{address}} artık başka birine ait, daha önce yazdığınız kişiye değil. Hiçbir şey gönderilmedi.",
     "addressTakenNow": "{{address}} artık başka birine ait. Daha önce yazdığınız kişi artık {{now}}. Hiçbir şey gönderilmedi.",
+    "groupKeysChanged": "Ortak posta kutusu {{address}} için anahtarlar, ona son yazdığınızdan beri değişti. Hiçbir şey gönderilmedi. Yöneticileriyle doğrulayın; kutuyu yeniden kurdularsa yeni anahtarlara güvenin ve yeniden gönderin.",
+    "groupKeysUnverified": "Ortak posta kutusu {{address}} için anahtarlar, bildiğiniz anahtarlarla karşılaştırılamadı. Hiçbir şey gönderilmedi.",
+    "trustGroupKeys": "Yeni anahtarlara güven",
+    "groupKeysTrusted": "{{address}} için yeni anahtarlara güveniliyor. Yeniden gönderin.",
+    "groupKeysTrustFailed": "Yeni anahtarlar kaydedilemedi. Yeniden deneyin.",
     "writeTo": "{{address}} adresine yaz"
   },
   "emptyHint": {

@@ -13,7 +13,7 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, AccountAddress, AccountManifestHistoryPageV1, AccountManifestV1,
+    capability_hash, AccountManifestHistoryPageV1, AccountManifestV1, AccountRef,
     AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, DeliveredEnvelope,
     DeviceListMismatch, FederatedChatTransaction, FederatedSealedTransactionV1,
     FederationDeliveryError, FederationDeliveryRejection, FederationDeliveryResponse,
@@ -40,6 +40,11 @@ const MAX_DIRECTORY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FEDERATION_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
+/// The active user an inbound path's `:accountId` is, on this server.
+async fn inbound_user(state: &AppState, account: &AccountRef) -> AppResult<Option<Uuid>> {
+    crate::account_ids::local_user(&state.pool, &state.config.chat_server_name, account).await
+}
+
 fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
     state
         .federation
@@ -49,11 +54,11 @@ fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
 
 pub async fn fetch_remote_bundles(
     state: &AppState,
-    address: &AccountAddress,
+    account: &AccountRef,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
-    let destination = address.server.as_str();
-    let path = format!("/api/fed/chat/users/{}/keys", address.username);
+    let destination = account.server.as_str();
+    let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
     let response = federation
         .send(
             destination,
@@ -71,18 +76,6 @@ pub async fn fetch_remote_bundles(
         )
         .await
         .map_err(federation_gateway_error)?;
-    // A held name there: where the account went, its chains verified and
-    // kept here (crate::remote_renames).
-    if let Some(renamed) = crate::remote_renames::relay(
-        state,
-        address.server.as_str(),
-        &address.canonical(),
-        &response,
-    )
-    .await
-    {
-        return Err(renamed);
-    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote chat user not found"));
     }
@@ -99,7 +92,7 @@ pub async fn fetch_remote_bundles(
                 "invalid remote chat directory response",
             )
         })?;
-    if !crate::account_names::same_address(&bundles.username, &address.canonical()) {
+    if bundles.account != *account {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "remote chat directory returned the wrong account",
@@ -110,12 +103,12 @@ pub async fn fetch_remote_bundles(
 
 pub async fn fetch_remote_sealed_bundles(
     state: &AppState,
-    address: &AccountAddress,
+    account: &AccountRef,
     request: &AnonymousPreKeyRequestV1,
 ) -> AppResult<UserPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
-    let destination = address.server.as_str();
-    let path = format!("/api/fed/chat/sealed/users/{}/keys", address.username);
+    let destination = account.server.as_str();
+    let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
     let body = serde_json::to_vec(request)
         .map_err(|error| AppError::internal(format!("encode sealed bundle request: {error}")))?;
     let response = federation
@@ -135,24 +128,12 @@ pub async fn fetch_remote_sealed_bundles(
         )
         .await
         .map_err(federation_gateway_error)?;
-    // A held name there: where the account went, its chains verified and
-    // kept here (crate::remote_renames).
-    if let Some(renamed) = crate::remote_renames::relay(
-        state,
-        address.server.as_str(),
-        &address.canonical(),
-        &response,
-    )
-    .await
-    {
-        return Err(renamed);
-    }
     if response.status != StatusCode::OK {
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
     let bundles: UserPreKeyBundlesResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if !crate::account_names::same_address(&bundles.username, &address.canonical()) {
+    if bundles.account != *account {
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
     Ok(bundles)
@@ -160,11 +141,11 @@ pub async fn fetch_remote_sealed_bundles(
 
 pub async fn fetch_remote_manifest_history(
     state: &AppState,
-    address: &AccountAddress,
+    account: &AccountRef,
     query: &crate::handlers::chat::ManifestHistoryQuery,
 ) -> AppResult<AccountManifestHistoryPageV1> {
     let federation = configured_stack(state)?;
-    let destination = address.server.as_str();
+    let destination = account.server.as_str();
     let query_string = manifest_history_query_string(query);
     let response = federation
         .send(
@@ -172,7 +153,10 @@ pub async fn fetch_remote_manifest_history(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/chat/users/{}/manifest-history", address.username),
+                path: format!(
+                    "/api/fed/chat/accounts/{}/manifest-history",
+                    account.account_id
+                ),
                 query: Some(query_string),
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -183,18 +167,6 @@ pub async fn fetch_remote_manifest_history(
         )
         .await
         .map_err(federation_gateway_error)?;
-    // A held name there: where the account went, its chains verified and
-    // kept here (crate::remote_renames).
-    if let Some(renamed) = crate::remote_renames::relay(
-        state,
-        address.server.as_str(),
-        &address.canonical(),
-        &response,
-    )
-    .await
-    {
-        return Err(renamed);
-    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found(
             "remote chat manifest history not found",
@@ -208,7 +180,7 @@ pub async fn fetch_remote_manifest_history(
     }
     let page: AccountManifestHistoryPageV1 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest history"))?;
-    if !crate::account_names::same_address(&page.account, &address.canonical())
+    if page.account != *account
         || page.from_sequence != query.page_from_sequence.unwrap_or(query.from_sequence)
         || page.to_sequence != query.to_sequence
     {
@@ -224,11 +196,11 @@ pub async fn fetch_remote_manifest_history(
 
 pub async fn fetch_remote_manifest(
     state: &AppState,
-    address: &AccountAddress,
+    account: &AccountRef,
 ) -> AppResult<AccountManifestV1> {
     let federation = configured_stack(state)?;
-    let destination = address.server.as_str();
-    let path = format!("/api/fed/chat/users/{}/manifest", address.username);
+    let destination = account.server.as_str();
+    let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
     let response = federation
         .send(
             destination,
@@ -246,18 +218,6 @@ pub async fn fetch_remote_manifest(
         )
         .await
         .map_err(federation_gateway_error)?;
-    // A held name there: where the account went, its chains verified and
-    // kept here (crate::remote_renames).
-    if let Some(renamed) = crate::remote_renames::relay(
-        state,
-        address.server.as_str(),
-        &address.canonical(),
-        &response,
-    )
-    .await
-    {
-        return Err(renamed);
-    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote chat manifest not found"));
     }
@@ -272,7 +232,7 @@ pub async fn fetch_remote_manifest(
     manifest
         .verify()
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
-    if !crate::account_names::same_address(&manifest.account, &address.canonical()) {
+    if manifest.account != *account {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
             "remote manifest returned the wrong account",
@@ -297,12 +257,12 @@ fn manifest_history_query_string(query: &crate::handlers::chat::ManifestHistoryQ
 
 pub async fn fetch_remote_profile(
     state: &AppState,
-    address: &AccountAddress,
+    account: &AccountRef,
     version: &str,
     access_key: &[u8],
 ) -> AppResult<ChatProfileResponse> {
     let federation = configured_stack(state)?;
-    let destination = address.server.as_str();
+    let destination = account.server.as_str();
     let profile_header = HeaderName::from_static(crate::handlers::chat::PROFILE_ACCESS_KEY_HEADER);
     let profile_value = HeaderValue::from_str(&STANDARD.encode(access_key))
         .map_err(|_| AppError::bad_request("invalid chat profile access key"))?;
@@ -312,7 +272,10 @@ pub async fn fetch_remote_profile(
             FederationRequestSpec {
                 feature: FederationFeature::ChatV2,
                 method: Method::GET,
-                path: format!("/api/fed/chat/users/{}/profile/{version}", address.username),
+                path: format!(
+                    "/api/fed/chat/accounts/{}/profile/{version}",
+                    account.account_id
+                ),
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body: Vec::new(),
@@ -323,18 +286,6 @@ pub async fn fetch_remote_profile(
         )
         .await
         .map_err(federation_gateway_error)?;
-    // A held name there: where the account went, its chains verified and
-    // kept here (crate::remote_renames).
-    if let Some(renamed) = crate::remote_renames::relay(
-        state,
-        address.server.as_str(),
-        &address.canonical(),
-        &response,
-    )
-    .await
-    {
-        return Err(renamed);
-    }
     if response.status == StatusCode::NOT_FOUND {
         return Err(AppError::not_found("remote chat profile not found"));
     }
@@ -350,10 +301,10 @@ pub async fn fetch_remote_profile(
             "invalid remote chat profile response",
         )
     })?;
-    if profile.version != version {
+    if profile.version != version || profile.account != *account {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
-            "remote chat profile returned the wrong version",
+            "remote chat profile returned the wrong account or version",
         ));
     }
     Ok(profile)
@@ -414,7 +365,7 @@ struct SealedFederationOutboxRow {
     id: Uuid,
     destination: String,
     sequence: i64,
-    recipient: String,
+    recipient_account_id: Uuid,
     transaction: Value,
     state: String,
     attempts: i32,
@@ -422,12 +373,14 @@ struct SealedFederationOutboxRow {
 
 pub async fn enqueue_sealed_send(
     state: &AppState,
-    recipient: &AccountAddress,
+    recipient: &AccountRef,
     request: SealedMessageSubmissionV1,
 ) -> AppResult<FederatedSealedOutcome> {
     request.validate().map_err(AppError::bad_request)?;
     let federation = configured_stack(state)?;
     let destination = recipient.server.as_str();
+    let recipient_id = Uuid::parse_str(&recipient.account_id)
+        .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
     if destination == federation.server_name() {
         return Err(AppError::bad_request(
             "local sealed recipients use local mailbox delivery",
@@ -438,10 +391,10 @@ pub async fn enqueue_sealed_send(
     let mut tx = state.pool.begin().await?;
     if let Some((id, state_name, stored_transaction)) = sqlx::query_as::<_, (Uuid, String, Value)>(
         "SELECT id, state, transaction FROM chat_sealed_federation_outbox
-         WHERE destination = $1 AND recipient = $2 AND send_id = $3 FOR UPDATE",
+         WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3 FOR UPDATE",
     )
     .bind(destination)
-    .bind(&recipient.username)
+    .bind(recipient_id)
     .bind(send_id)
     .fetch_optional(&mut *tx)
     .await?
@@ -504,7 +457,7 @@ pub async fn enqueue_sealed_send(
     let transaction = FederatedSealedTransactionV1 {
         version: 1,
         origin: federation.server_name().to_string(),
-        recipient: recipient.canonical(),
+        recipient: recipient.clone(),
         sequence: u64::try_from(sequence)
             .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?,
         send_id: request.send_id,
@@ -514,13 +467,13 @@ pub async fn enqueue_sealed_send(
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO chat_sealed_federation_outbox
-             (id, destination, sequence, recipient, send_id, transaction)
+             (id, destination, sequence, recipient_account_id, send_id, transaction)
          VALUES ($1,$2,$3,$4,$5,$6)",
     )
     .bind(id)
     .bind(destination)
     .bind(sequence)
-    .bind(&recipient.username)
+    .bind(recipient_id)
     .bind(send_id)
     .bind(serde_json::to_value(&transaction).map_err(|error| {
         AppError::internal(format!("encode sealed federation transaction: {error}"))
@@ -534,7 +487,7 @@ pub async fn enqueue_sealed_send(
 async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSealedOutcome> {
     let federation = configured_stack(state)?;
     let row: SealedFederationOutboxRow = sqlx::query_as(
-        "SELECT id, destination, sequence, recipient, transaction, state, attempts
+        "SELECT id, destination, sequence, recipient_account_id, transaction, state, attempts
          FROM chat_sealed_federation_outbox WHERE id = $1",
     )
     .bind(id)
@@ -581,7 +534,9 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
         .map_err(|error| {
             AppError::internal(format!("stored sealed transaction is invalid: {error}"))
         })?;
-    if transaction.recipient != format!("{}@{}", row.recipient, row.destination) {
+    if transaction.recipient
+        != crate::account_ids::stored(&row.destination, row.recipient_account_id)?
+    {
         return Err(AppError::internal(
             "sealed outbox recipient does not match its transaction",
         ));
@@ -749,8 +704,8 @@ struct FederationOutboxRow {
     id: Uuid,
     destination: String,
     sequence: i64,
-    recipient: String,
-    sender: String,
+    sender_user_id: Uuid,
+    recipient_account_id: Uuid,
     request: Value,
     state: String,
     response: Option<Value>,
@@ -763,7 +718,7 @@ struct FederationOutboxRow {
 pub async fn enqueue_send(
     state: &AppState,
     sender_user_id: Uuid,
-    recipient: &AccountAddress,
+    recipient: &AccountRef,
     request: SendMessagesRequest,
 ) -> AppResult<FederatedSendOutcome> {
     let federation = configured_stack(state)?;
@@ -782,21 +737,20 @@ pub async fn enqueue_send(
         .bind(sender_user_id)
         .execute(&mut *tx)
         .await?;
-    let sender_username: Option<String> = sqlx::query_scalar(
-        "UPDATE chat_devices d SET last_seen_at = now()
-             FROM users u
-             WHERE d.user_id = $1 AND d.device_id = $2 AND u.id = d.user_id
-             RETURNING COALESCE(u.username, '')",
+    let device: Option<i32> = sqlx::query_scalar(
+        "UPDATE chat_devices SET last_seen_at = now()
+             WHERE user_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_user_id)
     .bind(request.sender_device_id as i32)
     .fetch_optional(&mut *tx)
     .await?;
-    let sender_username =
-        sender_username.ok_or_else(|| AppError::not_found("no such chat device"))?;
+    device.ok_or_else(|| AppError::not_found("no such chat device"))?;
+    let recipient_id = Uuid::parse_str(&recipient.account_id)
+        .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
 
-    let existing: Option<(Uuid, String, Value, Option<Value>, String, String)> = sqlx::query_as(
-        "SELECT id, state, request, response, destination, recipient
+    let existing: Option<(Uuid, String, Value, Option<Value>, String, Uuid)> = sqlx::query_as(
+        "SELECT id, state, request, response, destination, recipient_account_id
                  FROM chat_federation_outbox
                  WHERE sender_user_id = $1 AND sender_device_id = $2 AND send_id = $3
                  FOR UPDATE",
@@ -816,7 +770,7 @@ pub async fn enqueue_send(
         prior_recipient,
     )) = existing
     {
-        if prior_destination != destination || prior_recipient != recipient.canonical() {
+        if prior_destination != destination || prior_recipient != recipient_id {
             return Err(AppError::conflict(
                 "sendId is already bound to another federated recipient",
             ));
@@ -871,12 +825,11 @@ pub async fn enqueue_send(
         .fetch_one(&mut *tx)
         .await?;
         let id = Uuid::new_v4();
-        let sender = format!("{sender_username}@{}", federation.server_name());
         sqlx::query(
             "INSERT INTO chat_federation_outbox
                     (id, destination, sequence, sender_user_id, sender_device_id,
-                     send_id, recipient, sender, request)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                     send_id, recipient_account_id, request)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
         )
         .bind(id)
         .bind(destination)
@@ -884,8 +837,7 @@ pub async fn enqueue_send(
         .bind(sender_user_id)
         .bind(request.sender_device_id as i32)
         .bind(&request.send_id)
-        .bind(recipient.canonical())
-        .bind(sender)
+        .bind(recipient_id)
         .bind(&request_value)
         .execute(&mut *tx)
         .await?;
@@ -938,8 +890,8 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         sequence,
         origin: federation.server_name().to_owned(),
         destination: row.destination.clone(),
-        recipient: row.recipient.clone(),
-        sender: row.sender.clone(),
+        recipient: crate::account_ids::stored(&row.destination, row.recipient_account_id)?,
+        sender: crate::account_ids::local(federation.server_name(), row.sender_user_id)?,
         message,
     };
     let body = serde_json::to_vec(&transaction).map_err(|error| {
@@ -1117,7 +1069,7 @@ async fn flush_due(state: &AppState) -> AppResult<usize> {
 
 async fn load_outbox(state: &AppState, id: Uuid) -> AppResult<Option<FederationOutboxRow>> {
     Ok(sqlx::query_as(
-        "SELECT id, destination, sequence, recipient, sender, request,
+        "SELECT id, destination, sequence, sender_user_id, recipient_account_id, request,
                 state, response, attempts
          FROM chat_federation_outbox WHERE id = $1",
     )
@@ -1238,10 +1190,10 @@ async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
 /// of a read request cannot exhaust the recipient's prekey pool.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/users/{username}/keys",
+    path = "/api/fed/chat/accounts/{accountId}/keys",
     tag = "chat federation",
     params(
-        ("username" = String, Path, description = "Recipient username local to this server")
+        ("accountId" = String, Path, description = "Recipient's account id on this server")
     ),
     responses(
         (status = 200, description = "Signed manifest and replay-safe PQ bundles", body = UserPreKeyBundlesResponse),
@@ -1251,30 +1203,26 @@ async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
 )]
 pub async fn get_user_bundles(
     State(state): State<AppState>,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = state
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::federated(&username, federation.server_name())
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let path = format!("/api/fed/chat/users/{}/keys", account.username);
+    let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
+    let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
-    let response_username = format!("{}@{}", account.username, federation.server_name());
-    let bundles = match crate::handlers::chat::load_user_bundles(
-        &state,
-        &account.username,
-        &response_username,
-        None,
-        false,
-        None,
-    )
-    .await
-    {
+    let bundles = match inbound_user(&state, &account).await {
+        Ok(Some(target_id)) => {
+            crate::handlers::chat::load_user_bundles(&state, target_id, None, false, None).await
+        }
+        Ok(None) => Err(AppError::not_found("user not found")),
+        Err(error) => Err(error),
+    };
+    let bundles = match bundles {
         Ok(bundles) => bundles,
         Err(error) => return signed_app_error(federation, &authenticated, error),
     };
@@ -1283,7 +1231,7 @@ pub async fn get_user_bundles(
 
 pub async fn get_sealed_user_bundles(
     State(state): State<AppState>,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Response> {
@@ -1291,9 +1239,9 @@ pub async fn get_sealed_user_bundles(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::federated(&username, federation.server_name())
+    let account = crate::account_ids::remote(federation.server_name(), &account_id)
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    let path = format!("/api/fed/chat/sealed/users/{}/keys", account.username);
+    let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
     let authenticated = federation
         .authenticate_inbound(
             &headers,
@@ -1324,17 +1272,22 @@ pub async fn get_sealed_user_bundles(
             )
         }
     };
-    let response_username = format!("{}@{}", account.username, federation.server_name());
-    let bundles = match crate::handlers::chat::load_user_bundles(
-        &state,
-        &account.username,
-        &response_username,
-        None,
-        true,
-        Some(&capability_hash(&capability)),
-    )
-    .await
-    {
+    // Not ours, not active, or a wrong capability: one answer.
+    let bundles = match inbound_user(&state, &account).await {
+        Ok(Some(target_id)) => {
+            crate::handlers::chat::load_user_bundles(
+                &state,
+                target_id,
+                None,
+                true,
+                Some(&capability_hash(&capability)),
+            )
+            .await
+        }
+        Ok(None) => Err(AppError::not_found("sealed delivery unavailable")),
+        Err(error) => Err(error),
+    };
+    let bundles = match bundles {
         Ok(bundles) => bundles,
         Err(error) => return signed_app_error(federation, &authenticated, error),
     };
@@ -1458,23 +1411,12 @@ pub async fn deliver_sealed_messages(
         capability: transaction.capability.clone(),
         envelopes: transaction.envelopes.clone(),
     };
-    let recipient = match transaction.recipient_account() {
-        Ok(recipient) => recipient,
-        Err(error) => {
-            return refuse_sealed(
-                tx,
-                federation,
-                &authenticated,
-                &transaction,
-                sequence,
-                error.to_string(),
-            )
-            .await
-        }
-    };
+    // Checked by validate: the recipient is on this server. One that is not
+    // an account here is answered as a wrong capability.
+    let recipient = Uuid::parse_str(&transaction.recipient.account_id).unwrap_or(Uuid::nil());
     let outcome = match crate::handlers::chat::store_sealed_messages(
         &mut tx,
-        &recipient.username,
+        recipient,
         &request,
         Some(&transaction.origin),
     )
@@ -1565,7 +1507,7 @@ pub async fn deliver_sealed_messages(
 /// signature profile.
 pub async fn get_manifest_history(
     State(state): State<AppState>,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
     Query(query): Query<crate::handlers::chat::ManifestHistoryQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
@@ -1573,9 +1515,11 @@ pub async fn get_manifest_history(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::federated(&username, federation.server_name())
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let path = format!("/api/fed/chat/users/{}/manifest-history", account.username);
+    let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
+    let path = format!(
+        "/api/fed/chat/accounts/{}/manifest-history",
+        account.account_id
+    );
     let query_string = manifest_history_query_string(&query);
     let authenticated = federation
         .authenticate_inbound(
@@ -1587,20 +1531,8 @@ pub async fn get_manifest_history(
             FederationFeature::ChatV2,
         )
         .await?;
-    let target_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
-    )
-    .bind(&account.username)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(target_id) = target_id else {
-        let error = crate::account_names::renamed_or(
-            &state.pool,
-            &state.config.chat_server_name,
-            &account.username,
-            AppError::not_found("chat manifest history not found"),
-        )
-        .await;
+    let Some(target_id) = inbound_user(&state, &account).await? else {
+        let error = AppError::not_found("chat manifest history not found");
         return signed_app_error(federation, &authenticated, error);
     };
     let incarnation_id: Option<String> = match sqlx::query_scalar(
@@ -1684,33 +1616,20 @@ pub async fn get_manifest_history(
 /// Signed server-to-server current account manifest.
 pub async fn get_manifest(
     State(state): State<AppState>,
-    Path(username): Path<String>,
+    Path(account_id): Path<String>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = state
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::federated(&username, federation.server_name())
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let path = format!("/api/fed/chat/users/{}/manifest", account.username);
+    let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
+    let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &path, None, &[], FederationFeature::ChatV2)
         .await?;
-    let target_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = kutup_current_user($1) AND is_active = true",
-    )
-    .bind(&account.username)
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some(target_id) = target_id else {
-        let error = crate::account_names::renamed_or(
-            &state.pool,
-            &state.config.chat_server_name,
-            &account.username,
-            AppError::not_found("chat manifest not found"),
-        )
-        .await;
+    let Some(target_id) = inbound_user(&state, &account).await? else {
+        let error = AppError::not_found("chat manifest not found");
         return signed_app_error(federation, &authenticated, error);
     };
     let value: Option<serde_json::Value> =
@@ -1735,10 +1654,10 @@ pub async fn get_manifest(
 /// destination-binds the proxying homeserver.
 #[utoipa::path(
     get,
-    path = "/api/fed/chat/users/{username}/profile/{version}",
+    path = "/api/fed/chat/accounts/{accountId}/profile/{version}",
     tag = "chat federation",
     params(
-        ("username" = String, Path, description = "Profile owner local to this server"),
+        ("accountId" = String, Path, description = "Profile owner's account id on this server"),
         ("version" = String, Path, description = "Profile-key-derived version")
     ),
     responses(
@@ -1749,16 +1668,18 @@ pub async fn get_manifest(
 )]
 pub async fn get_user_profile(
     State(state): State<AppState>,
-    Path((username, version)): Path<(String, String)>,
+    Path((account_id, version)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = state
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
-    let account = AccountAddress::federated(&username, federation.server_name())
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let uri = format!("/api/fed/chat/users/{}/profile/{version}", account.username);
+    let account = crate::account_ids::remote(federation.server_name(), &account_id)?;
+    let uri = format!(
+        "/api/fed/chat/accounts/{}/profile/{version}",
+        account.account_id
+    );
     let authenticated = federation
         .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV2)
         .await?;
@@ -1787,23 +1708,18 @@ pub async fn get_user_profile(
             AppError::not_found("chat profile not found"),
         );
     };
-    let profile = match crate::handlers::chat::load_public_profile(
-        &state,
-        &account.username,
-        &version,
-        &access_key,
-    )
-    .await
-    {
+    let found = match inbound_user(&state, &account).await {
+        Ok(Some(target_id)) => {
+            crate::handlers::chat::load_public_profile(&state, target_id, &version, &access_key)
+                .await
+        }
+        Ok(None) => Ok(None),
+        Err(error) => Err(error),
+    };
+    let profile = match found {
         Ok(Some(profile)) => profile,
         Ok(None) => {
-            let error = crate::account_names::renamed_or(
-                &state.pool,
-                &state.config.chat_server_name,
-                &account.username,
-                AppError::not_found("chat profile not found"),
-            )
-            .await;
+            let error = AppError::not_found("chat profile not found");
             return signed_app_error(federation, &authenticated, error);
         }
         Err(error) => return signed_app_error(federation, &authenticated, error),
@@ -1944,19 +1860,15 @@ pub async fn deliver_messages(
         );
     }
 
-    let recipient: AccountAddress =
-        transaction
-            .recipient
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    let recipient_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND is_active = true FOR SHARE",
-    )
-    .bind(&recipient.username)
-    .fetch_optional(&mut *tx)
-    .await?;
+    let recipient_id: Option<Uuid> = match Uuid::parse_str(&transaction.recipient.account_id) {
+        Ok(id) => {
+            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active = true FOR SHARE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?
+        }
+        Err(_) => None,
+    };
     let Some(recipient_id) = recipient_id else {
         let response = FederationDeliveryResponse {
             stored: 0,
@@ -2000,18 +1912,21 @@ pub async fn deliver_messages(
         );
     }
 
+    let sender_account_id = Uuid::parse_str(&transaction.sender.account_id)
+        .map_err(|_| AppError::bad_request("the sender's account id is not a UUID"))?;
     let mut stored = Vec::with_capacity(transaction.message.envelopes.len());
     for envelope in &transaction.message.envelopes {
         let (id, cursor, server_ts): (Uuid, i64, OffsetDateTime) = sqlx::query_as(
             "INSERT INTO chat_mailbox
-                (recipient_user_id, recipient_device_id, sender, sender_device_id,
-                 envelope_type, suite, content, send_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                (recipient_user_id, recipient_device_id, sender_server, sender_account_id,
+                 sender_device_id, envelope_type, suite, content, send_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
              RETURNING id, cursor, server_ts",
         )
         .bind(recipient_id)
         .bind(envelope.device_id as i32)
-        .bind(&transaction.sender)
+        .bind(&transaction.sender.server)
+        .bind(sender_account_id)
         .bind(transaction.message.sender_device_id as i32)
         .bind(crate::handlers::chat::envelope_type_code(
             envelope.envelope_type,
@@ -2237,46 +2152,24 @@ fn validate_transaction(
     if transaction.message.sender_device_id == 0 || transaction.message.sender_device_id > 127 {
         return Err(AppError::bad_request("sender device id is out of range"));
     }
-    let sender: AccountAddress =
-        transaction
-            .sender
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if sender.server != transaction.origin.as_str() {
+    check_accounts(transaction)
+}
+
+/// The sender is the origin's account (a peer speaks only for its own
+/// accounts) and the recipient the destination's. Both parsed canonical:
+/// AccountRef refuses anything else.
+fn check_accounts(transaction: &FederatedChatTransaction) -> AppResult<()> {
+    if transaction.sender.server != transaction.origin {
         return Err(AppError::unauthorized(
             "federated sender does not belong to the origin server",
         ));
     }
-    let recipient: AccountAddress =
-        transaction
-            .recipient
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| {
-                AppError::bad_request(error.to_string())
-            })?;
-    if recipient.server != transaction.destination.as_str() {
+    if transaction.recipient.server != transaction.destination {
         return Err(AppError::bad_request(
             "federated recipient does not belong to this server",
         ));
     }
-    // Exactly the canonical spelling: what is stored and routed on is the
-    // string as sent, so `alice@Origin.Example` is refused here (400), not by
-    // the mailbox's check (a 500 the origin would retry forever).
-    if !is_canonical_account(&transaction.sender) || !is_canonical_account(&transaction.recipient) {
-        return Err(AppError::bad_request(
-            "federated accounts must be in canonical form",
-        ));
-    }
     Ok(())
-}
-
-/// Whether `value` is an account address exactly as Kutup spells it.
-fn is_canonical_account(value: &str) -> bool {
-    value
-        .parse::<AccountAddress>()
-        .is_ok_and(|address| address.canonical() == value)
 }
 
 #[cfg(test)]
@@ -2301,8 +2194,8 @@ mod tests {
             async move {
                 sqlx::query_scalar::<_, Uuid>(
                     "INSERT INTO chat_sealed_federation_outbox
-                         (destination, sequence, recipient, send_id, transaction)
-                     VALUES ($1, $2, 'bob', gen_random_uuid(), '{}'::jsonb) RETURNING id",
+                         (destination, sequence, recipient_account_id, send_id, transaction)
+                     VALUES ($1, $2, gen_random_uuid(), gen_random_uuid(), '{}'::jsonb) RETURNING id",
                 )
                 .bind(destination)
                 .bind(sequence)
@@ -2370,17 +2263,52 @@ mod tests {
     }
 
     #[test]
-    fn federated_accounts_must_be_spelled_canonically() {
-        assert!(super::is_canonical_account("alice@origin.example"));
-        for refused in [
-            "alice@Origin.Example",
-            "alice@origin.example.",
-            "alice@localhost",
-            "alice@10.0.0.1",
-            "Alice@origin.example",
-            "alice",
+    fn a_peer_speaks_only_for_its_own_accounts() {
+        let account = |server: &str| {
+            kutup_chat_proto::AccountRef::new(server, "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap()
+        };
+        let transaction =
+            |sender: &str, recipient: &str| kutup_chat_proto::FederatedChatTransaction {
+                fed_version: super::CHAT_FEDERATION_PAYLOAD_VERSION,
+                transaction_id: Uuid::new_v4().to_string(),
+                sequence: 1,
+                origin: "a.example".into(),
+                destination: "b.example".into(),
+                recipient: account(recipient),
+                sender: account(sender),
+                message: kutup_chat_proto::SendMessagesRequest {
+                    sender_device_id: 1,
+                    send_id: Uuid::new_v4().to_string(),
+                    envelopes: Vec::new(),
+                    access_token: None,
+                },
+            };
+        assert!(super::check_accounts(&transaction("a.example", "b.example")).is_ok());
+        // A delivering a sender of C, or of the destination itself: refused.
+        let forged = super::check_accounts(&transaction("c.example", "b.example")).unwrap_err();
+        assert_eq!(forged.status, axum::http::StatusCode::UNAUTHORIZED);
+        assert!(super::check_accounts(&transaction("b.example", "b.example")).is_err());
+        // A recipient on another server than the destination: refused.
+        assert!(super::check_accounts(&transaction("a.example", "c.example")).is_err());
+    }
+
+    #[test]
+    fn federated_accounts_must_be_canonical() {
+        let account = |server: &str, id: &str| {
+            serde_json::from_value::<kutup_chat_proto::AccountRef>(
+                serde_json::json!({ "server": server, "accountId": id }),
+            )
+        };
+        let id = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        assert!(account("origin.example", id).is_ok());
+        for (server, id) in [
+            ("Origin.Example", id),
+            ("origin.example.", id),
+            ("origin.example", "0B6B5E0C-4C1E-4B8E-9C2D-6A1F3E5D7C9B"),
+            ("origin.example", "alice"),
         ] {
-            assert!(!super::is_canonical_account(refused), "{refused}");
+            assert!(account(server, id).is_err(), "{server} {id}");
         }
     }
 

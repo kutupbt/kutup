@@ -10,7 +10,7 @@ import { notificationsAllowed } from '../../lib/notificationPermission'
 import { startRingtone } from '../../lib/ringtone'
 import { useNow } from '../../lib/useNow'
 import { getAlwaysRelayCalls, getNotifications } from '../../state/prefs'
-import { parseAccountAddress } from '@kutup/chat-core/identity'
+import { directConversation, parseAccount } from '@kutup/chat-core/identity'
 import type { ConversationId } from '@kutup/chat-core/types'
 import { ConversationView } from '../thread/ConversationView'
 import { CallFrame, PanelButtons, RoundButton, type CallPanel, type CallPerson } from './CallFrame'
@@ -26,7 +26,7 @@ import { GroupCallScreen } from './GroupCallScreen'
  */
 export function CallHost() {
   const { service, self } = useChat()
-  const address = self?.address
+  const address = self?.key
   useEffect(() => {
     if (!service || !address) return
     const controller = new CallController(service, address, () => ({ alwaysRelay: getAlwaysRelayCalls() }))
@@ -55,7 +55,7 @@ function CallScreen({ call }: { call: CallState }) {
   const { snapshot, self } = useChat()
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
   const profile = profiles.get(call.peer)
-  const name = personName(call.peer, profiles, self?.address ?? '', t)
+  const name = personName(call.peer, profiles, self?.key ?? '', t)
   const remoteVideo = useRef<HTMLVideoElement>(null)
   const localVideo = useRef<HTMLVideoElement>(null)
   const remoteAudio = useRef<HTMLAudioElement>(null)
@@ -129,10 +129,10 @@ function CallScreen({ call }: { call: CallState }) {
   }
 
   const status = statusText(call, now, t)
-  const peerAddress = parseAccountAddress(call.peer)
+  const peerAccount = parseAccount(call.peer)
   // The conversation exists once the call was answered (calls ring only
   // between accepted contacts), so the chat opens then.
-  const conversation: ConversationId | null = peerAddress && call.phase !== 'incoming' ? { kind: 'direct', address: peerAddress } : null
+  const conversation: ConversationId | null = peerAccount && call.phase !== 'incoming' ? directConversation(peerAccount) : null
   const showRemoteVideo = remoteHasVideo && call.phase === 'active'
   const live = call.phase === 'outgoing' || call.phase === 'connecting' || call.phase === 'active'
   const people: CallPerson[] = [

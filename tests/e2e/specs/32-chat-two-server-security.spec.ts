@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Request, type Response } from '@playwright/test'
-import { appUrl, hasSecondaryServer, newAccount, registerAccount, serverDomain, signIn } from '../fixtures/apps'
+import { accountKey, appUrl, hasSecondaryServer, newAccount, registerAccount, serverDomain, signIn } from '../fixtures/apps'
 import {
   acceptRequest,
   closeDetails,
@@ -24,6 +24,13 @@ import {
   setDisappearing,
 } from '../fixtures/chat'
 import { recordSafeCheckpoint } from '../safe-diagnostics'
+
+/** An identified (not sealed) Direct send: POST /api/chat/accounts/<id>/messages. */
+const IDENTIFIED_SEND = /^\/api\/chat\/accounts\/[0-9a-f-]{36}\/messages$/
+/** A sealed send: POST /api/chat/anonymous/accounts/<id>/messages. */
+const ANONYMOUS_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/messages$/
+/** A sealed bundle fetch or send: POST /api/chat/anonymous/accounts/<id>/{keys,messages}. */
+const ANONYMOUS_KEYS_OR_SEND = /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/(keys|messages)$/
 
 const PASSWORD = 'Deneme123*FederatedSecurityPassword'
 const pageErrors = new WeakMap<Page, string[]>()
@@ -325,7 +332,7 @@ test.describe('two-server secure chat', () => {
     const identifiedToBob: string[] = []
     pageA.on('request', (request) => {
       const path = new URL(request.url()).pathname
-      if (request.method() === 'POST' && path.includes('/api/chat/users/') && path.endsWith('/messages')) identifiedToBob.push(path)
+      if (request.method() === 'POST' && IDENTIFIED_SEND.test(path)) identifiedToBob.push(path)
     })
 
     await openDirectChat(pageA, bobAddress)
@@ -334,10 +341,12 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-attachment-button')).toHaveCount(0)
     await expect(pageA.getByTestId('chat-attachment-input')).toHaveCount(0)
     await expect(pageA.getByTestId('chat-voice-button')).toHaveCount(0)
-    const firstIdentified = posted(pageA, /\/api\/chat\/users\/.+\/messages$/)
+    const firstIdentified = posted(pageA, IDENTIFIED_SEND)
     const first = `identified-first-${tag}`
     await send(pageA, first)
     expect((await firstIdentified).ok()).toBe(true)
+    // The watch below is armed: it saw this identified send.
+    expect(identifiedToBob.length).toBeGreaterThan(0)
     await openConversationWith(pageB, alice.username)
     await expect(message(pageB, first)).toBeVisible({ timeout: 45_000 })
     await acceptRequest(pageB)
@@ -371,7 +380,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-typing-indicator')).toContainText(bob.username, { timeout: 45_000 })
     await expect(pageA.getByText(typingDraft)).toHaveCount(0)
 
-    const sealedReplyResponse = posted(pageB, /\/api\/chat\/anonymous\/users\/.+\/messages$/)
+    const sealedReplyResponse = posted(pageB, ANONYMOUS_SEND)
     const reply = `sealed-reply-${tag}`
     await send(pageB, reply)
     expect((await sealedReplyResponse).ok()).toBe(true)
@@ -440,7 +449,7 @@ test.describe('two-server secure chat', () => {
         .catch(() => {})
     })
     identifiedToBob.length = 0
-    const sealedSendResponse = posted(pageA, /\/api\/chat\/anonymous\/users\/.+\/messages$/)
+    const sealedSendResponse = posted(pageA, ANONYMOUS_SEND)
     const sealed = `sealed-second-${tag}`
     await send(pageA, sealed)
     expect((await sealedSendResponse).ok()).toBe(true)
@@ -555,8 +564,7 @@ test.describe('two-server secure chat', () => {
       const path = new URL(response.url()).pathname
       return (
         response.request().method() === 'POST' &&
-        path.includes('/api/chat/anonymous/users/') &&
-        (path.endsWith('/keys') || path.endsWith('/messages')) &&
+        ANONYMOUS_KEYS_OR_SEND.test(path) &&
         response.status() === 404
       )
     })
@@ -684,8 +692,8 @@ test.describe('two-server secure chat', () => {
     }
     const genesisOwner = genesisRequest.genesis.ownerSet.owners[0]
     expect(genesisOwner).toBeDefined()
-    await expect(pageA.getByTestId(`chat-group-owner-fingerprint-${aliceAddress}`)).toContainText(genesisOwner.ownerId)
-    await expect(pageA.getByTestId(`chat-group-owner-credential-${aliceAddress}`)).toContainText(genesisOwner.publicKey)
+    await expect(pageA.getByTestId(`chat-group-owner-fingerprint-${accountKey(alice)}`)).toContainText(genesisOwner.ownerId)
+    await expect(pageA.getByTestId(`chat-group-owner-credential-${accountKey(alice)}`)).toContainText(genesisOwner.publicKey)
     await assertExactAuthoritySecurity(a, aPolicyHistory)
     await assertExactAuthoritySecurity(b, bPolicyHistory)
     await closeDetails(pageA)
@@ -713,7 +721,7 @@ test.describe('two-server secure chat', () => {
       {
         authorization: bobAuthorization,
         selfRequest: identifiedPackageRequest,
-        crossAccountRecipient: { username: alice.username, server: a },
+        crossAccountRecipient: { server: a, accountId: accountKey(alice).slice(4, 40) },
       },
     )
     expect(packageClaimStatuses.self).toBe(200)
@@ -723,14 +731,14 @@ test.describe('two-server secure chat', () => {
     // but preserve member count and routing domains and require no owner vote.
     const administratorCommit = posted(pageA, CONTROL)
     await openMembers(pageA)
-    const bobOnAlice = pageA.getByTestId(`chat-group-member-${bobAddress}`)
+    const bobOnAlice = pageA.getByTestId(`chat-group-member-${accountKey(bob)}`)
     await bobOnAlice.getByRole('button', { name: /^Make .* an administrator$/ }).click()
     expect((await requireResponseOrUiError(pageA, administratorCommit)).ok()).toBe(true)
     await expect(bobOnAlice.getByText('Administrator', { exact: true })).toBeVisible({ timeout: 90_000 })
     await closeDetails(pageA)
 
     await openMembers(pageB)
-    await expect(pageB.getByTestId(`chat-group-member-${bobAddress}`).getByText('Administrator', { exact: true })).toBeVisible({
+    await expect(pageB.getByTestId(`chat-group-member-${accountKey(bob)}`).getByText('Administrator', { exact: true })).toBeVisible({
       timeout: 90_000,
     })
 
@@ -749,7 +757,7 @@ test.describe('two-server secure chat', () => {
     await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
 
     await openMembers(pageA)
-    await expect(pageA.getByTestId(`chat-group-member-${charlieAddress}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-member-${accountKey(charlie)}`)).toBeVisible({ timeout: 90_000 })
     await closeDetails(pageA)
 
     // A rejected cross-server Welcome produces durable, federation-authenticated
@@ -780,15 +788,15 @@ test.describe('two-server secure chat', () => {
               if (!response.ok) return false
               const feedback = (await response.json()) as Array<{
                 conversationId: string
-                member: { username: string; server?: string }
+                member: { server: string; accountId: string }
                 decision: string
               }>
               return feedback.some(
                 (entry) =>
-                  entry.conversationId === groupId && `${entry.member.username}@${entry.member.server}` === member && entry.decision === 'rejected',
+                  entry.conversationId === groupId && `aci:${entry.member.accountId}@${entry.member.server}` === member && entry.decision === 'rejected',
               )
             },
-            { authorization: aliceAuthorization, groupId: conversationId, member: daveAddress },
+            { authorization: aliceAuthorization, groupId: conversationId, member: accountKey(dave) },
           ),
         { timeout: 90_000 },
       )
@@ -796,11 +804,11 @@ test.describe('two-server secure chat', () => {
 
     await reloadInto(pageA, conversationId)
     await openMembers(pageA)
-    await expect(pageA.getByTestId(`chat-group-invitation-feedback-${daveAddress}`)).toContainText('Rejected the invitation', { timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-invitation-feedback-${accountKey(dave)}`)).toContainText('Rejected the invitation', { timeout: 90_000 })
     const rejectedMemberRemoveCommit = posted(pageA, CONTROL)
-    await pageA.getByTestId(`chat-group-member-${daveAddress}`).getByRole('button', { name: /^Remove .* from the group$/ }).click()
+    await pageA.getByTestId(`chat-group-member-${accountKey(dave)}`).getByRole('button', { name: /^Remove .* from the group$/ }).click()
     expect((await requireResponseOrUiError(pageA, rejectedMemberRemoveCommit)).ok()).toBe(true)
-    await expect(pageA.getByTestId(`chat-group-member-${daveAddress}`)).toHaveCount(0, { timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-member-${accountKey(dave)}`)).toHaveCount(0, { timeout: 90_000 })
     await closeDetails(pageA)
     recordSafeCheckpoint('two-server-mls', 'membership-governance-completed', { members: 3 })
 
@@ -810,13 +818,13 @@ test.describe('two-server secure chat', () => {
     // partially approved transition/request still durable.
     const promoteOwnerCommit = posted(pageA, CONTROL)
     await openMembers(pageA)
-    await pageA.getByTestId(`chat-group-owner-${bobAddress}`).click()
+    await pageA.getByTestId(`chat-group-owner-${accountKey(bob)}`).click()
     expect((await requireResponseOrUiError(pageA, promoteOwnerCommit)).ok()).toBe(true)
-    await expect(pageA.getByTestId(`chat-group-member-owner-${bobAddress}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-member-owner-${accountKey(bob)}`)).toBeVisible({ timeout: 90_000 })
     await closeDetails(pageA)
 
     await openMembers(pageB)
-    await expect(pageB.getByTestId(`chat-group-member-owner-${bobAddress}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByTestId(`chat-group-member-owner-${accountKey(bob)}`)).toBeVisible({ timeout: 90_000 })
     await closeDetails(pageB)
 
     let ownerRemovalControlSubmitted = false
@@ -828,7 +836,7 @@ test.describe('two-server secure chat', () => {
     })
     const ownerApprovalRequest = posted(pageA, ANONYMOUS_MLS)
     await openMembers(pageA)
-    await pageA.getByTestId(`chat-group-owner-${bobAddress}`).click()
+    await pageA.getByTestId(`chat-group-owner-${accountKey(bob)}`).click()
     expect((await requireResponseOrUiError(pageA, ownerApprovalRequest)).ok()).toBe(true)
     await pageA.waitForTimeout(1_000)
     expect(ownerRemovalControlSubmitted).toBe(false)
@@ -849,7 +857,7 @@ test.describe('two-server secure chat', () => {
     await closeDetails(pageB)
 
     await openMembers(pageA)
-    await expect(pageA.getByTestId(`chat-group-member-owner-${bobAddress}`)).toHaveCount(0, { timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-member-owner-${accountKey(bob)}`)).toHaveCount(0, { timeout: 90_000 })
     await closeDetails(pageA)
     recordSafeCheckpoint('two-server-mls', 'owner-quorum-completed', { owners: 1 })
 
@@ -947,9 +955,9 @@ test.describe('two-server secure chat', () => {
     // Unknown recipients and known recipients with an invalid capability are
     // deliberately indistinguishable at the same-origin anonymous boundary.
     const enumerationResponses = await pageA.evaluate(
-      async ({ knownRecipient, unknownUsername }) => {
-        const unknownRecipient = structuredClone(knownRecipient) as { username: string }
-        unknownRecipient.username = unknownUsername
+      async ({ knownRecipient, unknownAccountId }) => {
+        const unknownRecipient = structuredClone(knownRecipient) as { accountId: string }
+        unknownRecipient.accountId = unknownAccountId
         const claim = async (recipient: unknown) => {
           const response = await fetch('/api/chat/mls/anonymous/key-packages', {
             method: 'POST',
@@ -961,7 +969,7 @@ test.describe('two-server secure chat', () => {
         }
         return Promise.all([claim(knownRecipient), claim(unknownRecipient)])
       },
-      { knownRecipient: firstAnonymousSubmission.recipient, unknownUsername: `mlsunknown${tag}` },
+      { knownRecipient: firstAnonymousSubmission.recipient, unknownAccountId: crypto.randomUUID() },
     )
     expect(enumerationResponses[0].status).toBe(404)
     expect(enumerationResponses[1].status).toBe(404)
@@ -1070,13 +1078,13 @@ test.describe('two-server secure chat', () => {
     // the recovered incarnation through the ordinary control quorum.
     const repromoteOwnerCommit = posted(pageA, CONTROL)
     await openMembers(pageA)
-    await pageA.getByTestId(`chat-group-owner-${bobAddress}`).click()
+    await pageA.getByTestId(`chat-group-owner-${accountKey(bob)}`).click()
     expect((await requireResponseOrUiError(pageA, repromoteOwnerCommit)).ok()).toBe(true)
-    await expect(pageA.getByTestId(`chat-group-member-owner-${bobAddress}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-member-owner-${accountKey(bob)}`)).toBeVisible({ timeout: 90_000 })
     await closeDetails(pageA)
 
     await openMembers(pageB)
-    await expect(pageB.getByTestId(`chat-group-member-owner-${bobAddress}`)).toBeVisible({ timeout: 90_000 })
+    await expect(pageB.getByTestId(`chat-group-member-owner-${accountKey(bob)}`)).toBeVisible({ timeout: 90_000 })
     await closeDetails(pageB)
 
     // Private group policy uses the same exact owner-only approval exchange.
@@ -1176,13 +1184,13 @@ test.describe('two-server secure chat', () => {
     await openMembers(pageB)
     await expect(pageB.getByTestId('chat-group-maximum-plaintext')).toHaveValue('1024', { timeout: 90_000 })
     const administratorRemoveCommit = posted(pageB, CONTROL)
-    await pageB.getByTestId(`chat-group-member-${charlieAddress}`).getByRole('button', { name: /^Remove .* from the group$/ }).click()
+    await pageB.getByTestId(`chat-group-member-${accountKey(charlie)}`).getByRole('button', { name: /^Remove .* from the group$/ }).click()
     expect((await requireResponseOrUiError(pageB, administratorRemoveCommit)).ok()).toBe(true)
-    await expect(pageB.getByTestId(`chat-group-member-${charlieAddress}`)).toHaveCount(0, { timeout: 90_000 })
+    await expect(pageB.getByTestId(`chat-group-member-${accountKey(charlie)}`)).toHaveCount(0, { timeout: 90_000 })
     await closeDetails(pageB)
 
     await openMembers(pageA)
-    await expect(pageA.getByTestId(`chat-group-member-${charlieAddress}`)).toHaveCount(0, { timeout: 90_000 })
+    await expect(pageA.getByTestId(`chat-group-member-${accountKey(charlie)}`)).toHaveCount(0, { timeout: 90_000 })
     await closeDetails(pageA)
 
     let recoverySubmitted = false

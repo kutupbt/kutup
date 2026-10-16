@@ -60,7 +60,7 @@ pub struct DrivePerson {
     /// Their address now, to show (`user@server`).
     pub account: String,
     /// On this server; the keys below are then filled in. For someone on
-    /// another server, look them up through `/api/drive/federation/users`.
+    /// another server, look them up by id (`/api/users/by-id`).
     pub local: bool,
     pub account_incarnation_id: Option<String>,
     /// Their Drive HPKE key, to seal them your profile key.

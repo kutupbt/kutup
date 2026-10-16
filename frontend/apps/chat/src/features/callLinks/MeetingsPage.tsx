@@ -233,7 +233,7 @@ function JoinLink({ url, label, testId }: { url: string; label: string; testId: 
   const { snapshot, self } = useChat()
   return (
     <Button size="sm" asChild>
-      <a href={url} target="_blank" rel="noreferrer" onClick={() => rememberCallName(snapshot.profile?.displayName || self?.account.username || '')} data-testid={testId}>
+      <a href={url} target="_blank" rel="noreferrer" onClick={() => rememberCallName(snapshot.profile?.displayName || self?.address.split('@')[0] || '')} data-testid={testId}>
         <Video />
         {label}
       </a>

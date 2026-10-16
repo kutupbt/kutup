@@ -46,36 +46,29 @@ impl ChatTransport for NativeTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> CoreResult<UserPreKeyBundlesResponse> {
-        self.json::<(), _>(
-            ChatHttpMethod::Get,
-            format!("/chat/users/{}/keys", urlencoding::encode(username)),
-            None,
-        )
-        .await
+    async fn fetch_bundles(&self, account: &str) -> CoreResult<UserPreKeyBundlesResponse> {
+        self.json::<(), _>(ChatHttpMethod::Get, account_path(account, "/keys")?, None)
+            .await
     }
 
     async fn fetch_sync_bundles(
         &self,
-        username: &str,
+        account: &str,
         current_device_id: u32,
     ) -> CoreResult<UserPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
-            format!(
-                "/chat/users/{}/keys?syncDeviceId={current_device_id}",
-                urlencoding::encode(username)
-            ),
+            account_path(account, &format!("/keys?syncDeviceId={current_device_id}"))?,
             None,
         )
         .await
     }
 
-    async fn fetch_manifest(&self, username: &str) -> CoreResult<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV1>> {
         let response = self
             .request(
                 ChatHttpMethod::Get,
-                format!("/chat/users/{}/manifest", urlencoding::encode(username)),
+                account_path(account, "/manifest")?,
                 None,
             )
             .await?;
@@ -148,17 +141,14 @@ impl ChatTransport for NativeTransport {
 
     async fn fetch_manifest_history(
         &self,
-        username: &str,
+        account: &str,
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
     ) -> CoreResult<AccountManifestHistoryPageV1> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
-            format!(
-                "/chat/users/{}/manifest-history?fromSequence={from_sequence}&toSequence={to_sequence}&pageFromSequence={page_from_sequence}",
-                urlencoding::encode(username)
-            ),
+            account_path(account, &format!("/manifest-history?fromSequence={from_sequence}&toSequence={to_sequence}&pageFromSequence={page_from_sequence}"))?,
             None,
         )
         .await
@@ -188,11 +178,11 @@ impl ChatTransport for NativeTransport {
         ensure_success(&response)
     }
 
-    async fn send(&self, username: &str, request: &SendMessagesRequest) -> CoreResult<SendOutcome> {
+    async fn send(&self, account: &str, request: &SendMessagesRequest) -> CoreResult<SendOutcome> {
         let response = self
             .request(
                 ChatHttpMethod::Post,
-                format!("/chat/users/{}/messages", urlencoding::encode(username)),
+                account_path(account, "/messages")?,
                 Some(encode(request)?),
             )
             .await?;
@@ -323,4 +313,16 @@ fn encode<T: Serialize + ?Sized>(value: &T) -> CoreResult<String> {
 fn decode<T: DeserializeOwned>(value: &str) -> CoreResult<T> {
     serde_json::from_str(value)
         .map_err(|error| ChatError::Transport(format!("decode response: {error}")))
+}
+
+/// `/chat/accounts/{accountId}{suffix}` with `server` as a query parameter:
+/// Chat routes by account, never by address (docs/plans/account-ids.md).
+fn account_path(account: &str, suffix: &str) -> CoreResult<String> {
+    let account = kutup_chat_core::parse_account(account)?;
+    let separator = if suffix.contains('?') { '&' } else { '?' };
+    Ok(format!(
+        "/chat/accounts/{}{suffix}{separator}server={}",
+        urlencoding::encode(&account.account_id),
+        urlencoding::encode(&account.server)
+    ))
 }

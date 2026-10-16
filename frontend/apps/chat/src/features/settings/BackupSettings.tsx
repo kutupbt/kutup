@@ -10,7 +10,7 @@ import { cn } from '@kutup/ui/lib/cn'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
-import { groupTitle } from '../../lib/names'
+import { groupTitle, personName } from '../../lib/names'
 import { backupStatusLabel, backupTone } from './backupStatus'
 import { SettingsSection } from './SettingsPage'
 
@@ -97,11 +97,11 @@ export function StorageSettings() {
   const retention = capabilities?.backup?.deliveryMediaRetentionDays
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
   const labelOf = (reference: string) => {
-    if (reference === self!.address) return t('chat.noteToSelf')
+    if (reference === self!.key) return t('chat.noteToSelf')
     const profile = profiles.get(reference)?.displayName
     if (profile) return profile
     const group = snapshot.groups.find((g) => g.request.genesis.conversationId === reference)
-    return group ? groupTitle(reference, t, group.currentGroupInfo) : reference
+    return group ? groupTitle(reference, t, group.currentGroupInfo) : personName(reference, profiles, self!.key, t)
   }
 
   return (

@@ -1,6 +1,7 @@
 import { Plus, Settings, Upload, Users } from 'lucide-react'
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { toast } from 'sonner'
+import { accountKeyOf } from '@kutup/crypto/accountRef'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { useTranslation } from 'react-i18next'
 import { Link, useNavigate } from 'react-router-dom'
@@ -92,7 +93,7 @@ export function HomePanel({ settings = false }: { settings?: boolean }) {
         toast.error(t('home.importEmpty'))
         return
       }
-      const path = await createList(saveFolder, titleOf(imported, file), asPlaces(imported, identity.data.account))
+      const path = await createList(saveFolder, titleOf(imported, file), asPlaces(imported, accountKeyOf(identity.data.accountRef)))
       toast.success(
         imported.skipped > 0
           ? t('home.importedSkipped', { count: imported.places.length, skipped: imported.skipped })

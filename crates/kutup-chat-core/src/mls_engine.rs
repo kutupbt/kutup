@@ -65,21 +65,20 @@ use uuid::Uuid;
 use crate::db::{ChatDb, MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, Pending};
 use crate::error::{ChatError, Result};
 use kutup_chat_proto::{
-    roster_commitment, verify_mls_client_control_history, AccountAddress,
-    AnonymousMlsDeviceEnvelopeV1, AnonymousMlsSubmissionV1, ChatAttachmentDescriptorV1,
-    ChatContent, CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1,
-    CreateMlsConversationRequestV1, FederatedMlsOrderingVoteRequestV1,
-    MlsApplicationSenderPolicyV1, MlsAuthoritySetV1, MlsAuthorityV1, MlsCipherSuiteId,
-    MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
-    MlsConversationDeviceV1, MlsConversationGenesisV1, MlsConversationKindV1,
-    MlsConversationMemberV1, MlsFinalizedControlBlockV1, MlsGroupAuthorizationPolicyV1,
-    MlsGroupControlBodyV1, MlsGroupCryptographicPolicyV1, MlsGroupInfoV1, MlsKeyPackageV1,
-    MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1, MlsMembershipDeliveryV1,
-    MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1, MlsMembershipTransitionV1,
-    MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1, MlsOwnerCandidateV1, MlsOwnerSetV1,
-    MlsOwnerV1, MlsPrivateControlStateV1, RecoverMlsConversationRequestV1,
-    RecoverMlsConversationResponseV1, VisibleMessageExtrasV1, MAX_MLS_DEVICES_PER_ACCOUNT,
-    MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
+    roster_commitment, verify_mls_client_control_history, AccountRef, AnonymousMlsDeviceEnvelopeV1,
+    AnonymousMlsSubmissionV1, ChatAttachmentDescriptorV1, ChatContent,
+    CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1, CreateMlsConversationRequestV1,
+    FederatedMlsOrderingVoteRequestV1, MlsApplicationSenderPolicyV1, MlsAuthoritySetV1,
+    MlsAuthorityV1, MlsCipherSuiteId, MlsClientControlHistoryPageV1, MlsControlActionTypeV1,
+    MlsControlBlockV1, MlsControlProposalV1, MlsConversationDeviceV1, MlsConversationGenesisV1,
+    MlsConversationKindV1, MlsConversationMemberV1, MlsFinalizedControlBlockV1,
+    MlsGroupAuthorizationPolicyV1, MlsGroupControlBodyV1, MlsGroupCryptographicPolicyV1,
+    MlsGroupInfoV1, MlsKeyPackageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
+    MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
+    MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
+    MlsOwnerCandidateV1, MlsOwnerSetV1, MlsOwnerV1, MlsPrivateControlStateV1,
+    RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1, VisibleMessageExtrasV1,
+    MAX_MLS_DEVICES_PER_ACCOUNT, MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
     MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_PRIVATE_CONTROL_EXTENSION_TYPE,
     MLS_PROTOCOL_VERSION,
 };
@@ -707,7 +706,7 @@ fn verify_private_control_accounts<'a>(
     let control_accounts = state
         .roster
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     if device_accounts != control_accounts {
         return Err(ChatError::Trust(
@@ -731,18 +730,18 @@ fn advance_test_private_control<'a>(
         .collect::<BTreeSet<_>>();
     state
         .roster
-        .retain(|member| !removed_accounts.contains(&member.address.canonical()));
+        .retain(|member| !removed_accounts.contains(&member.account.to_string()));
     for identity in additions {
         let (account, _) = parse_device_credential_identity(identity)?;
         if state
             .roster
             .iter()
-            .all(|member| member.address.canonical() != account)
+            .all(|member| member.account.to_string() != account)
         {
             state.roster.push(MlsConversationMemberV1 {
-                address: account
+                account: account
                     .parse()
-                    .map_err(|error: kutup_chat_proto::AddressError| {
+                    .map_err(|error: kutup_crypto::error::CryptoError| {
                         ChatError::Invalid(error.to_string())
                     })?,
                 is_admin: false,
@@ -752,7 +751,7 @@ fn advance_test_private_control<'a>(
     }
     state
         .roster
-        .sort_by_key(|member| member.address.canonical());
+        .sort_by_key(|member| member.account.to_string());
     state.previous_block_hash = if state.height == 0 {
         None
     } else {

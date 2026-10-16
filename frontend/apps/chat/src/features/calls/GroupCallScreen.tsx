@@ -27,7 +27,7 @@ function Screen({ call }: { call: GroupCallState }) {
     participant.local
       ? t('chat.you')
       : participant.address
-        ? personName(participant.address, profiles, self?.address ?? '', t)
+        ? personName(participant.address, profiles, self?.key ?? '', t)
         : t('chat.calls.unknownParticipant')
   const status = call.phase === 'connecting'
     ? t('chat.calls.connecting')

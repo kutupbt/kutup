@@ -1,8 +1,8 @@
 import axios from 'axios'
-import { canonicalAccountAddress, parseAccountAddress } from './identity'
+import { accountKey, parseAccount } from './identity'
 import type { MlsConversationService } from './mls-service'
 import type {
-  AccountAddress,
+  AccountRef,
   ChatTransportPort,
   GroupJoinRequest,
   InviteLinkCrypto,
@@ -124,12 +124,12 @@ export class InviteLinkService {
     private readonly mls: MlsConversationService,
     private readonly transport: ChatTransportPort,
     private readonly crypto: InviteLinkCrypto,
-    private readonly self: AccountAddress & { server: string },
+    private readonly self: AccountRef,
     private readonly storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null,
   ) {}
 
   private get selfAddress(): string {
-    return canonicalAccountAddress(this.self)
+    return accountKey(this.self)
   }
 
   private async call(host: string, operation: InviteLinkOperation): Promise<InviteLinkResult> {
@@ -235,7 +235,7 @@ export class InviteLinkService {
     const link = conversation.currentGroupInfo?.inviteLink
     const entry = this.waiting.get(conversationId)?.find(item => item.requester === requester)
     if (!link || !entry) return
-    const address = parseAccountAddress(requester)
+    const address = parseAccount(requester)
     if (!address) return
     if (approve && !this.isMember(conversation, requester)) {
       await this.mls.addMember(conversationId, address)
@@ -256,7 +256,7 @@ export class InviteLinkService {
 
   private isMember(conversation: LocalMlsConversationRecord, address: string): boolean {
     return conversation.currentRoster.some(
-      member => canonicalAccountAddress(member.address) === address,
+      member => accountKey(member.account) === address,
     )
   }
 
@@ -284,7 +284,7 @@ export class InviteLinkService {
       const conversationId = conversation.request.genesis.conversationId
       const link = conversation.currentGroupInfo?.inviteLink
       const self = conversation.currentRoster.find(
-        member => canonicalAccountAddress(member.address) === this.selfAddress,
+        member => accountKey(member.account) === this.selfAddress,
       )
       if (conversation.status !== 'active' || conversation.left || !link || !self?.isAdmin) continue
       active.add(conversationId)
@@ -329,7 +329,7 @@ export class InviteLinkService {
     }
     const admins = conversation.currentRoster
       .filter(member => member.isAdmin)
-      .map(member => canonicalAccountAddress(member.address))
+      .map(member => accountKey(member.account))
       .sort()
     const firstAdmin = admins[0] === this.selfAddress
     const waiting = new Map<string, GroupJoinRequest & { requestIds: string[] }>()
@@ -341,7 +341,7 @@ export class InviteLinkService {
         if (request.requester.server !== entry.originDomain) {
           throw new Error('an invite request names an account of another server')
         }
-        requester = canonicalAccountAddress(request.requester)
+        requester = accountKey(request.requester)
       } catch (error) {
         console.warn('chat: turning away a malformed group link request', error)
         await this.decideAll(link, [entry.requestId], false)
@@ -368,7 +368,7 @@ export class InviteLinkService {
         // One administrator adds, so two do not race to commit the same
         // addition; another steps in when that one is away.
         if (!firstAdmin && Date.now() - entry.createdAtMs < FALLBACK_ADDER_AFTER_MS) continue
-        const address = parseAccountAddress(requester)
+        const address = parseAccount(requester)
         if (!address) continue
         try {
           await this.mls.addMember(conversationId, address)
@@ -449,7 +449,7 @@ export class InviteLinkService {
   async requestToJoin(lookup: InviteLinkLookup): Promise<OwnJoinRequest> {
     const statusToken = this.crypto.inviteStatusToken()
     const request = this.crypto.inviteLinkSealRequest(lookup.link, {
-      requester: { username: this.self.username, server: this.self.server },
+      requester: this.self,
       createdAtMs: Date.now(),
     })
     const result = await this.call(lookup.link.host, {

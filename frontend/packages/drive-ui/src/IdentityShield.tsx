@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useIdentityStatus, useIsKutupAccount } from '@kutup/drive-core/identityStatus'
 import { cn } from '@kutup/ui/lib/cn'
-import { formerlyLabel } from './formerly'
+import { personLabel } from './personLabel'
 import { VerifyPersonDialog } from './IdentityWarning'
 
 /**
@@ -28,13 +28,12 @@ export function IdentityShield({ address, name, className }: { address: string; 
   if (!kutup || !kind || kind === 'unknown') return null
   const who = name || account
   const verified = (status.data?.kind === 'ok' || status.data?.kind === 'renamed') && status.data.verified
-  const doubt = kind === 'changed' || kind === 'invalid'
+  const doubt = kind === 'changed' || kind === 'invalid' || kind === 'someoneElse'
   const state = doubt ? kind : kind === 'unproven' ? 'unproven' : verified ? 'verified' : 'unverified'
-  const formerly = status.data?.kind === 'ok' ? status.data.formerly : undefined
-  const label = formerlyLabel(
+  const label = personLabel(
     t,
-    doubt ? t(`identityCheck.${kind}.title`, { name: who }) : verified ? t('identityCheck.verified', { name: who }) : t('identityCheck.verify', { name: who }),
-    formerly,
+    doubt ? t(`identityCheck.${kind}.title`, { name: who, account }) : verified ? t('identityCheck.verified', { name: who }) : t('identityCheck.verify', { name: who }),
+    status.data,
   )
   return (
     <>

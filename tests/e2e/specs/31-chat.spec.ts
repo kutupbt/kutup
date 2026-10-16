@@ -130,7 +130,7 @@ test.describe('Signal-backed chat', () => {
     // with the uniform 404 and never reaches Bob's device.
     const refused: number[] = []
     pageA.on('response', (response) => {
-      if (response.request().method() === 'POST' && /\/api\/chat\/anonymous\/users\/[^/]+\/messages$/.test(new URL(response.url()).pathname) && response.status() === 404) refused.push(Date.now())
+      if (response.request().method() === 'POST' && /^\/api\/chat\/anonymous\/accounts\/[0-9a-f-]{36}\/messages$/.test(new URL(response.url()).pathname) && response.status() === 404) refused.push(Date.now())
     })
     const whileBlocked = `while-blocked-${tag}`
     const sentAt = Date.now()

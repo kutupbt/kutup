@@ -18,7 +18,7 @@ export function ConversationBar({ model }: { model: ConversationModel }) {
   const navigate = useNavigate()
   const { service } = useChat()
   const [busy, setBusy] = useState(false)
-  const peer = model.address
+  const peer = model.peer
 
   async function update(action: 'accept' | 'reject' | 'block' | 'unblock') {
     if (!service || !peer) return

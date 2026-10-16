@@ -55,36 +55,39 @@ fn invitation_feedback_has_one_canonical_vector() {
         protocol_version: MLS_INVITATION_FEEDBACK_VERSION,
         conversation_id: Uuid::parse_str("4cc2114c-8015-4e78-9af8-2f5f71c18cf1").unwrap(),
         incarnation: 3,
-        member: "bob@b.example".parse().unwrap(),
+        member: "aci:b0b00000-0000-4000-8000-000000000002@b.example"
+            .parse()
+            .unwrap(),
         invited_epoch: 9,
         decision: MlsInvitationFeedbackDecisionV1::Rejected,
         decided_at: 1_785_249_600,
     };
-    let expected = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob","server":"b.example"},"invitedEpoch":9,"decision":"rejected","decidedAt":1785249600}"#;
+    let expected = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"server":"b.example","accountId":"b0b00000-0000-4000-8000-000000000002"},"invitedEpoch":9,"decision":"rejected","decidedAt":1785249600}"#;
     assert_eq!(feedback.canonical_bytes().unwrap(), expected);
     assert_eq!(
         feedback.feedback_digest().unwrap(),
-        "93a7802652346c4dacc3964ef7a123c82e2db750c1f2b1e6438e8595e592bbb0"
+        "afb376f4099eee8848be906d252d21ad5c7abc2f6cddde2dabb1afae0062c771"
     );
 
     feedback.decision = MlsInvitationFeedbackDecisionV1::Accepted;
-    let accepted = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob","server":"b.example"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
+    let accepted = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"server":"b.example","accountId":"b0b00000-0000-4000-8000-000000000002"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
     assert_eq!(feedback.canonical_bytes().unwrap(), accepted);
     assert_eq!(
         feedback.feedback_digest().unwrap(),
-        "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
+        "bbad61281b8118f658a8457f6bb9958ce8a10ad70d3bb5700de704f53e2be4d3"
     );
 
-    // The bare-username member encoding is refused.
-    let bare = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
-    assert!(serde_json::from_slice::<MlsInvitationFeedbackV1>(bare).is_err());
-    assert!("bob".parse::<AccountAddress>().is_err());
+    // A member named by a name, not an account, is refused.
+    let named = br#"{"protocolVersion":1,"conversationId":"4cc2114c-8015-4e78-9af8-2f5f71c18cf1","incarnation":3,"member":{"username":"bob","server":"b.example"},"invitedEpoch":9,"decision":"accepted","decidedAt":1785249600}"#;
+    assert!(serde_json::from_slice::<MlsInvitationFeedbackV1>(named).is_err());
     // Another member changes the digest.
     let mut other = feedback;
-    other.member = "carol@b.example".parse().unwrap();
+    other.member = "aci:ca201000-0000-4000-8000-000000000004@b.example"
+        .parse()
+        .unwrap();
     assert_ne!(
         other.feedback_digest().unwrap(),
-        "9f1413d1f191592bd7a4e7a883aa9a867f2646d70c6fbe1b3c93675fe046d6f5"
+        "bbad61281b8118f658a8457f6bb9958ce8a10ad70d3bb5700de704f53e2be4d3"
     );
 }
 
@@ -131,7 +134,9 @@ fn owner_candidate_has_a_stable_signing_vector_and_sender_binding() {
         protocol_version: MLS_PROTOCOL_VERSION,
         conversation_id: Uuid::from_u128(0x1234),
         incarnation: 7,
-        account: "alice@alpha.example".parse().unwrap(),
+        account: "aci:a11ce000-0000-4000-8000-000000000001@alpha.example"
+            .parse()
+            .unwrap(),
         owner_id: hex::encode(Sha256::digest(public_key)),
         public_key: base64::engine::general_purpose::STANDARD.encode(public_key),
         created_at: 1_700_000_000,
@@ -140,7 +145,7 @@ fn owner_candidate_has_a_stable_signing_vector_and_sender_binding() {
     let signing_bytes = candidate.signing_bytes().unwrap();
     assert_eq!(
         hex::encode(&signing_bytes),
-        "6b757475702d6d6c732d6f776e65722d63616e6469646174652d763100000100000000000000000000000000001234000000000000000700000013616c69636540616c7068612e6578616d706c6500000040646263323938323531633531333231623732363665373864316331353163326236326166663863623935623239333039366433343633303138353434666163650000002c2f52636b4f4671677831746b2b336a4e59432b68325a4839362f64724538574f31774c71794458703968673d000000006553f100"
+        "6b757475702d6d6c732d6f776e65722d63616e6469646174652d7631000001000000000000000000000000000012340000000000000007000000366163693a61313163653030302d303030302d343030302d383030302d30303030303030303030303140616c7068612e6578616d706c6500000040646263323938323531633531333231623732363665373864316331353163326236326166663863623935623239333039366433343633303138353434666163650000002c2f52636b4f4671677831746b2b336a4e59432b68325a4839362f64724538574f31774c71794458703968673d000000006553f100"
     );
     candidate.signature =
         base64::engine::general_purpose::STANDARD.encode(signer.sign(&signing_bytes).to_bytes());
@@ -154,7 +159,9 @@ fn owner_candidate_has_a_stable_signing_vector_and_sender_binding() {
             .unwrap(),
         body
     );
-    candidate.account = "mallory@alpha.example".parse().unwrap();
+    candidate.account = "aci:3a110000-0000-4000-8000-000000000005@alpha.example"
+        .parse()
+        .unwrap();
     assert!(candidate.verify().is_err());
 }
 
@@ -278,12 +285,16 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
     };
     let next_roster = vec![
         MlsConversationMemberV1 {
-            address: "alice@a0.example".parse().unwrap(),
+            account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+                .parse()
+                .unwrap(),
             is_admin: true,
             owner_id: Some(owner.owner_id.clone()),
         },
         MlsConversationMemberV1 {
-            address: "bobby@a1.example".parse().unwrap(),
+            account: "aci:b0bb1000-0000-4000-8000-000000000003@a1.example"
+                .parse()
+                .unwrap(),
             is_admin: false,
             owner_id: None,
         },
@@ -356,7 +367,7 @@ fn owner_approval_request_has_one_exact_private_transition_vector() {
     request.validate().unwrap();
     assert_eq!(
         request.request_hash().unwrap(),
-        "7fa97d088d2bd358b895f4f267bcc6f0a41c0d38ac49a1f0cf1f757c94292353"
+        "b8f86d8ecea4bfc1da00b2fa574b9aac78ac583bb835871a2808310c91c3d8d6"
     );
     let encoded = serde_json::to_vec(&request).unwrap();
     let decoded: MlsOwnerApprovalRequestV1 = serde_json::from_slice(&encoded).unwrap();
@@ -443,12 +454,16 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
     };
     let members = vec![
         MlsConversationMemberV1 {
-            address: "alice@a0.example".parse().unwrap(),
+            account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+                .parse()
+                .unwrap(),
             is_admin: true,
             owner_id: Some(owner.owner_id.clone()),
         },
         MlsConversationMemberV1 {
-            address: "bob@a1.example".parse().unwrap(),
+            account: "aci:b0b00000-0000-4000-8000-000000000002@a1.example"
+                .parse()
+                .unwrap(),
             is_admin: false,
             owner_id: None,
         },
@@ -485,11 +500,11 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
             next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
             local_members_after: members
                 .iter()
-                .filter(|member| member.address.server == destination)
+                .filter(|member| member.account.server == destination)
                 .cloned()
                 .collect(),
             local_devices_after: vec![MlsConversationDeviceV1 {
-                address: recipient.parse().unwrap(),
+                account: recipient.parse().unwrap(),
                 device_id,
             }],
             envelopes: vec![MlsMembershipEnvelopeV1 {
@@ -501,11 +516,21 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
             }],
         }
     };
-    let mut creator_delivery = make_delivery("a0.example", "alice@a0.example", 1, 0x7333);
+    let mut creator_delivery = make_delivery(
+        "a0.example",
+        "aci:a11ce000-0000-4000-8000-000000000001@a0.example",
+        1,
+        0x7333,
+    );
     creator_delivery.envelopes.clear();
     let deliveries = vec![
         creator_delivery,
-        make_delivery("a1.example", "bob@a1.example", 2, 0x7334),
+        make_delivery(
+            "a1.example",
+            "aci:b0b00000-0000-4000-8000-000000000002@a1.example",
+            2,
+            0x7334,
+        ),
     ];
     let plan = MlsIncarnationRecoveryPlanV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
@@ -578,7 +603,9 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
     recovery.verify(&owners).unwrap();
     let request = RecoverMlsConversationRequestV1 {
         recovery: recovery.clone(),
-        creator: "alice@a0.example".parse().unwrap(),
+        creator: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+            .parse()
+            .unwrap(),
         creator_device_id: 1,
         members,
         deliveries,
@@ -586,7 +613,7 @@ fn incarnation_recovery_is_owner_bound_append_only_and_destination_private() {
     request.validate_shape().unwrap();
     assert_eq!(
         recovery_digest,
-        "b24eaf5befedb52be1e43f25da2a419ee798d6126466549360331640ecdfa5ff"
+        "b8bb1490a0c30f1ecf0749899fae4f832a191dcc7c71d6a5559b840dcdd8003f"
     );
 
     let mut substituted = request.clone();
@@ -617,12 +644,16 @@ fn direct_roster_requires_exact_participant_authorities() {
     let (authorities, _) = authority_set(2);
     let members = vec![
         MlsConversationMemberV1 {
-            address: "alice@a0.example".parse().unwrap(),
+            account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+                .parse()
+                .unwrap(),
             is_admin: false,
             owner_id: None,
         },
         MlsConversationMemberV1 {
-            address: "bobby@a1.example".parse().unwrap(),
+            account: "aci:b0bb1000-0000-4000-8000-000000000003@a1.example"
+                .parse()
+                .unwrap(),
             is_admin: false,
             owner_id: None,
         },
@@ -670,12 +701,16 @@ fn direct_roster_requires_exact_participant_authorities() {
 fn membership_transition_commits_destination_private_snapshots() {
     let conversation_id = Uuid::from_u128(71);
     let alice = MlsConversationMemberV1 {
-        address: "alice@a0.example".parse().unwrap(),
+        account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+            .parse()
+            .unwrap(),
         is_admin: true,
         owner_id: None,
     };
     let bob = MlsConversationMemberV1 {
-        address: "bobby@a1.example".parse().unwrap(),
+        account: "aci:b0bb1000-0000-4000-8000-000000000003@a1.example"
+            .parse()
+            .unwrap(),
         is_admin: false,
         owner_id: None,
     };
@@ -692,7 +727,7 @@ fn membership_transition_commits_destination_private_snapshots() {
         next_participant_domains: vec!["a0.example".into(), "a1.example".into()],
         local_members_after: vec![alice.clone()],
         local_devices_after: vec![MlsConversationDeviceV1 {
-            address: alice.address,
+            account: alice.account,
             device_id: 1,
         }],
         envelopes: Vec::new(),
@@ -701,7 +736,7 @@ fn membership_transition_commits_destination_private_snapshots() {
         destination: "a1.example".into(),
         local_members_after: vec![bob.clone()],
         local_devices_after: vec![MlsConversationDeviceV1 {
-            address: bob.address,
+            account: bob.account,
             device_id: 1,
         }],
         ..delivery_a.clone()
@@ -733,11 +768,11 @@ fn membership_transition_commits_destination_private_snapshots() {
     delivery_b.verify_transition(&transition).unwrap();
     assert_eq!(
         delivery_a.delivery_digest().unwrap(),
-        "8d0c124cb625fc7b8cb84717a516205a7c53701808da20083e44150af8b98a7d"
+        "12b46637e74a127e4718136db8944ab86b69b498845ef22dd1461a050a495e23"
     );
     assert_eq!(
         transition.transition_digest().unwrap(),
-        "46b88215946f13c40857975162ead1ff6073a37df995b20745d2a2d96530802e"
+        "740ccd0ad5dc9a2e70e1030d9d8a6478decc0487032fdbe128288204e0cfeb3e"
     );
     assert_eq!(
         serde_json::to_string(&MlsControlActionTypeV1::DeviceSync).unwrap(),
@@ -808,17 +843,23 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
     let proposal_id = Uuid::from_u128(82);
     let (authorities, authority_keys) = authority_set(2);
     let alice = MlsConversationMemberV1 {
-        address: "alice@a0.example".parse().unwrap(),
+        account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+            .parse()
+            .unwrap(),
         is_admin: true,
         owner_id: None,
     };
     let bob = MlsConversationMemberV1 {
-        address: "bobby@a1.example".parse().unwrap(),
+        account: "aci:b0bb1000-0000-4000-8000-000000000003@a1.example"
+            .parse()
+            .unwrap(),
         is_admin: false,
         owner_id: None,
     };
     let carol = MlsConversationMemberV1 {
-        address: "carol@a2.example".parse().unwrap(),
+        account: "aci:ca201000-0000-4000-8000-000000000004@a2.example"
+            .parse()
+            .unwrap(),
         is_admin: false,
         owner_id: None,
     };
@@ -839,7 +880,7 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
         ],
         local_members_after: vec![alice.clone()],
         local_devices_after: vec![MlsConversationDeviceV1 {
-            address: alice.address,
+            account: alice.account,
             device_id: 1,
         }],
         envelopes: Vec::new(),
@@ -848,7 +889,7 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
         destination: "a1.example".into(),
         local_members_after: vec![bob.clone()],
         local_devices_after: vec![MlsConversationDeviceV1 {
-            address: bob.address,
+            account: bob.account,
             device_id: 1,
         }],
         ..delivery_a0.clone()
@@ -857,7 +898,7 @@ fn new_participant_bootstrap_requires_complete_qc_history_and_private_digest() {
         destination: "a2.example".into(),
         local_members_after: vec![carol.clone()],
         local_devices_after: vec![MlsConversationDeviceV1 {
-            address: carol.address,
+            account: carol.account,
             device_id: 1,
         }],
         ..delivery_a0.clone()
@@ -1257,7 +1298,9 @@ fn anonymous_submission_has_stable_aad_and_hides_conversation_id() {
     let encapsulation_key = [4u8; 32];
     let submission = AnonymousMlsSubmissionV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
-        recipient: "alice@example.org".parse().unwrap(),
+        recipient: "aci:a11ce000-0000-4000-8000-000000000001@example.org"
+            .parse()
+            .unwrap(),
         send_id: Uuid::from_u128(9),
         capability: base64::engine::general_purpose::STANDARD.encode([7u8; 16]),
         suite: MlsAnonymousDeliverySuiteV1::DhKemX25519HkdfSha256ChaCha20Poly1305,
@@ -1280,7 +1323,9 @@ fn anonymous_submission_has_stable_aad_and_hides_conversation_id() {
 fn anonymous_key_package_request_has_no_server_proof_cursor() {
     let request = AnonymousMlsKeyPackageRequestV1 {
         protocol_version: MLS_PROTOCOL_VERSION,
-        recipient: "alice@example.org".parse().unwrap(),
+        recipient: "aci:a11ce000-0000-4000-8000-000000000001@example.org"
+            .parse()
+            .unwrap(),
         capability: base64::engine::general_purpose::STANDARD.encode([7u8; 16]),
     };
     request.validate().unwrap();
@@ -1318,11 +1363,20 @@ fn mailbox_structurally_hides_anonymous_conversation_metadata() {
 #[test]
 fn group_capability_binds_epoch_and_recipient() {
     let conversation_id = Uuid::from_u128(3);
-    let alice: AccountAddress = "alice@example.org".parse().unwrap();
+    let alice: AccountRef = "aci:a11ce000-0000-4000-8000-000000000001@example.org"
+        .parse()
+        .unwrap();
+    let bob: AccountRef = "aci:b0b00000-0000-4000-8000-000000000002@example.org"
+        .parse()
+        .unwrap();
     let first = derive_group_delivery_capability(&[9; 32], conversation_id, 1, 5, &alice).unwrap();
     let second = derive_group_delivery_capability(&[9; 32], conversation_id, 1, 6, &alice).unwrap();
     assert_ne!(first, second);
     assert_eq!(first.len(), 16);
+    assert_ne!(
+        first,
+        derive_group_delivery_capability(&[9; 32], conversation_id, 1, 5, &bob).unwrap()
+    );
 }
 
 #[test]
@@ -1386,7 +1440,9 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
         required_quorum: 1,
     };
     let roster = vec![MlsConversationMemberV1 {
-        address: "alice@a0.example".parse().unwrap(),
+        account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+            .parse()
+            .unwrap(),
         is_admin: true,
         owner_id: Some(owner_id),
     }];
@@ -1445,11 +1501,11 @@ fn private_control_and_client_history_have_stable_canonical_vectors() {
     );
     assert_eq!(
         hex::encode(Sha256::digest(&private_bytes)),
-        "ba5cccaa3fe547d0afe5b1d2e6c6f72c182345e977fde1c383629b538b176ee5"
+        "e1ad0a20f27d39537149ac260d84c192e4f365882170b9051016ea51b6296691"
     );
     assert_eq!(
         hex::encode(Sha256::digest(&page_bytes)),
-        "6a368a890586365f915fe104b035bd32d3ed2b59ad694e96f38edaf56cfd24aa"
+        "f96595e49f2efd9f75166425d4e26e9753491360e3f3a111af1242f85f407a3a"
     );
     let pretty = serde_json::to_vec_pretty(&page).unwrap();
     assert!(MlsClientControlHistoryPageV1::from_canonical_bytes(&pretty).is_err());
@@ -1504,7 +1560,9 @@ fn client_control_history_replays_exactly_across_page_boundaries() {
         required_quorum: 1,
     };
     let roster = vec![MlsConversationMemberV1 {
-        address: "alice@a0.example".parse().unwrap(),
+        account: "aci:a11ce000-0000-4000-8000-000000000001@a0.example"
+            .parse()
+            .unwrap(),
         is_admin: true,
         owner_id: Some(owner_id),
     }];

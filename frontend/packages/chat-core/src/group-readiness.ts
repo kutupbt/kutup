@@ -1,4 +1,4 @@
-import { canonicalAccountAddress } from './identity'
+import { accountKey } from './identity'
 import type {
   LocalMlsConversationRecord,
   MlsInvitationFeedback,
@@ -22,7 +22,7 @@ export function mlsGroupInvitationReadiness(
   selfAddress: string | null,
 ): MlsGroupInvitationReadiness {
   const self = group.currentRoster.find(
-    member => canonicalAccountAddress(member.address) === selfAddress,
+    member => accountKey(member.account) === selfAddress,
   )
   if (!self?.isAdmin) return { pending: [], refused: [], blocksSending: false }
 
@@ -32,7 +32,7 @@ export function mlsGroupInvitationReadiness(
       entry.conversationId !== group.request.genesis.conversationId
       || entry.incarnation !== group.request.genesis.incarnation
     ) continue
-    const address = canonicalAccountAddress(entry.member)
+    const address = accountKey(entry.member)
     const previous = decisions.get(address)
     if (!previous || entry.invitedEpoch > previous.invitedEpoch) {
       decisions.set(address, entry)
@@ -42,7 +42,7 @@ export function mlsGroupInvitationReadiness(
   const pending: string[] = []
   const refused: string[] = []
   for (const member of group.currentRoster) {
-    const address = canonicalAccountAddress(member.address)
+    const address = accountKey(member.account)
     if (address === selfAddress) continue
     const joinedEpoch = group.memberJoinedEpochs.get(address)
     if (

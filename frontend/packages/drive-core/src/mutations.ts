@@ -19,7 +19,7 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
 import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
-import { confirmRecipient, recipientError } from './identityPins'
+import { confirmRecipient, lookupAddress } from './identityPins'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
 export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
@@ -187,23 +187,6 @@ export interface ShareInput {
 export type ShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
 
 /** Who an address leads to now (server-asserted): their account and keys. */
-interface LocalRecipient {
-  userId: string
-  server: string
-  accountId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
-interface RemoteRecipient {
-  server: string
-  accountId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
 /**
  * Share a folder by email (someone on this server) or `user@other-server`
  * (federation). The folder key is sealed to the recipient's Drive key and
@@ -231,44 +214,29 @@ export function useShareFolder() {
         recipientIncarnationId: incarnationId,
       })
 
-    let local: LocalRecipient | null = null
-    if (recipient.includes('@')) {
-      try {
-        local = (await api.get<LocalRecipient>(`/users/by-address/${encodeURIComponent(recipient)}`)).data
-      } catch (error) {
-        const status = (error as { response?: { status?: number } }).response?.status
-        // A name its person left: `RecipientRenamed`, with where they are now.
-        if (status !== 404) throw await recipientError(me, recipient, error)
-      }
-    }
-    if (local) {
-      await confirmRecipient(me, local.account, { driveHpkePublicKey: local.driveHpkePublicKey, incarnationId: local.accountIncarnationId }, input.identityConfirmed)
+    // `user@server`, here or on another Kutup server: one lookup either way.
+    const at = recipient.lastIndexOf('@')
+    const server = recipient.slice(at + 1).toLowerCase()
+    if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
+    // A name its person left throws `RecipientRenamed`, with where they are now.
+    const found = await lookupAddress(me, recipient)
+    // An account lives on the server of its address.
+    if (!found || found.server !== server) throw new RecipientNotFound()
+    // Checked by the address as typed, and sealed to exactly this answer.
+    await confirmRecipient(me, recipient, found, input.identityConfirmed)
+    if (found.server === me.accountRef.server) {
+      const local = found
       const namedShareEnvelope = await seal(
         local.driveHpkePublicKey,
         { server: local.server, accountId: local.accountId },
         local.accountIncarnationId,
       )
-      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.userId, namedShareEnvelope, ...permissions })
+      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.accountId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
     }
 
-    // Not an account here: `user@server` on another Kutup server.
-    const at = recipient.lastIndexOf('@')
-    const username = recipient.slice(0, at)
-    const server = recipient.slice(at + 1).toLowerCase()
-    if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-    let remote: RemoteRecipient
-    try {
-      remote = (
-        await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
-      ).data
-    } catch (error) {
-      const status = (error as { response?: { status?: number } }).response?.status
-      if (status === 404) throw new RecipientNotFound()
-      throw await recipientError(me, recipient, error)
-    }
-    await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
-    if (remote.server !== server) throw new RecipientNotFound()
+    // An account on another Kutup server.
+    const remote = found
     const namedShareEnvelope = await seal(
       remote.driveHpkePublicKey,
       { server: remote.server, accountId: remote.accountId },

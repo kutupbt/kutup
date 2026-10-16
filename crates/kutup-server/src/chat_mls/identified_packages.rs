@@ -40,16 +40,7 @@ pub(crate) async fn get_identified_key_packages(
         .as_ref()
         .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?;
     let requester_user_id = trusted_uuid(&auth.user_id)?;
-    let requester_username: Option<String> =
-        sqlx::query_scalar("SELECT username FROM users WHERE id = $1 AND is_active = true")
-            .bind(requester_user_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let requester = kutup_chat_proto::AccountAddress::federated(
-        &requester_username.ok_or_else(|| AppError::unauthorized("unauthorized"))?,
-        federation.server_name(),
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
+    let requester = crate::account_ids::local(federation.server_name(), requester_user_id)?;
     let incarnation = i64::try_from(request.incarnation)
         .map_err(|_| AppError::bad_request("MLS incarnation is outside the supported range"))?;
 
@@ -85,13 +76,13 @@ pub(crate) async fn get_identified_key_packages(
                 FROM chat_mls_local_members m
                 JOIN users u ON u.id = m.user_id
                 WHERE m.conversation_id = $1 AND m.incarnation = $2
-                  AND u.id = kutup_current_user($3) AND u.is_active = true
+                  AND u.id = $3 AND u.is_active = true
                   AND m.removed_epoch IS NULL AND m.membership_status = 'active'
              )",
         )
         .bind(request.conversation_id)
         .bind(incarnation)
-        .bind(&request.recipient.username)
+        .bind(crate::account_ids::id_of(&request.recipient)?)
         .fetch_one(&state.pool)
         .await?;
     if may_claim_membership_packages.is_none()
@@ -236,7 +227,7 @@ pub(crate) async fn federated_get_identified_key_packages(
 
 async fn claim_local_identified_key_packages(
     state: &AppState,
-    requester: &kutup_chat_proto::AccountAddress,
+    requester: &kutup_chat_proto::AccountRef,
     request: &IdentifiedMlsKeyPackageRequestV1,
     limits: &kutup_chat_proto::MlsAbuseLimitsV1,
 ) -> AppResult<MlsKeyPackageBundleV1> {
@@ -245,9 +236,9 @@ async fn claim_local_identified_key_packages(
         "SELECT u.id, m.version
          FROM users u
          JOIN chat_device_manifests m ON m.user_id = u.id
-         WHERE u.id = (SELECT user_id FROM account_names WHERE folded = kutup_fold($1) AND user_id IS NOT NULL) AND u.is_active = true",
+         WHERE u.id = $1 AND u.is_active = true",
     )
-    .bind(&request.recipient.username)
+    .bind(crate::account_ids::id_of(&request.recipient)?)
     .fetch_optional(&state.pool)
     .await?;
     let Some((recipient_user_id, manifest_version)) = recipient else {
@@ -261,12 +252,7 @@ async fn claim_local_identified_key_packages(
         "identified_bundle",
         scoped_digest(
             b"kutup/mls/rate/identified-bundle/v1",
-            format!(
-                "{}\0{}",
-                requester.canonical(),
-                request.recipient.canonical()
-            )
-            .as_bytes(),
+            format!("{}\0{}", requester, request.recipient).as_bytes(),
         ),
         60,
         limits.capability_bundle_requests_per_minute.into(),

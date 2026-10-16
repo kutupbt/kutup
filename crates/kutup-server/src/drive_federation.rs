@@ -48,20 +48,19 @@ pub(crate) const MAX_LIST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_DRIVE_OBJECT_BYTES: usize = 10 * 1024 * 1024 * 1024;
 const MAX_MULTIPART_FIELD_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Debug, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteDriveUserQuery {
-    pub server: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RemoteDriveUserResponse {
-    /// The address asked for, server-asserted: a lookup handle.
+/// An account and its keys, as every identity lookup answers it, here or on
+/// its server (`/api/users/by-address`, `/api/users/by-id`, and the signed
+/// federated lookups): one shape, so clients never tell local from remote.
+pub struct AccountLookupResponse {
+    /// The name the account goes by now on `server`, server-asserted: a
+    /// lookup handle and a label, never an identity.
     pub username: String,
     pub server: String,
     /// Who it is: the permanent account id on `server`.
     pub account_id: String,
+    /// `username@server`: the label shown.
     pub account: String,
     pub drive_hpke_public_key: String,
     pub account_incarnation_id: String,
@@ -253,7 +252,7 @@ pub(crate) fn canonical_domain(domain: &str) -> AppResult<&str> {
 
 /// A peer's account answer's keys: canonical, and its incarnation the one
 /// its authority key stands for.
-pub(crate) fn remote_keys_consistent(remote: &RemoteDriveUserResponse) -> bool {
+pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
     let Ok(authority) = canonical_public_key(&remote.account_authority_public_key) else {
         return false;
     };
@@ -392,35 +391,28 @@ fn stable_mutation_request_id(operation: &str, scope: &[&[u8]]) -> String {
 
 /// Local authenticated lookup of a remote Drive account through the pinned,
 /// signed federation transport.
-#[utoipa::path(
-    get,
-    path = "/api/drive/federation/users/{username}",
-    tag = "drive federation",
-    security(("BearerAuth" = [])),
-    params(
-        ("username" = String, Path, description = "Remote canonical username"),
-        ("server" = String, Query, description = "Remote canonical server domain")
-    ),
-    responses(
-        (status = 200, description = "Authenticated remote Drive account", body = RemoteDriveUserResponse),
-        (status = 404, description = "Remote account not found")
-    )
-)]
-pub async fn fetch_remote_user(
-    State(state): State<AppState>,
-    _user: AuthUser,
-    Path(username): Path<String>,
-    Query(query): Query<RemoteDriveUserQuery>,
-) -> AppResult<Response> {
-    let username = canonical_username(&username)?;
-    let server = canonical_domain(&query.server)?;
-    // An address on this server is not a remote one. Accounts here are found
-    // by the local lookup (`/api/users/by-address`), which a client tries
-    // first; reaching this with our own name means there is no such account.
+/// Another server's account by its name there (`GET /api/users/by-address`,
+/// the one place a name becomes an account: docs/plans/account-ids.md),
+/// asked of that server through federation. Each fetch counts against the
+/// caller's limit for that server.
+pub(crate) async fn remote_user_by_name(
+    state: &AppState,
+    caller: &str,
+    username: &str,
+    server: &str,
+) -> AppResult<AccountLookupResponse> {
+    let username = canonical_username(username)?;
+    let server = canonical_domain(server)?;
     if server == state.config.chat_server_name {
-        return Err(AppError::not_found("remote Drive user not found"));
+        return Err(AppError::not_found("user not found"));
     }
-    let federation = configured_stack(&state)?;
+    if !crate::ratelimit::ACCOUNT_PEER_FETCHES.allow(&format!("{caller}|{server}")) {
+        return Err(
+            AppError::too_many_requests("too many lookups of that server")
+                .with_details(serde_json::json!({ "code": "rateLimited" })),
+        );
+    }
+    let federation = configured_stack(state)?;
     let response = federation
         .send(
             server,
@@ -437,13 +429,13 @@ pub async fn fetch_remote_user(
         .map_err(gateway_error)?;
     // A held name there: where the account went (crate::remote_renames).
     if let Some(renamed) =
-        crate::remote_renames::relay(&state, server, &format!("{username}@{server}"), &response)
+        crate::remote_renames::relay(state, server, &format!("{username}@{server}"), &response)
             .await
     {
         return Err(renamed);
     }
     if response.status == StatusCode::NOT_FOUND {
-        return Err(AppError::not_found("remote Drive user not found"));
+        return Err(AppError::not_found("user not found"));
     }
     if response.status != StatusCode::OK {
         return Err(AppError::new(
@@ -451,7 +443,7 @@ pub async fn fetch_remote_user(
             format!("remote Drive directory returned {}", response.status),
         ));
     }
-    let remote: RemoteDriveUserResponse = serde_json::from_slice(&response.body)
+    let remote: AccountLookupResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote Drive user"))?;
     // Another spelling of the asked name is the same account (one per
     // folded name); the answer's spelling is the one it goes by.
@@ -466,7 +458,7 @@ pub async fn fetch_remote_user(
             "remote Drive directory returned the wrong account",
         ));
     }
-    Ok(Json(remote).into_response())
+    Ok(remote)
 }
 
 /// Create a domain-bound outgoing share and return its bearer capability only
@@ -603,7 +595,7 @@ pub async fn create_federated_share(
     path = "/api/fed/drive/users/{username}",
     tag = "drive federation",
     params(("username" = String, Path)),
-    responses((status = 200, description = "Signed local Drive account", body = RemoteDriveUserResponse))
+    responses((status = 200, description = "Signed local Drive account", body = AccountLookupResponse))
 )]
 pub async fn get_user(
     State(state): State<AppState>,
@@ -653,7 +645,7 @@ pub async fn get_user(
             federation,
             &authenticated,
             StatusCode::OK,
-            &RemoteDriveUserResponse {
+            &AccountLookupResponse {
                 account: format!("{}@{}", stored, federation.server_name()),
                 username: stored,
                 server: federation.server_name().to_owned(),

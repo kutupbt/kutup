@@ -3,7 +3,9 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { parseAccountAddress, parseAccountInput } from '@kutup/chat-core/identity'
+import type { AccountRef } from '@kutup/chat-core/identity'
+import { resolveTyped } from '../../lib/resolveAddress'
+import { SomeoneElseNotice } from '../contacts/SomeoneElseNotice'
 import { MLS_GROUP_NAME_MAX_CHARS } from '@kutup/chat-core/types'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -26,25 +28,38 @@ export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | undefined>()
   const [busy, setBusy] = useState(false)
+  /** The address typed leads to someone else than the person known there: added only on a second press. */
+  const [warned, setWarned] = useState<{ value: string; account: AccountRef; text: string } | null>(null)
 
   function close() {
     onOpenChange(false)
     setName('')
     setValue('')
     setError(undefined)
+    setWarned(null)
   }
 
   async function create(event: FormEvent) {
     event.preventDefault()
-    const serverName = capabilities?.serverName
-    const member = serverName ? parseAccountInput(value, serverName) : parseAccountAddress(value)
-    if (!member || !service) {
-      setError(t('chat.errors.invalidAddress'))
-      return
-    }
+    if (!service) return
     setBusy(true)
     try {
-      const group = await service.createGroup(member, name.trim())
+      let account: AccountRef
+      if (warned && warned.value === value) {
+        account = warned.account
+      } else {
+        const member = await resolveTyped(value, capabilities?.serverName, t)
+        if ('error' in member) {
+          setError(member.error)
+          return
+        }
+        if (member.warning) {
+          setWarned({ value, account: member.account, text: member.warning })
+          return
+        }
+        account = member.account
+      }
+      const group = await service.createGroup(account, name.trim())
       await refreshChat()
       close()
       toast.success(t('chat.group.created'))
@@ -90,12 +105,14 @@ export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 value={value}
                 onChange={(e) => {
                   setValue(e.target.value)
+                  setWarned(null)
                   setError(undefined)
                 }}
                 data-testid="chat-group-initial-member"
               />
             )}
           </Field>
+          {warned ? <SomeoneElseNotice text={warned.text} /> : null}
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={close}>
               {t('common.cancel')}
@@ -106,7 +123,7 @@ export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               data-testid="chat-group-create-submit"
             >
               {busy ? <Loader2 className="animate-spin" /> : null}
-              {t('chat.group.create')}
+              {warned ? t('chat.someoneElse.continueAnyway') : t('chat.group.create')}
             </Button>
           </DialogFooter>
         </form>

@@ -1192,63 +1192,113 @@ fn print_device_registration_vector() {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SafetyNumberVec {
-    #[serde(rename = "localAuthority")]
+    /// `aci:<uuid>@<server>`.
+    local_account: String,
+    /// Raw 32-byte Ed25519 authority keys, base64, no type prefix.
     local_authority: String,
-    #[serde(rename = "peerAuthority")]
+    peer_account: String,
     peer_authority: String,
     fingerprint: String,
-    #[serde(rename = "qrPayload")]
-    qr_payload: String,
-    /// A new incarnation under the same name: another authority, another number.
-    #[serde(rename = "newIncarnationAuthority")]
-    new_incarnation_authority: String,
-    #[serde(rename = "newIncarnationFingerprint")]
-    new_incarnation_fingerprint: String,
+    /// The local side's QR payload; the peer's has the halves swapped.
+    local_qr_payload: String,
+    peer_qr_payload: String,
+    /// The peer after a reset: same account, another authority, another number.
+    reset_authority: String,
+    reset_fingerprint: String,
+    /// The peer's authority under another account id: another number.
+    other_account: String,
+    other_account_fingerprint: String,
 }
 
-/// The safety number binds the two authorities and nothing else: no address,
-/// so a rename keeps it; a new incarnation (a new holder of a released name)
-/// has another authority and another number.
+/// The safety number (Signal's fingerprint v2 over the account reference and
+/// the authority): a rename keeps it; a reset, or another account, changes it.
 #[test]
 fn safety_number_vector() {
+    use kutup_crypto::account_ref::AccountRef;
     use kutup_crypto::safety_number;
     let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
     let v: SafetyNumberVec = serde_json::from_value(all["safetyNumber"].clone()).unwrap();
     let key = |s: &str| -> [u8; 32] { b64(s).try_into().unwrap() };
-    let number = safety_number::derive(&key(&v.local_authority), &key(&v.peer_authority)).unwrap();
-    assert_eq!(number.fingerprint, v.fingerprint);
-    assert_eq!(number.qr_payload, v.qr_payload);
-    assert_eq!(
-        safety_number::derive(&key(&v.peer_authority), &key(&v.local_authority)).unwrap(),
-        number
-    );
-    let other = safety_number::derive(&key(&v.local_authority), &key(&v.new_incarnation_authority))
-        .unwrap();
-    assert_eq!(other.fingerprint, v.new_incarnation_fingerprint);
-    assert_ne!(other.fingerprint, number.fingerprint);
-    assert!(!safety_number::matches_qr_payload(
-        &number,
-        &other.qr_payload
+    let acct = |s: &str| -> AccountRef { s.parse().unwrap() };
+    let (local, peer) = (acct(&v.local_account), acct(&v.peer_account));
+    let mine = safety_number::derive(
+        &local,
+        &key(&v.local_authority),
+        &peer,
+        &key(&v.peer_authority),
+    )
+    .unwrap();
+    let theirs = safety_number::derive(
+        &peer,
+        &key(&v.peer_authority),
+        &local,
+        &key(&v.local_authority),
+    )
+    .unwrap();
+    assert_eq!(mine.fingerprint, v.fingerprint);
+    assert_eq!(theirs.fingerprint, v.fingerprint);
+    assert_eq!(mine.qr_payload, v.local_qr_payload);
+    assert_eq!(theirs.qr_payload, v.peer_qr_payload);
+    assert!(safety_number::matches_qr_payload(&mine, &v.peer_qr_payload));
+    assert!(safety_number::matches_qr_payload(
+        &theirs,
+        &v.local_qr_payload
     ));
+    let reset = safety_number::derive(
+        &local,
+        &key(&v.local_authority),
+        &peer,
+        &key(&v.reset_authority),
+    )
+    .unwrap();
+    assert_eq!(reset.fingerprint, v.reset_fingerprint);
+    assert!(!safety_number::matches_qr_payload(
+        &reset,
+        &v.peer_qr_payload
+    ));
+    let other = safety_number::derive(
+        &local,
+        &key(&v.local_authority),
+        &acct(&v.other_account),
+        &key(&v.peer_authority),
+    )
+    .unwrap();
+    assert_eq!(other.fingerprint, v.other_account_fingerprint);
 }
 
 #[test]
 #[ignore]
 fn print_safety_number_vector() {
     use base64::Engine as _;
+    use kutup_crypto::account_ref::AccountRef;
     use kutup_crypto::safety_number;
     let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let local: AccountRef = "aci:3f1c6a52-8d0e-4b7a-9c21-5e4d8f0a1b2c@kutup.dev"
+        .parse()
+        .unwrap();
+    let peer: AccountRef = "aci:9a7b5c3d-1e2f-4a6b-8c0d-2e4f6a8b0c1d@example.org"
+        .parse()
+        .unwrap();
+    let other: AccountRef = "aci:c2d4e6f8-0a1b-4c3d-9e5f-7a9b1c3d5e7f@example.org"
+        .parse()
+        .unwrap();
     let (a, b, c) = ([1u8; 32], [2u8; 32], [3u8; 32]);
-    let n = safety_number::derive(&a, &b).unwrap();
-    let o = safety_number::derive(&a, &c).unwrap();
+    let mine = safety_number::derive(&local, &a, &peer, &b).unwrap();
+    let theirs = safety_number::derive(&peer, &b, &local, &a).unwrap();
     println!(
         "{}",
         serde_json::json!({
-            "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V2): the two account authorities only, sorted; no address, so a rename keeps the number and a new incarnation changes it.",
-            "localAuthority": e(&a), "peerAuthority": e(&b),
-            "fingerprint": n.fingerprint, "qrPayload": n.qr_payload,
-            "newIncarnationAuthority": e(&c), "newIncarnationFingerprint": o.fingerprint,
+            "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V3): Signal's fingerprint v2 (5200 x SHA-512 per side, 2 x 30 digits, CombinedFingerprints QR) with the stable id AccountRef::bytes() and the identity key the raw 32-byte Ed25519 account authority (no type prefix). A rename keeps the number; a reset or another account changes it.",
+            "localAccount": local.to_string(), "localAuthority": e(&a),
+            "peerAccount": peer.to_string(), "peerAuthority": e(&b),
+            "fingerprint": mine.fingerprint,
+            "localQrPayload": mine.qr_payload, "peerQrPayload": theirs.qr_payload,
+            "resetAuthority": e(&c),
+            "resetFingerprint": safety_number::derive(&local, &a, &peer, &c).unwrap().fingerprint,
+            "otherAccount": other.to_string(),
+            "otherAccountFingerprint": safety_number::derive(&local, &a, &other, &b).unwrap().fingerprint,
         })
     );
 }

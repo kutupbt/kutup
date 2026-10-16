@@ -2,12 +2,15 @@
 //!
 //! Chat keeps its own, stricter pins (the signed manifest chain, quarantine
 //! until an in-person comparison). The account also keeps one list for all of
-//! its apps (Drive, Office, Photos): the authority it met for every address,
-//! and which were compared in person. Chat reads and writes that list so an
-//! identity means the same everywhere:
+//! its apps (Drive, Office, Photos): the authority it met for every account
+//! (server and permanent account id, never an address), and which were
+//! compared in person. Chat reads and writes that list so an identity means
+//! the same everywhere:
 //!
-//! - a contact Chat meets for the first time whose address the list holds with
-//!   another authority is quarantined, not trusted on first use;
+//! - a contact Chat meets for the first time whose account the list holds
+//!   with another authority is quarantined, not trusted on first use;
+//! - an authority the list holds for another account is quarantined, never
+//!   written for this one;
 //! - an authority the list holds as verified is verified in Chat too;
 //! - an authority verified in Chat is verified in the list;
 //! - a contact the list does not know yet is added to it.
@@ -20,7 +23,9 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::identity_pins::{self, IdentityPinsV1, PinMatch, PinState, PinUpdate};
+use kutup_crypto::identity_pins::{
+    self, AuthorityCheck, IdentityPinsV2, PinMatch, PinState, PinUpdate, Recorded,
+};
 use zeroize::Zeroizing;
 
 use crate::db::{AuthorityTrust, ManifestTrust};
@@ -46,7 +51,7 @@ pub(crate) struct IdentityPinsSync {
     /// The account's key binding, which the list is sealed to.
     binding: String,
     key: Zeroizing<[u8; 32]>,
-    cache: Option<(u64, IdentityPinsV1)>,
+    cache: Option<(u64, IdentityPinsV2)>,
     /// The highest revision this engine has seen: an older list is refused
     /// (the server replaying one), as on the web.
     highest_seen: u64,
@@ -64,7 +69,7 @@ impl IdentityPinsSync {
         })
     }
 
-    async fn load(&mut self, transport: &dyn ChatTransport) -> Result<(u64, IdentityPinsV1)> {
+    async fn load(&mut self, transport: &dyn ChatTransport) -> Result<(u64, IdentityPinsV2)> {
         if let Some(cached) = &self.cache {
             return Ok(cached.clone());
         }
@@ -76,7 +81,7 @@ impl IdentityPinsSync {
                     "identity pins: the server answered no list after one was seen".into(),
                 ))
             }
-            None => (0, IdentityPinsV1::default()),
+            None => (0, IdentityPinsV2::default()),
             Some(record) => {
                 let sealed = STANDARD
                     .decode(&record.envelope)
@@ -113,18 +118,26 @@ impl IdentityPinsSync {
             return Ok(Reconcile::Nothing);
         }
         let (_, list) = self.load(transport).await?;
-        // The rules every app shares (identity_pins::lookup).
+        let account = crate::address::parse_account(&trust.account)?;
+        // The rules every app shares (identity_pins::lookup). Chat meets an
+        // account by its id, never by an address, so no address is asked
+        // about: a pin's labels play no part here.
         let found = identity_pins::lookup(
             &list,
-            &trust.account,
+            &account,
+            None,
             Some(trust.self_authority_key.as_str()),
         );
         let verified_here = trust.trust == AuthorityTrust::Verified;
+        // An authority the list holds for another account, in this account's
+        // manifest: someone else's keys, whatever Chat thinks of them.
+        if list.pins.iter().any(|pin| {
+            pin.authority_public_key == trust.self_authority_key && pin.account != account
+        }) {
+            return Ok(Reconcile::Quarantine);
+        }
         Ok(match found {
-            PinMatch::Pinned {
-                pin,
-                same_authority: false,
-            } => {
+            PinMatch::Pinned { pin, authority, .. } if authority != AuthorityCheck::Same => {
                 // Chat's own in-person verification outranks a pin that was
                 // only seen elsewhere: it is written to the list instead.
                 if verified_here && pin.state != PinState::Verified {
@@ -133,18 +146,7 @@ impl IdentityPinsSync {
                     Reconcile::Quarantine
                 }
             }
-            // Someone the user knew had this address and is elsewhere now:
-            // whoever is here is another person, unless verified here.
-            PinMatch::Moved { .. } if !verified_here => Reconcile::Quarantine,
-            // An identity the user replaced (its trust revoked), wherever it
-            // turns up: never verified from the list, quarantined unless
-            // verified here.
-            PinMatch::Replaced { .. } if !verified_here => Reconcile::Quarantine,
-            PinMatch::Replaced { .. } => Reconcile::Nothing,
-            // The same account (pinned here, or under another of its names).
             PinMatch::Pinned { pin, .. }
-            | PinMatch::Renamed { pin }
-            | PinMatch::Returned { pin }
                 if trust.trust == AuthorityTrust::Tofu && pin.state == PinState::Verified =>
             {
                 Reconcile::MarkVerified
@@ -176,14 +178,23 @@ impl IdentityPinsSync {
             let (revision, mut list) = self.load(transport).await?;
             let before = list.clone();
             let since = identity_pins::since_from_unix(now_seconds);
-            identity_pins::record(
+            let account = crate::address::parse_account(&trust.account)?;
+            let recorded = identity_pins::record(
                 &mut list,
-                &trust.account,
+                &account,
+                None,
                 &trust.self_authority_key,
                 update,
                 &since,
             )
             .map_err(crypto)?;
+            // An authority the list holds for another account, handed out in
+            // this account's manifest: never written, and said.
+            if let Recorded::AuthorityElsewhere { .. } = recorded {
+                return Err(ChatError::Trust(
+                    "identity pins: this authority belongs to another account".into(),
+                ));
+            }
             if list == before {
                 return Ok(());
             }
@@ -229,7 +240,7 @@ mod tests {
     use super::*;
     use crate::transport::IdentityPinsRecord;
     use crate::transport::SendOutcome;
-    use kutup_crypto::identity_pins::IdentityPinV1;
+    use kutup_crypto::identity_pins::IdentityPinV2;
 
     /// Only the identity pin calls; the server's list, revision by revision.
     #[derive(Default)]
@@ -301,7 +312,7 @@ mod tests {
         }
     }
 
-    fn pins(server: &Server) -> Vec<IdentityPinV1> {
+    fn pins(server: &Server) -> Vec<IdentityPinV2> {
         let record = server.stored.borrow().clone().unwrap();
         let key = identity_pins::derive_key(&MASTER).unwrap();
         identity_pins::open(&key, OWNER, &STANDARD.decode(record.envelope).unwrap())
@@ -317,7 +328,11 @@ mod tests {
     #[test]
     fn a_new_contact_is_added_and_then_agreed_with() {
         let server = Server::default();
-        let bob = trust("bob@kutup.dev", 2, AuthorityTrust::Tofu);
+        let bob = trust(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+            2,
+            AuthorityTrust::Tofu,
+        );
         assert_eq!(
             block_on(sync().reconcile(&server, &bob)).unwrap(),
             Reconcile::Nothing
@@ -334,16 +349,32 @@ mod tests {
     #[test]
     fn another_authority_than_the_list_holds_is_quarantined() {
         let server = Server::default();
-        block_on(sync().record(&server, &trust("bob@kutup.dev", 2, AuthorityTrust::Tofu), 0))
-            .unwrap();
+        block_on(sync().record(
+            &server,
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                2,
+                AuthorityTrust::Tofu,
+            ),
+            0,
+        ))
+        .unwrap();
         // Chat meets "bob" with an authority the account never trusted elsewhere.
-        let impostor = trust("bob@kutup.dev", 9, AuthorityTrust::Tofu);
+        let impostor = trust(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+            9,
+            AuthorityTrust::Tofu,
+        );
         assert_eq!(
             block_on(sync().reconcile(&server, &impostor)).unwrap(),
             Reconcile::Quarantine
         );
         // A quarantined contact is left to Chat's own verification.
-        let held = trust("bob@kutup.dev", 9, AuthorityTrust::Quarantined);
+        let held = trust(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+            9,
+            AuthorityTrust::Quarantined,
+        );
         assert_eq!(
             block_on(sync().reconcile(&server, &held)).unwrap(),
             Reconcile::Nothing
@@ -356,13 +387,21 @@ mod tests {
         // Verified in Chat: verified in the list.
         block_on(sync().record(
             &server,
-            &trust("bob@kutup.dev", 2, AuthorityTrust::Verified),
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                2,
+                AuthorityTrust::Verified,
+            ),
             0,
         ))
         .unwrap();
         assert_eq!(pins(&server)[0].state, PinState::Verified);
         // Another device of the account meets Bob: verified there too.
-        let fresh = trust("bob@kutup.dev", 2, AuthorityTrust::Tofu);
+        let fresh = trust(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+            2,
+            AuthorityTrust::Tofu,
+        );
         assert_eq!(
             block_on(sync().reconcile(&server, &fresh)).unwrap(),
             Reconcile::MarkVerified
@@ -373,10 +412,22 @@ mod tests {
     fn chats_in_person_check_outranks_an_identity_only_seen_elsewhere() {
         let server = Server::default();
         // Drive accepted a new identity for Bob without comparing it.
-        block_on(sync().record(&server, &trust("bob@kutup.dev", 3, AuthorityTrust::Tofu), 0))
-            .unwrap();
+        block_on(sync().record(
+            &server,
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                3,
+                AuthorityTrust::Tofu,
+            ),
+            0,
+        ))
+        .unwrap();
         // Chat compared Bob's old one in person: it is not quarantined, and it replaces the list's.
-        let verified = trust("bob@kutup.dev", 2, AuthorityTrust::Verified);
+        let verified = trust(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+            2,
+            AuthorityTrust::Verified,
+        );
         assert_eq!(
             block_on(sync().reconcile(&server, &verified)).unwrap(),
             Reconcile::Nothing
@@ -396,29 +447,60 @@ mod tests {
         let mut slow = sync();
         // This device read the empty list...
         assert_eq!(
-            block_on(slow.reconcile(&server, &trust("bob@kutup.dev", 2, AuthorityTrust::Tofu)))
-                .unwrap(),
+            block_on(slow.reconcile(
+                &server,
+                &trust(
+                    "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                    2,
+                    AuthorityTrust::Tofu
+                )
+            ))
+            .unwrap(),
             Reconcile::Nothing
         );
         // ...then another app pinned Carol.
         block_on(sync().record(
             &server,
-            &trust("carol@kutup.dev", 5, AuthorityTrust::Tofu),
+            &trust(
+                "aci:00000000-0000-4000-8000-4c26d9074c27@kutup.dev",
+                5,
+                AuthorityTrust::Tofu,
+            ),
             0,
         ))
         .unwrap();
-        block_on(slow.record(&server, &trust("bob@kutup.dev", 2, AuthorityTrust::Tofu), 0))
-            .unwrap();
-        let accounts: Vec<_> = pins(&server).into_iter().map(|p| p.account).collect();
-        assert_eq!(accounts, ["bob@kutup.dev", "carol@kutup.dev"]);
+        block_on(slow.record(
+            &server,
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                2,
+                AuthorityTrust::Tofu,
+            ),
+            0,
+        ))
+        .unwrap();
+        let accounts: Vec<_> = pins(&server)
+            .into_iter()
+            .map(|p| p.account.to_string())
+            .collect();
+        // Sorted by account.
+        assert_eq!(accounts, [CAROL, BOB]);
     }
 
     #[test]
     fn a_list_the_server_drops_after_one_was_seen_is_refused() {
         let server = Server::default();
         let mut engine = sync();
-        block_on(engine.record(&server, &trust("bob@kutup.dev", 2, AuthorityTrust::Tofu), 0))
-            .unwrap();
+        block_on(engine.record(
+            &server,
+            &trust(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                2,
+                AuthorityTrust::Tofu,
+            ),
+            0,
+        ))
+        .unwrap();
         assert_eq!(pins(&server).len(), 1);
         // The server forgets the list: writing from nothing would erase Bob.
         *server.stored.borrow_mut() = None;
@@ -426,7 +508,11 @@ mod tests {
         assert!(matches!(
             block_on(engine.record(
                 &server,
-                &trust("carol@kutup.dev", 5, AuthorityTrust::Tofu),
+                &trust(
+                    "aci:00000000-0000-4000-8000-4c26d9074c27@kutup.dev",
+                    5,
+                    AuthorityTrust::Tofu
+                ),
                 0
             )),
             Err(ChatError::Trust(_))
@@ -435,66 +521,24 @@ mod tests {
         // A fresh engine (no history) trusts the empty answer, as documented.
         assert!(block_on(sync().record(
             &server,
-            &trust("carol@kutup.dev", 5, AuthorityTrust::Tofu),
+            &trust(
+                "aci:00000000-0000-4000-8000-4c26d9074c27@kutup.dev",
+                5,
+                AuthorityTrust::Tofu
+            ),
             0
         ))
         .is_ok());
     }
 
-    #[test]
-    fn a_released_name_is_not_the_person_who_had_it() {
-        // The list knows Alice (verified) as alicia@, formerly alice@.
-        let server = Server::default();
-        let alice = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[1; 32]).unwrap();
-        let mut list = IdentityPinsV1::default();
-        identity_pins::record(
-            &mut list,
-            "alice@kutup.dev",
-            &authority(1),
-            PinUpdate::Verified,
-            "2026-10-10T12:00:00Z",
-        )
-        .unwrap();
-        let chain = vec![kutup_crypto::account_rename::sign(
-            &alice,
-            1,
-            "alice@kutup.dev",
-            "alicia@kutup.dev",
-            1_791_000_000_000,
-        )
-        .unwrap()];
-        identity_pins::apply_rename(&mut list, &alice.authority_public_key(), &chain).unwrap();
-        let key = identity_pins::derive_key(&MASTER).unwrap();
-        *server.stored.borrow_mut() = Some(IdentityPinsRecord {
-            revision: 1,
-            envelope: STANDARD.encode(identity_pins::seal(&key, OWNER, 1, &list).unwrap()),
-        });
-        // Chat meets someone else at alice@: quarantined, and not pinned.
-        let newcomer = trust("alice@kutup.dev", 6, AuthorityTrust::Tofu);
-        assert_eq!(
-            block_on(sync().reconcile(&server, &newcomer)).unwrap(),
-            Reconcile::Quarantine
-        );
-        block_on(sync().record(&server, &newcomer, 0)).unwrap();
-        assert_eq!(pins(&server).len(), 1);
-        // Alice under a name this device has not followed yet: still verified.
-        let renamed = trust("alicia2@kutup.dev", 1, AuthorityTrust::Tofu);
-        assert_eq!(
-            block_on(sync().reconcile(&server, &renamed)).unwrap(),
-            Reconcile::MarkVerified
-        );
-    }
+    const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev";
+    const CAROL: &str = "aci:00000000-0000-4000-8000-4c26d9074c27@kutup.dev";
 
     #[test]
-    fn an_identity_replaced_elsewhere_is_quarantined_wherever_it_turns_up() {
-        // Bob verified, then replaced by a new identity the user accepted.
+    fn a_reset_of_the_same_account_is_quarantined_and_an_old_key_too() {
+        // Bob verified, then reset: Drive accepted his new identity.
         let server = Server::default();
-        block_on(sync().record(
-            &server,
-            &trust("bob@kutup.dev", 2, AuthorityTrust::Verified),
-            0,
-        ))
-        .unwrap();
+        block_on(sync().record(&server, &trust(BOB, 2, AuthorityTrust::Verified), 0)).unwrap();
         let mut list = identity_pins::open(
             &identity_pins::derive_key(&MASTER).unwrap(),
             OWNER,
@@ -506,7 +550,8 @@ mod tests {
         .0;
         identity_pins::record(
             &mut list,
-            "bob@kutup.dev",
+            &BOB.parse().unwrap(),
+            None,
             &authority(3),
             PinUpdate::Accepted,
             "2026-10-11T12:00:00Z",
@@ -518,11 +563,32 @@ mod tests {
             envelope: STANDARD
                 .encode(identity_pins::seal(&key, OWNER, 2_000_000_000_000, &list).unwrap()),
         });
-        // The old identity shows up as carol@: never verified from the list.
-        let old = trust("carol@kutup.dev", 2, AuthorityTrust::Tofu);
+        // Chat still holds the old one: not verified from the list, quarantined.
         assert_eq!(
-            block_on(sync().reconcile(&server, &old)).unwrap(),
+            block_on(sync().reconcile(&server, &trust(BOB, 2, AuthorityTrust::Tofu))).unwrap(),
             Reconcile::Quarantine
         );
+        // The new one, as the list holds it: the same person.
+        assert_eq!(
+            block_on(sync().reconcile(&server, &trust(BOB, 3, AuthorityTrust::Tofu))).unwrap(),
+            Reconcile::Nothing
+        );
+    }
+
+    #[test]
+    fn an_authority_of_another_account_is_quarantined_and_never_written() {
+        let server = Server::default();
+        block_on(sync().record(&server, &trust(BOB, 2, AuthorityTrust::Tofu), 0)).unwrap();
+        // Carol's manifest carries Bob's authority: someone else's keys.
+        let carol = trust(CAROL, 2, AuthorityTrust::Tofu);
+        assert_eq!(
+            block_on(sync().reconcile(&server, &carol)).unwrap(),
+            Reconcile::Quarantine
+        );
+        assert!(matches!(
+            block_on(sync().record(&server, &carol, 0)),
+            Err(ChatError::Trust(_))
+        ));
+        assert_eq!(pins(&server).len(), 1);
     }
 }

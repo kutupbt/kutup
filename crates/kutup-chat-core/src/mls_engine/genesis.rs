@@ -11,7 +11,7 @@ impl MlsClient {
         &self,
         conversation_id: Uuid,
         mls_group_id: &[u8],
-        creator: AccountAddress,
+        creator: AccountRef,
         authority_policies: &[MlsOrderingServicePolicyV1],
         created_at_seconds: i64,
     ) -> Result<PreparedMlsGroupGenesis> {
@@ -33,7 +33,7 @@ impl MlsClient {
         &self,
         conversation_id: Uuid,
         mls_group_id: &[u8],
-        creator: AccountAddress,
+        creator: AccountRef,
         authority_policies: &[MlsOrderingServicePolicyV1],
         created_at_seconds: i64,
         group_info: Option<MlsGroupInfoV1>,
@@ -73,7 +73,7 @@ impl MlsClient {
                 || existing.request.genesis.created_at != created_at_seconds
                 || existing.request.genesis.authority_set != authority_set
                 || existing.request.members.len() != 1
-                || existing.request.members[0].address != creator
+                || existing.request.members[0].account != creator
             {
                 return Err(ChatError::Trust(
                     "MLS conversation id is already bound to a different genesis".into(),
@@ -107,7 +107,7 @@ impl MlsClient {
         insert_new_group_control_key(&mut metadata, mls_group_id)?;
         let owner = insert_new_group_owner_key(&mut metadata, mls_group_id)?;
         let member = MlsConversationMemberV1 {
-            address: creator.clone(),
+            account: creator.clone(),
             is_admin: true,
             owner_id: Some(owner.owner_id.clone()),
         };
@@ -136,7 +136,7 @@ impl MlsClient {
             },
             members,
             initial_devices: vec![MlsConversationDeviceV1 {
-                address: creator,
+                account: creator,
                 device_id: parse_device_credential_identity(&metadata.credential_identity)?.1,
             }],
         };
@@ -152,12 +152,12 @@ impl MlsClient {
             member_joined_epochs: request
                 .members
                 .iter()
-                .map(|member| (member.address.canonical(), request.genesis.initial_epoch))
+                .map(|member| (member.account.to_string(), request.genesis.initial_epoch))
                 .collect(),
             accepted_invitation_epochs: request
                 .members
                 .iter()
-                .map(|member| (member.address.canonical(), request.genesis.initial_epoch))
+                .map(|member| (member.account.to_string(), request.genesis.initial_epoch))
                 .collect(),
             current_authority_set: request.genesis.authority_set.clone(),
             current_owner_set,
@@ -303,10 +303,10 @@ impl MlsClient {
             public_key: owner_public,
         };
         let (account, _) = parse_device_credential_identity(&metadata.credential_identity)?;
-        let address: AccountAddress =
+        let address: AccountRef =
             account
                 .parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
+                .map_err(|error: kutup_crypto::error::CryptoError| {
                     ChatError::Invalid(error.to_string())
                 })?;
         let authority_signer = ed25519_dalek::SigningKey::generate(&mut OsRng);
@@ -321,7 +321,7 @@ impl MlsClient {
             epoch: 0,
             previous_block_hash: None,
             genesis_roster: vec![MlsConversationMemberV1 {
-                address: address.clone(),
+                account: address.clone(),
                 is_admin: true,
                 owner_id: Some(owner.owner_id.clone()),
             }],
@@ -345,7 +345,7 @@ impl MlsClient {
             genesis_authorization_policy: MlsGroupAuthorizationPolicyV1::members_default(),
             genesis_cryptographic_policy: MlsGroupCryptographicPolicyV1::v1_default(),
             roster: vec![MlsConversationMemberV1 {
-                address,
+                account: address,
                 is_admin: true,
                 owner_id: Some(owner.owner_id.clone()),
             }],

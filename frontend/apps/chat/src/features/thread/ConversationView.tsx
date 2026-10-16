@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { canonicalAccountAddress } from '@kutup/chat-core/identity'
+import { accountKey, parseAccount } from '@kutup/chat-core/identity'
 import { downloadChatMediaToCacheV1, openCachedChatMediaV1 } from '@kutup/chat-core/media'
 import type { ChatAttachmentDescriptorV1, ChatCallMedia, ChatGroupCall, ConversationId } from '@kutup/chat-core/types'
 import { freshAccessToken } from '@kutup/session/client'
@@ -29,6 +29,7 @@ import { pendingDefaultTimer, settlePendingDefaultTimer } from '../../lib/pendin
 import { groupUpdateSentences } from '../../lib/groupUpdate'
 import { callController, groupCallController, useCall, useGroupCall } from '../calls/callStore'
 import { personName } from '../../lib/names'
+import { accountName } from '../../state/accountNames'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
@@ -153,7 +154,7 @@ export function ConversationView({
   }
   async function placeCall(media: ChatCallMedia) {
     const controller = callController()
-    const peer = conversation.kind === 'direct' ? conversation.address : null
+    const peer = conversation.kind === 'direct' ? conversation.account : null
     if (!controller || !peer) return
     try {
       await controller.start(peer, media)
@@ -248,22 +249,24 @@ export function ConversationView({
   const profiles = useMemo(() => new Map(chat.snapshot.profiles.map((p) => [p.peer, p])), [chat.snapshot.profiles])
   const rows = useMemo(() => timelineRows(model.views, unread), [model.views, unread])
   const itemKeys = useMemo(() => rows.map((row) => row.key), [rows])
-  const nameOf = useCallback((view: MessageView) => personName(view.author, profiles, self.address, t), [profiles, self.address, t])
+  const nameOf = useCallback((view: MessageView) => personName(view.author, profiles, self.key, t), [profiles, self.key, t])
   const lastOwnText = useMemo(
     () => [...model.views].reverse().find((v) => v.outgoing && !v.mutation?.deleted && v.entry.content.text && !v.entry.content.attachment) ?? null,
     [model.views],
   )
   const typingIndicators = useTypingIndicators()
   const typing = typingIndicators
-    ? [...(chat.typing.get(model.key)?.keys() ?? [])].filter((sender) => sender !== self.address)
+    ? [...(chat.typing.get(model.key)?.keys() ?? [])].filter((sender) => sender !== self.key)
     : []
   const members = useMemo(
     () =>
       (model.group?.currentRoster ?? [])
-        .map((member) => canonicalAccountAddress(member.address))
-        .filter((address) => address !== self.address)
-        .map((address) => ({ address, name: personName(address, profiles, self.address, t) })),
-    [model.group, profiles, self.address, t],
+        .map((member) => ({ account: member.account, key: accountKey(member.account) }))
+        .filter(({ key }) => key !== self.key)
+        .map(({ account, key }) => ({ account, key, name: personName(key, profiles, self.key, t), address: accountName(key) })),
+    // A name that arrives later shows when the store says so.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [model.group, profiles, self.key, t, chat.namesRevision],
   )
   const writable = !model.readOnly
   // In a direct chat, files, voice messages and stickers travel by sealed
@@ -444,10 +447,10 @@ export function ConversationView({
           {t('chat.groupLink.bannerRequests', { count: joinRequests })}
         </button>
       ) : null}
-      {!embedded && model.address ? <PeerWaitingBanner address={model.address} /> : null}
+      {!embedded && model.peer ? <PeerWaitingBanner peer={model.peer} /> : null}
       {/* Not for a request: it is accepted (or blocked) first, then saved. */}
-      {!embedded && model.address && !model.note && !model.readOnly ? (
-        <NotInContactsBanner address={model.address} name={model.profile?.displayName} />
+      {!embedded && model.peer && model.address && !model.note && !model.readOnly ? (
+        <NotInContactsBanner peer={model.peer} address={model.address} name={model.profile?.displayName} />
       ) : null}
 
       <MessageScroller
@@ -516,6 +519,22 @@ export function ConversationView({
               </div>
             )
           }
+          if (row.kind === 'notice' && row.view.safetyChanged) {
+            return (
+              <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-start justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-safety-changed-notice">
+                <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+                {/* Whose number: the person of a direct chat (the line is only written there). */}
+                <span>{t('chat.safety.changedNotice', { name: model.peer ? personName(model.peer, profiles, self.key, t) : nameOf(row.view) })}</span>
+              </p>
+            )
+          }
+          if (row.kind === 'notice' && row.view.renamed) {
+            return (
+              <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto max-w-sm px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-rename-notice">
+                {t('chat.renamedNotice', { from: row.view.renamed.previous, to: row.view.renamed.current })}
+              </p>
+            )
+          }
           if (row.kind === 'notice' && row.view.groupCall) {
             const started = row.view.groupCall
             const live = model.groupCall?.callId === started.callId
@@ -539,7 +558,7 @@ export function ConversationView({
             return (
               <div key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-md flex-col items-center gap-0.5 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-group-notice">
                 <Users className="mb-0.5 size-4 shrink-0" aria-hidden />
-                {groupUpdateSentences(row.view.groupUpdate, self.address, (address) => personName(address, profiles, self.address, t), t).map((line, i) => (
+                {groupUpdateSentences(row.view.groupUpdate, self.key, (address) => personName(address, profiles, self.key, t), t).map((line, i) => (
                   <p key={i}>{line}</p>
                 ))}
               </div>
@@ -571,7 +590,7 @@ export function ConversationView({
               joinedBelow={row.joinedBelow}
               highlighted={highlight === view.id}
               profiles={profiles}
-              selfAddress={self.address}
+              selfKey={self.key}
               selfName={chat.snapshot.profile?.displayName}
               onVisible={() => startExpiry(view)}
               attachment={
@@ -599,10 +618,10 @@ export function ConversationView({
                 ) : view.poll ? (
                   <PollBody
                     state={view.poll}
-                    selfAddress={self.address}
+                    selfKey={self.key}
                     outgoing={own}
                     canVote={writable && !view.mutation?.deleted}
-                    nameOf={(address) => personName(address, profiles, self.address, t)}
+                    nameOf={(address) => personName(address, profiles, self.key, t)}
                     onVote={(options) => void actions.votePoll(view.id, options).catch(() => undefined)}
                     onEnd={own && writable ? () => void actions.endPoll(view.id).catch(() => undefined) : undefined}
                   />
@@ -620,7 +639,7 @@ export function ConversationView({
                         .markViewOnceOpened({
                           conversation,
                           messageId,
-                          sender: view.author,
+                          sender: parseAccount(view.author)!,
                           timestampMs: view.entry.timestampMs,
                           video: view.entry.content.attachment?.mediaClass === 'video',
                         })
@@ -675,7 +694,7 @@ export function ConversationView({
             </span>
             <span className="text-xs text-muted-foreground">
               {typing.length === 1
-                ? t('chat.typing.one', { name: personName(typing[0], profiles, self.address, t) })
+                ? t('chat.typing.one', { name: personName(typing[0], profiles, self.key, t) })
                 : t('chat.typing.many', { count: typing.length })}
             </span>
           </div>
@@ -777,11 +796,11 @@ export function ConversationView({
             <DialogDescription>{t('chat.calls.offerDescription')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={dropCallParam}>
+            {/* The safe action is the default: a call from a link needs a deliberate press. */}
+            <Button variant="outline" autoFocus onClick={dropCallParam}>
               {t('common.cancel')}
             </Button>
             <Button
-              autoFocus
               onClick={() => {
                 const media = offeredCall
                 dropCallParam()
@@ -807,8 +826,8 @@ export function ConversationView({
           setExporting(false)
           const now = new Date()
           const text = chatTranscript(model.title, model.views, {
-            self: self.address,
-            nameOf: (address) => personName(address, profiles, self.address, t),
+            self: self.key,
+            nameOf: (address) => personName(address, profiles, self.key, t),
             t,
             exportedAt: now,
           })

@@ -37,8 +37,8 @@ use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPol
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    AccountAddress, AccountManifestDeviceV1, AccountManifestV1, ChatContent, ContactControlBody,
-    ContactState, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId,
+    AccountManifestDeviceV1, AccountManifestV1, ChatContent, ContactControlBody, ContactState,
+    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId,
     DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
     SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
 };
@@ -112,7 +112,7 @@ pub(crate) struct SendAmendment<'a> {
 /// A decrypted inbound message handed up to the app.
 #[derive(Debug, Clone)]
 pub struct ReceivedMessage {
-    /// The sender device (`user`/`user@domain` + device id).
+    /// The sender device (account + device id).
     pub from: ChatAddress,
     pub content: ChatContent,
     /// The mailbox cursor (monotonic order + dedup key).
@@ -307,8 +307,8 @@ impl Session {
         };
         let db = self.store.db();
         let found = match &start.conversation {
-            kutup_chat_proto::ConversationId::Direct { address } => {
-                let peer = address.canonical();
+            kutup_chat_proto::ConversationId::Direct { account } => {
+                let peer = account.to_string();
                 let mut found = false;
                 for message in db.list_messages().await? {
                     if message.peer == peer && target_matches(&message.content)? {
@@ -344,7 +344,7 @@ impl Session {
 
     /// This account's home server.
     pub fn server(&self) -> &str {
-        &self.address.domain
+        &self.address.account.server
     }
 
     pub(crate) fn local_identity_public_key(&self) -> PublicKey {
@@ -1012,14 +1012,8 @@ impl Session {
         peer: &str,
         transition: ContactTransition,
     ) -> Result<ContactRecord> {
-        let address = peer
-            .parse::<AccountAddress>()
-            .map_err(|error| ChatError::Invalid(error.to_string()))?;
-        if address.canonical() != peer {
-            return Err(ChatError::Invalid(
-                "contact address is not canonical".into(),
-            ));
-        }
+        // A contact is an account; only its canonical string form parses.
+        crate::address::parse_account(peer)?;
         if peer == self.user() {
             return Err(ChatError::Invalid(
                 "Note to Self has no contact relationship state".into(),
@@ -1120,9 +1114,13 @@ impl Session {
         envelope: &DeliveredEnvelope,
         rng: &mut R,
     ) -> Result<ReceiveOutcome> {
-        let delivered_sender = envelope.sender.as_deref().ok_or(ChatError::MissingSender)?;
+        let delivered_sender = envelope
+            .sender
+            .as_ref()
+            .map(ToString::to_string)
+            .ok_or(ChatError::MissingSender)?;
         let (sender, from) =
-            self.resolve_delivered_sender(delivered_sender, envelope.sender_device_id)?;
+            self.resolve_delivered_sender(&delivered_sender, envelope.sender_device_id)?;
         let plaintext = match self.decrypt_bytes_staged(&from, envelope, rng).await {
             Ok(plaintext) => plaintext,
             Err(e) => {
@@ -1134,24 +1132,16 @@ impl Session {
             .await
     }
 
-    /// A delivered envelope's sender: always a canonical `username@server`
-    /// address; anything else is refused before any ratchet is chosen.
+    /// A delivered envelope's sender: always an account's canonical string
+    /// form (`aci:<uuid>@<server>`); anything else is refused before any
+    /// ratchet is chosen.
     pub(crate) fn resolve_delivered_sender(
         &self,
         sender: &str,
         device_id: u32,
     ) -> Result<(String, ChatAddress)> {
-        let account: kutup_chat_proto::AccountAddress =
-            sender
-                .parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
-                    ChatError::Invalid(error.to_string())
-                })?;
-        if account.canonical() != sender {
-            return Err(ChatError::Invalid(
-                "delivered sender is not a canonical account address".into(),
-            ));
-        }
+        // Only an account's canonical string form parses.
+        let account = crate::address::parse_account(sender)?;
         Ok((
             sender.to_owned(),
             ChatAddress::from_account(account, device_id),
@@ -1328,7 +1318,6 @@ impl Session {
                 .filter(|body| {
                     !body.send_id.is_empty()
                         && body.send_id.len() <= 64
-                        && !body.peer.is_empty()
                         && body.content.message_id == body.send_id
                         && body.content.kind != kutup_chat_proto::content::kind::SENT_TRANSCRIPT
                 })
@@ -1355,7 +1344,7 @@ impl Session {
         }
         let synced_message = if let Some(transcript) = transcript {
             if ChatContent::is_account_control_kind(&transcript.content.kind)
-                && (transcript.peer != self.user()
+                && (transcript.peer.to_string() != self.user()
                     || transcript.content.account_control_is_valid() != Some(true)
                     || transcript
                         .content
@@ -1369,25 +1358,24 @@ impl Session {
                 )));
             }
             if let Some(control) = transcript.content.as_contact_control() {
-                if transcript.peer != self.user()
+                if transcript.peer.to_string() != self.user()
                     || control.source_device_id != sender_device_id
                     || control.revision == 0
-                    || control.peer == self.user()
-                    || control.peer.parse::<AccountAddress>().is_err()
+                    || control.peer.to_string() == self.user()
                 {
                     self.store.discard();
                     return Err(ChatError::Content(
                         "invalid authenticated contact control".into(),
                     ));
                 }
-                let current = self.contact(&control.peer).await?;
+                let current = self.contact(&control.peer.to_string()).await?;
                 let incoming_order = (control.revision, control.source_device_id);
                 let current_order = current
                     .as_ref()
                     .map(|contact| (contact.revision, contact.source_device_id));
                 if current_order.is_none_or(|order| incoming_order > order) {
                     self.store.stage_contact(ContactRecord {
-                        peer: control.peer,
+                        peer: control.peer.to_string(),
                         state: control.state,
                         previous_state: control.previous_state,
                         revision: control.revision,
@@ -1416,11 +1404,11 @@ impl Session {
                 profile_control = true;
                 None
             } else {
-                self.stage_transcript_contact(&transcript.peer, received_at)
+                self.stage_transcript_contact(&transcript.peer.to_string(), received_at)
                     .await?;
                 let message = SentMessage {
                     send_id: transcript.send_id,
-                    peer: transcript.peer,
+                    peer: transcript.peer.to_string(),
                     sender_device_id,
                     content: serde_json::to_vec(&transcript.content)
                         .map_err(|e| ChatError::Content(e.to_string()))?,
@@ -2249,24 +2237,62 @@ impl Session {
         Ok(trust)
     }
 
+    /// Quarantines `peer`'s pinned identity and, once per change, writes the
+    /// local "safety number changed" line into its thread (true when it did).
     pub(crate) async fn quarantine_authority(
         &mut self,
         peer: &str,
         reason: &str,
         pending_reset: Option<crate::PendingAccountIdentityResetV1>,
-    ) -> Result<ManifestTrust> {
+    ) -> Result<(ManifestTrust, bool)> {
         let mut trust = self
             .manifest_trust(peer)
             .await?
             .ok_or_else(|| ChatError::Trust(format!("no authority is pinned for {peer}")))?;
+        // The line in the thread, once per change: the first quarantine of
+        // the pinned identity, and each new identity offered in its place.
+        let offered = pending_reset
+            .as_ref()
+            .map(|reset| reset.candidate.incarnation_id.clone());
+        let earlier = trust
+            .pending_reset
+            .as_ref()
+            .map(|reset| reset.candidate.incarnation_id.clone());
+        let line =
+            trust.trust != AuthorityTrust::Quarantined || (offered.is_some() && offered != earlier);
         trust.trust = AuthorityTrust::Quarantined;
         trust.quarantine_reason = Some(reason.chars().take(256).collect());
         if let Some(pending_reset) = pending_reset {
             trust.pending_reset = Some(Box::new(pending_reset));
         }
         self.store.stage_manifest_trust(trust.clone());
-        self.store.commit().await?;
-        Ok(trust)
+        if line {
+            let now = now_millis();
+            let content = ChatContent::safety_number_changed_with_id(
+                format!(
+                    "safety:{}:{}",
+                    trust.incarnation_id,
+                    offered.as_deref().unwrap_or("-")
+                ),
+                crate::clock::rfc3339(now),
+            );
+            self.store.stage_sent_message(SentMessage {
+                send_id: content.message_id.clone(),
+                peer: peer.to_string(),
+                sender_device_id: self.device_id(),
+                content: serde_json::to_vec(&content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: now,
+                delivered_at: Some(now),
+                delivered: true,
+                deduplicated: false,
+            });
+        }
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
+        Ok((trust, line))
     }
 
     pub(crate) async fn accept_authority_reset(&mut self, peer: &str) -> Result<ManifestTrust> {
@@ -2459,8 +2485,12 @@ impl Session {
             let (sync, sync_envelopes) = if ephemeral {
                 (None, Vec::new())
             } else {
-                let transcript =
-                    ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
+                let transcript = ChatContent::sent_transcript(
+                    send_id,
+                    crate::address::parse_account(peer_user)?,
+                    created_at,
+                    content.clone(),
+                );
                 let transcript_plaintext = serde_json::to_vec(&transcript)
                     .map_err(|e| ChatError::Content(e.to_string()))?;
                 let mut sync_summary = SendSummary::default();
@@ -2556,8 +2586,12 @@ impl Session {
             let (sync, sync_envelopes) = if ephemeral {
                 (None, Vec::new())
             } else {
-                let transcript =
-                    ChatContent::sent_transcript(send_id, peer_user, created_at, content.clone());
+                let transcript = ChatContent::sent_transcript(
+                    send_id,
+                    crate::address::parse_account(peer_user)?,
+                    created_at,
+                    content.clone(),
+                );
                 let transcript_plaintext = serde_json::to_vec(&transcript)
                     .map_err(|e| ChatError::Content(e.to_string()))?;
                 let mut sync_summary = SendSummary::default();
@@ -2723,8 +2757,12 @@ impl Session {
         // Note to Self travels only as a transcript, which must fit too.
         ensure_room_for_wrappers(send_id, &user, content)?;
         let created_at = now_millis();
-        let transcript =
-            ChatContent::sent_transcript(send_id, self.user(), created_at, content.clone());
+        let transcript = ChatContent::sent_transcript(
+            send_id,
+            crate::address::parse_account(self.user())?,
+            created_at,
+            content.clone(),
+        );
         let transcript_plaintext =
             serde_json::to_vec(&transcript).map_err(|e| ChatError::Content(e.to_string()))?;
         match self
@@ -2856,6 +2894,28 @@ impl Session {
     /// Every still-pending outbound send (for resend-on-startup).
     pub(crate) async fn pending_outbox(&self) -> Result<Vec<OutboxEntry>> {
         self.store.db().list_outbox().await
+    }
+
+    /// The line saying `peer` changed their username (one step of their
+    /// own verified rename chain), written once: its id names the account
+    /// and the rename's sequence, and a line already there stays where it
+    /// is. True when it was written now.
+    pub async fn record_peer_renamed(
+        &mut self,
+        peer: &str,
+        body: &kutup_chat_proto::PeerRenamedBody,
+    ) -> Result<bool> {
+        crate::address::parse_account(peer)?;
+        body.validate().map_err(ChatError::Invalid)?;
+        let id = format!("rename:{peer}:{}", body.sequence);
+        if self.sent_message(&id).await?.is_some() {
+            return Ok(false);
+        }
+        let content =
+            ChatContent::peer_renamed_with_id(id, crate::clock::rfc3339(now_millis()), body)
+                .map_err(ChatError::Invalid)?;
+        self.record_local_notice(peer, &content).await?;
+        Ok(true)
     }
 
     /// Write a local-only record (a call in the timeline) into `peer`'s
@@ -3183,9 +3243,7 @@ impl Session {
     }
 
     fn is_self(&self, peer: &ChatAddress) -> bool {
-        peer.user == self.address.user
-            && peer.domain == self.address.domain
-            && peer.device_id == self.address.device_id
+        peer.account == self.address.account && peer.device_id == self.address.device_id
     }
 }
 
@@ -3201,24 +3259,10 @@ fn current_profile_key(content: &kutup_chat_proto::ChatContent) -> Option<&str> 
 
 /// Look up the bundle for `device_id` in a served set (a 409 names a device the
 /// server should also have handed us a bundle for).
-fn canonical_account(value: &str) -> Result<String> {
-    let address: kutup_chat_proto::AccountAddress = value
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
-    let canonical = address.canonical();
-    if canonical != value {
-        return Err(ChatError::Invalid(
-            "history account address is not canonical".into(),
-        ));
-    }
-    Ok(canonical)
-}
-
 fn direct_conversation(value: &str) -> Result<kutup_chat_proto::ConversationId> {
-    let address: kutup_chat_proto::AccountAddress = canonical_account(value)?
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Invalid(error.to_string()))?;
-    Ok(kutup_chat_proto::ConversationId::direct(address))
+    Ok(kutup_chat_proto::ConversationId::direct(
+        crate::address::parse_account(value)?,
+    ))
 }
 
 fn find_bundle(bundles: &[DevicePreKeyBundle], device_id: u32) -> Result<&DevicePreKeyBundle> {
@@ -3580,8 +3624,12 @@ fn ensure_room_for_wrappers(send_id: &str, peer_user: &str, content: &ChatConten
         largest = largest.max(size(&wrapped)?);
     }
     if !content.is_ephemeral() {
-        let transcript =
-            ChatContent::sent_transcript(send_id, peer_user, i64::MAX, content.clone());
+        let transcript = ChatContent::sent_transcript(
+            send_id,
+            crate::address::parse_account(peer_user)?,
+            i64::MAX,
+            content.clone(),
+        );
         largest = largest.max(size(&transcript)?);
     }
     if largest > crate::padding::MAX_DIRECT_PLAINTEXT_BYTES {
@@ -3596,16 +3644,18 @@ fn next_contact_revision(current: u64) -> Result<u64> {
         .ok_or_else(|| ChatError::Invalid("contact revision is exhausted".into()))
 }
 
-impl From<&ContactRecord> for ContactControlBody {
-    fn from(contact: &ContactRecord) -> Self {
-        Self {
-            peer: contact.peer.clone(),
+impl TryFrom<&ContactRecord> for ContactControlBody {
+    type Error = ChatError;
+
+    fn try_from(contact: &ContactRecord) -> Result<Self> {
+        Ok(Self {
+            peer: crate::address::parse_account(&contact.peer)?,
             state: contact.state,
             previous_state: contact.previous_state,
             revision: contact.revision,
             source_device_id: contact.source_device_id,
             updated_at_ms: contact.updated_at_ms,
-        }
+        })
     }
 }
 
@@ -3644,7 +3694,7 @@ mod sealed_tests {
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let mut session = block_on(Session::generate(
             db.clone(),
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             1,
             1,
             &mut rng,
@@ -3656,7 +3706,7 @@ mod sealed_tests {
         const GONE: &str = "22222222-2222-4222-8222-222222222222";
         const GROUP_GONE: &str = "33333333-3333-4333-8333-333333333333";
         const GROUP: &str = "44444444-4444-4444-8444-444444444444";
-        let bob = direct_conversation("bob@b.test").unwrap();
+        let bob = direct_conversation("aci:00000000-0000-4000-8000-81b637d8fcd2@b.test").unwrap();
         let group = kutup_chat_proto::ConversationId::Group {
             group_id: GROUP.into(),
         };
@@ -3674,7 +3724,7 @@ mod sealed_tests {
         for (id, seq) in [(KEPT, 1), (GONE, 2)] {
             pending.messages.push(InboxMessage {
                 id: format!("mailbox-{seq}"),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 cursor: seq,
                 content: text(id, seq),
@@ -3692,7 +3742,7 @@ mod sealed_tests {
         .unwrap();
         pending.messages.push(InboxMessage {
             id: "mailbox-3".into(),
-            peer: "bob@b.test".into(),
+            peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
             sender_device_id: 1,
             cursor: 3,
             content: serde_json::to_vec(&reaction).unwrap(),
@@ -3707,7 +3757,7 @@ mod sealed_tests {
                 incarnation: 1,
                 mls_group_id: vec![5; 16],
                 epoch: 1,
-                sender: "dave@d.test".into(),
+                sender: "aci:00000000-0000-4000-8000-61ea0803f885@d.test".into(),
                 sender_device_id: 1,
                 outgoing: false,
                 cursor: Some(2),
@@ -3724,7 +3774,7 @@ mod sealed_tests {
                 send_id.clone(),
                 SentMessage {
                     send_id,
-                    peer: "alice@a.test".into(),
+                    peer: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
                     sender_device_id: 2,
                     content: serde_json::to_vec(&content).unwrap(),
                     created_at: 500 + i64::from(n),
@@ -3844,7 +3894,9 @@ mod sealed_tests {
             kutup_chat_proto::ViewOnceOpenedBody {
                 conversation: bob.clone(),
                 message_id: KEPT.into(),
-                sender: "bob@b.test".into(),
+                sender: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test"
+                    .parse()
+                    .unwrap(),
                 timestamp_ms: 101,
                 video: false,
             },
@@ -3866,7 +3918,7 @@ mod sealed_tests {
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let mut session = block_on(Session::generate(
             db.clone(),
-            "alice@a.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
             1,
             1,
             &mut rng,
@@ -3918,7 +3970,7 @@ mod sealed_tests {
         pending.messages.extend([
             InboxMessage {
                 id: "mailbox-expiring".into(),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 cursor: 1,
                 content: expiring(incoming_id, 1, "inbound"),
@@ -3926,7 +3978,7 @@ mod sealed_tests {
             },
             InboxMessage {
                 id: "mailbox-live".into(),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 cursor: 2,
                 content: serde_json::to_vec(&ChatContent::text_with_id(
@@ -3940,7 +3992,7 @@ mod sealed_tests {
             },
             InboxMessage {
                 id: "mailbox-reaction".into(),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 cursor: 3,
                 content: reaction.clone(),
@@ -3948,7 +4000,7 @@ mod sealed_tests {
             },
             InboxMessage {
                 id: "mailbox-future-content".into(),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 cursor: 4,
                 content: b"a future authenticated content encoding".to_vec(),
@@ -3959,7 +4011,7 @@ mod sealed_tests {
             sent_id.into(),
             SentMessage {
                 send_id: sent_id.into(),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 content: expiring(sent_id, 2, "outbound"),
                 created_at: 1_000,
@@ -3972,7 +4024,7 @@ mod sealed_tests {
             (
                 "71000000-0000-4000-8000-000000000001",
                 7,
-                direct_conversation("bob@b.test").unwrap(),
+                direct_conversation("aci:00000000-0000-4000-8000-81b637d8fcd2@b.test").unwrap(),
                 incoming_id,
             ),
             (
@@ -3988,7 +4040,7 @@ mod sealed_tests {
                 id.into(),
                 SentMessage {
                     send_id: id.into(),
-                    peer: "alice@a.test".into(),
+                    peer: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
                     sender_device_id: 1,
                     content: expiry_start(id, seq, conversation, target),
                     created_at: 1_000,
@@ -4002,7 +4054,7 @@ mod sealed_tests {
             "direct-derived".into(),
             Some(OutboxEntry {
                 send_id: "direct-derived".into(),
-                peer: "bob@b.test".into(),
+                peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 content: reaction.clone(),
                 envelopes: vec![1],
                 sealed_sender: false,
@@ -4039,7 +4091,7 @@ mod sealed_tests {
                 incarnation: 1,
                 mls_group_id: vec![5; 16],
                 epoch: 1,
-                sender: "bob@b.test".into(),
+                sender: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
                 sender_device_id: 1,
                 outgoing: false,
                 cursor: Some(4),
@@ -4077,7 +4129,7 @@ mod sealed_tests {
     fn the_largest_allowed_message_can_still_be_re_sent_sealed_as_a_first_message() {
         use base64::Engine as _;
         let mut rng = OsRng.unwrap_err();
-        let peer = "bob@chat.example";
+        let peer = "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example";
         let send_id = "00000000-0000-4000-8000-000000000001";
         let text =
             |n: usize| ChatContent::text_with_id(send_id, "2026-07-22T00:00:00Z", 1, "x".repeat(n));
@@ -4103,7 +4155,7 @@ mod sealed_tests {
         // Its re-send, with real ids, sealed, as a first (PreKey) message.
         let mut alice = block_on(Session::generate(
             Rc::new(SqliteChatDb::open_in_memory().unwrap()),
-            "alice@chat.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example",
             1,
             4,
             &mut rng,
@@ -4125,7 +4177,7 @@ mod sealed_tests {
         let expiration =
             Timestamp::from_epoch_millis(u64::try_from(now_millis()).unwrap() + 60 * 60 * 1000);
         let sender_certificate = SenderCertificate::new(
-            "alice@chat.example".into(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example".into(),
             None,
             alice.local_identity_public_key(),
             crate::address::device_id_u8(1).unwrap(),
@@ -4171,7 +4223,7 @@ mod sealed_tests {
         let bob_db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let mut alice = block_on(Session::generate(
             alice_db,
-            "alice@chat.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example",
             1,
             4,
             &mut rng,
@@ -4179,7 +4231,7 @@ mod sealed_tests {
         .unwrap();
         let mut bob = block_on(Session::generate(
             bob_db,
-            "bob@chat.example",
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
             1,
             4,
             &mut rng,
@@ -4195,7 +4247,7 @@ mod sealed_tests {
         let expiration =
             Timestamp::from_epoch_millis(u64::try_from(now_millis()).unwrap() + 60 * 60 * 1000);
         let sender_certificate = SenderCertificate::new(
-            "alice@chat.example".into(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example".into(),
             None,
             alice.local_identity_public_key(),
             crate::address::device_id_u8(1).unwrap(),
@@ -4215,7 +4267,7 @@ mod sealed_tests {
         let (outgoing, _) = block_on(alice.enqueue_sealed_direct_send(
             SealedDirectSend {
                 send_id: "00000000-0000-4000-8000-000000000001",
-                peer_user: "bob@chat.example",
+                peer_user: "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
                 recipient_bundles: &[bundle(&bob)],
                 sync_bundles: &[],
                 content: &content,
@@ -4239,27 +4291,33 @@ mod sealed_tests {
             send_id: None,
         };
         let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
-        assert_eq!(inspection.sender, "alice@chat.example");
+        assert_eq!(
+            inspection.sender,
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example"
+        );
         assert_eq!(inspection.identity_key, alice.local_identity_public_key());
 
         assert!(block_on(bob.receive_sealed_envelope(
             &envelope,
             &inspection,
-            "bob@chat.example",
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
             &wrong_root.public_key,
         ))
         .is_err());
         let outcome = block_on(bob.receive_sealed_envelope(
             &envelope,
             &inspection,
-            "bob@chat.example",
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
             &trust_root.public_key,
         ))
         .unwrap();
         let ReceiveOutcome::Message(message) = outcome else {
             panic!("sealed content should be a user message")
         };
-        assert_eq!(message.from.name(), "alice@chat.example");
+        assert_eq!(
+            message.from.name(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example"
+        );
         assert_eq!(
             message.content.as_text().map(|body| body.text),
             Some("sealed hello".into())

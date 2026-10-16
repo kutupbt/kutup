@@ -63,7 +63,8 @@
       "view": "View safety number",
       "verifiedStatus": "You have verified this safety number.",
       "changedStatus": "The safety number changed. Verify it again before sharing anything sensitive.",
-      "unverifiedStatus": "Compare the safety number with {{name}} in person or on a call to be sure no one is in between."
+      "unverifiedStatus": "Compare the safety number with {{name}} in person or on a call to be sure no one is in between.",
+      "changedNotice": "Your safety number with {{name}} changed."
     },
     "groupSecurity": {
       "ownerTitle": "Owner authorization",
@@ -221,7 +222,10 @@
       "capabilities": "Kutup could not check whether this server supports secure chat.",
       "unavailable": "Secure chat is temporarily unavailable.",
       "invalidAddress": "Enter a valid username or username@server address.",
-      "groupSend": "The message could not be sent to the group. Try again."
+      "groupSend": "The message could not be sent to the group. Try again.",
+      "notFound": "No Kutup account has this address.",
+      "renamed": "{{address}} is now {{now}}.",
+      "lookupFailed": "This address could not be looked up. Try again."
     },
     "mutations": {
       "edit": "Edit message",
@@ -287,6 +291,7 @@
       "settingDescription": "Show when you're typing, and see when others are. Turned off, you neither send nor see them."
     },
     "you": "You",
+    "someone": "Someone",
     "backToList": "Back to conversations",
     "encryptedIntro": "Messages and files here are end-to-end encrypted: only the people in a conversation can read them.",
     "nav": {
@@ -739,7 +744,8 @@
         "unnamed": "Give the group a name before turning on its link."
       },
       "bannerRequests_one": "{{count}} person wants to join",
-      "bannerRequests_other": "{{count}} people want to join"
+      "bannerRequests_other": "{{count}} people want to join",
+      "groupsOff": "Group chats are not available on this server."
     },
     "notifications": {
       "appName": "Kutup Chat",
@@ -1070,7 +1076,17 @@
       "inContacts": "In your contacts.",
       "view": "View contact"
     },
-    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does."
+    "peerWaiting": "{{server}} does not support this Chat version yet. Your messages wait and go as soon as it does.",
+    "someoneElse": {
+      "knownAs": "It is the account you know as {{name}}.",
+      "openAnyway": "Open anyway",
+      "continueAnyway": "Continue anyway"
+    },
+    "openAddress": {
+      "looking": "Looking up {{address}}…",
+      "back": "Back to chats"
+    },
+    "renamedNotice": "{{from}} changed their username to {{to}}."
   },
   "boot": {
     "opening": "Opening Chat…",
