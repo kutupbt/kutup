@@ -70,6 +70,15 @@ fn validate_hex32(name: &str, value: &str) -> AppResult<()> {
 }
 
 /// Whether this server hosts group calls (an SFU is configured).
+/// Group calls are a group feature: with groups off (`CHAT_GROUPS`, no
+/// ordering service) there are none, as every other group route answers.
+fn groups_on(state: &AppState) -> AppResult<()> {
+    if state.mls_ordering.is_none() {
+        return Err(AppError::not_found("MLS service unavailable"));
+    }
+    Ok(())
+}
+
 pub(crate) fn hosts_group_calls(state: &AppState) -> bool {
     let config = &state.config;
     !config.chat_sfu_url.is_empty()
@@ -222,6 +231,7 @@ pub(crate) async fn token(
     auth: AuthUser,
     Json(request): Json<GroupCallTokenRequest>,
 ) -> AppResult<Json<GroupCallTokenResponse>> {
+    groups_on(&state)?;
     if !ACCOUNT_TOKENS.allow(&auth.user_id) {
         return Err(AppError::too_many_requests("too many group call requests"));
     }
@@ -306,6 +316,7 @@ pub(crate) async fn federated_token(
     headers: HeaderMap,
     body: Bytes,
 ) -> AppResult<Response> {
+    groups_on(&state)?;
     let federation = state
         .federation
         .as_ref()

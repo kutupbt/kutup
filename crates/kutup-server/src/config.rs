@@ -121,9 +121,11 @@ pub struct Config {
     /// read after that: the stored mode is the only source
     /// (docs/plans/registration-codes.md).
     pub registration_mode: crate::registration::RegistrationMode,
-    /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
-    /// the server reports no groups, refuses the group routes, and the apps
-    /// show direct chats only; groups made earlier stay stored, unreachable.
+    /// Offer group chats and group calls (`CHAT_GROUPS`, default off: groups
+    /// return with the pairwise group design that replaces MLS, roadmap).
+    /// Off, the server reports no groups, refuses the group routes, and the
+    /// apps show direct chats only; groups made earlier stay stored,
+    /// unreachable.
     pub chat_groups: bool,
     /// Fetch pages for Chat link previews on behalf of this server's users
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
@@ -480,7 +482,7 @@ impl Config {
             federation_test_allow_private,
             rate_limits_relaxed,
             registration_mode,
-            chat_groups: get_env_bool("CHAT_GROUPS", true),
+            chat_groups: get_env_bool("CHAT_GROUPS", false),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
             chat_web_push_hosts: get_env(
@@ -590,6 +592,8 @@ pub(crate) struct Env {
     lookup: Lookup,
     names: Box<dyn Fn() -> Vec<String>>,
     errors: std::cell::RefCell<Vec<String>>,
+    /// Every name looked up: `.env.example` must list each one.
+    read: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
 impl Env {
@@ -603,6 +607,7 @@ impl Env {
                     .collect()
             }),
             errors: std::cell::RefCell::new(Vec::new()),
+            read: Default::default(),
         }
     }
 
@@ -618,6 +623,7 @@ impl Env {
             lookup: Box::new(move |key| map.get(key).cloned()),
             names: Box::new(move || names.clone()),
             errors: std::cell::RefCell::new(Vec::new()),
+            read: Default::default(),
         }
     }
 
@@ -627,6 +633,7 @@ impl Env {
 
     /// The value as set, even when blank.
     pub(crate) fn raw(&self, key: &str) -> Option<String> {
+        self.read.borrow_mut().insert(key.to_owned());
         (self.lookup)(key)
     }
 
@@ -1110,5 +1117,185 @@ mod feedback_repository_tests {
                 .unwrap_err()
                 .contains("FEEDBACK_GITHUB_REPOSITORY"));
         }
+    }
+}
+
+/// `.env.example` is the one list of settings (docs/self-hosting.md): every
+/// name the server reads and every name a compose file or script reads, each
+/// exactly once, nothing else; and each setting the server reads reaches the
+/// backend container from `.env`, unless Compose sets it itself.
+#[cfg(test)]
+mod env_example {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+    /// Read by a compose file or a script, not by the server: the name and a
+    /// file that reads it.
+    const OUTSIDE_THE_SERVER: &[(&str, &str)] = &[
+        ("POSTGRES_PASSWORD", "docker-compose.yml"),
+        ("POSTGRES_DB", "docker-compose.yml"),
+        ("POSTGRES_USER", "docker-compose.yml"),
+        ("KUTUP_HTTP_PORT", "docker-compose.yml"),
+        ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
+        ("CHAT_TURN_REALM", "docker-compose.yml"),
+        ("CHAT_SFU_TURN_DOMAIN", "docker-compose.yml"),
+        ("KUTUP_ACME_EMAIL", "docker-compose.acme.yml"),
+        ("KUTUP_ACME_DOMAINS", "docker-compose.acme.yml"),
+        ("KUTUP_ACME_EXTRA_DOMAINS", "docker-compose.acme.yml"),
+        ("KUTUP_ACME_STAGING", "docker-compose.acme.yml"),
+        ("STALWART_ADMIN_SECRET", "docker-compose.mail.yml"),
+        ("MAIL_SMTP_PORT", "docker-compose.mail.yml"),
+        ("KUTUP_SERVER_IMAGE", "docker-compose.images.yml"),
+        ("KUTUP_WEB_IMAGE", "docker-compose.images.yml"),
+        (
+            "KUTUP_STALWART_SETUP_IMAGE",
+            "docker-compose.mail-images.yml",
+        ),
+        ("KUTUP_BACKUP_PASSPHRASE", "scripts/backup-postgres.sh"),
+        ("KUTUP_BACKUP_KEEP_DAYS", "scripts/backup-postgres.sh"),
+    ];
+
+    /// Read by the server, but not from `.env` under Compose: it builds or
+    /// fixes them itself (DATABASE_URL from POSTGRES_*, the cache directory,
+    /// the port and mail's addresses inside its network, OPAQUE_SETUP_KEYS in
+    /// place of the file) or only test stacks set them.
+    const NOT_FROM_ENV_FILE: &[&str] = &[
+        "DATABASE_URL",
+        "MAPS_CACHE_DIR",
+        "PORT",
+        "MAIL_LMTP_BIND",
+        "MAIL_SUBMISSION_ADDR",
+        "OPAQUE_SETUP_KEYS_FILE",
+        "MAIL_TEST_KEY_ORIGIN",
+    ];
+
+    /// The compose files a self-hoster combines (docs/self-hosting.md).
+    const COMPOSE_FILES: &[&str] = &[
+        "docker-compose.yml",
+        "docker-compose.mail.yml",
+        "docker-compose.acme.yml",
+        "docker-compose.external-s3.yml",
+        "docker-compose.images.yml",
+        "docker-compose.mail-images.yml",
+    ];
+
+    fn file(path: &str) -> String {
+        std::fs::read_to_string(format!("{ROOT}/{path}"))
+            .unwrap_or_else(|error| panic!("{path}: {error}"))
+    }
+
+    /// Names read straight from the process environment, outside `Env`
+    /// (`PORT`, the OpenTelemetry settings): the quoted name in
+    /// `env::var("…")` or `nonempty_env("…")`, outside test modules.
+    fn read_directly() -> BTreeSet<String> {
+        fn walk(dir: &std::path::Path, found: &mut BTreeSet<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, found);
+                    continue;
+                }
+                // Rust files only; a `*tests.rs` file is a test module.
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+                for call in ["env::var(\"", "nonempty_env(\""] {
+                    for rest in code.split(call).skip(1) {
+                        let name: String = rest
+                            .chars()
+                            .take_while(|c| {
+                                c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_'
+                            })
+                            .collect();
+                        if !name.is_empty() {
+                            found.insert(name);
+                        }
+                    }
+                }
+            }
+        }
+        let mut found = BTreeSet::new();
+        walk(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut found,
+        );
+        found
+    }
+
+    /// Every name the server reads: all of `Config::from_env` (each read is
+    /// unconditional), the rate limits it checks, and the direct reads.
+    fn server_reads() -> BTreeSet<String> {
+        let env = Env::from_pairs(&[]);
+        Config::from_env(&env);
+        let mut names = env.read.take();
+        names.extend(read_directly());
+        names
+    }
+
+    /// Each setting `.env.example` lists, as `NAME=` or commented `# NAME=`.
+    fn listed() -> Vec<String> {
+        file(".env.example")
+            .lines()
+            .filter_map(|line| {
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                let (name, _) = line.split_once('=')?;
+                (!name.is_empty()
+                    && name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+                .then(|| name.to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn env_example_lists_every_setting_once() {
+        let listed = listed();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let twice: Vec<&String> = listed
+            .iter()
+            .filter(|name| !seen.insert((*name).clone()))
+            .collect();
+        assert!(
+            twice.is_empty(),
+            ".env.example lists these twice: {twice:?}"
+        );
+
+        for (name, path) in OUTSIDE_THE_SERVER {
+            assert!(file(path).contains(name), "{path} does not read {name}");
+        }
+        let server = server_reads();
+        let mut expected = server.clone();
+        expected.extend(OUTSIDE_THE_SERVER.iter().map(|(name, _)| name.to_string()));
+        let missing: Vec<&String> = expected.difference(&seen).collect();
+        assert!(
+            missing.is_empty(),
+            "read but not in .env.example: {missing:?}"
+        );
+        let unread: Vec<&String> = seen.difference(&expected).collect();
+        assert!(
+            unread.is_empty(),
+            "in .env.example but read by nothing (or add it to OUTSIDE_THE_SERVER): {unread:?}"
+        );
+    }
+
+    #[test]
+    fn every_setting_reaches_the_backend_from_the_env_file() {
+        let compose: String = COMPOSE_FILES.iter().map(|path| file(path)).collect();
+        let unwired: Vec<String> = server_reads()
+            .into_iter()
+            .filter(|name| !NOT_FROM_ENV_FILE.contains(&name.as_str()))
+            .filter(|name| !compose.contains(&format!("{name}: ${{{name}")))
+            .collect();
+        assert!(
+            unwired.is_empty(),
+            "the server reads these, but no compose file passes them from .env: {unwired:?}"
+        );
     }
 }

@@ -21,234 +21,96 @@ default in its
 
 ---
 
-## Step 1: Clone and Configure
+## Quick start
 
-```sh
-git clone https://github.com/kutupbt/kutup.git
-cd kutup
-cp .env.example .env
-```
+Five steps from a fresh server to the first sign-in. The settings follow the
+layout Ente uses for its self-hosted server (a short example env with only
+what must be set, every other setting documented with its default:
+[`server/config/example.env`](https://github.com/ente-io/ente/blob/main/server/config/example.env)
+and its [environment reference](https://ente.com/help/self-hosting/installation/env-var)).
 
-Edit `.env` and fill in every value:
+1. **Get the code and the settings file.**
 
-```sh
-# PostgreSQL — names have checked-in defaults; use a strong password
-POSTGRES_DB=kutup
-POSTGRES_USER=kutup
-POSTGRES_PASSWORD=<strong-random-password>
+   ```sh
+   git clone https://github.com/kutupbt/kutup.git
+   cd kutup
+   cp .env.example .env
+   ```
 
-# JWT secret — generate with:
-#   openssl rand -hex 64
-JWT_SECRET=<64-byte-hex-string>
+2. **Fill in the REQUIRED block at the top of `.env`.** Each line says how to
+   make its value:
 
-# The keys the sign-in (OPAQUE) setups are sealed under — generate with:
-#   echo "1:$(openssl rand -base64 32)"
-# Back it up apart from the database (see "Database backups").
-OPAQUE_SETUP_KEYS=1:<base64 of 32 random bytes>
+   | Setting | What it is | Make it with |
+   |---|---|---|
+   | `KUTUP_BASE_DOMAIN` | Your domain; the apps live on `account.`, `drive.`, `chat.`, … under it | — |
+   | `SERVER_URL` | This server's public HTTPS address | — |
+   | `CHAT_SERVER_NAME` | The name after the `@` in every address; set once | — |
+   | `POSTGRES_PASSWORD` | The database password | `openssl rand -hex 32` |
+   | `JWT_SECRET` | Signs sessions | `openssl rand -hex 64` |
+   | `OPAQUE_SETUP_KEYS` | The keys sign-in is sealed under; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
+   | `S3_SECRET_KEY` | The bundled object store's secret | `openssl rand -hex 32` |
+   | `ADMIN_ACCOUNT` | The break-glass administrator, `username:password` | — |
 
-# Object storage credentials — the bundled SeaweedFS's by default, injected
-# into every bundled service by Compose. For another S3 store see "Using
-# another S3 store" below.
-S3_ACCESS_KEY=kutup
-S3_SECRET_KEY=<strong-random-secret>
-S3_BUCKET=kutup-files
-S3_REGION=us-east-1
+   Everything below that block is optional and shows its default. Check the
+   file without starting anything:
 
-# Public URL — published as the federation API base
-# Must be the address users (and remote servers) reach this instance at
-SERVER_URL=https://kutup.example.com
+   ```sh
+   docker compose run --rm --no-deps backend check-config
+   ```
 
-# Stable account-address suffix. Set it once before accounts are created.
-# If federation is enabled, it must match FEDERATION_SERVER_NAME.
-CHAT_SERVER_NAME=kutup.example.com
+3. **Point the names at the server.** Each app hostname (`account`, `drive`,
+   `chat`, `photos`, `maps`, `office`, `contacts`, `mail`, `pass` and the
+   `editor` sandbox, under `KUTUP_BASE_DOMAIN`) needs a DNS record for this
+   machine.
 
-# Unified federation v2 identity used by both Chat and Drive. Optional: a
-# server without it makes and keeps its own (see "SERVER_URL" below).
-#   openssl rand -base64 32
-# FEDERATION_SERVER_NAME=kutup.example.com
-# FEDERATION_SIGNING_KEY=<base64-32-byte-ed25519-seed>
-# FEDERATION_NEXT_SIGNING_KEY=<set only during authenticated key rotation>
+4. **Pick the compose files for your setup** and start:
 
-# Active Chat installations per account. V1 permits 1..=10.
-CHAT_MAX_ACTIVE_DEVICES=10
-CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
+   | You want | Add | Also set in `.env` |
+   |---|---|---|
+   | The base: every app, the bundled database and object store | `docker-compose.yml` | — |
+   | Certificates from Let's Encrypt, renewed by themselves (ports 80 and 443 open) | `docker-compose.acme.yml` | optional `KUTUP_ACME_*` |
+   | Mail to and from outside | `docker-compose.mail.yml` | `MAIL_HOSTNAME`, `MAIL_INBOUND_TOKEN`, `STALWART_ADMIN_SECRET` |
+   | Your own S3 store (R2, B2, Hetzner, MinIO, AWS) instead of the bundled one | `docker-compose.external-s3.yml` | `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_BUCKET`, `S3_REGION` |
+   | Images built elsewhere instead of building here | `docker-compose.images.yml` | `KUTUP_SERVER_IMAGE`, `KUTUP_WEB_IMAGE` |
 
-# Group chats and group calls. Set to false for direct chats only: the server
-# then reports no groups and refuses the group routes, and the apps hide
-# them. Groups made earlier stay stored but cannot be opened.
-CHAT_GROUPS=true
+   For example, the base with automatic certificates and mail:
 
-# Link previews: the server fetches public https pages (port 443, public
-# addresses only) for the sender's previews. It then sees the links its users
-# preview, never their messages. Set to false to turn previews off.
-CHAT_LINK_PREVIEWS=true
+   ```sh
+   export COMPOSE_FILE=docker-compose.yml:docker-compose.acme.yml:docker-compose.mail.yml
+   docker compose up -d --build --wait
+   ```
 
-# Web Push: wake Chat devices whose browser is closed. Pushes are empty (the
-# server cannot read messages); the server sends them only to the push
-# services listed (exact hosts, or .suffix for subdomains). The VAPID key is
-# made once and kept in the database. Subject: a mailto: or https: contact.
-CHAT_WEB_PUSH=true
-# CHAT_WEB_PUSH_HOSTS=fcm.googleapis.com,updates.push.services.mozilla.com,.push.apple.com,.notify.windows.com
-# CHAT_WEB_PUSH_SUBJECT=mailto:admin@example.com
+   Without `docker-compose.acme.yml`, put your certificate and key at
+   `nginx/certs/fullchain.pem` and `nginx/certs/privkey.pem` first ("TLS /
+   HTTPS" below).
 
-# Calls: media flows browser to browser (DTLS-SRTP). STUN finds public
-# addresses; a TURN relay (coturn with use-auth-secret) carries calls that
-# can't connect directly and hides addresses for "Always relay calls".
-# The server hands out 12-hour credentials made with CHAT_TURN_SECRET.
-# `docker compose --profile turn up` starts coturn with the same secret.
-# The last address below is TURN over TLS on port 443, for networks that let
-# nothing out but HTTPS: the bundled nginx takes it on turn.<domain> (which
-# needs DNS and a place on the certificate) and hands it to coturn.
-# CHAT_STUN_URLS=stun:turn.example.com:3478
-# CHAT_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp,turns:turn.example.com:443?transport=tcp
-# CHAT_TURN_SECRET=<long random string>
-# CHAT_TURN_REALM=turn.example.com
+5. **Sign in** at `https://account.<KUTUP_BASE_DOMAIN>` with `ADMIN_ACCOUNT`
+   and finish setup ("First login" below).
 
-# Group calls: a LiveKit SFU (`docker compose --profile sfu up`). Browsers
-# connect to CHAT_SFU_URL; the bundled nginx serves the SFU at
-# wss://sfu.<domain>, which needs DNS and a place on the certificate. UDP
-# 50000-60000 and TCP 7881 must be reachable. Frames are end-to-end
-# encrypted, so the SFU forwards what it cannot read. Without these, accounts
-# here can join group calls other servers host but not start one.
-# CHAT_SFU_URL=wss://sfu.example.com
-# Where this server itself reaches the SFU's API, to remove someone from a
-# meeting or end it for everyone. Leave it out to use CHAT_SFU_URL; with the
-# bundled LiveKit, which runs on the host network, use the line below.
-# CHAT_SFU_API_URL=http://host.docker.internal:7880
-# CHAT_SFU_API_KEY=<key name>
-# CHAT_SFU_API_SECRET=<32+ random characters>
-# Group-call media over TLS on port 443, for the same networks: the name
-# (sfu-turn.<domain>, with DNS and a place on the certificate) the SFU's own
-# relay is offered under.
-# CHAT_SFU_TURN_DOMAIN=sfu-turn.example.com
+---
 
-# Optional: contacts-only sealed sender from an offline root. Leave both out
-# and the server provisions sealed sender itself. The policy contains public
-# offline roots and root-signed online certificates; the normal server receives
-# only the active online private key.
-# CHAT_SEALED_SENDER_POLICY=<canonical one-line JSON>
-# CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY=<base64-32-byte-libsignal-private-key>
+## Configuration reference
 
-# Private MLS groups work without configuration: the server orders them with
-# a control key it makes and the standard v1 policy. Set both values only to
-# publish a custom policy.
-# CHAT_MLS_ORDERING_POLICY=<canonical authenticated policy JSON>
-# CHAT_MLS_CONTROL_SIGNING_KEY=<base64 signing seed>
+`.env.example` is the reference: every setting the server, the compose files
+and the scripts read, each once, grouped by area (General, Automatic
+certificates, Database and storage, Chat, Calls, Mail, Names and federation,
+Rate limits and sign-in lockout, Monitoring, Published images, Advanced), with
+its default and one line on what it does. A test
+(`env_example_lists_every_setting_once` in `crates/kutup-server/src/config.rs`)
+keeps it that way, and checks that the compose files pass each setting the
+server reads on to it. The server checks every value at start: one it cannot
+read (a number that is not one, an unknown choice, an unknown `RATE_LIMIT_*`
+name) stops it with exit code 2 and the full list of problems, never a silent
+default. `kutup-server check-config` runs that check alone (no database, no
+migrations); run it against a new image and your `.env` before switching over.
 
-# Break-glass admin bootstrap: username:password (the password may hold
-# colons; the old email:username:password form is no longer read).
-# Created on first start; the admin signs in with the username and
-# completes setup on first login.
-# This account is the protected break-glass admin — it can never be
-# demoted, disabled, or deleted. Promote further admins inside the app.
-ADMIN_ACCOUNT=admin:<strong-admin-password>
+**Chat groups are off by default** (`CHAT_GROUPS=false`): Chat offers direct
+chats, calls and meeting links, but no group chats or group calls; the
+server reports none and refuses the group routes. Groups return with the
+pairwise group design that replaces them (docs/roadmap.md). `CHAT_GROUPS=true`
+switches the current groups on, for testing only.
 
-# Who may register on a fresh database: on (anyone), code (only with a
-# referral code an administrator made) or off (nobody; the default). Used only
-# while the database holds no choice yet: from then on the administrators set
-# it under Account → Admin → Server settings, and this is not read again.
-# REGISTRATION_MODE=off
-
-# SeaweedFS master — the admin dashboard probes it for real storage
-# capacity + usage. Default works for the bundled compose.
-SEAWEEDFS_MASTER_URL=http://seaweedfs-master:9333
-
-# Optional fallback storage capacity (bytes) for the admin UI, used only
-# when the SeaweedFS probe is unavailable. Unset / 0 hides the readout.
-# STORAGE_TOTAL_BYTES=536870912000
-
-# Days a trashed file/folder stays restorable before the hourly sweeper
-# purges it permanently. 0 disables the automatic purge (trash only
-# empties when users do it themselves). Default: 30.
-# TRASH_RETENTION_DAYS=30
-
-# Chat mailbox, temporary media-delivery, send-id retention, and inactive-device
-# expiry. The hourly maintenance job enforces these; 0 disables an individual policy.
-# CHAT_MAILBOX_RETENTION_DAYS=30
-# CHAT_SEND_RETENTION_DAYS=30
-# CHAT_MEDIA_DELIVERY_RETENTION_DAYS=45
-# CHAT_DEVICE_EXPIRY_DAYS=90
-
-# The server checks every variable at start: a value it cannot read (a number
-# that is not one, an unknown choice, an unknown RATE_LIMIT_* name) stops it
-# with exit code 2 and the full list of problems, instead of a silent default.
-# `kutup-server check-config` runs that check alone (no database, no
-# migrations): exit 0, or 2 with the list. Run it against a new image and
-# your .env before switching over.
-
-# Rate limits (defaults shown). Most are per client IP; chat key fetches use a
-# primary per-account budget plus a coarse IP outer wall. The backend resolves the
-# client IP from the proxy-set X-Real-IP header, so keep the backend
-# unreachable except through nginx.
-# RATE_LIMIT_LOGIN_PER_MIN=10
-# RATE_LIMIT_PREFLIGHT_PER_MIN=20
-# RATE_LIMIT_FORK_PER_MIN=120           # each app opened redeems one session hand-off
-# RATE_LIMIT_AVAILABLE_HASHES_PER_MIN=120 # Drive asking which "name (n)" is free, per account
-# RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN=600 # edits sent over HTTP (the CLI editing notes), per device
-# RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=20 # collaboration device registrations, per account
-# RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN=300 # account head, chain and index reads, per account
-# RATE_LIMIT_RENAME_CHECKS_PER_15_MIN=30 # name checks before a rename, per account
-# RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN=60 # another server's renames fetched for an account
-# RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN=120 # renames fetched from one other server
-# RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN=120 # accounts one account fetches by id from one other server
-# RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN=600 # rename announces taken from one other server
-# A name an account leaves (a rename, a deletion) stays held this many days
-# before anyone may take it; a renamed account's old address receives (only)
-# for the second number of days, then bounces. Both seed the values
-# administrators set under Administration (docs/plans/username-renames.md).
-# NAME_HOLD_DAYS=180
-# OLD_ADDRESS_RECEIVE_DAYS=90
-# NAME_SWEEP_SECONDS=3600 # how often those dates are acted on
-# RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN=60 # devices another server announces, per server and share
-# RATE_LIMIT_CALL_LINK_PER_MIN=60       # opening and joining a meeting link need no account
-# RATE_LIMIT_CALL_LINK_POLL_PER_MIN=600 # a meeting's waiting room, asked about every few seconds
-# RATE_LIMIT_USER_LOOKUP_PER_MIN=30
-# RATE_LIMIT_REGISTER_PER_HOUR=10
-# RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR=30    # checking a referral code before signing up
-# RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR=20 # wrong referral codes, checks and sign-ups together
-# RATE_LIMIT_RECOVERY_PER_HOUR=5
-# RATE_LIMIT_REPORT_PER_HOUR=20        # reporting a public link needs no account
-# RATE_LIMIT_FEEDBACK_PER_HOUR=10      # per account: feedback from the apps' sidebar
-# RATE_LIMIT_FED_USERS_PER_MIN=60
-# RATE_LIMIT_ADMIN_PER_MIN=120
-# RATE_LIMIT_CHAT_KEYS_PER_MIN=30
-# RATE_LIMIT_CHAT_KEYS_IP_PER_MIN=120
-# Test stacks only (APP_ENV=test only): every RATE_LIMIT_*
-# default raised; explicit values still win.
-# RATE_LIMITS_RELAXED=false
-
-# Feedback from the apps' sidebar reaches this server's administrators
-# (Account → Admin → Feedback). The public tracker an administrator may
-# forward an item to, and that the form offers to people who prefer to report
-# in public: owner/repo on GitHub, or off. The default is the upstream
-# project; point it at your own repository, or turn it off. Forwarding from
-# the admin page always warns first that the issue is readable by anyone if
-# the repository is public, and lets the administrator edit the issue's
-# title and text (to take personal details out) before anything opens.
-# FEEDBACK_GITHUB_REPOSITORY=kutupbt/kutup
-
-# Optional OTLP/gRPC traces and metrics. Leave all endpoints unset for
-# logs-only operation. Configure one shared endpoint, or both signal-specific
-# endpoints; a partial exporter configuration fails startup.
-# OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.com:4317
-# OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=https://collector.example.com:4317
-# OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=https://collector.example.com:4317
-# OTEL_SERVICE_NAME=kutup-server
-
-# Sign-in lockout: this many wrong passwords in a row for one account from
-# one client IP lock that pair out for the cooldown. Wrong passwords from
-# clients the account has never signed in from are also capped per account
-# (all of them together, in the same window); its own devices are not held
-# by that cap. Locked attempts return 429 and clear on their own. Defaults
-# shown.
-# LOGIN_LOCKOUT_THRESHOLD=5
-# LOGIN_LOCKOUT_MINUTES=15
-# LOGIN_ACCOUNT_CEILING=20
-# LOGIN_ACCOUNT_DAILY_CEILING=200
-```
-
-`.env.example` is the complete checked-in variable template. Keep
-`CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, and the public host in
+Keep `CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, and the public host in
 `SERVER_URL` aligned before creating accounts; changing an established account
 address or federation identity is a protocol migration, not a DNS-only edit.
 
@@ -295,7 +157,7 @@ sender-recipient correlations are never metric labels or trace fields.
 
 ---
 
-## Step 2: Start the Stack
+## The stack
 
 Compose injects `S3_ACCESS_KEY` and `S3_SECRET_KEY` from `.env` into SeaweedFS,
 the bucket initializer, and the backend. No second credential file needs to be
@@ -371,7 +233,7 @@ hostname. Mail itself is set up in "Mail" below.
 
 ---
 
-## Step 3: First Login
+## First login
 
 Find the admin password confirmation in the backend logs:
 
