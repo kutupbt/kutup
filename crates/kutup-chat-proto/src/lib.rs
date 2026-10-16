@@ -772,12 +772,12 @@ pub struct DeliveredEnvelope {
     /// and the client-side dedup key (tolerates a WS envelope and its
     /// REST-drained twin). Server-assigned; ordered `(cursor)`.
     pub cursor: u64,
-    /// [ADD→RSV] Sender address, `Option` from v1 so sealed sender (which
-    /// removes it) is not a breaking change. Local phase: bare username;
-    /// `user@domain` for remote senders once federation lands; `None` under
-    /// sealed sender. See `docs/chat-protocol.md` §8.1.
+    /// The sender's account (server and account id), never a name; `None`
+    /// under sealed sender. See `docs/chat-protocol.md` §8.1 and
+    /// docs/plans/account-ids.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<AccountRefSchema>))]
+    pub sender: Option<AccountRef>,
     /// True when `content` is a serialized libsignal unidentified-sender
     /// message. Such rows intentionally carry no sender metadata.
     #[serde(default)]
@@ -1069,10 +1069,19 @@ mod tests {
 
     #[test]
     fn delivered_envelope_has_cursor_and_optional_sender() {
-        let src = r#"{"id":"m1","cursor":42,"sender":"alice","senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
+        let src = r#"{"id":"m1","cursor":42,"sender":{"server":"a.example","accountId":"a11ce000-0000-4000-8000-000000000001"},"senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
         let e: DeliveredEnvelope = serde_json::from_str(src).unwrap();
         assert_eq!(e.cursor, 42);
-        assert_eq!(e.sender.as_deref(), Some("alice"));
+        assert_eq!(
+            e.sender.map(|sender| sender.to_string()).as_deref(),
+            Some("aci:a11ce000-0000-4000-8000-000000000001@a.example")
+        );
+        // A sender named by a name is refused.
+        let named = src.replace(
+            r#"{"server":"a.example","accountId":"a11ce000-0000-4000-8000-000000000001"}"#,
+            r#""alice""#,
+        );
+        assert!(serde_json::from_str::<DeliveredEnvelope>(&named).is_err());
         // Sealed-sender / future: absent sender still deserializes.
         let sealed = r#"{"id":"m2","cursor":43,"senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
         let e2: DeliveredEnvelope = serde_json::from_str(sealed).unwrap();
