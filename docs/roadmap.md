@@ -788,7 +788,9 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   as Signal's groups before MLS), keyed by account ids from the start. MLS
   is frozen until then: it gets only what other formats need to build, no
   new work, and its routes stay refused while `CHAT_GROUPS` is off. When the
-  pairwise design ships, the MLS code, tables and routes are removed.
+  pairwise design ships, the MLS code, tables and routes are removed, among
+  them `chat_mls_pending_requests` (still keyed by a sender address, and kept
+  only because `chat_mls_mailbox.request_id` references it).
 - **Networks that block WebSockets: what is left.** Calls get out over TLS
   on port 443 (`turn.` and `sfu-turn.`), Chat reads its mailbox every few
   seconds when its socket cannot open, and a document opens read-only with
