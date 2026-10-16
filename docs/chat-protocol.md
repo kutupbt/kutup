@@ -351,6 +351,18 @@ typing outboxes are discarded after ten seconds rather than delivered late.
 The homeservers and MLS ordering authorities see only the ordinary padded
 ciphertext delivery, never the typing kind or state.
 
+### Renames
+
+A thread is keyed by the peer's account, so a username change keeps it. The
+app follows a direct peer to the address its server says it has now along
+the peer's own rename chain (signed by the authority pinned for them,
+extending the chain the pin list holds), and for each rename issued since
+the list first met them writes a local-only `peerRenamed` line (`{previous,
+current, sequence}`), once per rename: its id names the account and the
+sequence. A few peers are checked per pass, newest conversations first, at
+most every five minutes each. Someone who later takes the old name is
+another account and another thread.
+
 ### Which devices a message is taken from
 
 An identified envelope is read only when its sender device is in the
@@ -522,8 +534,8 @@ receive path (Direct, sync transcript, MLS):
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
 from people not accepted, refused in Note to Self and in MLS. `callLog` is a
-local-only record of a finished call, like `groupUpdate`, `undecryptable` and
-`safetyNumberChanged`:
+local-only record of a finished call, like `groupUpdate`, `undecryptable`,
+`safetyNumberChanged` and `peerRenamed`:
 none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
 (`GroupCallBody`) announces a group call starting or ending, MLS only. See
 [`chat-calls.md`](chat-calls.md).

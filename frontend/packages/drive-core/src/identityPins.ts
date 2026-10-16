@@ -435,6 +435,58 @@ export async function followRename(me: DriveIdentity, address: string, renames: 
   return null
 }
 
+/** One step of an account's own rename chain: `from` → `to`, the chain's `sequence`. */
+export interface AccountRename {
+  from: string
+  to: string
+  sequence: number
+  issuedAtMs: number
+}
+
+/**
+ * Follows `account` to `current`, the address its server says it has now,
+ * along its own rename chain (docs/plans/account-ids.md): only a chain
+ * signed by the authority pinned for it, that extends the one the list
+ * holds, and that ends at `current`. The chain is applied to the pins (its
+ * addresses become the account's labels) and the renames issued since the
+ * list first met it are returned, oldest first: a rename from before is no
+ * news, and a server can't make one up. Nothing for an account the list
+ * doesn't know, or one already at `current`.
+ */
+export async function followAccountRenames(me: DriveIdentity, account: AccountRef, current: string): Promise<AccountRename[]> {
+  // Read the list again: another app (Chat's engine) may have pinned since.
+  store = null
+  const pins = await pinStore(me)
+  const pin = pins.pins.list.pins.find((known) => sameAccount(known.account, account))
+  if (!pin) return []
+  const label = pinAddress(pin)
+  if (label && (await sameAddress(label, current))) return []
+  let renames: RenameChains
+  try {
+    renames = await fetchRenames(current)
+  } catch {
+    return []
+  }
+  if (renames.version !== 1 || renames.unavailable) return []
+  const entry = renames.chains.find((chain) => chain.authorityPublicKey === pin.authorityPublicKey && chain.state === 'current')
+  if (!entry || entry.chain.length === 0 || !(await sameAddress(entry.current, current))) return []
+  const last = entry.chain[entry.chain.length - 1]
+  if (!(await sameAddress(last.current, current))) return []
+  try {
+    // Verifies the chain against the pinned authority, and that it extends the list's.
+    await updatePins(me, async (list) => {
+      const applied = await applyAccountRenameToPins(list, account, entry.chain, now())
+      return applied.applied.changed ? applied.pins : null
+    })
+  } catch {
+    return []
+  }
+  const met = Date.parse(pin.since)
+  return entry.chain
+    .filter((step) => Number.isFinite(met) && step.issuedAtMs > met)
+    .map((step) => ({ from: step.previous, to: step.current, sequence: step.sequence, issuedAtMs: step.issuedAtMs }))
+}
+
 /**
  * Whether `authority` may speak for `account`, found at `address`, as far as
  * the pin list knows (Mail's key checks):

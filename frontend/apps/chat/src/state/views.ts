@@ -321,6 +321,8 @@ export interface MessageView {
   undecryptable: 'waiting' | 'lost' | null
   /** The other person's safety number changed here (Signal's line in the thread). */
   safetyChanged: boolean
+  /** The other person changed their username (their own verified rename chain). */
+  renamed: { previous: string; current: string } | null
   /** A group call someone started. */
   groupCall: ChatGroupCall | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
@@ -451,7 +453,7 @@ export function threadView(
   }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.safetyNumberChanged || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.safetyNumberChanged || m.content.peerRenamed || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
       !opened.has(m.content.messageId) &&
       !repeatedStart(m),
   )
@@ -478,6 +480,9 @@ export function threadView(
       callLog: entry.content.callLog ?? null,
       undecryptable: undecryptableState(entry),
       safetyChanged: entry.content.safetyNumberChanged === true,
+      renamed: entry.content.peerRenamed
+        ? { previous: entry.content.peerRenamed.previous, current: entry.content.peerRenamed.current }
+        : null,
       groupCall: entry.content.groupCall?.event === 'started' ? entry.content.groupCall : null,
       viewedOnce: null,
       poll: entry.content.poll ? (polls.get(id) ?? null) : null,
@@ -515,6 +520,7 @@ export function threadView(
       callLog: null,
       undecryptable: null,
       safetyChanged: false,
+      renamed: null,
       groupCall: null,
       viewedOnce: { video: body.video },
       poll: null,

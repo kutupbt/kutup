@@ -1085,7 +1085,8 @@
     "openAddress": {
       "looking": "Looking up {{address}}…",
       "back": "Back to chats"
-    }
+    },
+    "renamedNotice": "{{from}} changed their username to {{to}}."
   },
   "boot": {
     "opening": "Opening Chat…",

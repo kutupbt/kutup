@@ -308,6 +308,7 @@ import {
   checkGroup,
   currentAddressOf,
   IdentityNotConfirmed,
+  followAccountRenames,
   type AccountAnswer,
   personSafetyNumber,
   pinnedVerdict,
@@ -855,5 +856,52 @@ describe('shared mailboxes (Mail’s key checks)', () => {
     await acceptGroup(me, 'kutup.dev', group, { signers: ['ADMIN'], digests: ['x1'] })
     expect(storedGroups()).toMatchObject([{ signerPublicKey: 'ADMIN', replaced: ['S2'] }])
     expect(await checkGroup(me, 'kutup.dev', group, { signers: ['ADMIN'], digests: ['x1'] })).toEqual({ kind: 'pinned' })
+  })
+})
+
+describe('followAccountRenames (Chat\'s rename line)', () => {
+  const ADA = { server: 'kutup.dev', accountId: 'acct-A' }
+  /** Ada's chain from ada.l to `to`, each step signed `by` at `at` (ms). */
+  function chainAt(to: string[], at: number, by = 'A') {
+    const addresses = ['ada.l@kutup.dev', ...to]
+    const steps = chainOf('A', addresses, by).map((step) => ({ ...step, issuedAtMs: at }))
+    return { version: 1, chains: [{ incarnationId: 'inc-A', authorityPublicKey: 'A', current: addresses.at(-1)!, state: 'current', chain: steps }] }
+  }
+
+  async function metAda() {
+    publish('ada.l@kutup.dev', 'A')
+    await checkIdentity(me, 'ada.l@kutup.dev')
+    newPage()
+  }
+
+  it('follows the pinned account along its own chain and tells the renames since it was met', async () => {
+    await metAda()
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.lovelace@kutup.dev'], Date.now() + 60_000))
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([
+      { from: 'ada.l@kutup.dev', to: 'ada.lovelace@kutup.dev', sequence: 1, issuedAtMs: expect.any(Number) as number },
+    ])
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev'] }])
+    // Already there: nothing more, and nothing asked.
+    server.renames.clear()
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
+  })
+
+  it('tells nothing of a rename from before it was met (the chain is still followed)', async () => {
+    await metAda()
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.lovelace@kutup.dev'], Date.parse('2020-01-01T00:00:00Z')))
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev', 'ada.lovelace@kutup.dev'] }])
+  })
+
+  it('never follows a chain another authority signed, or one ending elsewhere, or an account not pinned', async () => {
+    await metAda()
+    const puts = server.puts
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.lovelace@kutup.dev'], Date.now() + 60_000, 'M'))
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.other@kutup.dev'], Date.now() + 60_000))
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev')).toEqual([])
+    expect(await followAccountRenames(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toEqual([])
+    expect(server.puts).toBe(puts)
+    expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
   })
 })

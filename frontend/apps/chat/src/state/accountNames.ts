@@ -63,6 +63,11 @@ export function distrustAddress(account: AccountRef, address: string): void {
   names.delete(key)
 }
 
+/** Asks again about `key` on its next showing (its pinned name changed). */
+export function forgetAccountName(key: string): void {
+  names.delete(key)
+}
+
 /**
  * The address to show for the account `key` (`aci:<uuid>@<server>`), or
  * null while it is looked up or when nobody can say.

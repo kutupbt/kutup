@@ -108,6 +108,10 @@ pub mod kind {
     /// incarnation than the one pinned): the line in the thread, written by
     /// this device's engine once per change. Never travels. [IMPL]
     pub const SAFETY_NUMBER_CHANGED: &str = "safetyNumberChanged";
+    /// The peer changed their username, as their own verified rename chain
+    /// says (docs/plans/account-ids.md): the line in the thread, written by
+    /// this device once per rename. Never travels. [IMPL]
+    pub const PEER_RENAMED: &str = "peerRenamed";
     /// A message sent once more, at the request of a device that could not
     /// read it, wrapped whole. [IMPL]
     pub const RESEND: &str = "resend";
@@ -617,6 +621,36 @@ impl ChatContent {
         self.kind == kind::SAFETY_NUMBER_CHANGED && self.v == Self::VERSION
     }
 
+    /// The local line saying the peer changed their username.
+    pub fn peer_renamed_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        body: &PeerRenamedBody,
+    ) -> Result<Self, String> {
+        body.validate()?;
+        Ok(ChatContent {
+            v: Self::VERSION,
+            kind: kind::PEER_RENAMED.to_string(),
+            sent_at: sent_at.into(),
+            seq: 0,
+            message_id: message_id.into(),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body: serde_json::to_value(body).map_err(|error| error.to_string())?,
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    pub fn as_peer_renamed(&self) -> Option<PeerRenamedBody> {
+        if self.kind != kind::PEER_RENAMED || self.v != Self::VERSION {
+            return None;
+        }
+        let body: PeerRenamedBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     pub fn is_undecryptable(&self) -> bool {
         self.kind == kind::UNDECRYPTABLE && self.v == Self::VERSION
     }
@@ -916,6 +950,7 @@ impl ChatContent {
             || kind == kind::CALL_LOG
             || kind == kind::UNDECRYPTABLE
             || kind == kind::SAFETY_NUMBER_CHANGED
+            || kind == kind::PEER_RENAMED
     }
 
     pub fn group_update_with_id(
@@ -1034,6 +1069,7 @@ impl ChatContent {
                     | kind::SESSION_CONTROL
                     | kind::UNDECRYPTABLE
                     | kind::SAFETY_NUMBER_CHANGED
+                    | kind::PEER_RENAMED
                     | kind::RESEND
             )
     }
@@ -1178,6 +1214,39 @@ pub struct ResendBody {
     /// The id the message inside was first sent under.
     pub send_id: String,
     pub content: Box<ChatContent>,
+}
+
+/// Body of a local [`kind::PEER_RENAMED`] line: one step of the peer's own
+/// verified rename chain. The addresses are labels shown, never keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PeerRenamedBody {
+    /// The address before, `username@server`.
+    pub previous: String,
+    /// The address after.
+    pub current: String,
+    /// The rename's place in the chain: 1 for the first.
+    pub sequence: u64,
+}
+
+impl PeerRenamedBody {
+    pub fn validate(&self) -> Result<(), String> {
+        let address = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 320
+                && value
+                    .split_once('@')
+                    .is_some_and(|(name, server)| !name.is_empty() && !server.is_empty())
+        };
+        if !address(&self.previous)
+            || !address(&self.current)
+            || self.previous == self.current
+            || self.sequence == 0
+        {
+            return Err("peer rename line is not one rename".into());
+        }
+        Ok(())
+    }
 }
 
 /// Body of a local [`kind::UNDECRYPTABLE`] record.

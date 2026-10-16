@@ -1084,6 +1084,17 @@ export class ChatService {
     this.notifyPeers()
   }
 
+  /**
+   * Put the line saying `peer` changed their username into their thread on
+   * this device: one step of their own verified rename chain, written once.
+   */
+  async recordPeerRenamed(peer: AccountRef, rename: { from: string; to: string; sequence: number }): Promise<boolean> {
+    const written = await this.withLock(() =>
+      this.client.recordPeerRenamed(accountKey(peer), rename.from, rename.to, rename.sequence))
+    if (written) this.notifyPeers()
+    return written
+  }
+
   /** ICE servers for a call: STUN, and TURN with fresh credentials when the server has a relay. */
   async callServers(): Promise<ChatCallServers> {
     const cached = this.cachedCallServers

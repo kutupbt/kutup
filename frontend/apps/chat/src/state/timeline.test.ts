@@ -24,6 +24,7 @@ function view(id: string, at: number, author: string, extra: Partial<MessageView
     callLog: null,
     undecryptable: null,
     safetyChanged: false,
+    renamed: null,
     groupCall: null,
     viewedOnce: null,
     poll: null,
@@ -75,6 +76,15 @@ describe('timelineRows', () => {
       null,
     )
     expect(kinds(rows)).toEqual(['day', 'a', 'b', 'notice', 'c'])
+  })
+
+  it('puts a peer\'s rename on its own row, never counted unread', () => {
+    const rows = timelineRows(
+      [view('a', T0, 'bob'), view('r', T0 + 1_000, 'me', { renamed: { previous: 'ada@a.test', current: 'ada.new@a.test' } }), view('b', T0 + 2_000, 'bob')],
+      { after: T0 - 1, openedAt: T0 + 10_000 },
+    )
+    expect(kinds(rows)).toEqual(['day', 'unread', 'a', 'notice', 'b'])
+    expect(rows.find((r) => r.kind === 'unread')).toMatchObject({ count: 2 })
   })
 
   it('puts a safety number change on its own row, never counted unread', () => {

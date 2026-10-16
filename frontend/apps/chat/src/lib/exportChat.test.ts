@@ -23,6 +23,7 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
     callLog: null,
     undecryptable: null,
     safetyChanged: false,
+    renamed: null,
     groupCall: null,
     viewedOnce: null,
     poll: null,

@@ -1113,3 +1113,52 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
     );
     assert!(server.acked().is_empty());
 }
+
+/// The line saying a peer changed their username: written once per rename
+/// (a second sighting of the same step neither repeats nor moves it), never
+/// for anything but an account, and one more for each later rename.
+#[test]
+fn a_peer_rename_line_is_written_once_per_rename() {
+    let mut rng = test_rng();
+    let mut bob = in_memory(BOB, 1, &mut rng);
+    let first = kutup_chat_proto::PeerRenamedBody {
+        previous: "ada@example.test".into(),
+        current: "ada.new@example.test".into(),
+        sequence: 1,
+    };
+    assert!(block_on(bob.record_peer_renamed(ALICE, &first)).unwrap());
+    let lines = |bob: &Session| -> Vec<(String, i64)> {
+        block_on(bob.sent_history())
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                serde_json::from_slice::<ChatContent>(&message.content)
+                    .is_ok_and(|content| content.as_peer_renamed().is_some())
+            })
+            .map(|message| (message.peer, message.created_at))
+            .collect()
+    };
+    let once = lines(&bob);
+    assert_eq!(once.len(), 1);
+    assert_eq!(once[0].0, ALICE);
+    assert!(!block_on(bob.record_peer_renamed(ALICE, &first)).unwrap());
+    assert_eq!(
+        lines(&bob),
+        once,
+        "the same rename neither repeats nor moves"
+    );
+    let second = kutup_chat_proto::PeerRenamedBody {
+        previous: "ada.new@example.test".into(),
+        current: "ada.newer@example.test".into(),
+        sequence: 2,
+    };
+    assert!(block_on(bob.record_peer_renamed(ALICE, &second)).unwrap());
+    assert_eq!(lines(&bob).len(), 2);
+    // Only an account's thread; and only one rename, not a no-op.
+    assert!(block_on(bob.record_peer_renamed("ada@example.test", &first)).is_err());
+    let same = kutup_chat_proto::PeerRenamedBody {
+        current: first.previous.clone(),
+        ..first.clone()
+    };
+    assert!(block_on(bob.record_peer_renamed(ALICE, &same)).is_err());
+}

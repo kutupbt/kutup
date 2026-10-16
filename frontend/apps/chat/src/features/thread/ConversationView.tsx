@@ -528,6 +528,13 @@ export function ConversationView({
               </p>
             )
           }
+          if (row.kind === 'notice' && row.view.renamed) {
+            return (
+              <p key={row.key} className={cn(TIMELINE_ROW, 'mx-auto max-w-sm px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-rename-notice">
+                {t('chat.renamedNotice', { from: row.view.renamed.previous, to: row.view.renamed.current })}
+              </p>
+            )
+          }
           if (row.kind === 'notice' && row.view.groupCall) {
             const started = row.view.groupCall
             const live = model.groupCall?.callId === started.callId

@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from 'react'
 import type { ChatBackupView } from '@kutup/chat-core/backup'
 import { fetchChatCapabilities, isSupportedChat } from '@kutup/chat-core/capabilities'
-import { accountKey, conversationKey, type AccountRef } from '@kutup/chat-core/identity'
+import { accountKey, conversationKey, directKey, type AccountRef } from '@kutup/chat-core/identity'
 import { ChatService, ChatServiceError, type ChatConnectionStatus } from '@kutup/chat-core/service'
 import type {
   ChatCapabilities,
+  ConversationId,
   ChatProfile,
   ChatTypingEvent,
   GroupJoinRequest,
@@ -21,6 +22,7 @@ import { setSealedStorage } from '../state/sealedState'
 import { currentReadMarks } from '../state/readState'
 import { foldAccountState, mergeReadMarks } from '../state/accountState'
 import { startAccountNames, stopAccountNames } from '../state/accountNames'
+import { checkRenames, resetRenameWatch } from '../state/renameWatch'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
@@ -199,6 +201,8 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
       loaded: true,
       stale: false,
     })
+    // Renames of the people here, newest conversations first (a few a pass).
+    void checkRenames(service, directPeersByRecency(history, contacts, state.self?.key ?? ''), () => void reload(service, mlsGroups))
   } catch (error) {
     console.warn('chat: reload failed', error)
     if (mine === generation && state.service === service) set({ stale: true, loaded: true })
@@ -309,6 +313,7 @@ export function openChat(session: Session): void {
       for (const unsubscribe of unsubscribers) unsubscribe()
       setSealedStorage(null)
       stopAccountNames()
+      resetRenameWatch()
       service.dispose()
     }
     forgetPlaintextChatState(`${session.username}@${capabilities.serverName}`, session.userId)
@@ -389,4 +394,21 @@ export function closeChat(): void {
   openedFor = null
   generation += 1
   set(initial)
+}
+
+/** The other accounts of direct chats (and requests), newest conversation first, Note to Self left out. */
+export function directPeersByRecency(
+  history: readonly { conversation: ConversationId; timestampMs: number }[],
+  contacts: readonly { peer: string; updatedAtMs: number }[],
+  self: string,
+): string[] {
+  const latest = new Map<string, number>()
+  for (const entry of history) {
+    const peer = directKey(entry.conversation)
+    if (peer && peer !== self) latest.set(peer, Math.max(latest.get(peer) ?? 0, entry.timestampMs))
+  }
+  for (const contact of contacts) {
+    if (contact.peer !== self && !latest.has(contact.peer)) latest.set(contact.peer, contact.updatedAtMs)
+  }
+  return [...latest].sort((a, b) => b[1] - a[1]).map(([peer]) => peer)
 }

@@ -38,6 +38,19 @@ describe('local timeline records', () => {
     })
     expect(isVisibleChatMessage(line, 2_000)).toBe(false)
   })
+
+  it('a rename line is never a visible message', () => {
+    const line = entry('rename', 1_000, {
+      version: 1,
+      kind: 'peerRenamed',
+      sentAt: '2026-10-16T00:00:00Z',
+      seq: '0',
+      messageId: 'rename:aci:00000000-0000-4000-8000-81b637d8fcd2@b.test:1',
+      body: { previous: 'bob@b.test', current: 'bobby@b.test', sequence: 1 },
+      peerRenamed: { previous: 'bob@b.test', current: 'bobby@b.test', sequence: 1 },
+    })
+    expect(isVisibleChatMessage(line, 2_000)).toBe(false)
+  })
 })
 
 describe('disappearing Chat presentation', () => {

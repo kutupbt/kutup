@@ -1085,7 +1085,8 @@
     "openAddress": {
       "looking": "{{address}} aranıyor…",
       "back": "Sohbetlere dön"
-    }
+    },
+    "renamedNotice": "{{from}} kullanıcı adını {{to}} olarak değiştirdi."
   },
   "boot": {
     "opening": "İleti açılıyor…",

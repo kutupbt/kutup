@@ -58,7 +58,7 @@ pub use content::{
     ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
 };
 pub use content::{
-    ResendBody, SessionControlAction, SessionControlBody, UndecryptableBody,
+    PeerRenamedBody, ResendBody, SessionControlAction, SessionControlBody, UndecryptableBody,
     MAX_SESSION_CONTROL_SEND_IDS,
 };
 pub use extras::{

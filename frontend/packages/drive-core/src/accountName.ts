@@ -15,9 +15,13 @@ import { pinnedNameOf } from './identityPins'
 
 const byId = new Map<string, Promise<string | null>>()
 
-/** The address an account's server says it has now; null when it cannot say. */
-function serverName(account: AccountRef): Promise<string | null> {
+/**
+ * The address an account's server says it has now (a label, never who it
+ * is); null when it cannot say. Asked once a page unless `fresh`.
+ */
+export function serverAddressOf(account: AccountRef, fresh = false): Promise<string | null> {
   const key = `${account.accountId}@${account.server}`
+  if (fresh) byId.delete(key)
   let pending = byId.get(key)
   if (!pending) {
     pending = api
@@ -40,7 +44,7 @@ function serverName(account: AccountRef): Promise<string | null> {
 /** The address to show for `account`, or null when nobody can say. */
 export async function nameOfAccount(me: DriveIdentity, account: AccountRef): Promise<string | null> {
   if (sameAccount(account, me.accountRef)) return me.account
-  return (await pinnedNameOf(me, account).catch(() => null)) ?? serverName(account)
+  return (await pinnedNameOf(me, account).catch(() => null)) ?? serverAddressOf(account)
 }
 
 /** The address to show for `account` (null while unknown). */

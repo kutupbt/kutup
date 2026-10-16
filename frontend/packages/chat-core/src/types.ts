@@ -47,6 +47,8 @@ export interface ChatContentView {
   undecryptable?: boolean
   /** This device's line saying the peer's safety number changed (never sent). */
   safetyNumberChanged?: boolean
+  /** This device's line saying the peer changed their username, from their own verified rename chain (never sent). */
+  peerRenamed?: { previous: string; current: string; sequence: number }
   mentions?: ChatMentionV1[]
   linkPreview?: ChatLinkPreviewV1
   forwarded?: boolean
@@ -1933,6 +1935,8 @@ export interface WasmChatClientHandle {
   sendCallSignal(sendId: string, peer: string, sentAt: string, signal: ChatCallSignal): Promise<SendSummary>
   refreshProfile(): Promise<void>
   recordCallLog(peer: string, body: ChatCallLog): Promise<void>
+  /** The line saying `peer` changed their username (one step of their verified rename chain); once. True when written now. */
+  recordPeerRenamed(peer: string, previous: string, current: string, sequence: number): Promise<boolean>
   sendDisappearingTimer(
     sendId: string,
     peer: string,

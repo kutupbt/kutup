@@ -159,6 +159,7 @@ fn visible(content: &ChatContent) -> bool {
             | kind::CALL_LOG
             | kind::UNDECRYPTABLE
             | kind::SAFETY_NUMBER_CHANGED
+            | kind::PEER_RENAMED
             | kind::LIVE_LOCATION_STOP
             | kind::CONVERSATION_STATE
             | kind::READ_POSITION

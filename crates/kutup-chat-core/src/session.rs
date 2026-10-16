@@ -2896,6 +2896,28 @@ impl Session {
         self.store.db().list_outbox().await
     }
 
+    /// The line saying `peer` changed their username (one step of their
+    /// own verified rename chain), written once: its id names the account
+    /// and the rename's sequence, and a line already there stays where it
+    /// is. True when it was written now.
+    pub async fn record_peer_renamed(
+        &mut self,
+        peer: &str,
+        body: &kutup_chat_proto::PeerRenamedBody,
+    ) -> Result<bool> {
+        crate::address::parse_account(peer)?;
+        body.validate().map_err(ChatError::Invalid)?;
+        let id = format!("rename:{peer}:{}", body.sequence);
+        if self.sent_message(&id).await?.is_some() {
+            return Ok(false);
+        }
+        let content =
+            ChatContent::peer_renamed_with_id(id, crate::clock::rfc3339(now_millis()), body)
+                .map_err(ChatError::Invalid)?;
+        self.record_local_notice(peer, &content).await?;
+        Ok(true)
+    }
+
     /// Write a local-only record (a call in the timeline) into `peer`'s
     /// conversation as this device's own row. It is never sent; the same
     /// message id replaces the earlier record.

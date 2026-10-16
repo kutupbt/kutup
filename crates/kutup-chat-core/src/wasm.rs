@@ -2901,6 +2901,36 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    /// The line saying `peer` (an account key) changed their username from
+    /// `previous` to `current`, step `sequence` of their own verified rename
+    /// chain; written once. True when it was written now.
+    #[wasm_bindgen(js_name = recordPeerRenamed)]
+    pub async fn record_peer_renamed(
+        &mut self,
+        peer: String,
+        previous: String,
+        current: String,
+        sequence: f64,
+    ) -> std::result::Result<bool, JsValue> {
+        if !(sequence.is_finite()
+            && sequence >= 1.0
+            && sequence.fract() == 0.0
+            && sequence <= 9_007_199_254_740_991.0)
+        {
+            return Err(js_error("a rename sequence is a positive integer"));
+        }
+        let body = kutup_chat_proto::PeerRenamedBody {
+            previous,
+            current,
+            sequence: sequence as u64,
+        };
+        self.engine
+            .session_mut()
+            .record_peer_renamed(&peer, &body)
+            .await
+            .map_err(chat_error)
+    }
+
     #[wasm_bindgen(js_name = sendDisappearingTimer)]
     pub async fn send_disappearing_timer(
         &mut self,
@@ -3887,6 +3917,9 @@ struct ContentView {
     /// The local line saying the peer's safety number changed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     safety_number_changed: bool,
+    /// The local line saying the peer changed their username.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_renamed: Option<kutup_chat_proto::PeerRenamedBody>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forwarded: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3918,6 +3951,7 @@ impl From<ChatContent> for ContentView {
         let group_update = content.as_group_update();
         let undecryptable = content.is_undecryptable();
         let safety_number_changed = content.is_safety_number_changed();
+        let peer_renamed = content.as_peer_renamed();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
@@ -3962,6 +3996,7 @@ impl From<ChatContent> for ContentView {
             link_preview: extras.link_preview,
             undecryptable,
             safety_number_changed,
+            peer_renamed,
             forwarded: extras.forwarded,
             view_once: extras.view_once,
             expires_after_seconds,
