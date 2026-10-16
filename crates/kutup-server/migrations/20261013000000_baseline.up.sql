@@ -9820,5 +9820,3 @@ SELECT pg_catalog.setval('public.user_devices_revocation_seq', 1, false);
 --
 -- PostgreSQL database dump complete
 --
-
-

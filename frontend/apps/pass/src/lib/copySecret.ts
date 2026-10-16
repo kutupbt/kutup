@@ -20,4 +20,3 @@ export async function copySecret(value: string, done: string, cleared: string, n
       .catch(() => toast.warning(notCleared))
   }, CLEAR_CLIPBOARD_MS)
 }
-

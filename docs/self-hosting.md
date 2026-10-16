@@ -1157,4 +1157,3 @@ it); that is harmless. Re-run it after upgrading:
 ```sh
 docker compose run --rm seaweedfs-init
 ```
-
