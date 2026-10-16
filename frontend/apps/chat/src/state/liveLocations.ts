@@ -8,7 +8,7 @@ export interface LiveShareState {
   latest: ChatLiveLocationV1
   /** When the sharer stopped it early, if they did. */
   stoppedAtMs: number | null
-  /** The sharer (canonical address). */
+  /** The sharer (account key). */
   author: string
 }
 

@@ -308,6 +308,7 @@ import {
   checkGroup,
   currentAddressOf,
   IdentityNotConfirmed,
+  holdsAddress,
   followAccountRenames,
   type AccountAnswer,
   personSafetyNumber,
@@ -526,10 +527,6 @@ describe('checkIdentity', () => {
     const stored = (JSON.parse(server.pins.envelope) as { list: Record<string, unknown> }).list
     expect(stored.laterList).toEqual({ a: 1 })
     expect(storedPins()).toMatchObject([{ id: 'acct-B' }])
-  })
-
-  it('trusts the account itself', async () => {
-    expect(await checkIdentity(me, me.account)).toEqual({ kind: 'ok', verified: true })
   })
 
   it('refuses keys of an account already pinned handed out for another', async () => {
@@ -903,5 +900,36 @@ describe('followAccountRenames (Chat\'s rename line)', () => {
     expect(await followAccountRenames(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toEqual([])
     expect(server.puts).toBe(puts)
     expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
+  })
+})
+
+describe('this account is itself by its id, never by an address', () => {
+  it('treats its own address as self only while the answer is this account', async () => {
+    publish('me@kutup.dev', 'ME', { id: 'me-id' })
+    expect(await checkIdentity(me, 'me@kutup.dev')).toEqual({ kind: 'ok', verified: true })
+  })
+
+  it('its old address, now held by another account, is that account (a tab open since the rename)', async () => {
+    // The session still names me@ as its own address; the server says
+    // someone else has it now.
+    publish('me@kutup.dev', 'X', { id: 'acct-X' })
+    const status = await checkIdentity(me, 'me@kutup.dev')
+    expect(status).not.toEqual({ kind: 'ok', verified: true })
+    expect(status).toEqual({ kind: 'ok', verified: false })
+    expect(storedPins()).toMatchObject([{ id: 'acct-X', addresses: ['me@kutup.dev'] }])
+  })
+})
+
+describe('holdsAddress (a saved contact belongs to an account only when it holds the address)', () => {
+  it('is the pinned holder, never someone who took the name', async () => {
+    publish('ada@kutup.dev', 'A')
+    await checkIdentity(me, 'ada@kutup.dev')
+    expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-A' }, 'ada@kutup.dev')).toBe(true)
+    // Mallory at Ada's (left) name: pinned or not, not the holder.
+    newPage()
+    publish('ada@kutup.dev', 'M', { id: 'acct-M' })
+    await checkIdentity(me, 'ada@kutup.dev')
+    expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-M' }, 'ada@kutup.dev')).toBe(false)
+    expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toBe(false)
   })
 })

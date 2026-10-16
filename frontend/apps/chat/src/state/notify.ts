@@ -14,7 +14,7 @@ export interface NotifyContext {
   nowMs: number
   lists: ReadonlyMap<string, ListState>
   readThrough: Readonly<Record<string, number>>
-  /** Blocked people (canonical addresses). */
+  /** Blocked people (account keys, `aci:<uuid>@<server>`). */
   blocked: ReadonlySet<string>
   /** The conversation someone is looking at in a focused tab, if any. */
   focusedKey: string | null

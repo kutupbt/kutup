@@ -171,8 +171,8 @@ pub struct Session {
     /// The registration payload to publish — `Some` right after [`Session::generate`],
     /// `None` for a device reloaded via [`Session::open`] (already registered).
     registration: Option<RegisterChatDeviceRequest>,
-    /// Canonical account address used by every account-level comparison.
-    /// `address` retains the parsed user/domain split required by libsignal.
+    /// This account's key (`aci:<uuid>@<server>`), used by every account-level comparison.
+    /// `address` is the same account with this device's id: its libsignal address.
     account: String,
     address: ChatAddress,
 }

@@ -364,7 +364,7 @@ pub struct ManifestTrust {
     /// Request/routing key used by the local application (may be bare for a
     /// same-origin peer).
     pub peer: String,
-    /// Canonical account address authenticated inside the manifest.
+    /// The account the manifest names, authenticated inside it (`aci:<uuid>@<server>`).
     pub account: String,
     pub incarnation_id: String,
     pub authority_key_id: String,
