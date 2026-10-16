@@ -3244,8 +3244,10 @@ else's, `410` when a host removed it. `423` when a host locked the meeting.
 
 Sent with a signed-in account's `Authorization: Bearer` access token, the
 SFU token also carries that account's address as the participant's name,
-which the others see as vouched for by this server. Without it the joiner
-is a guest. The same holds for `…/knock`.
+which the others see as vouched for by this server. The seat or knock keeps
+the account's id; the address is its current one, read at every token, so a
+rename shows at the next one. Without it the joiner is a guest. The same
+holds for `…/knock`.
 
 ### PUT /api/chat/call-links/:roomId/waiting-room
 
@@ -3295,7 +3297,7 @@ minted for them ([`chat-calls.md`](chat-calls.md) "Hosts").
 `{ "roomId", "accessToken", "hostToken" | "sfuToken" }` →
 `{ "knocks": [{ "knockId", "label", "account"?, "createdAt" }] }`: who is
 waiting, oldest first, each with their sealed name and, when they showed
-it, the account this server vouches for. `404` for anyone who is not a
+it, the account this server vouches for (its current address). `404` for anyone who is not a
 host, as for an unknown room.
 
 ### POST /api/chat/call-links/knocks/decide

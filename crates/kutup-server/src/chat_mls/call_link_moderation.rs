@@ -40,6 +40,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use super::call_links::{admitted, hex32, require_sfu, Admitted};
 use crate::error::{AppError, AppResult};
@@ -104,7 +105,7 @@ pub(super) async fn claim_seat(
     participant_id: &str,
     seat_hash: &[u8; 32],
     entry: Entry,
-    account: Option<&str>,
+    account: Option<Uuid>,
 ) -> AppResult<Seat> {
     let existing: Option<(Vec<u8>, bool, bool)> = sqlx::query_as(
         "SELECT seat_hash, removed_at IS NOT NULL, no_screen FROM chat_call_link_seats
@@ -127,7 +128,7 @@ pub(super) async fn claim_seat(
         }
         let renewed = sqlx::query(
             "UPDATE chat_call_link_seats
-             SET last_minted_at = NOW(), account = $3,
+             SET last_minted_at = NOW(), account_id = $3,
                  role = CASE WHEN $4 THEN $5 ELSE role END
              WHERE room_id = $1 AND participant_id = $2 AND removed_at IS NULL",
         )
@@ -172,7 +173,7 @@ pub(super) async fn claim_seat(
     .execute(&state.pool)
     .await?;
     let taken = sqlx::query(
-        "INSERT INTO chat_call_link_seats (room_id, participant_id, seat_hash, role, account)
+        "INSERT INTO chat_call_link_seats (room_id, participant_id, seat_hash, role, account_id)
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
     )
     .bind(room_id)

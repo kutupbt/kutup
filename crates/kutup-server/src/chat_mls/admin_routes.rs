@@ -227,6 +227,11 @@ pub(crate) async fn conversation(
     _admin: AdminUser,
     Path(conversation_id): Path<Uuid>,
 ) -> AppResult<Response> {
+    // Groups off: as every other group route (the status above still
+    // answers, saying so).
+    if state.mls_ordering.is_none() {
+        return Err(AppError::not_found("MLS service unavailable"));
+    }
     let row: Option<MlsConversationRow> = sqlx::query_as(
         "SELECT c.kind, c.status AS conversation_status,
                 i.incarnation, i.status AS incarnation_status, i.suite,

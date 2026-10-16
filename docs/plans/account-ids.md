@@ -89,7 +89,7 @@ Unchanged:
 - `chat_federation_outbox`, `chat_sealed_federation_outbox`, `chat_mls_federation_outbox`, `chat_media_federation_pull_grants`: `recipient` is replaced by `recipient_account_id` in the rows and in the unique keys. The destination is already a column.
 - `chat_mls_invitation_feedback` and `chat_mls_invitation_feedback_outbox`: `member_address` is replaced by `member_server` + `member_account_id` in the primary key.
 - `chat_mls_pending_requests` (unused, unique on an address) is dropped.
-- `chat_call_link_seats` and `chat_call_link_knocks` gain `account_id` next to the display `account`.
+- `chat_call_link_seats` and `chat_call_link_knocks`: the display `account` is replaced by `account_id` (as built, below).
 
 **Renames:**
 - `remote_account_renames` gains `account_id` (from the peer's manifest or key binding) for lookups by id.
@@ -218,4 +218,29 @@ What landed, and where it differs from the note above:
 - **Profiles** are sealed for the account's id: a rename leaves them valid, and the "sealed for an earlier address" handling is gone, as is the rename relay on Chat fetches (an id never renames).
 - **MLS:** frozen. Groups are off for the beta (`CHAT_GROUPS` defaults to false) until the pairwise design replaces MLS; the MLS server code changed only as far as the new formats need to build.
 - **Federation gate:** the setup phase keeps Bob's account in a state file (`KUTUP_FEDERATION_STATE`) for the queue phase, which runs while B is down.
-- **Meeting seats and knocks** keep only the name the server vouches for, shown to the host at that moment: a label, which nothing keys on, so no `account_id` column was added beside it (one nothing would read).
+- **Meeting seats and knocks** (migration `20261016100000_call_link_account_ids`) keep the account this server vouches for as `account_id` (a local account: only this server's own sessions are vouched for, so the server is implied), replacing the `username@server` they held. The name shown is read from it when a token is minted and when the host lists knocks, so a rename shows at the next token instead of a stale name; a deleted account is nobody (`ON DELETE SET NULL`). `call_links_live` covers both.
+
+## Rows keyed by incarnation, after a reset
+
+Recovery with the phrase keeps the account's keys and so its incarnation;
+nothing below changes. An admin reset (`wipe_user`) clears the incarnation,
+and setup draws a new one. Rows naming the old incarnation are meant to be
+left behind, never moved to the new one: a new incarnation is new keys, which
+nobody has checked yet.
+
+- `mail_group_key_shares` / `mail_group_signing_shares.member_incarnation_id`:
+  every read joins on the member's current incarnation, so an old share is
+  never served and the member shows `needsKeys`. A manager re-seals for the
+  new identity after confirming it; the upsert replaces the old row.
+- `remote_account_renames` (a peer's chain, by domain and incarnation): a
+  peer's reset starts a new chain under the new incarnation; the old one
+  stays as that incarnation's history (an address can appear in several
+  chains), within the per-domain cap.
+- `remote_collab_devices` (a peer's devices): the old incarnation's devices
+  no longer renew and go at the daily sweep, after the lease and its grace,
+  or sooner once no share names that incarnation. Shares to the old
+  incarnation must be made again to the new one.
+- `rename_announce_outbox` (this server's own announces): an old
+  incarnation's pending rows still deliver its chain as it stood, kept in
+  `account_renames`, and drain as usual: done, refused for good, or dropped
+  after the give-up time.

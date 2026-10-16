@@ -145,11 +145,12 @@ pub(super) fn seat_hash(seat: &str) -> AppResult<[u8; 32]> {
     Ok(Sha256::digest(base64_exact("seat", seat, 32)?).into())
 }
 
-/// The account address this server vouches for, when the request carries a
-/// signed-in account's access token: the joiner chose to show the others
-/// who they are. Without one, or with one that does not hold, nobody is
-/// vouched for.
-pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Option<String> {
+/// The account this server vouches for, when the request carries a signed-in
+/// account's access token: the joiner chose to show the others who they are.
+/// Without one, or with one that does not hold, nobody is vouched for. Seats
+/// and knocks keep this id; the name shown is read from it each time
+/// (`vouched_name`), so a rename shows at the next token.
+pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
@@ -158,13 +159,23 @@ pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Op
     let user = crate::middleware::authenticate_access_token(state, token)
         .await
         .ok()?;
-    let user_id = Uuid::parse_str(&user.user_id).ok()?;
-    let username: String = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(user_id)
+    Uuid::parse_str(&user.user_id).ok()
+}
+
+/// The address a vouched-for account goes by now, for the others to see.
+/// An account deleted since is nobody.
+pub(super) async fn vouched_name(
+    state: &AppState,
+    account_id: Option<Uuid>,
+) -> AppResult<Option<String>> {
+    let Some(account_id) = account_id else {
+        return Ok(None);
+    };
+    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(account_id)
         .fetch_optional(&state.pool)
-        .await
-        .ok()??;
-    Some(format!("{username}@{}", state.config.chat_server_name))
+        .await?;
+    Ok(username.map(|username| format!("{username}@{}", state.config.chat_server_name)))
 }
 
 pub(super) fn hex32(name: &str, value: &str) -> AppResult<()> {
@@ -568,7 +579,7 @@ pub(crate) async fn token(
         &request.participant_id,
         &seat_hash,
         entry,
-        account.as_deref(),
+        account,
     )
     .await?;
     Ok(Json(room_token(
@@ -577,12 +588,13 @@ pub(crate) async fn token(
         &request.participant_id,
         &request.label,
         &seat,
-        account.as_deref(),
+        vouched_name(&state, account).await?.as_deref(),
     )?))
 }
 
 /// An SFU token for one sitting of a meeting, carrying the joiner's sealed
-/// name, the account this server vouches for (if any), and what their seat
+/// name, the current address of the account this server vouches for (if
+/// any; `vouched_name`), and what their seat
 /// lets them publish.
 pub(super) fn room_token(
     state: &AppState,

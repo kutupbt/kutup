@@ -43,6 +43,8 @@ fn groups_are_off_unless_switched_on() {
         "/api/chat/mls/messages/1",
         "/api/chat/mls/key-packages/1/count",
         &format!("/api/chat/mls/domains/{}/policy", server_domain(&c, &base)),
+        // A peer's policy is not fetched either.
+        "/api/chat/mls/domains/peer.invalid/policy",
     ] {
         assert_eq!(get(path), StatusCode::NOT_FOUND, "{path}");
     }
