@@ -7,14 +7,37 @@ vi.mock('../../crypto/src/rustWasm', async () => {
   ])
   const wasm = await readFile(new URL('../../../wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm', import.meta.url))
   await module.default({ module_or_path: wasm })
-  return { getCryptoWasm: () => Promise.resolve(module) }
+  // A shared mailbox's chain check is stubbed (the group signer's own
+  // signing is not in WASM here; its Rust vectors cover it): the stub
+  // answers `groupChain.view`, or throws when it is null.
+  const stubbed = {
+    ...module,
+    verifyMailGroupKeyChain: () => {
+      if (!groupChain.view) throw new Error('group key chain: refused')
+      return groupChain.view
+    },
+  }
+  return { getCryptoWasm: () => Promise.resolve(stubbed) }
 })
+const groupChain = vi.hoisted(() => ({ view: null as null | Record<string, unknown> }))
 const get = vi.hoisted(() => vi.fn())
 vi.mock('@kutup/session/client', () => ({ default: { get } }))
 // What the pin list says (drive-core's own tests cover how it decides).
 type Verdict = { kind: string; now?: string }
 const pins: { verdict: Verdict } = vi.hoisted(() => ({ verdict: { kind: 'unknown' } }))
-vi.mock('@kutup/drive-core/identityPins', () => ({ pinnedVerdict: vi.fn(() => Promise.resolve(pins.verdict)) }))
+const groupPins = vi.hoisted(() => ({ verdict: { kind: 'new' }, pinned: false, checked: [] as unknown[], accepted: [] as unknown[] }))
+vi.mock('@kutup/drive-core/identityPins', () => ({
+  pinnedVerdict: vi.fn(() => Promise.resolve(pins.verdict)),
+  checkGroup: vi.fn((_me: unknown, server: string, groupId: string, chain: unknown) => {
+    groupPins.checked.push({ server, groupId, chain })
+    return Promise.resolve(groupPins.verdict)
+  }),
+  isGroupPinned: vi.fn(() => Promise.resolve(groupPins.pinned)),
+  acceptGroup: vi.fn((_me: unknown, server: string, groupId: string, chain: unknown) => {
+    groupPins.accepted.push({ server, groupId, chain })
+    return Promise.resolve()
+  }),
+}))
 vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn(() => Promise.resolve({})) }))
 vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me' }) }))
 // The device's revision guard, in memory: the highest key-list sequence seen per address and signer.
@@ -35,7 +58,7 @@ vi.mock('@kutup/crypto/revisionGuard', async (importActual) => {
 })
 
 import { deriveAccountIdentityKeys, generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
-import { addressKeys, forgetKeys, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
+import { acceptGroupKeys, addressKeys, forgetKeys, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address) {
@@ -99,16 +122,6 @@ describe('an address’s keys against the pin list', () => {
     return addressKeys('ada_l@kutup.dev')
   }
 
-  it('holds no shared mailbox to the pin list: it is no person', async () => {
-    pins.verdict = { kind: 'changed' }
-    forgetKeys()
-    const group: Partial<Awaited<ReturnType<typeof lookupOf>>> = await lookupOf(master, binding, 'ada_l@kutup.dev')
-    delete group.accountId
-    get.mockResolvedValueOnce({ data: group })
-    const keys = await addressKeys('ada_l@kutup.dev')
-    expect(keys).not.toHaveProperty('accountRef')
-  })
-
   it('refuses another authority for a pinned person', async () => {
     await expect(lookedUp({ kind: 'changed' })).rejects.toBeInstanceOf(KeysIdentityChanged)
   })
@@ -167,11 +180,87 @@ describe('an address’s key lists against what this device has seen', () => {
   })
 })
 
+describe('a shared mailbox’s keys against the pin list', () => {
+  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const binding = crypto.randomUUID()
+  const groupId = '2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901'
+
+  /** What `/mail/keys` answers for a shared mailbox, and the verified chain the stub gives. */
+  async function groupLookup(sequence = 1) {
+    const key = await generateMailAddressKey(master, binding, 'team@kutup.dev')
+    const newest = await signMailKeyList(master, {
+      address: 'team@kutup.dev',
+      sequence,
+      ...(sequence > 1 ? { previousHash: 'ab'.repeat(32) } : {}),
+      issuedAt: '2026-10-16T12:00:00Z',
+      keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }],
+    })
+    const digests = Array.from({ length: sequence }, (_, i) => `d${i + 1}`)
+    groupChain.view = { firstSigner: 'S1', signer: 'S2', signers: ['S1', 'S2'], sequence, digests, newest }
+    return {
+      address: 'team@kutup.dev',
+      server: 'kutup.dev',
+      groupId,
+      firstSigner: 'S1',
+      keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, publicKey: key.publicKey, primary: true, flags: 3 }],
+      keyLists: [{ data: newest.data, signature: newest.signature }],
+    }
+  }
+
+  async function asked(lookup: unknown) {
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: lookup })
+    return addressKeys('team@kutup.dev')
+  }
+
+  it('holds the mailbox to its own group signer, by its id, never to a person', async () => {
+    groupPins.verdict = { kind: 'new' }
+    groupPins.checked = []
+    const keys = await asked(await groupLookup(2))
+    expect(keys).toMatchObject({ address: 'team@kutup.dev', authorityPublicKey: 'S2', group: { server: 'kutup.dev', groupId, signers: ['S1', 'S2'], digests: ['d1', 'd2'] } })
+    expect(keys).not.toHaveProperty('accountRef')
+    expect(groupPins.checked).toEqual([{ server: 'kutup.dev', groupId, chain: { signers: ['S1', 'S2'], digests: ['d1', 'd2'] } }])
+  })
+
+  it('says a changed signer is a change the sender may accept, then sends', async () => {
+    groupPins.verdict = { kind: 'changed' }
+    groupPins.accepted = []
+    const error = await asked(await groupLookup(3)).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(GroupKeysChanged)
+    expect(error).not.toBeInstanceOf(KeysIdentityChanged)
+    expect((error as GroupKeysChanged).chain).toMatchObject({ groupId, signers: ['S1', 'S2'] })
+    await acceptGroupKeys(error as GroupKeysChanged)
+    expect(groupPins.accepted).toEqual([{ server: 'kutup.dev', groupId, chain: { signers: ['S1', 'S2'], digests: ['d1', 'd2', 'd3'] } }])
+  })
+
+  it('says a known mailbox whose chain does not hold has changed, never a silent failure', async () => {
+    const lookup = await groupLookup(4)
+    groupChain.view = null
+    groupPins.pinned = true
+    const error = await asked(lookup).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(GroupKeysChanged)
+    expect((error as GroupKeysChanged).chain).toBeUndefined()
+    await expect(acceptGroupKeys(error as GroupKeysChanged)).rejects.toThrow()
+    // One never met: the keys are simply not usable.
+    groupPins.pinned = false
+    const unknown = await asked(lookup).catch((e: unknown) => e)
+    expect(unknown).toBeInstanceOf(UnverifiedKeys)
+    expect(unknown).not.toBeInstanceOf(GroupKeysChanged)
+  })
+
+  it('refuses an older list of the same mailbox than this device has seen', async () => {
+    groupPins.verdict = { kind: 'pinned' }
+    await asked(await groupLookup(6))
+    await expect(asked(await groupLookup(5))).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+})
+
 describe('a shared mailbox’s key lists', () => {
   it('are its signers’ chain, and a chain cut back to before a handover is refused', async () => {
     const { deriveAccountIdentityKeys: derive, generateMailGroupKey, newMailGroupSigner, signMailGroupKeyList } = await import('@kutup/crypto')
     // No address pin is consulted for a shared mailbox: a person's changed pin there does not apply.
     pins.verdict = { kind: 'changed' }
+    groupPins.verdict = { kind: 'pinned' }
     forgetKeys()
     const groupId = crypto.randomUUID()
     const address = 'hr_team@kutup.dev'

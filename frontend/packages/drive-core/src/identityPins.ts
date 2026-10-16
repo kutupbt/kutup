@@ -797,6 +797,11 @@ export async function checkGroup(me: DriveIdentity, server: string, groupId: str
   return match.kind === 'same' ? { kind: 'pinned' } : { kind: 'new' }
 }
 
+/** Whether the list knows the shared mailbox `groupId` on `server`. */
+export async function isGroupPinned(me: DriveIdentity, server: string, groupId: string): Promise<boolean> {
+  return ((await pinStore(me)).pins.list.groups ?? []).some((pin) => pin.server === server && pin.groupId === groupId)
+}
+
 /** Trust a shared mailbox's chain as published now, in place of the pinned one (the user knows why it changed). */
 export async function acceptGroup(me: DriveIdentity, server: string, groupId: string, chain: GroupChain): Promise<void> {
   await updatePins(me, async (list) => {

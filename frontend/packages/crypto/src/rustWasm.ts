@@ -237,6 +237,12 @@ export interface CryptoWasmModule {
     masterKeyBase64: string,
     list: import('./mailKey').MailKeyListInput,
   ): import('./mailKey').SignedMailKeyList
+  verifyMailGroupKeyChain(
+    groupId: string,
+    firstSignerBase64: string,
+    lists: { data: string; signature: string }[],
+    handovers: string[],
+  ): import('./mailKey').MailGroupKeyChain
   verifyMailKeyList(
     dataBase64: string,
     signatureBase64: string,
