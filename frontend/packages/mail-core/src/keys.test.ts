@@ -17,16 +17,31 @@ const pins: { verdict: Verdict } = vi.hoisted(() => ({ verdict: { kind: 'unknown
 vi.mock('@kutup/drive-core/identityPins', () => ({ pinnedVerdict: vi.fn(() => Promise.resolve(pins.verdict)) }))
 vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn(() => Promise.resolve({})) }))
 vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me' }) }))
+// The device's revision guard, in memory: the highest key-list sequence seen per address and signer.
+const seen = vi.hoisted(() => new Map<string, number>())
+vi.mock('@kutup/crypto/revisionGuard', async (importActual) => {
+  const actual = await importActual<typeof import('@kutup/crypto/revisionGuard')>()
+  return {
+    ...actual,
+    revisionGuard: () => ({
+      accept: (scope: string, id: string, revision: number) => {
+        const before = seen.get(`${scope}/${id}`) ?? 0
+        if (revision < before) return Promise.reject(new actual.OlderThanSeenError(scope, revision, before))
+        seen.set(`${scope}/${id}`, revision)
+        return Promise.resolve()
+      },
+    }),
+  }
+})
 
 import { deriveAccountIdentityKeys, generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
 import { addressKeys, forgetKeys, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 
-/** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `account`. */
-async function lookupOf(master: string, binding: string, address: string, account: string) {
+/** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
+async function lookupOf(master: string, binding: string, address: string, listed = address) {
   const key = await generateMailAddressKey(master, binding, address)
   const list = await signMailKeyList(master, {
-    account,
-    address,
+    address: listed,
     sequence: 1,
     issuedAt: '2026-10-14T12:00:00Z',
     keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }],
@@ -34,7 +49,8 @@ async function lookupOf(master: string, binding: string, address: string, accoun
   const identity = await deriveAccountIdentityKeys(master)
   return {
     address,
-    account,
+    server: 'kutup.dev',
+    accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
     accountAuthorityPublicKey: identity.authorityPublicKey,
     keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, publicKey: key.publicKey, primary: true, flags: 3 }],
     keyLists: [{ data: list.data, signature: list.signature }],
@@ -46,7 +62,7 @@ describe('an address’s keys', () => {
   const binding = crypto.randomUUID()
 
   it('are the current address’s, asked in any spelling', async () => {
-    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev')
+    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev')
     for (const asked of ['ada_l@kutup.dev', 'ada.l@kutup.dev', 'Ada-L@Kutup.dev', 'adal@kutup.dev']) {
       const keys = await verified(asked, lookup)
       expect(keys.address).toBe('ada_l@kutup.dev')
@@ -54,17 +70,17 @@ describe('an address’s keys', () => {
     }
   })
 
-  it('are an old address’s, its list naming the account as it was called then', async () => {
-    // After a rename to `ada_lovelace`, the old address still receives: its
-    // list names the old account, which the server now answers with.
-    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev')
-    await expect(verified('ada.l@kutup.dev', lookup)).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
-    // An answer naming another account than the list does is refused.
-    await expect(verified('ada_l@kutup.dev', { ...lookup, account: 'ada_lovelace@kutup.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
+  it('are refused when the newest list names another address of the account', async () => {
+    // After a rename to `ada_lovelace`, the old address still receives with
+    // its own list: a list of the new address served for it is refused.
+    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev')
+    await expect(verified('ada.l@kutup.dev', lookup)).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+    const other = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_lovelace@kutup.dev')
+    await expect(verified('ada_l@kutup.dev', other)).rejects.toThrow()
   })
 
   it('are refused when the answer is another address', async () => {
-    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev')
+    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev')
     await expect(verified('bob@kutup.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('ada_l@other.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
   })
@@ -77,7 +93,7 @@ describe('an address’s keys against the pin list', () => {
   async function lookedUp(verdict: { kind: string; now?: string }) {
     pins.verdict = verdict
     forgetKeys()
-    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev')
+    const lookup = await lookupOf(master, binding, 'ada_l@kutup.dev')
     get.mockResolvedValueOnce({ data: lookup })
     return addressKeys('ada_l@kutup.dev')
   }
@@ -93,8 +109,107 @@ describe('an address’s keys against the pin list', () => {
   })
 
   it('takes an old address its verified rename chain covers, and someone never met', async () => {
-    await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
-    await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
-    await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ account: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'renamed', now: 'ada_lovelace@kutup.dev' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'pinned' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+    await expect(lookedUp({ kind: 'unknown' })).resolves.toMatchObject({ address: 'ada_l@kutup.dev' })
+  })
+})
+
+describe('an address’s key lists against what this device has seen', () => {
+  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const binding = crypto.randomUUID()
+
+  it('refuses a chain shorter than one seen before (a rollback)', async () => {
+    pins.verdict = { kind: 'unknown' }
+    forgetKeys()
+    const first = await lookupOf(master, binding, 'roll_back@kutup.dev')
+    const key = await generateMailAddressKey(master, binding, 'roll_back@kutup.dev')
+    const { verifyMailKeyList } = await import('@kutup/crypto')
+    const one = await verifyMailKeyList(first.keyLists[0], first.accountAuthorityPublicKey)
+    const second = await signMailKeyList(master, {
+      address: 'roll_back@kutup.dev',
+      sequence: 2,
+      previousHash: one.hash,
+      issuedAt: '2026-10-15T12:00:00Z',
+      keys: [
+        { ...one.keys[0], primary: false },
+        { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete },
+      ].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1)),
+    })
+    const longer = {
+      ...first,
+      keys: [...first.keys, { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, publicKey: key.publicKey, primary: true, flags: 3 }].map((k) =>
+        k.fingerprint === key.fingerprint ? k : { ...k, primary: false },
+      ),
+      keyLists: [...first.keyLists, { data: second.data, signature: second.signature }],
+    }
+    get.mockResolvedValueOnce({ data: longer })
+    await expect(addressKeys('roll_back@kutup.dev')).resolves.toMatchObject({ sequence: 2 })
+    // The server hands back the first list alone: refused, not used.
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: first })
+    await expect(addressKeys('roll_back@kutup.dev')).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+})
+
+describe('a shared mailbox’s key lists', () => {
+  it('are its signers’ chain, and a chain cut back to before a handover is refused', async () => {
+    const { deriveAccountIdentityKeys: derive, generateMailGroupKey, newMailGroupSigner, signMailGroupKeyList } = await import('@kutup/crypto')
+    // No address pin is consulted for a shared mailbox: a person's changed pin there does not apply.
+    pins.verdict = { kind: 'changed' }
+    forgetKeys()
+    const groupId = crypto.randomUUID()
+    const address = 'hr_team@kutup.dev'
+    const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+    const owner = await derive(master)
+    const account = { server: 'kutup.dev', accountId: crypto.randomUUID() }
+    const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveHpkePublicKey }
+    const k1 = await generateMailGroupKey(address, groupId, [member])
+    const entry = (key: { fingerprint: string; sha256Fingerprint: string }, primary: boolean) => ({
+      fingerprint: key.fingerprint,
+      sha256Fingerprint: key.sha256Fingerprint,
+      primary,
+      flags: primary ? MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete : MAIL_KEY_FLAGS.notCompromised,
+    })
+    const first = await newMailGroupSigner(groupId, [member], { address, sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [entry(k1, true)] })
+    const holder = { account, hpkePrivateKey: owner.driveHpkePrivateKey, groupId, signer: first.publicKey, signingShare: first.shares[0] }
+    const k2 = await generateMailGroupKey(address, groupId, [member])
+    const keysAfter = [entry(k1, false), entry(k2, true)].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1))
+    const second = await signMailGroupKeyList(holder, { address, sequence: 2, previousHash: first.keyList.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter })
+    // A handover to a new signer at list 3.
+    const third = await newMailGroupSigner(
+      groupId,
+      [member],
+      { address, sequence: 3, previousHash: second.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter },
+      { holder, previousListHash: second.hash },
+    )
+    const row = (key: { fingerprint: string; sha256Fingerprint: string; publicKey: string }, primary: boolean) => ({
+      fingerprint: key.fingerprint,
+      sha256Fingerprint: key.sha256Fingerprint,
+      publicKey: key.publicKey,
+      primary,
+      flags: 3,
+    })
+    const lookup = (lists: { data: string; signature: string }[], handovers: string[]) => ({
+      address,
+      server: 'kutup.dev',
+      groupId,
+      firstSigner: first.publicKey,
+      keys: [row(k2, true), row(k1, false)],
+      keyLists: lists,
+      ...(handovers.length ? { signerHandovers: handovers } : {}),
+    })
+    const full = lookup([first.keyList, second, third.keyList], [third.handover!])
+    get.mockResolvedValueOnce({ data: full })
+    const keys = await addressKeys(address)
+    expect(keys.sequence).toBe(3)
+    expect(keys.group?.signers).toEqual([first.publicKey, third.publicKey])
+    // The server serves the chain cut back to before the handover: older than seen.
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: lookup([first.keyList, second], []) })
+    await expect(addressKeys(address)).rejects.toBeInstanceOf(UnverifiedKeys)
+    // A list from the old signer after its handover never verifies.
+    const fork = await signMailGroupKeyList(holder, { address, sequence: 3, previousHash: second.hash, issuedAt: '2026-10-16T12:00:00Z', keys: keysAfter })
+    await expect(verified(address, lookup([first.keyList, second, fork], [third.handover!]))).rejects.toBeInstanceOf(UnverifiedKeys)
   })
 })

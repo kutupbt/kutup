@@ -235,6 +235,7 @@
       "shared": "Paylaşılan posta kutusu"
     },
     "goesToAdministrators": "Bu rol adresinin henüz üyesi yok; e-postaları tüm yöneticilere gider.",
+    "needsNewSigner": "Bu posta kutusunun bir sahibi veya yöneticisi silindi ya da devre dışı bırakıldı ve imzalama anahtarını hâlâ tutuyor olabilir. İmzalamayı kalan sahiplere ve yöneticilere devretmek için kaydedin; o zamana kadar anahtarları değiştirilemez.",
     "toAdministrators": "Tüm yöneticilere gider",
     "displayName": "Ad",
     "postPolicy": "Kimler yazabilir",
@@ -271,7 +272,9 @@
     "openMailbox": "Aç",
     "sharedMailboxes": "Paylaşılan posta kutuları",
     "foldersOf": "{{name}} klasörleri",
-    "deleted": "Grup silindi."
+    "deleted": "Grup silindi.",
+    "identityInDoubt": "{{account}} için sunucunun verdiği anahtarlar bildiğiniz anahtarlar değil. Posta kutusunun anahtarları paylaşılmadı. Yalnızca {{account}} ile hesabının sıfırlandığını doğruladıysanız yine de paylaşın.",
+    "shareKeysAnyway": "Anahtarları yine de paylaş"
   },
   "nameDialog": {
     "label": "Ad",

@@ -383,12 +383,20 @@ pub async fn update_user(
             .map_err(|_| AppError::internal("internal error"))?;
     }
     if let Some(a) = req.is_active {
+        let mut tx = state.pool.begin().await?;
+        if !a {
+            // The shared mailboxes it signs for need a new signer: it may
+            // still hold the seed (docs/plans/mail-groups.md).
+            crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
+        }
         sqlx::query("UPDATE users SET is_active = $1 WHERE id = $2")
             .bind(a)
             .bind(target)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await
-            .map_err(|_| AppError::internal("internal error"))?; // A disabled account keeps no live sign-in anywhere.
+            .map_err(|_| AppError::internal("internal error"))?;
+        tx.commit().await?;
+        // A disabled account keeps no live sign-in anywhere.
         if !a {
             crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
             // Their public links are down with them (link_reports::ensure_link_up):
@@ -486,6 +494,9 @@ pub async fn delete_user(
     .await?;
     // Its account id is never given to anyone again (docs/plans/account-ids.md).
     crate::account_ids::retire(&mut tx, target).await?;
+    // The shared mailboxes it signed for need a new signer: its signing
+    // shares go with it, but it may still hold the seed.
+    crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
         .execute(&mut *tx)

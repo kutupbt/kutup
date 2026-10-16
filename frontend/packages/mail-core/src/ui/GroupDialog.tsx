@@ -3,7 +3,9 @@ import { Trash2, UserPlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import type { SealedMailKey } from '@kutup/crypto'
+import { useDriveIdentity } from '@kutup/drive-core/identity'
+import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
+import type { GroupKeyHolderOf } from '../api'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
@@ -42,8 +44,8 @@ export function GroupDialog({
   onClose,
 }: {
   groupId: string
-  /** The caller's address keys, to share a shared mailbox's keys from; null when they have none. */
-  ownKeys: SealedMailKey[] | null
+  /** What opens the caller's shares (their account key), to share a shared mailbox's keys from; null when unknown. */
+  ownKeys: GroupKeyHolderOf | null
   /** The caller is an administrator (may change owners and every group). */
   administrator: boolean
   onClose: () => void
@@ -58,7 +60,11 @@ export function GroupDialog({
   const [adding, setAdding] = useState('')
   const [problem, setProblem] = useState<string | null>(null)
   const [withoutHistory, setWithoutHistory] = useState(false)
+  // A member whose identity is in doubt (their keys are not the ones pinned):
+  // nothing is sealed to them until the caller says to go on.
+  const [inDoubt, setInDoubt] = useState<IdentityNotConfirmed | null>(null)
   const [saving, setSaving] = useState(false)
+  const identity = useDriveIdentity()
 
   useEffect(() => {
     if (!detail.data || members) return
@@ -96,8 +102,8 @@ export function GroupDialog({
     }
   }
 
-  async function save(confirmedWithoutHistory: boolean) {
-    if (!group || !detail.data || !members) return
+  async function save(confirmedWithoutHistory: boolean, identityConfirmed = false) {
+    if (!group || !detail.data || !members || !identity.data) return
     setProblem(null)
     setSaving(true)
     try {
@@ -109,14 +115,20 @@ export function GroupDialog({
           ...(policyChanged ? { postPolicy } : {}),
         })
       }
+      // Members whose keys changed (reset) get the mailbox's keys again too.
+      // A mailbox needing a new signer gets one on save.
       const changed =
+        (shared && group.needsNewSigner) ||
         members.length !== detail.data.members.length ||
         members.some((m) => {
           const before = detail.data.members.find((c) => c.userId === m.userId)
-          return !before || before.role !== m.role || before.canSendAs !== m.canSendAs
+          return !before || before.role !== m.role || before.canSendAs !== m.canSendAs || before.needsKeys
         })
       if (changed) {
-        const { body, historyShared } = await membershipBody(group, detail.data.members, members, ownKeys)
+        const { body, historyShared } = await membershipBody(group, detail.data.members, members, ownKeys, {
+          me: identity.data,
+          confirmed: identityConfirmed,
+        })
         if (!historyShared && !confirmedWithoutHistory) {
           setWithoutHistory(true)
           return
@@ -128,6 +140,10 @@ export function GroupDialog({
       toast.success(t('mailGroups.saved'))
       onClose()
     } catch (error) {
+      if (error instanceof IdentityNotConfirmed) {
+        setInDoubt(error)
+        return
+      }
       setProblem(apiErrorMessage(error, t('mailGroups.saveFailed')))
     } finally {
       setSaving(false)
@@ -150,6 +166,7 @@ export function GroupDialog({
         ) : (
           <div className="max-h-[60vh] space-y-4 overflow-y-auto">
             {detail.data.goesToAdministrators ? <Alert>{t('mailGroups.goesToAdministrators')}</Alert> : null}
+            {shared && canEdit && detail.data.group.needsNewSigner ? <Alert variant="warn">{t('mailGroups.needsNewSigner')}</Alert> : null}
             {canEdit ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label={t('mailGroups.displayName')}>
@@ -252,6 +269,14 @@ export function GroupDialog({
               {shared ? <p className="text-xs text-muted-foreground">{t('mailGroups.sharedKeysHint')}</p> : null}
             </section>
             {withoutHistory ? <Alert variant="warn">{t('mailGroups.withoutHistory')}</Alert> : null}
+            {inDoubt ? (
+              <Alert variant="error" title={t(`identityCheck.${inDoubt.status.kind}.title`, { name: inDoubt.account })}>
+                <p>{t('mailGroups.identityInDoubt', { account: inDoubt.account })}</p>
+                <Button className="mt-2" size="sm" variant="outline" onClick={() => void save(withoutHistory, true)}>
+                  {t('mailGroups.shareKeysAnyway')}
+                </Button>
+              </Alert>
+            ) : null}
             {problem ? <Alert variant="error">{problem}</Alert> : null}
           </div>
         )}

@@ -21,7 +21,8 @@ import {
   type GroupMailKey,
   type SealedMailKey,
 } from '@kutup/crypto'
-import { addressFolder } from '@kutup/crypto/accountRename'
+import { addressFolder, foldAddress } from '@kutup/crypto/accountRename'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
 import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
@@ -169,6 +170,17 @@ export interface MailAccount {
   ownPublicKeys: string[]
   /** Whether `address` is one of the account's, in any spelling (compared folded). */
   isOwnAddress: (address: string | null | undefined) => boolean
+  /**
+   * What opens this account's shares of shared mailboxes' keys: the account
+   * (its server and id) and its account-level HPKE private key (base64).
+   */
+  groupHolder: GroupKeyHolderOf
+}
+
+/** The account a group key share is sealed to, with the key that opens it. */
+export interface GroupKeyHolderOf {
+  account: AccountRef
+  hpkePrivateKey: string
 }
 
 /** Opens a shared mailbox's message with the newest group key that opens it. */
@@ -237,8 +249,10 @@ export interface OwnAddressRow {
 export function mailAccountOf(
   rows: readonly OwnAddressRow[],
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
-  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username'>,
+  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
+  /** The account itself, as `/user/me` names it: its server and id. */
+  self: AccountRef,
 ): MailAccount {
   const current = rows.find((row) => row.state === 'active')
   const primary = current?.keys.find((k) => k.primary)
@@ -274,6 +288,10 @@ export function mailAccountOf(
       const folded = fold(candidate)
       return folded !== null && own.has(folded)
     },
+    groupHolder: {
+      account: { server: self.server, accountId: self.accountId },
+      hpkePrivateKey: toBase64(session.privateKey),
+    },
   }
 }
 
@@ -299,7 +317,9 @@ export function useMailAccount() {
         .get<MailIdentity>('/mail/identity')
         .then((r) => r.data)
         .catch(() => null)
-      return mailAccountOf(data, identity, session, await addressFolder())
+      // The account as shares name it: by `/user/me`, never by a mail domain.
+      const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
+      return mailAccountOf(data, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
     },
   })
 }
@@ -817,6 +837,25 @@ export function useSearchAddresses(group?: string, enabled = true) {
 }
 
 const imageSendersKey = ['mail', 'image-senders'] as const
+
+/**
+ * A sender's address as the account's sender lists keep it: one of this
+ * server's folded (any spelling of a name is the one sender), any other
+ * lowercased.
+ */
+export function useSenderKey(address: string | null | undefined) {
+  const account = useMailAccount()
+  const domain = account.data?.domain.toLowerCase()
+  return useQuery({
+    queryKey: ['mail', 'sender-key', address?.trim().toLowerCase(), domain],
+    enabled: !!address && !!domain,
+    staleTime: Infinity,
+    queryFn: async () => {
+      const lower = address!.trim().toLowerCase()
+      return lower.endsWith(`@${domain}`) ? ((await foldAddress(lower)) ?? lower) : lower
+    },
+  })
+}
 
 /** Senders whose remote images always load (chosen when loading them). */
 export function useImageSenders() {

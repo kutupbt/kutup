@@ -180,3 +180,31 @@ What landed, and where it differs from the note above:
   - `drive_profile_keys` keeps no address column. People's labels come from the shares and accounts when listed.
   - `federated_incoming_*_shares.owner_user_id` keeps its name: it already is the owner's account id, as `collections.owner_user_id` and the JSON `ownerUserId` are.
 - **Moved to the Chat slice:** `remote_account_renames.account_id`. Rename chains are display only, and the peer's account id arrives signed in the account manifest that slice changes.
+
+## Slice 2 as built (Mail)
+
+- **Key lists name no account.** `MailKeyListV1` signs the incarnation, the authority key id and the address only (Proton's SignedKeyList names keys). A rename never touches a list. Vectors re-signed (`mail-address-key-v1.json`, `KUTUP_WRITE_MAIL_VECTORS=lists`).
+- **Key-list writes by the address row.** `PUT /api/mail/addresses/:id/key-list` and new keys are authorized by the row's `user_id` (current or receiving address), and the address comes from the row. A renamed account still manages its old address's keys (marking one compromised).
+- **`/api/mail/keys` names the account** by `server` and `accountId` (absent for a shared mailbox), not by a username.
+- **Shared-mailbox key shares on the account key**, as specified above:
+  - HPKE to the member's Drive HPKE key; the AAD binds the group id, the group key fingerprint, the member's AccountRef and their incarnation.
+  - The share carries the incarnation, so the server checks it against the member's current keys (`keyChanged`) without opening anything. `mail_group_key_shares.member_incarnation_id` replaces the address-key fingerprint.
+  - Browsers look members up by id and check their Drive key binding before sealing.
+  - The group id is drawn by the creating browser (`id` on create, `idTaken`), since the shares bind it.
+  - The server already refuses a rotation that does not share to exactly the remaining members.
+  - Beyond the note: the incarnation is in the AAD, as for named shares.
+- **Audit entries** for mail groups name the group by id and members by account id; the address is a snapshot.
+- **Shared mailboxes' key lists are signed by the group's own signing key** (review, decided by the main session, copying Proton's Signed Key Lists):
+  - an Ed25519 key made in a manager's browser, shared with each owner and manager sealed to their account keys as the group key is; the server stores and serves the chain and never signs (its mail-group authority is deleted);
+  - lists stay `MailKeyListV1`, their `incarnation_id` naming the signer (not an account incarnation; nothing reads it as one);
+  - a signer change is a `GroupSignerHandoverV1` signed by the outgoing signer and linked to its last list; losing an owner or manager needs one; a list an old signer signs after its handover is refused by the server and every client;
+  - only an administrator may start a new chain (no handover); senders who pinned the old signer then see a change;
+  - senders pin the signer by (server, group id) on first sight (TOFU) and check continuity after: the third session's `groups` pin section, with the same vectors. Until it lands, #212 pins no group (nothing keyed by its address): it verifies the whole chain on every lookup and guards it against rollback;
+  - an owner or manager whose account is deleted or deactivated may still hold the signer's seed: the group is marked `needsNewSigner`, nothing is published until a handover to a new signer for the active owners and managers (or an administrator's new chain), and their managers' group dialog asks for it (en/tr). Deactivated accounts get no shares (they hold no live keys); a manager seals the keys to them again if they come back (`needsKeys`);
+  - an administrator without a share of the signer who promotes someone to owner or manager starts a new chain (senders see a change), as when they remove one;
+  - inherent: a former signer and a colluding server can fork the chain at the handover point, serving a list the old signer signs instead of the handover to someone who never saw the handover. A sender who saw the chain past the handover refuses it (rollback guard, and the third session's group pins keep the digests); a sender meeting the group for the first time cannot tell, as with any TOFU pin.
+- **Members are checked against the manager's pins before sealing** (`confirmRecipient`, as Drive sharing): someone never met is pinned on first use; a changed or invalid identity stops the sealing until the manager confirms.
+- **Changes are checked under the group's lock:** rotations and membership changes take the group row first, then read members and check coverage inside the transaction (a test forces a rotation to wait on a removal).
+- **Re-sealing after a reset:** a member whose shares no longer open (`needsKeys`) may be given the keys again, after the manager's confirmation of their new identity; nobody else gets a share that way.
+- **Key-list rollback guard:** each device keeps the highest key-list sequence seen per address and signer (revision guard); an older chain is refused. A shared mailbox counts per group id and first signer, so a chain cut back to before a handover is refused too.
+- **This server's senders compare folded** in block, spam and allow lists, image senders and auto-reply records (any spelling of a name is one sender). Outside senders stay lowercased, as Proton keeps them.

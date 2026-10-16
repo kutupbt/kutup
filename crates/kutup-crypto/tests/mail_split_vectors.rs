@@ -178,20 +178,101 @@ fn unsigned_split_opens_for_each_member() {
 
 #[test]
 fn group_key_shares_open_only_for_their_member() {
-    // A shared mailbox's key, sealed to two members' address keys.
+    use kutup_crypto::account_ref::AccountRef;
+    use kutup_crypto::identity::AccountIdentityKeysV1;
+    use kutup_crypto::mail_key::{group_key_share_incarnation, GroupShareMember};
+    // A shared mailbox's key, sealed to Bob's account key (not an address
+    // key: a rename keeps it), for this group and this group key.
+    let group_id = "5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b";
     let group = generate_address_key("hr@kutup.dev", 1_790_000_000).unwrap();
-    let bob = generate_address_key("bob@kutup.dev", 1_790_000_000).unwrap();
-    let carol = generate_address_key("carol@kutup.dev", 1_790_000_000).unwrap();
-    let share = seal_group_key_share(&bob.public_key, &group.secret_key).unwrap();
-    let opened = open_group_key_share(&bob.secret_key, &share, &group.fingerprint).unwrap();
+    let other = generate_address_key("hr@kutup.dev", 1_790_000_001).unwrap();
+    let bob_keys = AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+    let carol_keys = AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
+    let bob = AccountRef::new("kutup.dev", "8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b").unwrap();
+    let carol = AccountRef::new("kutup.dev", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
+    let incarnation = bob_keys.incarnation_id();
+    let share = seal_group_key_share(
+        &group.secret_key,
+        group_id,
+        &GroupShareMember {
+            account: &bob,
+            incarnation_id: &incarnation,
+        },
+        &bob_keys.drive_hpke_public_key(),
+    )
+    .unwrap();
+    // The server sees whose keys it is sealed to, not what it holds.
+    assert_eq!(group_key_share_incarnation(&share).unwrap(), incarnation);
+    let open = |share: &[u8], group_id: &str, fingerprint, member: &AccountRef, key: &[u8]| {
+        open_group_key_share(share, group_id, fingerprint, member, key)
+    };
+    let opened = open(
+        &share,
+        group_id,
+        &group.fingerprint,
+        &bob,
+        bob_keys.drive_hpke_private_key(),
+    )
+    .unwrap();
     assert_eq!(&*opened, &*group.secret_key);
     // Mail to the group opens with the opened key.
     let split = encrypt_split_unsigned(&[&group.public_key], MESSAGE).unwrap();
     let message = join(&split.key_packets[0], &split.data_packet);
     assert_eq!(&*decrypt(&opened, &message, None).unwrap().data, MESSAGE);
-    // Not for Carol, and not for another group fingerprint.
-    assert!(open_group_key_share(&carol.secret_key, &share, &group.fingerprint).is_err());
-    assert!(open_group_key_share(&bob.secret_key, &share, &bob.fingerprint).is_err());
+    // Not for Carol (her key, or Bob's key named as her account), not for
+    // another group or group key.
+    assert!(open(
+        &share,
+        group_id,
+        &group.fingerprint,
+        &carol,
+        carol_keys.drive_hpke_private_key()
+    )
+    .is_err());
+    assert!(open(
+        &share,
+        group_id,
+        &group.fingerprint,
+        &carol,
+        bob_keys.drive_hpke_private_key()
+    )
+    .is_err());
+    assert!(open(
+        &share,
+        "00000000-0000-4000-8000-000000000000",
+        &group.fingerprint,
+        &bob,
+        bob_keys.drive_hpke_private_key()
+    )
+    .is_err());
+    assert!(open(
+        &share,
+        group_id,
+        &other.fingerprint,
+        &bob,
+        bob_keys.drive_hpke_private_key()
+    )
+    .is_err());
+    // A share claiming another incarnation does not open.
+    let mut moved = share.clone();
+    moved[1] ^= 1;
+    assert!(open(
+        &moved,
+        group_id,
+        &group.fingerprint,
+        &bob,
+        bob_keys.drive_hpke_private_key()
+    )
+    .is_err());
     // Only a secret key is sealed.
-    assert!(seal_group_key_share(&bob.public_key, b"not a key").is_err());
+    assert!(seal_group_key_share(
+        b"not a key",
+        group_id,
+        &GroupShareMember {
+            account: &bob,
+            incarnation_id: &incarnation
+        },
+        &bob_keys.drive_hpke_public_key(),
+    )
+    .is_err());
 }

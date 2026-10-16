@@ -1,3 +1,4 @@
+import type { AccountRef } from './accountRef'
 import { getCryptoWasm } from './rustWasm'
 
 // Mail address keys (docs/plans/mail-address-keys.md): OpenPGP keys per
@@ -30,7 +31,6 @@ export interface MailKeyEntry {
 }
 
 export interface MailKeyListInput {
-  account: string
   address: string
   sequence: number
   previousHash?: string
@@ -121,6 +121,77 @@ export async function foldAddress(address: string): Promise<string | null> {
  * Verifies a key list against an account authority and, when given, that it
  * directly follows `previous`.
  */
+/** A shared mailbox's verified key-list chain (Rust `mail_group::verify_group_key_chain`). */
+export interface GroupKeyChainView {
+  /** The first list's signer: what a sender pins on first sight (base64). */
+  firstSigner: string
+  /** The signer of the newest list, and every signer in order (base64). */
+  signer: string
+  signers: string[]
+  sequence: number
+  /** Each list's hash (hex), list 1's first. */
+  digests: string[]
+  newest: SignedMailKeyList
+}
+
+/** Checks a shared mailbox's whole key-list chain: signed by its signers in order, handed over only by the signer in force. */
+export async function verifyMailGroupKeyChain(
+  groupId: string,
+  firstSigner: string,
+  lists: { data: string; signature: string }[],
+  handovers: string[],
+): Promise<GroupKeyChainView> {
+  const view = (await getCryptoWasm()).verifyMailGroupKeyChain(groupId, firstSigner, lists, handovers)
+  return { ...view, newest: view.newest as SignedMailKeyList }
+}
+
+/** A shared mailbox's signing key as an owner or manager holds it; its seed is opened only inside WASM. */
+export interface GroupSignerHolder {
+  account: AccountRef
+  hpkePrivateKey: string
+  groupId: string
+  /** The signer in force (base64) and the holder's share of its seed. */
+  signer: string
+  signingShare: string
+}
+
+function signerHolder(holder: GroupSignerHolder) {
+  return {
+    account: { server: holder.account.server, accountId: holder.account.accountId },
+    hpkePrivateKey: holder.hpkePrivateKey,
+    groupId: holder.groupId,
+    signer: holder.signer,
+    signingShare: holder.signingShare,
+  }
+}
+
+/** Signs a shared mailbox's next key list with its signer in force. */
+export async function signMailGroupKeyList(holder: GroupSignerHolder, list: MailKeyListInput): Promise<SignedMailKeyList> {
+  return (await getCryptoWasm()).signMailGroupKeyList(signerHolder(holder), list) as SignedMailKeyList
+}
+
+/** A new signer for the shared mailbox: shared to `members` (its owners and managers), signing `list`, handed over from `outgoing` when there is one. */
+export async function newMailGroupSigner(
+  groupId: string,
+  members: GroupKeyMember[],
+  list: MailKeyListInput,
+  outgoing?: { holder: GroupSignerHolder; previousListHash: string },
+): Promise<{ publicKey: string; shares: string[]; keyList: SignedMailKeyList; handover?: string }> {
+  const made = (await getCryptoWasm()).newMailGroupSigner(
+    groupId,
+    memberInputs(members),
+    list,
+    outgoing ? signerHolder(outgoing.holder) : undefined,
+    outgoing?.previousListHash,
+  )
+  return { ...made, keyList: made.keyList as SignedMailKeyList }
+}
+
+/** The signer in force's seed shared with more owners and managers. */
+export async function reshareMailGroupSigner(holder: GroupSignerHolder, members: GroupKeyMember[]): Promise<string[]> {
+  return (await getCryptoWasm()).reshareMailGroupSigner(signerHolder(holder), memberInputs(members))
+}
+
 export async function verifyMailKeyList(
   list: { data: string; signature: string },
   authorityPublicKeyBase64: string,
@@ -265,49 +336,68 @@ export async function verifyMailCleartext(message: string, signerPublicKey?: str
 
 // --- Shared mailboxes (docs/plans/mail-groups.md, G1b) ---------------------
 
-/** A shared mailbox's key as a member holds it: their share, opened only inside WASM with their own address key. */
+/**
+ * A shared mailbox's key as a member holds it: their share, sealed to their
+ * account key (docs/plans/account-ids.md) and opened only inside WASM.
+ */
 export interface GroupMailKey {
-  /** The member's own address key, which opens the share. */
-  member: SealedMailKey
-  /** The group key's secret, encrypted to the member's address key (base64). */
+  /** The member: their account, whose Drive HPKE private key (base64) opens the share. */
+  account: AccountRef
+  hpkePrivateKey: string
+  /** The group key's secret, sealed to the member's account key (base64). */
   share: string
+  groupId: string
   /** The group key's fingerprint. */
   fingerprint: string
+}
+
+/** A member to share a group key with: their account and the account key their Drive key binding vouches for. */
+export interface GroupKeyMember {
+  account: AccountRef
+  incarnationId: string
+  hpkePublicKey: string
 }
 
 export interface GeneratedMailGroupKey {
   publicKey: string
   fingerprint: string
   sha256Fingerprint: string
-  /** One per member public key, in the order given. */
+  /** One per member, in the order given. */
   shares: string[]
 }
 
-/** Makes a shared mailbox's key, with a share for each member's address key (base64). */
-export async function generateMailGroupKey(groupAddress: string, memberPublicKeys: string[], createdAt: Date = new Date()): Promise<GeneratedMailGroupKey> {
-  return (await getCryptoWasm()).generateMailGroupKey(groupAddress, Math.floor(createdAt.getTime() / 1000), memberPublicKeys)
+function holder(key: GroupMailKey) {
+  return {
+    account: { server: key.account.server, accountId: key.account.accountId },
+    hpkePrivateKey: key.hpkePrivateKey,
+    share: key.share,
+    groupId: key.groupId,
+    fingerprint: key.fingerprint,
+  }
 }
 
-/** Shares a group key the caller holds with more members, one share per public key. */
-export async function reshareMailGroupKey(key: GroupMailKey, memberPublicKeys: string[]): Promise<string[]> {
-  const m = key.member
-  return (await getCryptoWasm()).reshareMailGroupKey(m.masterKeyBase64, m.binding, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, memberPublicKeys)
+function memberInputs(members: GroupKeyMember[]) {
+  return members.map((m) => ({ account: { server: m.account.server, accountId: m.account.accountId }, incarnationId: m.incarnationId, hpkePublicKey: m.hpkePublicKey }))
+}
+
+/** Makes the shared mailbox `groupId`'s key, with a share for each member. */
+export async function generateMailGroupKey(
+  groupAddress: string,
+  groupId: string,
+  members: GroupKeyMember[],
+  createdAt: Date = new Date(),
+): Promise<GeneratedMailGroupKey> {
+  return (await getCryptoWasm()).generateMailGroupKey(groupAddress, groupId, Math.floor(createdAt.getTime() / 1000), memberInputs(members))
+}
+
+/** Shares a group key the caller holds with more members, one share each. */
+export async function reshareMailGroupKey(key: GroupMailKey, members: GroupKeyMember[]): Promise<string[]> {
+  return (await getCryptoWasm()).reshareMailGroupKey(holder(key), memberInputs(members))
 }
 
 /** Opens a shared mailbox's message with its group key; with `senderPublicKey`, checks the signature too. */
 export async function openMailGroupMessage(key: GroupMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
-  const m = key.member
-  const opened = (await getCryptoWasm()).openMailGroupMessage(
-    m.masterKeyBase64,
-    m.binding,
-    m.address,
-    m.envelope,
-    m.fingerprint,
-    key.share,
-    key.fingerprint,
-    message,
-    senderPublicKey,
-  )
+  const opened = (await getCryptoWasm()).openMailGroupMessage(holder(key), message, senderPublicKey)
   try {
     return { data: opened.data, signed: opened.signed, verified: opened.verified }
   } finally {
@@ -317,18 +407,7 @@ export async function openMailGroupMessage(key: GroupMailKey, message: Uint8Arra
 
 /** `encryptMailMessage` signed by the group key: a member writing as the shared mailbox. */
 export async function encryptMailMessageAsGroup(key: GroupMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<SealedMail> {
-  const m = key.member
-  const sealed = (await getCryptoWasm()).encryptMailMessageAsGroup(
-    m.masterKeyBase64,
-    m.binding,
-    m.address,
-    m.envelope,
-    m.fingerprint,
-    key.share,
-    key.fingerprint,
-    recipientPublicKeys,
-    plaintext,
-  )
+  const sealed = (await getCryptoWasm()).encryptMailMessageAsGroup(holder(key), recipientPublicKeys, plaintext)
   try {
     return { keyPackets: sealed.keyPackets, dataPacket: sealed.dataPacket }
   } finally {
@@ -338,18 +417,7 @@ export async function encryptMailMessageAsGroup(key: GroupMailKey, recipientPubl
 
 /** `encryptMailPgp` signed by the group key. */
 export async function encryptMailPgpAsGroup(key: GroupMailKey, recipientPublicKeys: string[], plaintext: Uint8Array): Promise<string> {
-  const m = key.member
-  return (await getCryptoWasm()).encryptMailPgpAsGroup(
-    m.masterKeyBase64,
-    m.binding,
-    m.address,
-    m.envelope,
-    m.fingerprint,
-    key.share,
-    key.fingerprint,
-    recipientPublicKeys,
-    plaintext,
-  )
+  return (await getCryptoWasm()).encryptMailPgpAsGroup(holder(key), recipientPublicKeys, plaintext)
 }
 
 // --- Encrypt and Sign per message (docs/plans/mail-encrypt-sign.md) --------
@@ -381,12 +449,10 @@ export async function signMailCleartext(key: SealedMailKey, text: string): Promi
 
 /** {@link signMailCleartext} with a shared mailbox's key. */
 export async function signMailCleartextAsGroup(key: GroupMailKey, text: string): Promise<string> {
-  const m = key.member
-  return (await getCryptoWasm()).signMailCleartextAsGroup(m.masterKeyBase64, m.binding, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, text)
+  return (await getCryptoWasm()).signMailCleartextAsGroup(holder(key), text)
 }
 
 /** {@link signMailDetached} with a shared mailbox's key. */
 export async function signMailDetachedAsGroup(key: GroupMailKey, content: Uint8Array): Promise<string> {
-  const m = key.member
-  return (await getCryptoWasm()).signMailDetachedAsGroup(m.masterKeyBase64, m.binding, m.address, m.envelope, m.fingerprint, key.share, key.fingerprint, content)
+  return (await getCryptoWasm()).signMailDetachedAsGroup(holder(key), content)
 }

@@ -7,7 +7,14 @@ const fold = (address: string) => {
   const at = address.lastIndexOf('@')
   return at > 0 ? `${address.slice(0, at).replace(/[._-]/g, '').toLowerCase()}@${address.slice(at + 1).toLowerCase()}` : null
 }
-const session = { masterKey: new Uint8Array(32), envelopeBinding: 'binding', username: 'ada.lovelace' }
+const self = { server: 'kutup.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+const session = {
+  masterKey: new Uint8Array(32),
+  privateKey: new Uint8Array(32),
+  userId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
+  envelopeBinding: 'binding',
+  username: 'ada.lovelace',
+}
 const key = (id: string, primary: boolean) => ({ fingerprint: `fp-${id}`, publicKey: `pk-${id}`, privateKeyEnvelope: `env-${id}`, primary })
 
 // After a rename: the current address first, the old ones after (docs/api.md).
@@ -19,7 +26,7 @@ const rows: OwnAddressRow[] = [
 
 describe('the mail account after a rename', () => {
   it('sends from the current address, wherever the server lists it', () => {
-    const account = mailAccountOf([rows[1], rows[0], rows[2]], null, session, fold)
+    const account = mailAccountOf([rows[1], rows[0], rows[2]], null, session, fold, self)
     expect(account.address).toBe('ada.lovelace@kutup.test')
     expect(account.key).toMatchObject({ address: 'ada.lovelace@kutup.test', fingerprint: 'fp-new' })
     expect(account.publicKey).toBe('pk-new')
@@ -27,7 +34,7 @@ describe('the mail account after a rename', () => {
   })
 
   it('keeps the earlier addresses keys, each sealed for its own address', () => {
-    const account = mailAccountOf(rows, null, session, fold)
+    const account = mailAccountOf(rows, null, session, fold, self)
     expect(account.olderKeys.map((k) => [k.address, k.fingerprint])).toEqual([
       ['ada.lovelace@kutup.test', 'fp-new-old'],
       ['ada.l@kutup.test', 'fp-old'],
@@ -38,7 +45,7 @@ describe('the mail account after a rename', () => {
   })
 
   it('knows its own addresses in any spelling, and no one else', () => {
-    const account = mailAccountOf(rows, null, session, fold)
+    const account = mailAccountOf(rows, null, session, fold, self)
     for (const own of ['ada.lovelace@kutup.test', 'Ada_Lovelace@Kutup.Test', 'ADA-L@kutup.test', 'ada@kutup.test', 'a.d.a@kutup.test']) {
       expect(account.isOwnAddress(own)).toBe(true)
     }
@@ -48,13 +55,13 @@ describe('the mail account after a rename', () => {
   })
 
   it('has no account without a current address and its primary key', () => {
-    expect(() => mailAccountOf(rows.slice(1), null, session, fold)).toThrow(NoAddressKey)
-    expect(() => mailAccountOf([{ ...rows[0], keys: [] }], null, session, fold)).toThrow(NoAddressKey)
+    expect(() => mailAccountOf(rows.slice(1), null, session, fold, self)).toThrow(NoAddressKey)
+    expect(() => mailAccountOf([{ ...rows[0], keys: [] }], null, session, fold, self)).toThrow(NoAddressKey)
   })
   it('keeps a freed name\'s keys for its old mail, never as its own', () => {
     // ada@ was freed and may be Bob's now.
     const freed: OwnAddressRow[] = [rows[0], rows[1], { ...rows[2], state: 'freed' }]
-    const account = mailAccountOf(freed, null, session, fold)
+    const account = mailAccountOf(freed, null, session, fold, self)
     expect(account.olderKeys.map((k) => k.fingerprint)).toContain('fp-first')
     expect(account.isOwnAddress('ada@kutup.test')).toBe(false)
     expect(account.ownPublicKeys).not.toContain('pk-first')

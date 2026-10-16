@@ -664,6 +664,8 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::mail_groups::CreateMailGroup,
         crate::handlers::mail_groups::AdminUpdateMailGroup,
         crate::handlers::mail_groups::MailGroupKey,
+        crate::handlers::mail_groups::MailGroupKeys,
+        crate::mail::group_keys::NewGroupSigner,
         crate::handlers::mail_groups::RotateGroupKey,
         crate::handlers::mail_groups::MailAccountRef,
         crate::handlers::mail_groups::MailGroupEntry,

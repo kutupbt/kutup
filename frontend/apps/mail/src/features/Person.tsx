@@ -44,7 +44,7 @@ function useKutupAccount(address: string, enabled: boolean) {
       addressKeys(address).then(
         // An old address's account goes by another name now: Chat and calls
         // go to the name it has (its verified rename chain says which).
-        (keys) => currentAddressOf(keys.account, keys.authorityPublicKey),
+        (keys) => currentAddressOf(keys.address, keys.authorityPublicKey),
         (error: unknown) => {
           if (error instanceof NoKutupAddress) return null
           throw error

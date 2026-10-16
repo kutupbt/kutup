@@ -14,6 +14,8 @@ const fetchMailImage = vi.fn((url: string) =>
 vi.mock('@kutup/mail-core/api', () => ({
   useMailSettings: () => ({ data: { confirmLink: true, remoteImages, imageProxy, embeddedImages } }),
   useImageSenders: () => ({ data: senders }),
+  // Outside senders are kept lowercased (this server's folded).
+  useSenderKey: (address: string | undefined) => ({ data: address?.trim().toLowerCase() }),
   useAddImageSender: () => ({ mutate: addImageSender }),
   fetchMailImage: (url: string) => fetchMailImage(url),
 }))

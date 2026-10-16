@@ -235,6 +235,7 @@
       "shared": "Shared mailbox"
     },
     "goesToAdministrators": "This role address has no members yet, so its mail goes to every administrator.",
+    "needsNewSigner": "An owner or manager of this mailbox was deleted or deactivated and may still hold its signing key. Save to hand signing over to the owners and managers who remain; until then its keys cannot change.",
     "toAdministrators": "Goes to all administrators",
     "displayName": "Name",
     "postPolicy": "Who may write to it",
@@ -271,7 +272,9 @@
     "openMailbox": "Open",
     "sharedMailboxes": "Shared mailboxes",
     "foldersOf": "Folders of {{name}}",
-    "deleted": "Group deleted."
+    "deleted": "Group deleted.",
+    "identityInDoubt": "The keys {{account}}'s server gave are not the ones you know for them. The mailbox's keys were not shared with them. Share them anyway only if you checked with {{account}} that their account was reset.",
+    "shareKeysAnyway": "Share the keys anyway"
   },
   "nameDialog": {
     "label": "Name",

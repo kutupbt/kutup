@@ -73,7 +73,15 @@ pub fn normalise(pattern: &str) -> Option<String> {
     (ok && pattern.len() <= 320).then_some(pattern)
 }
 
-/// The entry that applies to mail from `from` in `user_id`'s lists.
+/// [`normalise`], then kept as senders are compared ([`super::sender_key`]):
+/// an address of this server folded.
+pub fn normalise_for(server_name: &str, pattern: &str) -> Option<String> {
+    normalise(pattern).map(|pattern| super::sender_key(server_name, &pattern))
+}
+
+/// The entry that applies to mail from `from` in `user_id`'s lists. A sender
+/// of this server is matched in any spelling of their name: entries keep
+/// its addresses folded (`mail_addresses.folded`).
 pub async fn verdict(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
@@ -85,8 +93,12 @@ pub async fn verdict(
     };
     let kind: Option<String> = sqlx::query_scalar(
         "SELECT kind FROM mail_sender_rules
-          WHERE user_id = $1 AND pattern IN ($2, $3)
-          ORDER BY (pattern = $2) DESC LIMIT 1",
+          WHERE user_id = $1
+            AND pattern IN ($2, $3, (SELECT folded FROM mail_addresses
+                                       WHERE folded = kutup_fold(split_part($2, '@', 1))
+                                                      || '@' || lower(split_part($2, '@', 2))
+                                       LIMIT 1))
+          ORDER BY (pattern = $3) ASC LIMIT 1",
     )
     .bind(user_id)
     .bind(&from)

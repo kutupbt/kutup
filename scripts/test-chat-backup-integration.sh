@@ -77,6 +77,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test account_ids_live -- --nocapture
+# Shared mailboxes' keys (docs/plans/mail-groups.md): lists signed by the
+# group's signers only, a rotation racing a removal, re-sealing after a reset.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test mail_groups_live -- --nocapture --test-threads 1
 
 # Drive: names unique in a folder, as Proton Drive's hashes (required on
 # every write, restore under a new name, which names are free), moves, and

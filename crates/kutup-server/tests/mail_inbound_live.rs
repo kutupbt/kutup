@@ -49,7 +49,6 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
             .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let list = MailKeyListV1 {
-        account: address.clone(),
         incarnation_id: hex32(user.identity.incarnation_id()),
         authority_key_id: hex32(user.identity.authority_key_id()),
         address: address.clone(),
@@ -1888,7 +1887,7 @@ fn distribution_lists_and_role_groups() {
     let create = |name: &str| {
         bearer(c.post(format!("{base}/api/admin/mail/groups")), &admin)
             .json(&json!({
-                "name": name, "displayName": "Team", "kind": "list", "postPolicy": "anyone",
+                "id": uuid::Uuid::new_v4().to_string(), "name": name, "displayName": "Team", "kind": "list", "postPolicy": "anyone",
                 "storageQuotaBytes": 10_000_000, "owners": [alice_user.id],
             }))
             .send()
@@ -2217,21 +2216,47 @@ fn distribution_lists_and_role_groups() {
     assert_eq!(create(&name).status(), 200);
 }
 
-/// The hex fingerprint of an address's key.
-fn fingerprint_of(address: &Address) -> String {
-    hex::encode(
-        mail_key::inspect_address_public_key(&address.public_key, &address.address)
-            .unwrap()
-            .fingerprint,
-    )
+/// A shared mailbox's key list as a manager's browser signs it with the
+/// group's signing key: `keys` (the new one primary), after `previous`.
+fn group_list(
+    signer: &kutup_crypto::mail_group::GroupSigningKey,
+    address: &str,
+    previous: Option<&mail_key::SignedMailKeyListV1>,
+    keys: Vec<MailKeyEntryV1>,
+) -> mail_key::SignedMailKeyListV1 {
+    let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
+    let mut keys = keys;
+    keys.sort_by_key(|key| key.fingerprint);
+    MailKeyListV1 {
+        incarnation_id: hex32(
+            kutup_crypto::identity::incarnation_id_from_authority_public(&signer.public_key),
+        ),
+        authority_key_id: hex32(kutup_crypto::identity::authority_key_id_from_public(
+            &signer.public_key,
+        )),
+        address: address.to_string(),
+        sequence: previous.map_or(1, |list| list.list.sequence + 1),
+        previous_hash: previous.map(mail_key::SignedMailKeyListV1::hash),
+        issued_at: "2026-10-16T12:00:00Z".into(),
+        keys,
+    }
+    .sign(&signer.signing_key())
+    .unwrap()
 }
 
-/// A shared mailbox key share for `member`, as a browser makes it.
-fn share_for(group_secret: &[u8], member_user: &User, member: &Address) -> Value {
+/// A shared mailbox key share for `member`, as a browser makes it: sealed
+/// to their account key, for the group `group_id`.
+fn share_for(group_secret: &[u8], group_id: &str, member: &User) -> Value {
+    let incarnation = member.identity.incarnation_id();
     json!({
-        "userId": member_user.id,
-        "share": b64(&mail_key::seal_group_key_share(&member.public_key, group_secret).unwrap()),
-        "memberFingerprint": fingerprint_of(member),
+        "userId": member.id,
+        "share": b64(&mail_key::seal_group_key_share(
+            group_secret,
+            group_id,
+            &mail_key::GroupShareMember { account: &member.person, incarnation_id: &incarnation },
+            &member.identity.drive_hpke_public_key(),
+        )
+        .unwrap()),
     })
 }
 
@@ -2256,7 +2281,9 @@ fn shared_mailboxes() {
         register(&c, &base),
     );
     let alice = set_up_address(&c, &base, &alice_user);
-    let bob = set_up_address(&c, &base, &bob_user);
+    // Bob's address gets its key (he receives the mailbox's mail); his share
+    // of the mailbox's key is sealed to his account key, not to it.
+    set_up_address(&c, &base, &bob_user);
     let carol = set_up_address(&c, &base, &carol_user);
     let domain = alice.address.split_once('@').unwrap().1.to_string();
     let tag = uuid::Uuid::new_v4().simple().to_string();
@@ -2269,27 +2296,54 @@ fn shared_mailboxes() {
 
     // Made with its key, a share for its owner; without one it is refused.
     let first = mail_key::generate_address_key(&hr, now).unwrap();
+    // The group's id is drawn by the browser: its key shares are bound to it.
+    let id = uuid::Uuid::new_v4().to_string();
     let create = |group_key: Value| {
         bearer(c.post(format!("{base}/api/admin/mail/groups")), &admin)
             .json(&json!({
-                "name": name, "displayName": "HR", "kind": "shared", "postPolicy": "anyone",
+                "id": id, "name": name, "displayName": "HR", "kind": "shared", "postPolicy": "anyone",
                 "storageQuotaBytes": 10_000_000, "owners": [alice_user.id], "groupKey": group_key,
             }))
             .send()
             .unwrap()
     };
     assert_eq!(create(Value::Null).status(), 400);
-    let r = create(json!({
+    // Its key lists are signed by the group's own signing key, its owner's:
+    // never by the server.
+    let signer = kutup_crypto::mail_group::GroupSigningKey::generate();
+    let first_entry = MailKeyEntryV1 {
+        fingerprint: first.fingerprint,
+        sha256_fingerprint: first.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    };
+    let list1 = group_list(&signer, &hr, None, vec![first_entry.clone()]);
+    let incarnation = alice_user.identity.incarnation_id();
+    let first_key = json!({
         "publicKey": b64(&first.public_key),
-        "shares": [share_for(&first.secret_key, &alice_user, &alice)],
-    }));
+        "shares": [share_for(&first.secret_key, &id, &alice_user)],
+        "keyList": { "data": b64(&list1.data), "signature": b64(&list1.signature) },
+    });
+    // Without its signer: refused.
+    assert_eq!(create(first_key.clone()).status(), 400);
+    let mut with_signer = first_key;
+    with_signer["signer"] = json!({
+        "publicKey": b64(&signer.public_key),
+        "shares": [{
+            "userId": alice_user.id,
+            "share": b64(&kutup_crypto::mail_group::seal_group_signing_share(
+                &signer,
+                &id,
+                &mail_key::GroupShareMember { account: &alice_user.person, incarnation_id: &incarnation },
+                &alice_user.identity.drive_hpke_public_key(),
+            ).unwrap()),
+        }],
+    });
+    let r = create(with_signer);
     assert_eq!(r.status(), 200, "create shared mailbox");
-    let id = r.json::<Value>().unwrap()["group"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    assert_eq!(r.json::<Value>().unwrap()["group"]["id"], id.as_str());
 
-    // Its key is published with a list the server signs.
+    // Its key is published with the chain its signer signed.
     let lookup: Value = bearer(
         c.get(format!("{base}/api/mail/keys?email={hr}")),
         &bob_user.token,
@@ -2298,18 +2352,19 @@ fn shared_mailboxes() {
     .unwrap()
     .json()
     .unwrap();
-    assert_eq!(lookup["account"], hr.as_str());
+    // A shared mailbox is no account: its chain names its signer.
+    assert!(lookup.get("accountId").is_none(), "{lookup}");
+    assert!(
+        lookup.get("accountAuthorityPublicKey").is_none(),
+        "{lookup}"
+    );
+    assert_eq!(lookup["groupId"], id.as_str());
+    assert_eq!(lookup["firstSigner"], b64(&signer.public_key));
     assert_eq!(
         lookup["keys"][0]["fingerprint"],
         hex::encode(first.fingerprint)
     );
-    let authority: [u8; 32] = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        lookup["accountAuthorityPublicKey"].as_str().unwrap(),
-    )
-    .unwrap()
-    .try_into()
-    .unwrap();
+    let authority = signer.public_key;
     let list_data = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         lookup["keyLists"][0]["data"].as_str().unwrap(),
@@ -2407,7 +2462,7 @@ fn shared_mailboxes() {
     let bob_share = json!({ "groupFingerprint": hex::encode(first.fingerprint) });
     let mut bob_share = bob_share.as_object().unwrap().clone();
     bob_share.extend(
-        share_for(&first.secret_key, &bob_user, &bob)
+        share_for(&first.secret_key, &id, &bob_user)
             .as_object()
             .unwrap()
             .clone(),
@@ -2426,12 +2481,57 @@ fn shared_mailboxes() {
     .unwrap();
     let share = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
-        keys[0]["share"].as_str().unwrap(),
+        keys["keys"][0]["share"].as_str().unwrap(),
     )
     .unwrap();
-    let bobs_key =
-        mail_key::open_group_key_share(&bob.secret_key, &share, &first.fingerprint).unwrap();
+    let bobs_key = mail_key::open_group_key_share(
+        &share,
+        &id,
+        &first.fingerprint,
+        &bob_user.person,
+        bob_user.identity.drive_hpke_private_key(),
+    )
+    .unwrap();
     assert!(mail_key::decrypt(&bobs_key, &content(&bob_user, &row).bytes().unwrap(), None).is_ok());
+
+    // Bob renames: his share is sealed to his account, not to an address, so
+    // he still opens the mailbox (docs/plans/account-ids.md).
+    let renamed =
+        common::rename_account(&c, &base, &bob_user, &format!("bobby-{}", &tag[..8]), false);
+    assert!(
+        renamed.status.is_success(),
+        "Bob's rename: {}",
+        renamed.body
+    );
+    let keys: Value = bearer(
+        c.get(format!("{base}/api/mail/groups/{id}/keys")),
+        &bob_user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let share = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        keys["keys"][0]["share"]
+            .as_str()
+            .expect("Bob keeps his share after renaming"),
+    )
+    .unwrap();
+    let after_rename = mail_key::open_group_key_share(
+        &share,
+        &id,
+        &first.fingerprint,
+        &bob_user.person,
+        bob_user.identity.drive_hpke_private_key(),
+    )
+    .unwrap();
+    assert!(mail_key::decrypt(
+        &after_rename,
+        &content(&bob_user, &row).bytes().unwrap(),
+        None
+    )
+    .is_ok());
 
     // Shared state: Bob reads it, Alice sees it read.
     let r = bearer(
@@ -2548,11 +2648,30 @@ fn shared_mailboxes() {
         std::thread::sleep(Duration::from_millis(200));
     };
     let second = mail_key::generate_address_key(&hr, later).unwrap();
+    let list2 = group_list(
+        &signer,
+        &hr,
+        Some(&list),
+        vec![
+            MailKeyEntryV1 {
+                primary: false,
+                flags: DEFAULT_FLAGS & !mail_key::FLAG_NOT_OBSOLETE,
+                ..first_entry
+            },
+            MailKeyEntryV1 {
+                fingerprint: second.fingerprint,
+                sha256_fingerprint: second.sha256_fingerprint,
+                primary: true,
+                flags: DEFAULT_FLAGS,
+            },
+        ],
+    );
     let r = set_members(
         alice_only,
         json!({ "newKey": {
             "publicKey": b64(&second.public_key),
-            "shares": [share_for(&second.secret_key, &alice_user, &alice)],
+            "shares": [share_for(&second.secret_key, &id, &alice_user)],
+            "keyList": { "data": b64(&list2.data), "signature": b64(&list2.signature) },
         } }),
     );
     assert_eq!(r.status(), 200, "remove with a new key");
@@ -4981,6 +5100,96 @@ fn expiring_messages_are_deleted_everywhere() {
     );
 }
 
+/// An old address after a rename is still the account's to manage
+/// (docs/plans/account-ids.md): its key list is authorized by the address's
+/// row, not by the account's current name, so its key can be marked
+/// compromised once it was renamed away from.
+#[test]
+fn an_old_addresss_keys_stay_its_accounts_to_manage() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let alice = register(&c, &base);
+    let old = set_up_address(&c, &base, &alice);
+    let (old_id, list) = current_list(&c, &base, &alice);
+    let renamed = common::rename_account(
+        &c,
+        &base,
+        &alice,
+        &format!("moved{}", rand::random::<u32>() % 1_000_000_000),
+        false,
+    );
+    assert!(renamed.status.is_success(), "rename: {}", renamed.body);
+
+    // After the rename, the old address gets a new key and its first key is
+    // marked compromised: the account's to do, by the address's row.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let new = mail_key::generate_address_key(&old.address, now).unwrap();
+    let envelope = mail_key::seal_address_key(
+        &alice.master_key,
+        &alice.binding,
+        &old.address,
+        &new.secret_key,
+    )
+    .unwrap();
+    let new_entry = MailKeyEntryV1 {
+        fingerprint: new.fingerprint,
+        sha256_fingerprint: new.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    };
+    let compromised = MailKeyEntryV1 {
+        primary: false,
+        flags: mail_key::FLAG_NOT_OBSOLETE,
+        ..list.list.keys[0].clone()
+    };
+    let key_list = next_list(&alice, &list, vec![compromised, new_entry]);
+    let add = |token: &str| {
+        bearer(
+            c.post(format!("{base}/api/mail/addresses/{old_id}/keys")),
+            token,
+        )
+        .json(&json!({ "publicKey": b64(&new.public_key), "privateKeyEnvelope": b64(&envelope), "keyList": key_list }))
+        .send()
+        .unwrap()
+    };
+    // Someone else's account may not touch it.
+    let bob = register(&c, &base);
+    assert!(add(&bob.token).status().is_client_error());
+    let r = add(&alice.token);
+    assert_eq!(r.status(), 200, "the old address's new key");
+    let lookup: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email={}", old.address)),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(
+        lookup["keys"][0]["fingerprint"],
+        hex::encode(new.fingerprint),
+        "{lookup}"
+    );
+    let first_key = lookup["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["fingerprint"] == hex::encode(list.list.keys[0].fingerprint))
+        .expect("the first key stays to open older mail");
+    assert_eq!(
+        first_key["flags"],
+        mail_key::FLAG_NOT_OBSOLETE as i64,
+        "{lookup}"
+    );
+    common::purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
 /// An account's old address after a rename (docs/plans/username-renames.md):
 /// it receives, never sends (an auto-reply goes from the current address),
 /// bounces once closed, and once freed is someone else's, while what it
@@ -5095,21 +5304,13 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
     assert_eq!(sent["from"]["address"], new.address.as_str(), "{sent}");
 
     // The keys of each, checked as the apps check them (mail-core keys.ts):
-    // the answer is the address asked (folded), and the newest signed list
-    // names its address and account as the answer does. The old address's
-    // list names the account as it was called then.
-    for (asked, stored, account) in [
-        (
-            old.address.clone(),
-            old.address.clone(),
-            old.address.clone(),
-        ),
-        (variant.clone(), new.address.clone(), new.address.clone()),
-        (
-            new.address.clone(),
-            new.address.clone(),
-            new.address.clone(),
-        ),
+    // the answer is the address asked (folded) and the account it belongs to
+    // (by id: both addresses are Alice's), and the newest signed list names
+    // its address, never a username.
+    for (asked, stored) in [
+        (old.address.clone(), old.address.clone()),
+        (variant.clone(), new.address.clone()),
+        (new.address.clone(), new.address.clone()),
     ] {
         let lookup: Value = bearer(
             c.get(format!("{base}/api/mail/keys?email={asked}")),
@@ -5120,7 +5321,12 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
         .json()
         .unwrap();
         assert_eq!(lookup["address"], stored.as_str(), "{asked}: {lookup}");
-        assert_eq!(lookup["account"], account.as_str(), "{asked}: {lookup}");
+        assert_eq!(lookup["accountId"], alice.id.as_str(), "{asked}: {lookup}");
+        assert_eq!(
+            lookup["server"],
+            alice.person.server.as_str(),
+            "{asked}: {lookup}"
+        );
         assert_eq!(
             kutup_crypto::names::fold_address(lookup["address"].as_str().unwrap()),
             kutup_crypto::names::fold_address(&asked)
@@ -5145,7 +5351,6 @@ fn a_renamed_address_receives_only_then_bounces_and_is_reused() {
             .pop()
             .unwrap();
         assert_eq!(newest.list.address, stored, "{asked}");
-        assert_eq!(newest.list.account, account, "{asked}");
     }
 
     // A message written as the old address (sealed to its own key for the

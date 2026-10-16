@@ -44,6 +44,11 @@ Specific codes, where an app does something particular (a test in
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
 | `accountIdTaken` | 409 | `register`: the account id is some account's, or was a deleted account's (ids are never reused): start again |
+| `keyListInvalid` | 400 | A shared mailbox's next key list the chain refuses: not signed by its signer in force, an old signer after its handover, a gap, or other keys than the group's |
+| `handoverNeeded` | 403 | A shared mailbox's new signer without a handover from the one in force: only an administrator starts a group's key lists over |
+| `newSignerNeeded` | 400 | Someone who held a shared mailbox's signing key no longer may (removed, no longer an owner or manager, or their account deleted or deactivated): the change needs a new signer |
+| `idTaken` | 409 | Creating a group: the id the browser drew is some group's: draw another |
+| `noAccountKey` | 400 | A shared mailbox's key share for an account not set up yet (no account keys to seal it to) |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
 | `opaqueKeyStale` | 409 | An OPAQUE record made against a setup that is no longer the server's current one: register again |
 | `opaqueKeyMissing` | 500 | The account's record names an OPAQUE setup whose key is not in `OPAQUE_SETUP_KEYS`: the operator restores the key (the account can recover with its phrase meanwhile) |
@@ -1548,16 +1553,22 @@ follow the current one.
 ### GET /api/mail/keys?email=
 
 A Kutup address's public keys (primary first) and every signed key list, oldest
-first. Clients verify the chain against the authority of `account`'s verified
-manifest. Rate-limited like user lookup. `email` may be any spelling of the
-address (`.`, `_`, `-` and case ignored); the answer names it as stored, and
-`account` as its newest key list does: for an old address of a renamed
-account, the name it had then (the same authority; the rename chain links the
-two). Clients check that `address` is the one asked, compared folded.
+first. Clients verify the chain against `accountAuthorityPublicKey`, checked
+against their pin of the account. Rate-limited like user lookup. `email` may
+be any spelling of the address (`.`, `_`, `-` and case ignored); the answer
+names it as stored, and the account it belongs to by `server` and
+`accountId` (server-asserted, as the address lookup's answer is). A shared
+mailbox's answer is `{ address, server, groupId, firstSigner, keys,
+keyLists, signerHandovers? }` instead: no account, and its chain checked with
+`mail_group::verify_group_key_chain` (WASM `verifyMailGroupKeyChain`) from
+`firstSigner` through the handovers. A key
+list names its address, never a username (docs/plans/account-ids.md), so a
+rename leaves it as it is. Clients check that `address` is the one asked,
+compared folded, and that the newest list names it.
 
 **Auth:** Bearer JWT
 
-**Response:** `{ "address": "...", "account": "username@server", "accountAuthorityPublicKey": "...", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
+**Response:** `{ "address": "...", "server": "...", "accountId": "<uuid>", "accountAuthorityPublicKey": "...", "keys": [{ "fingerprint", "sha256Fingerprint", "publicKey", "primary", "flags" }], "keyLists": [{ "data", "signature" }] }`; `404` when the address has no keys.
 
 ### GET /api/mail/keys/outside?email=
 
@@ -1788,9 +1799,14 @@ active administrator.
   the sender get it once.
 - Shared mailboxes (`kind: "shared"`): one mailbox with shared read state and
   its own address key, made in a browser; each member holds a share (the
-  key's secret encrypted to their address key). `GET /api/mail/keys` answers
-  a shared mailbox like an address, with key lists signed by the server's
-  mail-group authority (`accountAuthorityPublicKey`), and WKD serves its key.
+  key's secret sealed with HPKE to their account key, their Drive HPKE key
+  that their key binding ties to their account id, and bound to the group
+  id, the group key's fingerprint, their account and its incarnation:
+  `mail_key::seal_group_key_share`; a rename keeps it,
+  docs/plans/account-ids.md). `GET /api/mail/keys` answers
+  a shared mailbox with its key-list chain, signed by the group's own signing
+  key, which its owners and managers hold (never by the server), and WKD
+  serves its key.
   Its messages are read and filed with `?group={id}` on `GET
   /api/mail/messages`, `/counts`, `/threads/:id` and `/messages/:id/content`,
   and `"group"` in the bodies of `PATCH /api/mail/messages` and `POST
@@ -1799,24 +1815,53 @@ active administrator.
   members with `canSendAs`; `403` `notAllowedToSendAs` otherwise): From is its
   address, `keyPackets.self` is for its key, the copy lands in its Sent with
   `sentBy`, and the sender's limits count it.
-  - `GET /api/mail/groups/:id/keys` — its keys, primary first, with the
-    caller's `share`.
-  - `POST /api/mail/groups/:id/keys` — `{ "key": { "publicKey", "shares":
-    [{ "userId", "share", "memberFingerprint" }] } }`, a new primary key with
-    a share for every member (owners and managers).
+  - `GET /api/mail/groups/:id/keys` — `{ keys, signer?, signingShare? }`:
+    its keys, primary first, with the caller's `share` (only one sealed to
+    their current account keys), the signer in force of its key lists and,
+    for an owner or manager, their share of its seed.
+  - `POST /api/mail/groups/:id/keys` — `{ "key": NewGroupKey }`, a new
+    primary key with a share for every member and none for anyone else
+    (owners and managers). `NewGroupKey` is `{ publicKey, shares, keyList:
+    { data, signature }, signer?: { publicKey, shares, handover? } }`:
+    `keyList` is the next list (the keys before not primary and no longer to
+    encrypt to, this one primary), signed in the browser by the signer in
+    force, or by `signer` with the handover from the one in force (`shares`
+    for each owner and manager). The server checks the whole chain and
+    stores it; it never signs. `400 keyListInvalid` for a list the chain
+    refuses (another signer, an old signer after its handover, a gap, other
+    keys); `403 handoverNeeded` for a new signer without a handover from
+    anyone but an administrator (who starts a new chain).
   - `PUT /api/mail/groups/:id/members` also takes `keyShares` (`[{
-    "groupFingerprint", "userId", "share", "memberFingerprint" }]`, every
-    existing key for each joining member; `400` `sharesNeeded`) and `newKey`
-    (required when anyone leaves; `400` `newKeyNeeded`). Each share must be
-    encrypted to the member's current primary address key (`409`
-    `keyChanged`).
+    "groupFingerprint", "userId", "share" }]`, every existing key for each
+    joining member; `400` `sharesNeeded`) and `newKey` (required when anyone
+    leaves, with a share for exactly the members who stay; `400`
+    `newKeyNeeded`), and `signerShares` (`[{ "userId", "share" }]`, the
+    signer in force's seed for owners and managers who lack it: joining,
+    promoted, or reset since). Losing an owner or manager (removed, or no
+    longer one) needs `newKey` with a new `signer` (`400 newSignerNeeded`).
+    So does a group whose owner or manager was deleted or deactivated
+    (`needsNewSigner: true` on the group; every publish, by members or
+    rotation, without a new signer is refused, and the signer in force is
+    shared with nobody new). Shares, of a key or the signer, go to active
+    accounts only.
+    Keys may be sealed again to a member whose shares no longer open (reset
+    since: `needsKeys` in the group's detail), and to nobody else. The
+    changes are checked under the group's lock, against the members they
+    change. Each share must be sealed to the member's current account
+    incarnation (`409` `keyChanged`; `400` `noAccountKey` for an account not
+    set up yet). Browsers look each member up by
+    `GET /api/users/by-id/:accountId` and check their Drive key binding
+    before sealing.
 - Administrators: `GET /api/admin/mail/groups`, `POST /api/admin/mail/groups`
-  (`name`, `displayName`, `description`, `kind: "list" | "shared"`,
+  (`id`, a lowercase UUID the browser draws, which a shared mailbox's key
+  shares are bound to (`409` `idTaken`: draw another); `name`, `displayName`, `description`, `kind: "list" | "shared"`,
   `postPolicy`, `storageQuotaBytes`, `owners`, and for a shared mailbox
-  `groupKey` with a share for each owner; `409` `nameTaken` when the name is an
+  `groupKey` (a `NewGroupKey` with the first `signer`, no handover) with a
+  share for each owner; `409` `nameTaken` when the name is an
   account's, a group's or reserved), `PATCH /api/admin/mail/groups/:id`
   (quota, names, policy), `DELETE /api/admin/mail/groups/:id` (not a role
-  address; members keep their copies). Each change is in the audit log.
+  address; members keep their copies). Each change is in the audit log, by
+  the group's id and members' account ids (the address is a snapshot).
 - `GET /.well-known/security.txt` (RFC 9116, no authentication): `Contact:
   mailto:security@<server name>`, `Expires` a year ahead, `Preferred-Languages:
   en, tr`.

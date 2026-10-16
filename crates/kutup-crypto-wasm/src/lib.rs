@@ -2094,8 +2094,9 @@ pub fn encrypt_mail_message(
 // --- Shared mailboxes (docs/plans/mail-groups.md, G1b) ---------------------
 //
 // A shared mailbox has its own address key. Its secret part reaches each
-// member as a share: an OpenPGP message encrypted to the member's address
-// key. Like address keys, it is opened only here and never handed to JS.
+// member as a share sealed to the member's account key (their Drive HPKE
+// key, bound to their account id; docs/plans/account-ids.md). It is opened
+// only here and never handed to JS.
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2103,8 +2104,32 @@ struct MailGroupKeyView {
     public_key: String,
     fingerprint: String,
     sha256_fingerprint: String,
-    /// One share per member public key, in the order given.
+    /// One share per member, in the order given.
     shares: Vec<String>,
+}
+
+/// A member to share a group key with: their account, the incarnation and
+/// the Drive HPKE key their Drive key binding vouches for (checked by the
+/// caller).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupMemberInput {
+    account: kutup_crypto::account_ref::AccountRef,
+    incarnation_id: String,
+    hpke_public_key: String,
+}
+
+/// A group key as a member holds it: their share and what opens it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupKeyHolder {
+    /// The member: their account and its Drive HPKE private key (base64).
+    account: kutup_crypto::account_ref::AccountRef,
+    hpke_private_key: String,
+    share: String,
+    group_id: String,
+    /// The group key's fingerprint.
+    fingerprint: String,
 }
 
 fn group_fingerprint(fingerprint_hex: &str) -> Result<[u8; 20], JsValue> {
@@ -2114,57 +2139,64 @@ fn group_fingerprint(fingerprint_hex: &str) -> Result<[u8; 20], JsValue> {
         .ok_or_else(|| js_error("group fingerprint must be 40 hex digits"))
 }
 
-fn seal_shares(group_secret: &[u8], member_public_keys: &[String]) -> Result<Vec<String>, JsValue> {
-    member_public_keys
+fn seal_shares(
+    group_secret: &[u8],
+    group_id: &str,
+    members: JsValue,
+) -> Result<Vec<String>, JsValue> {
+    let members: Vec<GroupMemberInput> = serde_wasm_bindgen::from_value(members)
+        .map_err(|error| js_error(&format!("members: {error}")))?;
+    members
         .iter()
-        .map(|key| {
-            let key = decode_canonical_base64(key, "member public key")?;
-            kutup_crypto::mail_key::seal_group_key_share(&key, group_secret)
-                .map(|share| STANDARD.encode(share))
-                .map_err(|error| js_error(&error.to_string()))
+        .map(|member| {
+            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            kutup_crypto::mail_key::seal_group_key_share(
+                group_secret,
+                group_id,
+                &kutup_crypto::mail_key::GroupShareMember {
+                    account: &member.account,
+                    incarnation_id: &member.incarnation_id,
+                },
+                &key,
+            )
+            .map(|share| STANDARD.encode(share))
+            .map_err(|error| js_error(&error.to_string()))
         })
         .collect()
 }
 
 /// The group key's secret, opened from the caller's share with their own
-/// address key (sealed in `envelope`).
-#[allow(clippy::too_many_arguments)]
-fn open_group_secret(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
-) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
-    let member = open_mail_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-    )?;
-    let share = decode_canonical_base64(share_base64, "share")?;
+/// account key.
+fn open_group_secret(key: JsValue) -> Result<zeroize::Zeroizing<Vec<u8>>, JsValue> {
+    let holder: GroupKeyHolder = serde_wasm_bindgen::from_value(key)
+        .map_err(|error| js_error(&format!("group key: {error}")))?;
+    let private_key = zeroize::Zeroizing::new(decode_canonical_base64(
+        &holder.hpke_private_key,
+        "HPKE private key",
+    )?);
+    let share = decode_canonical_base64(&holder.share, "share")?;
     kutup_crypto::mail_key::open_group_key_share(
-        &member,
         &share,
-        &group_fingerprint(group_fingerprint_hex)?,
+        &holder.group_id,
+        &group_fingerprint(&holder.fingerprint)?,
+        &holder.account,
+        &private_key,
     )
     .map_err(|error| js_error(&error.to_string()))
 }
 
-/// Makes a shared mailbox's key for `group_address`, with a share for each
-/// member public key (base64).
+/// Makes a shared mailbox's key for `group_address` (the group `group_id`),
+/// with a share for each member.
 #[wasm_bindgen(js_name = generateMailGroupKey)]
 pub fn generate_mail_group_key(
     group_address: &str,
+    group_id: &str,
     created_at_secs: u32,
-    member_public_keys: Vec<String>,
+    members: JsValue,
 ) -> Result<JsValue, JsValue> {
     let key = kutup_crypto::mail_key::generate_address_key(group_address, created_at_secs)
         .map_err(|error| js_error(&error.to_string()))?;
-    let shares = seal_shares(&key.secret_key, &member_public_keys)?;
+    let shares = seal_shares(&key.secret_key, group_id, members)?;
     serde_wasm_bindgen::to_value(&MailGroupKeyView {
         public_key: STANDARD.encode(&key.public_key),
         fingerprint: hex::encode(key.fingerprint),
@@ -2175,29 +2207,13 @@ pub fn generate_mail_group_key(
 }
 
 /// Shares a group key the caller holds with more members (one share per
-/// member public key, in order).
+/// member, in order).
 #[wasm_bindgen(js_name = reshareMailGroupKey)]
-#[allow(clippy::too_many_arguments)]
-pub fn reshare_mail_group_key(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
-    member_public_keys: Vec<String>,
-) -> Result<Vec<String>, JsValue> {
-    let secret = open_group_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-        share_base64,
-        group_fingerprint_hex,
-    )?;
-    seal_shares(&secret, &member_public_keys)
+pub fn reshare_mail_group_key(key: JsValue, members: JsValue) -> Result<Vec<String>, JsValue> {
+    let holder: GroupKeyHolder = serde_wasm_bindgen::from_value(key.clone())
+        .map_err(|error| js_error(&format!("group key: {error}")))?;
+    let secret = open_group_secret(key)?;
+    seal_shares(&secret, &holder.group_id, members)
 }
 
 /// Opens a message of a shared mailbox with the group key, checking its
@@ -2205,25 +2221,11 @@ pub fn reshare_mail_group_key(
 #[wasm_bindgen(js_name = openMailGroupMessage)]
 #[allow(clippy::too_many_arguments)]
 pub fn open_mail_group_message(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
+    key: JsValue,
     message: &[u8],
     sender_public_key_base64: Option<String>,
 ) -> Result<OpenedMailJs, JsValue> {
-    let secret = open_group_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-        share_base64,
-        group_fingerprint_hex,
-    )?;
+    let secret = open_group_secret(key)?;
     let sender = sender_public_key_base64
         .map(|key| decode_canonical_base64(&key, "sender public key"))
         .transpose()?;
@@ -2325,25 +2327,8 @@ pub fn sign_mail_cleartext(
 /// [`sign_mail_cleartext`] with a shared mailbox's key.
 #[wasm_bindgen(js_name = signMailCleartextAsGroup)]
 #[allow(clippy::too_many_arguments)]
-pub fn sign_mail_cleartext_as_group(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
-    text: &str,
-) -> Result<String, JsValue> {
-    let secret = open_group_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-        share_base64,
-        group_fingerprint_hex,
-    )?;
+pub fn sign_mail_cleartext_as_group(key: JsValue, text: &str) -> Result<String, JsValue> {
+    let secret = open_group_secret(key)?;
     kutup_crypto::mail_key::sign_cleartext(&secret, text)
         .map_err(|error| js_error(&error.to_string()))
 }
@@ -2351,25 +2336,8 @@ pub fn sign_mail_cleartext_as_group(
 /// [`sign_mail_detached`] with a shared mailbox's key.
 #[wasm_bindgen(js_name = signMailDetachedAsGroup)]
 #[allow(clippy::too_many_arguments)]
-pub fn sign_mail_detached_as_group(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
-    content: &[u8],
-) -> Result<String, JsValue> {
-    let secret = open_group_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-        share_base64,
-        group_fingerprint_hex,
-    )?;
+pub fn sign_mail_detached_as_group(key: JsValue, content: &[u8]) -> Result<String, JsValue> {
+    let secret = open_group_secret(key)?;
     kutup_crypto::mail_key::sign_detached(&secret, content)
         .map_err(|error| js_error(&error.to_string()))
 }
@@ -2377,25 +2345,11 @@ pub fn sign_mail_detached_as_group(
 #[wasm_bindgen(js_name = encryptMailMessageAsGroup)]
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_message_as_group(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
+    key: JsValue,
     recipient_public_keys: Vec<String>,
     plaintext: &[u8],
 ) -> Result<SealedMailJs, JsValue> {
-    let secret = open_group_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-        share_base64,
-        group_fingerprint_hex,
-    )?;
+    let secret = open_group_secret(key)?;
     let keys = recipient_public_keys
         .iter()
         .map(|key| decode_canonical_base64(key, "recipient public key"))
@@ -2417,25 +2371,11 @@ pub fn encrypt_mail_message_as_group(
 #[wasm_bindgen(js_name = encryptMailPgpAsGroup)]
 #[allow(clippy::too_many_arguments)]
 pub fn encrypt_mail_pgp_as_group(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    share_base64: &str,
-    group_fingerprint_hex: &str,
+    key: JsValue,
     recipient_public_keys: Vec<String>,
     plaintext: &[u8],
 ) -> Result<String, JsValue> {
-    let secret = open_group_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-        share_base64,
-        group_fingerprint_hex,
-    )?;
+    let secret = open_group_secret(key)?;
     let keys = recipient_public_keys
         .iter()
         .map(|key| decode_canonical_base64(key, "recipient public key"))
@@ -2614,7 +2554,6 @@ struct MailKeyEntryView {
 #[derive(serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MailKeyListInput {
-    account: String,
     address: String,
     sequence: u64,
     #[serde(default)]
@@ -2629,7 +2568,6 @@ struct SignedMailKeyListView {
     data: String,
     signature: String,
     hash: String,
-    account: String,
     address: String,
     sequence: u64,
     previous_hash: Option<String>,
@@ -2654,7 +2592,6 @@ fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> Sig
         data: STANDARD.encode(&signed.data),
         signature: STANDARD.encode(signed.signature),
         hash: hex::encode(signed.hash()),
-        account: list.account.clone(),
         address: list.address.clone(),
         sequence: list.sequence,
         previous_hash: list.previous_hash.map(hex::encode),
@@ -2672,15 +2609,13 @@ fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> Sig
     }
 }
 
-/// Signs an address's key list with the account authority derived from the
-/// master key; the authority and incarnation ids are filled in here.
-#[wasm_bindgen(js_name = signMailKeyList)]
-pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
-        .map_err(|error| js_error(&format!("key list: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+/// The list `input` describes, under the signer (an account authority, or a
+/// shared mailbox's signing key) `authority_public`: its authority key id and
+/// incarnation id are derived from it.
+fn mail_key_list(
+    input: MailKeyListInput,
+    authority_public: &[u8; 32],
+) -> Result<kutup_crypto::mail_key::MailKeyListV1, JsValue> {
     let mut keys = Vec::with_capacity(input.keys.len());
     for key in &input.keys {
         keys.push(kutup_crypto::mail_key::MailKeyEntryV1 {
@@ -2690,10 +2625,15 @@ pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsVa
             flags: key.flags,
         });
     }
-    let list = kutup_crypto::mail_key::MailKeyListV1 {
-        account: input.account,
-        incarnation_id: hex_array(&identity.incarnation_id(), "incarnation")?,
-        authority_key_id: hex_array(&identity.authority_key_id(), "authority key id")?,
+    Ok(kutup_crypto::mail_key::MailKeyListV1 {
+        incarnation_id: hex_array(
+            &kutup_crypto::identity::incarnation_id_from_authority_public(authority_public),
+            "incarnation",
+        )?,
+        authority_key_id: hex_array(
+            &kutup_crypto::identity::authority_key_id_from_public(authority_public),
+            "authority key id",
+        )?,
         address: input.address,
         sequence: input.sequence,
         previous_hash: match &input.previous_hash {
@@ -2702,7 +2642,19 @@ pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsVa
         },
         issued_at: input.issued_at,
         keys,
-    };
+    })
+}
+
+/// Signs an address's key list with the account authority derived from the
+/// master key; the authority and incarnation ids are filled in here.
+#[wasm_bindgen(js_name = signMailKeyList)]
+pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let list = mail_key_list(input, &identity.authority_public_key())?;
     let signed = list
         .sign(identity.authority_signing_key())
         .map_err(|error| js_error(&error.to_string()))?;
@@ -2744,6 +2696,246 @@ pub fn verify_mail_key_list(
     }
     serde_wasm_bindgen::to_value(&signed_list_view(&signed))
         .map_err(|error| js_error(&format!("encode key list: {error}")))
+}
+
+/// A shared mailbox's key list, as its chain carries it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupChainListInput {
+    data: String,
+    signature: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupKeyChainViewJs {
+    first_signer: String,
+    signer: String,
+    signers: Vec<String>,
+    sequence: u64,
+    /// Each list's hash (hex), list 1's first.
+    digests: Vec<String>,
+    /// The newest list, as `verifyMailKeyList` shows one.
+    newest: SignedMailKeyListView,
+}
+
+/// Verifies a shared mailbox's whole key-list chain
+/// (`kutup_crypto::mail_group::verify_group_key_chain`): `firstSigner` and
+/// the signers as base64, `lists` as `[{ data, signature }]` (base64),
+/// `handovers` as base64 bytes.
+#[wasm_bindgen(js_name = verifyMailGroupKeyChain)]
+pub fn verify_mail_group_key_chain(
+    group_id: &str,
+    first_signer_base64: &str,
+    lists: JsValue,
+    handovers: Vec<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_group::{verify_group_key_chain, GroupSignerHandoverV1};
+    let first = public_key_32(first_signer_base64, "first signer")?;
+    let lists: Vec<GroupChainListInput> = serde_wasm_bindgen::from_value(lists)
+        .map_err(|error| js_error(&format!("key lists: {error}")))?;
+    let decoded = lists
+        .iter()
+        .map(|list| {
+            Ok((
+                decode_canonical_base64(&list.data, "key list")?,
+                decode_canonical_base64(&list.signature, "key list signature")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let pairs: Vec<(&[u8], &[u8])> = decoded
+        .iter()
+        .map(|(data, signature)| (data.as_slice(), signature.as_slice()))
+        .collect();
+    let handovers = handovers
+        .iter()
+        .map(|handover| {
+            GroupSignerHandoverV1::decode(&decode_canonical_base64(handover, "handover")?)
+                .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let view = verify_group_key_chain(group_id, &first, &pairs, &handovers)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let (data, signature) = decoded.last().expect("verified: one list at least");
+    let newest = kutup_crypto::mail_key::SignedMailKeyListV1::verify(data, signature, &view.signer)
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&GroupKeyChainViewJs {
+        first_signer: STANDARD.encode(view.first_signer),
+        signer: STANDARD.encode(view.signer),
+        signers: view
+            .signers
+            .iter()
+            .map(|signer| STANDARD.encode(signer))
+            .collect(),
+        sequence: view.sequence,
+        digests: view.digests.iter().map(hex::encode).collect(),
+        newest: signed_list_view(&newest),
+    })
+    .map_err(|error| js_error(&format!("encode key chain: {error}")))
+}
+
+/// A shared mailbox's signing key as an owner or manager holds it: their
+/// share of its seed and what opens it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupSignerHolder {
+    account: kutup_crypto::account_ref::AccountRef,
+    hpke_private_key: String,
+    group_id: String,
+    /// The signer in force (base64) and the holder's share of its seed.
+    signer: String,
+    signing_share: String,
+}
+
+fn open_signer(
+    holder: GroupSignerHolder,
+) -> Result<(kutup_crypto::mail_group::GroupSigningKey, String), JsValue> {
+    let private_key = zeroize::Zeroizing::new(decode_canonical_base64(
+        &holder.hpke_private_key,
+        "HPKE private key",
+    )?);
+    let key = kutup_crypto::mail_group::open_group_signing_share(
+        &decode_canonical_base64(&holder.signing_share, "signing share")?,
+        &holder.group_id,
+        &public_key_32(&holder.signer, "signer")?,
+        &holder.account,
+        &private_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok((key, holder.group_id))
+}
+
+/// Signs a shared mailbox's next key list with its signer in force, opened
+/// from the caller's share (never handed to JS).
+#[wasm_bindgen(js_name = signMailGroupKeyList)]
+pub fn sign_mail_group_key_list(holder: JsValue, list: JsValue) -> Result<JsValue, JsValue> {
+    let holder: GroupSignerHolder = serde_wasm_bindgen::from_value(holder)
+        .map_err(|error| js_error(&format!("signer: {error}")))?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let (signer, _) = open_signer(holder)?;
+    let signed = mail_key_list(input, &signer.public_key)?
+        .sign(&signer.signing_key())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&signed_list_view(&signed))
+        .map_err(|error| js_error(&format!("encode key list: {error}")))
+}
+
+/// The signer in force's seed, opened from the caller's share, sealed to
+/// more owners and managers (one share each, in order).
+#[wasm_bindgen(js_name = reshareMailGroupSigner)]
+pub fn reshare_mail_group_signer(
+    holder: JsValue,
+    members: JsValue,
+) -> Result<Vec<String>, JsValue> {
+    let holder: GroupSignerHolder = serde_wasm_bindgen::from_value(holder)
+        .map_err(|error| js_error(&format!("signer: {error}")))?;
+    let members: Vec<GroupMemberInput> = serde_wasm_bindgen::from_value(members)
+        .map_err(|error| js_error(&format!("members: {error}")))?;
+    let (signer, group_id) = open_signer(holder)?;
+    members
+        .iter()
+        .map(|member| {
+            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            kutup_crypto::mail_group::seal_group_signing_share(
+                &signer,
+                &group_id,
+                &kutup_crypto::mail_key::GroupShareMember {
+                    account: &member.account,
+                    incarnation_id: &member.incarnation_id,
+                },
+                &key,
+            )
+            .map(|share| STANDARD.encode(share))
+            .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NewGroupSignerView {
+    public_key: String,
+    /// One per member given (the owners and managers), in order.
+    shares: Vec<String>,
+    /// The first list it signs.
+    key_list: SignedMailKeyListView,
+    /// From the signer in force, when there is one (base64
+    /// `GroupSignerHandoverV1`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handover: Option<String>,
+}
+
+/// A new signing key for the shared mailbox `group_id`: its seed sealed to
+/// each of `members` (the owners and managers), the list `list` signed with
+/// it and, when `outgoing` (the caller's hold of the signer in force) is
+/// given, that signer's handover to it, linked to `previous_list_hash` (hex).
+/// The seed never leaves here: the owners and managers have it through their
+/// shares.
+#[wasm_bindgen(js_name = newMailGroupSigner)]
+pub fn new_mail_group_signer(
+    group_id: &str,
+    members: JsValue,
+    list: JsValue,
+    outgoing: JsValue,
+    previous_list_hash: Option<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_group::{
+        seal_group_signing_share, GroupSignerHandoverV1, GroupSigningKey,
+    };
+    let members: Vec<GroupMemberInput> = serde_wasm_bindgen::from_value(members)
+        .map_err(|error| js_error(&format!("members: {error}")))?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let sequence = input.sequence;
+    let signer = GroupSigningKey::generate();
+    let shares = members
+        .iter()
+        .map(|member| {
+            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            seal_group_signing_share(
+                &signer,
+                group_id,
+                &kutup_crypto::mail_key::GroupShareMember {
+                    account: &member.account,
+                    incarnation_id: &member.incarnation_id,
+                },
+                &key,
+            )
+            .map(|share| STANDARD.encode(share))
+            .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let handover = if outgoing.is_undefined() || outgoing.is_null() {
+        None
+    } else {
+        let holder: GroupSignerHolder = serde_wasm_bindgen::from_value(outgoing)
+            .map_err(|error| js_error(&format!("outgoing signer: {error}")))?;
+        if holder.group_id != group_id {
+            return Err(js_error("the outgoing signer is another group's"));
+        }
+        let (old, _) = open_signer(holder)?;
+        let previous = hex_array(
+            previous_list_hash
+                .as_deref()
+                .ok_or_else(|| js_error("a handover needs the previous list's hash"))?,
+            "previousListHash",
+        )?;
+        Some(
+            GroupSignerHandoverV1::sign(&old, group_id, sequence, &previous, &signer.public_key)
+                .map_err(|error| js_error(&error.to_string()))?,
+        )
+    };
+    let signed = mail_key_list(input, &signer.public_key)?
+        .sign(&signer.signing_key())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&NewGroupSignerView {
+        public_key: STANDARD.encode(signer.public_key),
+        shares,
+        key_list: signed_list_view(&signed),
+        handover: handover.map(|handover| STANDARD.encode(handover.encode())),
+    })
+    .map_err(|error| js_error(&format!("encode signer: {error}")))
 }
 
 // --- Drive identity (docs/plans/drive-identity-pins.md) ------------------------
