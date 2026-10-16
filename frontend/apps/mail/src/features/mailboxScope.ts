@@ -29,6 +29,6 @@ export function useGroupScope(account: MailAccount | undefined): GroupScope | nu
   return useMemo(() => {
     if (!group) return undefined
     if (!keys.data || !account) return null
-    return { groupId: group, keys: heldKeys(keys.data, group, account.groupHolder) }
+    return { groupId: group, keys: heldKeys(keys.data.keys, group, account.groupHolder) }
   }, [group, keys.data, account])
 }

@@ -121,6 +121,77 @@ export async function foldAddress(address: string): Promise<string | null> {
  * Verifies a key list against an account authority and, when given, that it
  * directly follows `previous`.
  */
+/** A shared mailbox's verified key-list chain (Rust `mail_group::verify_group_key_chain`). */
+export interface GroupKeyChainView {
+  /** The first list's signer: what a sender pins on first sight (base64). */
+  firstSigner: string
+  /** The signer of the newest list, and every signer in order (base64). */
+  signer: string
+  signers: string[]
+  sequence: number
+  /** Each list's hash (hex), list 1's first. */
+  digests: string[]
+  newest: SignedMailKeyList
+}
+
+/** Checks a shared mailbox's whole key-list chain: signed by its signers in order, handed over only by the signer in force. */
+export async function verifyMailGroupKeyChain(
+  groupId: string,
+  firstSigner: string,
+  lists: { data: string; signature: string }[],
+  handovers: string[],
+): Promise<GroupKeyChainView> {
+  const view = (await getCryptoWasm()).verifyMailGroupKeyChain(groupId, firstSigner, lists, handovers)
+  return { ...view, newest: view.newest as SignedMailKeyList }
+}
+
+/** A shared mailbox's signing key as an owner or manager holds it; its seed is opened only inside WASM. */
+export interface GroupSignerHolder {
+  account: AccountRef
+  hpkePrivateKey: string
+  groupId: string
+  /** The signer in force (base64) and the holder's share of its seed. */
+  signer: string
+  signingShare: string
+}
+
+function signerHolder(holder: GroupSignerHolder) {
+  return {
+    account: { server: holder.account.server, accountId: holder.account.accountId },
+    hpkePrivateKey: holder.hpkePrivateKey,
+    groupId: holder.groupId,
+    signer: holder.signer,
+    signingShare: holder.signingShare,
+  }
+}
+
+/** Signs a shared mailbox's next key list with its signer in force. */
+export async function signMailGroupKeyList(holder: GroupSignerHolder, list: MailKeyListInput): Promise<SignedMailKeyList> {
+  return (await getCryptoWasm()).signMailGroupKeyList(signerHolder(holder), list) as SignedMailKeyList
+}
+
+/** A new signer for the shared mailbox: shared to `members` (its owners and managers), signing `list`, handed over from `outgoing` when there is one. */
+export async function newMailGroupSigner(
+  groupId: string,
+  members: GroupKeyMember[],
+  list: MailKeyListInput,
+  outgoing?: { holder: GroupSignerHolder; previousListHash: string },
+): Promise<{ publicKey: string; shares: string[]; keyList: SignedMailKeyList; handover?: string }> {
+  const made = (await getCryptoWasm()).newMailGroupSigner(
+    groupId,
+    memberInputs(members),
+    list,
+    outgoing ? signerHolder(outgoing.holder) : undefined,
+    outgoing?.previousListHash,
+  )
+  return { ...made, keyList: made.keyList as SignedMailKeyList }
+}
+
+/** The signer in force's seed shared with more owners and managers. */
+export async function reshareMailGroupSigner(holder: GroupSignerHolder, members: GroupKeyMember[]): Promise<string[]> {
+  return (await getCryptoWasm()).reshareMailGroupSigner(signerHolder(holder), memberInputs(members))
+}
+
 export async function verifyMailKeyList(
   list: { data: string; signature: string },
   authorityPublicKeyBase64: string,

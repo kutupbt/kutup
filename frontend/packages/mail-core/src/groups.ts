@@ -1,5 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import { generateMailGroupKey, reshareMailGroupKey, type GroupKeyMember, type GroupMailKey } from '@kutup/crypto'
+import {
+  DEFAULT_MAIL_KEY_FLAGS,
+  generateMailGroupKey,
+  MAIL_KEY_FLAGS,
+  newMailGroupSigner,
+  reshareMailGroupKey,
+  reshareMailGroupSigner,
+  signMailGroupKeyList,
+  verifyMailGroupKeyChain,
+  type GroupKeyChainView,
+  type GroupKeyMember,
+  type GroupMailKey,
+  type GroupSignerHolder,
+  type MailKeyListInput,
+  type SignedMailKeyList,
+} from '@kutup/crypto'
 import { incarnationIdOfAuthority, verifyDriveKeyBinding } from '@kutup/crypto/identityPins'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
 import { confirmRecipient } from '@kutup/drive-core/identityPins'
@@ -64,9 +79,26 @@ export interface ShareInput {
   share: string
 }
 
+/** A new signer of the group's key lists: its seed shared with each owner and manager, handed over from the one in force when there is one. */
+export interface NewGroupSigner {
+  publicKey: string
+  shares: ShareInput[]
+  handover?: string
+}
+
 export interface NewGroupKey {
   publicKey: string
   shares: ShareInput[]
+  /** The next key list naming it, signed by the signer in force after the change. */
+  keyList: { data: string; signature: string }
+  signer?: NewGroupSigner
+}
+
+/** A shared mailbox's keys as the caller holds them, and the signer of its key lists with the caller's share of it (owners and managers). */
+export interface MailGroupKeys {
+  keys: MailGroupKeyRow[]
+  signer?: string
+  signingShare?: string
 }
 
 export const groupsKey = ['mail', 'groups'] as const
@@ -88,8 +120,8 @@ export function useGroupDetail(id: string | undefined) {
 }
 
 /** A shared mailbox's keys with the caller's shares. */
-export async function groupKeys(id: string): Promise<MailGroupKeyRow[]> {
-  return (await api.get<MailGroupKeyRow[]>(`/mail/groups/${id}/keys`)).data
+export async function groupKeys(id: string): Promise<MailGroupKeys> {
+  return (await api.get<MailGroupKeys>(`/mail/groups/${id}/keys`)).data
 }
 
 export function useGroupKeys(id: string | undefined) {
@@ -180,13 +212,91 @@ async function memberKey(member: { userId: string }, trust: MemberTrust): Promis
   return { account, incarnationId: data.accountIncarnationId, hpkePublicKey: data.driveHpkePublicKey }
 }
 
-/** A new key for the shared mailbox `groupId` at `groupAddress`, with a share for each of `members`. */
-export async function newGroupKey(groupAddress: string, groupId: string, members: { userId: string }[], trust: MemberTrust): Promise<NewGroupKey> {
+/** Who signs a shared mailbox's key lists: its owners and managers. */
+export function signs(role: GroupRole): boolean {
+  return role === 'owner' || role === 'manager'
+}
+
+/** A shared mailbox's key-list chain as its server serves it. */
+interface GroupChainAnswer {
+  groupId: string
+  firstSigner: string
+  keyLists: { data: string; signature: string }[]
+  signerHandovers?: string[]
+}
+
+/** The shared mailbox's key-list chain, verified (`mail_group::verify_group_key_chain`). */
+export async function groupChain(group: { id: string; address: string }): Promise<GroupKeyChainView> {
+  const { data } = await api.get<GroupChainAnswer>('/mail/keys', { params: { email: group.address } })
+  if (data.groupId !== group.id) throw new Error('the server answered for another group')
+  return verifyMailGroupKeyChain(group.id, data.firstSigner, data.keyLists, data.signerHandovers ?? [])
+}
+
+/**
+ * How the next key list is signed:
+ * - `first`: a new group's first signer, shared with `holders`;
+ * - `current`: the signer in force, held by the caller;
+ * - `handover`: a new signer for `holders`, handed over by the signer in force the caller holds (an owner or manager left);
+ * - `restart`: a new chain for `holders` (an administrator who holds no share; senders see a change).
+ */
+export type GroupSigning =
+  | { kind: 'first'; holders: { userId: string }[] }
+  | { kind: 'current'; holder: GroupSignerHolder; chain: GroupKeyChainView }
+  | { kind: 'handover'; holder: GroupSignerHolder; chain: GroupKeyChainView; holders: { userId: string }[] }
+  | { kind: 'restart'; holders: { userId: string }[]; chain: GroupKeyChainView | null }
+
+function sortedKeys(keys: MailKeyListInput['keys']): MailKeyListInput['keys'] {
+  return [...keys].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : a.fingerprint > b.fingerprint ? 1 : 0))
+}
+
+/** The list after `chain` naming `added` primary: the keys before stay to open older mail, no longer to encrypt to. */
+function nextList(address: string, chain: GroupKeyChainView | null, added: { fingerprint: string; sha256Fingerprint: string }, restart: boolean): MailKeyListInput {
+  const before = (chain?.newest.keys ?? []).map((key) => ({ ...key, primary: false, flags: key.flags & ~MAIL_KEY_FLAGS.notObsolete }))
+  const keys = sortedKeys([...before, { ...added, primary: true, flags: DEFAULT_MAIL_KEY_FLAGS }])
+  const issuedAt = new Date().toISOString()
+  if (!chain || restart) return { address, sequence: 1, issuedAt, keys }
+  return { address, sequence: chain.sequence + 1, previousHash: chain.digests[chain.digests.length - 1], issuedAt, keys }
+}
+
+/**
+ * A new key for the shared mailbox `groupId` at `groupAddress`, with a share
+ * for each of `members`, and the next key list naming it, signed as
+ * `signing` says. Nothing is sealed to a member whose keys are in doubt.
+ */
+export async function newGroupKey(
+  groupAddress: string,
+  groupId: string,
+  members: { userId: string }[],
+  trust: MemberTrust,
+  signing: GroupSigning,
+): Promise<NewGroupKey> {
   const keys = await Promise.all(members.map((member) => memberKey(member, trust)))
   const made = await generateMailGroupKey(groupAddress, groupId, keys)
-  return {
+  const key = {
     publicKey: made.publicKey,
     shares: members.map((member, i) => ({ userId: member.userId, share: made.shares[i] })),
+  }
+  const added = { fingerprint: made.fingerprint, sha256Fingerprint: made.sha256Fingerprint }
+  if (signing.kind === 'current') {
+    const list: SignedMailKeyList = await signMailGroupKeyList(signing.holder, nextList(groupAddress, signing.chain, added, false))
+    return { ...key, keyList: { data: list.data, signature: list.signature } }
+  }
+  const holderKeys = await Promise.all(signing.holders.map((holder) => memberKey(holder, trust)))
+  const chain = signing.kind === 'first' ? null : signing.chain
+  const signer = await newMailGroupSigner(
+    groupId,
+    holderKeys,
+    nextList(groupAddress, chain, added, signing.kind === 'restart'),
+    signing.kind === 'handover' ? { holder: signing.holder, previousListHash: signing.chain.digests[signing.chain.digests.length - 1] } : undefined,
+  )
+  return {
+    ...key,
+    keyList: { data: signer.keyList.data, signature: signer.keyList.signature },
+    signer: {
+      publicKey: signer.publicKey,
+      shares: signing.holders.map((holder, i) => ({ userId: holder.userId, share: signer.shares[i] })),
+      ...(signer.handover ? { handover: signer.handover } : {}),
+    },
   }
 }
 
@@ -201,6 +311,8 @@ export interface MembershipBody {
   members: { userId: string; role: GroupRole; canSendAs: boolean }[]
   keyShares?: (ShareInput & { groupFingerprint: string })[]
   newKey?: NewGroupKey
+  /** The signer in force's seed for owners and managers who lack it. */
+  signerShares?: ShareInput[]
 }
 
 /**
@@ -226,7 +338,8 @@ export async function membershipBody(
   const resealed = next.filter((m) => current.some((c) => c.userId === m.userId && c.needsKeys))
   const added = [...joining, ...resealed]
   const removed = current.filter((c) => !next.some((m) => m.userId === c.userId))
-  const rows = await groupKeys(group.id).catch(() => [] as MailGroupKeyRow[])
+  const answer = await groupKeys(group.id).catch((): MailGroupKeys => ({ keys: [] }))
+  const rows = answer.keys
   const held = me ? heldKeys(rows, group.id, me) : []
   const holdsAll = rows.length > 0 && held.length === rows.length
   const body: MembershipBody = { members }
@@ -238,8 +351,35 @@ export async function membershipBody(
       added.forEach((member, i) => body.keyShares!.push({ groupFingerprint: key.fingerprint, userId: member.userId, share: shares[i] }))
     }
   }
-  if (removed.length > 0 || (joining.length > 0 && !holdsAll)) {
-    body.newKey = await newGroupKey(group.address, group.id, next, trust)
+  // The signing key's holders: the owners and managers. Losing one means a
+  // new signer, handed over by the one in force (the caller's, if they hold
+  // it; an administrator without it starts a new chain).
+  const holdersBefore = current.filter((c) => signs(c.role)).map((c) => c.userId)
+  const holdersAfter = next.filter((m) => signs(m.role))
+  const lost = holdersBefore.some((id) => !holdersAfter.some((h) => h.userId === id))
+  const signer: GroupSignerHolder | null =
+    me && answer.signer && answer.signingShare ? { ...me, groupId: group.id, signer: answer.signer, signingShare: answer.signingShare } : null
+  if (removed.length > 0 || (joining.length > 0 && !holdsAll) || lost) {
+    const chain = await groupChain(group)
+    const signing: GroupSigning = lost
+      ? signer
+        ? { kind: 'handover', holder: signer, chain, holders: holdersAfter }
+        : { kind: 'restart', holders: holdersAfter, chain }
+      : signer
+        ? { kind: 'current', holder: signer, chain }
+        : { kind: 'restart', holders: holdersAfter, chain }
+    body.newKey = await newGroupKey(group.address, group.id, next, trust, signing)
+  }
+  if (!body.newKey?.signer && signer) {
+    // Owners and managers joining, promoted, or reset since get the signer in force.
+    const lacking = holdersAfter.filter(
+      (h) => !holdersBefore.includes(h.userId) || current.some((c) => c.userId === h.userId && c.needsKeys),
+    )
+    if (lacking.length > 0) {
+      const keys = await Promise.all(lacking.map((holder) => memberKey(holder, trust)))
+      const shares = await reshareMailGroupSigner(signer, keys)
+      body.signerShares = lacking.map((holder, i) => ({ userId: holder.userId, share: shares[i] }))
+    }
   }
   return { body, historyShared: joining.length === 0 || holdsAll }
 }

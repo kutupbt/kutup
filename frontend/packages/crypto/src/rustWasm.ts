@@ -21,6 +21,25 @@ export interface GroupKeyHolder {
   fingerprint: string
 }
 
+/** A shared mailbox's signing key as an owner or manager holds it, as WASM takes it. */
+export interface GroupSignerHolderJs {
+  account: { server: string; accountId: string }
+  hpkePrivateKey: string
+  groupId: string
+  signer: string
+  signingShare: string
+}
+
+/** A verified shared-mailbox key-list chain. */
+export interface GroupKeyChainViewJs {
+  firstSigner: string
+  signer: string
+  signers: string[]
+  sequence: number
+  digests: string[]
+  newest: unknown
+}
+
 /** A member a group key is shared with: their account and checked account key. */
 export interface GroupKeyMember {
   account: { server: string; accountId: string }
@@ -173,6 +192,21 @@ export interface CryptoWasmModule {
     address: string,
   ): { fingerprint: string; sha256Fingerprint: string; createdAt: number }
   armorMailPublicKey(publicKeyBase64: string): string
+  verifyMailGroupKeyChain(
+    groupId: string,
+    firstSignerBase64: string,
+    lists: { data: string; signature: string }[],
+    handovers: string[],
+  ): GroupKeyChainViewJs
+  signMailGroupKeyList(holder: GroupSignerHolderJs, list: unknown): unknown
+  newMailGroupSigner(
+    groupId: string,
+    members: GroupKeyMember[],
+    list: unknown,
+    outgoing: GroupSignerHolderJs | undefined,
+    previousListHash: string | undefined,
+  ): { publicKey: string; shares: string[]; keyList: unknown; handover?: string }
+  reshareMailGroupSigner(holder: GroupSignerHolderJs, members: GroupKeyMember[]): string[]
   signMailKeyList(
     masterKeyBase64: string,
     list: import('./mailKey').MailKeyListInput,

@@ -793,6 +793,34 @@ assert.throws(() => crypto.openMailGroupMessage({ ...bobHolds, account: aliceAcc
 assert.throws(() => crypto.openMailGroupMessage({ ...bobHolds, groupId: '00000000-0000-4000-8000-000000000000' }, groupMessage))
 assert.throws(() => crypto.openMailGroupMessage({ ...aliceHolds, share: bobShares[0] }, groupMessage))
 assert.match(crypto.encryptMailPgpAsGroup(aliceHolds, [groupKey.publicKey], new TextEncoder().encode('x')), /^-----BEGIN PGP MESSAGE-----/)
+
+// The shared mailbox's key lists: signed by its signing key, never the
+// server's. The checked-in chains verify or are refused as in Rust; a new
+// signer's seed stays in WASM and reaches owners and managers as shares.
+const chainVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-group-chain-v1.json`, 'utf8'),
+)
+const verifyChain = (chain) => crypto.verifyMailGroupKeyChain(chainVectors.groupId, chain.firstSigner, chain.lists, chain.handovers)
+const validChain = verifyChain(chainVectors.valid)
+assert.equal(validChain.sequence, 3)
+assert.deepEqual(validChain.digests, chainVectors.validDigests)
+for (const refused of ['serverForged', 'oldSignerFork', 'missingHandover']) assert.throws(() => verifyChain(chainVectors[refused]), undefined, refused)
+assert.equal(verifyChain(chainVectors.adminRestart).sequence, 1)
+const groupFirstList = { address: 'hr@kutup.dev', sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [{ fingerprint: groupKey.fingerprint, sha256Fingerprint: groupKey.sha256Fingerprint, primary: true, flags: 3 }] }
+const firstSigner = crypto.newMailGroupSigner(groupId, [memberOf(aliceAccount, aliceIdentity)], groupFirstList, undefined, undefined)
+assert.equal(firstSigner.handover, undefined)
+const aliceSigns = { account: aliceAccount, hpkePrivateKey: aliceIdentity.driveHpkePrivateKey, groupId, signer: firstSigner.publicKey, signingShare: firstSigner.shares[0] }
+const groupSecondList = crypto.signMailGroupKeyList(aliceSigns, { ...groupFirstList, sequence: 2, previousHash: firstSigner.keyList.hash })
+const grown = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList], [])
+assert.equal(grown.sequence, 2)
+// Alice hands the lists over to a new signer Bob holds; Bob's share of the
+// first signer opens for him.
+const handedOver = crypto.newMailGroupSigner(groupId, [memberOf(bobAccount, bobIdentity)], { ...groupFirstList, sequence: 3, previousHash: groupSecondList.hash }, aliceSigns, groupSecondList.hash)
+const third = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList, handedOver.keyList], [handedOver.handover])
+assert.deepEqual(third.signers, [firstSigner.publicKey, handedOver.publicKey])
+const bobSignerShare = crypto.reshareMailGroupSigner(aliceSigns, [memberOf(bobAccount, bobIdentity)])[0]
+crypto.signMailGroupKeyList({ ...aliceSigns, account: bobAccount, hpkePrivateKey: bobIdentity.driveHpkePrivateKey, signingShare: bobSignerShare }, groupFirstList)
+assert.throws(() => crypto.signMailGroupKeyList({ ...aliceSigns, signingShare: bobSignerShare }, groupFirstList))
 const armoredPgp = crypto.encryptMailPgp(
   mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),

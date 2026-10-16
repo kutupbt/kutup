@@ -281,7 +281,7 @@ class NoGroupShare extends Error {
 }
 
 async function sendAs(account: MailAccount, group: MailGroup): Promise<SendAs> {
-  const rows = await groupKeys(group.id)
+  const { keys: rows } = await groupKeys(group.id)
   const primary = rows.find((row) => row.primary)
   const key = primary ? heldKeys([primary], group.id, account.groupHolder)[0] : undefined
   if (!primary || !key) throw new NoGroupShare()

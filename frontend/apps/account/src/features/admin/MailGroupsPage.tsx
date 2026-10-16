@@ -217,7 +217,7 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
       const session = getSession()
       if (!session) throw new Error('not signed in')
       const me = await driveIdentityOf(session)
-      const groupKey = kind === 'shared' ? await newGroupKey(`${lower}@${server.data}`, id, owners, { me, confirmed: identityConfirmed }) : undefined
+      const groupKey = kind === 'shared' ? await newGroupKey(`${lower}@${server.data}`, id, owners, { me, confirmed: identityConfirmed }, { kind: 'first', holders: owners }) : undefined
       await api.post('/admin/mail/groups', {
         id,
         name: lower,

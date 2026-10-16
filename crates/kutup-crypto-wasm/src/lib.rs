@@ -2609,15 +2609,13 @@ fn signed_list_view(signed: &kutup_crypto::mail_key::SignedMailKeyListV1) -> Sig
     }
 }
 
-/// Signs an address's key list with the account authority derived from the
-/// master key; the authority and incarnation ids are filled in here.
-#[wasm_bindgen(js_name = signMailKeyList)]
-pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
-        .map_err(|error| js_error(&format!("key list: {error}")))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+/// The list `input` describes, under the signer (an account authority, or a
+/// shared mailbox's signing key) `authority_public`: its authority key id and
+/// incarnation id are derived from it.
+fn mail_key_list(
+    input: MailKeyListInput,
+    authority_public: &[u8; 32],
+) -> Result<kutup_crypto::mail_key::MailKeyListV1, JsValue> {
     let mut keys = Vec::with_capacity(input.keys.len());
     for key in &input.keys {
         keys.push(kutup_crypto::mail_key::MailKeyEntryV1 {
@@ -2627,9 +2625,15 @@ pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsVa
             flags: key.flags,
         });
     }
-    let list = kutup_crypto::mail_key::MailKeyListV1 {
-        incarnation_id: hex_array(&identity.incarnation_id(), "incarnation")?,
-        authority_key_id: hex_array(&identity.authority_key_id(), "authority key id")?,
+    Ok(kutup_crypto::mail_key::MailKeyListV1 {
+        incarnation_id: hex_array(
+            &kutup_crypto::identity::incarnation_id_from_authority_public(authority_public),
+            "incarnation",
+        )?,
+        authority_key_id: hex_array(
+            &kutup_crypto::identity::authority_key_id_from_public(authority_public),
+            "authority key id",
+        )?,
         address: input.address,
         sequence: input.sequence,
         previous_hash: match &input.previous_hash {
@@ -2638,7 +2642,19 @@ pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsVa
         },
         issued_at: input.issued_at,
         keys,
-    };
+    })
+}
+
+/// Signs an address's key list with the account authority derived from the
+/// master key; the authority and incarnation ids are filled in here.
+#[wasm_bindgen(js_name = signMailKeyList)]
+pub fn sign_mail_key_list(master_key_base64: &str, list: JsValue) -> Result<JsValue, JsValue> {
+    let master_key = master_key_32(master_key_base64)?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let list = mail_key_list(input, &identity.authority_public_key())?;
     let signed = list
         .sign(identity.authority_signing_key())
         .map_err(|error| js_error(&error.to_string()))?;
@@ -2756,6 +2772,170 @@ pub fn verify_mail_group_key_chain(
         newest: signed_list_view(&newest),
     })
     .map_err(|error| js_error(&format!("encode key chain: {error}")))
+}
+
+/// A shared mailbox's signing key as an owner or manager holds it: their
+/// share of its seed and what opens it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GroupSignerHolder {
+    account: kutup_crypto::account_ref::AccountRef,
+    hpke_private_key: String,
+    group_id: String,
+    /// The signer in force (base64) and the holder's share of its seed.
+    signer: String,
+    signing_share: String,
+}
+
+fn open_signer(
+    holder: GroupSignerHolder,
+) -> Result<(kutup_crypto::mail_group::GroupSigningKey, String), JsValue> {
+    let private_key = zeroize::Zeroizing::new(decode_canonical_base64(
+        &holder.hpke_private_key,
+        "HPKE private key",
+    )?);
+    let key = kutup_crypto::mail_group::open_group_signing_share(
+        &decode_canonical_base64(&holder.signing_share, "signing share")?,
+        &holder.group_id,
+        &public_key_32(&holder.signer, "signer")?,
+        &holder.account,
+        &private_key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok((key, holder.group_id))
+}
+
+/// Signs a shared mailbox's next key list with its signer in force, opened
+/// from the caller's share (never handed to JS).
+#[wasm_bindgen(js_name = signMailGroupKeyList)]
+pub fn sign_mail_group_key_list(holder: JsValue, list: JsValue) -> Result<JsValue, JsValue> {
+    let holder: GroupSignerHolder = serde_wasm_bindgen::from_value(holder)
+        .map_err(|error| js_error(&format!("signer: {error}")))?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let (signer, _) = open_signer(holder)?;
+    let signed = mail_key_list(input, &signer.public_key)?
+        .sign(&signer.signing_key())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&signed_list_view(&signed))
+        .map_err(|error| js_error(&format!("encode key list: {error}")))
+}
+
+/// The signer in force's seed, opened from the caller's share, sealed to
+/// more owners and managers (one share each, in order).
+#[wasm_bindgen(js_name = reshareMailGroupSigner)]
+pub fn reshare_mail_group_signer(
+    holder: JsValue,
+    members: JsValue,
+) -> Result<Vec<String>, JsValue> {
+    let holder: GroupSignerHolder = serde_wasm_bindgen::from_value(holder)
+        .map_err(|error| js_error(&format!("signer: {error}")))?;
+    let members: Vec<GroupMemberInput> = serde_wasm_bindgen::from_value(members)
+        .map_err(|error| js_error(&format!("members: {error}")))?;
+    let (signer, group_id) = open_signer(holder)?;
+    members
+        .iter()
+        .map(|member| {
+            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            kutup_crypto::mail_group::seal_group_signing_share(
+                &signer,
+                &group_id,
+                &kutup_crypto::mail_key::GroupShareMember {
+                    account: &member.account,
+                    incarnation_id: &member.incarnation_id,
+                },
+                &key,
+            )
+            .map(|share| STANDARD.encode(share))
+            .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NewGroupSignerView {
+    public_key: String,
+    /// One per member given (the owners and managers), in order.
+    shares: Vec<String>,
+    /// The first list it signs.
+    key_list: SignedMailKeyListView,
+    /// From the signer in force, when there is one (base64
+    /// `GroupSignerHandoverV1`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handover: Option<String>,
+}
+
+/// A new signing key for the shared mailbox `group_id`: its seed sealed to
+/// each of `members` (the owners and managers), the list `list` signed with
+/// it and, when `outgoing` (the caller's hold of the signer in force) is
+/// given, that signer's handover to it, linked to `previous_list_hash` (hex).
+/// The seed never leaves here: the owners and managers have it through their
+/// shares.
+#[wasm_bindgen(js_name = newMailGroupSigner)]
+pub fn new_mail_group_signer(
+    group_id: &str,
+    members: JsValue,
+    list: JsValue,
+    outgoing: JsValue,
+    previous_list_hash: Option<String>,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_group::{
+        seal_group_signing_share, GroupSignerHandoverV1, GroupSigningKey,
+    };
+    let members: Vec<GroupMemberInput> = serde_wasm_bindgen::from_value(members)
+        .map_err(|error| js_error(&format!("members: {error}")))?;
+    let input: MailKeyListInput = serde_wasm_bindgen::from_value(list)
+        .map_err(|error| js_error(&format!("key list: {error}")))?;
+    let sequence = input.sequence;
+    let signer = GroupSigningKey::generate();
+    let shares = members
+        .iter()
+        .map(|member| {
+            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            seal_group_signing_share(
+                &signer,
+                group_id,
+                &kutup_crypto::mail_key::GroupShareMember {
+                    account: &member.account,
+                    incarnation_id: &member.incarnation_id,
+                },
+                &key,
+            )
+            .map(|share| STANDARD.encode(share))
+            .map_err(|error| js_error(&error.to_string()))
+        })
+        .collect::<Result<Vec<_>, JsValue>>()?;
+    let handover = if outgoing.is_undefined() || outgoing.is_null() {
+        None
+    } else {
+        let holder: GroupSignerHolder = serde_wasm_bindgen::from_value(outgoing)
+            .map_err(|error| js_error(&format!("outgoing signer: {error}")))?;
+        if holder.group_id != group_id {
+            return Err(js_error("the outgoing signer is another group's"));
+        }
+        let (old, _) = open_signer(holder)?;
+        let previous = hex_array(
+            previous_list_hash
+                .as_deref()
+                .ok_or_else(|| js_error("a handover needs the previous list's hash"))?,
+            "previousListHash",
+        )?;
+        Some(
+            GroupSignerHandoverV1::sign(&old, group_id, sequence, &previous, &signer.public_key)
+                .map_err(|error| js_error(&error.to_string()))?,
+        )
+    };
+    let signed = mail_key_list(input, &signer.public_key)?
+        .sign(&signer.signing_key())
+        .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&NewGroupSignerView {
+        public_key: STANDARD.encode(signer.public_key),
+        shares,
+        key_list: signed_list_view(&signed),
+        handover: handover.map(|handover| STANDARD.encode(handover.encode())),
+    })
+    .map_err(|error| js_error(&format!("encode signer: {error}")))
 }
 
 // --- Drive identity (docs/plans/drive-identity-pins.md) ------------------------
