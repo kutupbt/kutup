@@ -28,7 +28,7 @@ use uuid::Uuid;
 use super::call_link_moderation::{claim_seat, host, sfu_room, tend, Entry, HostCredentials};
 use super::call_links::{
     admitted, base64_exact, hex32, owner, require_sfu, room_token, seat_hash, vouched_account,
-    SEALED_NAME_BYTES,
+    vouched_name, SEALED_NAME_BYTES,
 };
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
@@ -111,8 +111,8 @@ pub struct WaitingKnock {
     pub knock_id: Uuid,
     /// The knocker's sealed name.
     pub label: String,
-    /// The account address this server vouches for, when the knocker is
-    /// signed in here and chose to show it.
+    /// The current address of the account this server vouches for, when
+    /// the knocker is signed in here and chose to show it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -262,7 +262,7 @@ pub(crate) async fn knock(
     }
     let knock_id: Uuid = sqlx::query_scalar(
         "INSERT INTO chat_call_link_knocks
-            (room_id, participant_id, label, ticket_hash, seat_hash, account)
+            (room_id, participant_id, label, ticket_hash, seat_hash, account_id)
          VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(&request.room_id)
@@ -270,7 +270,7 @@ pub(crate) async fn knock(
     .bind(&label)
     .bind(ticket_hash.as_slice())
     .bind(seat_hash.as_slice())
-    .bind(&account)
+    .bind(account)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -351,12 +351,12 @@ pub(crate) async fn knock_status(
     require_sfu(&state)?;
     let presented: [u8; 32] = Sha256::digest(base64_exact("ticket", &request.ticket, 32)?).into();
     let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
-    // ticket_hash, status, participant_id, label, seat_hash, account
-    type Row = (Vec<u8>, i16, String, Vec<u8>, Vec<u8>, Option<String>);
+    // ticket_hash, status, participant_id, label, seat_hash, account_id
+    type Row = (Vec<u8>, i16, String, Vec<u8>, Vec<u8>, Option<Uuid>);
     let row: Option<Row> = sqlx::query_as(
         "UPDATE chat_call_link_knocks SET last_seen_at = NOW()
          WHERE id = $1 AND room_id = $2
-         RETURNING ticket_hash, status, participant_id, label, seat_hash, account",
+         RETURNING ticket_hash, status, participant_id, label, seat_hash, account_id",
     )
     .bind(request.knock_id)
     .bind(&request.room_id)
@@ -385,7 +385,7 @@ pub(crate) async fn knock_status(
                 &participant_id,
                 &seat_hash,
                 Entry::Admitted,
-                account.as_deref(),
+                account,
             )
             .await?;
             let token = room_token(
@@ -394,7 +394,7 @@ pub(crate) async fn knock_status(
                 &participant_id,
                 &STANDARD.encode(label),
                 &seat,
-                account.as_deref(),
+                vouched_name(&state, account).await?.as_deref(),
             )?;
             KnockStatusResponse {
                 status: "admitted",
@@ -436,10 +436,13 @@ pub(crate) async fn knocks(
     // A host looks here every few seconds: a good moment to look after the
     // meeting (call_link_moderation::tend).
     tend(&state, &request.room_id, &meeting).await;
+    // The name each vouched-for knocker goes by now.
     let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, Option<String>)> = sqlx::query_as(
-        "SELECT id, label, created_at, account FROM chat_call_link_knocks
-         WHERE room_id = $1 AND status = $2 AND last_seen_at > NOW() - make_interval(secs => $3)
-         ORDER BY created_at, id",
+        "SELECT k.id, k.label, k.created_at, u.username
+         FROM chat_call_link_knocks k LEFT JOIN users u ON u.id = k.account_id
+         WHERE k.room_id = $1 AND k.status = $2
+           AND k.last_seen_at > NOW() - make_interval(secs => $3)
+         ORDER BY k.created_at, k.id",
     )
     .bind(&request.room_id)
     .bind(WAITING)
@@ -449,10 +452,11 @@ pub(crate) async fn knocks(
     Ok(Json(WaitingKnocks {
         knocks: rows
             .into_iter()
-            .map(|(knock_id, label, created_at, account)| WaitingKnock {
+            .map(|(knock_id, label, created_at, username)| WaitingKnock {
                 knock_id,
                 label: STANDARD.encode(label),
-                account,
+                account: username
+                    .map(|username| format!("{username}@{}", state.config.chat_server_name)),
                 created_at,
             })
             .collect(),
