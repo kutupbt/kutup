@@ -242,8 +242,12 @@ pub(crate) async fn respond_invitation(
 const INVITATION_EXPIRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Expires due invitations for every account, in the background: a GET of
-/// the list never writes (docs/contributing.md).
+/// the list never writes (docs/contributing.md). Not with groups off: no
+/// invitation is pending or answered then, so none expires either.
 pub(crate) fn spawn_invitation_expiry(state: AppState) {
+    if state.mls_ordering.is_none() {
+        return;
+    }
     let Some(local_domain) = state
         .federation
         .as_ref()
