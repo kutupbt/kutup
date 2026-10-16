@@ -148,7 +148,7 @@ fn chat_media_round_trip(
         "version": 1,
         "originDomain": "a.test",
         "destinationDomain": "b.test",
-        "recipient": format!("{BOB_USERNAME}@b.test"),
+        "recipient": account_of(c, b, bob_token),
         "operationId": operation_id,
         "attachmentId": attachment_id,
         "suite": 1,
@@ -279,7 +279,10 @@ fn chat_media_capability_and_quota_recovery(
     let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
     let (digest, _) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
-    let offer = |operation_id: &str, recipient: &str, presented_capability: &[u8; 16]| {
+    let bob = account_of(c, b, bob_token);
+    // An account id nobody on B has.
+    let missing = AccountRef::new("b.test", &Uuid::new_v4().to_string()).unwrap();
+    let offer = |operation_id: &str, recipient: &AccountRef, presented_capability: &[u8; 16]| {
         json!({
             "version": 1,
             "originDomain": "a.test",
@@ -304,7 +307,7 @@ fn chat_media_capability_and_quota_recovery(
         .bearer_auth(alice_token)
         .json(&offer(
             "50000000-0000-4000-8000-000000000006",
-            &format!("{BOB_USERNAME}@b.test"),
+            &bob,
             &[0x73; 16],
         ))
         .send()
@@ -316,7 +319,7 @@ fn chat_media_capability_and_quota_recovery(
         .bearer_auth(alice_token)
         .json(&offer(
             "50000000-0000-4000-8000-000000000007",
-            "missing@b.test",
+            &missing,
             &capability,
         ))
         .send()
@@ -340,7 +343,7 @@ fn chat_media_capability_and_quota_recovery(
             .bearer_auth(alice_token)
             .json(&offer(
                 "50000000-0000-4000-8000-000000000008",
-                &format!("{BOB_USERNAME}@b.test"),
+                &bob,
                 &capability,
             ))
             .send()
@@ -359,7 +362,7 @@ fn chat_media_capability_and_quota_recovery(
             .bearer_auth(alice_token)
             .json(&offer(
                 "50000000-0000-4000-8000-000000000009",
-                &format!("{BOB_USERNAME}@b.test"),
+                &bob,
                 &capability,
             ))
             .send()
@@ -2821,7 +2824,7 @@ fn queue_phase(c: &Client, a: &str) {
                 "version": 1,
                 "originDomain": "a.test",
                 "destinationDomain": "b.test",
-                "recipient": format!("{BOB_USERNAME}@b.test"),
+                "recipient": bob_account(),
                 "operationId": QUEUED_MEDIA_OPERATION_ID,
                 "attachmentId": QUEUED_MEDIA_ATTACHMENT_ID,
                 "suite": 1,
