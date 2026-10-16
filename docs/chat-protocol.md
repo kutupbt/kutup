@@ -226,10 +226,10 @@ Relevant routes:
 | `POST/GET /api/chat/backup/media[/{id}]` | upload or lazily restore backup-media ciphertext |
 | `POST /api/chat/backup/media/reconciliation` | page the exact next restore-point media reference set |
 | `POST /api/chat/manifest` | publish exact next signed manifest |
-| `GET /api/chat/users/{username}/manifest` | current local/federated manifest |
-| `GET /api/chat/users/{username}/manifest-history` | bounded complete history page |
-| `GET /api/fed/chat/users/{username}/manifest` | signed-federation current manifest |
-| `GET /api/fed/chat/users/{username}/manifest-history` | signed-federation history page |
+| `GET /api/chat/accounts/{accountId}/manifest?server=` | current local/federated manifest |
+| `GET /api/chat/accounts/{accountId}/manifest-history?server=` | bounded complete history page |
+| `GET /api/fed/chat/accounts/{accountId}/manifest` | signed-federation current manifest |
+| `GET /api/fed/chat/accounts/{accountId}/manifest-history` | signed-federation history page |
 
 ## 6. Direct Chat and Note to Self
 

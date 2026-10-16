@@ -944,10 +944,20 @@ one that is not one of the caller's events is `400`: start from the first page)
 
 ### GET /api/users/by-address/:address
 
-Look up another local user's registered Drive identity (used when sharing a collection or a file).
+An account by the address a person types: the one place a name becomes an
+account (docs/plans/account-ids.md); everything after takes the account id.
+An address on another server is asked of that server through signed
+federation (its pinned identity, after discovery, admission and response
+authentication), each such fetch counting against the caller's limit for
+that server (`RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN`, `429 rateLimited`).
+A name held there answers `409` with the rename chains it relays, as Drive's
+lookups always have.
 
 **Auth:** Bearer JWT; 30 lookups per minute per IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`), then `429`
-**Param:** `:address` — the URL-encoded Kutup address on this server (`username@<server name>`). `404` when no active account has it.
+**Param:** `:address` — the URL-encoded Kutup address (`username@<server>`). `404` when no active account has it.
+
+**Response** for an account here (another server's answers `username` in
+place of `userId`, with the same other fields):
 
 **Response:**
 ```json
@@ -971,8 +981,8 @@ label. Shares, pins and records name the account, never the address.
 (server and id) and its Drive keys (`kutup_crypto::drive_key_binding`); it is absent only
 for an account an administrator wiped that has not finished its new first-login
 setup (and from a peer server that does not send one). Clients check it and pin the authority
-(docs/plans/drive-identity-pins.md); the federated lookup
-(`GET /api/drive/federation/users/:username`) returns the same two fields.
+(docs/plans/drive-identity-pins.md); another server's answer carries the
+same two fields.
 
 ### GET /api/users/by-id/:accountId
 
@@ -1340,34 +1350,6 @@ per-share cap.
 
 ---
 
-### GET /api/drive/federation/users/:username
-
-Resolve a remote Drive user through authenticated v2 federation before sealing
-the collection key.
-
-**Auth:** Bearer JWT
-**Query:** `?server=other.example.com` (canonical DNS identity, not a URL)
-
-**Response:**
-```json
-{
-  "username": "bob",
-  "server": "other.example.com",
-  "accountId": "<uuid>",
-  "account": "bob@other.example.com",
-  "driveHpkePublicKey": "<canonical base64, 32 bytes>",
-  "accountIncarnationId": "<lowercase SHA-256 hex>",
-  "driveSigningPublicKey": "<canonical base64, 32 bytes>",
-  "accountAuthorityPublicKey": "<canonical base64, 32 bytes>",
-  "driveKeyBinding": "<canonical base64, 64 bytes>"
-}
-```
-
-The response is accepted only after signed discovery, peer pin/rotation policy,
-admission, request authentication, and response authentication succeed.
-
----
-
 ### POST /api/collections/:id/federated-shares
 
 Create a domain-bound share for a user on a remote Kutup instance.
@@ -1450,7 +1432,7 @@ shown only. For someone on another server (`local: false`) the three key
 fields are null: look them up with `GET /api/users/by-id/:accountId?server=`. Open
 `receivedEnvelope` with your Drive key and check it with theirs; the profile
 key then fetches their profile through
-`GET /api/chat/users/:account/profile/:version`. When `sentProfileVersion` is
+`GET /api/chat/accounts/:accountId/profile/:version?server=`. When `sentProfileVersion` is
 not your current profile version, give them your key again.
 
 ### PUT /api/drive/profile-keys
@@ -3084,22 +3066,32 @@ atomically updates the current head and immutable history; exact replay is
 idempotent. Malformed signatures, gaps, forks, authority replacement, or a
 declared device-key conflict return `409`.
 
-### GET /api/chat/users/{username}/manifest
+### Chat routes name accounts by id
 
-Return the current account-signed device manifest for a local user. This direct
+Every Chat route that names another person takes their permanent account id
+in the path and their server as `?server=` (this server when absent): `aci`
+accounts, never names (docs/plans/account-ids.md). A name becomes an account
+only through `GET /api/users/by-address/:address`. A local account that is
+not active answers `404`; the anonymous routes give one answer for every
+failure. Manifests, profiles, key bundles (`account`) and mailbox envelopes
+(`sender`) name accounts as `{ "server", "accountId" }`.
+
+### GET /api/chat/accounts/{accountId}/manifest
+
+Return the current account-signed device manifest for an account. This direct
 manifest endpoint is authenticated. A client independently verifies its
 signature, authority continuity, and hash chain rather than trusting a server
 status label.
 
-### GET /api/chat/users/{username}/manifest-history
+### GET /api/chat/accounts/{accountId}/manifest-history
 
 Return complete, individually account-signed manifest records for an exact
 inclusive range. Query parameters are `fromSequence`, `toSequence`, and an
 optional `pageFromSequence`. Pages contain at most 64 records and carry the
 next exact sequence, never an opaque server cursor. Missing, duplicated,
 reordered, cross-incarnation, or partially verified history does not clear a
-client gap and blocks new sends to that peer. A remote canonical address is
-resolved only through the authenticated federation transport.
+client gap and blocks new sends to that peer. Another server's account is
+asked only through the authenticated federation transport.
 
 ### GET /api/chat/profile
 
@@ -3119,21 +3111,21 @@ only ciphertext, a profile-key-derived version, an access-key verifier, a
 master-key-wrapped profile key, revision, and source device. Revision plus
 source-device ordering resolves concurrent linked-device writes; exact replay
 is idempotent and a stale/conflicting revision returns `409`.
-Every encrypted field binds the exact profile suite, authenticated canonical
-account, version, revision, source device and purpose. Unknown suites,
+Every encrypted field binds the exact profile suite, the authenticated
+account (server and account id, so a rename leaves it valid), version,
+revision, source device and purpose. Unknown suites,
 noncanonical base64, malformed headers, relocation and trailing bytes return
 `400` before persistence.
 
-### GET /api/chat/users/{username}/profile/{version}
+### GET /api/chat/accounts/{accountId}/profile/{version}
 
-Capability-gated encrypted profile lookup for a local or federated canonical
-address. The caller supplies the profile access key in the dedicated request
+Capability-gated encrypted profile lookup for a local or federated account. The caller supplies the profile access key in the dedicated request
 header rather than the URL. A wrong version or capability is deliberately
 indistinguishable from a missing profile and returns `404`.
 
-### GET /api/chat/users/{username}/keys
+### GET /api/chat/accounts/{accountId}/keys
 
-Return PQXDH prekey bundles for **every** active Chat device of `username`
+Return PQXDH prekey bundles for **every** active Chat device of the account
 (a logical message encrypts to all of them), together with the exact complete
 account-signed manifest. Each bundle carries `identityKey`, `signedPreKey`,
 `kyberPreKey` (a consumed one-time ML-KEM-1024 prekey, or the reusable
@@ -3143,7 +3135,7 @@ creating sessions. Fetches are limited to 30/min per authenticated account
 (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall
 (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
-### POST /api/chat/users/{username}/messages
+### POST /api/chat/accounts/{accountId}/messages
 
 Deliver one logical message as per-device ciphertexts: `{ "senderDeviceId": n, "envelopes": [{ "deviceId", "registrationId", "envelopeType": "preKey"|"message", "suite": 1, "content": "<base64>" }] }`. The device set must exactly match the recipient's current devices — ids **and** registration ids — or the send fails with `409 { "missingDevices": [], "staleDevices": [], "extraDevices": [] }` (Signal's contract: no device can be silently skipped, and reinstalled devices are detected). Stored envelopes are also pushed to the recipient's live chat sockets.
 
@@ -3157,7 +3149,7 @@ same idempotent mailbox path.
 
 ### GET /api/chat/messages?deviceId=N&limit=100
 
-Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id", "sender", "senderDeviceId", "envelopeType", "suite", "content", "serverTimestamp" }], "more": bool }`. Envelopes stay stored until acked.
+Drain the device's mailbox, oldest first (max 500/page): `{ "envelopes": [{ "id", "sender" (`{ server, accountId }`, absent under sealed sender), "senderDeviceId", "envelopeType", "suite", "content", "serverTimestamp" }], "more": bool }`. Envelopes stay stored until acked.
 
 ### POST /api/chat/messages/ack?deviceId=N
 
@@ -3464,32 +3456,32 @@ Return one immutable identity document from the locally verified, contiguous
 history. Genesis is sequence zero. Every rotation hash-links its predecessor
 and is signed by both old and new keys.
 
-### GET /api/fed/chat/users/{username}/keys
+### GET /api/fed/chat/accounts/{accountId}/keys
 
 Authenticated server-to-server directory lookup. Returns the remote user's
 account-signed complete manifest and replay-safe last-resort PQ bundles. It
 deliberately does not consume one-time prekeys, so a replayed signed read cannot
 exhaust the remote recipient's pool.
 
-### GET /api/fed/chat/users/{username}/manifest
+### GET /api/fed/chat/accounts/{accountId}/manifest
 
 Return the current complete account-signed manifest through an authenticated,
 origin- and destination-bound federation response.
 
-### GET /api/fed/chat/users/{username}/manifest-history
+### GET /api/fed/chat/accounts/{accountId}/manifest-history
 
 Return the same exact-sequence, maximum-64-entry history pages as the local
 route. The signed request URI binds `fromSequence`, `toSequence`, and optional
 `pageFromSequence`.
 
-### GET /api/fed/chat/users/{username}/profile/{version}
+### GET /api/fed/chat/accounts/{accountId}/profile/{version}
 
 Authenticated proxy lookup for an opaque encrypted profile. The server-to-
 server signature authenticates and destination-binds the originating
 homeserver; the separate profile access-key header remains the end-to-end
 capability. Wrong capabilities return `404`.
 
-### GET /api/fed/{chat|drive}/accounts/{username}/renames
+### GET /api/fed/{chat|drive}/names/{username}/renames
 
 Signed, under `chat.v2` at `/api/fed/chat/…` or `drive.v1` at
 `/api/fed/drive/…` (each feature's requests stay in its own namespace;
@@ -3651,7 +3643,7 @@ servers* below).
   recipient's username is taken from their server, as for folders). The envelope is a `FileShareEnvelopeV1` at the file's current
   generation, sealed to the remote account (`recipientServer` and
   `recipientAccountId`, looked up with
-  `GET /api/drive/federation/users/:username`).
+  `GET /api/users/by-address/:address`).
   **Response:** `201 { inviteUrl }`, of the form
   `…/invite#server=…&capability=…&kind=file`. Only the capability's hash is
   kept.
