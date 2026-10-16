@@ -33,6 +33,47 @@ COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
 
 
 --
+-- Name: kutup_fold(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.kutup_fold(name text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    RETURN translate(name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ._-'::text, 'abcdefghijklmnopqrstuvwxyz'::text);
+
+
+
+
+--
+-- Name: account_names; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_names (
+    folded text NOT NULL,
+    name text NOT NULL,
+    user_id uuid,
+    incarnation_id text,
+    state text NOT NULL,
+    receive_until timestamp with time zone,
+    free_at timestamp with time zone,
+    CONSTRAINT account_names_check CHECK (((state = 'held'::text) = (free_at IS NOT NULL))),
+    CONSTRAINT account_names_check1 CHECK (((state = 'held'::text) OR (user_id IS NOT NULL))),
+    CONSTRAINT account_names_folded_check CHECK ((folded ~ '^[a-z0-9]{1,32}$'::text)),
+    CONSTRAINT account_names_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT account_names_name_check CHECK ((name ~ '^[a-z0-9_-]{3,32}$'::text)),
+    CONSTRAINT account_names_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text])))
+);
+
+
+--
+-- Name: kutup_current_user(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.kutup_current_user(typed text) RETURNS uuid
+    LANGUAGE sql STABLE STRICT PARALLEL SAFE
+    RETURN (SELECT n.user_id FROM public.account_names n WHERE ((n.folded = public.kutup_fold(kutup_current_user.typed)) AND (n.state = 'current'::text)));
+
+
+--
 -- Name: kutup_no_files_in_albums(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -140,6 +181,62 @@ END
 $$;
 
 
+--
+-- Name: account_heads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_heads (
+    user_id uuid NOT NULL,
+    sequence bigint NOT NULL,
+    sealed bytea NOT NULL,
+    incarnation_id text NOT NULL,
+    written_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_heads_incarnation_id_check CHECK ((incarnation_id <> ''::text)),
+    CONSTRAINT account_heads_sealed_check CHECK (((octet_length(sealed) >= 1) AND (octet_length(sealed) <= 16384))),
+    CONSTRAINT account_heads_sequence_check CHECK ((sequence >= 1))
+);
+
+
+--
+-- Name: account_renames; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_renames (
+    incarnation_id text NOT NULL,
+    sequence integer NOT NULL,
+    user_id uuid,
+    authority_public_key text NOT NULL,
+    previous text NOT NULL,
+    current text NOT NULL,
+    counted boolean NOT NULL,
+    statement jsonb NOT NULL,
+    digest text NOT NULL,
+    accepted_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT account_renames_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT account_renames_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000)))
+);
+
+
+--
+-- Name: account_security_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_security_events (
+    id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    kind text NOT NULL,
+    at timestamp with time zone DEFAULT now() NOT NULL,
+    acting_session_id uuid,
+    acting_client text,
+    acting_user_agent text,
+    admin_user_id uuid,
+    old_name text,
+    new_name text,
+    CONSTRAINT account_security_events_check CHECK (((kind = ANY (ARRAY['adminReset'::text, 'accountReset'::text, 'nameClosed'::text, 'nameFreed'::text])) OR (admin_user_id IS NULL))),
+    CONSTRAINT account_security_events_kind_check CHECK ((kind = ANY (ARRAY['passwordChange'::text, 'recovery'::text, 'rotate'::text, 'adminReset'::text, 'accountReset'::text, 'rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text]))),
+    CONSTRAINT account_security_events_names_check CHECK ((((kind = ANY (ARRAY['rename'::text, 'nameDropped'::text, 'nameClosed'::text, 'nameFreed'::text])) = (old_name IS NOT NULL)) AND ((kind = 'rename'::text) = (new_name IS NOT NULL))))
+);
 
 
 --
@@ -189,6 +286,25 @@ CREATE TABLE public.album_items (
     added_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT album_items_album_epoch_check CHECK ((album_epoch > 0)),
     CONSTRAINT album_items_key_generation_check CHECK ((key_generation > 0))
+);
+
+
+--
+-- Name: auth_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.auth_grants (
+    token_hash bytea NOT NULL,
+    user_id uuid NOT NULL,
+    purpose text NOT NULL,
+    session_id uuid,
+    target_user_id uuid,
+    expires_at timestamp with time zone NOT NULL,
+    used_at timestamp with time zone,
+    CONSTRAINT auth_grants_check CHECK (((target_user_id IS NULL) OR (purpose = 'adminReset'::text))),
+    CONSTRAINT auth_grants_check1 CHECK (((purpose = 'recovery'::text) = (session_id IS NULL))),
+    CONSTRAINT auth_grants_purpose_check CHECK ((purpose = ANY (ARRAY['pass'::text, 'passwordChange'::text, 'totp'::text, 'adminReset'::text, 'recovery'::text, 'rotate'::text, 'rename'::text]))),
+    CONSTRAINT auth_grants_token_hash_check CHECK ((octet_length(token_hash) = 32))
 );
 
 
@@ -547,7 +663,7 @@ CREATE TABLE public.chat_call_link_knocks (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     seat_hash bytea NOT NULL,
-    account text,
+    account_id uuid,
     CONSTRAINT chat_call_link_knocks_label_check CHECK ((octet_length(label) = 168)),
     CONSTRAINT chat_call_link_knocks_participant_id_check CHECK ((participant_id ~ '^[0-9a-f]{32}$'::text)),
     CONSTRAINT chat_call_link_knocks_seat_hash_check CHECK ((octet_length(seat_hash) = 32)),
@@ -565,11 +681,11 @@ CREATE TABLE public.chat_call_link_seats (
     participant_id text NOT NULL,
     seat_hash bytea NOT NULL,
     role smallint,
-    account text,
     no_screen boolean DEFAULT false NOT NULL,
     removed_at timestamp with time zone,
     issued_at timestamp with time zone DEFAULT now() NOT NULL,
     last_minted_at timestamp with time zone DEFAULT now() NOT NULL,
+    account_id uuid,
     CONSTRAINT chat_call_link_seats_participant_id_check CHECK ((participant_id ~ '^[0-9a-f]{32}$'::text)),
     CONSTRAINT chat_call_link_seats_role_check CHECK ((role = ANY (ARRAY[1, 2]))),
     CONSTRAINT chat_call_link_seats_seat_hash_check CHECK ((octet_length(seat_hash) = 32))
@@ -713,8 +829,6 @@ CREATE TABLE public.chat_federation_outbox (
     sender_user_id uuid NOT NULL,
     sender_device_id integer NOT NULL,
     send_id text NOT NULL,
-    recipient text NOT NULL,
-    sender text NOT NULL,
     request jsonb NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
     response jsonb,
@@ -723,6 +837,7 @@ CREATE TABLE public.chat_federation_outbox (
     last_error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    recipient_account_id uuid NOT NULL,
     CONSTRAINT chat_federation_outbox_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT chat_federation_outbox_sequence_check CHECK ((sequence > 0)),
     CONSTRAINT chat_federation_outbox_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'mismatch'::text, 'delivered'::text])))
@@ -797,7 +912,6 @@ CREATE TABLE public.chat_mailbox (
     cursor bigint NOT NULL,
     recipient_user_id uuid NOT NULL,
     recipient_device_id integer NOT NULL,
-    sender text,
     sender_device_id integer NOT NULL,
     envelope_type smallint NOT NULL,
     suite smallint NOT NULL,
@@ -805,7 +919,10 @@ CREATE TABLE public.chat_mailbox (
     server_ts timestamp with time zone DEFAULT now() NOT NULL,
     sealed_sender boolean DEFAULT false NOT NULL,
     send_id text,
-    CONSTRAINT chat_mailbox_sender_qualified CHECK (((sender IS NULL) OR (sender ~ '^[a-z0-9_-]{3,32}@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text))),
+    sender_server text,
+    sender_account_id uuid,
+    CONSTRAINT chat_mailbox_sender_check CHECK (((sender_server IS NULL) = (sender_account_id IS NULL))),
+    CONSTRAINT chat_mailbox_sender_server_check CHECK ((sender_server = lower(sender_server))),
     CONSTRAINT chat_mailbox_suite_known CHECK ((suite = 1))
 );
 
@@ -905,12 +1022,12 @@ CREATE TABLE public.chat_media_federation_outbox (
 CREATE TABLE public.chat_media_federation_pull_grants (
     origin_user_id uuid NOT NULL,
     destination text NOT NULL,
-    recipient text NOT NULL,
     operation_id uuid NOT NULL,
     attachment_id uuid NOT NULL,
     retrieval_token_hash bytea NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    recipient_account_id uuid NOT NULL,
     CONSTRAINT chat_media_federation_pull_grants_retrieval_token_hash_check CHECK ((octet_length(retrieval_token_hash) = 32))
 );
 
@@ -1283,7 +1400,6 @@ CREATE TABLE public.chat_mls_federation_outbox (
     sequence bigint NOT NULL,
     sender_user_id uuid,
     sender_device_id integer,
-    recipient text NOT NULL,
     send_id uuid NOT NULL,
     transaction jsonb NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
@@ -1292,6 +1408,7 @@ CREATE TABLE public.chat_mls_federation_outbox (
     last_error_class text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    recipient_account_id uuid NOT NULL,
     CONSTRAINT chat_mls_federation_outbox_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT chat_mls_federation_outbox_destination_check CHECK ((destination = lower(destination))),
     CONSTRAINT chat_mls_federation_outbox_sender_device_id_check CHECK (((sender_device_id IS NULL) OR ((sender_device_id >= 1) AND (sender_device_id <= 127)))),
@@ -1388,7 +1505,6 @@ CREATE TABLE public.chat_mls_incarnations (
 CREATE TABLE public.chat_mls_invitation_feedback (
     conversation_id uuid NOT NULL,
     incarnation bigint NOT NULL,
-    member_address text NOT NULL,
     invited_epoch bigint NOT NULL,
     source_domain text NOT NULL,
     decision text NOT NULL,
@@ -1396,11 +1512,13 @@ CREATE TABLE public.chat_mls_invitation_feedback (
     feedback_digest character(64) NOT NULL,
     feedback jsonb NOT NULL,
     received_at timestamp with time zone DEFAULT now() NOT NULL,
+    member_account text NOT NULL,
     CONSTRAINT chat_mls_invitation_feedback_decision_check CHECK ((decision = ANY (ARRAY['accepted'::text, 'rejected'::text, 'expired'::text]))),
     CONSTRAINT chat_mls_invitation_feedback_feedback_check CHECK ((jsonb_typeof(feedback) = 'object'::text)),
     CONSTRAINT chat_mls_invitation_feedback_feedback_digest_check CHECK ((feedback_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_mls_invitation_feedback_incarnation_check CHECK ((incarnation > 0)),
     CONSTRAINT chat_mls_invitation_feedback_invited_epoch_check CHECK ((invited_epoch > 0)),
+    CONSTRAINT chat_mls_invitation_feedback_member_account_check CHECK ((member_account ~ '^aci:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@[a-z0-9.-]+$'::text)),
     CONSTRAINT chat_mls_invitation_feedback_source_domain_check CHECK ((source_domain = lower(source_domain)))
 );
 
@@ -1413,7 +1531,6 @@ CREATE TABLE public.chat_mls_invitation_feedback_outbox (
     destination text NOT NULL,
     conversation_id uuid NOT NULL,
     incarnation bigint NOT NULL,
-    member_address text NOT NULL,
     invited_epoch bigint NOT NULL,
     feedback_digest character(64) NOT NULL,
     feedback jsonb NOT NULL,
@@ -1423,12 +1540,14 @@ CREATE TABLE public.chat_mls_invitation_feedback_outbox (
     last_error_class text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    member_account text NOT NULL,
     CONSTRAINT chat_mls_invitation_feedback_outbox_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT chat_mls_invitation_feedback_outbox_destination_check CHECK ((destination = lower(destination))),
     CONSTRAINT chat_mls_invitation_feedback_outbox_feedback_check CHECK ((jsonb_typeof(feedback) = 'object'::text)),
     CONSTRAINT chat_mls_invitation_feedback_outbox_feedback_digest_check CHECK ((feedback_digest ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT chat_mls_invitation_feedback_outbox_incarnation_check CHECK ((incarnation > 0)),
     CONSTRAINT chat_mls_invitation_feedback_outbox_invited_epoch_check CHECK ((invited_epoch > 0)),
+    CONSTRAINT chat_mls_invitation_feedback_outbox_member_account_check CHECK ((member_account ~ '^aci:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@[a-z0-9.-]+$'::text)),
     CONSTRAINT chat_mls_invitation_feedback_outbox_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'delivered'::text])))
 );
 
@@ -1824,7 +1943,6 @@ CREATE TABLE public.chat_sealed_federation_outbox (
     sequence bigint NOT NULL,
     sender_user_id uuid,
     sender_device_id integer,
-    recipient text NOT NULL,
     send_id uuid NOT NULL,
     transaction jsonb NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
@@ -1833,6 +1951,7 @@ CREATE TABLE public.chat_sealed_federation_outbox (
     last_error_class text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    recipient_account_id uuid NOT NULL,
     CONSTRAINT chat_sealed_federation_outbox_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT chat_sealed_federation_outbox_sender_device_id_check CHECK (((sender_device_id IS NULL) OR ((sender_device_id >= 1) AND (sender_device_id <= 127)))),
     CONSTRAINT chat_sealed_federation_outbox_sequence_check CHECK ((sequence > 0)),
@@ -1890,6 +2009,17 @@ CREATE TABLE public.chat_ws_tickets (
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_ws_tickets_token_hash_check CHECK ((length(token_hash) = 64))
+);
+
+
+--
+-- Name: collab_revocation_marks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.collab_revocation_marks (
+    home_domain text NOT NULL,
+    user_id uuid NOT NULL,
+    through_seq bigint NOT NULL
 );
 
 
@@ -2025,6 +2155,18 @@ CREATE TABLE public.contacts (
 
 
 --
+-- Name: device_registration_challenges; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.device_registration_challenges (
+    challenge_hash bytea NOT NULL,
+    user_id uuid NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT device_registration_challenges_challenge_hash_check CHECK ((octet_length(challenge_hash) = 32))
+);
+
+
+--
 -- Name: drive_federation_mutations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2056,13 +2198,16 @@ CREATE TABLE public.drive_federation_mutations (
 CREATE TABLE public.drive_profile_keys (
     user_id uuid NOT NULL,
     direction text NOT NULL,
-    peer_account text NOT NULL,
     envelope text NOT NULL,
     profile_version text NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    peer_incarnation_id text NOT NULL,
+    peer_server text NOT NULL,
+    peer_account_id uuid NOT NULL,
     CONSTRAINT drive_profile_keys_direction_check CHECK ((direction = ANY (ARRAY['sent'::text, 'received'::text]))),
     CONSTRAINT drive_profile_keys_envelope_check CHECK ((length(envelope) <= 2048)),
-    CONSTRAINT drive_profile_keys_peer_account_check CHECK (((length(peer_account) >= 3) AND (length(peer_account) <= 320))),
+    CONSTRAINT drive_profile_keys_peer_incarnation_id_check CHECK ((peer_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT drive_profile_keys_peer_server_check CHECK (((peer_server = lower(peer_server)) AND ((length(peer_server) >= 3) AND (length(peer_server) <= 253)))),
     CONSTRAINT drive_profile_keys_profile_version_check CHECK ((profile_version ~ '^[0-9a-f]{64}$'::text))
 );
 
@@ -2149,6 +2294,7 @@ CREATE TABLE public.federated_outgoing_file_shares (
     capability_hash text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     can_edit boolean DEFAULT false NOT NULL,
+    recipient_account_id uuid NOT NULL,
     CONSTRAINT federated_outgoing_file_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT federated_outgoing_file_shares_key_generation_check CHECK ((key_generation > 0)),
     CONSTRAINT federated_outgoing_file_shares_recipient_domain_check CHECK ((recipient_domain = lower(recipient_domain))),
@@ -2175,10 +2321,13 @@ CREATE TABLE public.federated_outgoing_shares (
     can_delete boolean DEFAULT false NOT NULL,
     upload_quota_bytes bigint,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    recipient_incarnation_id character(64) NOT NULL,
+    recipient_account_id uuid NOT NULL,
     CONSTRAINT federated_outgoing_shares_capability_hash_check CHECK ((capability_hash ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT federated_outgoing_shares_recipient_domain_check CHECK ((recipient_domain = lower(recipient_domain))),
     CONSTRAINT federated_outgoing_shares_recipient_domain_check1 CHECK (((length(recipient_domain) >= 3) AND (length(recipient_domain) <= 253))),
     CONSTRAINT federated_outgoing_shares_recipient_domain_check2 CHECK ((recipient_domain ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'::text)),
+    CONSTRAINT federated_outgoing_shares_recipient_incarnation_check CHECK ((recipient_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT federated_outgoing_shares_recipient_username_check CHECK ((recipient_username ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text)),
     CONSTRAINT federated_outgoing_shares_upload_quota_bytes_check CHECK (((upload_quota_bytes IS NULL) OR (upload_quota_bytes >= 0)))
 );
@@ -2495,10 +2644,11 @@ CREATE TABLE public.file_versions (
     kind text NOT NULL,
     ciphertext_sha256 text,
     key_generation integer NOT NULL,
-    remote_author text,
     parent_version_id uuid,
+    remote_author_server text,
+    remote_author_account_id uuid,
     CONSTRAINT file_versions_kind_check CHECK ((kind = ANY (ARRAY['file'::text, 'yjs'::text]))),
-    CONSTRAINT file_versions_remote_author_check CHECK ((length(remote_author) <= 320))
+    CONSTRAINT file_versions_remote_author_check CHECK (((remote_author_server IS NULL) = (remote_author_account_id IS NULL)))
 );
 
 
@@ -2608,8 +2758,12 @@ CREATE TABLE public.mail_addresses (
     address text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     group_id uuid,
+    state text DEFAULT 'active'::text NOT NULL,
+    folded text GENERATED ALWAYS AS (((public.kutup_fold(split_part(address, '@'::text, 1)) || '@'::text) || lower(split_part(address, '@'::text, 2)))) STORED NOT NULL,
+    receive_until timestamp with time zone,
     CONSTRAINT mail_addresses_address_check CHECK (((address = lower(address)) AND ((length(address) >= 3) AND (length(address) <= 320)))),
-    CONSTRAINT mail_addresses_owner CHECK (((user_id IS NULL) <> (group_id IS NULL)))
+    CONSTRAINT mail_addresses_owner CHECK (((user_id IS NULL) <> (group_id IS NULL))),
+    CONSTRAINT mail_addresses_state_check CHECK ((state = ANY (ARRAY['active'::text, 'receiving'::text, 'closed'::text, 'freed'::text])))
 );
 
 
@@ -2724,7 +2878,7 @@ CREATE TABLE public.mail_folders (
     id uuid NOT NULL,
     user_id uuid NOT NULL,
     parent_id uuid,
-    name_sealed text NOT NULL,
+    name_sealed text,
     color text NOT NULL,
     "position" integer DEFAULT 0 NOT NULL,
     expanded boolean DEFAULT true NOT NULL,
@@ -2759,9 +2913,9 @@ CREATE TABLE public.mail_group_key_shares (
     group_key_id uuid NOT NULL,
     user_id uuid NOT NULL,
     share bytea NOT NULL,
-    member_fingerprint character(40) NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mail_group_key_shares_member_fingerprint_check CHECK ((member_fingerprint ~ '^[0-9a-f]{40}$'::text)),
+    member_incarnation_id text NOT NULL,
+    CONSTRAINT mail_group_key_shares_member_incarnation_check CHECK ((member_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT mail_group_key_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 16384)))
 );
 
@@ -2816,6 +2970,40 @@ CREATE TABLE public.mail_group_objects (
 
 
 --
+-- Name: mail_group_signers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mail_group_signers (
+    group_id uuid NOT NULL,
+    from_sequence bigint NOT NULL,
+    public_key bytea NOT NULL,
+    handover bytea,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT mail_group_signers_check CHECK (((from_sequence = 1) = (handover IS NULL))),
+    CONSTRAINT mail_group_signers_from_sequence_check CHECK ((from_sequence >= 1)),
+    CONSTRAINT mail_group_signers_handover_check CHECK ((octet_length(handover) = 154)),
+    CONSTRAINT mail_group_signers_public_key_check CHECK ((octet_length(public_key) = 32))
+);
+
+
+--
+-- Name: mail_group_signing_shares; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.mail_group_signing_shares (
+    group_id uuid NOT NULL,
+    signer_public_key bytea NOT NULL,
+    user_id uuid NOT NULL,
+    share bytea NOT NULL,
+    member_incarnation_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT mail_group_signing_shares_member_incarnation_id_check CHECK ((member_incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT mail_group_signing_shares_share_check CHECK (((octet_length(share) >= 1) AND (octet_length(share) <= 1024))),
+    CONSTRAINT mail_group_signing_shares_signer_public_key_check CHECK ((octet_length(signer_public_key) = 32))
+);
+
+
+--
 -- Name: mail_groups; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2832,6 +3020,7 @@ CREATE TABLE public.mail_groups (
     storage_owner text DEFAULT 'server'::text NOT NULL,
     created_by uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    needs_new_signer boolean DEFAULT false NOT NULL,
     CONSTRAINT mail_groups_address_check CHECK (((address = lower(address)) AND ((length(address) >= 3) AND (length(address) <= 320)))),
     CONSTRAINT mail_groups_check CHECK (((system_role IS NULL) OR (post_policy = 'anyone'::text))),
     CONSTRAINT mail_groups_description_check CHECK ((length(description) <= 1000)),
@@ -2867,7 +3056,7 @@ CREATE TABLE public.mail_image_senders (
     user_id uuid NOT NULL,
     address text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT mail_image_senders_address_check CHECK ((((length(address) >= 3) AND (length(address) <= 320)) AND (address = lower(address))))
+    CONSTRAINT mail_image_senders_address_check CHECK (((length(address) >= 3) AND (length(address) <= 320) AND (address = lower(address))))
 );
 
 
@@ -3026,7 +3215,7 @@ CREATE TABLE public.mail_sender_rules (
     kind text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT mail_sender_rules_kind_check CHECK ((kind = ANY (ARRAY['spam'::text, 'block'::text, 'allow'::text]))),
-    CONSTRAINT mail_sender_rules_pattern_check CHECK ((((length(pattern) >= 3) AND (length(pattern) <= 320)) AND (pattern = lower(pattern))))
+    CONSTRAINT mail_sender_rules_pattern_check CHECK (((length(pattern) >= 3) AND (length(pattern) <= 320) AND (pattern = lower(pattern))))
 );
 
 
@@ -3124,6 +3313,47 @@ CREATE TABLE public.mail_settings (
     CONSTRAINT mail_settings_text_direction_check CHECK ((text_direction = ANY (ARRAY['ltr'::text, 'rtl'::text]))),
     CONSTRAINT mail_settings_view_layout_check CHECK ((view_layout = ANY (ARRAY['column'::text, 'row'::text]))),
     CONSTRAINT mail_settings_view_mode_check CHECK ((view_mode = ANY (ARRAY['conversation'::text, 'message'::text])))
+);
+
+
+--
+-- Name: opaque_login_states; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.opaque_login_states (
+    login_id uuid NOT NULL,
+    canonical_name text NOT NULL,
+    user_id uuid,
+    purpose text NOT NULL,
+    session_id uuid,
+    grant_for text,
+    source text NOT NULL,
+    lockout_key bytea NOT NULL,
+    ceiling_account text,
+    ceiling_source text,
+    server_key_id smallint NOT NULL,
+    sealed_state bytea NOT NULL,
+    credential_epoch bytea,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT opaque_login_states_check CHECK (((purpose = 'reauth'::text) = ((session_id IS NOT NULL) AND (grant_for IS NOT NULL) AND (user_id IS NOT NULL)))),
+    CONSTRAINT opaque_login_states_check1 CHECK (((ceiling_account IS NULL) = (ceiling_source IS NULL))),
+    CONSTRAINT opaque_login_states_credential_epoch_check CHECK (((credential_epoch IS NULL) OR (length(credential_epoch) = 16))),
+    CONSTRAINT opaque_login_states_grant_for_check CHECK ((grant_for = ANY (ARRAY['pass'::text, 'passwordChange'::text, 'totp'::text, 'adminReset'::text, 'verify'::text, 'rename'::text]))),
+    CONSTRAINT opaque_login_states_purpose_check CHECK ((purpose = ANY (ARRAY['session'::text, 'reauth'::text])))
+);
+
+
+--
+-- Name: opaque_server_setups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.opaque_server_setups (
+    key_id smallint NOT NULL,
+    sealed_setup bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    retired_at timestamp with time zone,
+    CONSTRAINT opaque_server_setups_key_id_check CHECK ((key_id > 0)),
+    CONSTRAINT opaque_server_setups_sealed_setup_check CHECK (((octet_length(sealed_setup) >= 1) AND (octet_length(sealed_setup) <= 4096)))
 );
 
 
@@ -3255,6 +3485,144 @@ CREATE TABLE public.public_shares (
 
 
 --
+-- Name: registration_code_uses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.registration_code_uses (
+    code_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    used_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: registration_codes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.registration_codes (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    code_hash bytea NOT NULL,
+    hint text NOT NULL,
+    note text DEFAULT ''::text NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone,
+    max_uses integer,
+    uses integer DEFAULT 0 NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by uuid,
+    CONSTRAINT registration_codes_check CHECK (((max_uses IS NULL) OR (uses <= max_uses))),
+    CONSTRAINT registration_codes_code_hash_check CHECK ((octet_length(code_hash) = 32)),
+    CONSTRAINT registration_codes_hint_check CHECK (((length(hint) >= 1) AND (length(hint) <= 8))),
+    CONSTRAINT registration_codes_max_uses_check CHECK (((max_uses IS NULL) OR ((max_uses >= 1) AND (max_uses <= 100000)))),
+    CONSTRAINT registration_codes_note_check CHECK ((length(note) <= 200)),
+    CONSTRAINT registration_codes_uses_check CHECK ((uses >= 0))
+);
+
+
+--
+-- Name: remote_account_renames; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.remote_account_renames (
+    domain text NOT NULL,
+    incarnation_id character(64) NOT NULL,
+    authority_public_key text NOT NULL,
+    sequence integer NOT NULL,
+    head_digest bytea NOT NULL,
+    current_address text NOT NULL,
+    state text NOT NULL,
+    chain jsonb NOT NULL,
+    addresses text[] NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT remote_account_renames_domain_check CHECK ((domain = lower(domain))),
+    CONSTRAINT remote_account_renames_head_digest_check CHECK ((octet_length(head_digest) = 32)),
+    CONSTRAINT remote_account_renames_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT remote_account_renames_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000))),
+    CONSTRAINT remote_account_renames_state_check CHECK ((state = ANY (ARRAY['current'::text, 'held'::text, 'gone'::text])))
+);
+
+
+--
+-- Name: remote_collab_devices; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.remote_collab_devices (
+    domain text NOT NULL,
+    device_id bigint NOT NULL,
+    incarnation_id character(64) NOT NULL,
+    account text NOT NULL,
+    user_id text NOT NULL,
+    authority_public_key text NOT NULL,
+    public_signing bytea NOT NULL,
+    registration_challenge bytea NOT NULL,
+    registration_issued_at_ms bigint NOT NULL,
+    registration_signature text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    revoked_at_ms bigint,
+    revocation_signature text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone,
+    CONSTRAINT remote_collab_devices_check CHECK (((revoked_at_ms IS NULL) = (revocation_signature IS NULL))),
+    CONSTRAINT remote_collab_devices_check1 CHECK (((revoked_at_ms IS NULL) OR (NOT active))),
+    CONSTRAINT remote_collab_devices_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT remote_collab_devices_public_signing_check CHECK ((octet_length(public_signing) = 32)),
+    CONSTRAINT remote_collab_devices_registration_challenge_check CHECK ((octet_length(registration_challenge) = 32))
+);
+
+
+--
+-- Name: remote_revocation_marks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.remote_revocation_marks (
+    domain text NOT NULL,
+    incarnation_id character(64) NOT NULL,
+    through_seq bigint NOT NULL
+);
+
+
+--
+-- Name: remote_revoked_device_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.remote_revoked_device_keys (
+    domain text NOT NULL,
+    key_hash bytea NOT NULL,
+    incarnation_id character(64) NOT NULL,
+    revoked_at_ms bigint NOT NULL,
+    CONSTRAINT remote_revoked_device_keys_key_hash_check CHECK ((octet_length(key_hash) = 32))
+);
+
+
+--
+-- Name: rename_announce_outbox; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rename_announce_outbox (
+    destination text NOT NULL,
+    incarnation_id character(64) NOT NULL,
+    sequence integer NOT NULL,
+    attempts integer DEFAULT 0 NOT NULL,
+    next_attempt_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_error text,
+    CONSTRAINT rename_announce_outbox_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT rename_announce_outbox_sequence_check CHECK (((sequence >= 1) AND (sequence <= 1000)))
+);
+
+
+--
+-- Name: retired_account_ids; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.retired_account_ids (
+    id uuid NOT NULL,
+    retired_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: sealed_sender_generated_certificates; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3285,7 +3653,7 @@ CREATE TABLE public.server_generated_keys (
     private_key bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT server_generated_keys_private_key_check CHECK ((octet_length(private_key) = 32)),
-    CONSTRAINT server_generated_keys_purpose_check CHECK ((purpose = ANY (ARRAY['federation-identity'::text, 'mls-control'::text, 'mail-group-authority'::text, 'fake-accounts'::text])))
+    CONSTRAINT server_generated_keys_purpose_check CHECK ((purpose = ANY (ARRAY['federation-identity'::text, 'mls-control'::text, 'fake-accounts'::text, 'registration-codes'::text])))
 );
 
 
@@ -3344,7 +3712,18 @@ CREATE TABLE public.user_devices (
     label text,
     is_active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    last_seen_at timestamp with time zone
+    last_seen_at timestamp with time zone,
+    incarnation_id character(64) NOT NULL,
+    registration_challenge bytea NOT NULL,
+    registration_issued_at_ms bigint NOT NULL,
+    registration_signature text NOT NULL,
+    session_id uuid,
+    revoked_at_ms bigint,
+    revocation_signature text,
+    revocation_seq bigint,
+    CONSTRAINT user_devices_incarnation_id_check CHECK ((incarnation_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT user_devices_registration_challenge_check CHECK ((octet_length(registration_challenge) = 32)),
+    CONSTRAINT user_devices_revocation_check CHECK ((((revoked_at_ms IS NULL) = (revocation_signature IS NULL)) AND ((revoked_at_ms IS NULL) = (revocation_seq IS NULL)) AND ((revoked_at_ms IS NULL) OR (NOT is_active))))
 );
 
 
@@ -3365,6 +3744,18 @@ CREATE SEQUENCE public.user_devices_id_seq
 --
 
 ALTER SEQUENCE public.user_devices_id_seq OWNED BY public.user_devices.id;
+
+
+--
+-- Name: user_devices_revocation_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.user_devices_revocation_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
 
 
 --
@@ -3410,12 +3801,6 @@ CREATE TABLE public.users (
     account_authority_key_id character(64) NOT NULL,
     account_incarnation_id character(64) NOT NULL,
     drive_signing_public_key text NOT NULL,
-    account_protection_suite smallint NOT NULL,
-    account_protection_salt text NOT NULL,
-    argon_memory_kib integer NOT NULL,
-    argon_iterations integer NOT NULL,
-    argon_parallelism integer NOT NULL,
-    login_key_hash text NOT NULL,
     totp_secret text,
     totp_enabled boolean DEFAULT false NOT NULL,
     storage_quota_bytes bigint DEFAULT '10737418240'::bigint NOT NULL,
@@ -3431,14 +3816,18 @@ CREATE TABLE public.users (
     version_retention_days integer DEFAULT 30 NOT NULL,
     drive_key_binding text,
     key_binding text,
+    opaque_record bytea,
+    opaque_suite smallint,
+    opaque_server_key_id smallint,
+    is_break_glass boolean DEFAULT false NOT NULL,
     CONSTRAINT users_account_authority_key_id_check CHECK (((account_authority_key_id = ''::bpchar) OR (account_authority_key_id ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT users_account_incarnation_id_check CHECK (((account_incarnation_id = ''::bpchar) OR (account_incarnation_id ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT users_account_protection_suite_check CHECK ((account_protection_suite = ANY (ARRAY[0, 1]))),
-    CONSTRAINT users_argon_iterations_check CHECK ((argon_iterations >= 0)),
-    CONSTRAINT users_argon_memory_kib_check CHECK ((argon_memory_kib >= 0)),
-    CONSTRAINT users_argon_parallelism_check CHECK ((argon_parallelism >= 0)),
     CONSTRAINT users_color_format CHECK (((color IS NULL) OR (color ~ '^#[0-9a-fA-F]{6}$'::text))),
     CONSTRAINT users_key_binding_check CHECK ((key_binding ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
+    CONSTRAINT users_opaque_check CHECK ((((opaque_record IS NULL) = (opaque_suite IS NULL)) AND ((opaque_record IS NULL) = (opaque_server_key_id IS NULL)))),
+    CONSTRAINT users_opaque_record_check CHECK (((octet_length(opaque_record) >= 1) AND (octet_length(opaque_record) <= 1024))),
+    CONSTRAINT users_opaque_server_key_id_check CHECK ((opaque_server_key_id > 0)),
+    CONSTRAINT users_opaque_suite_check CHECK ((opaque_suite = 1)),
     CONSTRAINT users_username_format CHECK ((username ~ '^[a-z0-9_-]{3,32}$'::text)),
     CONSTRAINT users_version_retention_days_check CHECK ((version_retention_days = ANY (ARRAY[7, 30, 90, 180, 365, 3650])))
 );
@@ -3466,6 +3855,46 @@ ALTER TABLE ONLY public.user_devices ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: account_heads account_heads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_heads
+    ADD CONSTRAINT account_heads_pkey PRIMARY KEY (user_id, sequence);
+
+
+--
+-- Name: account_names account_names_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_names
+    ADD CONSTRAINT account_names_name_key UNIQUE (name);
+
+
+--
+-- Name: account_names account_names_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_names
+    ADD CONSTRAINT account_names_pkey PRIMARY KEY (folded);
+
+
+--
+-- Name: account_renames account_renames_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_renames
+    ADD CONSTRAINT account_renames_pkey PRIMARY KEY (incarnation_id, sequence);
+
+
+--
+-- Name: account_security_events account_security_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_security_events
+    ADD CONSTRAINT account_security_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: admin_audit_log admin_audit_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3479,6 +3908,14 @@ ALTER TABLE ONLY public.admin_audit_log
 
 ALTER TABLE ONLY public.album_items
     ADD CONSTRAINT album_items_pkey PRIMARY KEY (album_id, file_id);
+
+
+--
+-- Name: auth_grants auth_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.auth_grants
+    ADD CONSTRAINT auth_grants_pkey PRIMARY KEY (token_hash);
 
 
 --
@@ -3930,19 +4367,19 @@ ALTER TABLE ONLY public.chat_media_federation_outbox
 
 
 --
--- Name: chat_media_federation_pull_grants chat_media_federation_pull_gr_destination_recipient_attachm_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.chat_media_federation_pull_grants
-    ADD CONSTRAINT chat_media_federation_pull_gr_destination_recipient_attachm_key UNIQUE (destination, recipient, attachment_id);
-
-
---
 -- Name: chat_media_federation_pull_grants chat_media_federation_pull_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_media_federation_pull_grants
     ADD CONSTRAINT chat_media_federation_pull_grants_pkey PRIMARY KEY (destination, operation_id);
+
+
+--
+-- Name: chat_media_federation_pull_grants chat_media_federation_pull_grants_recipient_attachment_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_media_federation_pull_grants
+    ADD CONSTRAINT chat_media_federation_pull_grants_recipient_attachment_key UNIQUE (destination, recipient_account_id, attachment_id);
 
 
 --
@@ -4134,7 +4571,7 @@ ALTER TABLE ONLY public.chat_mls_federation_inbound_transactions
 --
 
 ALTER TABLE ONLY public.chat_mls_federation_outbox
-    ADD CONSTRAINT chat_mls_federation_outbox_destination_recipient_send_id_key UNIQUE (destination, recipient, send_id);
+    ADD CONSTRAINT chat_mls_federation_outbox_destination_recipient_send_id_key UNIQUE (destination, recipient_account_id, send_id);
 
 
 --
@@ -4214,7 +4651,7 @@ ALTER TABLE ONLY public.chat_mls_incarnations
 --
 
 ALTER TABLE ONLY public.chat_mls_invitation_feedback_outbox
-    ADD CONSTRAINT chat_mls_invitation_feedback_outbox_pkey PRIMARY KEY (destination, conversation_id, incarnation, member_address, invited_epoch);
+    ADD CONSTRAINT chat_mls_invitation_feedback_outbox_pkey PRIMARY KEY (destination, conversation_id, incarnation, member_account, invited_epoch);
 
 
 --
@@ -4222,7 +4659,7 @@ ALTER TABLE ONLY public.chat_mls_invitation_feedback_outbox
 --
 
 ALTER TABLE ONLY public.chat_mls_invitation_feedback
-    ADD CONSTRAINT chat_mls_invitation_feedback_pkey PRIMARY KEY (conversation_id, incarnation, member_address, invited_epoch);
+    ADD CONSTRAINT chat_mls_invitation_feedback_pkey PRIMARY KEY (conversation_id, incarnation, member_account, invited_epoch);
 
 
 --
@@ -4382,7 +4819,7 @@ ALTER TABLE ONLY public.chat_sealed_federation_inbound
 --
 
 ALTER TABLE ONLY public.chat_sealed_federation_outbox
-    ADD CONSTRAINT chat_sealed_federation_outbox_destination_recipient_send_id_key UNIQUE (destination, recipient, send_id);
+    ADD CONSTRAINT chat_sealed_federation_outbox_destination_recipient_send_id_key UNIQUE (destination, recipient_account_id, send_id);
 
 
 --
@@ -4431,6 +4868,14 @@ ALTER TABLE ONLY public.chat_web_push_key
 
 ALTER TABLE ONLY public.chat_ws_tickets
     ADD CONSTRAINT chat_ws_tickets_pkey PRIMARY KEY (token_hash);
+
+
+--
+-- Name: collab_revocation_marks collab_revocation_marks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collab_revocation_marks
+    ADD CONSTRAINT collab_revocation_marks_pkey PRIMARY KEY (home_domain, user_id);
 
 
 --
@@ -4514,6 +4959,14 @@ ALTER TABLE ONLY public.contacts
 
 
 --
+-- Name: device_registration_challenges device_registration_challenges_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_registration_challenges
+    ADD CONSTRAINT device_registration_challenges_pkey PRIMARY KEY (challenge_hash);
+
+
+--
 -- Name: drive_federation_mutations drive_federation_mutations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4526,7 +4979,7 @@ ALTER TABLE ONLY public.drive_federation_mutations
 --
 
 ALTER TABLE ONLY public.drive_profile_keys
-    ADD CONSTRAINT drive_profile_keys_pkey PRIMARY KEY (user_id, direction, peer_account);
+    ADD CONSTRAINT drive_profile_keys_pkey PRIMARY KEY (user_id, direction, peer_server, peer_account_id);
 
 
 --
@@ -4786,14 +5239,6 @@ ALTER TABLE ONLY public.mail_address_keys
 
 
 --
--- Name: mail_addresses mail_addresses_address_key; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.mail_addresses
-    ADD CONSTRAINT mail_addresses_address_key UNIQUE (address);
-
-
---
 -- Name: mail_addresses mail_addresses_group_id_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4927,6 +5372,22 @@ ALTER TABLE ONLY public.mail_group_members
 
 ALTER TABLE ONLY public.mail_group_objects
     ADD CONSTRAINT mail_group_objects_pkey PRIMARY KEY (object_key);
+
+
+--
+-- Name: mail_group_signers mail_group_signers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mail_group_signers
+    ADD CONSTRAINT mail_group_signers_pkey PRIMARY KEY (group_id, from_sequence);
+
+
+--
+-- Name: mail_group_signing_shares mail_group_signing_shares_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mail_group_signing_shares
+    ADD CONSTRAINT mail_group_signing_shares_pkey PRIMARY KEY (group_id, signer_public_key, user_id);
 
 
 --
@@ -5066,6 +5527,22 @@ ALTER TABLE ONLY public.mail_settings
 
 
 --
+-- Name: opaque_login_states opaque_login_states_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opaque_login_states
+    ADD CONSTRAINT opaque_login_states_pkey PRIMARY KEY (login_id);
+
+
+--
+-- Name: opaque_server_setups opaque_server_setups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opaque_server_setups
+    ADD CONSTRAINT opaque_server_setups_pkey PRIMARY KEY (key_id);
+
+
+--
 -- Name: pass_pin_failures pass_pin_failures_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5146,6 +5623,94 @@ ALTER TABLE ONLY public.public_shares
 
 
 --
+-- Name: registration_code_uses registration_code_uses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_code_uses
+    ADD CONSTRAINT registration_code_uses_pkey PRIMARY KEY (code_id, user_id);
+
+
+--
+-- Name: registration_code_uses registration_code_uses_user_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_code_uses
+    ADD CONSTRAINT registration_code_uses_user_id_key UNIQUE (user_id);
+
+
+--
+-- Name: registration_codes registration_codes_code_hash_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_codes
+    ADD CONSTRAINT registration_codes_code_hash_key UNIQUE (code_hash);
+
+
+--
+-- Name: registration_codes registration_codes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_codes
+    ADD CONSTRAINT registration_codes_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: remote_account_renames remote_account_renames_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.remote_account_renames
+    ADD CONSTRAINT remote_account_renames_pkey PRIMARY KEY (domain, incarnation_id);
+
+
+--
+-- Name: remote_collab_devices remote_collab_devices_domain_public_signing_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.remote_collab_devices
+    ADD CONSTRAINT remote_collab_devices_domain_public_signing_key UNIQUE (domain, public_signing);
+
+
+--
+-- Name: remote_collab_devices remote_collab_devices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.remote_collab_devices
+    ADD CONSTRAINT remote_collab_devices_pkey PRIMARY KEY (domain, device_id);
+
+
+--
+-- Name: remote_revocation_marks remote_revocation_marks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.remote_revocation_marks
+    ADD CONSTRAINT remote_revocation_marks_pkey PRIMARY KEY (domain, incarnation_id);
+
+
+--
+-- Name: remote_revoked_device_keys remote_revoked_device_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.remote_revoked_device_keys
+    ADD CONSTRAINT remote_revoked_device_keys_pkey PRIMARY KEY (domain, key_hash);
+
+
+--
+-- Name: rename_announce_outbox rename_announce_outbox_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rename_announce_outbox
+    ADD CONSTRAINT rename_announce_outbox_pkey PRIMARY KEY (destination, incarnation_id, sequence);
+
+
+--
+-- Name: retired_account_ids retired_account_ids_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.retired_account_ids
+    ADD CONSTRAINT retired_account_ids_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: sealed_sender_generated_certificates sealed_sender_generated_certificates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5202,6 +5767,22 @@ ALTER TABLE ONLY public.user_devices
 
 
 --
+-- Name: user_devices user_devices_public_signing_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_devices
+    ADD CONSTRAINT user_devices_public_signing_key UNIQUE (public_signing);
+
+
+--
+-- Name: user_devices user_devices_revocation_seq_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_devices
+    ADD CONSTRAINT user_devices_revocation_seq_key UNIQUE (revocation_seq);
+
+
+--
 -- Name: user_map_preferences user_map_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5239,6 +5820,69 @@ ALTER TABLE ONLY public.users
 
 ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_username_unique UNIQUE (username);
+
+
+--
+-- Name: account_names_free; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX account_names_free ON public.account_names USING btree (free_at) WHERE (state = 'held'::text);
+
+
+--
+-- Name: account_names_one_current; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX account_names_one_current ON public.account_names USING btree (user_id) WHERE (state = 'current'::text);
+
+
+--
+-- Name: account_names_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX account_names_user ON public.account_names USING btree (user_id);
+
+
+--
+-- Name: account_renames_current; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX account_renames_current ON public.account_renames USING btree (current);
+
+
+--
+-- Name: account_renames_previous; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX account_renames_previous ON public.account_renames USING btree (previous);
+
+
+--
+-- Name: account_renames_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX account_renames_user ON public.account_renames USING btree (user_id, accepted_at DESC);
+
+
+--
+-- Name: account_security_events_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX account_security_events_user ON public.account_security_events USING btree (user_id, at DESC, id DESC);
+
+
+--
+-- Name: auth_grants_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX auth_grants_expiry ON public.auth_grants USING btree (expires_at);
+
+
+--
+-- Name: auth_grants_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX auth_grants_user ON public.auth_grants USING btree (user_id);
 
 
 --
@@ -5459,6 +6103,13 @@ CREATE UNIQUE INDEX collections_unique_top_level_name ON public.collections USIN
 
 
 --
+-- Name: device_registration_challenges_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX device_registration_challenges_expiry ON public.device_registration_challenges USING btree (expires_at);
+
+
+--
 -- Name: drive_federation_mutations_share_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5477,6 +6128,20 @@ CREATE INDEX federated_incoming_shares_remote_domain_idx ON public.federated_inc
 --
 
 CREATE INDEX federated_outgoing_file_shares_file_idx ON public.federated_outgoing_file_shares USING btree (file_id);
+
+
+--
+-- Name: federated_outgoing_file_shares_recipient; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX federated_outgoing_file_shares_recipient ON public.federated_outgoing_file_shares USING btree (recipient_domain, recipient_account_id);
+
+
+--
+-- Name: federated_outgoing_shares_recipient; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX federated_outgoing_shares_recipient ON public.federated_outgoing_shares USING btree (recipient_domain, recipient_account_id);
 
 
 --
@@ -6054,6 +6719,27 @@ CREATE INDEX live_location_streams_expires_idx ON public.live_location_streams U
 
 
 --
+-- Name: mail_addresses_address; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX mail_addresses_address ON public.mail_addresses USING btree (address);
+
+
+--
+-- Name: mail_addresses_live; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX mail_addresses_live ON public.mail_addresses USING btree (folded) WHERE (state <> 'freed'::text);
+
+
+--
+-- Name: mail_group_signing_shares_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX mail_group_signing_shares_user ON public.mail_group_signing_shares USING btree (user_id);
+
+
+--
 -- Name: mail_messages_expiring; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6079,6 +6765,27 @@ CREATE INDEX mail_outbox_due ON public.mail_outbox USING btree (deliver_at) WHER
 --
 
 CREATE UNIQUE INDEX mail_outbox_one_per_draft ON public.mail_outbox USING btree (draft_id) WHERE (state = ANY (ARRAY['pending'::text, 'sending'::text]));
+
+
+--
+-- Name: opaque_login_states_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX opaque_login_states_expiry ON public.opaque_login_states USING btree (expires_at);
+
+
+--
+-- Name: opaque_login_states_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX opaque_login_states_name ON public.opaque_login_states USING btree (canonical_name, expires_at);
+
+
+--
+-- Name: opaque_login_states_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX opaque_login_states_source ON public.opaque_login_states USING btree (source, expires_at);
 
 
 --
@@ -6117,10 +6824,52 @@ CREATE INDEX public_shares_file_target_idx ON public.public_shares USING btree (
 
 
 --
+-- Name: registration_codes_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX registration_codes_created_at ON public.registration_codes USING btree (created_at DESC);
+
+
+--
+-- Name: remote_account_renames_addresses; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX remote_account_renames_addresses ON public.remote_account_renames USING gin (addresses);
+
+
+--
+-- Name: remote_collab_devices_incarnation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX remote_collab_devices_incarnation ON public.remote_collab_devices USING btree (domain, incarnation_id);
+
+
+--
+-- Name: rename_announce_outbox_due; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX rename_announce_outbox_due ON public.rename_announce_outbox USING btree (next_attempt_at);
+
+
+--
 -- Name: user_devices_active; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX user_devices_active ON public.user_devices USING btree (user_id) WHERE is_active;
+
+
+--
+-- Name: user_devices_session; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX user_devices_session ON public.user_devices USING btree (session_id);
+
+
+--
+-- Name: users_one_break_glass; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX users_one_break_glass ON public.users USING btree ((true)) WHERE is_break_glass;
 
 
 --
@@ -6229,6 +6978,46 @@ CREATE TRIGGER mail_messages_updated BEFORE UPDATE ON public.mail_messages FOR E
 
 
 --
+-- Name: account_heads account_heads_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_heads
+    ADD CONSTRAINT account_heads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: account_names account_names_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_names
+    ADD CONSTRAINT account_names_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: account_renames account_renames_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_renames
+    ADD CONSTRAINT account_renames_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: account_security_events account_security_events_admin_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_security_events
+    ADD CONSTRAINT account_security_events_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: account_security_events account_security_events_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_security_events
+    ADD CONSTRAINT account_security_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: album_items album_items_added_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6250,6 +7039,30 @@ ALTER TABLE ONLY public.album_items
 
 ALTER TABLE ONLY public.album_items
     ADD CONSTRAINT album_items_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
+
+
+--
+-- Name: auth_grants auth_grants_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.auth_grants
+    ADD CONSTRAINT auth_grants_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.auth_sessions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: auth_grants auth_grants_target_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.auth_grants
+    ADD CONSTRAINT auth_grants_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: auth_grants auth_grants_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.auth_grants
+    ADD CONSTRAINT auth_grants_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --
@@ -6429,11 +7242,27 @@ ALTER TABLE ONLY public.chat_backups
 
 
 --
+-- Name: chat_call_link_knocks chat_call_link_knocks_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_call_link_knocks
+    ADD CONSTRAINT chat_call_link_knocks_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: chat_call_link_knocks chat_call_link_knocks_room_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.chat_call_link_knocks
     ADD CONSTRAINT chat_call_link_knocks_room_id_fkey FOREIGN KEY (room_id) REFERENCES public.chat_call_links(room_id) ON DELETE CASCADE;
+
+
+--
+-- Name: chat_call_link_seats chat_call_link_seats_account_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.chat_call_link_seats
+    ADD CONSTRAINT chat_call_link_seats_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --
@@ -6973,6 +7802,14 @@ ALTER TABLE ONLY public.chat_ws_tickets
 
 
 --
+-- Name: collab_revocation_marks collab_revocation_marks_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collab_revocation_marks
+    ADD CONSTRAINT collab_revocation_marks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: collection_key_epoch_history collection_key_epoch_history_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7066,6 +7903,14 @@ ALTER TABLE ONLY public.contact_groups
 
 ALTER TABLE ONLY public.contacts
     ADD CONSTRAINT contacts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: device_registration_challenges device_registration_challenges_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.device_registration_challenges
+    ADD CONSTRAINT device_registration_challenges_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --
@@ -7453,6 +8298,30 @@ ALTER TABLE ONLY public.mail_group_objects
 
 
 --
+-- Name: mail_group_signers mail_group_signers_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mail_group_signers
+    ADD CONSTRAINT mail_group_signers_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.mail_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mail_group_signing_shares mail_group_signing_shares_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mail_group_signing_shares
+    ADD CONSTRAINT mail_group_signing_shares_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.mail_groups(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mail_group_signing_shares mail_group_signing_shares_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.mail_group_signing_shares
+    ADD CONSTRAINT mail_group_signing_shares_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: mail_groups mail_groups_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7589,6 +8458,22 @@ ALTER TABLE ONLY public.mail_settings
 
 
 --
+-- Name: opaque_login_states opaque_login_states_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opaque_login_states
+    ADD CONSTRAINT opaque_login_states_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.auth_sessions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: opaque_login_states opaque_login_states_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.opaque_login_states
+    ADD CONSTRAINT opaque_login_states_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: pass_pin_failures pass_pin_failures_sign_in_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7618,14 +8503,6 @@ ALTER TABLE ONLY public.pass_pins
 
 ALTER TABLE ONLY public.pass_settings
     ADD CONSTRAINT pass_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
-
-
---
--- Name: pass_vault_secrets pass_vault_secrets_file_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.pass_vault_secrets
-    ADD CONSTRAINT pass_vault_secrets_file_id_fkey FOREIGN KEY (file_id) REFERENCES public.files(id) ON DELETE CASCADE;
 
 
 --
@@ -7701,6 +8578,38 @@ ALTER TABLE ONLY public.public_shares
 
 
 --
+-- Name: registration_code_uses registration_code_uses_code_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_code_uses
+    ADD CONSTRAINT registration_code_uses_code_id_fkey FOREIGN KEY (code_id) REFERENCES public.registration_codes(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_code_uses registration_code_uses_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_code_uses
+    ADD CONSTRAINT registration_code_uses_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: registration_codes registration_codes_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_codes
+    ADD CONSTRAINT registration_codes_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: registration_codes registration_codes_revoked_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.registration_codes
+    ADD CONSTRAINT registration_codes_revoked_by_fkey FOREIGN KEY (revoked_by) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: uploads uploads_collection_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7714,6 +8623,14 @@ ALTER TABLE ONLY public.uploads
 
 ALTER TABLE ONLY public.uploads
     ADD CONSTRAINT uploads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_devices user_devices_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_devices
+    ADD CONSTRAINT user_devices_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.auth_sessions(id) ON DELETE SET NULL;
 
 
 --
@@ -7763,13 +8680,37 @@ ALTER TABLE ONLY public.user_ui_preferences
 
 
 --
--- Data for Name: admin_audit_log; Type: TABLE DATA; Schema: public; Owner: -
---
-
-
-
---
 -- Data for Name: users; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: account_heads; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: account_names; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: account_renames; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: account_security_events; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: admin_audit_log; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -7800,6 +8741,12 @@ ALTER TABLE ONLY public.user_ui_preferences
 
 --
 -- Data for Name: auth_sessions; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: auth_grants; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -8303,6 +9250,12 @@ ALTER TABLE ONLY public.user_ui_preferences
 
 
 --
+-- Data for Name: collab_revocation_marks; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
 -- Data for Name: collection_key_epoch_history; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -8334,6 +9287,12 @@ ALTER TABLE ONLY public.user_ui_preferences
 
 --
 -- Data for Name: contact_group_members; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: device_registration_challenges; Type: TABLE DATA; Schema: public; Owner: -
 --
 
 
@@ -8582,6 +9541,18 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
+-- Data for Name: mail_group_signers; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: mail_group_signing_shares; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
 -- Data for Name: mail_identities; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -8648,6 +9619,18 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
+-- Data for Name: opaque_login_states; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: opaque_server_setups; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
 -- Data for Name: pass_pin_failures; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -8702,6 +9685,54 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 
 
 --
+-- Data for Name: registration_codes; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: registration_code_uses; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: remote_account_renames; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: remote_collab_devices; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: remote_revocation_marks; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: remote_revoked_device_keys; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: rename_announce_outbox; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
+-- Data for Name: retired_account_ids; Type: TABLE DATA; Schema: public; Owner: -
+--
+
+
+
+--
 -- Data for Name: sealed_sender_generated_certificates; Type: TABLE DATA; Schema: public; Owner: -
 --
 
@@ -8717,7 +9748,6 @@ INSERT INTO public.federation_policy VALUES (true, true, '2026-10-13 12:07:28.27
 -- Data for Name: site_settings; Type: TABLE DATA; Schema: public; Owner: -
 --
 
-INSERT INTO public.site_settings VALUES ('registration_enabled', 'true');
 
 
 --
@@ -8778,6 +9808,13 @@ SELECT pg_catalog.setval('public.mail_sending_events_id_seq', 1, false);
 --
 
 SELECT pg_catalog.setval('public.user_devices_id_seq', 1, false);
+
+
+--
+-- Name: user_devices_revocation_seq; Type: SEQUENCE SET; Schema: public; Owner: -
+--
+
+SELECT pg_catalog.setval('public.user_devices_revocation_seq', 1, false);
 
 
 --

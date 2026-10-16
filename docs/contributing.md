@@ -107,6 +107,8 @@ The chain starts at `20261013000000_baseline`: every migration up to the
 clean-slate release, squashed into one schema. `scripts/check-migration-baseline.sh
 <old-ref>` proves a squash equal to the chain it replaces (both applied to an
 empty Postgres 16, compared by schema and rows), and `--generate` writes it.
+Plans under `docs/plans/` name migrations as they were written before the
+squash; what they describe is now part of the baseline.
 
 The rules:
 
