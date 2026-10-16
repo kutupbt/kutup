@@ -689,14 +689,17 @@ pub struct DevicePreKeyBundle {
     pub one_time_pre_key: Option<EcPreKey>,
 }
 
-/// `GET /api/chat/users/{username}/keys` — bundles for every active device.
+/// `GET /api/chat/accounts/{accountId}/keys` — bundles for every active device.
 /// A 1:1 conversation encrypts to all of the peer's devices (and the sender's other
 /// devices, for sync — the client fetches its own bundle list too).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UserPreKeyBundlesResponse {
-    pub username: String,
+    /// The account the bundles are for (server and account id); a client
+    /// checks it is the one it asked for and the one the manifest names.
+    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+    pub account: AccountRef,
     pub devices: Vec<DevicePreKeyBundle>,
     /// The signed device manifest (§5.3). A verifying client checks each
     /// returned bundle against it before establishing a session. Absence is
