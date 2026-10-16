@@ -789,11 +789,11 @@ export function ConversationView({
             <DialogDescription>{t('chat.calls.offerDescription')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={dropCallParam}>
+            {/* The safe action is the default: a call from a link needs a deliberate press. */}
+            <Button variant="outline" autoFocus onClick={dropCallParam}>
               {t('common.cancel')}
             </Button>
             <Button
-              autoFocus
               onClick={() => {
                 const media = offeredCall
                 dropCallParam()
