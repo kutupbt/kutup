@@ -68,6 +68,8 @@ pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
 };
+#[cfg(feature = "openapi")]
+pub use identity::AccountRefSchema;
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use invite_link::{
     InviteJoinRequestV1, InviteLinkCallV1, InviteLinkOperationV1, InviteLinkPreviewV1,
@@ -339,8 +341,11 @@ pub struct AccountManifestDriveKeysV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountManifestV1 {
     pub manifest_version: u16,
-    /// Canonical local or federated routing address; never a display name.
-    pub account: String,
+    /// The account: its server and permanent account id (docs/plans/account-ids.md),
+    /// never a name. The server refuses a manifest naming any other account than
+    /// the one publishing it.
+    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+    pub account: AccountRef,
     /// Domain-separated SHA-256 identifier derived from the authority public
     /// key. A destructive account wipe necessarily starts another incarnation.
     pub incarnation_id: String,
@@ -371,7 +376,7 @@ impl AccountManifestV1 {
         let mut out = Vec::with_capacity(256 + self.devices.len() * 96);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.manifest_version.to_be_bytes());
-        push_string(&mut out, &self.account)?;
+        out.extend_from_slice(&self.account.bytes());
         out.extend_from_slice(&decode_lower_hex_32("incarnationId", &self.incarnation_id)?);
         out.extend_from_slice(&self.sequence.to_be_bytes());
         push_optional(&mut out, self.previous_hash.as_deref())?;
@@ -441,13 +446,6 @@ impl AccountManifestV1 {
 
         if self.manifest_version != ACCOUNT_MANIFEST_VERSION {
             return Err("unsupported account manifest version".into());
-        }
-        let account: AccountAddress = self
-            .account
-            .parse()
-            .map_err(|error: AddressError| error.to_string())?;
-        if account.canonical() != self.account {
-            return Err("manifest account is not canonical".into());
         }
         if self.sequence == 0 {
             return Err("manifest sequence must be positive".into());
@@ -565,7 +563,8 @@ pub const MAX_ACCOUNT_MANIFEST_HISTORY_PAGE: usize = 64;
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountManifestHistoryPageV1 {
-    pub account: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+    pub account: AccountRef,
     pub from_sequence: u64,
     pub to_sequence: u64,
     pub manifests: Vec<AccountManifestV1>,
@@ -575,12 +574,7 @@ pub struct AccountManifestHistoryPageV1 {
 
 impl AccountManifestHistoryPageV1 {
     pub fn validate(&self) -> Result<(), String> {
-        let account: AccountAddress = self
-            .account
-            .parse()
-            .map_err(|error: AddressError| error.to_string())?;
-        if account.canonical() != self.account
-            || self.from_sequence == 0
+        if self.from_sequence == 0
             || self.to_sequence < self.from_sequence
             || self.manifests.is_empty()
             || self.manifests.len() > MAX_ACCOUNT_MANIFEST_HISTORY_PAGE
@@ -969,7 +963,8 @@ mod tests {
         let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
         let mut manifest = AccountManifestV1 {
             manifest_version: ACCOUNT_MANIFEST_VERSION,
-            account: "alice@example.test".into(),
+            account: AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap(),
             incarnation_id: hex::encode(incarnation.finalize()),
             sequence: 1,
             previous_hash: None,

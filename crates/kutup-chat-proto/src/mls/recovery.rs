@@ -169,7 +169,8 @@ impl MlsIncarnationRecoveryV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecoverMlsConversationRequestV1 {
     pub recovery: MlsIncarnationRecoveryV1,
-    pub creator: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub creator: AccountRef,
     pub creator_device_id: u32,
     pub members: Vec<MlsConversationMemberV1>,
     pub deliveries: Vec<MlsMembershipDeliveryV1>,
@@ -179,19 +180,11 @@ impl RecoverMlsConversationRequestV1 {
     pub fn validate_shape(&self) -> Result<(), String> {
         self.recovery.validate_shape()?;
         let plan = &self.recovery.plan;
-        let canonical_creator: AccountAddress = self
-            .creator
-            .canonical()
-            .parse()
-            .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical_creator != self.creator {
-            return Err("MLS recovery creator must be canonical and federated".into());
-        }
         if !(1..=127).contains(&self.creator_device_id)
             || !self
                 .members
                 .iter()
-                .any(|member| member.address == self.creator)
+                .any(|member| member.account == self.creator)
         {
             return Err("MLS recovery creator is not an exact preserved device".into());
         }
@@ -205,7 +198,7 @@ impl RecoverMlsConversationRequestV1 {
             .iter()
             .map(|member| {
                 member.validate()?;
-                Ok::<String, String>(member.address.server.clone())
+                Ok::<String, String>(member.account.server.clone())
             })
             .collect::<Result<BTreeSet<_>, _>>()?
             .into_iter()
@@ -241,7 +234,7 @@ impl RecoverMlsConversationRequestV1 {
             let expected_local = self
                 .members
                 .iter()
-                .filter(|member| member.address.server == delivery.destination)
+                .filter(|member| member.account.server == delivery.destination)
                 .cloned()
                 .collect::<Vec<_>>();
             if delivery.local_members_after != expected_local {
@@ -252,11 +245,11 @@ impl RecoverMlsConversationRequestV1 {
                 .iter()
                 .any(|envelope| envelope.kind != MlsMembershipEnvelopeKindV1::Welcome)
                 || expected_local.iter().any(|member| {
-                    member.address != self.creator
+                    member.account != self.creator
                         && !delivery
                             .envelopes
                             .iter()
-                            .any(|envelope| envelope.recipient == member.address)
+                            .any(|envelope| envelope.recipient == member.account)
                 })
                 || delivery.envelopes.iter().any(|envelope| {
                     envelope.recipient == self.creator

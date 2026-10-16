@@ -371,7 +371,8 @@ pub struct MlsOwnerCandidateV1 {
     pub protocol_version: u16,
     pub conversation_id: Uuid,
     pub incarnation: u64,
-    pub account: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub account: AccountRef,
     pub owner_id: String,
     pub public_key: String,
     pub created_at: i64,
@@ -402,7 +403,7 @@ impl MlsOwnerCandidateV1 {
         out.extend_from_slice(&self.protocol_version.to_be_bytes());
         out.extend_from_slice(self.conversation_id.as_bytes());
         out.extend_from_slice(&self.incarnation.to_be_bytes());
-        push_string(&mut out, &self.account.canonical())?;
+        push_string(&mut out, &self.account.to_string())?;
         push_string(&mut out, &self.owner_id)?;
         push_string(&mut out, &self.public_key)?;
         out.extend_from_slice(&self.created_at.to_be_bytes());
@@ -658,7 +659,8 @@ impl MlsConversationGenesisV1 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsConversationMemberV1 {
-    pub address: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub account: AccountRef,
     pub is_admin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
@@ -666,14 +668,6 @@ pub struct MlsConversationMemberV1 {
 
 impl MlsConversationMemberV1 {
     pub fn validate(&self) -> Result<(), String> {
-        let canonical: AccountAddress = self
-            .address
-            .canonical()
-            .parse()
-            .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.address {
-            return Err("MLS member address must be canonical and federated".into());
-        }
         if let Some(owner_id) = &self.owner_id {
             validate_hash("ownerId", owner_id)?;
             if !self.is_admin {
@@ -691,21 +685,15 @@ impl MlsConversationMemberV1 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsConversationDeviceV1 {
-    pub address: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub account: AccountRef,
     pub device_id: u32,
 }
 
 impl MlsConversationDeviceV1 {
     pub fn validate(&self) -> Result<(), String> {
-        let canonical: AccountAddress = self
-            .address
-            .canonical()
-            .parse()
-            .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.address || !(1..=127).contains(&self.device_id) {
-            return Err(
-                "MLS conversation device must have a canonical account and id 1-127".into(),
-            );
+        if !(1..=127).contains(&self.device_id) {
+            return Err("MLS conversation device id must be 1-127".into());
         }
         Ok(())
     }
@@ -939,7 +927,7 @@ impl MlsPrivateControlStateV1 {
         let mut roster_owner_ids = BTreeSet::new();
         for member in &self.roster {
             member.validate()?;
-            let address = member.address.canonical();
+            let address = member.account.to_string();
             if previous
                 .as_ref()
                 .is_some_and(|prior: &String| address <= *prior)
@@ -989,7 +977,7 @@ fn validate_private_roster_owner_bindings(
     let mut admin_count = 0usize;
     for member in roster {
         member.validate()?;
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         if previous
             .as_ref()
             .is_some_and(|prior: &String| address <= *prior)
@@ -1060,12 +1048,12 @@ impl CreateMlsConversationRequestV1 {
         let mut admins = 0usize;
         for member in &self.members {
             member.validate()?;
-            let address = member.address.canonical();
+            let address = member.account.to_string();
             if previous.as_ref().is_some_and(|prior| &address <= prior) {
-                return Err("MLS roster must be strictly ordered by canonical address".into());
+                return Err("MLS roster must be strictly ordered by account".into());
             }
             previous = Some(address);
-            member_domains.insert(member.address.server.as_str());
+            member_domains.insert(member.account.server.as_str());
             admins += usize::from(member.is_admin);
             if let Some(owner_id) = &member.owner_id {
                 if !owner_ids.insert(owner_id.as_str()) {
@@ -1207,7 +1195,8 @@ pub struct MlsInvitationFeedbackV1 {
     pub protocol_version: u16,
     pub conversation_id: Uuid,
     pub incarnation: u64,
-    pub member: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub member: AccountRef,
     pub invited_epoch: u64,
     pub decision: MlsInvitationFeedbackDecisionV1,
     pub decided_at: i64,
@@ -1215,11 +1204,6 @@ pub struct MlsInvitationFeedbackV1 {
 
 impl MlsInvitationFeedbackV1 {
     pub fn validate(&self) -> Result<(), String> {
-        let canonical: AccountAddress = self
-            .member
-            .canonical()
-            .parse()
-            .map_err(|error: crate::AddressError| error.to_string())?;
         if self.protocol_version != MLS_INVITATION_FEEDBACK_VERSION
             || self.conversation_id.is_nil()
             || self.incarnation == 0
@@ -1227,7 +1211,6 @@ impl MlsInvitationFeedbackV1 {
             || self.invited_epoch == 0
             || self.invited_epoch > i64::MAX as u64
             || self.decided_at < 0
-            || canonical != self.member
         {
             return Err("MLS invitation feedback has invalid identifiers or member".into());
         }
@@ -1415,14 +1398,14 @@ impl FederatedMlsGenesisReplicaV1 {
         let mut previous_address = None;
         for member in &self.members {
             member.validate()?;
-            let domain = member.address.server.as_str();
+            let domain = member.account.server.as_str();
             if destination_domain.is_some_and(|expected| expected != domain) {
                 return Err(
                     "federated MLS genesis contains members from multiple destinations".into(),
                 );
             }
             destination_domain = Some(domain);
-            let address = member.address.canonical();
+            let address = member.account.to_string();
             if previous_address
                 .as_ref()
                 .is_some_and(|previous: &String| address <= *previous)
@@ -1448,7 +1431,7 @@ impl FederatedMlsGenesisReplicaV1 {
     pub fn includes_member_domain(&self, domain: &str) -> bool {
         self.members
             .iter()
-            .any(|member| member.address.server == domain)
+            .any(|member| member.account.server == domain)
     }
 }
 
@@ -1648,7 +1631,8 @@ impl TryFrom<u16> for MlsMembershipEnvelopeKindV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsMembershipEnvelopeV1 {
     pub envelope_id: Uuid,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub device_id: u32,
     pub kind: MlsMembershipEnvelopeKindV1,
     pub opaque_message: String,
@@ -1659,15 +1643,9 @@ impl MlsMembershipEnvelopeV1 {
         if self.envelope_id.is_nil() {
             return Err("MLS membership envelope id must not be nil".into());
         }
-        let canonical: AccountAddress = self
-            .recipient
-            .canonical()
-            .parse()
-            .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.recipient || self.recipient.server != destination {
+        if self.recipient.server != destination {
             return Err(
-                "MLS membership envelope recipient must be canonical and local to its destination"
-                    .into(),
+                "MLS membership envelope recipient must be local to its destination".into(),
             );
         }
         if !(1..=127).contains(&self.device_id) {
@@ -1739,10 +1717,10 @@ impl MlsMembershipDeliveryV1 {
         let mut previous_member = None;
         for member in &self.local_members_after {
             member.validate()?;
-            if member.address.server != self.destination.as_str() {
+            if member.account.server != self.destination.as_str() {
                 return Err("MLS membership delivery contains a non-local member".into());
             }
-            let address = member.address.canonical();
+            let address = member.account.to_string();
             if previous_member
                 .as_ref()
                 .is_some_and(|prior: &String| address <= *prior)
@@ -1759,7 +1737,7 @@ impl MlsMembershipDeliveryV1 {
         if self
             .local_devices_after
             .iter()
-            .any(|device| device.address.server != self.destination.as_str())
+            .any(|device| device.account.server != self.destination.as_str())
         {
             return Err("MLS membership delivery contains a non-local device".into());
         }
@@ -1767,7 +1745,7 @@ impl MlsMembershipDeliveryV1 {
         let mut previous_envelope = None;
         for envelope in &self.envelopes {
             let key = (
-                envelope.recipient.canonical(),
+                envelope.recipient.to_string(),
                 envelope.device_id,
                 u16::from(envelope.kind),
                 envelope.envelope_id,
@@ -1829,7 +1807,7 @@ fn validate_conversation_devices(
     }
     let member_addresses = members
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     let mut covered = BTreeSet::new();
     let mut previous = None;
@@ -1837,7 +1815,7 @@ fn validate_conversation_devices(
     let mut current_account_devices = 0usize;
     for device in devices {
         device.validate()?;
-        let address = device.address.canonical();
+        let address = device.account.to_string();
         if !member_addresses.contains(&address) {
             return Err("MLS conversation device is absent from the account roster".into());
         }
@@ -1877,7 +1855,7 @@ pub fn roster_commitment(members: &[MlsConversationMemberV1]) -> Result<String, 
     let mut previous: Option<String> = None;
     for member in members {
         member.validate()?;
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         if previous.as_ref().is_some_and(|prior| &address <= prior) {
             return Err("MLS roster must be strictly ordered".into());
         }

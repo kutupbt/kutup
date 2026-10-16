@@ -281,7 +281,8 @@ pub struct MlsKeyPackageCountResponseV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnonymousMlsKeyPackageRequestV1 {
     pub protocol_version: u16,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     /// Canonical padded base64 16-byte delivery capability.
     pub capability: String,
 }
@@ -294,7 +295,8 @@ pub struct AnonymousMlsKeyPackageRequestV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentifiedMlsKeyPackageRequestV1 {
     pub protocol_version: u16,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub conversation_id: Uuid,
     pub incarnation: u64,
 }
@@ -316,7 +318,8 @@ impl IdentifiedMlsKeyPackageRequestV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FederatedIdentifiedMlsKeyPackageRequestV1 {
     pub origin_domain: String,
-    pub requester: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub requester: AccountRef,
     pub request: IdentifiedMlsKeyPackageRequestV1,
 }
 
@@ -346,7 +349,8 @@ impl AnonymousMlsKeyPackageRequestV1 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsKeyPackageBundleV1 {
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub manifest: AccountManifestV1,
     pub key_packages: Vec<MlsKeyPackageV1>,
 }
@@ -357,7 +361,7 @@ impl MlsKeyPackageBundleV1 {
             return Err("anonymous MLS KeyPackage response shape is invalid".into());
         }
         self.manifest.verify()?;
-        if self.manifest.account != self.recipient.canonical() {
+        if self.manifest.account != self.recipient {
             return Err("MLS KeyPackage manifest belongs to another account".into());
         }
         let mut devices = BTreeSet::new();
@@ -416,7 +420,8 @@ impl AnonymousMlsDeviceEnvelopeV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnonymousMlsSubmissionV1 {
     pub protocol_version: u16,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub send_id: Uuid,
     pub capability: String,
     pub suite: MlsAnonymousDeliverySuiteV1,
@@ -459,7 +464,7 @@ impl AnonymousMlsSubmissionV1 {
 }
 
 pub fn anonymous_mls_delivery_aad(
-    recipient: &AccountAddress,
+    recipient: &AccountRef,
     send_id: Uuid,
     suite: MlsAnonymousDeliverySuiteV1,
     device_id: u32,
@@ -469,7 +474,7 @@ pub fn anonymous_mls_delivery_aad(
     }
     let mut aad = Vec::with_capacity(256);
     aad.extend_from_slice(ANONYMOUS_MLS_DELIVERY_CONTEXT);
-    push_string(&mut aad, &recipient.canonical())?;
+    aad.extend_from_slice(&recipient.bytes());
     aad.extend_from_slice(&device_id.to_be_bytes());
     aad.extend_from_slice(send_id.as_bytes());
     aad.extend_from_slice(&u16::from(suite).to_be_bytes());
@@ -502,7 +507,7 @@ pub fn derive_group_delivery_capability(
     conversation_id: Uuid,
     incarnation: u64,
     epoch: u64,
-    recipient: &AccountAddress,
+    recipient: &AccountRef,
 ) -> Result<[u8; 16], String> {
     if exporter_secret.len() < 16 || conversation_id.is_nil() || incarnation == 0 {
         return Err("group delivery capability input is invalid".into());
@@ -512,7 +517,7 @@ pub fn derive_group_delivery_capability(
     info.extend_from_slice(conversation_id.as_bytes());
     info.extend_from_slice(&incarnation.to_be_bytes());
     info.extend_from_slice(&epoch.to_be_bytes());
-    push_string(&mut info, &recipient.canonical())?;
+    info.extend_from_slice(&recipient.bytes());
     let mut capability = [0u8; 16];
     Hkdf::<Sha256>::new(None, exporter_secret)
         .expand(&info, &mut capability)

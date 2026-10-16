@@ -13,7 +13,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
-use crate::{AccountAddress, AccountManifestV1};
+use crate::{AccountManifestV1, AccountRef};
 
 pub const MLS_PROTOCOL_VERSION: u16 = 1;
 pub const MLS_ORDERING_SERVICE_POLICY_VERSION: u16 = 1;
