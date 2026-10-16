@@ -505,6 +505,7 @@ pub async fn rename(
     // Peers learn of it from the announce, sent after this commits.
     crate::remote_renames::enqueue(&mut tx, &server, &incarnation, view.sequence).await?;
     tx.commit().await?;
+    crate::remote_renames::announce_soon();
     tracing::info!(%user_id, sequence = view.sequence, "account renamed");
     Ok(Json(RenameView {
         username: new_name,

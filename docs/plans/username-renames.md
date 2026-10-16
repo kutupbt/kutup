@@ -593,7 +593,8 @@ Migration `20261015010000_account_renames_federation`; `crate::remote_renames`.
   (the plan's `/api/fed/accounts/…` above). No new federation feature.
 - **Announce.** In the rename's transaction, one outbox row per pinned peer not
   quarantined (`trust_state <> 'quarantined'`: "verified" in the trust table is the
-  rare admin-verified state). A worker sends the whole chain every 30 seconds, with
+  rare admin-verified state). A worker sends the whole chain at once after the rename
+commits and then every 30 seconds, with
   backoff to 6 hours, for 7 days; a peer without either feature, or one this server
   may not send to, is dropped at once (it learns at its next lookup).
 - **Keeping chains** (`remote_account_renames`, one per domain and incarnation): kept

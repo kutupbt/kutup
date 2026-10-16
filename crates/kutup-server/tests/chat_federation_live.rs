@@ -3326,16 +3326,28 @@ fn account_ids_phase(c: &Client, a: &str, b: &str) {
         "find aid_bob again",
     );
     assert_eq!(now_found["accountId"], carol.person.account_id.as_str());
-    // Bob, by his id, is still Bob, under his new name.
-    let by_id = json_response(
-        c.get(format!("{a}/api/users/by-id/{}", bob.person.account_id))
-            .query(&[("server", domain_b.as_str())])
-            .bearer_auth(&owner.token)
-            .send()
-            .unwrap(),
-        "Bob by id",
-    );
-    assert_eq!(by_id["account"], format!("aid_bobby@{domain_b}"));
+    // Bob, by his id, is still Bob, under his new name. A fetched Bob for
+    // the shares, before he renamed, and keeps that answer half a minute;
+    // B announces the rename as it commits, and the announce drops it. The
+    // wait is for that delivery only, well inside the half minute.
+    let by_id = || {
+        json_response(
+            c.get(format!("{a}/api/users/by-id/{}", bob.person.account_id))
+                .query(&[("server", domain_b.as_str())])
+                .bearer_auth(&owner.token)
+                .send()
+                .unwrap(),
+            "Bob by id",
+        )
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut found = by_id();
+    while found["account"] != format!("aid_bobby@{domain_b}") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(250));
+        found = by_id();
+    }
+    assert_eq!(found["account"], format!("aid_bobby@{domain_b}"), "{found}");
+    assert_eq!(found["accountId"], bob.person.account_id.as_str());
 }
 
 #[test]

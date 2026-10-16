@@ -99,6 +99,24 @@ fn slot(person: &AccountRef) -> Slot {
     fetches.entry(person.to_string()).or_default().clone()
 }
 
+/// Forgets what was fetched of `server`'s account `incarnation_id` (its
+/// rename reached this server: remote_renames), so the next lookup asks
+/// again and shows the new name at once. A fetch in flight may predate the
+/// rename, so its slot goes too; whoever waits on it keeps their answer.
+pub(crate) fn forget_remote(server: &str, incarnation_id: &str) {
+    let suffix = format!("@{server}");
+    let mut fetches = FETCHES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    fetches.retain(|person, slot| {
+        !person.ends_with(&suffix)
+            || slot.try_lock().is_ok_and(|kept| match kept.as_ref() {
+                Some((_, Fetched::Found(found))) => found.account_incarnation_id != incarnation_id,
+                _ => true,
+            })
+    });
+}
+
 /// `GET /api/users/by-id/{accountId}?server=` — an account by its permanent
 /// id: its address now (server-asserted, shown as a label) and its identity.
 /// Another server's is asked of it through federation (its pinned identity,
@@ -288,5 +306,40 @@ mod tests {
         *again.lock().await = Some((Instant::now() - FRESH_FOR, Fetched::Missing));
         drop(again);
         assert!(slot(&alice).lock().await.is_none());
+    }
+
+    fn found(server: &str, id: &str, incarnation: &str) -> Fetched {
+        Fetched::Found(Box::new(AccountLookupResponse {
+            username: "old_name".into(),
+            server: server.into(),
+            account_id: id.into(),
+            account: format!("old_name@{server}"),
+            drive_hpke_public_key: String::new(),
+            account_incarnation_id: incarnation.into(),
+            drive_signing_public_key: String::new(),
+            account_authority_public_key: String::new(),
+            drive_key_binding: None,
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_rename_forgets_that_accounts_answer_only() {
+        let (renamed, other) = ("a".repeat(64), "b".repeat(64));
+        let bob = AccountRef::new("forget.test", "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d").unwrap();
+        let carol = AccountRef::new("forget.test", "2c3d4e5f-6071-4b8c-9d0e-1f2a3b4c5d6e").unwrap();
+        // The same incarnation id on another server is another account.
+        let elsewhere =
+            AccountRef::new("elsewhere.test", "1b2c3d4e-5f60-4a7b-8c9d-0e1f2a3b4c5d").unwrap();
+        for (person, incarnation) in [(&bob, &renamed), (&carol, &other), (&elsewhere, &renamed)] {
+            *slot(person).lock().await = Some((
+                Instant::now(),
+                found(&person.server, &person.account_id, incarnation),
+            ));
+        }
+        forget_remote("forget.test", &renamed);
+        // Bob is asked again; Carol and the other server's account are not.
+        assert!(slot(&bob).lock().await.is_none());
+        assert!(slot(&carol).lock().await.is_some());
+        assert!(slot(&elsewhere).lock().await.is_some());
     }
 }
