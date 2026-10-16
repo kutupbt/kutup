@@ -109,12 +109,12 @@ export class KeysIdentityChanged extends UnverifiedKeys {
 async function pinned(keys: AddressKeys): Promise<AddressKeys> {
   const session = getSession()
   if (!session?.username) return keys
-  // A shared mailbox is no person: the first signer of its chain is pinned
-  // at its address (a handover keeps it; an administrator's new chain does
-  // not, and shows as a change). Pinned by the mailbox's id once the pin
-  // list knows groups (docs/plans/account-ids.md).
-  const pinnedKey = keys.group ? keys.group.signers[0] : keys.authorityPublicKey
-  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, pinnedKey)
+  // A shared mailbox is no person and has no address pin: its chain is
+  // verified on every lookup and guarded against rollback; group pins by
+  // (server, group id) come with the pin list's groups section
+  // (docs/plans/account-ids.md, slice 3).
+  if (keys.group) return keys
+  const verdict = await pinnedVerdict(await driveIdentityOf(session), keys.address, keys.authorityPublicKey)
   if (verdict.kind === 'changed') throw new KeysIdentityChanged(keys.address, verdict.now)
   return keys
 }

@@ -155,7 +155,8 @@ describe('an address’s key lists against what this device has seen', () => {
 describe('a shared mailbox’s key lists', () => {
   it('are its signers’ chain, and a chain cut back to before a handover is refused', async () => {
     const { deriveAccountIdentityKeys: derive, generateMailGroupKey, newMailGroupSigner, signMailGroupKeyList } = await import('@kutup/crypto')
-    pins.verdict = { kind: 'unknown' }
+    // No address pin is consulted for a shared mailbox: a person's changed pin there does not apply.
+    pins.verdict = { kind: 'changed' }
     forgetKeys()
     const groupId = crypto.randomUUID()
     const address = 'hr_team@kutup.dev'
