@@ -19,13 +19,30 @@ const bytesJson = (bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(byt
 const bytesBase64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64')
 const base64Bytes = (value: string) => new Uint8Array(Buffer.from(value, 'base64'))
 
+/** Refuses what Rust's backup format refuses here: a `sender` that is not `{ server, accountId }`. */
+function rustShaped(value: unknown): unknown {
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk)
+    if (!node || typeof node !== 'object') return
+    for (const [key, child] of Object.entries(node)) {
+      if (key === 'sender' && (typeof child !== 'object' || !child || !('accountId' in child) || !('server' in child))) {
+        throw new Error(`invalid type: ${typeof child} ${JSON.stringify(child)}, expected struct Wire`)
+      }
+      walk(child)
+    }
+  }
+  walk(value)
+  return value
+}
+
 vi.mock('@kutup/crypto/rustWasm', () => ({
   getCryptoWasm: vi.fn(async () => ({
     verifyChatBackupMetadata: (_authorization: unknown, manifest?: { baseCiphertextSha256: string }) => ({
       signerAuthorizationDigest: '1'.repeat(64),
       manifestDigest: manifest?.baseCiphertextSha256,
     }),
-    encodeChatBackupPlaintext: (value: unknown) => jsonBytes(value),
+    // As Rust's format does: a record's sender is an AccountRef, never a string.
+    encodeChatBackupPlaintext: (value: unknown) => jsonBytes(rustShaped(value)),
     decodeChatBackupPlaintext: (value: string) => bytesJson(base64Bytes(value)),
     sealChatBackupObject: (plaintext: Uint8Array) => bytesBase64(plaintext),
     openChatBackupObject: (ciphertext: string) => ciphertext,

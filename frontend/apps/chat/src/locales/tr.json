@@ -1081,6 +1081,10 @@
       "knownAs": "Bu, {{name}} olarak tanıdığın hesap.",
       "openAnyway": "Yine de aç",
       "continueAnyway": "Yine de devam et"
+    },
+    "openAddress": {
+      "looking": "{{address}} aranıyor…",
+      "back": "Sohbetlere dön"
     }
   },
   "boot": {

@@ -1081,6 +1081,10 @@
       "knownAs": "It is the account you know as {{name}}.",
       "openAnyway": "Open anyway",
       "continueAnyway": "Continue anyway"
+    },
+    "openAddress": {
+      "looking": "Looking up {{address}}…",
+      "back": "Back to chats"
     }
   },
   "boot": {

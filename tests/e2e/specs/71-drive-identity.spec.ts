@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { appUrl, finishNewKeys, newAccount, openDrive, registerAccount, signIn, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
+import { ADMIN_PASSWORD, appUrl, finishNewKeys, newAccount, openDrive, registerAccount, signIn, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 import { createNote, item, noteLive, openItem } from '../fixtures/drive'
 
 const PASSWORD = 'Deneme123*DriveIdentityPassword'
@@ -54,10 +54,12 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await adminPage.getByRole('row').filter({ hasText: alice.username }).first().click()
   await adminPage.getByRole('button', { name: 'Wipe account', exact: true }).click()
   const confirm = adminPage.getByRole('alertdialog')
-  await confirm.getByRole('textbox').fill(alice.username)
-  await confirm.getByRole('button', { name: 'Wipe account', exact: true }).click()
+  await confirm.getByLabel(`Type ${alice.username} to confirm`).fill(alice.username)
   const copy = adminPage.getByRole('button', { name: 'Copy' }).first()
-  await expect(copy).toBeVisible({ timeout: 30_000 })
+  // The administrator proves it is them (as spec 28), through the edge's sign-in limit.
+  await submitThroughRateLimit(adminPage, 'Wipe account', copy, () =>
+    confirm.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD),
+  )
   const temporary = (await copy.locator('xpath=preceding-sibling::*[1]').textContent())!.trim()
   await admin.close()
 

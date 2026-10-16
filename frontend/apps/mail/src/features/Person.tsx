@@ -53,9 +53,12 @@ function useKutupAccount(address: string, enabled: boolean) {
   })
 }
 
-/** Where Chat opens a direct conversation (`apps/chat` `pathForAddress`). */
-function chatUrl(account: string, call?: 'audio') {
-  return appUrl('chat', `/c/${encodeURIComponent(`direct:${account}`)}${call ? `?call=${call}` : ''}`)
+/**
+ * Chat with someone by their address (`apps/chat` `/to/:address`): Chat
+ * looks the address up and checks it, then opens that account's chat.
+ */
+function chatUrl(address: string, call?: 'audio') {
+  return appUrl('chat', `/to/${encodeURIComponent(address)}${call ? `?call=${call}` : ''}`)
 }
 
 function Item({ icon, children, onClick }: { icon: ReactNode; children: ReactNode; onClick: () => void }) {
