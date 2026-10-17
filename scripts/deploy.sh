@@ -256,6 +256,7 @@ for i in $images; do
   sed -i "s#^KUTUP_${var}_IMAGE=.*#KUTUP_${var}_IMAGE=$registry/$i:$tag@$digest#" .env
 done
 grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
+started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 docker compose up -d --wait
 docker compose restart nginx >/dev/null
 
@@ -267,8 +268,17 @@ docker compose exec -T postgres sh -c 'psql -U "${POSTGRES_USER:-kutup}" -d "${P
 errors="$(docker compose logs --no-color backend --since 3m 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
   | grep -cE ' ERROR |level=error|panicked' || true)"
 echo "backend error lines: $errors"
-docker compose logs stalwart-setup --since 5m 2>&1 | grep -q 'Authentication-Results' \
-  || { echo "deploy: stalwart-setup did not report Authentication-Results" >&2; exit 1; }
+# stalwart-setup reports its mail check a little after the stack is up: wait
+# for the line (read whole, then searched, so no pipe ends early).
+deadline=$((SECONDS + 120))
+until docker compose logs --no-color stalwart-setup --since "$started" 2>&1 \
+    | grep -c 'Authentication-Results' | grep -qv '^0$'; do
+  if (( SECONDS >= deadline )); then
+    echo "deploy: stalwart-setup did not report Authentication-Results within 120 s" >&2
+    exit 1
+  fi
+  sleep 3
+done
 docker compose run --rm --no-deps backend storage-check | tail -1
 [ -n "$hosts" ] || hosts="$(for a in account drive chat office editor maps photos contacts mail pass; do printf '%s.%s ' "$a" "$(env_get KUTUP_BASE_DOMAIN)"; done)"
 failed=0
