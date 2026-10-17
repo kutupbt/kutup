@@ -300,7 +300,7 @@ pub enum GroupActionV1 {
     /// Revision 0: the group, with its creator as the first administrator.
     #[serde(rename_all = "camelCase")]
     Genesis {
-        home: GroupHomeV1,
+        home: GroupHomePinV1,
         access: GroupAccessV1,
         entry: String,
     },
