@@ -30,8 +30,9 @@ pub const AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 pub const REQUEST_LABEL: &[u8] = b"application/kutup-oblivious-request";
 pub const RESPONSE_LABEL: &[u8] = b"application/kutup-oblivious-response";
 
-/// The padded sizes of a request or response body: 1, 4, 16 and 64 KiB.
-pub const SIZES: [usize; 4] = [1024, 4096, 16 * 1024, 64 * 1024];
+/// The padded sizes of a request or response body: 1, 4, 16, 64 and 256 KiB
+/// (a whole group's state, up to 256 members, fits the largest).
+pub const SIZES: [usize; 5] = [1024, 4096, 16 * 1024, 64 * 1024, 256 * 1024];
 
 const HEADER_LEN: usize = 7;
 const ENC_LEN: usize = 32;
@@ -325,7 +326,9 @@ mod tests {
             (1023, SIZES[0]),
             (1024, SIZES[1]),
             (4096, SIZES[2]),
-            (MAX_BODY, SIZES[3]),
+            (16 * 1024, SIZES[3]),
+            (64 * 1024, SIZES[4]),
+            (MAX_BODY, SIZES[4]),
         ] {
             let (request, _) = seal_request(1, &gateway.public_key(), &vec![7; len]).unwrap();
             assert_eq!(

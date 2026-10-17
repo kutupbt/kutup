@@ -33,8 +33,10 @@ const NONCE_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
 const HASH_LEN: usize = 32;
-/// The largest operation body a request carries (the oblivious body is
-/// capped below 64 KiB; the envelope takes the rest).
+/// The largest operation body a request carries: a change is capped at this
+/// (`group::MAX_CHANGE_BYTES`), so with the envelope's base64 and fields a
+/// request always fits the 64 KiB padded size. Answers (a whole state) may
+/// take the 256 KiB size.
 pub const MAX_REQUEST_BODY: usize = 48 * 1024;
 
 const KEY_CONFIG_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config/v1\0";
