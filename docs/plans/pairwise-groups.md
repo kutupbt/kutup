@@ -528,7 +528,9 @@ again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1
   hash of the resulting state.
 - **The home signs what it accepts, as Signal's groups server does.** Signal's
   server notary-signs every change it stores (`server_params.rs:142`). Ours signs
-  each accepted change with its federation identity, the one pinned at genesis.
+  each accepted change with its federation identity, the one pinned at genesis,
+  over `(groupId, revision, change hash, resulting state hash)`. After a
+  rotation, clients verify it against the identity history.
   - Logs, states and the changes that ride in group messages carry that
     signature.
   - **Clients apply only home-signed changes.** A member can't circulate a
@@ -699,7 +701,13 @@ them on pseudonyms (§3).
     - a joiner whose binding names a banned account is shown unverified;
     - administrators are prompted to remove them.
 
-    There is no refusal, so the server checks still hold, and the link is kept.
+    There is no refusal, so the server checks still hold.
+  - **Banning someone who joined through the link also resets the link password
+    by default**, in the same change, as an option the administrator can untick.
+    - Without it, a banned person who still has the link could rejoin under a
+      new pseudonym and, as a member, read the member list until an
+      administrator removed them. Signal's server prevents that rejoin itself.
+    - The server already checks the password, so nothing new is needed there.
   - **Link-join floods.** Pseudonyms cost nothing, so one link holder could fill
     the group's 256 places in minutes. Two defences:
     - the home limits link joins per relay server and per group;
