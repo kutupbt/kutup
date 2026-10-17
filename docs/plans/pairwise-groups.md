@@ -1,8 +1,8 @@
 # Chat groups on one-to-one sessions (replacing MLS)
 
-Status: draft, revised after the main session's review and the second
-session's server review (2026-10-17). No code before both accept it and the user
-answers the questions at the end.
+Status: final draft (2026-10-17), with the user's decisions (end of the note)
+and both sessions' reviews. Next is the main session's security review of the
+pseudonym design. No code before the user's go.
 - Replaces: [`chat-mls.md`](../chat-mls.md) and [`chat-invite-links.md`](../chat-invite-links.md). MLS groups were never enabled in the beta (`CHAT_GROUPS` is off).
 - Background: the research report "Self healing encrypted group chat"
   (2026-10, outside the repository). It compares per-sender keys, pairwise fan-out
@@ -311,479 +311,294 @@ revision (`SignalService.proto:947-951`).
   report's invariant 10 for messaging; changes need the group's server, as
   Signal's need its one groups server.
 
-## 3. Group state: Groups v2, on the group's own server
+## 3. Group state: Groups v2 on the group's server, members as pseudonyms
 
 **What we copy from `Groups.proto:23-124` and `groups.preload.ts`:**
 - **Master key.** A random 32-byte group master key. From it, the group id and
   the state key are derived. Signal derives `GroupSecretParams` the same way
   (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
-- **The state.** It holds:
-  - the members, each `{account, role, joinedAtRevision, profileKey}`, the
-    profile key encrypted with the state key (`Member.profileKey`);
-  - roles `OWNER` (one) / `ADMINISTRATOR` / `DEFAULT`, and the ranked owner
-    candidates (below);
-  - `AccessControl {attributes, members, addFromInviteLink}` with
-    `ANY / MEMBER / ADMINISTRATOR / UNSATISFIABLE`;
-  - the title, description, avatar and disappearing timer;
-  - `announcementsOnly`;
-  - requesting members (`MemberPendingAdminApproval`) and banned members;
-  - the invite-link password;
-  - the revision.
+- **Roles: Signal's two, nothing more (the user, 2026-10-17).**
+  `ADMINISTRATOR` and `DEFAULT`, with any number of administrators.
+- **Access rules.** `AccessControl {attributes, members, addFromInviteLink}`
+  with `ANY / MEMBER / ADMINISTRATOR / UNSATISFIABLE`, as in Signal.
+- **Settings.** The title, description, avatar, disappearing timer,
+  `announcementsOnly` and `terminated`.
+- **Lists.** Pending slots (added, not yet claimed), requesting members
+  (`MemberPendingAdminApproval`) and banned members.
+- **The rest.** The invite-link password and the revision.
 
-  There is no delivery secret in the state. Capabilities are per member and
-  travel pairwise (§1).
-- **Encrypted attributes.** The title, description and timer are encrypted with
-  the state key. The limits are Signal's: a title of at most 1024 encrypted
-  bytes and a description of at most 8192 (`groups.preload.ts:255-256`).
+**Members are pseudonyms (the user, 2026-10-17: "the server must not be able
+to see members").**
+- **The plan.** It follows [`research/20-federated-group-credentials.md`](../research/20-federated-group-credentials.md).
+- **Why not Signal's zkgroup.** Signal hides members from its groups server with
+  zkgroup, but its credentials are keyed-verification MACs that only the
+  issuer's secret can verify (`zkcredential/src/lib.rs:25-29`;
+  `presentation.rs:640-642`). That needs one operator, and doesn't work across
+  federated servers.
+- **The pseudonym.** Each member holds, per group, a random signing key pair.
+  The group's server knows a member only by that public key.
+  - It is random per group, so pseudonyms can't be linked across groups.
+  - Its private key is in the member's `chatGroups` entry (§5), so all their
+    devices can use it.
+  - Kutup's MLS code used the same device for owners (`owner_id`,
+    `kutup-chat-proto/src/mls/conversation.rs:342-361`).
+- **What the server reads, the plain part of the state:**
+  - members as `{pseudonym, role, joinedAtRevision}`;
+  - pending slots as `{slotId, role, H(claimSecret)}`;
+  - requesting and banned pseudonyms;
+  - the access rules, the invite-link password and the revision.
+
+  **No AccountRef is in it.**
+- **What only members read, the part encrypted with the state key:**
+  - for each pseudonym, the member's AccountRef, their profile key
+    (`Member.profileKey` in Signal) and a **binding**: a signature by one of the
+    account's devices over `(groupId, pseudonym, AccountRef)`. Members check it
+    against that account's verified manifest;
+  - for each pending slot, the invited AccountRef;
+  - the title, description, timer and avatar reference.
+  - The limits are Signal's: a title of at most 1024 encrypted bytes and a
+    description of at most 8192 (`groups.preload.ts:255-256`).
   - The cipher is the `kutup-crypto` AEAD, XChaCha20-Poly1305, not Signal's
     AES-256-GCM-SIV: one AEAD suite per `cryptographic-dependencies.md`.
 - **The avatar.** It is an encrypted blob under the state key, at most 512 KiB,
-  stored by the group's server next to the state. The state holds only its id
-  and hash.
-  - This matches Signal, whose state holds `avatarUrl` while the CDN holds the
-    bytes encrypted with the blob key.
-  - It counts against the group's server's own allowance, not a member's
-    storage pool: remote members have no pool there.
-- **Changes.** A change is `Actions {revision = current + 1, ...}`: add, remove,
-  modify-role, modify profile key, modify title/avatar/description/timer/access,
-  invite-link password, request, approve, ban and unban. It has two parts:
-  - a **plain part the server reads**:
-    - the accounts added and removed, roles, access rules, requests, approvals,
-      bans and the invite-link password;
-    - **which** attributes the change modifies (title, description, timer,
-      avatar), without their values;
-    - the target account of a profile-key change;
-    - the actor's manifest sequence, the previous hash and the revision.
+  stored by the group's server, and counted against that server's own
+  allowance. Signal's state holds `avatarUrl`, while its CDN holds the bytes.
+- **The member list a client uses** (for sending, receiving and answering
+  resend requests) is the decrypted AccountRefs whose bindings verify. A member
+  whose binding doesn't verify is shown as unverified and treated as a
+  non-member (§2, §4). The rest of the group carries on.
 
-    Signal's server reads the same things, through ciphertexts and proofs;
-  - an **encrypted part** with the attributes (title, description, timer,
-    avatar reference) and profile keys, sealed with the state key.
+**Where the state lives: the server where the group was created (the user,
+2026-10-17).**
+- The home is fixed, as in Signal (one groups server) and XMPP MUC. There is no
+  handover, import or recovery. If that server is gone for good, the group is
+  lost, and the client offers "New group with the same people".
+- **Reaching it.** Every request goes through the anonymous route below, never a
+  signed-in session, and is authorised by a pseudonym's signature.
+- **Reads.** State and logs go only to a current member's pseudonym, and logs
+  only from its `joinedAtRevision`. A removed pseudonym gets the same refusal as
+  a stranger.
+- **Tables (the second session's design).**
+  - Groups: id, revision, chain head and the encrypted part.
+  - Members: pseudonym public key, role and joined revision.
+  - Pending slots, requesting and banned pseudonyms.
+  - Changes: one row per group and revision, unique, holding the body and the
+    previous hash.
+  - **No table holds an account id**, local or remote.
+  - `current + 1` is taken with the group's row locked, so concurrent changes
+    get exactly one winner, and the others get `409`.
 
-  The server takes exactly `current + 1`.
-  - On `409` the client refetches and tries again, up to 5 times within a minute
-    (`modifyGroupV2`, `groups.preload.ts:1507-1716`).
+**The anonymous route (Oblivious HTTP, RFC 9458).**
+- If a member's own server proxied group requests as federation does today, it
+  would learn the group id, and the home would learn the account. We copy
+  Oblivious HTTP instead:
+  1. The client encrypts each request to the home's HPKE key, which the home
+     publishes in its discovery document.
+  2. The member's own server relays the opaque blob. It learns only the
+     destination server.
+  3. The home answers through the same relay.
+- **The keys.** The encapsulation is RFC 9458's, built with `kutup-crypto`'s
+  HPKE (`hpke-rs`), so Rust owns the format.
+- **Members on the home server itself** use the same route, through their own
+  server's relay, never their session.
+- **Inside the encrypted request:** the group id, the operation, a timestamp, a
+  random nonce, and a signature by the member's pseudonym over all of them.
+  - The home refuses a timestamp more than 5 minutes off, and a nonce seen
+    within that window.
+- **Abuse limits without identity:**
+  - **The relay** knows its signed-in user and limits how many requests each
+    user may relay per minute, without seeing their contents.
+  - **The home** limits per pseudonym, per group and per relay server.
+  - A request without a valid member signature is refused before any work, with
+    the same answer as an unknown group.
+
+**Changes.** A change is `Actions {revision = current + 1, ...}`: add (a pending
+slot), claim, remove, leave, modify-role, modify profile key,
+modify title/avatar/description/timer, modify access, invite-link password,
+request, approve, ban, unban and terminate. It has two parts:
+- **The plain part, which the server reads:**
+  - the pseudonyms and slots added, claimed and removed;
+  - roles, access rules, requests, approvals, bans and the invite-link
+    password;
+  - **which** attributes the change modifies (title, description, timer,
+    avatar), without their values;
+  - the target pseudonym of a profile-key change;
+  - the actor's pseudonym, the previous hash and the revision.
+- **The encrypted part:** the AccountRefs, bindings, profile keys and attribute
+  values, sealed with the state key.
+
+The server takes exactly `current + 1`. On `409` the client refetches and tries
+again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1716`).
+
+**Who accepts a change: the server, by the same rules as the clients.**
+- In Signal, the groups server decides what it accepts and notary-signs what it
+  stores (`server_params.rs:142`). We copy that, with one rule: **every check
+  that decides whether a change is accepted is made by the group's server before
+  it stores the change, and by every client again.** A change the server
+  accepts is then never refused by an honest client, so the group can't freeze
+  the way MLS did.
+- **The checks, all on the plain part:**
+  - exactly `current + 1`, and the previous hash matches the chain head;
+  - the actor's pseudonym signature over the change;
+  - the actor's role at the previous revision, by Signal's rules (§4):
+    `members` for adds, `attributes` for each attribute named, administrators
+    for roles, removals, bans, approvals, the link and `terminate`;
+  - a profile-key change targets the actor's own pseudonym;
+  - a claim reveals a secret whose hash is the slot's `H(claimSecret)`;
+  - the last-administrator rule (§4).
+- **What the server can't check.** The encrypted part isn't an acceptance check,
+  because the server can't read it.
+  - Attributes are AEAD-sealed. A bad one fails to decrypt on clients, which
+    show an unreadable change while the revision still advances.
+  - Encrypted content that the plain part doesn't declare is ignored as
+    unreadable, never a reason to refuse.
+  - A binding that doesn't verify makes that member unverified (above). It is
+    never a reason to refuse the change.
+- **What the server can't do.** Signal's server can't add a ghost member,
+  because it lacks the master key. Ours can't invent or alter a change either,
+  because every change needs a member pseudonym's signature. A pseudonym enters
+  only through:
+  - a claim of a slot an administrator (or, under `members = MEMBER`, a member)
+    signed;
+  - a link join that the link's rules allow;
+  - the genesis.
+- **The chain.** It is `hash(previous change)`, and each change also carries the
+  hash of the resulting state.
+- **The state hash is one a server can compute.** It covers the canonical
+  serialization of the plain part plus the encrypted parts as ciphertext bytes,
+  never their decrypted values.
 - **Catching up.** In order:
-  1. apply a change that rides in the message, if it is exactly one revision on;
+  1. apply a change that rides in a group message, if it is exactly one
+     revision on;
   2. otherwise fetch `logs/<from>` in pages;
   3. otherwise fetch the whole state (`getGroupUpdates`, `:3585-3792`).
 
   A member reads the log only from its `joinedAtRevision`
   (`WebAPI.preload.ts:4978-4996`).
 - **Announcing.** After a change, the actor sends a group-update message to all
-  members, and to a removed member pairwise. Each receiver shows a
-  timeline line per change (`'group-v2-change'`).
+  members, and to a removed member pairwise. Each receiver shows a timeline
+  line per change (`'group-v2-change'`).
 
-**Where the state lives: the owner's server (the user, 2026-10-17).** Signal
-has one groups server. Here a group lives on **its owner's server, the group's
-server**, and moves when ownership moves.
-- **Why the owner's server.** The user's direction, after MLS, whose groups
-  were served by their members' servers. The owner is the person who answers
-  for the group, and their server hosts its state, the avatar and the calls.
-- Members on other servers reach it through their own server, over
-  authenticated federation (`/api/fed/chat/groups/...`). The member's server
-  attests the account, as federated chat already does.
-- **Reads.** State and logs go only to current members, and logs only from the
-  member's `joinedAtRevision`. A removed account gets the same refusal as a
-  stranger.
-- **Tables (the second session's design).**
-  - Groups: id, incarnation, revision, chain head, the encrypted attributes and
-    the home state (active, or moved with its new home).
-  - Members: an AccountRef (`account_id` plus `server`, not a foreign key to
-    `users`, since members can be remote), role and joined revision.
-  - Owner candidates, requesting accounts and banned accounts.
-  - Changes: one row per group and revision, unique, holding the body and the
-    previous hash.
-  - `current + 1` is taken with the group's row locked, so concurrent changes
-    get exactly one winner, and the others get `409`.
-- One home at a time is the shape the report calls "one owning server per
-  group" (also RCS and MIMI). It replaces MLS's set of ordering servers voting
-  by quorum, which is where the freezes came from.
-
-**What MLS did, and what we copy.** We read the MLS code
-(`mls_engine/ownership.rs`, `owner_approval.rs`, `recovery.rs`, `leave.rs`;
-`chat_mls/` on the server; `chat-mls.md` "Ordering authorities").
-- **MLS's ordering.** MLS groups had no single home. One to 64 ordering servers
-  (by default the creator's and the first invitee's, so 2 of 2) voted on each
-  change by a two-thirds quorum.
-- **MLS's owners.** It had one or more owners, also decided by a two-thirds
-  quorum, separate from administrators.
-- **Moving a group.** MLS had no way to move a group to another server.
-- **What we copy:**
-  - an **owner** role above administrators;
-  - **owner candidates**: a member's own signed consent to become owner
-    (`MlsOwnerCandidateV1`, `conversation.rs:363-421`; `validate_new_owner_candidates`,
-    `ownership.rs:942-986`);
-  - **an owner must hand over before leaving** (`leave.rs:41-43`);
-  - **pruning candidates** who leave the roster (`prune_owner_candidates_for_roster`,
-    `ownership.rs:753-786`);
-  - **incarnation recovery** when the servers are gone: same roster, a new
-    incarnation, the old one read-only (`recovery.rs`, `recovery_store.rs`);
-  - recovery **fails closed** when it doesn't extend the member's own head.
-- **What differs, and why:**
-  - **One owner, no quorum.** A group has one home, so one owner whose server
-    hosts it. MLS's owner quorum is what made governance impossible once enough
-    owner keys were lost (an owner key lived on one device only,
-    `ownership.rs:881-885`). Our owner signs with any of their devices, like any
-    change.
-  - **The home moves with the owner.** MLS had no such move.
-  - **Candidates are ranked, so recovery is deterministic.** MLS had no
-    automatic succession, and no flow for a vanished owner.
-
-**Roles.** `OWNER` (exactly one, also an administrator), `ADMINISTRATOR` and
-`DEFAULT`.
-- Only the owner can:
-  - hand over ownership;
-  - order the candidates;
-  - end the group for everyone.
-- Administrators can't remove or demote the owner.
-- The owner is the creator at first.
-
-**Owner candidates.**
-- **Who.** Every administrator is a candidate once they have published a
-  candidacy: a change of their own, signed by one of their devices, which
-  consents to hosting the group on their server.
-  - Their client publishes it when they are made administrator, unless their
-    server doesn't host groups (`CHAT_GROUPS` off, or the group over its
-    member limit). That is the same automatic publication MLS made after an
-    invitation.
-- **The order.** The owner may reorder the candidates. The default order is
-  when each became a candidate.
-- **Pruning.** A candidate who stops being an administrator or a member drops
-  off the list, as MLS pruned them.
-- **Where it lives.** The list is in the state's plain part, so the server
-  checks it like any change.
-
-**Handing over (the owner chooses, or leaves).**
-1. The owner proposes change N, a **transfer to a candidate**. It names the new
-   owner's account and the new home server, and is signed by the owner.
-2. The candidate accepts by signing the same change. Their consent is needed,
-   because their server takes on hosting, the avatar's storage and the SFU.
-3. The old home checks N like any change, plus:
-   - both signatures;
-   - the target is a candidate.
-4. **Prepare first.** Before accepting N, the old home calls the new home
-   (`/api/fed/chat/groups/:id/prepare`).
-   - The new home records durably that it will import this group at N.
-   - It checks there that it has groups on and room under its member limit.
-   - N is accepted only on that acknowledgement.
-5. After N, the old home accepts no change. Every write, and every log read past
-   N, gets `409 groupMoved` with the new home.
-   - It notifies the new home through a durable outbox, retried until the
-     import is acknowledged.
-   - The new owner's client can trigger the import too.
-6. **The new home imports** the log `0..N` from the old home over federation
-   (`/api/fed/chat/groups/:id/import`). It is a paged pull, as MLS's authority
-   bootstrap was: at most 64 changes or 8 MiB a page, with durable progress that
-   resumes after a restart.
-   - It checks every previous-hash link.
-   - It checks that the state after N hashes to the value N names.
-   - It verifies N's two signatures in full.
-   - It doesn't re-verify every historical signature. That would mean fetching
-     the manifest histories of every past actor, including deleted accounts, and
-     could wedge the move. Clients verified history themselves as it came.
-   - It also takes the avatar, the banned and requesting lists and the
-     invite-link password.
-   - It accepts N+1 only after the import is complete. That order means there
-     are never two writable homes.
-7. **Members repoint.** A member's server keeps no map of groups to homes:
-   - clients send each request to the group's server named in their
-     `chatGroups` entry or the latest group context;
-   - `groupMoved` corrects a stale one;
-   - the client updates its `chatGroups` entry when it applies N.
-8. **The old home is a read-only tombstone.** It serves the log up to N to
-   members who are behind, for 30 days by default (a server setting).
-   - After that it keeps only the `groupMoved` pointer, one row per group.
-   - **The pointer is never dropped.** A member away for longer still finds the
-     new home, and a chain of moves is followed pointer by pointer.
-9. **Calls.** A running call on the old home ends with "the group moved", and
-   members rejoin on the new home.
-
-**A transfer can't freeze the group.** Once the new home has acknowledged the
-prepare, a failure is only a matter of availability:
-- a new home that is down is a home that is down;
-- a new home gone for good is the owner's server gone, which recovery covers.
-
-No cancel change is needed.
-
-**The owner leaves, or loses their account.**
-- **Leaving.** An owner can leave only after handing over. If the owner is the
-  last member, leaving ends the group. MLS had the same rule.
-- **Removal.** An administrator can't remove the owner.
-- **Account deletion.** The owner's server refuses to end an account that owns
-  groups until it hands them over, as Proton refuses to delete an
-  organisation's owner. The refusal covers every path that ends an account:
-  - deleting it oneself;
-  - an administrator deleting it;
-  - the destructive administrator wipe.
-- **Paths that don't end an account.**
-  - An **incarnation reset** keeps the account id. The owner signs again from
-    the new manifest, so it needs no succession.
-  - A **disabled** owner isn't deleted. There is no succession: the group waits
-    until an administrator re-enables the account.
-- **An administrator override deletes it anyway.** The home server is then
-  still up but has no owner. It accepts a **succession** change signed by the
-  first candidate in the list, because the owner's account no longer exists on
-  that server. After that the handover runs as above.
-  - The server's check is that the owner's account no longer exists there:
-    no `users` row for that account id.
-  - Clients accept a succession by the first candidate when the home server
-    issues it.
-  - The trust they extend is the home server's word that the owner is gone. A
-    dishonest home server could at most let the first candidate, who consented
-    and is an administrator, take over early.
-
-**The owner's server is gone: recovery.** When the server disappears, the
-owner's account goes with it, so no handover is possible. We copy MLS's
-incarnation recovery:
-1. **Who may start it.** The first candidate in the list whose own server is
-   up.
-   - Their client offers "Recover the group" once the group's server has been
-     unreachable for 24 hours.
-   - It is a deliberate step, as in MLS, never automatic.
-2. **What it is.** A **recovery change** on the candidate's own server, which
-   becomes the new home:
-   - incarnation + 1;
-   - the base, `(revision R, chain hash)`: the last state the candidate
-     verified;
-   - the same roster, with the candidate as owner and the remaining candidates
-     in order.
-
-   It is signed by the candidate.
-
-   **It carries the history.** The candidate's server has none of the group's
-   log, and the old home is gone. The candidate's client uploads the log it
-   verified, from the oldest revision it keeps up to R, plus the plain state at
-   R.
-   - The new home stores it as the old incarnation's read-only log.
-   - Members behind R catch up from it and verify the links to `(R, hash)`, as
-     from any home.
-   - Server-side, the new home's ACL for the new incarnation is the plain state
-     at R from that upload. The server can check it only against the
-     candidate's signature and the hash chain; clients verify the rest.
-   - The SFU moves to the new home, as on a transfer.
-3. **What clients check.** A client accepts it when:
-   - the signer was a candidate at R;
-   - the base is the client's own verified head, or a head it can reach
-     through the log it already has.
-
-   A client whose head is **past** R (the old home served it later changes)
-   refuses the recovery and shows that the group's server still answers
-   elsewhere. That is MLS's fail-closed rule.
-4. **Two recoveries.** Clients order recoveries by **R, highest first, then by
-   candidate rank**, and take the first. The one with the most history wins;
-   rank (fixed in the state at R) breaks ties.
-   - Ordering by rank first could pick a recovery from an older R, which every
-     member past that R refuses, splitting the group for nothing.
-   - A client past the chosen R still refuses it (fail-closed).
-   - Two recoveries both have incarnation + 1, so each is identified by its
-     genesis hash, not by the incarnation number.
-   - A later recovery with a higher R **supersedes** an accepted one, by the
-     same order, but only while the accepted recovery's home has taken no
-     change past its genesis. A member who was ahead can then bring the group
-     forward when recoveries race within minutes.
-   - Once the accepted recovery has later changes, switching would drop them,
-     which is a fork, so it no longer happens. A member who was ahead keeps
-     their later history read-only and rejoins the recovered group, with a
-     notice. No change members made is ever discarded.
-5. **After a recovery:**
-   - the old incarnation is read-only on every client;
-   - a change from a revived old home is ignored with a warning;
-   - the group keeps its id and master key, since the roster is the same;
-   - a member removed before R stays removed.
-6. **Without a candidate** (no other administrator), the group can't be
-   recovered. Members start a new group, and the client offers "New group with
-   the same people".
-
-**Forks across moves.**
-- A transfer is an ordinary change in the chain, so the fork checks of §3
-  cover it unchanged.
-- A recovery starts a new incarnation whose genesis names the old `(R, hash)`.
-- Group contexts carry `{incarnation, revision, chainHash}`, and `chatGroups`
-  keeps the incarnation, so a member can't be shown the old and new incarnation
-  as the same group.
-
-**What the server sees (a deviation: no zkgroup at first).**
-- Signal's server stores each member as a deterministic `UuidCiphertext` and
-  authorises requests with zero-knowledge presentations (`AuthCredentialWithPni`,
-  `CertificateController.java:96-141`; `server_params.rs:173-189`). Its server
-  never learns who is in a group.
-- We don't copy that now, for two reasons:
-  1. **Federation.** A member's credential would be issued by *their* server,
-     and the group's server would verify presentations against every member
-     server's zkgroup parameters. Nobody has built that, and Signal's own groups
-     server, the reference for it, isn't public.
-  2. **What the servers already see.** Federation already shows them the
-     accounts that exchange messages, so the gain is smaller than on Signal's
-     single server.
-- So the group's server keeps the member list in plain form: the AccountRefs and
-  their roles. It checks access as an ordinary authenticated ACL. Everything
-  else is encrypted, as in Signal: the title, description, avatar, timer and
-  link password.
-- The server sees:
-  - the number of members and who they are;
-  - roles and access rules;
-  - the timing of changes;
-  - the encrypted sizes.
-- zkgroup stays possible later. The state format keeps member entries in one
-  field, so a later version can encrypt them.
-
-**Who accepts a change: the server, by the same rules as the clients.**
-- In Signal, the groups server decides what it accepts (role and access checks
-  through zk proofs) and notary-signs what it stores (`server_params.rs:142`).
-  Clients take what it signed.
-- We copy that, with one rule from the second session's review: **every check
-  that decides whether a change is accepted is made by the group's server before
-  it stores the change, and by every client again.** A change the server accepts
-  is then never refused by an honest client, so the group can't freeze the way
-  MLS did.
-- The checks, all on the plain part:
-  - exactly `current + 1`, and the previous hash matches the chain head;
-  - the actor's signature, by a device in the actor's manifest at the sequence
-    the change names. The server fetches and verifies that manifest as the
-    directory already does, so server and clients judge the same manifest;
-  - the actor's membership and role at the previous revision, under
-    `AccessControl` and the rules of §4: `members` for adds, and `attributes`
-    for each attribute the plain part names;
-  - for a profile-key change, the actor is its target: only a member changes
-    their own entry.
-- The encrypted part isn't an acceptance check, because the server can't read
-  it.
-  - Its attributes are AEAD-sealed, so a bad one fails to decrypt on clients.
-  - Clients show it as an unreadable change, and the revision still advances.
-  - Encrypted content that the plain part doesn't declare (an attribute not
-    named, a profile key for another account) is ignored as unreadable, never
-    a reason to refuse the change.
-  - So every acceptance check is one the server makes, and nothing only a
-    client can judge decides acceptance.
-- **What the server cannot do.** Signal's server can't add a ghost member,
-  because it lacks the master key needed to encrypt a member entry. Ours can't
-  either, because every change needs a member device's signature:
-  - a change the server invents, edits or reorders fails a client's own check;
-  - that client then shows the server-lied warning (below);
-  - this is the only case where a client refuses a change.
-- The chain is `hash(previous change)`, and each change also carries the hash
-  of the resulting state.
-- **The state hash is one a server can compute.** It covers:
-  - the canonical serialization of the plain part;
-  - the encrypted parts as ciphertext bytes, never their decrypted values.
-
-  So the group's server, and a new home importing, can check it.
-
-**Membership is the client's.** These rules hold everywhere; the server's view
-is never an input to them:
-- The member list a device uses (for its book, for receiving and for answering
-  requests) is the result of its own verified change chain.
-- A `409` from the group's server means "refetch and verify again". It is never
-  "take the server's list".
-- Member devices come only from verified manifests (§1).
-- A receiver drops a group message whose sender isn't a member at its latest
-  verified revision. The one exception is the hold rule for a revision it can't
-  fetch yet (§2).
-- With `announcementsOnly` on, a receiver also drops messages from members who
-  aren't administrators. Only clients can enforce this, because the server
-  can't read sealed senders.
-
-**Verifying changes made before now.** A change is checked when the device
-first applies it, not again later. The cases:
-- **Catching up after being away.** Each change names the actor's manifest
-  sequence. A device that has since left the actor's manifest is checked
-  against the actor's manifest history (`/api/chat/accounts/:id/manifest-history`),
-  which is verified from the pinned account authority as today.
-- **The actor's account authority was reset since** (a new incarnation). The old
-  incarnation's manifests are no longer reachable from the pin, so that change
-  can't be checked directly.
-  - It is accepted only if a later change, by an actor this device *can* verify,
-    chains over it, vouching for it through the hash chain.
-  - Until such a change exists, the group shows that a recent change couldn't be
-    confirmed, and the device applies nothing past it. Messaging isn't held up:
-    the next verifiable change unblocks everything after it.
-  - This needs both an authority reset and a device that was away across it,
-    so it is rare.
+**Verifying changes made before now.**
+- **Pseudonym signatures** verify for ever: a member's pseudonym key doesn't
+  change while they are a member. So catching up after a long absence needs no
+  manifest history for them.
+- **A binding** is checked once, when the member's claim or join is applied,
+  against the account's manifest then. A device that has since left that
+  manifest is checked against its manifest history
+  (`/api/chat/accounts/:id/manifest-history`), as verified from the pin today.
+- **After the bound account's authority was reset**, its member re-signs the
+  binding from the new manifest, as a profile-key-style change of their own.
+  Until then, members see a safety-number notice for them, as for direct chats.
 - **Joining.** A new member doesn't verify history from before it joined.
-  1. It verifies the change that added it. That change is by a current device
-     of the adder, or of the approving administrator, and carries the hash of
-     the resulting state.
-  2. It takes the state snapshot at that revision only if the snapshot's hash
-     matches.
+  1. It verifies the claim or join that added it.
+  2. It takes the state snapshot whose hash that change carries. This is
+     Signal's join, which starts from the state at the joining revision
+     (`groups.preload.ts:3977-4016`).
 
-  This is Signal's join, which also starts from the state at the joining
-  revision (`groups.preload.ts:3977-4016`).
+**Membership is the client's.**
+- The member list a device uses is the result of its own verified change chain
+  and verified bindings. The server's view is never an input.
+- A `409` means "refetch and verify again".
+- Member devices come only from verified manifests (§1).
+- A receiver drops a group message whose sender isn't a verified member at its
+  latest verified revision. The one exception is the hold rule for a revision it
+  can't fetch yet (§2).
+- With `announcementsOnly` on, a receiver also drops messages from members who
+  aren't administrators. Only clients can enforce this, because no server can
+  read sealed senders.
 
-**Forks and withholding.** Two administrators can validly sign the same
-`current + 1`, and a dishonest server could show each half of the group a
-different branch, or hold changes back. The defences:
+**Forks and withholding.** A dishonest server could show halves of the group
+different branches, or hold changes back. The defences:
 - Every group message carries `{revision, chainHash}`. A member that sees its
   own revision with a different hash fetches again. If the difference persists,
   it shows a warning that the group's server is showing members different
   histories.
 - Each `chatGroups` entry (§5) keeps the last verified revision and chain hash,
-  protected by the account head. A server that rolls a group back, or serves an
-  older branch to another of this account's devices, is detected. The device
-  refuses older state, as `revisionGuard` does in
+  protected by the account head. A rollback, or an older branch served to
+  another of this account's devices, is detected. The device refuses older
+  state, as `revisionGuard` does in
   [`rollback-protection.md`](rollback-protection.md).
-- The research report's deterministic merge rule for partitions (owners beat
-  admins, mutual removals) is **not** needed. One server orders, as in Signal;
-  the signatures and these checks make that order verifiable.
+- One server orders, as in Signal; the signatures and these checks make that
+  order verifiable.
 
-## 4. Membership
+## 4. Membership: Signal's rules, checked on pseudonyms
 
-- **Create.** The creator is the owner and first administrator. The group's
-  server is the creator's server until ownership moves (§3). Revision 0 is a
-  signed genesis change; the group id comes
-  from the master key.
-- **Add.**
-  - Who may add depends on `AccessControl.members`.
-  - An added member joins at once with `joinedAtRevision`.
-  - Signal's `membersPendingProfileKey` state isn't copied. It exists only
-    because Signal's server needs a zkgroup profile-key credential before a full
-    add. Kutup's profile keys travel in E2EE messages already.
-  - **How the added member learns the group**, whether on the same server or
-    another:
-    1. The adder sends the group-update message pairwise to the new member's
-       devices. Its encrypted group context carries the master key and the
-       group's server, as Signal's `GroupContextV2` carries the master key.
-    2. The new member's client fetches the state from the group's server: a
-       remote member through its own server over federation.
-    3. It verifies its add (§3) and writes the group to its account's list.
-  - An added member who isn't a contact sees the group as a message request
-    (accept, block or leave) before anything is sent from their side, as in
-    Signal. Processing the add does two things:
-    - it writes the member's profile key into their own entry;
-    - it publishes and sends their group capability (§1).
-
-    That reveals only that a device got the add, which the delivery itself
-    already shows the servers.
-- **Remove.** Only administrators may remove. The remover's change is sent
-  pairwise to the removed member, so they learn of it.
+The rules are Signal's, as the Desktop client applies them. The server checks
+them on pseudonyms (§3).
+- **Create.** The creator is the first administrator. Revision 0 is a signed
+  genesis change; the group id comes from the master key.
+- **Who may do what** (Signal-Desktop):
+  - edit the title, description, avatar and timer: administrators, or every
+    member when `attributes` is `MEMBER` (`canEditGroupInfo.preload.ts:9-30`;
+    `canChangeTimer.preload.ts`);
+  - add members: administrators, or every member when `members` is `MEMBER`
+    (`canAddNewMembers.preload.ts:9-27`);
+  - the invite link and its setting: administrators (`GroupLinkManagement.dom.tsx:126`);
+  - promote and demote, remove, ban, approve requests, change access rules and
+    `announcementsOnly`: administrators;
+  - end the group for everyone (`terminated`): administrators
+    (`ConversationDetails.dom.tsx:255-256`).
+- **The last administrator.** An administrator can't leave while the group has
+  other members and none of them is an administrator: they choose a new one
+  first (`getCannotLeaveBecauseYouAreLastAdmin`, `ConversationDetails.dom.tsx:158-170`).
+  - The server enforces it on pseudonyms: a leave by the only administrator
+    pseudonym is refused while other member pseudonyms remain.
+- **An administrator's account ending.** Signal-Desktop has no rule for it, and
+  Signal's groups server isn't public, so its behaviour can't be confirmed.
+  - With pseudonyms our server can't know that an account ended either.
+  - The group keeps working: messages flow, members can leave.
+  - Changes that need an administrator wait until an administrator acts. If none
+    is left, they never happen. Members can start a new group with the same
+    people.
+  - Clients show a member whose account has ended (their manifest is gone) as
+    such.
+- **Add.** Who may add depends on `AccessControl.members`. Signal's "pending"
+  member is made explicit:
+  1. The adder writes a **pending slot**, with the role and `H(claimSecret)` in
+     the plain part and the invited AccountRef encrypted.
+  2. The adder sends the group-update message pairwise to the invitee's devices.
+     Its encrypted group context carries the master key, the group's server and
+     the `claimSecret`, as Signal's `GroupContextV2` carries the master key.
+  3. The invitee's client fetches the state through the anonymous route. It then
+     **claims** the slot with a change that reveals `claimSecret` and its new
+     pseudonym, signed by that pseudonym, with its encrypted binding and profile
+     key.
+  4. The server checks the hash, and members check that the binding's account is
+     the slot's. The new member's `joinedAtRevision` is the claim's.
+  5. An invitee who isn't a contact sees the group as a message request (accept,
+     block or leave) before anything is sent from their side, as in Signal.
+     Claiming publishes and sends their group capability (§1). That reveals only
+     that a device got the invitation.
+  - An unclaimed slot can be revoked by an administrator, or by its adder, as
+    Signal's pending members can.
+- **Remove.** Administrators remove a pseudonym. The change is sent pairwise to
+  the removed member, so they learn of it.
   - Each remaining sender replaces its sender key before its next send (§1).
   - Each remaining member replaces its group capability (§1).
-  - The group's server stops serving state to the removed account, and removes
-    it from a running group call (§6).
-  - The removed member keeps the profile keys it already had, as in Signal, so
-    it can still send one-to-one sealed messages. Those arrive as message
-    requests, the same as from any non-contact.
-- **Leave.**
-  - A member leaves by a change of their own.
-  - The owner hands over first (below). The last administrator must name
-    another one first; Signal requires this too.
-  - A leave counts as a removal for the key and capability rules.
-- **Roles.** Administrators promote and demote. `attributes` access decides who
-  may change the title, avatar, description and timer.
+  - The server refuses the removed pseudonym from then on, and removes it from a
+    running group call (§6).
+  - The removed member keeps the profile keys it already had, as in Signal.
+- **Leave.** A member leaves by a change signed by their own pseudonym, subject
+  to the last-administrator rule. A leave counts as a removal for the key and
+  capability rules.
 - **Invite link.** Copied from `GroupInviteLink.contentsV1 {masterKey, inviteLinkPassword}`
   (`Groups.proto:102-111`; `groups.preload.ts:262-358`).
-  - The link carries the master key and the 16-byte password, and our version
-    adds the group's server. All of it sits in the URL fragment, so no web
-    server log sees it.
+  - The link carries the master key, the 16-byte password and the group's
+    server, all in the URL fragment, so no web server log sees them.
   - `addFromInviteLink`: `ANY` joins at once, `ADMINISTRATOR` asks for approval,
     `UNSATISFIABLE` turns the link off.
+  - A join or a request is a change carrying the joiner's new pseudonym, the
+    password and the encrypted binding. The server checks the password and the
+    access rule.
   - Before joining, the person sees the encrypted title, description, avatar
-    and member count (`GroupJoinInfo`).
-  - Resetting the link replaces the password.
-  - Banned accounts can't request again.
-  - Holding the master key from a link gives no group capability (§1). Before
-    joining, it gives only the join info. The server serves state to members
-    only.
+    and member count (`GroupJoinInfo`), fetched through the anonymous route with
+    the password.
+  - Resetting the link replaces the password. A banned pseudonym can't request
+    again. A banned person could return under a new pseudonym through the link,
+    so banning also resets the link, a step Signal doesn't take: with
+    pseudonyms the server can't recognise the person.
 - **History.** New members see only what is sent after they join, as in Signal:
   - distribution goes only to devices current at send time;
   - each distribution starts at the current iteration;
@@ -792,22 +607,15 @@ different branch, or hold changes back. The defences:
 - **A removed member** keeps what they already received. They can't read
   anything a sender sends after that sender applied the removal; the window
   before then is described in §1.
-- **Blocking a member** is client-side only, as in Signal: the server can't see
-  sealed senders.
+- **Blocking a member** is client-side only, as in Signal.
   - My devices drop that member's group messages.
-  - My own messages still go to them while they're a member. Leaving them out
-    would quietly break the group for them, and an administrator can remove
-    them.
-  - My devices still take their hidden pairwise kinds (distribution messages,
-    capabilities, resends), checked against membership, so the group keeps
-    working if I unblock them.
-  - Blocking in a group doesn't rotate my direct-chat capability unless I also
-    block them as a contact, which is today's rule for direct chats.
+  - My own messages still go to them while they're a member.
+  - Their hidden pairwise kinds are still taken, checked against membership.
+  - It rotates my direct-chat capability only if I also block them as a
+    contact.
 - **A member's identity change.** As in Signal:
   - each group they share with me shows a safety-number notice line;
   - my sender key for those groups is replaced (§1).
-
-  Their membership is by AccountRef, so it survives an account authority reset.
 
 ## 5. My group list across my devices, and rollback
 
@@ -819,6 +627,7 @@ different branch, or hold changes back. The defences:
   - the master key;
   - the group's server;
   - the joined revision;
+  - my pseudonym key pair for the group (§3);
   - my current group capability;
   - the last verified revision and chain hash.
 - Writes go through `listedWrite`, so the server can neither drop a group from
@@ -827,10 +636,6 @@ different branch, or hold changes back. The defences:
   write the head when they arrive, as for pins.
 - The last-seen revision is written at most once a minute per group, and on
   every membership change, to keep head writes few.
-- **Devices keep the verified change log**, not only the state, from their
-  `joinedAtRevision`: at most a few thousand small rows per group. A recovering
-  candidate uploads it (§3, recovery), and a member uses it to judge a
-  recovery's base.
 - The chat backup ([`chat-backup.md`](../chat-backup.md)) is unchanged: display
   records stay keyed by conversation. A group conversation's key changes from
   today's `Group{groupId: uuid}` to the 32-byte derived id, encoded as
@@ -856,14 +661,15 @@ different branch, or hold changes back. The defences:
 
 **What we copy.**
 - **The SFU.** The call runs on **the group's server's SFU**. That server issues
-  the LiveKit token only to current members, the same ACL as the state, and
-  replaces the "room id is the capability" rule.
-  - Members on other servers get their token through their own server over
-    federation, as today's `/api/fed/chat/group-calls/token` does. It moves under
-    `/api/fed/chat/groups/:id/call-token`.
-  - The token is short-lived, and its identity is the AccountRef plus the
-    device. Today's `group_calls.rs` moves out of `chat_mls/` with the meeting
-    files.
+  the LiveKit token only to a current member's pseudonym, through the anonymous
+  route like every group request (§3), and replaces the "room id is the
+  capability" rule.
+  - The token is short-lived. Its identity is the pseudonym plus a random
+    per-call device tag, so the SFU never sees an account.
+  - Participants learn which member is which from the frame-key messages, which
+    are pairwise and from verified members.
+  - Today's `group_calls.rs` and its federation route are replaced. The meeting
+    files move out of `chat_mls/` first.
   - A group whose server has no SFU configured offers no group calls; the
     button says why.
 - **Keys.** Each participant draws a random 32-byte frame key and sends it
@@ -918,7 +724,7 @@ different branch, or hold changes back. The defences:
   - The 1 MiB-per-request and 32-envelope limits of direct chats don't apply
     to the multi-recipient route.
 - **Rates.**
-  - Group changes: 30 a minute per account, and 60 a minute per group, so many
+  - Group changes: 30 a minute per pseudonym, and 60 a minute per group, so many
     accounts can't flood one log.
   - A multi-recipient send costs one sealed-send unit per recipient capability.
 - **Sealed sender.** Group sends are always sealed: multi-recipient with group
@@ -929,7 +735,10 @@ different branch, or hold changes back. The defences:
 - **The member identity.** It's the libsignal `ProtocolAddress` name
   `aci:<uuid>@<server>` with the device id, as for direct chats.
 - **Never an address.** No group record, table, state field, change, capability,
-  mention or call token holds an address. Names come from profiles and pins, as
+  mention or call token holds an address.
+- **Never an account on the group's server.** AccountRefs appear only in the
+  encrypted part of the state and in E2EE messages. The server knows members by
+  pseudonym (§3). Names come from profiles and pins, as
   everywhere since [`account-ids.md`](account-ids.md).
 - **The group context.** Every group message carries
   `group {masterKey, groupServer, revision, chainHash, change?}` inside the
@@ -1045,10 +854,10 @@ own fallback path (§1).
 
 | Slice | Third session (chat-core, client) | Second session (server, storage, federation) |
 | --- | --- | --- |
-| 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks (§3), logs and the ACL; federation proxying; the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
+| 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; pseudonyms, bindings, slots and claims; the anonymous route's client side (HPKE encapsulation, signed requests); the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, claim, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks on pseudonyms (§3), logs and the pseudonym ACL; the anonymous route (the HPKE gateway on the home, the relay on every server, replay and rate limits); the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
 | 2. Sending once | Multi-recipient encryption, group capabilities and their rotation, the `404` handling; lifting the 64 cap | The multi-recipient route with shared-payload storage, capability publishing, the destination split |
-| 3. Links, settings and ownership | Invite links, join requests and approval, access control, description and avatar, announcements-only, banning; owner candidates, handover, succession and recovery (client checks, the recovery offer, repointing); their UI and specs | Join info, requests, avatar blobs, bans; the transfer checks, the paged import, the tombstone and `groupMoved`, succession, refusing to delete an owner, recovery acceptance |
-| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token from the group's server, its federation route, removal through LiveKit's admin API |
+| 3. Links and settings | Invite links, link joins and requests by pseudonym, approval, access control, description and avatar, announcements-only, banning, ending a group; their UI and specs | Join info through the anonymous route, link checks, requests, avatar blobs, bans |
+| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API |
 | 5. MLS out | Client and core removal | Server removal and the migration |
 
 **Estimate (honest, working days of one session).** The second session's
@@ -1056,40 +865,44 @@ figures are from its review.
 
 | Slice | Third session | Second session | Calendar, in parallel |
 | --- | --- | --- | --- |
-| 1. Usable groups (off in production) | 16–20 | 15–19 | about 4–5 weeks, with review and the two-server gate |
+| 1. Usable groups (off in production) | 20–26 | 19–25 | about 5–6 weeks, with review and the two-server gate |
 | 2. Sending once | 4–5 | 8–10 | about 2 weeks |
-| 3. Links, settings and ownership | 11–15 | 10–15 | about 3 weeks |
+| 3. Links and settings | 6–8 | 3–4 | about 1.5–2 weeks |
 | 4. Calls | 4–6 | 1–2 | about 1–1.5 weeks |
 | 5. MLS out | 3 | 2–3 | about 1 week |
 
-- In all, that's about 38–49 days for the third session and 36–49 for the
-  second. The ownership moves add about 5–7 and 7–11.
-- Applying the account-id slices' 1.5× to the calendar gives **about 10–14
+- In all, that's about 37–48 days for the third session and 33–44 for the
+  second.
+  - The fixed home removed the ownership moves.
+  - Pseudonymous members and the anonymous route add about 4–6 days to each
+    session ([research 20](../research/20-federated-group-credentials.md)).
+- Applying the account-id slices' 1.5× to the calendar gives **about 10–13
   weeks** for everything, and groups switch on at the end.
 - Slice 1 alone carries the highest risk: the state engine and its server-side
   twin are new. If it runs over, it pushes the rest out rather than being cut.
 
 `CHAT_GROUPS` turns on only after slice 5 and its gates, when the user decides.
 
-## Questions for review
+## Decisions (the user, 2026-10-17)
 
-1. **The group's server = the owner's server**, moving with ownership by a
-   transfer the new owner accepts. When that server is gone, the first
-   candidate recovers the group, as MLS's incarnation recovery did. The user
-   chose the owner's server (2026-10-17). Accept the handover and recovery
-   rules?
-2. **No zkgroup at first.** The group's server sees the member list in plain
-   form. It checks every change by the same rules as the clients (§3), and
-   changes are signed by the actor and hash-chained, so the server can't forge
-   them. Accept, with zkgroup left as a later option?
-3. **Members' profile keys in the group state** (copied from Signal), so
-   members who aren't contacts reach each other sealed one to one. Plus **a
-   delivery capability per member for the multi-recipient route**, in place of
-   Signal's group send endorsements, replaced at once on removal. Accept?
-4. **Key replacement when a device leaves a member's manifest.** Signal doesn't
-   do this. Keep it?
-5. **256 members** until fan-out is measured (Signal: 1000). Accepted by the
-   user (2026-10-17).
-6. **Resend from stored history, to original recipients only, with receivers
-   asking for a week** (today's direct-chat rule; Desktop keeps a send log of 14
-   days at most). Keep?
+1. **Home.** The group lives on the server where it was created and never moves.
+   If that server is gone, the group is lost. There is no recovery.
+2. **Roles.** Signal's two: administrator and member, with any number of
+   administrators and Signal's last-administrator rule. There is no owner.
+3. **Hidden membership.** No server may see who is in a group. Members are
+   per-group pseudonyms, and requests go through the anonymous route
+   ([research 20](../research/20-federated-group-credentials.md)). zkgroup is
+   not used, because it doesn't federate.
+4. **Rollout.** All at once: groups stay off in production until all five
+   slices are done.
+5. **Size.** At most 256 members.
+
+Still open for the reviewers:
+- **Key replacement when a device leaves a member's manifest.** Signal doesn't
+  do this. Keep it?
+- **Resend from stored history, to original recipients only, with receivers
+  asking for a week.** This is today's direct-chat rule; Desktop keeps a send
+  log of 14 days at most. Keep it?
+- **Banning also resets the invite link** (§4). Signal doesn't do this. We
+  propose it because with pseudonyms the server can't recognise a banned person
+  who returns. Accept?
