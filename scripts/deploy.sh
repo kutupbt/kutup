@@ -24,8 +24,9 @@
 #      running ones (deploy-history/), so a rollback is exact;
 #   3. with --wipe: lists what the bucket wipe would delete (aws-cli --dryrun)
 #      and refuses if a backup is among it;
-#   4. checks out the commit and validates its nginx config, and runs the new
-#      server's check-config against .env (also in --dry-run);
+#   4. runs the new server's check-config against .env with the commit's compose
+#      files read from git (also in --dry-run), then checks out the commit,
+#      validates its nginx config and runs check-config again;
 #   5. backs up the database and Mail's Stalwart data (the systemd backup units);
 #   6. with --wipe only: stops the stack, drops the database volume and empties
 #      the bucket except the backup prefixes; Stalwart's volume (DKIM keys) stays;
@@ -33,6 +34,7 @@
 #      starts the stack and restarts nginx;
 #   8. checks: migrations, backend errors, Stalwart's setup, storage, every host;
 #   9. removes Kutup images other than the new and the previous release.
+# It reports success only when the server's part ran to its last line.
 
 set -euo pipefail
 
@@ -83,8 +85,16 @@ if $wipe && ! $dry; then
   [ "$answer" = "${host#*@}" ] || { echo "deploy: not confirmed" >&2; exit 1; }
 fi
 
-ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" <<'REMOTE'
+# The server's output, kept to see that its script ran to the end.
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
+ssh "${ssh_opts[@]}" "$host" bash -s -- "$dir" "$tag" "$sha" "$wipe" "$dry" "$has_check_config" "${KUTUP_DEPLOY_HOSTS:-}" <<'REMOTE' | tee "$log"
 set -euo pipefail
+# bash -s reads this script from stdin as it runs, and a command that reads
+# stdin (docker compose run or exec) would swallow the rest of it, ending the
+# deploy early but successfully. One block is read whole before it runs, and
+# nothing in it gets the script as its stdin.
+{
 dir="$1" tag="$2" sha="$3" wipe="$4" dry="$5" has_check_config="$6" hosts="${7:-}"
 cd "$dir"
 # One value from .env, read literally (.env is a Compose file, not shell).
@@ -149,9 +159,37 @@ if [ "$wipe" = true ]; then
   echo "   objects to delete: $would; database volume to drop; Stalwart's volume kept"
 fi
 
+# The target commit's compose files, read from git without checking it out:
+# a release may add a setting that only its own compose files pass to the
+# server, so the first settings check must use them. Paths in them resolve
+# from the checkout, and a server-local file outside git is used as it is.
+target="$(mktemp -d)"
+trap 'rm -rf "$target"' EXIT
+compose_files="${COMPOSE_FILE:-$(env_get COMPOSE_FILE)}"
+if [ -z "$compose_files" ]; then
+  compose_files=docker-compose.yml
+  if git cat-file -e "$sha:docker-compose.override.yml" 2>/dev/null || [ -f docker-compose.override.yml ]; then
+    compose_files="$compose_files:docker-compose.override.yml"
+  fi
+fi
+target_compose=(--project-directory "$dir" --env-file "$dir/.env")
+IFS="${COMPOSE_PATH_SEPARATOR:-:}" read -ra files <<< "$compose_files"
+for f in "${files[@]}"; do
+  if [[ "$f" != /* ]] && git cat-file -e "$sha:$f" 2>/dev/null; then
+    mkdir -p "$target/$(dirname "$f")"
+    git show "$sha:$f" > "$target/$f"
+    target_compose+=(-f "$target/$f")
+  elif [ -f "$f" ]; then
+    target_compose+=(-f "$f")
+  else
+    echo "deploy: compose file $f is neither in $sha nor on the server" >&2
+    exit 1
+  fi
+done
+
 # The new server's settings check against this .env (kutup-server
-# check-config: environment only, no database), with the new image and the
-# current compose files; repeated after the checkout below.
+# check-config: environment only, no database), with the new image; the
+# arguments choose the compose files. Repeated after the checkout below.
 check_config() {
   local out
   if [ "$has_check_config" != true ]; then
@@ -162,7 +200,7 @@ check_config() {
   # server stays up (a timeout alone stops the client, not the container).
   local name="kutup-check-config-$$" status=0
   out="$(KUTUP_SERVER_IMAGE="$registry/kutup-server:$tag" \
-    timeout 120 docker compose run --rm --no-deps -T --name "$name" backend check-config 2>&1)" || status=$?
+    timeout 120 docker compose "$@" run --rm --no-deps -T --name "$name" backend check-config 2>&1)" || status=$?
   docker rm -f "$name" >/dev/null 2>&1 || true
   if [ "$status" = 0 ]; then
     echo "   $out"
@@ -173,7 +211,7 @@ check_config() {
   fi
 }
 echo "== settings check"
-check_config
+check_config "${target_compose[@]}"
 
 if [ "$dry" = true ]; then
   rm -f "$record"
@@ -181,6 +219,7 @@ if [ "$dry" = true ]; then
   echo "   (pinned by digest), start the stack and check it. Current image lines:"
   grep -E '^KUTUP_(SERVER|WEB|STALWART_SETUP)_IMAGE=' .env
   git log --oneline -1
+  echo "== server done: dry run"
   exit 0
 fi
 
@@ -246,5 +285,13 @@ docker images --format '{{.Repository}}:{{.Tag}}' | grep -E "^$registry/" \
   | grep -vE ":($tag${old:+|$old})$" | xargs -r docker rmi >/dev/null 2>&1 || true
 docker image prune -f >/dev/null
 df -h / | tail -1
+echo "== server done: deployed"
+} </dev/null
 REMOTE
+# Success only when the server's script reached its own end.
+if $dry; then end="== server done: dry run"; else end="== server done: deployed"; fi
+if [ "$(tail -n 1 "$log")" != "$end" ]; then
+  echo "deploy: the server's script stopped before its end; nothing after its last line ran" >&2
+  exit 1
+fi
 $dry && echo "== dry run done, nothing changed" || echo "== deployed $tag"
