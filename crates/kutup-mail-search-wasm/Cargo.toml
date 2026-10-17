@@ -2,6 +2,7 @@
 name = "kutup-mail-search-wasm"
 description = "Browser bindings for Mail's search index: the word index over sealed records"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

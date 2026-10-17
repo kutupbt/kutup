@@ -2,6 +2,7 @@
 name = "kutup-search"
 description = "Kutup's word index: Turkish-aware folding and a period-sharded inverted index over sealed records"
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
