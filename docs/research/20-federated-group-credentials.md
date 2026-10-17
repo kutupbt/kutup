@@ -39,9 +39,10 @@ Sources:
   Credentials Supporting Efficient Verifiable Encryption" (CCS 2020,
   [ePrint 2019/1416](https://eprint.iacr.org/2019/1416)).
 
-Two research agents for the literature survey stopped at a usage limit. The
-code facts below were read directly. The literature section is shorter than
-planned and says where it is unverified.
+Two research agents for the literature survey stopped at a usage limit.
+- The code facts below were read directly.
+- The literature section is a short, targeted check and doesn't claim to be a
+  complete survey.
 
 ## 1. How Signal's Private Group System works
 
@@ -161,16 +162,34 @@ second connection can't be correlated with the first".
   request, without knowing whose key it is. That needs no credential at all. It
   is design (e).
 
-**(d) The literature on federated hidden membership.**
-- **Matrix:** room membership is ordinary room state, visible to every
+**(d) The literature on federated hidden membership.** This is a short,
+targeted check (2026-10-17), not a complete survey.
+- **MIMI.** The IETF's interoperability protocol hosts each room at one hub,
+  which "keeps a copy of the room state, which includes the room policy and
+  participant list" ([draft-ietf-mimi-protocol-06](https://www.ietf.org/archive/id/draft-ietf-mimi-protocol-06.txt)).
+  It doesn't hide membership from the hub.
+- **Matrix.** Room membership is ordinary room state, visible to every
   participating homeserver.
-- **MIMI:** the IETF's interoperability work centres on a hub server that sees
-  the participant list.
-- **MLS:** its own deployments use credentials the delivery service can see.
-- We didn't find a deployed or well-reviewed federated system that hides
-  membership from the hosting server. This is from known specifications; the
-  wider survey was cut short (above) and should be redone before it is cited as
-  complete.
+- **MLS.**
+  - "Private Hierarchical Governance for Encrypted Messaging"
+    ([arXiv 2406.19433](https://arxiv.org/pdf/2406.19433), 2024) keeps
+    membership out of the delivery service's state, but notes that the service
+    can infer it from the recipient lists clients send.
+  - The MLS virtual-clients draft
+    ([draft-kohbrok-mls-virtual-clients](https://bgpupdates.potaroo.net/ietf/ids/draft-kohbrok-mls-virtual-clients-03.xml))
+    hides a user's devices behind one leaf.
+  - TU Graz lists hiding MLS membership as an open thesis topic
+    ([crypto_anon_groups](https://thesis.isec.tugraz.at/master/crypto_anon_groups.pdf)).
+- **Privacy Pass** ([RFC 9576](https://www.rfc-editor.org/rfc/rfc9576.html),
+  [RFC 9578](https://datatracker.ietf.org/doc/html/rfc9578)) gives anonymous
+  tokens that a relying party checks without learning the client.
+  - Its rate-limiting form, ARC, is still a working-group draft
+    ([privacypass documents](https://datatracker.ietf.org/wg/privacypass/documents/)).
+  - It fits the home's per-user limits behind the relay (the plan keeps it as
+    the upgrade), not the membership problem.
+- We found no deployed or well-reviewed federated system that hides membership
+  from the server hosting the group. Design (e) is our own composition of known
+  parts, and should be reviewed as such.
 
 **(e) Per-group pseudonymous member keys (recommended).**
 - **The keys.** Each member holds, per group, a random signing key pair: its
@@ -190,14 +209,19 @@ second connection can't be correlated with the first".
   the plan's server-side acceptance rule requires. The rule still holds, on
   pseudonyms.
 - **Adding a member** (Signal's "pending" member, made explicit):
-  1. The adder writes a pending slot. Its plain part is the role and
-     `H(claimSecret)`; its encrypted part is the AccountRef.
-  2. The adder sends the invitee the master key and `claimSecret` over the
-     pairwise session.
-  3. The invitee claims the slot with a change that reveals `claimSecret` and
-     its new pseudonym, signed by that pseudonym, with its encrypted binding.
-  4. The home checks the hash; members check that the binding's account is the
-     one the slot named.
+  1. The adder writes a pending slot. Its plain part is the role and a
+     one-time claim public key; its encrypted part is the AccountRef.
+  2. The adder sends the invitee the master key and the claim private key over
+     the pairwise session, in the invitee's copy only.
+  3. The invitee claims the slot with its new pseudonym, signed by the claim
+     key and by the pseudonym, with its encrypted binding.
+  4. The home checks the claim signature, so nothing it sees lets it claim the
+     slot itself. Members check that the binding's account is the one the slot
+     named.
+- **Changes are signed by the home** with its pinned federation identity, as
+  Signal's server notary-signs. Clients apply only home-signed changes, and they
+  apply changes by unverified members with a warning, so the chain never
+  freezes.
 - **Joining by link:** the requester's pseudonym plus the link password, which
   the home checks as Signal's server does.
 - **Duplicates:** the same account added twice is folded by clients, which can

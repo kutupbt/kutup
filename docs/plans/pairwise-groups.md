@@ -345,7 +345,7 @@ to see members").**
     `kutup-chat-proto/src/mls/conversation.rs:342-361`).
 - **What the server reads, the plain part of the state:**
   - members as `{pseudonym, role, joinedAtRevision}`;
-  - pending slots as `{slotId, role, adder's pseudonym, H(claimSecret)}`;
+  - pending slots as `{slotId, role, adder's pseudonym, claim public key}`;
   - requesting and banned pseudonyms;
   - the access rules, the invite-link password and the revision.
 
@@ -415,6 +415,17 @@ to see members").**
     DNS- and SSRF-safe transport, only to the gateway path, with a body cap.
   - It adds the server-signed federation envelope, so the home can admit and
     rate-limit per relay server. It adds nothing that identifies the user.
+  - The home accepts relay traffic only from authenticated federation servers.
+- **One user can exhaust a relay's quota at the home.** The relay's own per-user
+  limit is the first defence. The home's per-relay limit is sized for a large
+  server's members together.
+  - Privacy Pass ([RFC 9576](https://www.rfc-editor.org/rfc/rfc9576.html),
+    [9578](https://datatracker.ietf.org/doc/html/rfc9578)) could let the home
+    limit per user without learning who: the relay issues tokens to its users,
+    and the home redeems them.
+  - Its rate-limiting form (ARC) is still an Internet-Draft
+    ([draft-ietf-privacypass-arc-protocol](https://datatracker.ietf.org/wg/privacypass/documents/)),
+    so v1 uses the per-relay limit and keeps this as the upgrade.
   - The response is bound to the request's encapsulation, so a relay can't swap
     answers.
 - **Sizes are padded.** Requests and responses are padded to fixed sizes (1, 4,
@@ -425,7 +436,8 @@ to see members").**
 - **Inside the encrypted request:** the group id, the operation, a timestamp, a
   random nonce, and a signature by the member's pseudonym over all of them.
   - The home refuses a timestamp more than 5 minutes off, and a nonce seen
-    within that window. It keeps seen nonces for 10 minutes (twice the skew).
+    within that window. A refusal for the timestamp carries the home's time, so
+    a client with a skewed clock corrects and retries. It keeps seen nonces for 10 minutes (twice the skew).
     Changes are protected by `current + 1` as well; for reads, the nonce stops
     replay for amplification.
 - **Requests from non-members** (a link's join info, a join request) carry a
@@ -488,7 +500,7 @@ again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1
     `members` for adds, `attributes` for each attribute named, administrators
     for roles, removals, bans, approvals, the link and `terminate`;
   - a profile-key change targets the actor's own pseudonym;
-  - a claim reveals a secret whose hash is the slot's `H(claimSecret)`;
+  - a claim is signed by the slot's one-time claim key over the new pseudonym;
   - the last-administrator rule (§4).
 - **What the server can't check.** The encrypted part isn't an acceptance check,
   because the server can't read it.
@@ -498,6 +510,12 @@ again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1
     unreadable, never a reason to refuse.
   - A binding that doesn't verify makes that member unverified (above). It is
     never a reason to refuse the change.
+- **Changes by unverified pseudonyms are applied.** Clients apply every change
+  the home signed and accepted, so the chain can't freeze. When the actor is an
+  unverified member, the change shows with a warning naming them as
+  unverified.
+  - Sender keys, resends, call keys and group capabilities still go only to
+    verified members.
 - **What the server can't do.** Signal's server can't add a ghost member,
   because it lacks the master key. Ours can't invent or alter a change either,
   because every change needs a member pseudonym's signature. A pseudonym enters
@@ -508,12 +526,20 @@ again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1
   - the genesis.
 - **The chain.** It is `hash(previous change)`, and each change also carries the
   hash of the resulting state.
+- **The home signs what it accepts, as Signal's groups server does.** Signal's
+  server notary-signs every change it stores (`server_params.rs:142`). Ours signs
+  each accepted change with its federation identity, the one pinned at genesis.
+  - Logs, states and the changes that ride in group messages carry that
+    signature.
+  - **Clients apply only home-signed changes.** A member can't circulate a
+    signed `r + 1` that the home never stored, and two administrators' rival
+    changes can't split the receivers.
 - **The state hash is one a server can compute.** It covers the canonical
   serialization of the plain part plus the encrypted parts as ciphertext bytes,
   never their decrypted values.
 - **Catching up.** In order:
   1. apply a change that rides in a group message, if it is exactly one
-     revision on;
+     revision on and carries the home's signature;
   2. otherwise fetch `logs/<from>` in pages;
   3. otherwise fetch the whole state (`getGroupUpdates`, `:3585-3792`).
 
@@ -522,6 +548,14 @@ again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1
 - **Announcing.** After a change, the actor sends a group-update message to all
   members, and to a removed member pairwise. Each receiver shows a timeline
   line per change (`'group-v2-change'`).
+
+**Linking a member across groups by timing.** A member's pseudonyms differ per
+group, but acting in several groups at once would link them.
+- A profile-key change, a binding re-signed after an identity reset, and a new
+  device catching up are spread over each group with a random delay of minutes.
+- A claim waits a random few seconds to a minute after the invitation arrives,
+  rather than following the adder's message at once.
+- Sizes are padded (above).
 
 **Verifying changes made before now.**
 - **Pseudonym signatures** verify for ever: a member's pseudonym key doesn't
@@ -586,8 +620,9 @@ them on pseudonyms (§3).
 - **The last administrator.** An administrator can't leave while the group has
   other members and none of them is an administrator: they choose a new one
   first (`getCannotLeaveBecauseYouAreLastAdmin`, `ConversationDetails.dom.tsx:158-170`).
-  - The server enforces it on pseudonyms: a leave by the only administrator
-    pseudonym is refused while other member pseudonyms remain.
+  - The server enforces it on pseudonyms: a leave or a **self-demotion** by the
+    only administrator pseudonym is refused while other member pseudonyms
+    remain.
 - **An administrator's account ending.** Signal-Desktop has no rule for it, and
   Signal's groups server isn't public, so its behaviour can't be confirmed.
   - With pseudonyms our server can't know that an account ended either.
@@ -604,20 +639,28 @@ them on pseudonyms (§3).
 - **Add.** Who may add depends on `AccessControl.members`. Signal's "pending"
   member is made explicit:
   1. The adder writes a **pending slot**. The plain part holds the role, the
-     adder's pseudonym and
-     `H("kutup/group-claim/v1" ‖ groupId ‖ slotId ‖ claimSecret)`, where
-     `claimSecret` is 32 random bytes. The invited AccountRef is encrypted.
+     adder's pseudonym and a **one-time claim public key** (Ed25519) that the
+     adder generates for this slot. The invited AccountRef is encrypted.
      - Pending slots count toward the member limit (members plus pending ≤
        `CHAT_GROUP_MAX_MEMBERS`), as Signal counts pending members.
   2. The adder sends the group-update message pairwise to the invitee's devices.
      Its encrypted group context carries the master key, the group's server and
-     the `claimSecret`, as Signal's `GroupContextV2` carries the master key.
-  3. The invitee's client fetches the state through the anonymous route. It then
-     **claims** the slot with a change that reveals `claimSecret` and its new
-     pseudonym, signed by that pseudonym, with its encrypted binding and profile
+     the home's pinned identity, as Signal's `GroupContextV2` carries the master
      key.
-  4. The server checks the hash, and takes the claim once, under the group's row
-     lock. Members check that the binding's account is the slot's. The new
+     - **Only the invitee's copy** also carries the claim private key, never the
+       copy sent to the other members.
+  3. The invitee's client fetches the state through the anonymous route. It then
+     **claims** the slot with a change carrying:
+     - its new pseudonym;
+     - a signature by the claim key over
+       `("kutup/group-claim/v1", groupId, slotId, new pseudonym)`;
+     - the pseudonym's own signature over the change;
+     - its encrypted binding and profile key.
+  4. The server verifies the claim signature with the slot's public key, and
+     takes the claim once, under the group's row lock.
+     - Nothing the home sees lets it claim the slot itself. With a revealed
+       secret, a dishonest home could have dropped the invitee's request and
+       claimed an administrator slot with its own pseudonym. Members check that the binding's account is the slot's. The new
      member's `joinedAtRevision` is the claim's.
   5. An invitee who isn't a contact sees the group as a message request (accept,
      block or leave) before anything is sent from their side, as in Signal.
@@ -649,9 +692,18 @@ them on pseudonyms (§3).
     and member count (`GroupJoinInfo`), fetched through the anonymous route with
     the password.
   - Resetting the link replaces the password. A banned pseudonym can't request
-    again. A banned person could return under a new pseudonym through the link,
-    so banning also resets the link, a step Signal doesn't take: with
-    pseudonyms the server can't recognise the person.
+    again.
+  - **Bans by account, in the encrypted part.** With pseudonyms the server can't
+    recognise a banned person who returns through the link under a new
+    pseudonym. So the encrypted part keeps a ban list by AccountRef:
+    - a joiner whose binding names a banned account is shown unverified;
+    - administrators are prompted to remove them.
+
+    There is no refusal, so the server checks still hold, and the link is kept.
+  - **Link-join floods.** Pseudonyms cost nothing, so one link holder could fill
+    the group's 256 places in minutes. Two defences:
+    - the home limits link joins per relay server and per group;
+    - administrators get one tap to "remove all unverified".
 - **History.** New members see only what is sent after they join, as in Signal:
   - distribution goes only to devices current at send time;
   - each distribution starts at the current iteration;
@@ -924,14 +976,15 @@ figures are from its review.
 
 | Slice | Third session | Second session | Calendar, in parallel |
 | --- | --- | --- | --- |
-| 1. Usable groups (off in production) | 20–26 | 21–27 | about 5–6 weeks, with review and the two-server gate |
+| 1. Usable groups (off in production) | 21–28 | 22–28 | about 5–6 weeks, with review and the two-server gate |
 | 2. Sending once | 4–5 | 8–10 | about 2 weeks |
 | 3. Links and settings | 6–8 | 3–4 | about 1.5–2 weeks |
 | 4. Calls | 4–6 | 2–3 | about 1–1.5 weeks |
 | 5. MLS out | 3 | 2–3 | about 1 week |
 
-- In all, that's about 37–48 days for the third session and 36–47 for the
-  second.
+- In all, that's about 38–50 days for the third session and 37–48 for the
+  second. The security review's claim keys, home-signed changes and timing
+  jitter add about 1–2 and 1.
   - The fixed home removed the ownership moves.
   - Pseudonymous members and the anonymous route add about 4–6 days to each
     session ([research 20](../research/20-federated-group-credentials.md)).
@@ -962,6 +1015,3 @@ Still open for the reviewers:
 - **Resend from stored history, to original recipients only, with receivers
   asking for a week.** This is today's direct-chat rule; Desktop keeps a send
   log of 14 days at most. Keep it?
-- **Banning also resets the invite link** (§4). Signal doesn't do this. We
-  propose it because with pseudonyms the server can't recognise a banned person
-  who returns. Accept?
