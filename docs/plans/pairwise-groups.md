@@ -576,9 +576,16 @@ incarnation recovery:
    - Ordering by rank first could pick a recovery from an older R, which every
      member past that R refuses, splitting the group for nothing.
    - A client past the chosen R still refuses it (fail-closed).
-   - A later recovery by another candidate with a higher R **supersedes** one
-     already accepted, by the same order. A member who was ahead can then bring
-     the group forward instead of being left out.
+   - Two recoveries both have incarnation + 1, so each is identified by its
+     genesis hash, not by the incarnation number.
+   - A later recovery with a higher R **supersedes** an accepted one, by the
+     same order, but only while the accepted recovery's home has taken no
+     change past its genesis. A member who was ahead can then bring the group
+     forward when recoveries race within minutes.
+   - Once the accepted recovery has later changes, switching would drop them,
+     which is a fork, so it no longer happens. A member who was ahead keeps
+     their later history read-only and rejoins the recovered group, with a
+     notice. No change members made is ever discarded.
 5. **After a recovery:**
    - the old incarnation is read-only on every client;
    - a change from a revived old home is ignored with a warning;
