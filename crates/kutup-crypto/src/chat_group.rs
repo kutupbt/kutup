@@ -240,9 +240,15 @@ impl GroupKeyPair {
         &self,
         group_id: &[u8; GROUP_ID_LEN],
         slot_id: &[u8; SLOT_ID_LEN],
+        slot_revision: u64,
         new_pseudonym: &[u8; PUBLIC_KEY_LEN],
     ) -> [u8; SIGNATURE_LEN] {
-        self.sign(&claim_signed_bytes(group_id, slot_id, new_pseudonym))
+        self.sign(&claim_signed_bytes(
+            group_id,
+            slot_id,
+            slot_revision,
+            new_pseudonym,
+        ))
     }
 
     fn sign(&self, bytes: &[u8]) -> [u8; SIGNATURE_LEN] {
@@ -257,13 +263,23 @@ pub fn change_signed_bytes(change_bytes: &[u8]) -> Vec<u8> {
 }
 
 /// What a slot's claim key signs: that `new_pseudonym` claims `slot_id` of
-/// the group. Nothing the server sees lets it sign this.
+/// the group, the slot added at `slot_revision` (so the claim can't be
+/// replayed into a later slot with the same id). Nothing the server sees
+/// lets it sign this.
 pub fn claim_signed_bytes(
     group_id: &[u8; GROUP_ID_LEN],
     slot_id: &[u8; SLOT_ID_LEN],
+    slot_revision: u64,
     new_pseudonym: &[u8; PUBLIC_KEY_LEN],
 ) -> Vec<u8> {
-    [CLAIM_DOMAIN, group_id, slot_id, new_pseudonym].concat()
+    [
+        CLAIM_DOMAIN,
+        group_id,
+        slot_id,
+        &slot_revision.to_be_bytes(),
+        new_pseudonym,
+    ]
+    .concat()
 }
 
 /// What an account's Chat device signs to bind a pseudonym of the group to
@@ -303,12 +319,13 @@ pub fn verify_claim_signature(
     claim_key: &[u8; PUBLIC_KEY_LEN],
     group_id: &[u8; GROUP_ID_LEN],
     slot_id: &[u8; SLOT_ID_LEN],
+    slot_revision: u64,
     new_pseudonym: &[u8; PUBLIC_KEY_LEN],
     signature: &[u8; SIGNATURE_LEN],
 ) -> Result<()> {
     verify(
         claim_key,
-        &claim_signed_bytes(group_id, slot_id, new_pseudonym),
+        &claim_signed_bytes(group_id, slot_id, slot_revision, new_pseudonym),
         signature,
     )
 }
@@ -391,42 +408,20 @@ mod tests {
         let group = master().group_id();
         let claim_key = GroupKeyPair::generate();
         let claimant = GroupKeyPair::generate().public_key();
-        let claim = claim_key.sign_claim(&group, &[3u8; 16], &claimant);
-        verify_claim_signature(
-            &claim_key.public_key(),
-            &group,
-            &[3u8; 16],
-            &claimant,
-            &claim,
-        )
-        .unwrap();
-        // Another pseudonym or slot: refused. A change signature is not a claim.
+        let claim = claim_key.sign_claim(&group, &[3u8; 16], 4, &claimant);
+        let key = claim_key.public_key();
+        verify_claim_signature(&key, &group, &[3u8; 16], 4, &claimant, &claim).unwrap();
+        // Another pseudonym, slot or slot revision: refused. A change
+        // signature is not a claim.
         let thief = GroupKeyPair::generate().public_key();
-        assert!(verify_claim_signature(
-            &claim_key.public_key(),
-            &group,
-            &[3u8; 16],
-            &thief,
-            &claim
-        )
-        .is_err());
-        assert!(verify_claim_signature(
-            &claim_key.public_key(),
-            &group,
-            &[4u8; 16],
-            &claimant,
-            &claim
-        )
-        .is_err());
-        let as_change = claim_key.sign_change(&claim_signed_bytes(&group, &[3u8; 16], &claimant));
-        assert!(verify_claim_signature(
-            &claim_key.public_key(),
-            &group,
-            &[3u8; 16],
-            &claimant,
-            &as_change
-        )
-        .is_err());
+        assert!(verify_claim_signature(&key, &group, &[3u8; 16], 4, &thief, &claim).is_err());
+        assert!(verify_claim_signature(&key, &group, &[4u8; 16], 4, &claimant, &claim).is_err());
+        assert!(verify_claim_signature(&key, &group, &[3u8; 16], 5, &claimant, &claim).is_err());
+        let as_change =
+            claim_key.sign_change(&claim_signed_bytes(&group, &[3u8; 16], 4, &claimant));
+        assert!(
+            verify_claim_signature(&key, &group, &[3u8; 16], 4, &claimant, &as_change).is_err()
+        );
     }
 
     #[test]

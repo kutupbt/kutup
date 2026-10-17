@@ -4,6 +4,14 @@ use super::*;
 
 const HOME: &str = "home.example";
 
+fn home_pin() -> GroupHomePinV1 {
+    GroupHomePinV1 {
+        server: HOME.into(),
+        identity_sequence: 1,
+        identity_document_hash: "9".repeat(64),
+    }
+}
+
 struct Group {
     master: GroupMasterKey,
     state: GroupStateV1,
@@ -28,9 +36,12 @@ fn author(group: &Group, actor: &GroupKeyPair, actions: Vec<GroupActionV1>) -> G
         previous_hash: encode(&group.head),
         actor: encode(&actor.public_key()),
         actions,
-        resulting_state_hash: encode(&[0u8; 32]),
+        resulting_state_hash: Some(encode(&[0u8; 32])),
         signature: String::new(),
     };
+    if change.is_newcomers_change() {
+        change.resulting_state_hash = None;
+    }
     let next = resulting_state(&group.state, &group.head, &change, &GroupLimits::MAX)
         .expect("an honest author's change");
     sign(&mut change, actor, &next);
@@ -38,7 +49,9 @@ fn author(group: &Group, actor: &GroupKeyPair, actions: Vec<GroupActionV1>) -> G
 }
 
 fn sign(change: &mut GroupChangeV1, actor: &GroupKeyPair, next: &GroupStateV1) {
-    change.resulting_state_hash = encode(&next.hash().unwrap());
+    if !change.is_newcomers_change() {
+        change.resulting_state_hash = Some(encode(&next.hash().unwrap()));
+    }
     change.signature = encode(&actor.sign_change(&change.signed_bytes().unwrap()));
 }
 
@@ -56,20 +69,16 @@ fn create(creator: &GroupKeyPair) -> Group {
         previous_hash: encode(&[0u8; 32]),
         actor: encode(&creator.public_key()),
         actions: vec![GroupActionV1::Genesis {
-            home: GroupHomePinV1 {
-                server: HOME.into(),
-                identity_sequence: 1,
-                identity_document_hash: "9".repeat(64),
-            },
+            home: home_pin(),
             access: GroupAccessV1::DEFAULT,
             entry: sealed_entry(&master, &creator.public_key()),
         }],
-        resulting_state_hash: encode(&[0u8; 32]),
+        resulting_state_hash: Some(encode(&[0u8; 32])),
         signature: String::new(),
     };
-    let first = resulting_genesis_state(&change, HOME, &GroupLimits::MAX).unwrap();
+    let first = resulting_genesis_state(&change, &home_pin(), &GroupLimits::MAX).unwrap();
     sign(&mut change, creator, &first);
-    let state = check_genesis(&change, HOME, &GroupLimits::MAX).unwrap();
+    let state = check_genesis(&change, &home_pin(), &GroupLimits::MAX).unwrap();
     Group {
         head: change.hash().unwrap(),
         master,
@@ -108,7 +117,14 @@ fn claim_change(
 ) -> GroupChangeV1 {
     let group_id = decode_group_id(&group.state.group_id).unwrap();
     let slot = decode_exact::<16>("slotId", slot_id).unwrap();
-    let claim_signature = claim_key.sign_claim(&group_id, &slot, &member.public_key());
+    let slot_revision = group
+        .state
+        .slots
+        .iter()
+        .find(|s| s.slot_id == slot_id)
+        .map_or(0, |s| s.created_at_revision);
+    let claim_signature =
+        claim_key.sign_claim(&group_id, &slot, slot_revision, &member.public_key());
     author(
         group,
         member,
@@ -133,9 +149,12 @@ fn forced(group: &Group, actor: &GroupKeyPair, actions: Vec<GroupActionV1>) -> G
         previous_hash: encode(&group.head),
         actor: encode(&actor.public_key()),
         actions,
-        resulting_state_hash: encode(&group.state.hash().unwrap()),
+        resulting_state_hash: Some(encode(&group.state.hash().unwrap())),
         signature: String::new(),
     };
+    if change.is_newcomers_change() {
+        change.resulting_state_hash = None;
+    }
     change.signature = encode(&actor.sign_change(&change.signed_bytes().unwrap()));
     change
 }
@@ -201,7 +220,6 @@ fn the_home_cannot_claim_a_slot_without_the_claim_key() {
             entry: sealed_entry(&group.master, &home_key.public_key()),
         }],
     );
-    stolen.resulting_state_hash = honest.resulting_state_hash.clone();
     stolen.signature = encode(&home_key.sign_change(&stolen.signed_bytes().unwrap()));
     assert_eq!(refused(&group, &stolen), GroupChangeError::BadSignature);
 
@@ -216,7 +234,7 @@ fn the_home_cannot_claim_a_slot_without_the_claim_key() {
         &late,
         vec![GroupActionV1::Claim {
             slot_id: slot_id.clone(),
-            claim_signature: encode(&claim_key.sign_claim(&group_id, &slot, &late.public_key())),
+            claim_signature: encode(&claim_key.sign_claim(&group_id, &slot, 1, &late.public_key())),
             entry: sealed_entry(&group.master, &late.public_key()),
         }],
     );
@@ -419,7 +437,7 @@ fn the_chain_and_the_named_state_are_checked() {
     );
 
     let mut wrong_state = change.clone();
-    wrong_state.resulting_state_hash = encode(&[1u8; 32]);
+    wrong_state.resulting_state_hash = Some(encode(&[1u8; 32]));
     wrong_state.signature = encode(&creator.sign_change(&wrong_state.signed_bytes().unwrap()));
     assert_eq!(
         refused(&group, &wrong_state),
@@ -470,11 +488,380 @@ fn a_newcomers_change_carries_one_action() {
         previous_hash: encode(&group.head),
         actor: encode(&joiner.public_key()),
         actions: vec![GroupActionV1::CancelRequest, GroupActionV1::Leave],
-        resulting_state_hash: encode(&[0u8; 32]),
+        resulting_state_hash: None,
         signature: encode(&[0u8; 64]),
     };
     assert!(matches!(
         refused(&group, &change),
         GroupChangeError::Malformed(_)
     ));
+}
+
+fn admins(group: &Group) -> usize {
+    group
+        .state
+        .members
+        .iter()
+        .filter(|m| m.role == GroupRole::Administrator)
+        .count()
+}
+
+/// Admins A and B, member C.
+fn three(a: &GroupKeyPair, b: &GroupKeyPair, c: &GroupKeyPair) -> Group {
+    let mut group = create(a);
+    add(&mut group, a, b, GroupRole::Administrator);
+    add(&mut group, a, c, GroupRole::Member);
+    assert_eq!(admins(&group), 2);
+    group
+}
+
+#[test]
+fn no_change_can_leave_the_group_without_an_administrator() {
+    let (a, b, c) = (
+        GroupKeyPair::generate(),
+        GroupKeyPair::generate(),
+        GroupKeyPair::generate(),
+    );
+    let group = three(&a, &b, &c);
+    let pb = encode(&b.public_key());
+    let pa = encode(&a.public_key());
+    for actions in [
+        // Leave, then act on the rights just given up.
+        vec![
+            GroupActionV1::Leave,
+            GroupActionV1::ModifyRole {
+                pseudonym: pb.clone(),
+                role: GroupRole::Member,
+            },
+        ],
+        vec![
+            GroupActionV1::Leave,
+            GroupActionV1::RemoveMember {
+                pseudonym: pb.clone(),
+            },
+        ],
+        // Demote both administrators in one change.
+        vec![
+            GroupActionV1::ModifyRole {
+                pseudonym: pa.clone(),
+                role: GroupRole::Member,
+            },
+            GroupActionV1::ModifyRole {
+                pseudonym: pb.clone(),
+                role: GroupRole::Member,
+            },
+        ],
+    ] {
+        let change = forced(&group, &a, actions);
+        let error = refused(&group, &change);
+        assert!(
+            matches!(
+                error,
+                GroupChangeError::NotMember
+                    | GroupChangeError::NotAllowed
+                    | GroupChangeError::LastAdministrator
+            ),
+            "{error:?}"
+        );
+    }
+    // Nothing runs after a leave, whatever it is.
+    let after_leave = forced(
+        &group,
+        &a,
+        vec![
+            GroupActionV1::Leave,
+            GroupActionV1::AddSlot {
+                slot_id: encode(&[7u8; 16]),
+                role: GroupRole::Administrator,
+                claim_key: encode(&[8u8; 32]),
+                entry: sealed_entry(&group.master, b"slot"),
+            },
+        ],
+    );
+    assert_eq!(refused(&group, &after_leave), GroupChangeError::NotMember);
+    // Demoting oneself then demoting the other: refused on the second.
+    let self_then_other = forced(
+        &group,
+        &a,
+        vec![
+            GroupActionV1::ModifyRole {
+                pseudonym: pa,
+                role: GroupRole::Member,
+            },
+            GroupActionV1::ModifyRole {
+                pseudonym: pb,
+                role: GroupRole::Member,
+            },
+        ],
+    );
+    assert_eq!(
+        refused(&group, &self_then_other),
+        GroupChangeError::NotAllowed
+    );
+}
+
+#[test]
+fn the_last_administrator_cannot_leave_pending_slots_behind() {
+    let creator = GroupKeyPair::generate();
+    let mut group = create(&creator);
+    let slot = author(
+        &group,
+        &creator,
+        vec![GroupActionV1::AddSlot {
+            slot_id: encode(&[1u8; 16]),
+            role: GroupRole::Member,
+            claim_key: encode(&GroupKeyPair::generate().public_key()),
+            entry: sealed_entry(&group.master, b"slot"),
+        }],
+    );
+    apply(&mut group, &slot);
+    let leave = forced(&group, &creator, vec![GroupActionV1::Leave]);
+    assert_eq!(refused(&group, &leave), GroupChangeError::LastAdministrator);
+    // Revoking the slot in the same change lets the last member go.
+    let revoke_and_leave = author(
+        &group,
+        &creator,
+        vec![
+            GroupActionV1::RevokeSlot {
+                slot_id: encode(&[1u8; 16]),
+            },
+            GroupActionV1::Leave,
+        ],
+    );
+    apply(&mut group, &revoke_and_leave);
+    assert!(group.state.members.is_empty());
+}
+
+#[test]
+fn a_valid_claim_still_needs_the_pseudonyms_own_signature() {
+    let creator = GroupKeyPair::generate();
+    let mut group = create(&creator);
+    let claim_key = GroupKeyPair::generate();
+    let slot_id = encode(&[1u8; 16]);
+    let add = author(
+        &group,
+        &creator,
+        vec![GroupActionV1::AddSlot {
+            slot_id: slot_id.clone(),
+            role: GroupRole::Member,
+            claim_key: encode(&claim_key.public_key()),
+            entry: sealed_entry(&group.master, b"slot"),
+        }],
+    );
+    apply(&mut group, &add);
+    let invitee = GroupKeyPair::generate();
+    let mut claim = claim_change(&group, &invitee, &claim_key, &slot_id);
+    claim.signature = encode(&GroupKeyPair::generate().sign_change(&claim.signed_bytes().unwrap()));
+    assert_eq!(refused(&group, &claim), GroupChangeError::BadSignature);
+}
+
+#[test]
+fn a_removed_member_can_change_nothing() {
+    let (a, b, c) = (
+        GroupKeyPair::generate(),
+        GroupKeyPair::generate(),
+        GroupKeyPair::generate(),
+    );
+    let mut group = three(&a, &b, &c);
+    let remove = author(
+        &group,
+        &a,
+        vec![GroupActionV1::RemoveMember {
+            pseudonym: encode(&b.public_key()),
+        }],
+    );
+    apply(&mut group, &remove);
+    let late = forced(
+        &group,
+        &b,
+        vec![GroupActionV1::ModifyAnnouncementsOnly { on: true }],
+    );
+    assert_eq!(refused(&group, &late), GroupChangeError::NotMember);
+}
+
+#[test]
+fn members_and_slots_together_stop_at_the_limit() {
+    let creator = GroupKeyPair::generate();
+    let mut group = create(&creator);
+    let limits = GroupLimits {
+        max_members: 3,
+        max_requesting: 3,
+    };
+    let slots = |from: u8| -> Vec<GroupActionV1> {
+        (from..from + 2)
+            .map(|i| GroupActionV1::AddSlot {
+                slot_id: encode(&[i; 16]),
+                role: GroupRole::Member,
+                claim_key: encode(&[i; 32]),
+                entry: sealed_entry(&group.master, b"slot"),
+            })
+            .collect()
+    };
+    let two = author(&group, &creator, slots(1));
+    group.state = check_change(&group.state, &group.head, &two, &limits).unwrap();
+    group.head = two.hash().unwrap();
+    // One member and two slots fill three places; a fourth is refused.
+    let mut more = forced(&group, &creator, slots(10)[..1].to_vec());
+    more.resulting_state_hash = Some(encode(&[0u8; 32]));
+    more.signature = encode(&creator.sign_change(&more.signed_bytes().unwrap()));
+    assert_eq!(
+        check_change(&group.state, &group.head, &more, &limits).unwrap_err(),
+        GroupChangeError::LimitReached
+    );
+    // A server can't promise more than the protocol's 256.
+    let too_many = GroupLimits {
+        max_members: MAX_GROUP_MEMBERS + 1,
+        max_requesting: 1,
+    };
+    assert!(matches!(
+        check_change(&group.state, &group.head, &more, &too_many).unwrap_err(),
+        GroupChangeError::Malformed(_)
+    ));
+    let too_many_requests = GroupLimits {
+        max_members: 1,
+        max_requesting: MAX_GROUP_MEMBERS + 1,
+    };
+    assert!(matches!(
+        check_change(&group.state, &group.head, &more, &too_many_requests).unwrap_err(),
+        GroupChangeError::Malformed(_)
+    ));
+}
+
+#[test]
+fn oversized_sealed_attributes_are_refused() {
+    let creator = GroupKeyPair::generate();
+    let group = create(&creator);
+    let key = group.master.state_key();
+    for (attribute, field, plain_len) in [
+        (
+            GroupAttribute::Title,
+            SealedField::Title,
+            MAX_SEALED_TITLE_BYTES,
+        ),
+        (
+            GroupAttribute::Description,
+            SealedField::Description,
+            MAX_SEALED_DESCRIPTION_BYTES,
+        ),
+    ] {
+        let value = encode(&key.seal(field, b"", &vec![b'x'; plain_len]).unwrap());
+        let change = forced(
+            &group,
+            &creator,
+            vec![GroupActionV1::ModifyAttribute {
+                attribute,
+                value: Some(value),
+            }],
+        );
+        assert!(matches!(
+            refused(&group, &change),
+            GroupChangeError::Malformed(_)
+        ));
+    }
+}
+
+#[test]
+fn a_claim_is_bound_to_its_slots_revision() {
+    let creator = GroupKeyPair::generate();
+    let mut group = create(&creator);
+    let claim_key = GroupKeyPair::generate();
+    let slot_id = encode(&[1u8; 16]);
+    let add_slot = |group: &Group| {
+        author(
+            group,
+            &creator,
+            vec![GroupActionV1::AddSlot {
+                slot_id: slot_id.clone(),
+                role: GroupRole::Member,
+                claim_key: encode(&claim_key.public_key()),
+                entry: sealed_entry(&group.master, b"slot"),
+            }],
+        )
+    };
+    let first = add_slot(&group);
+    apply(&mut group, &first);
+    let invitee = GroupKeyPair::generate();
+    let old_claim = claim_change(&group, &invitee, &claim_key, &slot_id);
+    let GroupActionV1::Claim {
+        claim_signature, ..
+    } = old_claim.actions[0].clone()
+    else {
+        unreachable!()
+    };
+    // The slot is revoked and added again with the same id and key.
+    let revoke = author(
+        &group,
+        &creator,
+        vec![GroupActionV1::RevokeSlot {
+            slot_id: slot_id.clone(),
+        }],
+    );
+    apply(&mut group, &revoke);
+    let again = add_slot(&group);
+    apply(&mut group, &again);
+    // The old claim signature doesn't take the new slot.
+    let replay = forced(
+        &group,
+        &invitee,
+        vec![GroupActionV1::Claim {
+            slot_id,
+            claim_signature,
+            entry: sealed_entry(&group.master, &invitee.public_key()),
+        }],
+    );
+    assert_eq!(refused(&group, &replay), GroupChangeError::BadSignature);
+}
+
+#[test]
+fn a_newcomers_change_names_no_state_and_others_must() {
+    let creator = GroupKeyPair::generate();
+    let group = create(&creator);
+    let joiner = GroupKeyPair::generate();
+    let mut join = forced(
+        &group,
+        &joiner,
+        vec![GroupActionV1::RequestToJoin {
+            password: encode(&[1u8; 16]),
+            entry: sealed_entry(&group.master, &joiner.public_key()),
+        }],
+    );
+    join.resulting_state_hash = Some(encode(&[0u8; 32]));
+    assert!(join.validate_shape().is_err());
+    let mut member_change = forced(
+        &group,
+        &creator,
+        vec![GroupActionV1::ModifyAnnouncementsOnly { on: true }],
+    );
+    member_change.resulting_state_hash = None;
+    assert!(member_change.validate_shape().is_err());
+}
+
+#[test]
+fn a_genesis_must_name_the_expected_home() {
+    let creator = GroupKeyPair::generate();
+    let master = GroupMasterKey::from_bytes(&[5u8; 32]).unwrap();
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: encode_group_id(&master.group_id()),
+        revision: 0,
+        previous_hash: encode(&[0u8; 32]),
+        actor: encode(&creator.public_key()),
+        actions: vec![GroupActionV1::Genesis {
+            home: home_pin(),
+            access: GroupAccessV1::DEFAULT,
+            entry: sealed_entry(&master, &creator.public_key()),
+        }],
+        resulting_state_hash: Some(encode(&[0u8; 32])),
+        signature: String::new(),
+    };
+    let first = resulting_genesis_state(&change, &home_pin(), &GroupLimits::MAX).unwrap();
+    sign(&mut change, &creator, &first);
+    let other = GroupHomePinV1 {
+        identity_sequence: 2,
+        ..home_pin()
+    };
+    assert_eq!(
+        check_genesis(&change, &other, &GroupLimits::MAX).unwrap_err(),
+        GroupChangeError::WrongGroup
+    );
 }

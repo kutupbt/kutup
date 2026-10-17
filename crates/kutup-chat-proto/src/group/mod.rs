@@ -163,6 +163,9 @@ pub struct GroupSlotV1 {
     pub role: GroupRole,
     /// The pseudonym that added it, who may revoke it with administrators.
     pub adder: String,
+    /// The revision that added it; a claim signs it, so a claim can't be
+    /// replayed into a later slot with the same id.
+    pub created_at_revision: u64,
     /// The one-time key a claim is signed with.
     pub claim_key: String,
     /// The sealed invited account.
@@ -238,6 +241,9 @@ impl GroupStateV1 {
             }
             previous_slot = Some(id);
             decode_pseudonym(&slot.adder)?;
+            if slot.created_at_revision > self.revision {
+                return Err("a slot was added after the state's revision".into());
+            }
             decode_pseudonym(&slot.claim_key)?;
             decode_sealed("slot entry", &slot.entry, MAX_SEALED_ENTRY_BYTES)?;
         }
@@ -422,8 +428,13 @@ pub struct GroupChangeV1 {
     /// The actor's pseudonym.
     pub actor: String,
     pub actions: Vec<GroupActionV1>,
-    /// The hash of the state this change results in.
-    pub resulting_state_hash: String,
+    /// The hash of the state this change results in. Absent, and only
+    /// absent, on a newcomer's change (a claim, a link join, a request or its
+    /// cancellation): a newcomer never sees the state, whose sealed entries a
+    /// link's master key would open, so the home computes the result and its
+    /// notary signature names it; every client recomputes it with
+    /// [`check::check_change`] and compares.
+    pub resulting_state_hash: Option<String>,
     /// The actor's signature over the change with this field empty.
     pub signature: String,
 }
@@ -436,7 +447,14 @@ impl GroupChangeV1 {
         decode_group_id(&self.group_id)?;
         decode_exact::<HASH_LEN>("previousHash", &self.previous_hash)?;
         decode_pseudonym(&self.actor)?;
-        decode_exact::<HASH_LEN>("resultingStateHash", &self.resulting_state_hash)?;
+        match (&self.resulting_state_hash, self.is_newcomers_change()) {
+            (Some(hash), false) => {
+                decode_exact::<HASH_LEN>("resultingStateHash", hash)?;
+            }
+            (None, true) => {}
+            (Some(_), true) => return Err("a newcomer's change names no resulting state".into()),
+            (None, false) => return Err("a change names its resulting state".into()),
+        }
         if self.actions.is_empty() || self.actions.len() > MAX_ACTIONS_PER_CHANGE {
             return Err("a change carries 1 to 64 actions".into());
         }
@@ -444,6 +462,18 @@ impl GroupChangeV1 {
             return Err("a genesis, claim, join or request change carries one action".into());
         }
         Ok(())
+    }
+
+    /// A change by someone who isn't a member yet and never saw the state:
+    /// its one action is a claim, a link join, a request or its cancellation.
+    pub fn is_newcomers_change(&self) -> bool {
+        matches!(
+            self.actions.as_slice(),
+            [GroupActionV1::Claim { .. }
+                | GroupActionV1::JoinFromLink { .. }
+                | GroupActionV1::RequestToJoin { .. }
+                | GroupActionV1::CancelRequest]
+        )
     }
 
     /// The bytes the actor signs: the canonical change with an empty signature.

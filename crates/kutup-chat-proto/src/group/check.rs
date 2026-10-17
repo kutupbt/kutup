@@ -16,9 +16,9 @@ use kutup_crypto::chat_group::{verify_change_signature, verify_claim_signature, 
 
 use super::{
     decode_exact, decode_group_id, decode_pseudonym, decode_sealed, encode, AccessRequired,
-    GroupActionV1, GroupAttribute, GroupChangeV1, GroupMemberV1, GroupRequestV1, GroupRole,
-    GroupSlotV1, GroupStateV1, GROUP_FORMAT_VERSION, INVITE_LINK_PASSWORD_LEN, MAX_GROUP_MEMBERS,
-    MAX_SEALED_BAN_LIST_BYTES, MAX_SEALED_ENTRY_BYTES,
+    GroupActionV1, GroupAttribute, GroupChangeV1, GroupHomePinV1, GroupMemberV1, GroupRequestV1,
+    GroupRole, GroupSlotV1, GroupStateV1, GROUP_FORMAT_VERSION, INVITE_LINK_PASSWORD_LEN,
+    MAX_GROUP_MEMBERS, MAX_SEALED_BAN_LIST_BYTES, MAX_SEALED_ENTRY_BYTES,
 };
 
 /// What a server allows (`CHAT_GROUP_MAX_MEMBERS`, at most 256).
@@ -107,20 +107,17 @@ fn malformed(reason: impl Into<String>) -> GroupChangeError {
     GroupChangeError::Malformed(reason.into())
 }
 
-/// Checks revision 0 and returns the group's first state. `home_server` is
-/// the server the change was sent to, which must be the one it names.
-///
-/// It doesn't check that the pin is that server's *current* identity
-/// (sequence and document hash): only the server knows that, and checks it
-/// before calling this. A client verifies the pin through the identity
-/// history (`GroupHomePinV1::follow`).
+/// Checks revision 0 and returns the group's first state. `home` is the pin
+/// the genesis must name exactly: the server passes its own current
+/// identity, a client the pin it got with the invitation or link (and that
+/// pin is checked through the identity history, `GroupHomePinV1::follow`).
 pub fn check_genesis(
     change: &GroupChangeV1,
-    home_server: &str,
+    home: &GroupHomePinV1,
     limits: &GroupLimits,
 ) -> Result<GroupStateV1, GroupChangeError> {
     verify_actor_signature(change)?;
-    let state = genesis_state(change, home_server, limits)?;
+    let state = genesis_state(change, home, limits)?;
     compare_hash(&state, change)?;
     Ok(state)
 }
@@ -129,15 +126,15 @@ pub fn check_genesis(
 /// check but the signature and the named hash.
 pub fn resulting_genesis_state(
     change: &GroupChangeV1,
-    home_server: &str,
+    home: &GroupHomePinV1,
     limits: &GroupLimits,
 ) -> Result<GroupStateV1, GroupChangeError> {
-    genesis_state(change, home_server, limits)
+    genesis_state(change, home, limits)
 }
 
 fn genesis_state(
     change: &GroupChangeV1,
-    home_server: &str,
+    expected_home: &GroupHomePinV1,
     limits: &GroupLimits,
 ) -> Result<GroupStateV1, GroupChangeError> {
     check_limits(limits)?;
@@ -156,7 +153,7 @@ fn genesis_state(
     else {
         return Err(malformed("revision 0 carries one genesis action"));
     };
-    if home.server != home_server {
+    if home != expected_home {
         return Err(GroupChangeError::WrongGroup);
     }
     decode_sealed("entry", entry, MAX_SEALED_ENTRY_BYTES).map_err(malformed)?;
@@ -235,12 +232,14 @@ fn next_state(
     let mut next = state.clone();
     next.revision = change.revision;
     let actor = change.actor.as_str();
-    // Roles are judged at the previous revision, as Signal's server does.
-    let actor_was_member = state.member(actor).is_some();
-    let actor_was_admin = state.is_administrator(actor);
 
     for action in &change.actions {
-        if !action.is_by_newcomer() && !actor_was_member {
+        // The actor's rights are those it held at the previous revision and
+        // still holds now: within a change they can only shrink, so nothing
+        // runs on rights an earlier action gave up (a leave, a demotion).
+        let actor_is_member = state.member(actor).is_some() && next.member(actor).is_some();
+        let actor_is_admin = state.is_administrator(actor) && next.is_administrator(actor);
+        if !action.is_by_newcomer() && !actor_is_member {
             return Err(GroupChangeError::NotMember);
         }
         apply(
@@ -248,20 +247,40 @@ fn next_state(
             &mut next,
             change,
             actor,
-            actor_was_admin,
+            actor_is_admin,
             action,
             limits,
         )?;
+    }
+    // The last-administrator rule (Signal-Desktop
+    // `getCannotLeaveBecauseYouAreLastAdmin`), over the whole change: a group
+    // that had an administrator and still has members or pending slots keeps
+    // one, however the change was put together.
+    let had_admin = state
+        .members
+        .iter()
+        .any(|m| m.role == GroupRole::Administrator);
+    let has_admin = next
+        .members
+        .iter()
+        .any(|m| m.role == GroupRole::Administrator);
+    let still_populated = !next.members.is_empty() || !next.slots.is_empty();
+    if had_admin && still_populated && !has_admin {
+        return Err(GroupChangeError::LastAdministrator);
     }
     sort_by_decoded(&mut next);
     next.validate().map_err(malformed)?;
     Ok(next)
 }
 
+/// A server's limits may be lower than the protocol's, never higher: clients
+/// check with [`GroupLimits::MAX`], so they accept everything any server
+/// accepted.
 fn check_limits(limits: &GroupLimits) -> Result<(), GroupChangeError> {
     if limits.max_members == 0
         || limits.max_members > MAX_GROUP_MEMBERS
         || limits.max_requesting == 0
+        || limits.max_requesting > MAX_GROUP_MEMBERS
     {
         return Err(malformed("server group limits are out of range"));
     }
@@ -275,13 +294,15 @@ fn verify_actor_signature(change: &GroupChangeV1) -> Result<(), GroupChangeError
     verify_change_signature(&actor, &bytes, &signature).map_err(|_| GroupChangeError::BadSignature)
 }
 
-/// The state must be the one the change names.
+/// The state must be the one the change names. A newcomer's change names
+/// none: the home's notary signature names the state it computed, and the
+/// caller compares that with the state this check returns.
 fn compare_hash(next: &GroupStateV1, change: &GroupChangeV1) -> Result<(), GroupChangeError> {
+    let Some(named) = &change.resulting_state_hash else {
+        return Ok(());
+    };
     let hash = next.hash().map_err(malformed)?;
-    require(
-        encode(&hash) == change.resulting_state_hash,
-        GroupChangeError::StateMismatch,
-    )
+    require(encode(&hash) == *named, GroupChangeError::StateMismatch)
 }
 
 /// Lists are ordered by their decoded bytes, not their base64 text.
@@ -307,10 +328,10 @@ fn require(condition: bool, error: GroupChangeError) -> Result<(), GroupChangeEr
 
 /// Signal's access rule: `member` lets every member act, `administrator` only
 /// administrators; anything else lets no one.
-fn allowed(access: AccessRequired, actor_was_admin: bool) -> bool {
+fn allowed(access: AccessRequired, actor_is_admin: bool) -> bool {
     match access {
         AccessRequired::Member | AccessRequired::Any => true,
-        AccessRequired::Administrator => actor_was_admin,
+        AccessRequired::Administrator => actor_is_admin,
         AccessRequired::Unsatisfiable => false,
     }
 }
@@ -321,18 +342,6 @@ fn place_count(state: &GroupStateV1) -> usize {
 
 fn is_banned(state: &GroupStateV1, pseudonym: &str) -> bool {
     state.banned.iter().any(|banned| banned == pseudonym)
-}
-
-/// The last-administrator rule (Signal-Desktop
-/// `getCannotLeaveBecauseYouAreLastAdmin`): the only administrator can't
-/// leave or step down while the group has other members.
-fn last_administrator(state: &GroupStateV1, actor: &str) -> bool {
-    state.is_administrator(actor)
-        && state.members.len() > 1
-        && !state
-            .members
-            .iter()
-            .any(|member| member.pseudonym != actor && member.role == GroupRole::Administrator)
 }
 
 /// The link's password, compared in constant time: the server runs this on
@@ -368,7 +377,7 @@ fn apply(
     next: &mut GroupStateV1,
     change: &GroupChangeV1,
     actor: &str,
-    actor_was_admin: bool,
+    actor_is_admin: bool,
     action: &GroupActionV1,
     limits: &GroupLimits,
 ) -> Result<(), GroupChangeError> {
@@ -383,11 +392,11 @@ fn apply(
             entry,
         } => {
             require(
-                allowed(before.access.members, actor_was_admin),
+                allowed(before.access.members, actor_is_admin),
                 GroupChangeError::NotAllowed,
             )?;
             require(
-                *role == GroupRole::Member || actor_was_admin,
+                *role == GroupRole::Member || actor_is_admin,
                 GroupChangeError::NotAllowed,
             )?;
             decode_exact::<16>("slotId", slot_id).map_err(malformed)?;
@@ -405,6 +414,7 @@ fn apply(
                 slot_id: slot_id.clone(),
                 role: *role,
                 adder: actor.to_string(),
+                created_at_revision: change.revision,
                 claim_key: claim_key.clone(),
                 entry: entry.clone(),
             });
@@ -418,7 +428,7 @@ fn apply(
                 .position(|slot| &slot.slot_id == slot_id)
                 .ok_or(GroupChangeError::UnknownTarget)?;
             require(
-                actor_was_admin || next.slots[index].adder == actor,
+                actor_is_admin || next.slots[index].adder == actor,
                 GroupChangeError::NotAllowed,
             )?;
             next.slots.remove(index);
@@ -443,8 +453,15 @@ fn apply(
             let claimant = decode_pseudonym(actor).map_err(malformed)?;
             let signature =
                 decode_exact::<64>("claimSignature", claim_signature).map_err(malformed)?;
-            verify_claim_signature(&claim_key, &group, &slot_bytes, &claimant, &signature)
-                .map_err(|_| GroupChangeError::BadSignature)?;
+            verify_claim_signature(
+                &claim_key,
+                &group,
+                &slot_bytes,
+                slot.created_at_revision,
+                &claimant,
+                &signature,
+            )
+            .map_err(|_| GroupChangeError::BadSignature)?;
             decode_sealed("entry", entry, MAX_SEALED_ENTRY_BYTES).map_err(malformed)?;
             next.slots.remove(index);
             next.members.push(GroupMemberV1 {
@@ -508,7 +525,7 @@ fn apply(
         }
 
         A::ApproveRequest { pseudonym } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             let index = next
                 .requesting
                 .iter()
@@ -529,7 +546,7 @@ fn apply(
         }
 
         A::DenyRequest { pseudonym } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             let index = next
                 .requesting
                 .iter()
@@ -540,27 +557,16 @@ fn apply(
         }
 
         A::RemoveMember { pseudonym } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             require(pseudonym != actor, malformed("a member leaves with leave"))?;
             remove_member(next, pseudonym)
         }
 
-        A::Leave => {
-            require(
-                !last_administrator(next, actor),
-                GroupChangeError::LastAdministrator,
-            )?;
-            remove_member(next, actor)
-        }
+        // The last-administrator rule is checked over the whole change.
+        A::Leave => remove_member(next, actor),
 
         A::ModifyRole { pseudonym, role } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
-            if pseudonym == actor && *role == GroupRole::Member {
-                require(
-                    !last_administrator(next, actor),
-                    GroupChangeError::LastAdministrator,
-                )?;
-            }
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             let member = next
                 .members
                 .iter_mut()
@@ -583,7 +589,7 @@ fn apply(
 
         A::ModifyAttribute { attribute, value } => {
             require(
-                allowed(before.access.attributes, actor_was_admin),
+                allowed(before.access.attributes, actor_is_admin),
                 GroupChangeError::NotAllowed,
             )?;
             if let Some(value) = value {
@@ -601,19 +607,19 @@ fn apply(
         }
 
         A::ModifyAccess { access } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             next.access = *access;
             Ok(())
         }
 
         A::ModifyAnnouncementsOnly { on } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             next.announcements_only = *on;
             Ok(())
         }
 
         A::ModifyInviteLink { password } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             if let Some(password) = password {
                 decode_exact::<INVITE_LINK_PASSWORD_LEN>("password", password)
                     .map_err(malformed)?;
@@ -623,7 +629,7 @@ fn apply(
         }
 
         A::Ban { pseudonym } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             require(pseudonym != actor, GroupChangeError::NotAllowed)?;
             decode_pseudonym(pseudonym).map_err(malformed)?;
             if next.member(pseudonym).is_some() {
@@ -638,7 +644,7 @@ fn apply(
         }
 
         A::Unban { pseudonym } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             let before_len = next.banned.len();
             next.banned.retain(|banned| banned != pseudonym);
             require(
@@ -648,7 +654,7 @@ fn apply(
         }
 
         A::ModifyBanList { value } => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             if let Some(value) = value {
                 decode_sealed("banList", value, MAX_SEALED_BAN_LIST_BYTES).map_err(malformed)?;
             }
@@ -657,7 +663,7 @@ fn apply(
         }
 
         A::Terminate => {
-            require(actor_was_admin, GroupChangeError::NotAllowed)?;
+            require(actor_is_admin, GroupChangeError::NotAllowed)?;
             next.terminated = true;
             Ok(())
         }
