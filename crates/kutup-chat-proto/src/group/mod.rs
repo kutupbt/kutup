@@ -15,16 +15,17 @@
 //!
 //! Encoding: canonical JSON, as the rest of this crate. Binary values are
 //! standard padded base64, except the group id, which is unpadded base64url
-//! because it also names the group in paths.
+//! because it also names the group in paths (one definition, in
+//! `group_route`).
 
 pub mod check;
 #[cfg(test)]
 mod tests;
 
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::chat_group::{
-    change_hash, state_hash, GROUP_ID_LEN, HASH_LEN, PUBLIC_KEY_LEN, SIGNATURE_LEN, SLOT_ID_LEN,
+    change_hash, state_hash, HASH_LEN, PUBLIC_KEY_LEN, SIGNATURE_LEN, SLOT_ID_LEN,
 };
 use serde::{Deserialize, Serialize};
 
@@ -112,7 +113,7 @@ impl GroupAccessV1 {
 /// The server that holds the group, fixed at creation, pinned by its
 /// federation identity document; that identity signs what the server
 /// accepts and its gateway key (`crate::group_route`).
-pub use crate::group_route::GroupHomePinV1;
+pub use crate::group_route::{decode_group_id, encode_group_id, GroupHomePinV1};
 
 /// The sealed group-wide attributes; `None` when unset.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,22 +483,6 @@ impl GroupChangeV1 {
     pub fn hash(&self) -> Result<[u8; HASH_LEN], String> {
         Ok(change_hash(&self.canonical_bytes()?))
     }
-}
-
-pub fn encode_group_id(id: &[u8; GROUP_ID_LEN]) -> String {
-    URL_SAFE_NO_PAD.encode(id)
-}
-
-pub fn decode_group_id(value: &str) -> Result<[u8; GROUP_ID_LEN], String> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(value)
-        .map_err(|_| "groupId must be unpadded base64url".to_string())?;
-    if URL_SAFE_NO_PAD.encode(&bytes) != value {
-        return Err("groupId is not canonical".into());
-    }
-    bytes
-        .try_into()
-        .map_err(|_| "groupId must be 32 bytes".to_string())
 }
 
 pub fn encode(bytes: &[u8]) -> String {

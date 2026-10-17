@@ -107,8 +107,13 @@ fn malformed(reason: impl Into<String>) -> GroupChangeError {
     GroupChangeError::Malformed(reason.into())
 }
 
-/// Checks revision 0 and returns the group's first state. `home` is the
-/// server the change was sent to, which must be the one it names.
+/// Checks revision 0 and returns the group's first state. `home_server` is
+/// the server the change was sent to, which must be the one it names.
+///
+/// It doesn't check that the pin is that server's *current* identity
+/// (sequence and document hash): only the server knows that, and checks it
+/// before calling this. A client verifies the pin through the identity
+/// history (`GroupHomePinV1::follow`).
 pub fn check_genesis(
     change: &GroupChangeV1,
     home_server: &str,
@@ -330,10 +335,22 @@ fn last_administrator(state: &GroupStateV1, actor: &str) -> bool {
             .any(|member| member.pseudonym != actor && member.role == GroupRole::Administrator)
 }
 
+/// The link's password, compared in constant time: the server runs this on
+/// every join attempt.
 fn check_password(state: &GroupStateV1, password: &str) -> Result<(), GroupChangeError> {
-    decode_exact::<INVITE_LINK_PASSWORD_LEN>("password", password).map_err(malformed)?;
+    let offered =
+        decode_exact::<INVITE_LINK_PASSWORD_LEN>("password", password).map_err(malformed)?;
+    let Some(current) = &state.invite_link_password else {
+        return Err(GroupChangeError::WrongPassword);
+    };
+    let current = decode_exact::<INVITE_LINK_PASSWORD_LEN>("inviteLinkPassword", current)
+        .map_err(malformed)?;
+    let difference = offered
+        .iter()
+        .zip(current.iter())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
     require(
-        state.invite_link_password.as_deref() == Some(password),
+        std::hint::black_box(difference) == 0,
         GroupChangeError::WrongPassword,
     )
 }
