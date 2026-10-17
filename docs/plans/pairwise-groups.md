@@ -461,12 +461,18 @@ server**, and moves when ownership moves.
    because their server takes on hosting, the avatar's storage and the SFU.
 3. The old home checks N like any change, plus:
    - both signatures;
-   - the target is a candidate;
-   - the new home has groups on and room under its member limit, which the old
-     home asks the new home before accepting.
-4. After N, the old home accepts no change. Every write, and every log read past
+   - the target is a candidate.
+4. **Prepare first.** Before accepting N, the old home calls the new home
+   (`/api/fed/chat/groups/:id/prepare`).
+   - The new home records durably that it will import this group at N.
+   - It checks there that it has groups on and room under its member limit.
+   - N is accepted only on that acknowledgement.
+5. After N, the old home accepts no change. Every write, and every log read past
    N, gets `409 groupMoved` with the new home.
-5. **The new home imports** the log `0..N` from the old home over federation
+   - It notifies the new home through a durable outbox, retried until the
+     import is acknowledged.
+   - The new owner's client can trigger the import too.
+6. **The new home imports** the log `0..N` from the old home over federation
    (`/api/fed/chat/groups/:id/import`). It is a paged pull, as MLS's authority
    bootstrap was: at most 64 changes or 8 MiB a page, with durable progress that
    resumes after a restart.
@@ -480,28 +486,47 @@ server**, and moves when ownership moves.
      invite-link password.
    - It accepts N+1 only after the import is complete. That order means there
      are never two writable homes.
-6. **Members repoint.** A member's server keeps no map of groups to homes:
+7. **Members repoint.** A member's server keeps no map of groups to homes:
    - clients send each request to the group's server named in their
      `chatGroups` entry or the latest group context;
    - `groupMoved` corrects a stale one;
    - the client updates its `chatGroups` entry when it applies N.
-7. **The old home is a read-only tombstone.** It serves the log up to N to
-   members who are behind, for 30 days by default (a server setting), then
-   answers only `groupMoved`.
-8. **Calls.** A running call on the old home ends with "the group moved", and
+8. **The old home is a read-only tombstone.** It serves the log up to N to
+   members who are behind, for 30 days by default (a server setting).
+   - After that it keeps only the `groupMoved` pointer, one row per group.
+   - **The pointer is never dropped.** A member away for longer still finds the
+     new home, and a chain of moves is followed pointer by pointer.
+9. **Calls.** A running call on the old home ends with "the group moved", and
    members rejoin on the new home.
+
+**A transfer can't freeze the group.** Once the new home has acknowledged the
+prepare, a failure is only a matter of availability:
+- a new home that is down is a home that is down;
+- a new home gone for good is the owner's server gone, which recovery covers.
+
+No cancel change is needed.
 
 **The owner leaves, or loses their account.**
 - **Leaving.** An owner can leave only after handing over. If the owner is the
   last member, leaving ends the group. MLS had the same rule.
 - **Removal.** An administrator can't remove the owner.
-- **Account deletion.** The owner's server refuses to delete an account that
-  owns groups until it hands them over, as Proton refuses to delete an
-  organisation's owner.
+- **Account deletion.** The owner's server refuses to end an account that owns
+  groups until it hands them over, as Proton refuses to delete an
+  organisation's owner. The refusal covers every path that ends an account:
+  - deleting it oneself;
+  - an administrator deleting it;
+  - the destructive administrator wipe.
+- **Paths that don't end an account.**
+  - An **incarnation reset** keeps the account id. The owner signs again from
+    the new manifest, so it needs no succession.
+  - A **disabled** owner isn't deleted. There is no succession: the group waits
+    until an administrator re-enables the account.
 - **An administrator override deletes it anyway.** The home server is then
   still up but has no owner. It accepts a **succession** change signed by the
   first candidate in the list, because the owner's account no longer exists on
   that server. After that the handover runs as above.
+  - The server's check is that the owner's account no longer exists there:
+    no `users` row for that account id.
   - Clients accept a succession by the first candidate when the home server
     issues it.
   - The trust they extend is the home server's word that the owner is gone. A
@@ -525,6 +550,18 @@ incarnation recovery:
      in order.
 
    It is signed by the candidate.
+
+   **It carries the history.** The candidate's server has none of the group's
+   log, and the old home is gone. The candidate's client uploads the log it
+   verified, from the oldest revision it keeps up to R, plus the plain state at
+   R.
+   - The new home stores it as the old incarnation's read-only log.
+   - Members behind R catch up from it and verify the links to `(R, hash)`, as
+     from any home.
+   - Server-side, the new home's ACL for the new incarnation is the plain state
+     at R from that upload. The server can check it only against the
+     candidate's signature and the hash chain; clients verify the rest.
+   - The SFU moves to the new home, as on a transfer.
 3. **What clients check.** A client accepts it when:
    - the signer was a candidate at R;
    - the base is the client's own verified head, or a head it can reach
@@ -533,9 +570,15 @@ incarnation recovery:
    A client whose head is **past** R (the old home served it later changes)
    refuses the recovery and shows that the group's server still answers
    elsewhere. That is MLS's fail-closed rule.
-4. **Two recoveries.** If two candidates recover at once, clients take the
-   **higher-ranked candidate's** recovery and leave the other, with a notice.
-   The rank is fixed in the state at R, so every client chooses the same one.
+4. **Two recoveries.** Clients order recoveries by **R, highest first, then by
+   candidate rank**, and take the first. The one with the most history wins;
+   rank (fixed in the state at R) breaks ties.
+   - Ordering by rank first could pick a recovery from an older R, which every
+     member past that R refuses, splitting the group for nothing.
+   - A client past the chosen R still refuses it (fail-closed).
+   - A later recovery by another candidate with a higher R **supersedes** one
+     already accepted, by the same order. A member who was ahead can then bring
+     the group forward instead of being left out.
 5. **After a recovery:**
    - the old incarnation is read-only on every client;
    - a change from a revived old home is ignored with a warning;
@@ -614,6 +657,11 @@ incarnation recovery:
   - this is the only case where a client refuses a change.
 - The chain is `hash(previous change)`, and each change also carries the hash
   of the resulting state.
+- **The state hash is one a server can compute.** It covers:
+  - the canonical serialization of the plain part;
+  - the encrypted parts as ciphertext bytes, never their decrypted values.
+
+  So the group's server, and a new home importing, can check it.
 
 **Membership is the client's.** These rules hold everywhere; the server's view
 is never an input to them:
@@ -772,6 +820,10 @@ different branch, or hold changes back. The defences:
   write the head when they arrive, as for pins.
 - The last-seen revision is written at most once a minute per group, and on
   every membership change, to keep head writes few.
+- **Devices keep the verified change log**, not only the state, from their
+  `joinedAtRevision`: at most a few thousand small rows per group. A recovering
+  candidate uploads it (§3, recovery), and a member uses it to judge a
+  recovery's base.
 - The chat backup ([`chat-backup.md`](../chat-backup.md)) is unchanged: display
   records stay keyed by conversation. A group conversation's key changes from
   today's `Group{groupId: uuid}` to the 32-byte derived id, encoded as
@@ -999,13 +1051,13 @@ figures are from its review.
 | --- | --- | --- | --- |
 | 1. Usable groups (off in production) | 16–20 | 15–19 | about 4–5 weeks, with review and the two-server gate |
 | 2. Sending once | 4–5 | 8–10 | about 2 weeks |
-| 3. Links, settings and ownership | 10–13 | 8–11 | about 2.5–3 weeks |
+| 3. Links, settings and ownership | 11–15 | 10–15 | about 3 weeks |
 | 4. Calls | 4–6 | 1–2 | about 1–1.5 weeks |
 | 5. MLS out | 3 | 2–3 | about 1 week |
 
-- In all, that's about 37–47 days for the third session and 34–45 for the
-  second. The ownership moves add about 4–5 and 5–7.
-- Applying the account-id slices' 1.5× to the calendar gives **about 10–13
+- In all, that's about 38–49 days for the third session and 36–49 for the
+  second. The ownership moves add about 5–7 and 7–11.
+- Applying the account-id slices' 1.5× to the calendar gives **about 10–14
   weeks** for everything, and groups switch on at the end.
 - Slice 1 alone carries the highest risk: the state engine and its server-side
   twin are new. If it runs over, it pushes the rest out rather than being cut.
