@@ -155,15 +155,17 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
     setPending(true)
     setError(null)
     try {
-      const opened = await openVault(vault, key, session.userId)
-      clearLocked(fileId)
-      if (remember) {
+      // Kept before the vault shows: a reload once it shows still opens it
+      // with the sign-in.
+      await openVault(vault, key, session.userId, async (opened) => {
+        if (!remember) return
         try {
           await keepKey(session, fileId, opened.vault())
         } catch {
           toast.error(t('unlock.keepFailed'))
         }
-      }
+      })
+      clearLocked(fileId)
     } catch (failure) {
       setError(failure instanceof VaultError ? t('unlock.wrongKey') : t('unlock.unreachable'))
     } finally {
