@@ -34,16 +34,17 @@ const KEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
 const HASH_LEN: usize = 32;
 /// The largest operation body a request carries: a change is capped at this
-/// (`group::MAX_CHANGE_BYTES`), so with the envelope's base64 and fields a
-/// request always fits the 64 KiB padded size. Answers (a whole state) may
-/// take the 256 KiB size.
-pub const MAX_REQUEST_BODY: usize = 48 * 1024;
+/// (`group::MAX_CHANGE_BYTES`). Base64 makes 46 KiB about 62.8 KiB, which
+/// with the envelope's other fields keeps every request within the 64 KiB
+/// padded size. Answers (a whole state) may take the 256 KiB size.
+pub const MAX_REQUEST_BODY: usize = 46 * 1024;
 
 const KEY_CONFIG_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config/v1\0";
 const REQUEST_DOMAIN: &[u8] = b"kutup/chat-group/request/v1\0";
 const LINK_PROOF_DOMAIN: &[u8] = b"kutup/chat-group/link-request/v1\0";
 const NOTARY_DOMAIN: &[u8] = b"kutup/chat-group/notary/v1\0";
 const BODY_HASH_DOMAIN: &[u8] = b"kutup/chat-group/request-body/v1\0";
+const KEY_CONFIG_HASH_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config-hash/v1\0";
 
 // --- encoding ----------------------------------------------------------------
 
@@ -169,6 +170,25 @@ impl GroupHomePinV1 {
     }
 }
 
+/// The document of `sequence` in a history already followed from the pin
+/// ([`GroupHomePinV1::follow`]), and its successor there, if any.
+fn signer_in(
+    history: &[FederationIdentityDocumentV1],
+    sequence: u64,
+) -> Result<
+    (
+        &FederationIdentityDocumentV1,
+        Option<&FederationIdentityDocumentV1>,
+    ),
+    String,
+> {
+    let index = history
+        .iter()
+        .position(|document| document.sequence == sequence)
+        .ok_or_else(|| "signed by an identity document the history lacks".to_string())?;
+    Ok((&history[index], history.get(index + 1)))
+}
+
 // --- the gateway key config ------------------------------------------------------
 
 /// The HPKE key a home's gateway takes requests under, signed by the home's
@@ -240,28 +260,51 @@ impl GroupGatewayKeyConfigV1 {
         {
             return Err("gateway key config names an unsupported suite".into());
         }
-        if self.expires_at <= self.issued_at
-            || self.expires_at - self.issued_at > MAX_KEY_CONFIG_LIFETIME_SECS
-        {
-            return Err("gateway key config lifetime is invalid".into());
+        match self.expires_at.checked_sub(self.issued_at) {
+            Some(lifetime) if lifetime > 0 && lifetime <= MAX_KEY_CONFIG_LIFETIME_SECS => {}
+            _ => return Err("gateway key config lifetime is invalid".into()),
         }
         decode_fixed::<KEY_LEN>("publicKey", &self.public_key)?;
         Ok(())
     }
 
-    /// The config's key, after checking it is `identity`'s (the document the
-    /// client reached from its pin, [`GroupHomePinV1::follow`]) and current.
+    /// What the home's notary names, so members can compare the config each
+    /// of them was given ([`GroupNotaryV1::names`]).
+    pub fn hash(&self) -> Result<[u8; HASH_LEN], String> {
+        self.validate_shape()?;
+        Ok(Sha256::new()
+            .chain_update(KEY_CONFIG_HASH_DOMAIN)
+            .chain_update(canonical(self)?)
+            .finalize()
+            .into())
+    }
+
+    /// The config's key, after checking it is signed by a document of
+    /// `history` (followed from the group's pin, [`GroupHomePinV1::follow`])
+    /// and current. A config signed by a document that has a successor in
+    /// `history` is a retired key's: accepted only until the overlap after the
+    /// successor was issued. A relay that truncates the history can hide a
+    /// rotation from this check; [`GroupNotaryV1::names`] and
+    /// [`Self::accept_after`] catch that.
     pub fn verify(
         &self,
-        identity: &FederationIdentityDocumentV1,
+        history: &[FederationIdentityDocumentV1],
         now: i64,
     ) -> Result<(u8, [u8; KEY_LEN]), String> {
         self.validate_shape()?;
-        if self.server != identity.server || self.identity_sequence != identity.sequence {
+        let (identity, successor) = signer_in(history, self.identity_sequence)?;
+        if self.server != identity.server {
             return Err("gateway key config is not signed by this identity".into());
         }
-        if now >= self.expires_at || now + MAX_CLOCK_SKEW_SECS < self.issued_at {
+        let not_before = self.issued_at.saturating_sub(MAX_CLOCK_SKEW_SECS);
+        if now >= self.expires_at || now < not_before {
             return Err("gateway key config is not current".into());
+        }
+        if let Some(successor) = successor {
+            let retired_after = successor.issued_at.saturating_add(KEY_OVERLAP_SECS);
+            if now >= retired_after || self.issued_at >= successor.issued_at {
+                return Err("gateway key config is signed by a retired identity key".into());
+            }
         }
         let key = identity.key.verifying_key().map_err(|e| e.to_string())?;
         let signature = Signature::from_bytes(&decode_fixed::<SIGNATURE_LEN>(
@@ -274,6 +317,36 @@ impl GroupGatewayKeyConfigV1 {
             self.key_id,
             decode_fixed::<KEY_LEN>("publicKey", &self.public_key)?,
         ))
+    }
+
+    /// The newest config wins: a client keeps the newest config it has seen
+    /// per home and takes a config only if it isn't older. Two different
+    /// configs of the same identity and time are an equivocation, and a newer
+    /// config may not reuse the key id of one still live.
+    pub fn accept_after(&self, seen: Option<&Self>, now: i64) -> Result<(), String> {
+        let Some(seen) = seen else {
+            return Ok(());
+        };
+        if self.server != seen.server {
+            return Err("gateway key configs of different homes".into());
+        }
+        let order =
+            (self.identity_sequence, self.issued_at).cmp(&(seen.identity_sequence, seen.issued_at));
+        match order {
+            std::cmp::Ordering::Less => {
+                Err("gateway key config is older than one already seen".into())
+            }
+            std::cmp::Ordering::Equal if self != seen => {
+                Err("the home signed two different gateway key configs for one time".into())
+            }
+            std::cmp::Ordering::Equal => Ok(()),
+            std::cmp::Ordering::Greater => {
+                if self.key_id == seen.key_id && now < seen.expires_at {
+                    return Err("gateway key config reuses the id of a live key".into());
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -348,6 +421,8 @@ pub enum GroupRequestAuthV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupRequestV1 {
     pub version: u16,
+    /// The home server it is sealed to; another home refuses it.
+    pub home: String,
     pub group_id: String,
     pub operation: GroupOperationV1,
     pub timestamp: i64,
@@ -374,6 +449,9 @@ impl GroupRequestV1 {
 
     fn validate_shape(&self) -> Result<(), String> {
         require_version(self.version)?;
+        if !kutup_crypto::account_ref::valid_server(&self.home) {
+            return Err("home is not a valid server name".into());
+        }
         decode_group_id(&self.group_id)?;
         decode_fixed::<NONCE_LEN>("nonce", &self.nonce)?;
         let body = decode_bounded("body", &self.body, MAX_REQUEST_BODY)?;
@@ -421,6 +499,13 @@ impl GroupRequestV1 {
             .chain_update(&body)
             .finalize();
         let mut hasher = Sha256::new();
+        let home = self.home.as_bytes();
+        hasher.update(
+            u16::try_from(home.len())
+                .map_err(|_| "home is too long")?
+                .to_be_bytes(),
+        );
+        hasher.update(home);
         hasher.update(self.group_id()?);
         hasher.update([self.operation.tag()]);
         hasher.update(self.timestamp.to_be_bytes());
@@ -438,6 +523,7 @@ impl GroupRequestV1 {
 
     /// A request signed by a pseudonym.
     pub fn sign_with_pseudonym(
+        home: &str,
         group_id: &[u8; GROUP_ID_LEN],
         operation: GroupOperationV1,
         timestamp: i64,
@@ -448,6 +534,7 @@ impl GroupRequestV1 {
         let public = pseudonym.verifying_key().to_bytes();
         let mut request = Self {
             version: GROUP_ROUTE_VERSION,
+            home: home.to_owned(),
             group_id: encode_group_id(group_id),
             operation,
             timestamp,
@@ -469,6 +556,7 @@ impl GroupRequestV1 {
 
     /// A link-authorised request, proving the link's password.
     pub fn with_link_password(
+        home: &str,
         group_id: &[u8; GROUP_ID_LEN],
         operation: GroupOperationV1,
         timestamp: i64,
@@ -477,6 +565,7 @@ impl GroupRequestV1 {
     ) -> Result<Self, String> {
         let mut request = Self {
             version: GROUP_ROUTE_VERSION,
+            home: home.to_owned(),
             group_id: encode_group_id(group_id),
             operation,
             timestamp,
@@ -542,7 +631,7 @@ impl GroupRequestV1 {
 
     /// Whether the request's clock is within the window of `now`.
     pub fn is_timely(&self, now: i64) -> bool {
-        (self.timestamp - now).abs() <= MAX_CLOCK_SKEW_SECS
+        self.timestamp.abs_diff(now) <= MAX_CLOCK_SKEW_SECS.unsigned_abs()
     }
 }
 
@@ -622,12 +711,16 @@ impl GroupResponseV1 {
 // --- the home's notary signature ------------------------------------------------------
 
 /// The home's signature over a change it accepted: the group, the revision,
-/// the change's hash and the resulting state's hash, by its federation
-/// identity. Clients apply only changes that carry one.
+/// the change's hash, the resulting state's hash, and the hash of the gateway
+/// key config the home was serving, by its federation identity. Clients
+/// apply only changes that carry one. Naming the key config lets members
+/// compare, through the signed chain, the config each was given: a relay that
+/// hands a client an older or another config is seen there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupNotaryV1 {
     pub identity_sequence: u64,
+    pub key_config_hash: String,
     pub signature: String,
 }
 
@@ -636,19 +729,24 @@ fn notary_input(
     revision: u64,
     change_hash: &[u8; HASH_LEN],
     state_hash: &[u8; HASH_LEN],
+    key_config_hash: &[u8; HASH_LEN],
 ) -> Vec<u8> {
     let mut input = NOTARY_DOMAIN.to_vec();
     input.extend_from_slice(group_id);
     input.extend_from_slice(&revision.to_be_bytes());
     input.extend_from_slice(change_hash);
     input.extend_from_slice(state_hash);
+    input.extend_from_slice(key_config_hash);
     input
 }
 
 impl GroupNotaryV1 {
+    /// Signs with `document`'s key, naming `config`, which the same document
+    /// must have signed.
     pub fn sign(
         document: &FederationIdentityDocumentV1,
         signing_key: &SigningKey,
+        config: &GroupGatewayKeyConfigV1,
         group_id: &[u8; GROUP_ID_LEN],
         revision: u64,
         change_hash: &[u8; HASH_LEN],
@@ -659,98 +757,327 @@ impl GroupNotaryV1 {
         {
             return Err("signing key is not the identity document's key".into());
         }
-        let signature =
-            signing_key.sign(&notary_input(group_id, revision, change_hash, state_hash));
+        if config.identity_sequence != document.sequence || config.server != document.server {
+            return Err("the key config is not this identity document's".into());
+        }
+        let key_config_hash = config.hash()?;
+        let signature = signing_key.sign(&notary_input(
+            group_id,
+            revision,
+            change_hash,
+            state_hash,
+            &key_config_hash,
+        ));
         Ok(Self {
             identity_sequence: document.sequence,
+            key_config_hash: STANDARD.encode(key_config_hash),
             signature: STANDARD.encode(signature.to_bytes()),
         })
     }
 
-    /// Checks the signature by `identity`, the document of
-    /// `identity_sequence` (reached from the group's pin).
+    /// Checks the signature by the document of `identity_sequence` in
+    /// `history` (followed from the group's pin). Identity sequences only
+    /// move forward along a group's chain: `previous_sequence` is the
+    /// previous revision's notary's, and a notary by an older document than
+    /// that is refused. A notary by a document the history lacks means the
+    /// history was cut short: refetch it, never skip the check.
+    #[allow(clippy::too_many_arguments)]
     pub fn verify(
         &self,
-        identity: &FederationIdentityDocumentV1,
+        history: &[FederationIdentityDocumentV1],
+        previous_sequence: Option<u64>,
         group_id: &[u8; GROUP_ID_LEN],
         revision: u64,
         change_hash: &[u8; HASH_LEN],
         state_hash: &[u8; HASH_LEN],
     ) -> Result<(), String> {
-        if identity.sequence != self.identity_sequence {
-            return Err("notary is signed by another identity document".into());
+        if previous_sequence.is_some_and(|previous| self.identity_sequence < previous) {
+            return Err("notary is by an identity older than the previous revision's".into());
         }
+        let (identity, _) = signer_in(history, self.identity_sequence)?;
         let key = identity.key.verifying_key().map_err(|e| e.to_string())?;
+        let key_config_hash = decode_fixed::<HASH_LEN>("keyConfigHash", &self.key_config_hash)?;
         let signature = Signature::from_bytes(&decode_fixed::<SIGNATURE_LEN>(
             "signature",
             &self.signature,
         )?);
         key.verify_strict(
-            &notary_input(group_id, revision, change_hash, state_hash),
+            &notary_input(
+                group_id,
+                revision,
+                change_hash,
+                state_hash,
+                &key_config_hash,
+            ),
             &signature,
         )
         .map_err(|_| "notary signature is invalid".to_string())
     }
+
+    /// Whether this (verified) notary names `config`: the config the home was
+    /// serving when it accepted the change. A client whose config isn't the
+    /// one the newest notary names refetches; if what it gets still isn't, a
+    /// relay is showing it another config, and the client stops using it.
+    pub fn names(&self, config: &GroupGatewayKeyConfigV1) -> Result<bool, String> {
+        Ok(decode_fixed::<HASH_LEN>("keyConfigHash", &self.key_config_hash)? == config.hash()?)
+    }
 }
+
+// --- answers ---------------------------------------------------------------------------
+
+/// A state as the home serves it: the state's canonical bytes with the change
+/// that produced it and that change's notary, so a client verifies the state
+/// in one step (the notary binds the change's hash and the state's hash).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupStateAnswerV1 {
+    pub state: String,
+    pub change: String,
+    pub notary: GroupNotaryV1,
+}
+
+/// One change of a log page with its notary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupLogEntryV1 {
+    pub change: String,
+    pub notary: GroupNotaryV1,
+}
+
+/// Changes in revision order from the asked revision; `more` when the page
+/// stopped before the head (it is cut to fit the largest padded size).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupLogPageV1 {
+    pub entries: Vec<GroupLogEntryV1>,
+    pub more: bool,
+}
+
+macro_rules! canonical_answer {
+    ($type:ty, $name:literal) => {
+        impl $type {
+            pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+                canonical(self)
+            }
+
+            pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+                from_canonical(bytes, kutup_crypto::oblivious::MAX_BODY, $name)
+            }
+        }
+    };
+}
+
+canonical_answer!(GroupStateAnswerV1, "group state answer");
+canonical_answer!(GroupLogPageV1, "group log page");
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn identity(byte: u8) -> (FederationIdentityDocumentV1, SigningKey) {
-        let key = SigningKey::from_bytes(&[byte; 32]);
-        (
-            FederationIdentityDocumentV1::genesis("home.example", 10, &key).unwrap(),
-            key,
-        )
-    }
-
+    const HOME: &str = "home.example";
     const GROUP: [u8; 32] = [5; 32];
     const NONCE: [u8; 16] = [6; 16];
 
-    #[test]
-    fn a_key_config_verifies_only_from_its_pinned_identity() {
-        let (genesis, key) = identity(1);
-        let pin = GroupHomePinV1::of(&genesis).unwrap();
-        let config = GroupGatewayKeyConfigV1::sign(&genesis, &key, 3, &[9; 32], 100, 200).unwrap();
-        let current = pin.follow(std::slice::from_ref(&genesis)).unwrap();
-        assert_eq!(config.verify(current, 150).unwrap(), (3, [9; 32]));
-        assert!(config.verify(current, 200).is_err(), "expired");
+    fn key(byte: u8) -> SigningKey {
+        SigningKey::from_bytes(&[byte; 32])
+    }
 
-        // A relay's own identity can't stand in for the pinned one.
-        let (other, other_key) = identity(2);
-        let forged =
-            GroupGatewayKeyConfigV1::sign(&other, &other_key, 3, &[8; 32], 100, 200).unwrap();
-        assert!(pin.follow(std::slice::from_ref(&other)).is_err());
-        assert!(forged.verify(current, 150).is_err());
+    fn genesis() -> FederationIdentityDocumentV1 {
+        FederationIdentityDocumentV1::genesis(HOME, 10, &key(1)).unwrap()
+    }
 
-        let mut swapped = config.clone();
-        swapped.public_key = STANDARD.encode([8u8; 32]);
-        assert!(swapped.verify(current, 150).is_err());
+    /// genesis (key 1, issued 10) → rotated (key 2, issued 1_000_000).
+    fn rotated() -> FederationIdentityDocumentV1 {
+        FederationIdentityDocumentV1::rotate(&genesis(), 1_000_000, &key(1), &key(2)).unwrap()
+    }
+
+    fn config(
+        document: &FederationIdentityDocumentV1,
+        signer: u8,
+        key_id: u8,
+        issued_at: i64,
+    ) -> GroupGatewayKeyConfigV1 {
+        GroupGatewayKeyConfigV1::sign(
+            document,
+            &key(signer),
+            key_id,
+            &[key_id; 32],
+            issued_at,
+            issued_at + MAX_KEY_CONFIG_LIFETIME_SECS,
+        )
+        .unwrap()
     }
 
     #[test]
-    fn a_rotated_identity_is_followed_from_the_pin() {
-        let (genesis, first_key) = identity(1);
-        let second_key = SigningKey::from_bytes(&[3; 32]);
-        let second =
-            FederationIdentityDocumentV1::rotate(&genesis, 20, &first_key, &second_key).unwrap();
-        let pin = GroupHomePinV1::of(&genesis).unwrap();
-        let history = [genesis.clone(), second.clone()];
-        let current = pin.follow(&history).unwrap();
-        assert_eq!(current.sequence, second.sequence);
-        let config =
-            GroupGatewayKeyConfigV1::sign(&second, &second_key, 4, &[7; 32], 100, 200).unwrap();
-        assert!(config.verify(current, 150).is_ok());
-        assert!(config.verify(&genesis, 150).is_err());
-        // A history that skips the pinned document is refused.
-        assert!(pin.follow(std::slice::from_ref(&second)).is_err());
+    fn a_key_config_verifies_only_from_the_pinned_history() {
+        let pin = GroupHomePinV1::of(&genesis()).unwrap();
+        let history = [genesis()];
+        pin.follow(&history).unwrap();
+        let config = config(&genesis(), 1, 3, 100);
+        assert_eq!(config.verify(&history, 150).unwrap(), (3, [3; 32]));
+        assert!(config
+            .verify(&history, 100 + MAX_KEY_CONFIG_LIFETIME_SECS)
+            .is_err());
+
+        // A relay's own identity can't stand in for the pinned one.
+        let other = FederationIdentityDocumentV1::genesis(HOME, 10, &key(9)).unwrap();
+        assert!(pin.follow(std::slice::from_ref(&other)).is_err());
+        let forged = GroupGatewayKeyConfigV1::sign(&other, &key(9), 3, &[8; 32], 100, 200).unwrap();
+        assert!(forged.verify(&history, 150).is_err());
+
+        let mut swapped = config.clone();
+        swapped.public_key = STANDARD.encode([8u8; 32]);
+        assert!(swapped.verify(&history, 150).is_err());
+    }
+
+    #[test]
+    fn hostile_integers_are_refused_not_wrapped() {
+        let mut config = config(&genesis(), 1, 3, 100);
+        config.issued_at = i64::MIN;
+        config.expires_at = i64::MAX;
+        assert!(config.verify(&[genesis()], 150).is_err());
+        let request = GroupRequestV1::sign_with_pseudonym(
+            HOME,
+            &GROUP,
+            GroupOperationV1::GetState,
+            i64::MIN + 1_000,
+            &NONCE,
+            b"",
+            &key(4),
+        )
+        .unwrap();
+        assert!(!request.is_timely(1_000));
+        assert!(!request.is_timely(i64::MAX));
+    }
+
+    #[test]
+    fn a_retired_identitys_config_lasts_only_through_the_overlap() {
+        let history = [genesis(), rotated()];
+        let old = config(&genesis(), 1, 3, 900_000);
+        assert!(old
+            .verify(&history, 1_000_000 + KEY_OVERLAP_SECS - 1)
+            .is_ok());
+        assert!(old.verify(&history, 1_000_000 + KEY_OVERLAP_SECS).is_err());
+        // Signed by the old key after the rotation: never.
+        let late = config(&genesis(), 1, 4, 1_000_001);
+        assert!(late.verify(&history, 1_000_002).is_err());
+        let new = config(&rotated(), 2, 5, 1_000_001);
+        assert!(new.verify(&history, 1_000_002).is_ok());
+        // The history must reach the signer.
+        assert!(new.verify(&[genesis()], 1_000_002).is_err());
+    }
+
+    #[test]
+    fn the_newest_config_wins() {
+        let first = config(&genesis(), 1, 3, 100);
+        let second = config(&genesis(), 1, 4, 200);
+        assert!(second.accept_after(Some(&first), 250).is_ok());
+        assert!(first.accept_after(Some(&second), 250).is_err(), "older");
+        assert!(first.accept_after(Some(&first), 250).is_ok());
+        let equivocation = config(&genesis(), 1, 9, 100);
+        assert!(equivocation.accept_after(Some(&first), 250).is_err());
+        // A newer config may not reuse a live key's id.
+        let reused = config(&genesis(), 1, 3, 200);
+        assert!(reused.accept_after(Some(&first), 250).is_err());
+        assert!(reused
+            .accept_after(Some(&first), 100 + MAX_KEY_CONFIG_LIFETIME_SECS)
+            .is_ok());
+    }
+
+    fn notary(
+        document: &FederationIdentityDocumentV1,
+        signer: u8,
+        config: &GroupGatewayKeyConfigV1,
+        revision: u64,
+    ) -> GroupNotaryV1 {
+        GroupNotaryV1::sign(
+            document,
+            &key(signer),
+            config,
+            &GROUP,
+            revision,
+            &[1; 32],
+            &[2; 32],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_notary_signs_the_group_revision_both_hashes_and_the_config() {
+        let config = config(&genesis(), 1, 3, 100);
+        let signed = notary(&genesis(), 1, &config, 7);
+        let history = [genesis()];
+        let check = |n: &GroupNotaryV1, revision, change: [u8; 32], state: [u8; 32]| {
+            n.verify(&history, None, &GROUP, revision, &change, &state)
+        };
+        assert!(check(&signed, 7, [1; 32], [2; 32]).is_ok());
+        assert!(check(&signed, 8, [1; 32], [2; 32]).is_err());
+        assert!(check(&signed, 7, [3; 32], [2; 32]).is_err());
+        assert!(check(&signed, 7, [1; 32], [3; 32]).is_err());
+        let mut renamed = signed.clone();
+        renamed.key_config_hash = STANDARD.encode([0u8; 32]);
+        assert!(check(&renamed, 7, [1; 32], [2; 32]).is_err());
+        assert!(signed.names(&config).unwrap());
+        // Another document's key can't notarise, nor name another's config.
+        assert!(
+            GroupNotaryV1::sign(&genesis(), &key(2), &config, &GROUP, 7, &[1; 32], &[2; 32])
+                .is_err()
+        );
+        assert!(
+            GroupNotaryV1::sign(&rotated(), &key(2), &config, &GROUP, 7, &[1; 32], &[2; 32])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn notaries_move_forward_through_identities() {
+        let history = [genesis(), rotated()];
+        let old = notary(&genesis(), 1, &config(&genesis(), 1, 3, 100), 7);
+        let new = notary(&rotated(), 2, &config(&rotated(), 2, 4, 1_000_001), 8);
+        assert!(new
+            .verify(&history, Some(1), &GROUP, 8, &[1; 32], &[2; 32])
+            .is_ok());
+        // Once a group's chain reached the new identity, the old one is done.
+        assert!(old
+            .verify(&history, Some(2), &GROUP, 7, &[1; 32], &[2; 32])
+            .is_err());
+    }
+
+    #[test]
+    fn a_truncated_history_or_another_clients_config_is_detected() {
+        // The home rotated its identity and serves config B; a relay keeps a
+        // client on the pre-rotation history and config A.
+        let full = [genesis(), rotated()];
+        let truncated = [genesis()];
+        let a = config(&genesis(), 1, 3, 900_000);
+        let b = config(&rotated(), 2, 4, 1_000_001);
+        let latest = notary(&rotated(), 2, &b, 9);
+        // A alone looks fine from the truncated history...
+        assert!(a.verify(&truncated, 1_000_002).is_ok());
+        // ...but the newest notary is by a document that history lacks, so
+        // the client must refetch it rather than trust A,
+        assert!(latest
+            .verify(&truncated, Some(1), &GROUP, 9, &[1; 32], &[2; 32])
+            .is_err());
+        // and with the full history, the notary names B, not A.
+        latest
+            .verify(&full, Some(1), &GROUP, 9, &[1; 32], &[2; 32])
+            .unwrap();
+        assert!(!latest.names(&a).unwrap());
+        assert!(latest.names(&b).unwrap());
+
+        // Two clients given different configs of one identity: the notary
+        // shows which one the home serves.
+        let c = config(&rotated(), 2, 5, 1_000_500);
+        assert!(c.verify(&full, 1_000_600).is_ok());
+        assert!(!latest.names(&c).unwrap());
     }
 
     #[test]
     fn a_pseudonym_signed_request_round_trips_and_binds_every_field() {
-        let pseudonym = SigningKey::from_bytes(&[4; 32]);
+        let pseudonym = key(4);
         let request = GroupRequestV1::sign_with_pseudonym(
+            HOME,
             &GROUP,
             GroupOperationV1::SubmitChange,
             1_000,
@@ -759,59 +1086,61 @@ mod tests {
             &pseudonym,
         )
         .unwrap();
-        let bytes = request.canonical_bytes().unwrap();
-        let back = GroupRequestV1::from_canonical_bytes(&bytes).unwrap();
+        let back =
+            GroupRequestV1::from_canonical_bytes(&request.canonical_bytes().unwrap()).unwrap();
         assert_eq!(
             back.verify_pseudonym().unwrap(),
             pseudonym.verifying_key().to_bytes()
         );
-
-        let mut other_body = back.clone();
-        other_body.body = STANDARD.encode(b"other");
-        assert!(other_body.verify_pseudonym().is_err());
-        let mut other_time = back.clone();
-        other_time.timestamp += 1;
-        assert!(other_time.verify_pseudonym().is_err());
-        let mut other_group = back.clone();
-        other_group.group_id = encode_group_id(&[1; 32]);
-        assert!(other_group.verify_pseudonym().is_err());
-        let mut other_operation = back;
-        other_operation.operation = GroupOperationV1::PutAvatar;
-        assert!(other_operation.verify_pseudonym().is_err());
+        let tampered: Vec<GroupRequestV1> = vec![
+            GroupRequestV1 {
+                body: STANDARD.encode(b"other"),
+                ..back.clone()
+            },
+            GroupRequestV1 {
+                timestamp: 1_001,
+                ..back.clone()
+            },
+            GroupRequestV1 {
+                group_id: encode_group_id(&[1; 32]),
+                ..back.clone()
+            },
+            GroupRequestV1 {
+                operation: GroupOperationV1::PutAvatar,
+                ..back.clone()
+            },
+            GroupRequestV1 {
+                home: "other.example".into(),
+                ..back.clone()
+            },
+            GroupRequestV1 {
+                nonce: STANDARD.encode([7u8; 16]),
+                ..back.clone()
+            },
+        ];
+        for request in tampered {
+            assert!(request.verify_pseudonym().is_err(), "{request:?}");
+        }
     }
 
     #[test]
     fn requests_fit_their_operation() {
-        let pseudonym = SigningKey::from_bytes(&[4; 32]);
-        assert!(GroupRequestV1::sign_with_pseudonym(
-            &GROUP,
-            GroupOperationV1::GetState,
-            1,
-            &NONCE,
-            b"unexpected",
-            &pseudonym
-        )
-        .is_err());
-        assert!(GroupRequestV1::sign_with_pseudonym(
-            &GROUP,
+        let pseudonym = key(4);
+        let sign = |operation, body: &[u8]| {
+            GroupRequestV1::sign_with_pseudonym(
+                HOME, &GROUP, operation, 1, &NONCE, body, &pseudonym,
+            )
+        };
+        assert!(sign(GroupOperationV1::GetState, b"unexpected").is_err());
+        assert!(sign(GroupOperationV1::SubmitChange, b"").is_err());
+        assert!(sign(GroupOperationV1::GetJoinInfo, b"").is_err());
+        assert!(sign(
             GroupOperationV1::SubmitChange,
-            1,
-            &NONCE,
-            b"",
-            &pseudonym
-        )
-        .is_err());
-        // Join info is the one link-authorised operation.
-        assert!(GroupRequestV1::sign_with_pseudonym(
-            &GROUP,
-            GroupOperationV1::GetJoinInfo,
-            1,
-            &NONCE,
-            b"",
-            &pseudonym
+            &vec![0; MAX_REQUEST_BODY + 1]
         )
         .is_err());
         assert!(GroupRequestV1::with_link_password(
+            HOME,
             &GROUP,
             GroupOperationV1::GetState,
             1,
@@ -822,8 +1151,29 @@ mod tests {
     }
 
     #[test]
+    fn the_largest_request_fits_the_64_kib_padded_size() {
+        let request = GroupRequestV1::sign_with_pseudonym(
+            "a-rather-long-home-server-name.example.org",
+            &GROUP,
+            GroupOperationV1::SubmitChange,
+            i64::MAX,
+            &NONCE,
+            &vec![0xff; MAX_REQUEST_BODY],
+            &key(4),
+        )
+        .unwrap();
+        let bytes = request.canonical_bytes().unwrap();
+        assert!(
+            bytes.len() < kutup_crypto::oblivious::SIZES[3],
+            "{}",
+            bytes.len()
+        );
+    }
+
+    #[test]
     fn a_link_request_proves_the_password_only() {
         let request = GroupRequestV1::with_link_password(
+            HOME,
             &GROUP,
             GroupOperationV1::GetJoinInfo,
             7,
@@ -833,69 +1183,100 @@ mod tests {
         .unwrap();
         assert!(request.verify_link_password(b"the link password").unwrap());
         assert!(!request.verify_link_password(b"another").unwrap());
-        let mut replayed_later = request;
-        replayed_later.timestamp += 60;
-        assert!(!replayed_later
-            .verify_link_password(b"the link password")
-            .unwrap());
+        let later = GroupRequestV1 {
+            timestamp: 67,
+            ..request
+        };
+        assert!(!later.verify_link_password(b"the link password").unwrap());
     }
 
     #[test]
     fn timeliness_is_the_window_either_way() {
-        let pseudonym = SigningKey::from_bytes(&[4; 32]);
         let at = |timestamp| {
             GroupRequestV1::sign_with_pseudonym(
+                HOME,
                 &GROUP,
                 GroupOperationV1::GetState,
                 timestamp,
                 &NONCE,
                 b"",
-                &pseudonym,
+                &key(4),
             )
             .unwrap()
         };
         assert!(at(1_000).is_timely(1_000 + MAX_CLOCK_SKEW_SECS));
         assert!(!at(1_000).is_timely(1_000 + MAX_CLOCK_SKEW_SECS + 1));
         assert!(at(1_000).is_timely(1_000 - MAX_CLOCK_SKEW_SECS));
+        assert!(!at(1_000).is_timely(1_000 - MAX_CLOCK_SKEW_SECS - 1));
     }
 
     #[test]
-    fn responses_are_canonical_and_only_refusals_carry_a_code() {
+    fn responses_and_answers_are_canonical() {
         let ok = GroupResponseV1::new(GroupResponseStatusV1::Ok, 5, b"state");
         let back = GroupResponseV1::from_canonical_bytes(&ok.canonical_bytes().unwrap()).unwrap();
         assert_eq!(back.body().unwrap(), b"state");
-        let refused = GroupResponseV1::refused("notAdministrator", 5);
-        assert!(refused.canonical_bytes().is_ok());
-        let mut coded_ok = ok;
-        coded_ok.code = Some("x".into());
-        assert!(coded_ok.canonical_bytes().is_err());
+        assert!(GroupResponseV1::refused("notAllowed", 5)
+            .canonical_bytes()
+            .is_ok());
+        assert!(GroupResponseV1 {
+            code: Some("x".into()),
+            ..ok
+        }
+        .canonical_bytes()
+        .is_err());
+
+        let config = config(&genesis(), 1, 3, 100);
+        let page = GroupLogPageV1 {
+            entries: vec![GroupLogEntryV1 {
+                change: STANDARD.encode(b"change"),
+                notary: notary(&genesis(), 1, &config, 1),
+            }],
+            more: false,
+        };
+        let bytes = page.canonical_bytes().unwrap();
+        assert_eq!(GroupLogPageV1::from_canonical_bytes(&bytes).unwrap(), page);
     }
 
+    /// Fixed signing inputs and signatures: a change to any domain, field
+    /// order or encoding fails here first (Ed25519 is deterministic).
     #[test]
-    fn the_notary_signs_the_group_revision_and_both_hashes() {
-        let (genesis, key) = identity(1);
-        let notary = GroupNotaryV1::sign(&genesis, &key, &GROUP, 7, &[1; 32], &[2; 32]).unwrap();
-        assert!(notary
-            .verify(&genesis, &GROUP, 7, &[1; 32], &[2; 32])
-            .is_ok());
-        assert!(notary
-            .verify(&genesis, &GROUP, 8, &[1; 32], &[2; 32])
-            .is_err());
-        assert!(notary
-            .verify(&genesis, &GROUP, 7, &[3; 32], &[2; 32])
-            .is_err());
-        assert!(notary
-            .verify(&genesis, &GROUP, 7, &[1; 32], &[3; 32])
-            .is_err());
-        assert!(notary
-            .verify(&genesis, &[0; 32], 7, &[1; 32], &[2; 32])
-            .is_err());
-        let (other, other_key) = identity(2);
-        assert!(GroupNotaryV1::sign(&genesis, &other_key, &GROUP, 7, &[1; 32], &[2; 32]).is_err());
-        let forged =
-            GroupNotaryV1::sign(&other, &other_key, &GROUP, 7, &[1; 32], &[2; 32]).unwrap();
-        assert!(forged
-            .verify(&genesis, &GROUP, 7, &[1; 32], &[2; 32])
-            .is_err());
+    fn golden_signing_inputs() {
+        let config = config(&genesis(), 1, 3, 100);
+        let config_input = hex::encode(config.signing_input().unwrap());
+        assert_eq!(
+            config_input,
+            include_str!("../tests/vectors/group-route-v1/key-config-input.hex").trim()
+        );
+        assert_eq!(
+            config.signature,
+            include_str!("../tests/vectors/group-route-v1/key-config-signature.b64").trim()
+        );
+        let request = GroupRequestV1::sign_with_pseudonym(
+            HOME,
+            &GROUP,
+            GroupOperationV1::SubmitChange,
+            1_700_000_000,
+            &NONCE,
+            b"change",
+            &key(4),
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(request.canonical_bytes().unwrap()).unwrap(),
+            include_str!("../tests/vectors/group-route-v1/request.json").trim()
+        );
+        assert_eq!(
+            hex::encode(
+                request
+                    .pseudonym_input(&key(4).verifying_key().to_bytes())
+                    .unwrap()
+            ),
+            include_str!("../tests/vectors/group-route-v1/request-input.hex").trim()
+        );
+        let notary = notary(&genesis(), 1, &config, 7);
+        assert_eq!(
+            String::from_utf8(canonical(&notary).unwrap()).unwrap(),
+            include_str!("../tests/vectors/group-route-v1/notary.json").trim()
+        );
     }
 }

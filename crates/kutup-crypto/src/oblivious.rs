@@ -282,10 +282,18 @@ pub struct ResponseContext(ExchangeSecret);
 
 impl ResponseContext {
     pub fn seal_response(&self, body: &[u8]) -> Result<Vec<u8>> {
-        let padded = Zeroizing::new(pad(body)?);
         let mut response_nonce = [0u8; RESPONSE_NONCE_LEN];
         copy_randombytes(&mut response_nonce);
-        let (aead, nonce) = self.0.aead(&response_nonce)?;
+        self.seal_response_with_nonce(body, &response_nonce)
+    }
+
+    fn seal_response_with_nonce(
+        &self,
+        body: &[u8],
+        response_nonce: &[u8; RESPONSE_NONCE_LEN],
+    ) -> Result<Vec<u8>> {
+        let padded = Zeroizing::new(pad(body)?);
+        let (aead, nonce) = self.0.aead(response_nonce)?;
         let ciphertext = aead
             .encrypt(
                 &nonce,
@@ -296,7 +304,7 @@ impl ResponseContext {
             )
             .map_err(backend)?;
         let mut response = Vec::with_capacity(RESPONSE_NONCE_LEN + ciphertext.len());
-        response.extend_from_slice(&response_nonce);
+        response.extend_from_slice(response_nonce);
         response.extend_from_slice(&ciphertext);
         Ok(response)
     }
@@ -396,5 +404,81 @@ mod tests {
         assert_eq!(again.public_key(), gateway.public_key());
         let (request, _) = seal_request(9, &gateway.public_key(), b"x").unwrap();
         assert!(again.open_request(&request).is_ok());
+    }
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        key_id: u8,
+        private_key: String,
+        request: String,
+        request_body: String,
+        response_nonce: String,
+        response: String,
+        response_body: String,
+    }
+
+    /// A recorded exchange (RFC 9458 §4.3/§4.4 with this suite and labels):
+    /// the gateway must open the fixed request bytes, and seal the fixed
+    /// answer to exactly the fixed response bytes.
+    #[test]
+    fn a_recorded_exchange_still_opens_and_seals_the_same() {
+        let vector: Vector =
+            serde_json::from_str(include_str!("../tests/vectors/oblivious-v1.json")).unwrap();
+        let gateway =
+            GatewayKey::from_private_key(vector.key_id, &hex::decode(&vector.private_key).unwrap())
+                .unwrap();
+        let (body, server) = gateway
+            .open_request(&hex::decode(&vector.request).unwrap())
+            .unwrap();
+        assert_eq!(body.as_slice(), vector.request_body.as_bytes());
+        let nonce: [u8; RESPONSE_NONCE_LEN] = hex::decode(&vector.response_nonce)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let response = server
+            .seal_response_with_nonce(vector.response_body.as_bytes(), &nonce)
+            .unwrap();
+        assert_eq!(hex::encode(&response), vector.response);
+        // The client's side derives the same response key from its context.
+        let client = RequestContext(ExchangeSecret {
+            enc: server.0.enc.clone(),
+            secret: server.0.secret.clone(),
+        });
+        assert_eq!(
+            client.open_response(&response).unwrap(),
+            vector.response_body.as_bytes()
+        );
+    }
+
+    #[test]
+    #[ignore = "writes tests/vectors/oblivious-v1.json; run once by hand"]
+    fn write_recorded_exchange() {
+        let gateway = GatewayKey::from_private_key(7, &[0x42; 32]).unwrap();
+        let request_body = "{\"operation\":\"getState\"}";
+        let (request, _) = seal_request(7, &gateway.public_key(), request_body.as_bytes()).unwrap();
+        let (_, server) = gateway.open_request(&request).unwrap();
+        let nonce = [0x24; RESPONSE_NONCE_LEN];
+        let response_body = "{\"status\":\"ok\"}";
+        let response = server
+            .seal_response_with_nonce(response_body.as_bytes(), &nonce)
+            .unwrap();
+        let vector = Vector {
+            key_id: 7,
+            private_key: hex::encode([0x42; 32]),
+            request: hex::encode(&request),
+            request_body: request_body.into(),
+            response_nonce: hex::encode(nonce),
+            response: hex::encode(&response),
+            response_body: response_body.into(),
+        };
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/vectors/oblivious-v1.json"
+            ),
+            serde_json::to_string_pretty(&vector).unwrap() + "\n",
+        )
+        .unwrap();
     }
 }
