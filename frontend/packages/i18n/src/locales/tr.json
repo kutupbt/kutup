@@ -227,9 +227,6 @@
   "mailGroups": {
     "title": "Gruplar",
     "loading": "Grup yükleniyor…",
-    "pageDescription": "Üyesi olduğunuz gruplar. Dağıtım listelerinin e-postaları kendi gelen kutunuza gelir; paylaşılan posta kutusu onun yanında açılır ve üyeleri birlikte okur, birlikte yanıtlar.",
-    "emptyTitle": "Henüz grup yok",
-    "emptyDescription": "Bir yönetici sizi dağıtım listelerine ve paylaşılan posta kutularına ekler.",
     "kind": {
       "list": "Dağıtım listesi",
       "shared": "Paylaşılan posta kutusu"

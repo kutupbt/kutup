@@ -227,9 +227,6 @@
   "mailGroups": {
     "title": "Groups",
     "loading": "Loading the group…",
-    "pageDescription": "The groups you belong to. A distribution list's mail arrives in your own inbox; a shared mailbox opens beside it, and its members read and answer it together.",
-    "emptyTitle": "No groups yet",
-    "emptyDescription": "An administrator adds you to distribution lists and shared mailboxes.",
     "kind": {
       "list": "Distribution list",
       "shared": "Shared mailbox"

@@ -302,7 +302,7 @@ log.
    Administration → Mail groups (role addresses first with their purpose,
    create a list or a shared mailbox, whose first key is made in the
    administrator's browser for its owners; quotas; delete); one group dialog
-   (`@kutup/mail-core/ui/GroupDialog`) used there and in Mail → Groups for
+   (`@kutup/mail-core/ui/GroupDialog`) used there and in Account → Group membership for
    members (added by address), roles, "may send as", name, description and
    who may post, which shares a shared mailbox's keys with joining members
    and makes a new key when someone leaves; an administrator without shares

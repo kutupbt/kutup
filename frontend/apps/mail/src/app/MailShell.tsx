@@ -51,7 +51,6 @@ import { openComposer, useComposer } from '../features/composerState'
 import { MAILTO_HASH, parseMailto } from '../features/mailto'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
 import { BlockSenderHost } from '../features/BlockSenderHost'
-import { GroupsNavLink } from '../features/GroupsNavLink'
 import { SpamUnsubscribeDialog } from '../features/SpamUnsubscribeDialog'
 import { PlacesHost } from '../features/PlacesHost'
 import { PlacesNav } from '../features/PlacesNav'
@@ -291,7 +290,6 @@ export function MailShell() {
           {shared.map((group) => (
             <SharedMailbox key={group.id} group={group} open={groupId === group.id} />
           ))}
-          <GroupsNavLink groups={groups.data} />
       <PlacesNav counts={counts.data} />
       </>}
       sidebarFooter={

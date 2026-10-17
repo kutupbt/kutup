@@ -74,8 +74,11 @@ test('a shared mailbox and a distribution list, made by an administrator and use
     await expect(admin.getByText(`${name}@${domain}`).first()).toBeVisible()
   }
 
-  // Alice adds Bob to both from Mail (the shared mailbox's key goes to him).
+  // Alice adds Bob to both from Group membership in Account settings (the
+  // shared mailbox's key goes to him); Mail's old Groups address leads there.
   await aliceMail.goto(appUrl('mail', '/groups'))
+  await expect(aliceMail).toHaveURL(appUrl('account', '/settings/groups'), { timeout: 30_000 })
+  await expect(aliceMail.getByRole('link', { name: 'Group membership' })).toBeVisible({ timeout: 30_000 })
   for (const name of [hr, team]) {
     const row = aliceMail.getByRole('listitem').filter({ hasText: `${name}@${domain}` })
     await row.getByRole('button', { name: 'Manage' }).click()

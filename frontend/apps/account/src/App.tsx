@@ -18,6 +18,7 @@ import { StoragePage } from './features/settings/StoragePage'
 import { EncryptionKeysPage } from './features/keys/EncryptionKeysPage'
 import { ProfilePage } from './features/settings/ProfilePage'
 import { DevicesSessionsPage } from './features/settings/DevicesSessionsPage'
+import { GroupMembershipPage } from './features/settings/GroupMembershipPage'
 import { MapsPage } from './features/settings/MapsPage'
 import { SecurityPage } from './features/settings/SecurityPage'
 import { NotFoundPage } from './NotFoundPage'
@@ -93,6 +94,7 @@ export function App() {
               <Route path="/settings/sessions" element={<Navigate to="/settings/devices" replace />} />
               <Route path="/settings/devices" element={<DevicesSessionsPage />} />
               <Route path="/settings/maps" element={<MapsPage />} />
+              <Route path="/settings/groups" element={<GroupMembershipPage />} />
               <Route path="/admin" element={<Navigate to="/admin/users" replace />} />
               <Route path="/admin/users" element={<RequireAdmin><UsersPage /></RequireAdmin>} />
               <Route path="/admin/users/new" element={<RequireAdmin><NewUserPage /></RequireAdmin>} />
