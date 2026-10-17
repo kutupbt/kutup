@@ -27,55 +27,111 @@ The bar for the first `v*` tag:
 
 Items below are organized by **whether they block v1** vs. whether they can ship in a subsequent release.
 
+## Standing rules
+
+- **Copy the references.** Where a reference project already does it right,
+  Kutup follows its design: Signal for Chat and identity, Proton for Mail and
+  accounts, Ente for self-hosting. A deviation needs a stated reason; effort
+  alone is not one.
+- **Changeable attributes are never identifiers.** Usernames, addresses and
+  passwords are attributes of a permanent random account id (as Signal's
+  ACI); they are never keys and never bound into cryptography. The one
+  exception is OpenPGP, whose keys are per address by the standard.
+
 ---
 
 ## Blockers for v1 (must-have)
 
-### V1 cryptographic and identity cutover
+### Order of the next work
+
+1. Pairwise groups (Signal-style), replacing MLS (below).
+2. Dependency supply-chain checks (`cargo deny`).
+3. Security log: sign-ins and 2FA events.
+4. System emails through Kutup's Stalwart (reset, welcome, share notices).
+5. Account-level device linking (QR).
+6. Key transparency.
+7. Native apps.
+8. Signed builds.
+9. The admin app at `admin.<domain>`.
+
+### Shipped in the clean-slate release (2d26c64eb60d, live 2026-10-17)
+
+The release wiped kutup.dev (database and bucket) and shipped:
+
+- OPAQUE sign-in ([`plans/opaque.md`](plans/opaque.md));
+- permanent random account ids, as Signal's ACI, under every username and
+  address ([`plans/account-ids.md`](plans/account-ids.md));
+- account-signed manifests and key bindings, and identity pins v2 keyed by
+  account id;
+- safety numbers v3, copied from Signal;
+- rollback protection ([`plans/rollback-protection.md`](plans/rollback-protection.md));
+- device limits: Chat installations 1–10 per account
+  (`CHAT_MAX_ACTIVE_DEVICES`, default 10, the protocol's hard cap; a new
+  installation past it is refused) and at most 20 collaboration devices in
+  use per account, fixed ([`plans/device-registration.md`](plans/device-registration.md));
+- username renames: names folded (dots, `_` and `-` ignored), freed after an
+  administrator-set hold, the old address receive-only during the hold,
+  carried across federation ([`plans/username-renames.md`](plans/username-renames.md));
+- groups off for the beta (`CHAT_GROUPS`, default false);
+- a tidied `.env.example` (a required block, settings by area) and
+  `kutup-server check-config`;
+- the migrations squashed into one baseline, `20261013000000_baseline`; new
+  migrations go above it, and an applied one is never edited;
+- no global transparency log, checkpoints or monitor: each account signs its
+  own manifest.
+
+### V1 cryptographic and identity cutover: what is left
 
 Kutup is still preproduction, so the first stable tag must freeze the clean
 format rather than preserve development-only ciphertexts or trust machinery.
 This destructive-change permission expires at the first stable `v*` tag;
 afterward `docs/crypto-agility.md` requires versioned readers, authenticated
-migrations, peer capability windows and no silent downgrade.
+migrations, peer capability windows and no silent downgrade. No second wipe of
+kutup.dev is planned: what is left must land without one.
 
-The normative checklist is
+State against the normative checklist,
 [`docs/draft/v1/security-review-follow-ups.md`](draft/v1/security-review-follow-ups.md).
-The following are release blockers:
+Done:
 
-- one parameterized Argon2id root with HKDF-separated KEK/login keys, a derived
-  recovery-auth proof that never exposes recovery entropy, and suite-bearing
-  account envelopes;
-- canonical Rust `kutup-crypto` used by the browser through WASM, subject only
-  to the documented per-operation 10× primitive-adapter exception;
-- one account-signed `AccountManifestV1`, complete history, durable TOFU/QR
-  pins, explicit account-incarnation reset, and removal of the global
-  transparency log/checkpoint/proof/monitor stack;
-- typed context-bound XChaCha Drive/profile/collaboration envelopes,
-  authenticated X25519-HPKE named shares and owner-authenticated collection
-  epochs;
-- an administrator-controlled 1–10 active-device limit (default and hard cap
-  10), enforced identically by every Chat and identity path;
-- Signal-class web-device continuity: **active-installation review, editable
-  account-private installation labels, safe revocation, and always-on
-  account-local E2EE Chat backup are implemented.** Numeric device IDs remain
-  immutable protocol-routing metadata.
-  Every durable display mutation enters a crash-safe encrypted outbox; the
-  homeserver stores an opaque signed base-plus-tail restore point and separately
-  encrypted media under the account's one storage pool. A recovered
-  browser uses the existing Drive recovery setup and restores from the server;
-  device-to-device history transfer is not supported. Missing or invalid backup
-  state produces an explicit history-loss warning rather than a silent empty
-  inbox;
-- MLS suite `0x0003` and real 256-account/2,560-leaf group gates; and
-- confidential broadcast for 1,000,000 accounts and up to 10,000,000 device
-  grants using the separate LKH plus small-MLS-control-group design.
+- account protection: OPAQUE sign-in with an Argon2id KSF, the export-key KEK
+  bound to the account's key binding, a derived recovery proof (the server
+  receives only the proof) and suite-2 account envelopes;
+- typed, context-bound XChaCha envelopes for Drive, collaboration and
+  profile keys;
+- signed X25519-HPKE named shares: HPKE Base mode plus an Ed25519 sender
+  signature, not HPKE Auth mode;
+- owner-authenticated collection epochs;
+- durable, synced TOFU/QR pins (v2, by account id), a wipe being a new
+  incarnation. Pins warn rather than block where the checklist said
+  quarantine: Chat quarantines; Drive and Mail warn and stop sealing;
+- Chat installation review, labels and revocation, the always-on Chat
+  backup and its history-loss warning.
 
-The format inventory and threat models are
-[`docs/v1-format-inventory.md`](v1-format-inventory.md),
-[`docs/drive-security-threat-model.md`](drive-security-threat-model.md), and
-[`docs/broadcast-security-threat-model.md`](broadcast-security-threat-model.md).
-The exact third-party ownership boundary is
+Left before the tag:
+
+- **Pairwise groups (Signal-style), replacing MLS.** Each member's devices
+  are reached one to one, as Signal's groups before MLS, keyed by account ids
+  (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
+  routes and `chat_mls_*` tables are removed. The checklist's group-limit
+  split and authority-quorum UI are obsolete with them.
+- **An independent security review** of the V1 formats and protocols, with a
+  review bundle prepared for it.
+- **The remaining libsodium primitives.** Formats are sealed in WASM, but the
+  browser still uses libsodium for secretstream chunks (`streamEncryptor.ts`),
+  collaboration Ed25519 device keys and frame signatures (`sign.ts`,
+  `devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
+  `backup.ts` and `media.ts`. Each gets a written 10× justification in
+  [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
+  moves to WASM. The Android Worker benchmark is still open; with OPAQUE's
+  KSF it may be moot.
+- **Remove the leftover Argon2id KEK/login root** in `kutup-crypto`'s
+  `kdf.rs` and its WASM export: OPAQUE replaced it and the frontend no longer
+  calls it (small).
+
+The format inventory and threat model are
+[`docs/v1-format-inventory.md`](v1-format-inventory.md) and
+[`docs/drive-security-threat-model.md`](drive-security-threat-model.md). The
+exact third-party ownership boundary is
 [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md).
 
 ### Signed builds
@@ -119,6 +175,18 @@ has Chat's link uses it.
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
 
+### Admin · Chat device limit as a setting
+
+`CHAT_MAX_ACTIVE_DEVICES` is an environment setting only. Wanted: a durable
+administrator setting with its UI in Administration and an audit event when
+it changes, within the same 1–10 bounds.
+
+### Operations · runbook and alerting
+
+An operator runbook (backups and restore, key and setup-key rotation, a
+wipe, an incident) and alerting on the failures that need a person, from the
+checklist's operator items.
+
 ### Key transparency (after the wipe)
 
 Copy libsignal keytrans: a per-server append-only, verifiable log of
@@ -139,23 +207,15 @@ failed) and two-step changes. Next kinds: `signIn`, `totpOn`, `totpOff`,
 `deviceRevoked`. IP addresses only behind an opt-in "advanced logs" setting,
 as Proton keeps them, if at all.
 
-### SMTP integration
+### System emails through Kutup's Stalwart
 
-Without SMTP, kutup can't:
-- Send welcome emails (we cut the "Send welcome email" toggle from the admin create-user dialog because there's no flow)
-- Send password-reset links (admins currently share temp passwords out-of-band)
-- Send share notifications ("Alice shared a folder with you")
-
-| What's needed | Where |
-|---|---|
-| Backend: SMTP client + env-var config (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`) | `crates/kutup-server/src/email.rs` (new) |
-| Backend: template system for welcome / reset / share emails (HTML + plaintext) | `crates/kutup-server/templates/email/` |
-| Frontend: re-enable the "Send welcome email" toggle in `AdminCreateUserDialog` (currently dropped) | `frontend/src/components/admin/AdminCreateUserDialog.tsx` |
-| Documentation: `docs/email.md` setup guide | new |
-
-Kutup Mail's Stalwart (phase C1 of
-[`research/17-mail-calendar-contacts.md`](research/17-mail-calendar-contacts.md))
-can carry these system emails too, once it runs.
+Kutup cannot yet send its own emails: welcome mail for a new account,
+password-reset or recovery notices, and share notices ("Alice shared a folder
+with you"); the admin's create-user dialog has no "send welcome email" for
+that reason, and admins hand over temporary passwords out of band. They go
+out through the server's own Stalwart (Kutup Mail), signed with its DKIM
+keys, from a system address; no separate SMTP relay or `SMTP_*` settings.
+Templates in HTML and plain text, in each account's language.
 
 ### Admin · System status endpoint
 
@@ -313,12 +373,11 @@ The full architecture is captured in `docs/research/11-federated-chat.md` (libsi
 
 The normative wire contract the three clients freeze against is **`docs/chat-protocol.md`** (v1) — it consolidates the wire-affecting decisions from `11-`/`12-`/`13-` into one spec, tagging every field **[IMPL]** (phase-2 server, frozen), **[ADD]** (additive, phase-2b), or **[RSV]** (reserved now, implemented later so it's not a breaking migration). Implement against that.
 
-**Current group decision:** the earlier GV2/sender-key proposal is superseded by
-the RFC 9420 MLS architecture in [`chat-mls.md`](chat-mls.md). Direct Chat and
-Note to Self remain on pinned libsignal; private groups and the small broadcast
-administrator control group use OpenMLS. Groups use owner-approved,
-dynamically replaceable multi-server ordering authorities rather than a
-permanent homeserver. **Account/device authenticity** is a V1 requirement.
+**Current group decision:** groups are off for the beta (`CHAT_GROUPS`
+false) and come back as pairwise groups (Signal-style, each member's devices
+reached one to one), replacing the MLS groups of [`chat-mls.md`](chat-mls.md);
+MLS is removed when they ship. Direct Chat and Note to Self remain on pinned
+libsignal. **Account/device authenticity** is a V1 requirement.
 Sealed sender remains all-or-nothing with no identified fallback, and all
 federation continues to use the common authenticated transport rather than a
 room DAG.
@@ -334,9 +393,9 @@ names unambiguous):
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
-| 5 | MLS private groups | **V1 binding implemented, activated and two-server verified.** Durable OpenMLS state, manifest-bound devices, private role/control state, quorum-certified multi-authority ordering, owner-approved governance/recovery, destination-private delivery, invitation consent, linked-device sync, restart reconciliation and exact group security inspection use RFC 9420 suite `0x0003` with X25519/ChaCha/Ed25519. The native scale gate operates an actual 256-account × 10-device OpenMLS tree (2,560 independent leaves); the same Rust core builds for WASM, while browser lifecycle, adversarial replay/enumeration, restart/federation and destination-metadata gates pass. Direct and Note to Self remain libsignal. See `docs/chat-mls.md`. |
+| 5 | MLS private groups | **Built and two-server verified, off for the beta and to be replaced.** OpenMLS groups with multi-server ordering authorities (`docs/chat-mls.md`) proved fragile when devices changed on the first live server. Pairwise groups (Signal-style) replace them; the MLS code, routes and `chat_mls_*` tables go when they ship. |
 | 6 | Web messaging and media | **The currently scoped Phase 6 messaging/media slices are implemented: Chat-media is advertised and clean two-server verified; encrypted replies, reactions, author-only edits/deletions, delivery/read receipts, ephemeral typing indicators, disappearing messages, private local search, platform photo/video capture and voice-note recording are present.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, the account's one administrator-controlled storage pool, manual streaming download, clearable encrypted per-conversation accounting and continuous E2EE history/media backup. Browser camera capture uses the browser/OS permission UI and feeds the resulting file into that same encrypted path without a second format, endpoint or plaintext fallback. Voice recording is browser-permission-owned, bounded to 10 minutes and 64 MiB (or the lower server limit), stops every microphone track on all terminal paths, authenticates its duration in the E2EE descriptor and uses the same immutable media path. Replies bind a canonical logical message UUID only inside the shared E2EE content and survive server-hosted backup restore. Reactions are bounded encrypted set/remove operations reduced as one deterministic latest reaction per account without server-visible metadata. Edits use deterministic author-authenticated replacement operations; irreversible deletion tombstones prevent stale-device resurrection. Batched receipt targets and state remain E2EE; read receipts are browser-local opt-in and MLS views aggregate accounts. Typing controls are E2EE, accepted only for established conversations, excluded from product history/transcripts, locally expiring and burst-throttled to limit MLS one-time KeyPackage pressure. Disappearing timers are hidden E2EE controls; every affected text/attachment authenticates its own 30-second-to-30-day duration, senders count from durable creation, and recipients count from first actual view with the earliest absolute start synchronized privately across their linked devices. Durable plaintext and derived controls are atomically purged, unsaved media references are released, and backup restore or browser replacement cannot restart expiry. Local search uses an index kept only on the device and sealed with the chat store, applies edits/deletes/expiry before showing a hit, and never emits a query or plaintext index to a server. Chat shares the account storage pool (10 GiB by default) with Drive and the other apps; administrators can change it per account. See `docs/chat-media.md` and `docs/chat-protocol.md`. |
-| 5b | Confidential broadcast | **V1 blocker scheduled after Phase 6, not an oversized MLS group.** A small MLS owner/admin control group authorizes publishers and the replaceable ordering authorities. A fixed-depth account-leaf LKH serves up to 1,000,000 subscribed accounts; each account access secret is independently wrapped to up to ten manifest devices (10,000,000 grants). Posts are encrypted once and pulled/cached by subscriber homeservers. Removal rekeys before the next post, owner removal performs a restart-safe full rebuild, and history policy is `0..=365` days (default 30) over daily one-way content epochs. See `docs/broadcast-security-threat-model.md`. |
+| 5b | Confidential broadcast | **No longer a V1 blocker.** The LKH plus small-MLS-control-group design (`docs/broadcast-security-threat-model.md`) depended on MLS; broadcast is reconsidered after pairwise groups. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
 | 8 | Calls | 1:1 WebRTC → SFU group calls; TURN + SNI demux on 443. Separate from the messaging-complete web milestone. |
 | 9 | Native clients | **Not started; deferred.** One app per product (Drive, Chat, Mail; later Photos), each in its own repository. Stabilize the UniFFI APIs, package XCFramework/AAR artifacts, complete Keychain/Keystore and lifecycle integration, reach Direct/MLS/media/backup parity, and pass real-device release gates in each app's repository. |
@@ -439,7 +498,7 @@ the user's devices through encrypted Note-to-Self state. They control only
 device downloads and never weaken the homeserver's durable-storage rule after
 an accepted delivery.
 
-### Platform · Advanced traffic-inspection protection [TODO, post-MLS v1]
+### Platform · Advanced traffic-inspection protection [TODO, after v1]
 
 Add an optional traffic-obfuscation layer for every connection to a Kutup
 server and every Kutup server-to-server connection. A shared protected
@@ -1234,11 +1293,10 @@ offline). Restore it by vendoring the UI bundle (`SWAGGER_UI_OVERWRITE_FOLDER` o
 These live in `docs/research/` because the design hasn't been chosen yet:
 
 - **WebAuthn / passkey support** — not yet captured in `docs/research/`. Would supplement TOTP for second-factor. Useful research before adding.
-- **Chat open questions** — the post-RFC post-quantum MLS suite transition and
-  advanced traffic-obfuscation profiles. Direct/MLS retention, continuous
-  recovery, and the confidential-broadcast design are already specified or
-  implemented; follow the current Chat documents rather than the July research
-  baselines.
+- **Chat open questions** — advanced traffic-obfuscation profiles, and how
+  confidential broadcast is built once pairwise groups replace MLS. Direct
+  retention and continuous recovery are specified and implemented; follow the
+  current Chat documents rather than the July research baselines.
 
 Collaborative text/Office/whiteboard editing and Drive-style version history
 are shipped. Research notes `01`–`08` are retained as the design and debugging
