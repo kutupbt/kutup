@@ -790,7 +790,10 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   new work, and its routes stay refused while `CHAT_GROUPS` is off. When the
   pairwise design ships, the MLS code, tables and routes are removed, among
   them `chat_mls_pending_requests` (still keyed by a sender address, and kept
-  only because `chat_mls_mailbox.request_id` references it).
+  only because `chat_mls_mailbox.request_id` references it). MLS anonymous
+  delivery to a local recipient, and at the destination, deduplicates a
+  reused send id without comparing content, so a different copy is dropped
+  silently; the pairwise design must compare a stored digest and refuse it.
 - **Networks that block WebSockets: what is left.** Calls get out over TLS
   on port 443 (`turn.` and `sfu-turn.`), Chat reads its mailbox every few
   seconds when its socket cannot open, and a document opens read-only with

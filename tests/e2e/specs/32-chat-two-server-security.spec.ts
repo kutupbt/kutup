@@ -111,6 +111,17 @@ function posted(page: Page, pathname: string | RegExp): Promise<Response> {
 const CONTROL = '/api/chat/mls/control/blocks'
 const ANONYMOUS_MLS = '/api/chat/mls/anonymous/messages'
 
+/** The anonymous MLS submission for a recipient on `server`. One group send
+ * posts one submission per recipient, and they may answer in any order. */
+function postedAnonymousTo(page: Page, server: string): Promise<Response> {
+  return page.waitForResponse((response) => {
+    const request = response.request()
+    if (request.method() !== 'POST' || new URL(response.url()).pathname !== ANONYMOUS_MLS) return false
+    const submission = request.postDataJSON() as { recipient?: { server?: string } } | null
+    return submission?.recipient?.server === server
+  }, { timeout: 60_000 })
+}
+
 async function sendCapturedMedia(page: Page, filename: string, plaintext: string): Promise<void> {
   const input = page.getByTestId('chat-capture-input')
   await expect(input).toHaveAttribute('accept', 'image/*,video/*')
@@ -921,7 +932,9 @@ test.describe('two-server secure chat', () => {
 
     await expect(pageA.locator('[data-sonner-toast][data-type="error"]')).toHaveCount(0)
 
-    const sentToBob = posted(pageA, ANONYMOUS_MLS)
+    // Charlie, on Alice's server, is in the group too: the checks below are
+    // about the origin outbox, so they replay Bob's federated submission.
+    const sentToBob = postedAnonymousTo(pageA, b)
     const fromAlice = `mls-from-alice-${tag}`
     await send(pageA, fromAlice)
     const firstAnonymousResponse = await requireResponseOrUiError(pageA, sentToBob)
@@ -960,9 +973,9 @@ test.describe('two-server secure chat', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(changed),
       })
-      return response.status
+      return { status: response.status, body: await response.text() }
     }, firstAnonymousSubmission)
-    expect(conflictingReplay).toBe(409)
+    expect(conflictingReplay.status, `conflicting replay answered ${conflictingReplay.status}: ${conflictingReplay.body}`).toBe(409)
 
     // Unknown recipients and known recipients with an invalid capability are
     // deliberately indistinguishable at the same-origin anonymous boundary.
