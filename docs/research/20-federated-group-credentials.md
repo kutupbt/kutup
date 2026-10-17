@@ -207,7 +207,9 @@ second connection can't be correlated with the first".
 - If a member's own server proxied its group requests as today's federation
   does, it would learn the group id and the home would learn the account.
   Instead we copy [RFC 9458](https://datatracker.ietf.org/doc/html/rfc9458):
-  1. The client encrypts each request to the home's published HPKE key.
+  1. The client encrypts each request to the home's HPKE key. That key comes in
+     a key config signed by the home's federation identity, which members pin
+     from the group's genesis, so the relay can't substitute its own.
   2. Its own server relays the opaque blob, learning only the destination
      server.
   3. The home answers through the same relay.
@@ -229,7 +231,8 @@ second connection can't be correlated with the first".
 
 | Who | Learns | Doesn't learn |
 | --- | --- | --- |
-| The home server | the number of members; one pseudonym per member per group (unlinkable across groups); roles and join revisions; the timing and sizes of changes and reads; the relay server each request came through; IPs of members on the home itself | any member's account, unless correlated through timing or IPs |
+| The home server | the number of members; one pseudonym per member per group (unlinkable across groups); roles and join revisions; the timing of changes and reads (sizes are padded to buckets); the relay server each request came through; in calls, only member servers' TURN addresses (relay forced) | a remote member's account, unless correlated through timing |
+| The home server, for its own accounts | the same, plus, if its operator correlates its relay with its gateway (same operator), **which of its own accounts are members**, always including the creator | nothing more: this is the design's hard limit |
 | A member's own server | that its user talks to home H (relayed blobs), with timing and sizes; that its user receives sealed mail under one more capability; which of its users share one multi-recipient send from one origin (so that they share *some* group) | the group id, the other members, the user's role |
 | The sender's server | that someone (anonymous route) sent to some destinations | who sent, or to which group |
 
@@ -239,6 +242,9 @@ leaks about the same to the home and spreads the rest over servers that each
 see less.
 
 **Leaks no design here removes:**
+- members whose account is on the home server itself, against an operator who
+  correlates its relay with its gateway. No-log relaying and client-side
+  batching reduce it but don't remove it;
 - traffic analysis across cooperating servers (timing of fan-out);
 - IP addresses, unless the client uses a network-level anonymiser;
 - that group's own members see each other, which is the point.

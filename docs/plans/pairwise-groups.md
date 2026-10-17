@@ -345,7 +345,7 @@ to see members").**
     `kutup-chat-proto/src/mls/conversation.rs:342-361`).
 - **What the server reads, the plain part of the state:**
   - members as `{pseudonym, role, joinedAtRevision}`;
-  - pending slots as `{slotId, role, H(claimSecret)}`;
+  - pending slots as `{slotId, role, adder's pseudonym, H(claimSecret)}`;
   - requesting and banned pseudonyms;
   - the access rules, the invite-link password and the revision.
 
@@ -393,25 +393,68 @@ to see members").**
 - If a member's own server proxied group requests as federation does today, it
   would learn the group id, and the home would learn the account. We copy
   Oblivious HTTP instead:
-  1. The client encrypts each request to the home's HPKE key, which the home
-     publishes in its discovery document.
+  1. The client encrypts each request to the home's HPKE key.
   2. The member's own server relays the opaque blob. It learns only the
      destination server.
   3. The home answers through the same relay.
 - **The keys.** The encapsulation is RFC 9458's, built with `kutup-crypto`'s
   HPKE (`hpke-rs`), so Rust owns the format.
+- **The home's key is authenticated end to end.** The client fetches the key
+  config through its own server, which is also the relay. A dishonest relay
+  could hand over its own key, read every request and pass it on. So:
+  - the key config, with its key id, is signed by the home's federation
+    identity key (v2);
+  - the group state's plain part carries that identity public key, pinned at
+    genesis by the creator, and every invitation and invite link carries it too;
+  - clients verify every key config and every rotation against the pinned
+    identity. A change of the identity itself is followed through the existing
+    signed identity history, checked from the pin;
+  - the gateway accepts the previous key for 24 hours after a rotation.
+- **The relay is not an open proxy.**
+  - It forwards only to federation peers, resolved through the existing
+    DNS- and SSRF-safe transport, only to the gateway path, with a body cap.
+  - It adds the server-signed federation envelope, so the home can admit and
+    rate-limit per relay server. It adds nothing that identifies the user.
+  - The response is bound to the request's encapsulation, so a relay can't swap
+    answers.
+- **Sizes are padded.** Requests and responses are padded to fixed sizes (1, 4,
+  16 and 64 KiB), and log pages are sized to fit. Otherwise the relay could tell
+  a claim from a log page or a state fetch by size.
 - **Members on the home server itself** use the same route, through their own
   server's relay, never their session.
 - **Inside the encrypted request:** the group id, the operation, a timestamp, a
   random nonce, and a signature by the member's pseudonym over all of them.
   - The home refuses a timestamp more than 5 minutes off, and a nonce seen
-    within that window.
+    within that window. It keeps seen nonces for 10 minutes (twice the skew).
+    Changes are protected by `current + 1` as well; for reads, the nonce stops
+    replay for amplification.
+- **Requests from non-members** (a link's join info, a join request) carry a
+  proof of the link password instead of a member signature. They are limited
+  per group and per relay server, so a link holder can't flood the group.
 - **Abuse limits without identity:**
   - **The relay** knows its signed-in user and limits how many requests each
     user may relay per minute, without seeing their contents.
   - **The home** limits per pseudonym, per group and per relay server.
   - A request without a valid member signature is refused before any work, with
-    the same answer as an unknown group.
+    the same answer and in the same time as an unknown group (one decapsulation
+    and one lookup either way).
+
+**What the anonymous route can't hide: members on the home server itself.** A
+member whose account is on the group's own server uses a relay and a gateway
+run by the same operator, often the same process.
+- An operator who logs requests, or patches its code, can match "user U relayed
+  a blob" with "pseudonym P made request R". That reveals which of its own
+  accounts are in its groups.
+- That always includes the creator, whose server is the home.
+- Hidden membership therefore holds:
+  - for **remote members**, against the home;
+  - for **local members**, only against an operator that doesn't correlate.
+- What reduces the leak, for an honest but curious operator:
+  - the relay keeps no log per request and passes blobs on a separate path;
+  - the client delays and batches local requests.
+- Neither fully removes it, and no design studied does
+  ([research 20](../research/20-federated-group-credentials.md), §4). This is a
+  user-facing limit of the requirement.
 
 **Changes.** A change is `Actions {revision = current + 1, ...}`: add (a pending
 slot), claim, remove, leave, modify-role, modify profile key,
@@ -552,12 +595,20 @@ them on pseudonyms (§3).
   - Changes that need an administrator wait until an administrator acts. If none
     is left, they never happen. Members can start a new group with the same
     people.
+  - So the dead administrator's pseudonym stays for ever. No server can tell its
+    account ended. Whether clients should offer anything more (for example, a
+    member-signed handover after the dead administrator's manifest is gone for a
+    set time) is **a policy question for the user**.
   - Clients show a member whose account has ended (their manifest is gone) as
     such.
 - **Add.** Who may add depends on `AccessControl.members`. Signal's "pending"
   member is made explicit:
-  1. The adder writes a **pending slot**, with the role and `H(claimSecret)` in
-     the plain part and the invited AccountRef encrypted.
+  1. The adder writes a **pending slot**. The plain part holds the role, the
+     adder's pseudonym and
+     `H("kutup/group-claim/v1" ‖ groupId ‖ slotId ‖ claimSecret)`, where
+     `claimSecret` is 32 random bytes. The invited AccountRef is encrypted.
+     - Pending slots count toward the member limit (members plus pending ≤
+       `CHAT_GROUP_MAX_MEMBERS`), as Signal counts pending members.
   2. The adder sends the group-update message pairwise to the invitee's devices.
      Its encrypted group context carries the master key, the group's server and
      the `claimSecret`, as Signal's `GroupContextV2` carries the master key.
@@ -565,14 +616,16 @@ them on pseudonyms (§3).
      **claims** the slot with a change that reveals `claimSecret` and its new
      pseudonym, signed by that pseudonym, with its encrypted binding and profile
      key.
-  4. The server checks the hash, and members check that the binding's account is
-     the slot's. The new member's `joinedAtRevision` is the claim's.
+  4. The server checks the hash, and takes the claim once, under the group's row
+     lock. Members check that the binding's account is the slot's. The new
+     member's `joinedAtRevision` is the claim's.
   5. An invitee who isn't a contact sees the group as a message request (accept,
      block or leave) before anything is sent from their side, as in Signal.
      Claiming publishes and sends their group capability (§1). That reveals only
      that a device got the invitation.
-  - An unclaimed slot can be revoked by an administrator, or by its adder, as
-    Signal's pending members can.
+  - An unclaimed slot can be revoked by an administrator or by its adder, as
+    Signal's pending members can. The server checks "administrator, or the
+    adder's pseudonym".
 - **Remove.** Administrators remove a pseudonym. The change is sent pairwise to
   the removed member, so they learn of it.
   - Each remaining sender replaces its sender key before its next send (§1).
@@ -666,6 +719,12 @@ them on pseudonyms (§3).
   capability" rule.
   - The token is short-lived. Its identity is the pseudonym plus a random
     per-call device tag, so the SFU never sees an account.
+  - **Media goes through the member's own server's TURN, with relay forced**
+    (`iceTransportPolicy: "relay"`, through the `turn.` host Kutup already
+    runs). Otherwise each participant's IP would reach the home's SFU next to
+    their pseudonym, a stronger link than the request path. The home's SFU
+    then sees only member servers' TURN addresses. The cost is relay bandwidth
+    on member servers.
   - Participants learn which member is which from the frame-key messages, which
     are pairwise and from verified members.
   - Today's `group_calls.rs` and its federation route are replaced. The meeting
@@ -857,7 +916,7 @@ own fallback path (§1).
 | 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; pseudonyms, bindings, slots and claims; the anonymous route's client side (HPKE encapsulation, signed requests); the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, claim, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks on pseudonyms (§3), logs and the pseudonym ACL; the anonymous route (the HPKE gateway on the home, the relay on every server, replay and rate limits); the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
 | 2. Sending once | Multi-recipient encryption, group capabilities and their rotation, the `404` handling; lifting the 64 cap | The multi-recipient route with shared-payload storage, capability publishing, the destination split |
 | 3. Links and settings | Invite links, link joins and requests by pseudonym, approval, access control, description and avatar, announcements-only, banning, ending a group; their UI and specs | Join info through the anonymous route, link checks, requests, avatar blobs, bans |
-| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API |
+| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, forced TURN relay, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API, TURN capacity for forced relay |
 | 5. MLS out | Client and core removal | Server removal and the migration |
 
 **Estimate (honest, working days of one session).** The second session's
@@ -865,13 +924,13 @@ figures are from its review.
 
 | Slice | Third session | Second session | Calendar, in parallel |
 | --- | --- | --- | --- |
-| 1. Usable groups (off in production) | 20–26 | 19–25 | about 5–6 weeks, with review and the two-server gate |
+| 1. Usable groups (off in production) | 20–26 | 21–27 | about 5–6 weeks, with review and the two-server gate |
 | 2. Sending once | 4–5 | 8–10 | about 2 weeks |
 | 3. Links and settings | 6–8 | 3–4 | about 1.5–2 weeks |
-| 4. Calls | 4–6 | 1–2 | about 1–1.5 weeks |
+| 4. Calls | 4–6 | 2–3 | about 1–1.5 weeks |
 | 5. MLS out | 3 | 2–3 | about 1 week |
 
-- In all, that's about 37–48 days for the third session and 33–44 for the
+- In all, that's about 37–48 days for the third session and 36–47 for the
   second.
   - The fixed home removed the ownership moves.
   - Pseudonymous members and the anonymous route add about 4–6 days to each
