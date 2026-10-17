@@ -1,0 +1,86 @@
+# cargo-deny policy for every Cargo root: the workspace, fuzz/,
+# crates/kutup-chat-core and crates/kutup-client-ffi. `scripts/gate.sh deny`
+# runs it from the repository root with --manifest-path for each (part of the
+# static gate; weekly in .github/workflows/advisories.yml).
+#
+# An advisory is ignored only with the reason it does not reach Kutup and what
+# lifts it; docs/roadmap.md "Security · dependency advisories left open" keeps
+# the same list. Remove an entry as soon as its fix is in the lockfile.
+
+[graph]
+all-features = true
+
+[advisories]
+# Unmaintained crates fail like vulnerabilities unless listed below.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # libcrux-sha3 0.0.8: wrong output from repeated incremental portable SHAKE
+    # squeezes, and a panic in AVX2 SHAKE-256 for odd output lengths. Neither
+    # touches ML-KEM (both advisories say so). hpke-rs 0.6.1 calls it only to
+    # derive X-Wing and ML-KEM key pairs; Kutup's HPKE suite is DHKEM(X25519).
+    # Lifted by libsignal pinning libcrux-ml-kem >= the fixed sha3, and a newer
+    # hpke-rs.
+    { id = "RUSTSEC-2026-0207", reason = "SHAKE incremental squeeze: not used by ML-KEM or Kutup's HPKE suite" },
+    { id = "RUSTSEC-2026-0208", reason = "AVX2 SHAKE-256 odd lengths: not used by ML-KEM or Kutup's HPKE suite" },
+    # libcrux-secrets 0.0.5: constant-time swap/select may be wrong on aarch64,
+    # inside libsignal 0.97.2's ML-KEM (=0.0.5 pin). The browser runs it as
+    # WASM (no aarch64 assembly) and the server uses libsignal only for sealed
+    # sender certificates. Native aarch64 clients (the native apps, not started)
+    # need it fixed: lifted by a libsignal release pinning >= 0.0.6.
+    { id = "RUSTSEC-2026-0212", reason = "aarch64-only, in libsignal's ML-KEM; web is WASM, native apps not started; needs a libsignal bump" },
+    # rsa 0.9.10, Marvin: timing of RSA private-key decryption. Kutup never
+    # decrypts or signs with an RSA private key: address keys are Ed25519 plus
+    # Curve25519 (imports refused otherwise), RSA serves only to describe an
+    # outside public key, and the server's JWTs are HS256. No fixed release.
+    { id = "RUSTSEC-2023-0071", reason = "no RSA private-key operation anywhere in Kutup" },
+    # Unmaintained, no replacement in their parents yet:
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif's progress bars in the CLI" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: a build-time macro of hax-lib under libsignal's ML-KEM" },
+    { id = "RUSTSEC-2026-0215", reason = "smallstr: inside yrs (Yjs) in kutup-collab" },
+    { id = "RUSTSEC-2024-0384", reason = "instant: OpenMLS's timer in chat-core, removed with MLS (docs/roadmap.md)" },
+]
+
+[licenses]
+# Everything Kutup links must be compatible with its AGPL-3.0-only.
+allow = [
+    "0BSD",
+    "AGPL-3.0-only",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# The repository's own unpublished crates (the fuzz targets carry no licence).
+ignore = true
+
+[bans]
+# Duplicate versions are reported, not refused: most come from libsignal's and
+# OpenMLS's exact pins.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/signalapp/libsignal",
+    "https://github.com/signalapp/SparsePostQuantumRatchet.git",
+]

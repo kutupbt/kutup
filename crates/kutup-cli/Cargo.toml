@@ -2,6 +2,7 @@
 name = "kutup-cli"
 description = "kutup CLI — E2E encrypted file storage client."
 version = "0.1.0"
+publish = false
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

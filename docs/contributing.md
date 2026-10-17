@@ -183,6 +183,7 @@ cargo clippy --all-targets -- -D warnings       # lints (gate)
 cargo fmt --check                               # formatting (gate)
 python3 scripts/test-check-docs.py               # checker regression tests
 python3 scripts/check-docs.py                    # Markdown links and referenced paths
+scripts/gate.sh deny                             # cargo deny, every Cargo root (cargo install cargo-deny --locked)
 docker run --rm -v "$PWD:/repo" -w /repo \
   rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
   -no-color                                       # GitHub workflow lint

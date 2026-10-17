@@ -45,7 +45,7 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 ### Order of the next work
 
 1. Pairwise groups (Signal-style), replacing MLS (below).
-2. Dependency supply-chain checks (`cargo deny`).
+2. Dependency supply-chain checks: what is left after `cargo deny`.
 3. Security log: sign-ins and 2FA events.
 4. System emails through Kutup's Stalwart (reset, welcome, share notices).
 5. Account-level device linking (QR).
@@ -150,12 +150,11 @@ Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 
 ### Dependency supply-chain checks
 
-Crypto dependencies are pinned exactly (`=x.y.z`, docs/cryptographic-dependencies.md)
-and locked in `Cargo.lock`, but nothing checks advisories, licences or duplicate
-versions automatically. Add `cargo deny` (advisories, bans, licences, sources) to
-the static gate, and consider `cargo vet` audits for the crypto crates
-(`opaque-ke`, `voprf`, `hpke-rs`, `pgp`, `dryoc`, `ed25519-dalek`). Raised in the
-OPAQUE review (2026-10-13).
+`cargo deny` runs in the static gate over every Cargo root (`deny.toml`,
+`scripts/gate.sh deny`), and weekly on master for advisories alone, so an
+advisory published in a quiet week still shows. Left: `cargo vet` audits for
+the crypto crates (`opaque-ke`, `voprf`, `hpke-rs`, `pgp`, `dryoc`,
+`ed25519-dalek`). Raised in the OPAQUE review (2026-10-13).
 
 Also from that review: the crypto WASM module carries `OpaqueServer` (the
 server half of OPAQUE) for the vector tests. A second build with a test
@@ -1198,15 +1197,29 @@ restored clean browser within 45 seconds, once in three runs.
 
 ### Security · dependency advisories left open
 
-Recorded 2026-10-11 with the dependency security update; recheck when any of
-these move.
+`deny.toml` ignores these, each with its reason; remove an entry as soon as
+its fix is in the lockfile. Recorded 2026-10-17.
 
+- **`libcrux-secrets` 0.0.5** (RUSTSEC-2026-0212: constant-time swap and
+  select may be wrong on aarch64). Inside libsignal 0.97.2's ML-KEM, which
+  pins it exactly. The browser runs it as WASM and the server uses libsignal
+  only for sealed-sender certificates, but native aarch64 clients would be
+  affected. **Before the native apps:** bump libsignal to a release that pins
+  `libcrux-secrets` 0.0.6 or later (chat-core).
+- **`libcrux-sha3` 0.0.8** (RUSTSEC-2026-0207 and -0208, SHAKE): neither
+  touches ML-KEM, and `hpke-rs` 0.6.1 uses it only for X-Wing and ML-KEM key
+  derivation, not Kutup's DHKEM(X25519) suite. Goes with the same libsignal
+  bump and a newer `hpke-rs`.
+- **`rsa` 0.9.10** (RUSTSEC-2023-0071, Marvin; no fixed release): Kutup never
+  decrypts or signs with an RSA private key.
+- **Unmaintained**, no replacement in their parents yet: `number_prefix`
+  (indicatif, CLI), `proc-macro-error2` (hax-lib, under libsignal's ML-KEM),
+  `smallstr` (yrs) and `instant` (OpenMLS, removed with MLS).
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
-  overlong ciphertext buffer, a crash rather than a disclosure). It reaches
-  `kutup-chat-core` and `kutup-client-ffi` through `hpke-rs =0.6.1`, which
-  OpenMLS `=0.8.1` pins. Updating means a new OpenMLS and its HPKE stack.
-  Groups are moving off MLS to pairwise sessions, which removes it; if that
-  takes long, upgrade OpenMLS on its own.
+  overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
+  so `cargo deny` doesn't see it. It reaches `kutup-chat-core` and
+  `kutup-client-ffi` through `hpke-rs =0.6.1`, which OpenMLS `=0.8.1` pins, and
+  goes with MLS.
 - **`braces` 3.0.3** (no fixed release): build time only, through
   Excalidraw's `sass` → `chokidar`.
 - **`postcss-selector-parser` 6.0.10** (fixed in 7.1.6, a major release):

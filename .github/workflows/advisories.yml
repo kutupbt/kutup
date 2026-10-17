@@ -1,0 +1,28 @@
+name: Dependency advisories
+
+# The static gate checks advisories on every change. This weekly run on
+# master catches an advisory published in a week without changes
+# (deny.toml; docs/roadmap.md "Security · dependency advisories left open").
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: cargo deny advisories (every Cargo root)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Advisories
+        env:
+          DENY_CHECKS: advisories
+        run: scripts/gate.sh deny

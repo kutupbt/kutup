@@ -49,6 +49,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: security-static
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
       - name: Static checks
         env:
           # What is applied anywhere is what master has shipped, so every

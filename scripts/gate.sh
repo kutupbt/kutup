@@ -2,7 +2,9 @@
 # The one gate. CI's jobs call these stages, and so does a local pre-merge
 # run, so what passes here passes there (docs/contributing.md).
 #
-#   scripts/gate.sh static              formatting, lints, docs and config checks
+#   scripts/gate.sh static              formatting, lints, docs and config checks, and deny
+#   scripts/gate.sh deny                cargo deny over every Cargo root (deny.toml);
+#                                       DENY_CHECKS=advisories for one check
 #   scripts/gate.sh rust                Rust tests and lockfile checks, every Cargo root
 #                                       (rust-workspace + rust-standalone)
 #   scripts/gate.sh web                 frontend install, WASM builds and tests, build
@@ -46,10 +48,29 @@ static() {
   cargo fmt --manifest-path fuzz/Cargo.toml -- --check
   step "Clippy (workspace)"
   cargo clippy --locked --workspace --all-targets -- -D warnings
+  deny
   # TODO(after the clean-slate release): clippy -D warnings for the
   # standalone crates too. Chat core has 76 findings and the FFI one, never
   # checked before; they are fixed once the Chat wire changes have landed,
   # to keep that churn out of the same release.
+}
+
+# Advisories, licences, sources and bans for every Cargo root, by the one
+# policy in deny.toml (its ignore list carries each reason); only errors are
+# printed, since duplicate versions only warn. CI installs the
+# pinned cargo-deny; locally: cargo install cargo-deny --locked.
+deny() {
+  step "Dependency policy (cargo deny)"
+  if ! command -v cargo-deny >/dev/null 2>&1; then
+    echo "gate: cargo-deny is not installed (cargo install cargo-deny --locked)" >&2
+    return 1
+  fi
+  local root
+  for root in . "${standalone_crates[@]}" fuzz; do
+    # One word per check name: DENY_CHECKS is a space-separated list.
+    # shellcheck disable=SC2086
+    cargo deny --log-level error --manifest-path "$root/Cargo.toml" check ${DENY_CHECKS:-}
+  done
 }
 
 rust_workspace() {
@@ -158,6 +179,7 @@ stage="${1:-}"
 shift || true
 case "$stage" in
   static) static ;;
+  deny) deny ;;
   rust) rust ;;
   rust-workspace) rust_workspace ;;
   rust-standalone) rust_standalone ;;
