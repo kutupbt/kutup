@@ -361,9 +361,10 @@ to see members").**
     description of at most 8192 (`groups.preload.ts:255-256`).
   - The cipher is the `kutup-crypto` AEAD, XChaCha20-Poly1305, not Signal's
     AES-256-GCM-SIV: one AEAD suite per `cryptographic-dependencies.md`.
-- **The avatar.** It is an encrypted blob under the state key, at most 512 KiB,
-  stored by the group's server, and counted against that server's own
-  allowance. Signal's state holds `avatarUrl`, while its CDN holds the bytes.
+- **The avatar.** It is an encrypted blob under the state key, at most 40 KiB
+  encrypted, so it fits one request to the home. That is enough for Signal's
+  group avatars, which Desktop scales to a 512-pixel JPEG. It is stored by the
+  group's server, and counted against that server's own allowance. Signal's state holds `avatarUrl`, while its CDN holds the bytes.
 - **The member list a client uses** (for sending, receiving and answering
   resend requests) is the decrypted AccountRefs whose bindings verify. A member
   whose binding doesn't verify is shown as unverified and treated as a
@@ -497,6 +498,25 @@ request, approve, ban, unban and terminate. It has two parts:
   - the actor's pseudonym, the previous hash and the revision.
 - **The encrypted part:** the AccountRefs, bindings, profile keys and attribute
   values, sealed with the state key.
+  - Each sealed field is bound to the group, the field (title, member entry,
+    ...) and its subject (the pseudonym or slot), so it can't be moved to
+    another place.
+  - It is **not** bound to the revision. A field is carried unchanged through
+    later revisions; binding the revision would mean sealing every field again
+    at every change. Replaying an older value in the same place needs the
+    state key, which only members hold, and a member could seal that value
+    anyway.
+- **A newcomer's change names no resulting state.** A claim, a link join, a
+  request or its cancellation is made by someone who never fetched the state:
+  its sealed entries would open with a link's master key, and Signal shows a
+  requester only the join info. So:
+  - the newcomer builds the change from the join info's revision and head;
+  - the home computes the result, and its notary signature names the state
+    hash;
+  - every client recomputes the state with the same check and compares it with
+    the notary's hash.
+
+  Every other change names its resulting state.
 
 The server takes exactly `current + 1`. On `409` the client refetches and tries
 again, up to 5 times within a minute (`modifyGroupV2`, `groups.preload.ts:1507-1716`).
@@ -667,11 +687,13 @@ them on pseudonyms (§3).
      key.
      - **Only the invitee's copy** also carries the claim private key, never the
        copy sent to the other members.
-  3. The invitee's client fetches the state through the anonymous route. It then
-     **claims** the slot with a change carrying:
+  3. The invitee's client fetches the join info (revision and head) through the
+     anonymous route. It then **claims** the slot with a change carrying:
      - its new pseudonym;
      - a signature by the claim key over
-       `("kutup/group-claim/v1", groupId, slotId, new pseudonym)`;
+       `("kutup/chat-group/claim/v1", groupId, slotId, the slot's revision, new pseudonym)`.
+       The slot's revision means a claim can't be replayed into a later slot
+       with the same id;
      - the pseudonym's own signature over the change;
      - its encrypted binding and profile key.
   4. The server verifies the claim signature with the slot's public key, and
