@@ -21,23 +21,39 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener)
 }
 
-/** Opens a vault (once, however often it is asked); a wrong key throws. */
-export function openVault(vault: VaultFile, key: VaultKeyInput, userId: string): Promise<VaultSession> {
+/**
+ * Opens a vault (once, however often it is asked); a wrong key throws.
+ * `beforeShown` runs on the opened vault before it shows (keeping its key
+ * with the sign-in): once the vault shows, a reload must not lose it. It
+ * handles its own failures; the vault shows either way.
+ */
+export function openVault(
+  vault: VaultFile,
+  key: VaultKeyInput,
+  userId: string,
+  beforeShown?: (session: VaultSession) => Promise<void>,
+): Promise<VaultSession> {
   const id = vault.file.id
   const open = sessions.get(id)
-  if (open) return Promise.resolve(open)
+  if (open) return beforeShown ? beforeShown(open).then(() => open) : Promise.resolve(open)
   let pending = opening.get(id)
   if (!pending) {
     pending = VaultSession.open(vault.folder, vault.file, key, userId, vault.canEdit)
-      .then((session) => {
-        sessions.set(id, session)
-        changed()
+      .then(async (session) => {
+        try {
+          await beforeShown?.(session)
+        } finally {
+          sessions.set(id, session)
+          changed()
+        }
         return session
       })
       .finally(() => opening.delete(id))
     opening.set(id, pending)
+    return pending
   }
-  return pending
+  // Opening already for another caller: it shows when that one is done.
+  return beforeShown ? pending.then(async (session) => (await beforeShown(session), session)) : pending
 }
 
 const LOCKED_KEY = 'kutup-pass-locked'

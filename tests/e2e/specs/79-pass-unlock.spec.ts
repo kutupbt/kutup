@@ -27,6 +27,12 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   page.on('console', (message) => {
     if (/Content Security Policy/i.test(message.text())) violations.push(message.text())
   })
+  // A slow server: keeping a key takes a while. The vault must not show
+  // before its key is kept, or a reload right after would ask for it again.
+  await page.route(/\/api\/pass\/vault-secrets\//, async (route) => {
+    if (route.request().method() === 'PUT') await new Promise((resolve) => setTimeout(resolve, 2_000))
+    await route.continue()
+  })
   await openPass(page)
   const vaultUrl = await createVault(page, 'Gizli', VAULT_PASSWORD, false)
 
