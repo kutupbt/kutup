@@ -347,10 +347,15 @@ revision (`SignalService.proto:947-951`).
 - **Changes.** A change is `Actions {revision = current + 1, ...}`: add, remove,
   modify-role, modify profile key, modify title/avatar/description/timer/access,
   invite-link password, request, approve, ban and unban. It has two parts:
-  - a **plain part the server reads**: the accounts added and removed, roles,
-    access rules, requests, approvals, bans, the invite-link password, the
-    actor's manifest sequence, the previous hash and the revision. Signal's
-    server reads the same things, through ciphertexts and proofs;
+  - a **plain part the server reads**:
+    - the accounts added and removed, roles, access rules, requests, approvals,
+      bans and the invite-link password;
+    - **which** attributes the change modifies (title, description, timer,
+      avatar), without their values;
+    - the target account of a profile-key change;
+    - the actor's manifest sequence, the previous hash and the revision.
+
+    Signal's server reads the same things, through ciphertexts and proofs;
   - an **encrypted part** with the attributes (title, description, timer,
     avatar reference) and profile keys, sealed with the state key.
 
@@ -435,11 +440,19 @@ here lives on **the server where it was created, the group's server**.
     the change names. The server fetches and verifies that manifest as the
     directory already does, so server and clients judge the same manifest;
   - the actor's membership and role at the previous revision, under
-    `AccessControl` and the rules of §4.
+    `AccessControl` and the rules of §4: `members` for adds, and `attributes`
+    for each attribute the plain part names;
+  - for a profile-key change, the actor is its target: only a member changes
+    their own entry.
 - The encrypted part isn't an acceptance check, because the server can't read
   it.
   - Its attributes are AEAD-sealed, so a bad one fails to decrypt on clients.
   - Clients show it as an unreadable change, and the revision still advances.
+  - Encrypted content that the plain part doesn't declare (an attribute not
+    named, a profile key for another account) is ignored as unreadable, never
+    a reason to refuse the change.
+  - So every acceptance check is one the server makes, and nothing only a
+    client can judge decides acceptance.
 - **What the server cannot do.** Signal's server can't add a ghost member,
   because it lacks the master key needed to encrypt a member entry. Ours can't
   either, because every change needs a member device's signature:
@@ -790,11 +803,28 @@ one-to-one sealed route with the profile keys from the state. This is Desktop's
 own fallback path (§1).
 - Slice 1 doesn't wait for the multi-recipient route and its shared-payload
   storage, the largest server piece.
+- **A sealed batch request (the second session's review).** Today's anonymous
+  route takes one recipient account per request, and allows 60 attempts a
+  minute per IP (`RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN`). Federated sealed
+  traffic allows 600 sends a minute per origin. One message to a 64-member
+  group would pass the per-IP limit on its own. Slice 1 therefore adds a batch
+  request:
+  - one request per destination server, carrying several recipients;
+  - each recipient with its own capability and its per-device envelopes;
+  - still no shared payload and no sender.
+
+  The per-IP limit counts requests. The per-capability counters stay the
+  real limit, one unit per recipient (§7). The origin forwards one federated
+  transaction per destination.
+  - This is the multi-recipient route's outer shape without libsignal's
+    format, so slice 2 replaces the body, not the plumbing.
+  - Raising the per-IP default instead would weaken the outer wall for direct
+    chats.
 - Until slice 2 lands, groups are capped at 64 members, a server setting.
 
 | Slice | Third session (chat-core, client) | Second session (server, storage, federation) |
 | --- | --- | --- |
-| 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks (§3), logs and the ACL; federation proxying; the sealed route for group members who aren't contacts; limits; live tests |
+| 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks (§3), logs and the ACL; federation proxying; the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
 | 2. Sending once | Multi-recipient encryption, group capabilities and their rotation, the `404` handling; lifting the 64 cap | The multi-recipient route with shared-payload storage, capability publishing, the destination split |
 | 3. Links and settings | Invite links, join requests and approval, access control, description and avatar, announcements-only, banning; their UI and specs | Join info, requests, avatar blobs, bans |
 | 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token from the group's server, its federation route, removal through LiveKit's admin API |
@@ -805,13 +835,13 @@ figures are from its review.
 
 | Slice | Third session | Second session | Calendar, in parallel |
 | --- | --- | --- | --- |
-| 1. Usable groups | 16–20 | 13–17 | about 4–5 weeks, with review and the two-server gate |
+| 1. Usable groups | 16–20 | 15–19 | about 4–5 weeks, with review and the two-server gate |
 | 2. Sending once | 4–5 | 8–10 | about 2 weeks |
 | 3. Links and settings | 6–8 | 3–4 | about 1.5–2 weeks |
 | 4. Calls | 4–6 | 1–2 | about 1–1.5 weeks |
 | 5. MLS out | 3 | 2–3 | about 1 week |
 
-- In all, that's about 33–42 days for the third session and 27–36 for the
+- In all, that's about 33–42 days for the third session and 29–38 for the
   second.
 - Applying the account-id slices' 1.5× to the calendar gives **about 9–12
   weeks** for everything.
