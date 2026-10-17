@@ -1387,6 +1387,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "kutup-crypto",
  "kutup-federation-proto",
  "serde",

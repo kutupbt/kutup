@@ -21,6 +21,7 @@ mod calls;
 pub mod content;
 mod extras;
 pub mod federation;
+pub mod group_route;
 mod identity;
 mod invite_link;
 mod locations;
