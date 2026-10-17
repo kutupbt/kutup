@@ -10,9 +10,10 @@ Chat app's look. Decided with the product owner:
 
 - **In:** everything below, including voice/video calls and Web Push.
 - **Out:** Stories and payments.
-- **Groups stay MLS.** Signal's sender-key groups with a central group server
-  do not fit federation, and MLS already gives agreed membership and cheaper
-  removal.
+- **Groups move to Signal's model.** Sender keys over one-to-one sessions,
+  with the group state on the group's own server. This replaces MLS
+  ([`pairwise-groups.md`](pairwise-groups.md), in review). Until it ships,
+  groups are off in the beta.
 - **Group info:** administrators may always change the name, picture and
   description; a group setting ("who can edit group info": administrators /
   all members, changed by owners) can open it to members, as in Signal.

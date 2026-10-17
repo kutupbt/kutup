@@ -376,8 +376,16 @@ The normative wire contract the three clients freeze against is **`docs/chat-pro
 **Current group decision:** groups are off for the beta (`CHAT_GROUPS`
 false) and come back as pairwise groups (Signal-style, each member's devices
 reached one to one), replacing the MLS groups of [`chat-mls.md`](chat-mls.md);
-MLS is removed when they ship. Direct Chat and Note to Self remain on pinned
-libsignal. **Account/device authenticity** is a V1 requirement.
+MLS is removed when they ship. The design is
+[`plans/pairwise-groups.md`](plans/pairwise-groups.md) (decided 2026-10-17):
+- sender keys over one-to-one sessions;
+- Groups v2 state on the server where the group was created;
+- members hidden from servers as per-group pseudonyms
+  ([`research/20-federated-group-credentials.md`](research/20-federated-group-credentials.md));
+- all at once, at most 256 members.
+
+Direct Chat and Note to Self remain on pinned libsignal. **Account/device
+authenticity** is a V1 requirement.
 Sealed sender remains all-or-nothing with no identified fallback, and all
 federation continues to use the common authenticated transport rather than a
 room DAG.
