@@ -321,7 +321,8 @@ revision (`SignalService.proto:947-951`).
 - **The state.** It holds:
   - the members, each `{account, role, joinedAtRevision, profileKey}`, the
     profile key encrypted with the state key (`Member.profileKey`);
-  - roles `ADMINISTRATOR` / `DEFAULT`;
+  - roles `OWNER` (one) / `ADMINISTRATOR` / `DEFAULT`, and the ranked owner
+    candidates (below);
   - `AccessControl {attributes, members, addFromInviteLink}` with
     `ANY / MEMBER / ADMINISTRATOR / UNSATISFIABLE`;
   - the title, description, avatar and disappearing timer;
@@ -373,11 +374,12 @@ revision (`SignalService.proto:947-951`).
   members, and to a removed member pairwise. Each receiver shows a
   timeline line per change (`'group-v2-change'`).
 
-**Where the state lives (federation).** Signal has one groups server. A group
-here lives on **the server where it was created, the group's server**.
-- That is the creator's server, but the group belongs to the server, not to the
-  creator's account. It outlives the creator leaving or deleting their account.
-- A wipe or reset of that server loses the group.
+**Where the state lives: the owner's server (the user, 2026-10-17).** Signal
+has one groups server. Here a group lives on **its owner's server, the group's
+server**, and moves when ownership moves.
+- **Why the owner's server.** The user's direction, after MLS, whose groups
+  were served by their members' servers. The owner is the person who answers
+  for the group, and their server hosts its state, the avatar and the calls.
 - Members on other servers reach it through their own server, over
   authenticated federation (`/api/fed/chat/groups/...`). The member's server
   attests the account, as federated chat already does.
@@ -385,20 +387,171 @@ here lives on **the server where it was created, the group's server**.
   member's `joinedAtRevision`. A removed account gets the same refusal as a
   stranger.
 - **Tables (the second session's design).**
-  - Groups: id, revision, chain head and the encrypted attributes.
+  - Groups: id, incarnation, revision, chain head, the encrypted attributes and
+    the home state (active, or moved with its new home).
   - Members: an AccountRef (`account_id` plus `server`, not a foreign key to
     `users`, since members can be remote), role and joined revision.
-  - Requesting and banned accounts.
+  - Owner candidates, requesting accounts and banned accounts.
   - Changes: one row per group and revision, unique, holding the body and the
     previous hash.
   - `current + 1` is taken with the group's row locked, so concurrent changes
     get exactly one winner, and the others get `409`.
-- This is the shape the report calls "one owning server per group" (also RCS and
-  MIMI). It replaces MLS's replaceable multi-server ordering authorities, which
-  is where the freezes came from.
-- Not in this design: moving a group to another server. If the group's server
-  disappears for good, members start a new group, and the client offers "New
-  group with the same people". A later note can add a move.
+- One home at a time is the shape the report calls "one owning server per
+  group" (also RCS and MIMI). It replaces MLS's set of ordering servers voting
+  by quorum, which is where the freezes came from.
+
+**What MLS did, and what we copy.** We read the MLS code
+(`mls_engine/ownership.rs`, `owner_approval.rs`, `recovery.rs`, `leave.rs`;
+`chat_mls/` on the server; `chat-mls.md` "Ordering authorities").
+- **MLS's ordering.** MLS groups had no single home. One to 64 ordering servers
+  (by default the creator's and the first invitee's, so 2 of 2) voted on each
+  change by a two-thirds quorum.
+- **MLS's owners.** It had one or more owners, also decided by a two-thirds
+  quorum, separate from administrators.
+- **Moving a group.** MLS had no way to move a group to another server.
+- **What we copy:**
+  - an **owner** role above administrators;
+  - **owner candidates**: a member's own signed consent to become owner
+    (`MlsOwnerCandidateV1`, `conversation.rs:363-421`; `validate_new_owner_candidates`,
+    `ownership.rs:942-986`);
+  - **an owner must hand over before leaving** (`leave.rs:41-43`);
+  - **pruning candidates** who leave the roster (`prune_owner_candidates_for_roster`,
+    `ownership.rs:753-786`);
+  - **incarnation recovery** when the servers are gone: same roster, a new
+    incarnation, the old one read-only (`recovery.rs`, `recovery_store.rs`);
+  - recovery **fails closed** when it doesn't extend the member's own head.
+- **What differs, and why:**
+  - **One owner, no quorum.** A group has one home, so one owner whose server
+    hosts it. MLS's owner quorum is what made governance impossible once enough
+    owner keys were lost (an owner key lived on one device only,
+    `ownership.rs:881-885`). Our owner signs with any of their devices, like any
+    change.
+  - **The home moves with the owner.** MLS had no such move.
+  - **Candidates are ranked, so recovery is deterministic.** MLS had no
+    automatic succession, and no flow for a vanished owner.
+
+**Roles.** `OWNER` (exactly one, also an administrator), `ADMINISTRATOR` and
+`DEFAULT`.
+- Only the owner can:
+  - hand over ownership;
+  - order the candidates;
+  - end the group for everyone.
+- Administrators can't remove or demote the owner.
+- The owner is the creator at first.
+
+**Owner candidates.**
+- **Who.** Every administrator is a candidate once they have published a
+  candidacy: a change of their own, signed by one of their devices, which
+  consents to hosting the group on their server.
+  - Their client publishes it when they are made administrator, unless their
+    server doesn't host groups (`CHAT_GROUPS` off, or the group over its
+    member limit). That is the same automatic publication MLS made after an
+    invitation.
+- **The order.** The owner may reorder the candidates. The default order is
+  when each became a candidate.
+- **Pruning.** A candidate who stops being an administrator or a member drops
+  off the list, as MLS pruned them.
+- **Where it lives.** The list is in the state's plain part, so the server
+  checks it like any change.
+
+**Handing over (the owner chooses, or leaves).**
+1. The owner proposes change N, a **transfer to a candidate**. It names the new
+   owner's account and the new home server, and is signed by the owner.
+2. The candidate accepts by signing the same change. Their consent is needed,
+   because their server takes on hosting, the avatar's storage and the SFU.
+3. The old home checks N like any change, plus:
+   - both signatures;
+   - the target is a candidate;
+   - the new home has groups on and room under its member limit, which the old
+     home asks the new home before accepting.
+4. After N, the old home accepts no change. Every write, and every log read past
+   N, gets `409 groupMoved` with the new home.
+5. **The new home imports** the log `0..N` from the old home over federation
+   (`/api/fed/chat/groups/:id/import`). It is a paged pull, as MLS's authority
+   bootstrap was: at most 64 changes or 8 MiB a page, with durable progress that
+   resumes after a restart.
+   - It checks every previous-hash link.
+   - It checks that the state after N hashes to the value N names.
+   - It verifies N's two signatures in full.
+   - It doesn't re-verify every historical signature. That would mean fetching
+     the manifest histories of every past actor, including deleted accounts, and
+     could wedge the move. Clients verified history themselves as it came.
+   - It also takes the avatar, the banned and requesting lists and the
+     invite-link password.
+   - It accepts N+1 only after the import is complete. That order means there
+     are never two writable homes.
+6. **Members repoint.** A member's server keeps no map of groups to homes:
+   - clients send each request to the group's server named in their
+     `chatGroups` entry or the latest group context;
+   - `groupMoved` corrects a stale one;
+   - the client updates its `chatGroups` entry when it applies N.
+7. **The old home is a read-only tombstone.** It serves the log up to N to
+   members who are behind, for 30 days by default (a server setting), then
+   answers only `groupMoved`.
+8. **Calls.** A running call on the old home ends with "the group moved", and
+   members rejoin on the new home.
+
+**The owner leaves, or loses their account.**
+- **Leaving.** An owner can leave only after handing over. If the owner is the
+  last member, leaving ends the group. MLS had the same rule.
+- **Removal.** An administrator can't remove the owner.
+- **Account deletion.** The owner's server refuses to delete an account that
+  owns groups until it hands them over, as Proton refuses to delete an
+  organisation's owner.
+- **An administrator override deletes it anyway.** The home server is then
+  still up but has no owner. It accepts a **succession** change signed by the
+  first candidate in the list, because the owner's account no longer exists on
+  that server. After that the handover runs as above.
+  - Clients accept a succession by the first candidate when the home server
+    issues it.
+  - The trust they extend is the home server's word that the owner is gone. A
+    dishonest home server could at most let the first candidate, who consented
+    and is an administrator, take over early.
+
+**The owner's server is gone: recovery.** When the server disappears, the
+owner's account goes with it, so no handover is possible. We copy MLS's
+incarnation recovery:
+1. **Who may start it.** The first candidate in the list whose own server is
+   up.
+   - Their client offers "Recover the group" once the group's server has been
+     unreachable for 24 hours.
+   - It is a deliberate step, as in MLS, never automatic.
+2. **What it is.** A **recovery change** on the candidate's own server, which
+   becomes the new home:
+   - incarnation + 1;
+   - the base, `(revision R, chain hash)`: the last state the candidate
+     verified;
+   - the same roster, with the candidate as owner and the remaining candidates
+     in order.
+
+   It is signed by the candidate.
+3. **What clients check.** A client accepts it when:
+   - the signer was a candidate at R;
+   - the base is the client's own verified head, or a head it can reach
+     through the log it already has.
+
+   A client whose head is **past** R (the old home served it later changes)
+   refuses the recovery and shows that the group's server still answers
+   elsewhere. That is MLS's fail-closed rule.
+4. **Two recoveries.** If two candidates recover at once, clients take the
+   **higher-ranked candidate's** recovery and leave the other, with a notice.
+   The rank is fixed in the state at R, so every client chooses the same one.
+5. **After a recovery:**
+   - the old incarnation is read-only on every client;
+   - a change from a revived old home is ignored with a warning;
+   - the group keeps its id and master key, since the roster is the same;
+   - a member removed before R stays removed.
+6. **Without a candidate** (no other administrator), the group can't be
+   recovered. Members start a new group, and the client offers "New group with
+   the same people".
+
+**Forks across moves.**
+- A transfer is an ordinary change in the chain, so the fork checks of §3
+  cover it unchanged.
+- A recovery starts a new incarnation whose genesis names the old `(R, hash)`.
+- Group contexts carry `{incarnation, revision, chainHash}`, and `chatGroups`
+  keeps the incarnation, so a member can't be shown the old and new incarnation
+  as the same group.
 
 **What the server sees (a deviation: no zkgroup at first).**
 - Signal's server stores each member as a deterministic `UuidCiphertext` and
@@ -520,8 +673,9 @@ different branch, or hold changes back. The defences:
 
 ## 4. Membership
 
-- **Create.** The creator is the first administrator. The group's server is the
-  creator's server. Revision 0 is a signed genesis change; the group id comes
+- **Create.** The creator is the owner and first administrator. The group's
+  server is the creator's server until ownership moves (§3). Revision 0 is a
+  signed genesis change; the group id comes
   from the master key.
 - **Add.**
   - Who may add depends on `AccessControl.members`.
@@ -556,8 +710,8 @@ different branch, or hold changes back. The defences:
     requests, the same as from any non-contact.
 - **Leave.**
   - A member leaves by a change of their own.
-  - The last administrator must name another one first. Signal requires this
-    too.
+  - The owner hands over first (below). The last administrator must name
+    another one first; Signal requires this too.
   - A leave counts as a removal for the key and capability rules.
 - **Roles.** Administrators promote and demote. `attributes` access decides who
   may change the title, avatar, description and timer.
@@ -792,12 +946,19 @@ exists. Once pairwise groups pass their gates, one change removes MLS:
   owner group becomes a pairwise group when broadcasts are designed, and is out
   of scope here.
 
-`CHAT_GROUPS` stays the switch. It is turned on only when the user decides,
-after the gates.
+`CHAT_GROUPS` stays the switch. It is turned on once all five slices of §10
+are done, when the user decides.
 
 ## 10. Slices, split and estimate
 
-**Slice 1 gives usable groups first.** In it, group messages are sender-key
+**Rollout: all at once (the user, 2026-10-17).** The work is built and merged
+in the slices below, but groups stay **off in production** (`CHAT_GROUPS`) until
+every slice is done: links and requests, calls, and the MLS removal. Then they
+are switched on together.
+- The e2e stacks run with groups on from slice 1.
+- No interim limit is ever user-visible.
+
+**Slice 1 builds usable groups first.** In it, group messages are sender-key
 ciphertexts sent as one sealed envelope per member device, over the existing
 one-to-one sealed route with the profile keys from the state. This is Desktop's
 own fallback path (§1).
@@ -820,13 +981,14 @@ own fallback path (§1).
     format, so slice 2 replaces the body, not the plumbing.
   - Raising the per-IP default instead would weaken the outer wall for direct
     chats.
-- Until slice 2 lands, groups are capped at 64 members, a server setting.
+- Until slice 2 lands, test stacks cap groups at 64 members, a server
+  setting. It is never seen in production, where groups are still off.
 
 | Slice | Third session (chat-core, client) | Second session (server, storage, federation) |
 | --- | --- | --- |
 | 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks (§3), logs and the ACL; federation proxying; the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
 | 2. Sending once | Multi-recipient encryption, group capabilities and their rotation, the `404` handling; lifting the 64 cap | The multi-recipient route with shared-payload storage, capability publishing, the destination split |
-| 3. Links and settings | Invite links, join requests and approval, access control, description and avatar, announcements-only, banning; their UI and specs | Join info, requests, avatar blobs, bans |
+| 3. Links, settings and ownership | Invite links, join requests and approval, access control, description and avatar, announcements-only, banning; owner candidates, handover, succession and recovery (client checks, the recovery offer, repointing); their UI and specs | Join info, requests, avatar blobs, bans; the transfer checks, the paged import, the tombstone and `groupMoved`, succession, refusing to delete an owner, recovery acceptance |
 | 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token from the group's server, its federation route, removal through LiveKit's admin API |
 | 5. MLS out | Client and core removal | Server removal and the migration |
 
@@ -835,23 +997,28 @@ figures are from its review.
 
 | Slice | Third session | Second session | Calendar, in parallel |
 | --- | --- | --- | --- |
-| 1. Usable groups | 16–20 | 15–19 | about 4–5 weeks, with review and the two-server gate |
+| 1. Usable groups (off in production) | 16–20 | 15–19 | about 4–5 weeks, with review and the two-server gate |
 | 2. Sending once | 4–5 | 8–10 | about 2 weeks |
-| 3. Links and settings | 6–8 | 3–4 | about 1.5–2 weeks |
+| 3. Links, settings and ownership | 10–13 | 8–11 | about 2.5–3 weeks |
 | 4. Calls | 4–6 | 1–2 | about 1–1.5 weeks |
 | 5. MLS out | 3 | 2–3 | about 1 week |
 
-- In all, that's about 33–42 days for the third session and 29–38 for the
-  second.
-- Applying the account-id slices' 1.5× to the calendar gives **about 9–12
-  weeks** for everything.
+- In all, that's about 37–47 days for the third session and 34–45 for the
+  second. The ownership moves add about 4–5 and 5–7.
+- Applying the account-id slices' 1.5× to the calendar gives **about 10–13
+  weeks** for everything, and groups switch on at the end.
 - Slice 1 alone carries the highest risk: the state engine and its server-side
   twin are new. If it runs over, it pushes the rest out rather than being cut.
 
+`CHAT_GROUPS` turns on only after slice 5 and its gates, when the user decides.
+
 ## Questions for review
 
-1. **The group's server = the creator's server**, with no move between servers
-   in this design. Accept?
+1. **The group's server = the owner's server**, moving with ownership by a
+   transfer the new owner accepts. When that server is gone, the first
+   candidate recovers the group, as MLS's incarnation recovery did. The user
+   chose the owner's server (2026-10-17). Accept the handover and recovery
+   rules?
 2. **No zkgroup at first.** The group's server sees the member list in plain
    form. It checks every change by the same rules as the clients (§3), and
    changes are signed by the actor and hash-chained, so the server can't forge
@@ -862,7 +1029,8 @@ figures are from its review.
    Signal's group send endorsements, replaced at once on removal. Accept?
 4. **Key replacement when a device leaves a member's manifest.** Signal doesn't
    do this. Keep it?
-5. **256 members** until fan-out is measured (Signal: 1000). Accept?
+5. **256 members** until fan-out is measured (Signal: 1000). Accepted by the
+   user (2026-10-17).
 6. **Resend from stored history, to original recipients only, with receivers
    asking for a week** (today's direct-chat rule; Desktop keeps a send log of 14
    days at most). Keep?
