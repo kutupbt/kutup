@@ -223,7 +223,7 @@ const contentKey = (id: string) => ['mail', 'content', id] as const
 const scoped = (group?: string) => (group ? { group } : {})
 
 /** Fetched again this often while the app is open (web push comes later). */
-const POLL_MS = 30_000
+export const POLL_MS = 30_000
 
 /** No address key yet: the Account app makes it at sign-in. */
 export class NoAddressKey extends Error {

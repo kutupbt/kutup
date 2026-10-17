@@ -20,7 +20,7 @@ import { incarnationIdOfAuthority, verifyDriveKeyBinding } from '@kutup/crypto/i
 import type { DriveIdentity } from '@kutup/drive-core/identity'
 import { confirmRecipient } from '@kutup/drive-core/identityPins'
 import api from '@kutup/session/client'
-import type { GroupKeyHolderOf } from './api'
+import { POLL_MS, type GroupKeyHolderOf } from './api'
 
 // Mail groups (docs/plans/mail-groups.md): distribution lists and shared
 // mailboxes. A shared mailbox's key reaches each member as a share, the key's
@@ -110,11 +110,13 @@ export interface MailGroupKeys {
 
 export const groupsKey = ['mail', 'groups'] as const
 
-/** The groups the signed-in account belongs to. */
+/** The groups the signed-in account belongs to, on Mail's poll: a group an
+ * administrator adds the account to shows up while the app is open. */
 export function useMyGroups() {
   return useQuery({
     queryKey: groupsKey,
     queryFn: async () => (await api.get<MailGroup[]>('/mail/groups')).data,
+    refetchInterval: POLL_MS,
   })
 }
 
