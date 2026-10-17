@@ -1,8 +1,8 @@
 //! Per-conversation timelines (`docs/research/16-browser-storage-architecture.md`,
 //! Phase 2b).
 //!
-//! An index over the four history stores (inbound and sent direct messages,
-//! group messages, imported history), kept in the store's derived-index
+//! An index over the three history stores (inbound and sent direct messages,
+//! group messages), kept in the store's derived-index
 //! records and written in the same transaction as the records it indexes
 //! ([`changes`], called from each backend's `apply`). A directory holds one
 //! header per conversation; each conversation's references (time, store,
@@ -17,17 +17,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use kutup_chat_proto::content::kind;
-use kutup_chat_proto::{AccountAddress, ChatContent, ConversationId};
+use kutup_chat_proto::{ChatContent, ConversationId};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{
-    ChatDb, ImportedHistoryRecordV1, InboxMessage, MlsHistoryMessage, Pending, SentMessage,
-};
+use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
 
 /// Raised whenever what is indexed or how changes; a store with an older
 /// directory is indexed again from its records.
-pub(crate) const TIMELINE_VERSION: u32 = 2;
+pub(crate) const TIMELINE_VERSION: u32 = 3;
 /// References per chunk before it splits.
 pub(crate) const CHUNK_LIMIT: usize = 256;
 const DIRECTORY_KEY: &[u8] = b"timeline/directory";
@@ -38,7 +36,6 @@ pub enum Source {
     Inbox,
     Sent,
     Mls,
-    Imported,
 }
 
 /// From someone else.
@@ -129,14 +126,13 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 }
 
 pub(crate) fn direct(peer: &str) -> Result<ConversationId> {
-    let address = peer
-        .parse::<AccountAddress>()
+    let account = crate::address::parse_account(peer)
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
-    Ok(ConversationId::direct(address))
+    Ok(ConversationId::direct(account))
 }
 
 /// Kinds left out of the history of direct messages (as the full history
-/// does), and the wider set left out of group and imported history.
+/// does), and the wider set left out of group history.
 fn hidden_direct(kind_name: &str) -> bool {
     matches!(
         kind_name,
@@ -162,6 +158,8 @@ fn visible(content: &ChatContent) -> bool {
             | kind::GROUP_CALL
             | kind::CALL_LOG
             | kind::UNDECRYPTABLE
+            | kind::SAFETY_NUMBER_CHANGED
+            | kind::PEER_RENAMED
             | kind::LIVE_LOCATION_STOP
             | kind::CONVERSATION_STATE
             | kind::READ_POSITION
@@ -197,6 +195,35 @@ fn routed_conversation(content: &ChatContent) -> Option<ConversationId> {
 
 fn content_of(bytes: &[u8]) -> Option<ChatContent> {
     serde_json::from_slice(bytes).ok()
+}
+
+/// The kind a record whose content does not decode is shown as: as the
+/// timeline indexes it (visible), the history shows it, as "a message from a
+/// newer client", never failing the whole history. Content from an older
+/// client (no `messageId`) or a stranger's malformed message lands here.
+pub(crate) const UNSUPPORTED: &str = "unsupported";
+
+/// `bytes` as content, or the unsupported placeholder named `id` (the
+/// record's own id) and dated `sent_at`.
+pub(crate) fn content_or_unsupported(bytes: &[u8], id: &str, sent_at: String) -> ChatContent {
+    content_of(bytes).unwrap_or_else(|| ChatContent {
+        v: ChatContent::VERSION,
+        kind: UNSUPPORTED.to_owned(),
+        sent_at,
+        seq: 0,
+        message_id: id.to_owned(),
+        reply_to: None,
+        profile_key: None,
+        profile_suite: None,
+        body: serde_json::Value::Null,
+        extra: serde_json::Map::new(),
+    })
+}
+
+/// Whether `bytes` decode to one of the kinds `hidden` leaves out; content
+/// that does not decode is never hidden (it shows as unsupported).
+pub(crate) fn decodes_to(bytes: &[u8], hidden: fn(&str) -> bool) -> bool {
+    content_of(bytes).is_some_and(|content| hidden(&content.kind))
 }
 
 /// Where a record is indexed (once, or twice for a routed control), or
@@ -309,22 +336,6 @@ pub(crate) fn place_mls(message: &MlsHistoryMessage) -> Vec<Indexed> {
     )
 }
 
-pub(crate) fn imported_id(transfer_id: &str, source_record_id: &str) -> String {
-    format!("{transfer_id}\u{0}{source_record_id}")
-}
-
-pub(crate) fn place_imported(message: &ImportedHistoryRecordV1) -> Vec<Indexed> {
-    place(
-        message.conversation.clone(),
-        Source::Imported,
-        imported_id(&message.transfer_id, &message.source_record_id),
-        message.timestamp_ms,
-        !message.outgoing,
-        &message.content,
-        hidden_other,
-    )
-}
-
 /// Index writes for `pending`, to commit with it. Nothing while the store
 /// has no current directory (it is indexed whole on open, [`ensure_built`]).
 /// The index writes for one commit, and the conversations it touched.
@@ -356,9 +367,6 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     for message in pending.mls_messages.values() {
         added.extend(place_mls(message));
     }
-    for message in pending.imported_history.values() {
-        added.extend(place_imported(message));
-    }
     // A group message still being sent shows on its conversation's newest
     // page without being indexed: its conversation changes all the same.
     let mut queued = HashSet::new();
@@ -377,8 +385,7 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
         && pending.delete_sent_message_ids.is_empty()
-        && pending.delete_mls_message_ids.is_empty()
-        && pending.delete_imported_history_ids.is_empty();
+        && pending.delete_mls_message_ids.is_empty();
     if added.is_empty() && nothing_removed {
         return Ok(Changes {
             writes: HashMap::new(),
@@ -404,14 +411,6 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     for id in &pending.delete_mls_message_ids {
         if let Some(message) = db.load_mls_message(id).await? {
             removed.extend(place_mls(&message));
-        }
-    }
-    for (transfer_id, source_record_id) in &pending.delete_imported_history_ids {
-        if let Some(message) = db
-            .load_imported_history(transfer_id, source_record_id)
-            .await?
-        {
-            removed.extend(place_imported(&message));
         }
     }
     let mut writer = Writer::new(db, &mut directory);
@@ -465,9 +464,6 @@ async fn ensure_timeline_built(db: &dyn ChatDb) -> Result<()> {
     }
     for message in db.list_mls_messages().await? {
         placed.extend(place_mls(&message));
-    }
-    for message in db.list_imported_history().await? {
-        placed.extend(place_imported(&message));
     }
     let mut directory = Directory {
         version: TIMELINE_VERSION,
@@ -927,11 +923,22 @@ mod tests {
     use futures_executor::block_on;
 
     fn text(body: &str) -> Vec<u8> {
-        serde_json::to_vec(&ChatContent::text("2026-10-08T10:00:00Z", 1, body)).unwrap()
+        serde_json::to_vec(&ChatContent::text_with_id(
+            uuid::Uuid::new_v4().to_string(),
+            "2026-10-08T10:00:00Z",
+            1,
+            body,
+        ))
+        .unwrap()
     }
 
     fn control(kind_name: &str, body: serde_json::Value) -> Vec<u8> {
-        let mut content = ChatContent::text("2026-10-08T10:00:00Z", 1, "");
+        let mut content = ChatContent::text_with_id(
+            uuid::Uuid::new_v4().to_string(),
+            "2026-10-08T10:00:00Z",
+            1,
+            "",
+        );
         content.kind = kind_name.to_string();
         content.body = body;
         serde_json::to_vec(&content).unwrap()
@@ -969,7 +976,7 @@ mod tests {
             incarnation: 1,
             mls_group_id: vec![1; 16],
             epoch: 1,
-            sender: "carol@a.test".into(),
+            sender: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
             sender_device_id: 1,
             outgoing: false,
             cursor: Some(ts as u64),
@@ -1040,9 +1047,11 @@ mod tests {
         let mut pending = Pending::default();
         for i in 0..700i64 {
             let ts = (i * 7919) % 1000 + 1_000;
-            pending
-                .messages
-                .push(inbox(&format!("in-{i}"), "alice@a.test", ts));
+            pending.messages.push(inbox(
+                &format!("in-{i}"),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                ts,
+            ));
         }
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
@@ -1050,7 +1059,7 @@ mod tests {
             block_on(load_directory(&db))
                 .unwrap()
                 .unwrap()
-                .conversations["direct:alice@a.test"]
+                .conversations["direct:aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"]
                 .chunks
                 .len()
                 > 2
@@ -1061,18 +1070,23 @@ mod tests {
         let mut pending = Pending::default();
         pending.sent_messages.insert(
             "out-1".into(),
-            sent("out-1", "alice@a.test", 1_500, text("hi")),
+            sent(
+                "out-1",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                1_500,
+                text("hi"),
+            ),
         );
         pending.sent_messages.insert(
             "read-1".into(),
             sent(
                 "read-1",
-                "myself@a.test",
+                "aci:00000000-0000-4000-8000-e06e309b66b3@a.test",
                 1_600,
                 control(
                     kind::READ_POSITION,
                     serde_json::json!({
-                        "conversation": {"kind": "direct", "address": {"username": "alice", "server": "a.test"}},
+                        "conversation": {"kind": "direct", "account": {"server": "a.test", "accountId": "00000000-0000-4000-8000-2bd806c97f0e"}},
                         "throughMessageId": "in-1",
                         "readThroughMs": 1_500
                     }),
@@ -1083,7 +1097,7 @@ mod tests {
             "typing-1".into(),
             sent(
                 "typing-1",
-                "alice@a.test",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
                 1_601,
                 control(kind::TYPING, serde_json::json!({"active": true})),
             ),
@@ -1095,16 +1109,21 @@ mod tests {
         }
         block_on(db.apply(&pending)).unwrap();
         let mut again = Pending::default();
-        let mut delivered = sent("out-1", "alice@a.test", 1_500, text("hi"));
+        let mut delivered = sent(
+            "out-1",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+            1_500,
+            text("hi"),
+        );
         delivered.delivered = true;
         again.sent_messages.insert("out-1".into(), delivered);
         block_on(db.apply(&again)).unwrap();
         let now = indexed(&db);
         assert_eq!(now, expected(&db));
-        let alice = &now["direct:alice@a.test"];
+        let alice = &now["direct:aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"];
         let read = alice.iter().find(|entry| entry.id == "read-1").unwrap();
         assert_eq!(read.flags & (ROUTED | VISIBLE), ROUTED, "routed, not shown");
-        let travelled = now["direct:myself@a.test"]
+        let travelled = now["direct:aci:00000000-0000-4000-8000-e06e309b66b3@a.test"]
             .iter()
             .find(|entry| entry.id == "read-1")
             .unwrap();
@@ -1131,11 +1150,12 @@ mod tests {
         block_on(db.apply(&deletes)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         let mut peer = Pending::default();
-        peer.delete_messages_for_peers.insert("alice@a.test".into());
+        peer.delete_messages_for_peers
+            .insert("aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into());
         block_on(db.apply(&peer)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         assert!(
-            !indexed(&db).contains_key("direct:myself@a.test"),
+            !indexed(&db).contains_key("direct:aci:00000000-0000-4000-8000-e06e309b66b3@a.test"),
             "an emptied conversation goes"
         );
 
@@ -1191,24 +1211,47 @@ mod tests {
             )
         };
         let mut pending = Pending::default();
-        pending
-            .sent_messages
-            .insert("t-1".into(), sent("t-1", "alice@a.test", 100, timer(30)));
-        pending
-            .sent_messages
-            .insert("t-2".into(), sent("t-2", "alice@a.test", 300, timer(60)));
-        pending.messages.push(inbox("in-1", "alice@a.test", 200));
+        pending.sent_messages.insert(
+            "t-1".into(),
+            sent(
+                "t-1",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                100,
+                timer(30),
+            ),
+        );
+        pending.sent_messages.insert(
+            "t-2".into(),
+            sent(
+                "t-2",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                300,
+                timer(60),
+            ),
+        );
+        pending.messages.push(inbox(
+            "in-1",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+            200,
+        ));
         block_on(db.apply(&pending)).unwrap();
         let header = |db: &SqliteChatDb| {
-            block_on(load_directory(db)).unwrap().unwrap().conversations["direct:alice@a.test"]
+            block_on(load_directory(db)).unwrap().unwrap().conversations
+                ["direct:aci:00000000-0000-4000-8000-2bd806c97f0e@a.test"]
                 .clone()
         };
         assert_eq!(header(&db).timer.unwrap().id, "t-2");
 
         let mut older = Pending::default();
-        older
-            .sent_messages
-            .insert("t-0".into(), sent("t-0", "alice@a.test", 50, timer(5)));
+        older.sent_messages.insert(
+            "t-0".into(),
+            sent(
+                "t-0",
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test",
+                50,
+                timer(5),
+            ),
+        );
         block_on(db.apply(&older)).unwrap();
         assert_eq!(
             header(&db).timer.unwrap().id,
@@ -1245,9 +1288,11 @@ mod tests {
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut pending = Pending::default();
         for i in 0..300i64 {
-            pending
-                .messages
-                .push(inbox(&format!("in-{i}"), "bob@a.test", 5_000 - i));
+            pending.messages.push(inbox(
+                &format!("in-{i}"),
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@a.test",
+                5_000 - i,
+            ));
         }
         // Written before the index existed: nothing indexed yet.
         block_on(db.apply(&pending)).unwrap();
@@ -1257,5 +1302,39 @@ mod tests {
         let commits = db.commit_count();
         block_on(ensure_built(&db)).unwrap();
         assert_eq!(db.commit_count(), commits, "a current index is left alone");
+    }
+}
+
+#[cfg(test)]
+mod unsupported_tests {
+    use super::*;
+
+    #[test]
+    fn content_without_a_message_id_shows_as_unsupported_not_an_error() {
+        // An older client's message: everything but messageId.
+        let old = br#"{"v":1,"kind":"text","sentAt":"2026-10-13T10:00:00Z","seq":1,"body":{"text":"hi"}}"#;
+        let shown = content_or_unsupported(old, "mbox-1", "2026-10-13T10:00:01Z".into());
+        assert_eq!(shown.kind, UNSUPPORTED);
+        assert_eq!(shown.message_id, "mbox-1");
+        assert!(!decodes_to(old, |_| true));
+        for junk in [&b"not json"[..], b"{}", br#"{"messageId":5}"#] {
+            assert_eq!(
+                content_or_unsupported(junk, "x", String::new()).kind,
+                UNSUPPORTED
+            );
+        }
+        // Real content passes through untouched.
+        let text = serde_json::to_vec(&ChatContent::text_with_id(
+            "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+            "2026-10-13T10:00:00Z",
+            1,
+            "hi",
+        ))
+        .unwrap();
+        assert_eq!(
+            content_or_unsupported(&text, "x", String::new()).kind,
+            "text"
+        );
+        assert!(decodes_to(&text, |kind| kind == "text"));
     }
 }

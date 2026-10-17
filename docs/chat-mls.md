@@ -146,8 +146,8 @@ only in the mandatory MLS GroupContext extension:
 - `MlsGroupAuthorizationPolicyV1` selects whether all members or only
   administrators may send user-visible application messages, and whether all
   members or only administrators may change the group information
-  (`groupInfoEditors`; omitted while it is the default, administrators, so
-  earlier policies keep their canonical bytes).
+  (`groupInfoEditors`, `1` members or `2` administrators; always present in
+  the canonical bytes, and a policy without it does not decode).
 - `MlsGroupCryptographicPolicyV1` fixes suite `0x0003`, private-control
   extension `0xff4b`, anonymous delivery, 160-byte padding steps, two retained past
   epochs, and a maximum canonical user-application plaintext size. Typed MLS

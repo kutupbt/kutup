@@ -2,7 +2,8 @@
   "boot": {
     "opening": "Postalarınız açılıyor…",
     "failedTitle": "Posta açılamadı",
-    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı denetleyip yeniden deneyin."
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı denetleyip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   },
   "notFound": {
     "title": "Sayfa bulunamadı",
@@ -220,6 +221,7 @@
     "forwardedDate": "Tarih: {{date}}",
     "forwardedSubject": "Konu: {{subject}}",
     "sendingPaused": "Hesabınız için dış adreslere posta gönderimi duraklatıldı. Yöneticinize danışın.",
+    "addressReceiveOnly": "Bu ileti artık yalnızca posta alan eski adresinizden yazıldı. Güncel adresiniz yerleştirildi: yeniden gönderin.",
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
     "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
     "pinnedKeyUnusable": "{{address}} için güvendiğiniz anahtar artık kullanılamıyor. Kişiler'de değiştirin ya da kaldırın.",
@@ -263,7 +265,15 @@
     "rightToLeft": "Sağdan sola",
     "emoji": "Emoji ekle",
     "contactGroup_one": "Kişi grubu · {{count}} üye",
-    "contactGroup_other": "Kişi grubu · {{count}} üye"
+    "contactGroup_other": "Kişi grubu · {{count}} üye",
+    "addressTaken": "{{address}} artık başka birine ait, daha önce yazdığınız kişiye değil. Hiçbir şey gönderilmedi.",
+    "addressTakenNow": "{{address}} artık başka birine ait. Daha önce yazdığınız kişi artık {{now}}. Hiçbir şey gönderilmedi.",
+    "groupKeysChanged": "Ortak posta kutusu {{address}} için anahtarlar, ona son yazdığınızdan beri değişti. Hiçbir şey gönderilmedi. Yöneticileriyle doğrulayın; kutuyu yeniden kurdularsa yeni anahtarlara güvenin ve yeniden gönderin.",
+    "groupKeysUnverified": "Ortak posta kutusu {{address}} için anahtarlar, bildiğiniz anahtarlarla karşılaştırılamadı. Hiçbir şey gönderilmedi.",
+    "trustGroupKeys": "Yeni anahtarlara güven",
+    "groupKeysTrusted": "{{address}} için yeni anahtarlara güveniliyor. Yeniden gönderin.",
+    "groupKeysTrustFailed": "Yeni anahtarlar kaydedilemedi. Yeniden deneyin.",
+    "writeTo": "{{address}} adresine yaz"
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",

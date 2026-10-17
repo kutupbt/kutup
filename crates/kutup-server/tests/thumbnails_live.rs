@@ -11,95 +11,18 @@
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test thumbnails_live -- --nocapture
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use rand::RngCore;
-use reqwest::blocking::{Client, RequestBuilder, Response};
+mod common;
+
+use common::{register, sign_in, User};
+use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-
-fn b64(b: &[u8]) -> String {
-    STANDARD.encode(b)
-}
 
 fn client() -> Client {
     Client::builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap()
-}
-
-struct Account {
-    email: String,
-    login_key: String,
-    master_key: [u8; 32],
-}
-
-fn register(c: &Client, base: &str) -> Account {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let email = format!("thumbs-{ts}@example.com");
-    let username = format!("thm{}", ts % 1_000_000);
-    let password = "sessions-pw-123456";
-    let mut rng = rand::thread_rng();
-    let mut master_key = [0u8; 32];
-    let mut recovery_entropy = [0u8; 32];
-    let mut salt = [0u8; 16];
-    rng.fill_bytes(&mut master_key);
-    rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut salt);
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        password,
-        &salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &email).unwrap();
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
-    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-    let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(plain, key, purpose, &email).unwrap()
-    };
-    let reg = json!({
-        "email": email, "username": username,
-        "loginKey": b64(keys.login_key.as_slice()),
-        "masterKeyEnvelope": seal(&master_key, keys.key_encryption_key.as_slice(), AccountEnvelopePurpose::PasswordMasterKey),
-        "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
-        "drivePrivateKeyEnvelope": seal(identity.drive_hpke_private_key(), &master_key, AccountEnvelopePurpose::DriveHpkePrivateKey),
-        "publicKey": b64(&identity.drive_hpke_public_key()),
-        "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
-        "accountAuthorityKeyId": identity.authority_key_id(),
-        "accountIncarnationId": identity.incarnation_id(),
-        "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-        "accountProtectionSuite": 1,
-        "accountProtectionSalt": b64(&salt),
-        "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
-        "recoveryProof": b64(recovery_proof.as_slice()),
-    });
-    let r = c
-        .post(format!("{base}/api/auth/register"))
-        .json(&reg)
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "register: {}", r.status());
-    Account {
-        email,
-        login_key: b64(keys.login_key.as_slice()),
-        master_key,
-    }
-}
-
-fn login(c: &Client, base: &str, a: &Account, client_type: Option<&str>) -> Response {
-    let mut req = c
-        .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "email": a.email, "loginKey": a.login_key }));
-    if let Some(ct) = client_type {
-        req = req.header("x-kutup-client", ct);
-    }
-    req.send().unwrap()
 }
 
 fn bearer(req: RequestBuilder, token: &str) -> RequestBuilder {
@@ -115,10 +38,9 @@ fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn token_of(c: &Client, base: &str, a: &Account) -> String {
-    let r = login(c, base, a, Some("cli"));
-    assert!(r.status().is_success(), "login: {}", r.status());
-    r.json::<Value>().unwrap()["accessToken"]
+/// A fresh OPAQUE sign-in of `a` (as the CLI): its access token.
+fn token_of(c: &Client, base: &str, a: &User) -> String {
+    sign_in(c, base, &a.username, &a.password)["accessToken"]
         .as_str()
         .unwrap()
         .to_string()
@@ -208,6 +130,7 @@ fn thumbnails_contract() {
             "nameEnvelope": drive_envelope::seal_b64(b"Thumbs", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
             "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
             "parentCollectionId": null,
+            "nameHash": collection_id.replace('-', "").repeat(2),
         }))
         .send()
         .unwrap();
@@ -229,6 +152,7 @@ fn thumbnails_contract() {
     let form = reqwest::blocking::multipart::Form::new()
         .text("fileId", file_id.clone())
         .text("collectionId", collection_id.clone())
+        .text("nameHash", file_id.replace('-', "").repeat(2))
         .text(
             "fileKeyEnvelope",
             drive_envelope::seal_b64(
@@ -502,4 +426,6 @@ fn thumbnails_contract() {
         listed(&c, &base, &token, &collection_id, &file_id)["thumbnails"],
         json!({})
     );
+    // Nothing left behind for the gate's checks.
+    common::purge_accounts(&c, &base, &[&owner, &stranger]);
 }

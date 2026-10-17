@@ -221,7 +221,7 @@ async fn send_one(
     let internal = |what: &str| json!({ "status": 500, "error": what });
     let (stream, _) = state
         .storage
-        .get_object_version(key, version)
+        .get_stored(key, version)
         .await
         .map_err(|_| internal("storage"))?;
     let bytes = stream

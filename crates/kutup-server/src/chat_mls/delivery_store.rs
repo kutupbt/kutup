@@ -72,7 +72,7 @@ impl MlsRepository {
 
     pub(super) async fn authorize_anonymous_key_package_claim(
         &self,
-        username: &str,
+        recipient: Uuid,
         capability: &[u8; 16],
         limits: &MlsAbuseLimitsV1,
         now: OffsetDateTime,
@@ -83,9 +83,9 @@ impl MlsRepository {
             "SELECT u.id, m.version
              FROM users u
              JOIN chat_device_manifests m ON m.user_id = u.id
-             WHERE u.username = $1",
+             WHERE u.id = $1",
         )
-        .bind(username)
+        .bind(recipient)
         .fetch_optional(&mut *tx)
         .await?;
         let Some((recipient_user_id, manifest_version)) = recipient else {
@@ -113,7 +113,7 @@ impl MlsRepository {
 
     pub(super) async fn claim_anonymous_key_packages(
         &self,
-        username: &str,
+        recipient: Uuid,
         capability: &[u8; 16],
         expected_user_id: Uuid,
         expected_manifest_version: u64,
@@ -125,9 +125,9 @@ impl MlsRepository {
             "SELECT u.id, m.version
              FROM users u
              JOIN chat_device_manifests m ON m.user_id = u.id
-             WHERE u.username = $1",
+             WHERE u.id = $1",
         )
-        .bind(username)
+        .bind(recipient)
         .fetch_optional(&mut *tx)
         .await?;
         let Some((recipient_user_id, manifest_version)) = recipient else {
@@ -205,7 +205,7 @@ impl MlsRepository {
 
     pub(super) async fn store_anonymous_submission(
         &self,
-        username: &str,
+        recipient: Uuid,
         submission: &AnonymousMlsSubmissionV1,
         capability: &[u8; 16],
         limits: &MlsAbuseLimitsV1,
@@ -214,8 +214,8 @@ impl MlsRepository {
         let presented_hash = capability_hash(capability);
         let mut tx = self.pool.begin().await?;
         let recipient_user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
-                .bind(username)
+            sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+                .bind(recipient)
                 .fetch_optional(&mut *tx)
                 .await?;
         let Some(recipient_user_id) = recipient_user_id else {

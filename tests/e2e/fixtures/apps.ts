@@ -57,17 +57,26 @@ export function allOrigins(): string[] {
 }
 
 export interface Account {
-  email: string
+  /** Its Kutup address: the username at the server's domain (docs/plans/account-identity.md). */
+  address: string
   username: string
   password: string
   server: Server
+}
+
+/** The domain after the @ of a server's addresses (CHAT_SERVER_NAME; kutup.local on the test stack). */
+export function addressDomain(server: Server = 'primary'): string {
+  const value = server === 'primary' ? process.env.E2E_DOMAIN : process.env.E2E_SECONDARY_DOMAIN
+  if (value) return value
+  if (server === 'primary') return 'kutup.local'
+  throw new Error('E2E_SECONDARY_DOMAIN is required')
 }
 
 /** A fresh account's details; nothing is created yet. */
 export function newAccount(prefix: string, password: string, server: Server = 'primary'): Account {
   const run = `${Date.now().toString(36)}${process.pid.toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const username = `${prefix}${run}`.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 32)
-  return { email: `${username}@kutup.dev`, username, password, server }
+  return { address: `${username}@${addressDomain(server)}`, username, password, server }
 }
 
 /**
@@ -78,10 +87,11 @@ export function newAccount(prefix: string, password: string, server: Server = 'p
  */
 export async function registerAccount(context: BrowserContext, account: Account): Promise<string> {
   const page = await context.newPage()
+  const learned = learnAccountId(page, account)
   await page.goto(appUrl('account', '/register', account.server))
-  await page.getByLabel('Email', { exact: true }).fill(account.email)
   await page.getByLabel('Username', { exact: true }).fill(account.username)
   const phrase = await finishNewKeys(page, account.password)
+  await learned()
   await page.close()
   return phrase
 }
@@ -115,16 +125,16 @@ export async function finishNewKeys(page: Page, password: string): Promise<strin
  * (tests/e2e/docker-compose.isolated.yml). Its first sign-in uses the
  * bootstrap password and sets ADMIN_PASSWORD through the key wizard.
  */
-export const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? 'admin@kutup.dev'
+export const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME ?? 'admin'
 const ADMIN_BOOTSTRAP_PASSWORD = process.env.E2E_BOOTSTRAP_PASSWORD ?? 'Bootstrap*Temporary123'
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'Deneme123*AdminLongPassword'
+export const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'Deneme123*AdminLongPassword'
 
 /** Signs the context in as the administrator, finishing its setup once. */
 export async function signInAsAdmin(context: BrowserContext): Promise<void> {
   const page = await context.newPage()
   for (const password of [ADMIN_PASSWORD, ADMIN_BOOTSTRAP_PASSWORD]) {
     await page.goto(appUrl('account', '/login'))
-    await page.getByLabel('Email', { exact: true }).fill(ADMIN_EMAIL)
+    await page.getByLabel('Username', { exact: true }).fill(ADMIN_USERNAME)
     await page.getByLabel('Password', { exact: true }).fill(password)
     const welcome = page.getByRole('heading', { name: /Welcome/ })
     const setup = page.getByRole('heading', { name: 'Finish setting up your account' })
@@ -141,16 +151,51 @@ export async function signInAsAdmin(context: BrowserContext): Promise<void> {
   await page.close()
 }
 
+/** Each signed-in account's permanent id (users.id), as its sign-in answered. */
+const accountIds = new Map<string, string>()
+
+/**
+ * The account's key, `aci:<uuid>@<server>`: how Chat names it (test ids,
+ * routes). Known once the account signed in here.
+ */
+export function accountKey(account: Account): string {
+  const id = accountIds.get(account.address)
+  if (!id) throw new Error(`${account.address} has not signed in in this run`)
+  return `aci:${id}@${addressDomain(account.server)}`
+}
+
 /** Signs in through the account app; the context's apps then fork from it. */
 export async function signIn(context: BrowserContext, account: Account): Promise<void> {
   const page = await context.newPage()
+  const learned = learnAccountId(page, account)
   await page.goto(appUrl('account', '/login', account.server))
-  await page.getByLabel('Email', { exact: true }).fill(account.email)
+  await page.getByLabel('Username', { exact: true }).fill(account.username)
   await page.getByLabel('Password', { exact: true }).fill(account.password)
   // The launcher greets in the account's language, which may be Turkish.
   await submitThroughRateLimit(page, 'Sign in', page.getByRole('heading', { name: /Welcome|Hoş geldiniz/ }))
   await sessionSaved(page)
+  await learned()
   await page.close()
+}
+
+/** Keeps the id the sign-in or sign-up on `page` answers for `account`; await the result before closing it. */
+function learnAccountId(page: Page, account: Account): () => Promise<void> {
+  const answers: Promise<void>[] = []
+  page.on('response', (response) => {
+    const path = new URL(response.url()).pathname
+    if (!response.ok() || !(path.endsWith('/api/auth/login/finish') || path.endsWith('/api/auth/register'))) return
+    answers.push(
+      response.json().then(
+        (body: { userId?: unknown }) => {
+          if (typeof body.userId === 'string') accountIds.set(account.address, body.userId)
+        },
+        () => {},
+      ),
+    )
+  })
+  return async () => {
+    await Promise.all(answers)
+  }
 }
 
 /** Failures the account app reports that no retry here can fix. */
@@ -162,13 +207,20 @@ const BROKEN = /Your keys could not be created on this device/
  * several accounts meets that limit the way a person would, with "Too many
  * attempts", and waits for it to refill before trying again.
  */
-export async function submitThroughRateLimit(page: Page, button: string, done: Locator): Promise<void> {
+export async function submitThroughRateLimit(
+  page: Page,
+  button: string,
+  done: Locator,
+  /** Fills in again what the form cleared after a refused attempt (a password). */
+  refill?: () => Promise<void>,
+): Promise<void> {
   const limited = page.getByRole('alert').filter({ hasText: 'Too many attempts' })
   // A failure the page reports ends the wait at once, with its own words,
   // rather than after the timeout.
   const broken = page.getByRole('alert').filter({ hasText: BROKEN })
   for (let attempt = 1; ; attempt++) {
     const retrying = await limited.isVisible()
+    if (refill) await refill()
     await page.getByRole('button', { name: button, exact: true }).click()
     // The previous attempt's message stays until this one is under way.
     if (retrying) await expect(limited).toBeHidden({ timeout: 30_000 })

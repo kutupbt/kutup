@@ -33,6 +33,8 @@ step() {
 static() {
   step "Compose S3 credential wiring"
   python3 scripts/test-compose-s3-credentials.py
+  step "Migrations (applied ones unchanged, new ones newer than the base)"
+  scripts/check-migrations.sh "${KUTUP_MIGRATION_BASE:-origin/master}"
   step "Documentation checks"
   python3 scripts/test-check-docs.py
   python3 scripts/check-docs.py

@@ -6,10 +6,10 @@ import { SafetyVerificationDialog } from './SafetyVerificationDialog'
 
 function safety(trust: SafetyNumberV1['trust'] = 'Tofu'): SafetyNumberV1 {
   return {
-    localAccount: 'alice@alpha.example',
-    peerAccount: 'bob@beta.example',
+    localAccount: 'aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example',
+    peerAccount: 'aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example',
     fingerprint: Array.from({ length: 16 }, (_, index) => String(index).padStart(5, '0')).join(' '),
-    qrPayload: 'kutup://verify/chat/v1/exact-pair-bound-value',
+    qrPayload: 'kutup://verify/v3/CAISA-this-side-first',
     authorityKeyId: '11'.repeat(32),
     trust,
     continuityGap: false,
@@ -32,15 +32,15 @@ describe('SafetyVerificationDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Verify bob@beta.example' }))
     expect(screen.getByText(/not verified face to face/i)).toBeVisible()
     expect(screen.getByTestId('chat-safety-qr'))
-      .toHaveAttribute('data-value', 'kutup://verify/chat/v1/exact-pair-bound-value')
+      .toHaveAttribute('data-value', 'kutup://verify/v3/CAISA-this-side-first')
     expect(screen.getByTestId('chat-safety-number')).toHaveTextContent('00000 00001')
-    fireEvent.change(screen.getByPlaceholderText('kutup://verify/chat/v1/…'), {
-      target: { value: 'kutup://verify/chat/v1/scanned-from-bob' },
+    fireEvent.change(screen.getByPlaceholderText('kutup://verify/v3/…'), {
+      target: { value: 'kutup://verify/v3/CAISA-bob-side-first' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Verify exact match' }))
 
     await waitFor(() => {
-      expect(onVerify).toHaveBeenCalledWith('kutup://verify/chat/v1/scanned-from-bob')
+      expect(onVerify).toHaveBeenCalledWith('kutup://verify/v3/CAISA-bob-side-first')
     })
   })
 

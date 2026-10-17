@@ -1,17 +1,16 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { z } from 'zod'
-import type { RegistrationKeys } from '@kutup/crypto'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Field } from '@kutup/ui/components/field'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { Spinner } from '@kutup/ui/components/states'
 import { AuthLayout } from './AuthLayout'
-import { authErrorMessage } from './errors'
-import { generateAccountKeys } from './flows'
+import { authErrorMessage, bodyCode } from './errors'
+import { generateAccountKeys, releaseAccountKeys, type AccountKeys } from './flows'
 import { MIN_PASSWORD_SCORE, passwordScore, usePasswordStrength } from './passwordStrength'
 import { PasswordStrengthMeter } from './PasswordStrengthMeter'
 import { ConfirmRecoveryPhrase, ShowRecoveryPhrase } from './RecoveryPhrase'
@@ -28,24 +27,30 @@ type Step = 'password' | 'generating' | 'phrase' | 'confirm'
 export function NewKeysWizard({
   title,
   description,
-  email,
+  account,
   leadingFields,
   validateLeading,
+  setupToken,
   onKeysConfirmed,
+  onSetupExpired,
 }: {
   title: string
   description: string
-  /** The account email the keys are bound to (read when the password is submitted). */
-  email: () => string
-  /** Fields above the password (registration: email and username). */
+  /** The account the keys are for (its username), named in the saved recovery phrase. */
+  account: () => string
+  /** Fields above the password (registration: the username). */
   leadingFields?: ReactNode
   /** Validate the leading fields; false keeps the user on the first step. */
   validateLeading?: () => Promise<boolean>
-  onKeysConfirmed: (keys: RegistrationKeys) => Promise<void>
+  /** An administrator-created account's first sign-in: what allows registering its password. */
+  setupToken?: string
+  onKeysConfirmed: (keys: AccountKeys) => Promise<void>
+  /** The setup token ran out or was replaced (`setupTokenInvalid`): the first sign-in starts over. */
+  onSetupExpired?: () => void
 }) {
   const { t } = useTranslation()
   const [step, setStep] = useState<Step>('password')
-  const [keys, setKeys] = useState<RegistrationKeys | null>(null)
+  const [keys, setKeys] = useState<AccountKeys | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -62,6 +67,7 @@ export function NewKeysWizard({
     register,
     handleSubmit,
     watch,
+    reset,
     setError: setFieldError,
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
@@ -69,6 +75,12 @@ export function NewKeysWizard({
     defaultValues: { password: '', confirm: '' },
   })
   const score = usePasswordStrength(watch('password'))
+
+  // The password stays in the keys' worker (to register again if the server
+  // refuses the first record), ended when these keys are replaced or left.
+  useEffect(() => () => {
+    if (keys) releaseAccountKeys(keys)
+  }, [keys])
 
   const onPassword = handleSubmit(async ({ password }) => {
     if (validateLeading && !(await validateLeading())) return
@@ -79,9 +91,15 @@ export function NewKeysWizard({
     setError(null)
     setStep('generating')
     try {
-      setKeys(await generateAccountKeys(password, email()))
+      setKeys(await generateAccountKeys(password, setupToken))
+      // The keys' worker has the password now; the form lets it go.
+      reset()
       setStep('phrase')
-    } catch {
+    } catch (err) {
+      if (onSetupExpired && bodyCode(err) === 'setupTokenInvalid') {
+        onSetupExpired()
+        return
+      }
       setError(t('auth.errors.keyGenerationFailed'))
       setStep('password')
     }
@@ -101,7 +119,7 @@ export function NewKeysWizard({
   if (keys && step === 'phrase') {
     return (
       <AuthLayout title={t('recoveryPhrase.title')} description={t('recoveryPhrase.description')} width="md">
-        <ShowRecoveryPhrase mnemonic={keys.mnemonic} email={email()} onContinue={() => setStep('confirm')} />
+        <ShowRecoveryPhrase mnemonic={keys.mnemonic} account={account()} onContinue={() => setStep('confirm')} />
       </AuthLayout>
     )
   }
@@ -118,7 +136,10 @@ export function NewKeysWizard({
             setPending(true)
             setError(null)
             onKeysConfirmed(keys)
-              .catch((err: unknown) => setError(authErrorMessage(err, t, 'auth.errors.generic')))
+              .catch((err: unknown) => {
+                if (onSetupExpired && bodyCode(err) === 'setupTokenInvalid') onSetupExpired()
+                else setError(authErrorMessage(err, t, 'auth.errors.generic'))
+              })
               .finally(() => setPending(false))
           }}
         />

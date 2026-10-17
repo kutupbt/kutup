@@ -28,7 +28,6 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct VersionRow {
     id: String,
-    s3_version_id: String,
     storage_path: String,
     seq_at_snapshot: i64,
     doc_key_id: i64,
@@ -43,10 +42,11 @@ pub struct VersionRow {
     /// The key generation it was sealed at: open it with that generation's
     /// file key.
     key_generation: i32,
-    /// Saved by someone on another server (`user@server`); the owner is
-    /// `authorUserId` then.
+    /// Saved by someone on another server, as `{ server, accountId }`
+    /// (docs/plans/account-ids.md); the owner is `authorUserId` then.
     #[serde(skip_serializing_if = "Option::is_none")]
-    remote_author: Option<String>,
+    #[schema(value_type = Option<Object>)]
+    remote_author: Option<kutup_crypto::account_ref::AccountRef>,
     /// A whole-file version: the version it replaced (`null`: the original
     /// upload, or not recorded).
     parent_version_id: Option<String>,
@@ -54,7 +54,6 @@ pub struct VersionRow {
 
 pub(crate) type VersionTuple = (
     Uuid,
-    String,
     String,
     i64,
     i64,
@@ -67,12 +66,12 @@ pub(crate) type VersionTuple = (
     i32,
     Option<String>,
     Option<Uuid>,
+    Option<Uuid>,
 );
 
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     let (
         id,
-        s3v,
         path,
         seq,
         dk,
@@ -83,12 +82,18 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         created,
         kind,
         key_generation,
-        remote_author,
+        remote_author_server,
+        remote_author_account_id,
         parent_version_id,
     ) = t;
+    let remote_author = match (remote_author_server, remote_author_account_id) {
+        (Some(server), Some(id)) => {
+            kutup_crypto::account_ref::AccountRef::new(&server, &id.to_string()).ok()
+        }
+        _ => None,
+    };
     VersionRow {
         id: id.to_string(),
-        s3_version_id: s3v,
         storage_path: path,
         seq_at_snapshot: seq,
         doc_key_id: dk,
@@ -104,9 +109,9 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
     }
 }
 
-pub(crate) const VERSION_SELECT: &str = r#"SELECT id, s3_version_id, storage_path, seq_at_snapshot,
+pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-       remote_author, parent_version_id
+       remote_author_server, remote_author_account_id, parent_version_id
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -132,7 +137,7 @@ pub async fn list(
     Path(file_id): Path<String>,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let rows: Vec<VersionTuple> = sqlx::query_as(&format!(
@@ -156,7 +161,7 @@ pub async fn list(
         ("fileId" = String, Path, description = "File id"),
         ("vid" = String, Path, description = "Version id")
     ),
-    responses((status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq / x-kutup-s3-version headers"))
+    responses((status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers"))
 )]
 pub async fn download(
     State(state): State<AppState>,
@@ -165,35 +170,32 @@ pub async fn download(
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    if !can_access_file(&state.pool, user_id, fid).await {
+    if !can_access_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, String, i64, i64)> = sqlx::query_as(
-        "SELECT storage_path, s3_version_id, doc_key_id, seq_at_snapshot FROM file_versions WHERE id = $1 AND file_id = $2",
+    let row: Option<(String, i64, i64)> = sqlx::query_as(
+        "SELECT storage_path, doc_key_id, seq_at_snapshot FROM file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version, doc_key_id, seq)) = row else {
+    let Some((path, doc_key_id, seq)) = row else {
         return Err(AppError::not_found("not found"));
     };
 
-    // v2 versions are objects of their own; older ones S3 versions of one key.
-    let (body, size) = if s3_version.is_empty() {
-        state.storage.get_object(&path).await
-    } else {
-        state.storage.get_object_version(&path, &s3_version).await
-    }
-    .map_err(|_| AppError::internal("storage"))?;
+    let (body, size) = state
+        .storage
+        .get_object(&path)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
     let extra = vec![
         (
             HeaderName::from_static("x-kutup-doc-key-id"),
             doc_key_id.to_string(),
         ),
         (HeaderName::from_static("x-kutup-seq"), seq.to_string()),
-        (HeaderName::from_static("x-kutup-s3-version"), s3_version),
     ];
     Ok(octet_stream_response(body, size, &extra))
 }
@@ -221,7 +223,7 @@ pub async fn patch(
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     // Naming or pinning a version changes what retention keeps: an editor's call.
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let label = req.label.map(|l| l.trim().to_string());
@@ -294,9 +296,9 @@ pub async fn delete(
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
-    type Row = (String, String, Uuid, Uuid, bool);
+    type Row = (String, Uuid, Uuid, bool);
     let row: Option<Row> = sqlx::query_as(&format!(
-        "SELECT v.storage_path, v.s3_version_id, v.author_user_id, c.owner_user_id,
+        "SELECT v.storage_path, v.author_user_id, c.owner_user_id,
                 v.id = ({NEWEST_VERSION})
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
@@ -307,11 +309,11 @@ pub async fn delete(
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version, author, owner, newest)) = row else {
+    let Some((path, author, owner, newest)) = row else {
         return Err(AppError::not_found("not found"));
     };
     if user_id != author && user_id != owner {
-        if can_access_file(&state.pool, user_id, fid).await {
+        if can_access_file(&state.pool, user_id, fid).await? {
             return Err(AppError::forbidden(
                 "only the file's owner or whoever saved this version can delete it",
             ));
@@ -323,7 +325,7 @@ pub async fn delete(
             "the newest version is the file's current content and cannot be deleted",
         ));
     }
-    crate::jobs::remove_version(&state.pool, &state.storage, vid, &path, &s3_version)
+    crate::jobs::remove_version(&state.pool, &state.storage, vid, &path)
         .await
         .map_err(|_| AppError::internal("could not delete the version"))?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -363,7 +365,7 @@ pub async fn create(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -415,12 +417,12 @@ pub async fn create(
 
 /// Stores a version from its form fields and sealed blob: checked, charged to
 /// `payer`, recorded, and the collaboration log trimmed up to its position.
-/// `remote_author` names an editor on another server (the owner pays then).
+/// `remote_author` is an editor on another server (the owner pays then).
 pub(crate) async fn store_version(
     state: &AppState,
     fid: Uuid,
     payer: Uuid,
-    remote_author: Option<&str>,
+    remote_author: Option<&kutup_crypto::account_ref::AccountRef>,
     fields: &std::collections::HashMap<String, String>,
     tmp_file: NamedTempFile,
     size: i64,
@@ -456,16 +458,10 @@ pub(crate) async fn store_version(
     let keep_forever = fields.get("keepForever").is_some_and(|v| v == "true");
     // A conditional save (docs/plans/pass.md, "Saving without overwriting"):
     // stored only if the file still holds the content it was made from.
-    let based_on = match fields.get("basedOn").map(String::as_str) {
-        None => None,
-        Some(_) if kind != "file" => {
-            return Err(AppError::bad_request("basedOn needs kind file"));
-        }
-        Some(crate::handlers::files::ORIGINAL) => Some(None),
-        Some(id) => Some(Some(
-            Uuid::parse_str(id).map_err(|_| AppError::bad_request("invalid basedOn"))?,
-        )),
-    };
+    if fields.contains_key("basedOn") && kind != "file" {
+        return Err(AppError::bad_request("basedOn needs kind file"));
+    }
+    let based_on = parse_based_on(fields.get("basedOn").map(String::as_str))?;
 
     // The same typed, file-bound blob as an upload; the server checks only its
     // public header.
@@ -486,6 +482,15 @@ pub(crate) async fn store_version(
     let storage_path = version_storage_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
+    // A save that claims a log position takes the relay's per-file lock
+    // first, before the file's row: the one lock order the relay uses too
+    // (`collab::trim_log`), so the two never deadlock.
+    if seq_at_snapshot > 0 {
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(super::collab::log_lock_key(fid))
+            .execute(&mut *tx)
+            .await?;
+    }
     // One whole-file save at a time per file, so the content it replaces is
     // the content current when it lands. Taken before the key check's shared
     // lock: upgrading a shared lock would deadlock two saves.
@@ -494,22 +499,8 @@ pub(crate) async fn store_version(
             .bind(fid)
             .execute(&mut *tx)
             .await?;
-        let current: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM file_versions WHERE file_id = $1 AND kind = 'file'
-             ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(fid)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if based_on.is_some_and(|expected| expected != current) {
-            let current = current.map_or_else(
-                || crate::handlers::files::ORIGINAL.to_owned(),
-                |id| id.to_string(),
-            );
-            return Err(AppError::conflict("the file changed since").with_details(
-                serde_json::json!({ "code": "version_conflict", "current": current }),
-            ));
-        }
+        let current = current_whole_version(&mut tx, fid).await?;
+        check_based_on(based_on, current)?;
         current
     } else {
         None
@@ -525,10 +516,6 @@ pub(crate) async fn store_version(
     // the log's head (a made-up position must not trim edits it lacks). Under
     // the relay's per-file lock, so no frame lands in between.
     let seq_at_snapshot = if seq_at_snapshot > 0 {
-        sqlx::query("SELECT pg_advisory_xact_lock($1)")
-            .bind(super::collab::log_lock_key(fid))
-            .execute(&mut *tx)
-            .await?;
         seq_at_snapshot.min(super::collab::log_head(&mut *tx, fid).await?)
     } else {
         0
@@ -536,14 +523,14 @@ pub(crate) async fn store_version(
     // Stamped when stored, not when the transaction began: a save that waited
     // for the lock above is newer than the one it waited for.
     let created: VersionTuple = sqlx::query_as(
-        r#"INSERT INTO file_versions (id, file_id, s3_version_id, storage_path, seq_at_snapshot,
+        r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
-                                      key_generation, remote_author, parent_version_id,
-                                      created_at)
-           VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, clock_timestamp())
-           RETURNING id, s3_version_id, storage_path, seq_at_snapshot, doc_key_id,
+                                      key_generation, remote_author_server,
+                                      remote_author_account_id, parent_version_id, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp())
+           RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
                      author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-                     remote_author, parent_version_id"#,
+                     remote_author_server, remote_author_account_id, parent_version_id"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -556,8 +543,9 @@ pub(crate) async fn store_version(
     .bind(keep_forever)
     .bind(kind)
     .bind(key_generation)
-    .bind(remote_author)
+    .bind(remote_author.map(|author| author.server.clone()))
     .bind(parent)
+    .bind(remote_author.map(|author| Uuid::parse_str(&author.account_id).expect("canonical")))
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
@@ -620,6 +608,48 @@ pub(crate) async fn store_version(
         return Err(AppError::internal("commit"));
     }
     Ok(to_version_row(created))
+}
+
+/// `basedOn`: a version id, or `original` (the file as first uploaded).
+pub(crate) fn parse_based_on(value: Option<&str>) -> AppResult<Option<Option<Uuid>>> {
+    Ok(match value {
+        None => None,
+        Some(crate::handlers::files::ORIGINAL) => Some(None),
+        Some(id) => Some(Some(
+            Uuid::parse_str(id).map_err(|_| AppError::bad_request("invalid basedOn"))?,
+        )),
+    })
+}
+
+/// The file's newest whole-file version (`None`: the original upload).
+pub(crate) async fn current_whole_version(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    fid: Uuid,
+) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar(
+        "SELECT id FROM file_versions WHERE file_id = $1 AND kind = 'file'
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(fid)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+/// `409 version_conflict` (naming the current version) unless the file still
+/// holds what a save was based on.
+pub(crate) fn check_based_on(
+    based_on: Option<Option<Uuid>>,
+    current: Option<Uuid>,
+) -> AppResult<()> {
+    if based_on.is_some_and(|expected| expected != current) {
+        let current = current.map_or_else(
+            || crate::handlers::files::ORIGINAL.to_owned(),
+            |id| id.to_string(),
+        );
+        return Err(AppError::conflict("the file changed since")
+            .with_details(serde_json::json!({ "code": "version_conflict", "current": current })));
+    }
+    Ok(())
 }
 
 /// Parses the trusted user id + the file-id path param (bad file id ⇒ 404).

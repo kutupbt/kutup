@@ -47,8 +47,8 @@
   "fileShare": {
     "title": "Share “{{name}}”",
     "description": "They get this file's own key, never its folder's. They see only this file.",
-    "recipient": "Email or Kutup address",
-    "recipientHint": "A Kutup address (user@server) or, for someone on this server, their email. Someone on another server gets an invite link, and can edit too, through their server, if you allow it.",
+    "recipient": "Kutup address",
+    "recipientHint": "Their Kutup address (user@server). Someone on another server gets an invite link, and can edit too, through their server, if you allow it.",
     "canEdit": "Can edit",
     "canEditHint": "Editors can change it and save versions; viewers can only open it. Only you can rename, move or delete it.",
     "canView": "Can view",
@@ -181,12 +181,27 @@
       "title": "“{{name}}” is already here",
       "fileThere": "{{folder}} already has a file with this name. Names are compared without letter case.",
       "folderThere": "{{folder}} already has a folder with this name. Names are compared without letter case.",
-      "replaceHint": "Replace: the file there goes to the trash, where you can restore it.",
+      "replaceHint": "Replace: this becomes the newest version of the file there; its older versions stay in its history.",
       "keepBothHint": "Keep both: this one is uploaded as “{{name}}”.",
       "applyToAll": "Do the same for the other name clashes in this upload",
       "replace": "Replace",
       "keepBoth": "Keep both",
       "skip": "Skip"
+    },
+    "replaceProblem": {
+      "changed": {
+        "title": "“{{name}}” changed meanwhile",
+        "description": "The file in {{folder}} changed while this one was being sent, so nothing was replaced."
+      },
+      "ownUpload": {
+        "title": "“{{name}}” has an unfinished replacement",
+        "description": "An earlier replacement of this file in {{folder}} stopped over an hour ago. Cancel it and start again, keep both, or skip."
+      },
+      "othersUpload": {
+        "title": "“{{name}}” is being replaced right now",
+        "description": "A new version of this file in {{folder}} is being uploaded right now, maybe from another device. Keep both, or skip."
+      },
+      "restart": "Cancel it and start again"
     }
   },
   "contactSuggest": {
@@ -220,6 +235,7 @@
       "shared": "Shared mailbox"
     },
     "goesToAdministrators": "This role address has no members yet, so its mail goes to every administrator.",
+    "needsNewSigner": "An owner or manager of this mailbox was deleted or deactivated and may still hold its signing key. Save to hand signing over to the owners and managers who remain; until then its keys cannot change.",
     "toAdministrators": "Goes to all administrators",
     "displayName": "Name",
     "postPolicy": "Who may write to it",
@@ -256,7 +272,9 @@
     "openMailbox": "Open",
     "sharedMailboxes": "Shared mailboxes",
     "foldersOf": "Folders of {{name}}",
-    "deleted": "Group deleted."
+    "deleted": "Group deleted.",
+    "identityInDoubt": "The keys {{account}}'s server gave are not the ones you know for them. The mailbox's keys were not shared with them. Share them anyway only if you checked with {{account}} that their account was reset.",
+    "shareKeysAnyway": "Share the keys anyway"
   },
   "nameDialog": {
     "label": "Name",
@@ -303,8 +321,22 @@
       "body": "The keys the server gave for {{account}} are not signed by their account. This may not be from them: don't trust its contents, links or requests.",
       "shareBody": "The keys the server gave for {{account}} are not signed by their account, so the server might be able to read what you share."
     },
+    "someoneElse": {
+      "title": "{{account}} is someone else now",
+      "body": "The person you knew at {{account}} no longer has this address. Whoever has it now is someone else: check who they are before you trust anything from them.",
+      "bodyNow": "The person you knew at {{account}} is now {{now}}. Whoever has {{account}} now is someone else: check who they are before you trust anything from them.",
+      "shareBody": "The person you knew at {{account}} no longer has this address, so you would be sharing with someone else. Check who they are first.",
+      "shareBodyNow": "The person you knew at {{account}} is now {{now}}, so you would be sharing with someone else. Share with {{now}} instead, or check who this is first."
+    },
+    "renamed": {
+      "banner": "{{name}} is now {{now}} (formerly {{account}}).",
+      "share": "{{account}} is a name this person has left: they are now {{now}}.",
+      "useNow": "Share with {{now}}",
+      "formerly": "formerly {{formerly}}"
+    },
     "accept": "Trust the new identity",
     "acceptFailed": "It could not be saved. Try again.",
+    "knownAs": "the account you know as {{name}}",
     "shareAnyway": "Share anyway",
     "verified": "{{name}} is verified",
     "verify": "Verify {{name}}",
@@ -318,7 +350,8 @@
       "unverified": "Not verified",
       "unproven": "Keys not confirmed yet",
       "changed": "Identity changed",
-      "invalid": "Identity not confirmed"
+      "invalid": "Identity not confirmed",
+      "someoneElse": "Someone else"
     }
   },
   "safetyNumber": {
@@ -373,5 +406,41 @@
     "send": "Send",
     "sent": "Thanks! Your feedback was sent to the administrators.",
     "failed": "Your feedback could not be sent. Try again."
+  },
+  "restoreName": {
+    "title": "“{{name}}” is already there",
+    "description": "Something with this name is where it comes back. Restore it as “{{name}}”, or leave it in the trash.",
+    "restore": "Restore as “{{name}}”",
+    "leave": "Leave in trash"
+  },
+  "accountHead": {
+    "blockedTitle": "Your data in this app and on the server disagree",
+    "blockedBody": "Another device may have been shown a different history, or your server was restored from a backup and recent changes may be lost. Changes to contacts, labels, saved keys and vault passwords are paused here until you decide.",
+    "continue": "Continue with the server's data",
+    "confirmTitle": "Continue with the server's data?",
+    "confirmBody": "This app will follow what the server shows from now on. Review your contacts, labels and saved keys afterwards: changes made elsewhere may be missing.",
+    "rollbackDetail": "The server shows an older state than this app has already seen.",
+    "forkDetail": "The server shows a history that does not include changes this app has seen.",
+    "continueFailed": "Could not continue. Check your connection and try again.",
+    "tooOld": "This app hadn't been used for a long time; it now follows the server's current data.",
+    "dismiss": "Dismiss",
+    "dataState": "Data state",
+    "dataStateDescription": "A number that goes up with every change to contacts, labels, saved keys and vault passwords. Compare it between your devices if you ever doubt the server.",
+    "dataStateNone": "No changes yet.",
+    "dataStateLine": "#{{sequence}}",
+    "lastByThisApp": "Last changed here",
+    "lastByAnother": "Last changed on another device or app",
+    "since": "Seen here {{when}}",
+    "history": "This app's history",
+    "historyEmpty": "Nothing to show.",
+    "startedFresh": "Started following #{{sequence}}",
+    "startedFreshUnreadable": "This device's record could not be read; started following #{{sequence}}",
+    "reanchoredRollback": "Continued with the server's older data (#{{from}} → #{{to}})",
+    "reanchoredFork": "Continued with the server's other history (#{{from}} → #{{to}})",
+    "reanchoredTooOld": "Caught up after a long time (#{{from}} → #{{to}})",
+    "forgotten": "Continued after the server lost its history (was #{{from}})"
+  },
+  "mailPlaces": {
+    "unnamedFolder": "Unnamed folder"
   }
 }

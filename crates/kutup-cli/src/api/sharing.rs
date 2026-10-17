@@ -4,8 +4,8 @@ use anyhow::Result;
 use reqwest::Method;
 
 use super::{
-    Client, FedPubKeyResponse, FederatedShareRequest, FederatedShareResponse, PublicShareRequest,
-    PublicShareResponse, ShareRequest, UserByEmail,
+    AccountLookup, Client, FederatedShareRequest, FederatedShareResponse, PublicShareRequest,
+    PublicShareResponse, ShareRequest,
 };
 
 impl Client {
@@ -46,25 +46,30 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Looks up a local user's id + public key by email. Mirrors `GetUserByEmail`.
-    pub fn get_user_by_email(&self, email: &str) -> Result<UserByEmail> {
+    /// An account and its Drive keys by its Kutup address, here or through
+    /// its server: the one name lookup.
+    pub fn get_user_by_address(&self, address: &str) -> Result<AccountLookup> {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/users/by-email/{}", super::path_segment(email)),
+                &format!("/users/by-address/{}", super::path_segment(address)),
             )
             .send()?;
         super::decode_json(resp)
     }
 
-    /// Fetches a remote user's federation public key. Mirrors `GetFedPubKey`.
-    pub fn get_fed_pubkey(&self, username: &str, server: &str) -> Result<FedPubKeyResponse> {
+    /// An account by its permanent id, here or through its server: its
+    /// address now (shown only) and its keys.
+    pub fn get_account(
+        &self,
+        person: &kutup_crypto::account_ref::AccountRef,
+    ) -> Result<AccountLookup> {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/drive/federation/users/{}", super::path_segment(username)),
+                &format!("/users/by-id/{}", super::path_segment(&person.account_id)),
             )
-            .query(&[("server", server)])
+            .query(&[("server", person.server.as_str())])
             .send()?;
         super::decode_json(resp)
     }

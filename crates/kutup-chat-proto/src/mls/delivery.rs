@@ -281,7 +281,8 @@ pub struct MlsKeyPackageCountResponseV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnonymousMlsKeyPackageRequestV1 {
     pub protocol_version: u16,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     /// Canonical padded base64 16-byte delivery capability.
     pub capability: String,
 }
@@ -294,7 +295,8 @@ pub struct AnonymousMlsKeyPackageRequestV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentifiedMlsKeyPackageRequestV1 {
     pub protocol_version: u16,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub conversation_id: Uuid,
     pub incarnation: u64,
 }
@@ -302,7 +304,6 @@ pub struct IdentifiedMlsKeyPackageRequestV1 {
 impl IdentifiedMlsKeyPackageRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol_version != MLS_PROTOCOL_VERSION
-            || self.recipient.server.is_none()
             || self.conversation_id.is_nil()
             || self.incarnation == 0
         {
@@ -317,7 +318,8 @@ impl IdentifiedMlsKeyPackageRequestV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FederatedIdentifiedMlsKeyPackageRequestV1 {
     pub origin_domain: String,
-    pub requester: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub requester: AccountRef,
     pub request: IdentifiedMlsKeyPackageRequestV1,
 }
 
@@ -326,7 +328,7 @@ impl FederatedIdentifiedMlsKeyPackageRequestV1 {
         kutup_federation_proto::validate_server_name(&self.origin_domain)
             .map_err(|error| error.to_string())?;
         self.request.validate()?;
-        if self.requester.server.as_deref() != Some(self.origin_domain.as_str()) {
+        if self.requester.server != self.origin_domain.as_str() {
             return Err("federated identified MLS request has the wrong requester identity".into());
         }
         Ok(())
@@ -335,7 +337,7 @@ impl FederatedIdentifiedMlsKeyPackageRequestV1 {
 
 impl AnonymousMlsKeyPackageRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
-        if self.protocol_version != MLS_PROTOCOL_VERSION || self.recipient.server.is_none() {
+        if self.protocol_version != MLS_PROTOCOL_VERSION {
             return Err("anonymous MLS KeyPackage request has invalid version or recipient".into());
         }
         decode_canonical_base64("delivery capability", &self.capability, 16, 16)?;
@@ -347,21 +349,19 @@ impl AnonymousMlsKeyPackageRequestV1 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MlsKeyPackageBundleV1 {
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub manifest: AccountManifestV1,
     pub key_packages: Vec<MlsKeyPackageV1>,
 }
 
 impl MlsKeyPackageBundleV1 {
     pub fn validate(&self, now: i64) -> Result<(), String> {
-        if self.recipient.server.is_none()
-            || self.key_packages.is_empty()
-            || self.key_packages.len() > MAX_ANONYMOUS_ENVELOPES
-        {
+        if self.key_packages.is_empty() || self.key_packages.len() > MAX_ANONYMOUS_ENVELOPES {
             return Err("anonymous MLS KeyPackage response shape is invalid".into());
         }
         self.manifest.verify()?;
-        if self.manifest.account != self.recipient.canonical() {
+        if self.manifest.account != self.recipient {
             return Err("MLS KeyPackage manifest belongs to another account".into());
         }
         let mut devices = BTreeSet::new();
@@ -420,7 +420,8 @@ impl AnonymousMlsDeviceEnvelopeV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnonymousMlsSubmissionV1 {
     pub protocol_version: u16,
-    pub recipient: AccountAddress,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub send_id: Uuid,
     pub capability: String,
     pub suite: MlsAnonymousDeliverySuiteV1,
@@ -430,7 +431,6 @@ pub struct AnonymousMlsSubmissionV1 {
 impl AnonymousMlsSubmissionV1 {
     pub fn validate(&self) -> Result<(), String> {
         if self.protocol_version != MLS_PROTOCOL_VERSION
-            || self.recipient.server.is_none()
             || self.send_id.is_nil()
             || self.envelopes.is_empty()
             || self.envelopes.len() > MAX_ANONYMOUS_ENVELOPES
@@ -464,17 +464,17 @@ impl AnonymousMlsSubmissionV1 {
 }
 
 pub fn anonymous_mls_delivery_aad(
-    recipient: &AccountAddress,
+    recipient: &AccountRef,
     send_id: Uuid,
     suite: MlsAnonymousDeliverySuiteV1,
     device_id: u32,
 ) -> Result<Vec<u8>, String> {
-    if recipient.server.is_none() || send_id.is_nil() || device_id == 0 {
+    if send_id.is_nil() || device_id == 0 {
         return Err("anonymous MLS AAD identifiers are invalid".into());
     }
     let mut aad = Vec::with_capacity(256);
     aad.extend_from_slice(ANONYMOUS_MLS_DELIVERY_CONTEXT);
-    push_string(&mut aad, &recipient.canonical())?;
+    aad.extend_from_slice(&recipient.bytes());
     aad.extend_from_slice(&device_id.to_be_bytes());
     aad.extend_from_slice(send_id.as_bytes());
     aad.extend_from_slice(&u16::from(suite).to_be_bytes());
@@ -507,13 +507,9 @@ pub fn derive_group_delivery_capability(
     conversation_id: Uuid,
     incarnation: u64,
     epoch: u64,
-    recipient: &AccountAddress,
+    recipient: &AccountRef,
 ) -> Result<[u8; 16], String> {
-    if exporter_secret.len() < 16
-        || conversation_id.is_nil()
-        || incarnation == 0
-        || recipient.server.is_none()
-    {
+    if exporter_secret.len() < 16 || conversation_id.is_nil() || incarnation == 0 {
         return Err("group delivery capability input is invalid".into());
     }
     let mut info = Vec::with_capacity(256);
@@ -521,7 +517,7 @@ pub fn derive_group_delivery_capability(
     info.extend_from_slice(conversation_id.as_bytes());
     info.extend_from_slice(&incarnation.to_be_bytes());
     info.extend_from_slice(&epoch.to_be_bytes());
-    push_string(&mut info, &recipient.canonical())?;
+    info.extend_from_slice(&recipient.bytes());
     let mut capability = [0u8; 16];
     Hkdf::<Sha256>::new(None, exporter_secret)
         .expand(&info, &mut capability)

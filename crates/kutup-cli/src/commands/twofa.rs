@@ -45,6 +45,9 @@ fn status(profile: &str, json: bool) -> Result<()> {
 
 fn enable(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
+    // Turning it on takes the password as well (a stolen session alone must
+    // not be able to lock the owner out).
+    let password = super::login::current_password()?;
     let res = ctx.client.setup_totp()?;
 
     // Render the otpauth:// URI as a terminal QR (most authenticator apps scan it directly).
@@ -61,7 +64,8 @@ fn enable(profile: &str, json: bool) -> Result<()> {
     if code.is_empty() {
         bail!("aborted (no code entered)");
     }
-    ctx.client.verify_totp(&code)?;
+    let grant = super::login::reauth_grant(&ctx.client, &password, "totp")?;
+    ctx.client.verify_totp(&code, &grant)?;
 
     if json {
         crate::output::print_json(&serde_json::json!({ "totpEnabled": true }))?;
@@ -76,11 +80,13 @@ fn enable(profile: &str, json: bool) -> Result<()> {
 
 fn disable(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
+    let password = super::login::current_password()?;
     let code = prompt_line("Enter your current 6-digit code to confirm: ")?;
     if code.is_empty() {
         bail!("aborted (no code entered)");
     }
-    ctx.client.disable_totp(&code)?;
+    let grant = super::login::reauth_grant(&ctx.client, &password, "totp")?;
+    ctx.client.disable_totp(&code, &grant)?;
 
     if json {
         crate::output::print_json(&serde_json::json!({ "totpEnabled": false }))?;

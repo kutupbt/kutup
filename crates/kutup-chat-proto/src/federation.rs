@@ -7,11 +7,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeviceListMismatch, SendMessagesRequest};
+use crate::{AccountRef, DeviceListMismatch, SendMessagesRequest};
 
 /// Common-stack feature identifier for every transaction in this module.
 pub const FEDERATED_CHAT_FEATURE: kutup_federation_proto::FederationFeature =
-    kutup_federation_proto::FederationFeature::ChatV1;
+    kutup_federation_proto::FederationFeature::ChatV2;
 
 /// One in-order ciphertext delivery from an origin mailbox server to a
 /// destination mailbox server. No room state is replicated.
@@ -24,11 +24,13 @@ pub struct FederatedChatTransaction {
     pub sequence: u64,
     pub origin: String,
     pub destination: String,
-    /// Canonical `username@destination`.
-    pub recipient: String,
-    /// Canonical `username@origin`; plaintext until sealed sender lands as a
-    /// complete abuse-controlled system.
-    pub sender: String,
+    /// The recipient's account on `destination` (server and account id).
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
+    /// The sender's account on `origin`; plaintext until sealed sender lands
+    /// as a complete abuse-controlled system.
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub sender: AccountRef,
     pub message: SendMessagesRequest,
 }
 

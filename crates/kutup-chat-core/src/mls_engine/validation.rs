@@ -228,13 +228,13 @@ pub(super) fn validate_local_control_state(record: &LocalMlsConversationRecord) 
     let roster_accounts = record
         .current_roster
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     for member in &record.current_roster {
         member
             .validate()
             .map_err(|error| ChatError::Db(format!("invalid durable MLS member: {error}")))?;
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         if previous
             .as_ref()
             .is_some_and(|prior: &String| address <= *prior)
@@ -340,11 +340,11 @@ pub(super) fn advance_member_readiness(
     let previous = record
         .current_roster
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     let next = next_roster
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     record
         .member_joined_epochs
@@ -382,7 +382,7 @@ fn validate_local_genesis_request(request: &CreateMlsConversationRequestV1) -> R
     let mut owner_ids = BTreeSet::new();
     for member in &request.members {
         member.validate().map_err(ChatError::Db)?;
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         if previous
             .as_ref()
             .is_some_and(|prior: &String| address <= *prior)
@@ -431,7 +431,7 @@ pub(super) fn validate_group_roster(roster: &[MlsConversationMemberV1]) -> Resul
     let mut admins = 0usize;
     for member in roster {
         member.validate().map_err(ChatError::Invalid)?;
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         if previous
             .as_ref()
             .is_some_and(|prior: &String| address <= *prior)
@@ -457,7 +457,7 @@ pub(super) fn roster_by_address(
 ) -> Result<BTreeMap<String, MlsConversationMemberV1>> {
     let mut result = BTreeMap::new();
     for member in roster {
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         if result.insert(address, member.clone()).is_some() {
             return Err(ChatError::Invalid(
                 "MLS group roster repeats an account".into(),
@@ -474,11 +474,11 @@ pub(super) fn validate_private_roster_action(
 ) -> std::result::Result<(), String> {
     let previous_by_address = previous
         .iter()
-        .map(|member| (member.address.canonical(), member))
+        .map(|member| (member.account.to_string(), member))
         .collect::<BTreeMap<_, _>>();
     let next_by_address = next
         .iter()
-        .map(|member| (member.address.canonical(), member))
+        .map(|member| (member.account.to_string(), member))
         .collect::<BTreeMap<_, _>>();
     if previous_by_address.len() != previous.len() || next_by_address.len() != next.len() {
         return Err("MLS roster action repeats an account".into());
@@ -566,13 +566,7 @@ pub(super) fn validate_private_roster_action(
 pub(super) fn participant_domains(roster: &[MlsConversationMemberV1]) -> Result<Vec<String>> {
     roster
         .iter()
-        .map(|member| {
-            member
-                .address
-                .server
-                .clone()
-                .ok_or_else(|| ChatError::Invalid("MLS member has no federation domain".into()))
-        })
+        .map(|member| Ok(member.account.server.clone()))
         .collect::<Result<BTreeSet<_>>>()
         .map(|domains| domains.into_iter().collect())
 }
@@ -581,24 +575,19 @@ pub(super) fn parse_device_credential_identity(identity: &str) -> Result<(String
     let (account, device_id) = identity.rsplit_once('#').ok_or_else(|| {
         ChatError::Trust("MLS credential identity must be account@server#device".into())
     })?;
-    let address: AccountAddress = account
+    let address: AccountRef = account
         .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if address.server.is_none() {
-        return Err(ChatError::Trust(
-            "MLS credential identity requires a federation domain".into(),
-        ));
-    }
+        .map_err(|error: kutup_crypto::error::CryptoError| ChatError::Trust(error.to_string()))?;
     let device_id: u32 = device_id
         .parse()
         .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;
-    if !(1..=127).contains(&device_id) || format!("{}#{device_id}", address.canonical()) != identity
+    if !(1..=127).contains(&device_id) || format!("{}#{device_id}", address.to_string()) != identity
     {
         return Err(ChatError::Trust(
             "MLS credential identity is not canonical".into(),
         ));
     }
-    Ok((address.canonical(), device_id))
+    Ok((address.to_string(), device_id))
 }
 
 pub(super) fn verify_exact_roster(
@@ -914,11 +903,11 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 candidate.verify().map_err(ChatError::Db)?;
                 if candidate.conversation_id != record.request.genesis.conversation_id
                     || candidate.incarnation != record.request.genesis.incarnation
-                    || candidate.account.canonical() != *account
+                    || candidate.account.to_string() != *account
                     || !record
                         .current_roster
                         .iter()
-                        .any(|member| member.address.canonical() == *account)
+                        .any(|member| member.account.to_string() == *account)
                 {
                     return Err(ChatError::Db(
                         "durable MLS owner candidate differs from its conversation".into(),
@@ -935,7 +924,7 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
                 .owner(&owner.owner_id)
                 .is_none_or(|declared| declared.public_key != BASE64.encode(&owner.public_key))
                 || !record.current_roster.iter().any(|member| {
-                    member.address.canonical() == local_address
+                    member.account.to_string() == local_address
                         && member.owner_id.as_deref() == Some(owner.owner_id.as_str())
                 })
             {
@@ -1108,9 +1097,9 @@ pub(super) fn validate_metadata(metadata: &SnapshotMetadata) -> Result<()> {
         }
         if let Some(pending) = metadata.owner_approval_requests.get(&group_key) {
             let request = &pending.request;
-            let requester = pending.requester.canonical();
+            let requester = pending.requester.to_string();
             let requester_is_owner = record.current_roster.iter().any(|member| {
-                member.address.canonical() == requester
+                member.account.to_string() == requester
                     && member
                         .owner_id
                         .as_deref()

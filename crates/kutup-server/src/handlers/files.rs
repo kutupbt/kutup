@@ -28,6 +28,12 @@ use crate::middleware::AuthUser;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
+/// Where a file's original upload is stored: under the file's own prefix,
+/// beside its versions, assets and thumbnails (`files/{id}/…`), whoever
+/// uploaded it and from wherever (a peer's upload too).
+pub(crate) fn original_storage_path(file_id: Uuid) -> String {
+    format!("files/{file_id}/original")
+}
 /// The largest non-file form field: ids and sealed metadata / key envelopes.
 pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 
@@ -36,13 +42,10 @@ pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 pub struct UpdateFileMetadataRequest {
     metadata_envelope: String,
     metadata_revision: i64,
-    /// The new name's hash (docs/plans/drive-unique-names.md). Absent keeps
-    /// the stored one (the metadata changed, not the name); `null` clears it
-    /// (renamed by someone without the folder's key, the file shared by
-    /// itself: the owner's client fills it in).
-    #[serde(deserialize_with = "present")]
-    #[schema(value_type = Option<String>)]
-    name_hash: Option<Option<String>>,
+    /// The new name's hash (docs/plans/drive-unique-names.md); absent when
+    /// the name did not change (the details did). An editor without the
+    /// folder's key (the file shared by itself) sends a random one.
+    name_hash: Option<String>,
 }
 
 /// A field that is there, even as `null` (`Some(None)`), apart from one
@@ -135,7 +138,7 @@ pub async fn list_files(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = Uuid::parse_str(&id).map_err(|_| AppError::forbidden("forbidden"))?;
 
-    if !can_access_collection(&state.pool, user_id, coll_id).await {
+    if !can_access_collection(&state.pool, user_id, coll_id).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -249,7 +252,7 @@ pub async fn upload(
         return Err(AppError::bad_request("missing required fields"));
     }
     let name_hash =
-        crate::drive_names::parse_name_hash(fields.get("nameHash").map(String::as_str))?;
+        crate::drive_names::require_name_hash(fields.get("nameHash").map(String::as_str))?;
     let content_hash =
         crate::drive_names::parse_content_hash(fields.get("contentHash").map(String::as_str))?;
     let Some((tmp_file, file_size)) = tmp else {
@@ -297,17 +300,15 @@ pub async fn upload(
     let blob_context = DriveFileBlobContextV1::new(&file_id_str, 1)
         .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
     validate_file_blob_file(&tmp_file, blob_context)?;
-    let storage_path = format!("{}/{}/{}", user_id, coll_id, file_id);
+    let storage_path = original_storage_path(file_id);
 
     // Claim the id, then check room — both held until commit, so neither a
     // retry with the same id nor a concurrent write can slip past.
     let mut tx = state.pool.begin().await?;
     // Before anything is stored: a name already here refuses the upload.
-    if let Some(hash) = &name_hash {
-        let place = crate::drive_names::Place::Folder(coll_id);
-        crate::drive_names::lock_place(&mut tx, place).await?;
-        crate::drive_names::ensure_name_free(&mut tx, place, hash, None).await?;
-    }
+    let place = crate::drive_names::Place::Folder(coll_id);
+    crate::drive_names::lock_place(&mut tx, place).await?;
+    crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, None).await?;
     if !crate::drive_writes::claim_file_id(&mut tx, file_id, None).await? {
         return Err(AppError::conflict("file id already in use"));
     }
@@ -419,7 +420,7 @@ pub async fn download(
         return Err(AppError::not_found("not found"));
     }
     // The folder's people, or someone the file itself is shared with.
-    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 
@@ -471,7 +472,7 @@ pub async fn download_original(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await {
+    if !crate::handlers::can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
     }
     let content = crate::file_content::original_content(&state.pool, file_id)
@@ -522,7 +523,7 @@ pub async fn update_metadata(
     };
     // The folder's owner, an uploader who may delete, or someone the file
     // itself is shared with for editing.
-    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await {
+    if !crate::drive_writes::is_file_share_editor(&state.pool, user_id, file_id).await? {
         require_owner_or_uploader_with_delete(&state, user_id, coll_id, uploader_id).await?;
     }
 
@@ -547,7 +548,11 @@ pub async fn update_metadata(
     )?;
 
     let change_name = req.name_hash.is_some();
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.flatten().as_deref())?;
+    let name_hash = req
+        .name_hash
+        .as_deref()
+        .map(|hash| crate::drive_names::require_name_hash(Some(hash)))
+        .transpose()?;
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::Folder(coll_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
@@ -631,7 +636,7 @@ pub async fn claim_seed(
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     // Seeding writes the document's first state: an editor's job.
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
 

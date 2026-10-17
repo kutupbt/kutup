@@ -60,9 +60,8 @@ pub struct CreateCallLinkRequest {
     /// (standard base64, 552 bytes).
     pub info: String,
     /// SHA-256 of the owner's host token (standard base64, 32 bytes), which
-    /// only the owner's account can derive. Needed for a waiting room.
-    #[serde(default)]
-    pub host_token_hash: Option<String>,
+    /// only the owner's account can derive: what lets the owner host.
+    pub host_token_hash: String,
     /// Joiners wait until the owner admits them.
     #[serde(default)]
     pub waiting_room: bool,
@@ -146,11 +145,12 @@ pub(super) fn seat_hash(seat: &str) -> AppResult<[u8; 32]> {
     Ok(Sha256::digest(base64_exact("seat", seat, 32)?).into())
 }
 
-/// The account address this server vouches for, when the request carries a
-/// signed-in account's access token: the joiner chose to show the others
-/// who they are. Without one, or with one that does not hold, nobody is
-/// vouched for.
-pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Option<String> {
+/// The account this server vouches for, when the request carries a signed-in
+/// account's access token: the joiner chose to show the others who they are.
+/// Without one, or with one that does not hold, nobody is vouched for. Seats
+/// and knocks keep this id; the name shown is read from it each time
+/// (`vouched_name`), so a rename shows at the next token.
+pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Option<Uuid> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)?
         .to_str()
@@ -159,13 +159,23 @@ pub(super) async fn vouched_account(state: &AppState, headers: &HeaderMap) -> Op
     let user = crate::middleware::authenticate_access_token(state, token)
         .await
         .ok()?;
-    let user_id = Uuid::parse_str(&user.user_id).ok()?;
-    let username: String = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(user_id)
+    Uuid::parse_str(&user.user_id).ok()
+}
+
+/// The address a vouched-for account goes by now, for the others to see.
+/// An account deleted since is nobody.
+pub(super) async fn vouched_name(
+    state: &AppState,
+    account_id: Option<Uuid>,
+) -> AppResult<Option<String>> {
+    let Some(account_id) = account_id else {
+        return Ok(None);
+    };
+    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(account_id)
         .fetch_optional(&state.pool)
-        .await
-        .ok()??;
-    Some(format!("{username}@{}", state.config.chat_server_name))
+        .await?;
+    Ok(username.map(|username| format!("{username}@{}", state.config.chat_server_name)))
 }
 
 pub(super) fn hex32(name: &str, value: &str) -> AppResult<()> {
@@ -216,14 +226,7 @@ pub(crate) async fn create(
     hex32("nonce", &request.nonce)?;
     let hash = base64_exact("accessTokenHash", &request.access_token_hash, 32)?;
     let info = base64_exact("info", &request.info, SEALED_INFO_BYTES)?;
-    let host_token_hash = request
-        .host_token_hash
-        .as_deref()
-        .map(|hash| base64_exact("hostTokenHash", hash, 32))
-        .transpose()?;
-    if request.waiting_room && host_token_hash.is_none() {
-        return Err(AppError::bad_request("a waiting room needs hostTokenHash"));
-    }
+    let host_token_hash = base64_exact("hostTokenHash", &request.host_token_hash, 32)?;
     if let Some(replaces) = &request.replaces {
         hex32("replaces", replaces)?;
         if *replaces == request.room_id {
@@ -429,7 +432,7 @@ pub(super) struct Admitted {
     pub sitting: i64,
     /// Since when the meeting has been on without a host in it.
     pub hostless_since: Option<OffsetDateTime>,
-    host_token_hash: Option<Vec<u8>>,
+    host_token_hash: Vec<u8>,
 }
 
 impl Admitted {
@@ -441,11 +444,12 @@ impl Admitted {
         let presented: [u8; 32] = Sha256::digest(base64_exact("hostToken", token, 32)?).into();
         let stored: [u8; 32] = self
             .host_token_hash
-            .as_deref()
-            .and_then(|hash| hash.try_into().ok())
-            .unwrap_or([0u8; 32]);
-        Ok(self.host_token_hash.is_some()
-            && kutup_chat_proto::constant_time_capability_hash_eq(&presented, &stored))
+            .as_slice()
+            .try_into()
+            .map_err(|_| AppError::internal("stored host token hash"))?;
+        Ok(kutup_chat_proto::constant_time_capability_hash_eq(
+            &presented, &stored,
+        ))
     }
 }
 
@@ -464,7 +468,7 @@ pub(super) async fn admitted(
         Vec<u8>,
         Vec<u8>,
         bool,
-        Option<Vec<u8>>,
+        Vec<u8>,
         bool,
         i64,
         Option<OffsetDateTime>,
@@ -575,7 +579,7 @@ pub(crate) async fn token(
         &request.participant_id,
         &seat_hash,
         entry,
-        account.as_deref(),
+        account,
     )
     .await?;
     Ok(Json(room_token(
@@ -584,12 +588,13 @@ pub(crate) async fn token(
         &request.participant_id,
         &request.label,
         &seat,
-        account.as_deref(),
+        vouched_name(&state, account).await?.as_deref(),
     )?))
 }
 
 /// An SFU token for one sitting of a meeting, carrying the joiner's sealed
-/// name, the account this server vouches for (if any), and what their seat
+/// name, the current address of the account this server vouches for (if
+/// any; `vouched_name`), and what their seat
 /// lets them publish.
 pub(super) fn room_token(
     state: &AppState,

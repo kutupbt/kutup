@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { canonicalAccountAddress } from '@kutup/chat-core/identity'
+import { accountKey } from '@kutup/chat-core/identity'
 import type { ConversationId } from '@kutup/chat-core/types'
 import { useChat } from '../../app/chatStore'
 import { groupIdOf } from '../../state/views'
@@ -18,7 +18,7 @@ export function LiveShareRunner() {
 
   useEffect(() => {
     const server = capabilities?.serverName
-    const address = self?.address
+    const address = self?.key
     if (!service || !server || !address) return
     liveShares.attach({
       sender: service,
@@ -27,11 +27,11 @@ export function LiveShareRunner() {
       rosterOf: (conversation: ConversationId) => {
         if (conversation.kind !== 'group') return null
         const group = groups.current.find((g) => groupIdOf(g) === conversation.groupId)
-        return group ? group.currentRoster.map((member) => canonicalAccountAddress(member.address)) : []
+        return group ? group.currentRoster.map((member) => accountKey(member.account)) : []
       },
     })
     return () => liveShares.detach()
-  }, [service, capabilities?.serverName, self?.address])
+  }, [service, capabilities?.serverName, self?.key])
 
   useEffect(() => {
     for (const message of snapshot.history) {

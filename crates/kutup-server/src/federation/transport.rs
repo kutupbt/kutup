@@ -192,6 +192,9 @@ impl FederationStack {
                 self.transport.negative.lock().await.remove(domain);
                 Ok(peer)
             }
+            // Not a broken peer, only one without this feature: nothing to
+            // forget or hold against its other features.
+            Err(error) if lacks_capability(&error) => Err(error),
             Err(error) => {
                 let message = format!("{error:#}");
                 self.transport.positive.lock().await.remove(domain);
@@ -222,11 +225,14 @@ impl FederationStack {
         let Some(cached) = cached else {
             return Ok(None);
         };
-        if cached.discovery.expires_at <= now.unix_timestamp()
-            || !has_feature(&cached.discovery, feature)
-        {
+        if cached.discovery.expires_at <= now.unix_timestamp() {
             self.transport.positive.lock().await.remove(domain);
             return Ok(None);
+        }
+        // A verified discovery without the feature stays cached until it
+        // expires (an upgrade shows then); nothing is fetched meanwhile.
+        if !has_feature(&cached.discovery, feature) {
+            return Err(PeerLacksCapability { feature }.into());
         }
         let Some(pinned) = self.trust.pinned_peer(domain).await? else {
             self.transport.positive.lock().await.remove(domain);
@@ -277,13 +283,6 @@ impl FederationStack {
         if discovery.identity.sequence > MAX_IDENTITY_SEQUENCE {
             anyhow::bail!("federation identity sequence exceeds the supported history bound");
         }
-        if !has_feature(&discovery, feature) {
-            anyhow::bail!(
-                "peer does not advertise the required {} capability",
-                feature.as_str()
-            );
-        }
-
         let mut chain = Vec::with_capacity(discovery.identity.sequence as usize + 1);
         for sequence in 0..discovery.identity.sequence {
             let url = Url::parse(&format!("{origin}{IDENTITY_PATH_PREFIX}{sequence}.json"))?;
@@ -328,6 +327,12 @@ impl FederationStack {
                 discovery: discovery.clone(),
             },
         );
+        // Checked once the discovery is verified and cached: a peer that
+        // lacks one feature keeps its others (Drive with a chat.v1 peer), and
+        // asking again until the discovery expires costs nothing.
+        if !has_feature(&discovery, feature) {
+            return Err(PeerLacksCapability { feature }.into());
+        }
         Ok(resolved_peer(discovery, pinned))
     }
 
@@ -900,6 +905,32 @@ async fn enforce_final_policy(
     }
 }
 
+/// The peer's signed discovery does not list the feature protocol a request
+/// needs (an older Kutup, say `chat.v1` against this server's `chat.v2`).
+/// Callers tell it apart from a transport failure: retrying soon cannot help,
+/// only the peer upgrading can.
+#[derive(Debug)]
+pub(crate) struct PeerLacksCapability {
+    pub(crate) feature: FederationFeature,
+}
+
+impl std::fmt::Display for PeerLacksCapability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "peer does not advertise the required {} capability",
+            self.feature.as_str()
+        )
+    }
+}
+
+impl std::error::Error for PeerLacksCapability {}
+
+/// Whether `error` is a [`PeerLacksCapability`].
+pub(crate) fn lacks_capability(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<PeerLacksCapability>().is_some()
+}
+
 fn resolved_peer(
     discovery: FederationDiscoveryV2,
     pinned: PinnedFederationPeer,
@@ -912,14 +943,14 @@ fn resolved_peer(
 
 fn policy_feature(feature: FederationFeature) -> FederationPolicyFeature {
     match feature {
-        FederationFeature::ChatV1 => FederationPolicyFeature::Chat,
+        FederationFeature::ChatV2 => FederationPolicyFeature::Chat,
         FederationFeature::DriveV1 => FederationPolicyFeature::Drive,
     }
 }
 
 fn has_feature(discovery: &FederationDiscoveryV2, feature: FederationFeature) -> bool {
     let required = match feature {
-        FederationFeature::ChatV1 => FederationCapabilityId::chat_v1(),
+        FederationFeature::ChatV2 => FederationCapabilityId::chat_v2(),
         FederationFeature::DriveV1 => FederationCapabilityId::drive_v1(),
     };
     discovery.capabilities.binary_search(&required).is_ok()
@@ -927,7 +958,7 @@ fn has_feature(discovery: &FederationDiscoveryV2, feature: FederationFeature) ->
 
 fn validate_request_spec(spec: &FederationRequestSpec) -> anyhow::Result<()> {
     let valid_namespace = match spec.feature {
-        FederationFeature::ChatV1 => {
+        FederationFeature::ChatV2 => {
             spec.path.starts_with("/api/fed/chat/")
                 || matches!(
                     spec.path.as_str(),
@@ -961,6 +992,12 @@ fn operation_url(api_base: &str, path: &str, query: Option<&str>) -> anyhow::Res
     let url = Url::parse(&value)?;
     if url.fragment().is_some() {
         anyhow::bail!("federation operation URL cannot contain a fragment");
+    }
+    // The path as sent must be the one checked against the feature's
+    // namespace: URL parsing resolves `.` and `..` and escapes characters,
+    // which would move a request out of it.
+    if !url.path().ends_with(path) {
+        anyhow::bail!("federation operation path is not canonical");
     }
     Ok(url)
 }
@@ -1001,10 +1038,15 @@ async fn bound_client(
     if addresses.is_empty() {
         anyhow::bail!("federation host resolved to no addresses");
     }
+    // The same address list as every other outbound connection; only a test
+    // stack (FEDERATION_TEST_ALLOW_PRIVATE, refused unless APP_ENV=test)
+    // reaches peers on private networks, and over http for peers and
+    // discovery too. NAT64, 6to4 and Teredo addresses are refused as well,
+    // so an IPv6-only server behind DNS64 cannot reach IPv4-only peers.
     if !allow_private_test_network
         && addresses
             .iter()
-            .any(|address| ssrf::is_private_ip(address.ip()))
+            .any(|address| !ssrf::is_public(address.ip()))
     {
         anyhow::bail!("federation to private/internal addresses is not allowed");
     }
@@ -1105,9 +1147,47 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn a_peer_on_the_retired_chat_wire_lacks_chat_v2() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let identity =
+            kutup_federation_proto::FederationIdentityDocumentV1::genesis("old.example", 100, &key)
+                .unwrap();
+        let discovery = |capabilities: Vec<FederationCapabilityId>| {
+            FederationDiscoveryV2::sign(
+                "old.example",
+                "https://old.example",
+                capabilities,
+                identity.clone(),
+                100,
+                200,
+                &key,
+            )
+            .unwrap()
+        };
+        let old = discovery(vec![
+            FederationCapabilityId::identity_v1(),
+            FederationCapabilityId::try_from("chat.v1".to_owned()).unwrap(),
+        ]);
+        assert!(!has_feature(&old, FederationFeature::ChatV2));
+        let current = discovery(vec![
+            FederationCapabilityId::identity_v1(),
+            FederationCapabilityId::chat_v2(),
+        ]);
+        assert!(has_feature(&current, FederationFeature::ChatV2));
+        // Told apart from a transport failure, which is retried soon.
+        let error: anyhow::Error = PeerLacksCapability {
+            feature: FederationFeature::ChatV2,
+        }
+        .into();
+        assert!(lacks_capability(&error));
+        assert!(error.to_string().contains("chat.v2"));
+        assert!(!lacks_capability(&anyhow::anyhow!("connection refused")));
+    }
+
+    #[test]
     fn feature_paths_cannot_cross_protocol_namespaces() {
         let mut spec = FederationRequestSpec {
-            feature: FederationFeature::ChatV1,
+            feature: FederationFeature::ChatV2,
             method: Method::GET,
             path: "/api/fed/chat/users/alice/keys".into(),
             query: None,
@@ -1128,6 +1208,47 @@ mod tests {
         assert!(validate_request_spec(&spec).is_err());
         spec.path = "https://internal.example/api/fed/chat/users/alice/keys".into();
         assert!(validate_request_spec(&spec).is_err());
+    }
+
+    /// A path URL parsing would change (`.`/`..` segments, characters it
+    /// escapes) is refused, so a request cannot leave its namespace after the
+    /// namespace check.
+    #[test]
+    fn a_path_normalisation_would_change_is_refused() {
+        let base = "https://peer.test";
+        assert!(operation_url(base, "/api/fed/chat/accounts/ada/renames", None).is_ok());
+        for path in [
+            "/api/fed/chat/accounts/../../drive/accounts/x/renames",
+            "/api/fed/chat/./accounts/ada/renames",
+            "/api/fed/chat/accounts/a b/renames",
+        ] {
+            assert!(operation_url(base, path, None).is_err(), "{path}");
+        }
+    }
+
+    /// Renames are served under both features' namespaces: each feature's
+    /// requests go out on a path the transport sends for it.
+    #[test]
+    fn rename_paths_are_inside_each_features_namespace() {
+        for feature in [FederationFeature::ChatV2, FederationFeature::DriveV1] {
+            for path in [
+                crate::remote_renames::chains_path(feature, "alice"),
+                crate::remote_renames::announce_path(feature),
+            ] {
+                let spec = FederationRequestSpec {
+                    feature,
+                    method: Method::GET,
+                    path: path.clone(),
+                    query: None,
+                    content_type: "application/json".into(),
+                    body: vec![],
+                    request_id: Uuid::new_v4().to_string(),
+                    extra_headers: vec![],
+                    response_limit: 1024,
+                };
+                validate_request_spec(&spec).unwrap_or_else(|e| panic!("{feature}: {path}: {e}"));
+            }
+        }
     }
 
     #[test]

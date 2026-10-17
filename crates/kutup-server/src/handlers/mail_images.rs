@@ -309,9 +309,11 @@ async fn fetch_image(url: Url, checks: &Checks) -> AppResult<Fetched> {
             truncate: false,
             // Sites often send images under another type; the bytes decide.
             wanted: &|_| true,
+            body: None,
         },
         &Options {
             allow_http: true,
+            redirects: public_fetch::Redirects::Follow,
             follow: &follow,
         },
         checks,

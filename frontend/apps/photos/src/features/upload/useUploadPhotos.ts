@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { MediaMetadataV1 } from '@kutup/crypto'
+import { hashBlob } from '@kutup/crypto/contentHash'
 import { cachedFolderIndex, foldersKey } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
@@ -109,8 +110,11 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
     ): Promise<'skipped' | undefined> => {
       if (!folder.key) throw new Error('folder is not open')
       let media = await readMedia(file, signal)
-      const key = media?.hash ? duplicateKey(file.name, media.hash) : null
-      const existing = key ? (library.current.get(key) ?? added.current.get(key)) : undefined
+      // The content's SHA-256, read once: it finds the photo if it is in
+      // the library already, and is sealed into its metadata.
+      const sha256 = await hashBlob(file, signal)
+      const key = duplicateKey(file.name, sha256)
+      const existing = library.current.get(key) ?? added.current.get(key)
       if (existing) {
         done({ id: existing, media })
         return 'skipped'
@@ -135,13 +139,14 @@ export function useUploadPhotos(photos: readonly Photo[], preferences: PhotosPre
             // A reload or a crash leaves it to go on with (the upload panel).
             resumable: owner ? { owner } : undefined,
             nameHash,
+            sha256,
           }),
         )
       } catch (error) {
         done(null)
         throw error
       }
-      if (key) added.current.set(key, uploaded.fileId)
+      added.current.set(key, uploaded.fileId)
       done({ id: uploaded.fileId, media })
       thumbnailsAfterUpload(uploaded, file)
       return undefined

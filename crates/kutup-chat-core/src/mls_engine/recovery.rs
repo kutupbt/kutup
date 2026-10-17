@@ -286,12 +286,12 @@ impl MlsClient {
             member_joined_epochs: private
                 .roster
                 .iter()
-                .map(|member| (member.address.canonical(), 1))
+                .map(|member| (member.account.to_string(), 1))
                 .collect(),
             accepted_invitation_epochs: private
                 .roster
                 .iter()
-                .map(|member| (member.address.canonical(), 1))
+                .map(|member| (member.account.to_string(), 1))
                 .collect(),
             current_roster: private.roster,
             current_authority_set: private.authority_set,
@@ -433,13 +433,16 @@ impl MlsClient {
         ensure_private_control_matches_record(old_group.extensions(), &conversation)?;
         let (creator_address, creator_device_id) =
             parse_device_credential_identity(&metadata.credential_identity)?;
-        let creator: AccountAddress = creator_address
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+        let creator: AccountRef =
+            creator_address
+                .parse()
+                .map_err(|error: kutup_crypto::error::CryptoError| {
+                    ChatError::Trust(error.to_string())
+                })?;
         let creator_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address == creator)
+            .find(|member| member.account == creator)
             .ok_or_else(|| ChatError::Trust("recovery creator is absent from the roster".into()))?;
         let owner = group_owner_credential(&metadata, mls_group_id)?;
         if creator_member.owner_id.as_deref() != Some(owner.owner_id.as_str())
@@ -483,7 +486,7 @@ impl MlsClient {
                 || !conversation
                     .current_roster
                     .iter()
-                    .any(|member| member.address.canonical() == address)
+                    .any(|member| member.account.to_string() == address)
                 || !packaged_identities.insert(addition.credential.credential_identity.clone())
             {
                 return Err(ChatError::Trust(
@@ -493,7 +496,7 @@ impl MlsClient {
             packaged_accounts.insert(address);
         }
         if conversation.current_roster.iter().any(|member| {
-            member.address != creator && !packaged_accounts.contains(&member.address.canonical())
+            member.account != creator && !packaged_accounts.contains(&member.account.to_string())
         }) {
             return Err(ChatError::Invalid(
                 "every non-creator recovery account requires a verified KeyPackage".into(),
@@ -603,15 +606,13 @@ impl MlsClient {
             for addition in additions {
                 let (address, device_id) =
                     parse_device_credential_identity(&addition.credential.credential_identity)?;
-                let recipient: AccountAddress =
+                let recipient: AccountRef =
                     address
                         .parse()
-                        .map_err(|error: kutup_chat_proto::AddressError| {
+                        .map_err(|error: kutup_crypto::error::CryptoError| {
                             ChatError::Trust(error.to_string())
                         })?;
-                let destination = recipient.server.clone().ok_or_else(|| {
-                    ChatError::Trust("recovery recipient has no federation domain".into())
-                })?;
+                let destination = recipient.server.clone();
                 envelopes_by_domain
                     .entry(destination)
                     .or_default()
@@ -629,31 +630,34 @@ impl MlsClient {
             let mut envelopes = envelopes_by_domain.remove(destination).unwrap_or_default();
             envelopes.sort_by_key(|envelope| {
                 (
-                    envelope.recipient.canonical(),
+                    envelope.recipient.to_string(),
                     envelope.device_id,
                     u16::from(envelope.kind),
                     envelope.envelope_id,
                 )
             });
             let mut local_devices_after = Vec::new();
-            if creator.server.as_deref() == Some(destination.as_str()) {
+            if creator.server == destination.as_str() {
                 local_devices_after.push(MlsConversationDeviceV1 {
-                    address: creator.clone(),
+                    account: creator.clone(),
                     device_id: creator_device_id,
                 });
             }
             for addition in additions {
                 let (address, device_id) =
                     parse_device_credential_identity(&addition.credential.credential_identity)?;
-                let address = address.parse::<AccountAddress>().map_err(
-                    |error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()),
+                let address = address.parse::<AccountRef>().map_err(
+                    |error: kutup_crypto::error::CryptoError| ChatError::Trust(error.to_string()),
                 )?;
-                if address.server.as_deref() == Some(destination.as_str()) {
-                    local_devices_after.push(MlsConversationDeviceV1 { address, device_id });
+                if address.server == destination.as_str() {
+                    local_devices_after.push(MlsConversationDeviceV1 {
+                        account: address,
+                        device_id,
+                    });
                 }
             }
             local_devices_after
-                .sort_by_key(|device| (device.address.canonical(), device.device_id));
+                .sort_by_key(|device| (device.account.to_string(), device.device_id));
             let delivery = MlsMembershipDeliveryV1 {
                 protocol_version: MLS_PROTOCOL_VERSION,
                 conversation_id: new_genesis.conversation_id,
@@ -665,7 +669,7 @@ impl MlsClient {
                 next_participant_domains: domains.clone(),
                 local_members_after: members
                     .iter()
-                    .filter(|member| member.address.server.as_deref() == Some(destination))
+                    .filter(|member| member.account.server == *destination)
                     .cloned()
                     .collect(),
                 local_devices_after,
@@ -931,13 +935,13 @@ impl MlsClient {
                 .request
                 .members
                 .iter()
-                .map(|member| (member.address.canonical(), 1))
+                .map(|member| (member.account.to_string(), 1))
                 .collect(),
             accepted_invitation_epochs: control
                 .request
                 .members
                 .iter()
-                .map(|member| (member.address.canonical(), 1))
+                .map(|member| (member.account.to_string(), 1))
                 .collect(),
             current_authority_set: plan.new_genesis.authority_set.clone(),
             current_owner_set: current.current_owner_set,

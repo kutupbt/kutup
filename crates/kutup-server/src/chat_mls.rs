@@ -60,6 +60,7 @@ pub(crate) use identified_packages::{
 pub(crate) use invitation_feedback::{
     federated_record_invitation_feedback, list_invitation_feedback,
 };
+pub(crate) use invitation_routes::spawn_invitation_expiry;
 pub(crate) use invitation_routes::{list_invitations, respond_invitation};
 pub(crate) use invite_links::{
     call as call_invite_link, federated_call as federated_call_invite_link,
@@ -156,15 +157,14 @@ pub(super) async fn notify_mls_conversation_mailbox(state: &AppState, conversati
     }
 }
 
-pub(super) async fn notify_mls_recipient_mailbox(state: &AppState, username: &str) {
+pub(super) async fn notify_mls_recipient_mailbox(state: &AppState, recipient: Uuid) {
     let targets: Result<Vec<(Uuid, i32)>, _> = sqlx::query_as(
         "SELECT DISTINCT m.recipient_user_id, m.recipient_device_id
          FROM chat_mls_mailbox m
-         JOIN users u ON u.id = m.recipient_user_id
-         WHERE u.username = $1
+         WHERE m.recipient_user_id = $1
          ORDER BY m.recipient_user_id, m.recipient_device_id",
     )
-    .bind(username)
+    .bind(recipient)
     .fetch_all(&state.pool)
     .await;
     match targets {

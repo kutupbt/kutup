@@ -1,12 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import { deriveAccountIdentityKeys, toBase64 } from '@kutup/crypto'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { loadServerSettings } from '@kutup/session/apps'
-import { useRequiredSession } from '@kutup/session/store'
+import { useRequiredSession, type Session } from '@kutup/session/store'
 
 export interface DriveIdentity {
   userId: string
-  /** `username@server`, as named shares bind it. */
+  /** `username@server`: this account's current handle. */
   account: string
+  /** This account, for good: its server and permanent id (`users.id`). */
+  accountRef: AccountRef
+  /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
+  binding: string
   incarnationId: string
   masterKey: Uint8Array
   privateKey: Uint8Array
@@ -19,27 +24,32 @@ export interface DriveIdentity {
  * account's canonical `username@server` and its incarnation id. Stable for a
  * session, so derived once.
  */
+/** The signed-in account's Drive identity, for code outside React (Mail's key checks). */
+export async function driveIdentityOf(session: Session): Promise<DriveIdentity> {
+  const [data, identity] = await Promise.all([
+    loadServerSettings<{ chat?: { serverName?: string } }>(),
+    deriveAccountIdentityKeys(toBase64(session.masterKey)),
+  ])
+  const serverName = data.chat?.serverName
+  if (!serverName) throw new Error('the server did not publish its name')
+  if (!session.username) throw new Error('this account has no username')
+  return {
+    userId: session.userId,
+    account: `${session.username}@${serverName}`,
+    accountRef: { server: serverName, accountId: session.userId },
+    binding: session.envelopeBinding,
+    incarnationId: identity.incarnationId,
+    masterKey: session.masterKey,
+    privateKey: session.privateKey,
+    authorityPublicKey: identity.authorityPublicKey,
+  }
+}
+
 export function useDriveIdentity() {
   const session = useRequiredSession()
   return useQuery({
     queryKey: ['drive-identity', session.sessionId],
     staleTime: Infinity,
-    queryFn: async (): Promise<DriveIdentity> => {
-      const [data, identity] = await Promise.all([
-        loadServerSettings<{ chat?: { serverName?: string } }>(),
-        deriveAccountIdentityKeys(toBase64(session.masterKey)),
-      ])
-      const serverName = data.chat?.serverName
-      if (!serverName) throw new Error('the server did not publish its name')
-      if (!session.username) throw new Error('this account has no username')
-      return {
-        userId: session.userId,
-        account: `${session.username}@${serverName}`,
-        incarnationId: identity.incarnationId,
-        masterKey: session.masterKey,
-        privateKey: session.privateKey,
-        authorityPublicKey: identity.authorityPublicKey,
-      }
-    },
+    queryFn: () => driveIdentityOf(session),
   })
 }

@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { openMailName, sealMailName, toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { useRequiredSession } from '@kutup/session/store'
 import { mailKey, useMailAccount } from './api'
+import { createName, listedNames, openGuardedName, readGuarded, renameName } from './places'
 
 // Mail filters (docs/plans/mail-filters.md, F2), as Proton's simple
 // filters. The server runs them as mail arrives, so conditions and actions
-// are readable to it; the name is sealed here like folder names.
+// are readable to it; the name is sealed here like folder names, with its
+// revision, and a rename names the revision it started from.
 
 export type FilterField = 'sender' | 'recipient' | 'subject' | 'attachments'
 export type FilterOp = 'contains' | 'is' | 'begins' | 'ends' | 'matches'
@@ -29,6 +30,8 @@ export interface FilterActions {
 export interface MailFilter {
   id: string
   name: string
+  /** The revision of the sealed name (0 when it did not open). */
+  nameRevision: number
   enabled: boolean
   position: number
   match: 'all' | 'any'
@@ -56,29 +59,50 @@ export function useFilters() {
   return useQuery({
     queryKey: [...filtersKey, address],
     enabled: !!address,
-    queryFn: async (): Promise<MailFilter[]> => {
-      const { data } = await api.get<MailFilter[]>('/mail/filters')
-      const masterKey = toBase64(session.masterKey)
-      return Promise.all(
-        data.map(async (filter) => ({
-          ...filter,
-          name: await openMailName(masterKey, address!, 'filter', filter.id, filter.name).catch(() => '…'),
-        })),
-      )
-    },
+    queryFn: () => loadFilters(session),
   })
 }
 
-function useFilterMutation<T, R>(fn: (input: T, seal: (id: string, name: string) => Promise<string>) => Promise<R>) {
+type FilterSession = { masterKey: Uint8Array; envelopeBinding: string; userId: string }
+
+interface FilterTools {
+  /** Creates a filter: `post` gets its sealed name and the next account head. */
+  create: (id: string, name: string, post: (sealed: string, head: string) => Promise<unknown>) => Promise<void>
+  /** Renames on top of the name the head lists now, with the next head. */
+  rename: (id: string, name: string, patch: (body: { name: string; baseNameRevision: number; head: string }) => Promise<unknown>) => Promise<void>
+  session: FilterSession
+}
+
+/** The account's filters, read now, with their names opened and held to the account head. */
+export async function loadFilters(session: FilterSession): Promise<MailFilter[]> {
+  return readGuarded(session, async (index) => {
+    const { data } = await api.get<Omit<MailFilter, 'nameRevision'>[]>('/mail/filters')
+    index?.expectListing(
+      data.map((filter) => `filter:${filter.id}`),
+      'filter:',
+    )
+    return Promise.all(
+      data.map(async (filter) => {
+        const opened = await openGuardedName(session, 'filter', filter.id, filter.name)
+        if (opened) index?.expect(`filter:${filter.id}`, opened.revision)
+        return { ...filter, name: opened?.name ?? '…', nameRevision: opened?.revision ?? 0 }
+      }),
+    )
+  })
+}
+
+function useFilterMutation<T, R>(fn: (input: T, tools: FilterTools) => Promise<R>) {
   const session = useRequiredSession()
   const account = useMailAccount()
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: T) => {
-      const address = account.data?.address
-      if (!address) throw new Error('mail is not ready')
-      const masterKey = toBase64(session.masterKey)
-      return fn(input, (id, name) => sealMailName(masterKey, address, 'filter', id, name))
+      if (!account.data?.address) throw new Error('mail is not ready')
+      return fn(input, {
+        create: (id, name, post) => createName(session, 'filter', id, name, post),
+        rename: (id, name, patch) => renameName(session, 'filter', id, name, patch),
+        session,
+      })
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: filtersKey }),
   })
@@ -92,24 +116,39 @@ export type FilterDraft = Pick<MailFilter, 'name' | 'match' | 'conditions' | 'ac
 }
 
 export function useCreateFilter() {
-  return useFilterMutation(async (draft: FilterDraft, seal) => {
+  return useFilterMutation(async (draft: FilterDraft, { create }) => {
     const { id = crypto.randomUUID(), name, ...rest } = draft
-    await api.post('/mail/filters', { id, name: await seal(id, name.trim()), ...rest })
+    await create(id, name.trim(), (sealed, head) => api.post('/mail/filters', { id, name: sealed, ...rest, head }))
     return id
   })
 }
 
 export function useUpdateFilter() {
-  return useFilterMutation(async (input: Partial<FilterDraft> & { id: string }, seal) => {
+  return useFilterMutation(async (input: Partial<FilterDraft> & { id: string }, { rename }) => {
     // The source is fixed when a filter is made.
     const { id, name, enabled, match, conditions, actions } = input
-    await api.patch(`/mail/filters/${id}`, { enabled, match, conditions, actions, ...(name !== undefined ? { name: await seal(id, name.trim()) } : {}) })
+    const rest = { enabled, match, conditions, actions }
+    // Switching on or off, and what it matches or does, are not sealed: no head.
+    if (name === undefined) await api.patch(`/mail/filters/${id}`, rest)
+    else await rename(id, name.trim(), (body) => api.patch(`/mail/filters/${id}`, { ...rest, ...body }))
   })
 }
 
 export function useDeleteFilter() {
-  return useFilterMutation(async (id: string) => {
-    await api.delete(`/mail/filters/${id}`)
+  return useFilterMutation(async (id: string, { session }) => {
+    await listedNames(session, (index) =>
+      Promise.resolve(
+        // Gone already: nothing to do.
+        index.revision(`filter:${id}`) === undefined
+          ? null
+          : {
+              changes: [[`filter:${id}`, null]] as const,
+              send: async (head: string) => {
+                await api.delete(`/mail/filters/${id}`, { data: { head } })
+              },
+            },
+      ),
+    )
   })
 }
 

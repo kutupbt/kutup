@@ -13,6 +13,7 @@ use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::ConversationId;
+use kutup_crypto::account_ref::AccountRef;
 
 pub const CHAT_BACKUP_PROTOCOL_VERSION: u16 = 1;
 pub const CHAT_DELIVERY_MEDIA_RETENTION_DAYS: u32 = 45;
@@ -234,7 +235,8 @@ pub struct ChatBackupDisplayRecordV1 {
     pub record_id: String,
     pub mutation_sequence: u64,
     pub conversation: ConversationId,
-    pub sender: String,
+    /// Who sent it: an account, never an address.
+    pub sender: AccountRef,
     pub sender_device_id: u32,
     pub outgoing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,10 +254,6 @@ impl ChatBackupDisplayRecordV1 {
         require_uuid("recordId", &self.record_id)?;
         if self.mutation_sequence == 0 || self.timestamp_ms <= 0 || self.sender_device_id == 0 {
             return Err("backup display record ordering metadata is invalid".into());
-        }
-        if self.sender.is_empty() || self.sender.len() > 320 || self.sender.as_bytes().contains(&0)
-        {
-            return Err("backup display record sender is invalid".into());
         }
         if self.tombstone == self.content.is_some() {
             return Err("backup display record must contain content or a tombstone".into());
@@ -803,13 +801,17 @@ mod tests {
         value
     }
 
+    fn alice() -> AccountRef {
+        AccountRef::new("example.test", "00000000-0000-4000-8000-000000000001").unwrap()
+    }
+
     fn display_record() -> ChatBackupDisplayRecordV1 {
         ChatBackupDisplayRecordV1 {
             version: 1,
             record_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             mutation_sequence: 1,
-            conversation: ConversationId::direct("alice@example.test".parse().unwrap()),
-            sender: "alice@example.test".into(),
+            conversation: ConversationId::direct(alice()),
+            sender: alice(),
             sender_device_id: 1,
             outgoing: false,
             content: Some(serde_json::json!({

@@ -2,7 +2,8 @@
   "boot": {
     "opening": "Opening Pass…",
     "failedTitle": "Pass could not open",
-    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again.",
+    "keysChanged": "This account's keys changed on the server since you signed in. Sign in again."
   },
   "notFound": {
     "title": "Page not found",
@@ -52,6 +53,27 @@
     "choose": "Choose key file",
     "remove": "Remove key file"
   },
+  "vaultKey": {
+    "choice": "Vault key",
+    "random": "A random key, kept in my Kutup account (recommended)",
+    "randomDescription": "Nothing to choose or remember: the vault opens with your Kutup sign-in. To open it in KeePassXC on a computer, show the key from the vault's menu.",
+    "chosen": "A password I choose",
+    "chosenDescription": "For a vault you also open in KeePass apps by typing its password.",
+    "label": "Vault key",
+    "show": "Show vault key…",
+    "title": "Key of {{name}}",
+    "description": "Kasa made this key for the vault. Use it, with the vault's file from Drive, to open the vault in KeePassXC or another KeePass app; type it exactly as shown, in lowercase, with its dashes. Enter your Kutup password to see it.",
+    "reveal": "Show key",
+    "copy": "Copy vault key",
+    "copied": "Vault key copied",
+    "none": "Kasa did not make this vault's key: it opens with the password chosen for it.",
+    "notKept": "The key could not be kept in your account",
+    "notKeptDescription": "The vault was made, but its key could not be kept in your Kutup account. Copy the key now and keep it safe: without it the vault cannot be opened.",
+    "forgetTitle": "Forget this vault's key?",
+    "forgetDescription": "Kasa made this vault's key, and your account is the only place it is kept unless you saved it yourself. Show the vault key and save it first; without it the vault cannot be opened again.",
+    "saved": "I saved the key",
+    "keepAgain": "Try keeping it again"
+  },
   "unlock": {
     "title": "Unlock {{name}}",
     "description": "Enter the vault's password or key file.",
@@ -70,6 +92,7 @@
     "withPassword": "Unlock with my password",
     "wrongAccountPassword": "That is not your Kutup password.",
     "paused": "Too many wrong passwords: your account is locked for a while, as at sign-in. Use the vault's own key below.",
+    "slowDown": "Too many attempts from here. Wait a minute, then try again.",
     "checkUnreachable": "Kutup could not be reached to check your password. Enter the vault's key instead.",
     "pin": "PIN",
     "pinDescription": "The six-digit PIN of your Kutup account.",

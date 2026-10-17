@@ -1,5 +1,8 @@
 import axios from 'axios'
+import { accountOfKey } from '@kutup/crypto/accountRef'
+import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
+import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
 import type {
   ChatDevice,
@@ -14,6 +17,27 @@ import type {
   PendingMlsInvitation,
   RecoverMlsConversationRequest,
 } from './types'
+
+/**
+ * A Chat route for one account, given as its `aci:<uuid>@<server>` string:
+ * `/chat/accounts/<accountId><suffix>` with the server as a parameter. The
+ * engine hands accounts only; an address never reaches a route.
+ */
+export function accountRoute(
+  account: string,
+  suffix: string,
+  scope: '/chat' | '/chat/anonymous' = '/chat',
+): { path: string; server: string } {
+  const ref = accountOfKey(account)
+  if (!ref) throw new Error('not an account reference')
+  return { path: `${scope}/accounts/${encodeURIComponent(ref.accountId)}${suffix}`, server: ref.server }
+}
+
+function signedIn() {
+  const session = getSession()
+  if (!session) throw new Error('not signed in')
+  return session
+}
 
 /** Authenticated REST adapter consumed by the Rust engine. */
 /** Extra waits for an ordering quorum, after the API client's own retries. */
@@ -38,19 +62,21 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/device', request).then((response) => response.data)
   }
 
-  async fetchBundles(username: string): Promise<unknown> {
+  async fetchBundles(account: string): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/keys')
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/keys`)
+      .get(path, { params: { server } })
       .then((response) => response.data)
   }
 
   async fetchSyncBundles(
-    username: string,
+    account: string,
     currentDeviceId: number,
   ): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/keys')
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/keys`, {
-        params: { syncDeviceId: currentDeviceId },
+      .get(path, {
+        params: { syncDeviceId: currentDeviceId, server },
       })
       .then((response) => response.data)
   }
@@ -61,10 +87,11 @@ export class ApiChatTransport implements ChatTransportPort {
       .then((response) => response.data)
   }
 
-  async fetchManifest(username: string): Promise<unknown | null> {
+  async fetchManifest(account: string): Promise<unknown | null> {
+    const { path, server } = accountRoute(account, '/manifest')
     try {
       return await api
-        .get(`/chat/users/${encodeURIComponent(username)}/manifest`)
+        .get(path, { params: { server } })
         .then((response) => response.data)
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 404) return null
@@ -73,14 +100,16 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async fetchManifestHistory(
-    username: string,
+    account: string,
     fromSequence: string,
     toSequence: string,
     pageFromSequence: string,
   ): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/manifest-history')
     return api
-      .get(`/chat/users/${encodeURIComponent(username)}/manifest-history`, {
+      .get(path, {
         params: {
+          server,
           fromSequence,
           toSequence,
           pageFromSequence,
@@ -102,14 +131,15 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async fetchSealedBundles(
-    username: string,
+    account: string,
     capability: string,
   ): Promise<unknown> {
+    const { path, server } = accountRoute(account, '/keys', '/chat/anonymous')
     return axios
       .post(
-        `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/keys`,
+        `${apiBase()}${path}`,
         { capability },
-        { withCredentials: false, headers: { Authorization: undefined } },
+        { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
       )
       .then((response) => response.data)
   }
@@ -118,24 +148,61 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/manifest', manifest).then((response) => response.data)
   }
 
-  /** The account's synced identity pins, shared with Drive (docs/plans/drive-identity-pins.md). */
+  /**
+   * The account's synced identity pins, shared with Drive
+   * (docs/plans/drive-identity-pins.md), held to the account head
+   * (docs/plans/rollback-protection.md): the revision the server names must
+   * be the one the verified index lists, and the engine checks the sealed one
+   * against it. A list the head does not vouch for, or an app blocked on
+   * another history, throws: Chat keeps to its own pins, and the shell's
+   * banner says why.
+   */
   async fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null> {
-    try {
-      return await api.get<{ revision: number; envelope: string }>('/user/identity-pins').then((response) => response.data)
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) return null
-      throw error
+    const head = await accountHead(signedIn())
+    // Two reads: a write landing between them is read again once.
+    for (let attempt = 0; ; attempt++) {
+      const index = await head.verifiedIndex('pins')
+      let record: { revision: number; envelope: string } | null
+      try {
+        record = await api.get<{ revision: number; envelope: string }>('/user/identity-pins').then((response) => response.data)
+      } catch (error) {
+        if (!(axios.isAxiosError(error) && error.response?.status === 404)) throw error
+        record = null
+      }
+      try {
+        if (record) index.expect('pins', record.revision)
+        else index.expectListing([])
+        return record
+      } catch (error) {
+        if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
+      }
     }
   }
 
-  async storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean> {
-    try {
-      await api.put('/user/identity-pins', record)
-      return true
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 409) return false
-      throw error
-    }
+  /**
+   * Stores the engine's next list with the next account head. `false` when
+   * another app stored a list first (the engine reads it again and redoes its
+   * change); sent again on a new head when only another value moved; a
+   * write whose answer was lost is found in the index and counts as stored.
+   */
+  async storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean> {
+    let stored = false
+    await (await accountHead(signedIn())).listedWrite('pins', (index) => {
+      const listed = index.revision('pins') ?? 0
+      if (listed === write.revision) {
+        stored = true
+        return Promise.resolve(null)
+      }
+      if (listed !== write.baseRevision) return Promise.resolve(null)
+      return Promise.resolve({
+        changes: [['pins', write.revision]] as const,
+        send: async (head: string) => {
+          await api.put('/user/identity-pins', { baseRevision: write.baseRevision, envelope: write.envelope, head })
+          stored = true
+        },
+      })
+    })
+    return stored
   }
 
   async fetchOwnProfile(): Promise<unknown | null> {
@@ -152,15 +219,16 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async fetchProfile(
-    username: string,
+    account: string,
     version: string,
     accessKey: string,
   ): Promise<unknown | null> {
+    const { path, server } = accountRoute(account, `/profile/${encodeURIComponent(version)}`)
     try {
       return await api
         .get(
-          `/chat/users/${encodeURIComponent(username)}/profile/${encodeURIComponent(version)}`,
-          { headers: { 'X-Kutup-Profile-Access-Key': accessKey } },
+          path,
+          { params: { server }, headers: { 'X-Kutup-Profile-Access-Key': accessKey } },
         )
         .then((response) => response.data)
     } catch (error) {
@@ -369,17 +437,15 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   async sendMessage(
-    username: string,
+    account: string,
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
   > {
+    const { path, server } = accountRoute(account, '/messages')
     try {
-      const response = await api.post(
-        `/chat/users/${encodeURIComponent(username)}/messages`,
-        request,
-      )
+      const response = await api.post(path, request, { params: { server } })
       return {
         kind: 'delivered',
         deduplicated: response.data?.deduplicated === true,
@@ -388,23 +454,24 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         return { kind: 'mismatch', mismatch: error.response.data }
       }
-      throw error
+      throw peerSendError(error)
     }
   }
 
   async sendSealedMessage(
-    username: string,
+    account: string,
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
     | { kind: 'refused' }
   > {
+    const { path, server } = accountRoute(account, '/messages', '/chat/anonymous')
     try {
       const response = await axios.post(
-        `${apiBase()}/chat/anonymous/users/${encodeURIComponent(username)}/messages`,
+        `${apiBase()}${path}`,
         request,
-        { withCredentials: false, headers: { Authorization: undefined } },
+        { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
       )
       return { kind: 'delivered', deduplicated: response.data?.deduplicated === true }
     } catch (error) {
@@ -416,7 +483,12 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response?.status === 404 && isSealedRefusal(error.response.data)) {
         return { kind: 'refused' }
       }
-      throw error
+      // The recipient's server refused this message for good
+      // (docs/federation-protocol.md): it leaves the queue as a refusal does.
+      if (axios.isAxiosError(error) && error.response?.status === 502 && errorCode(error) === 'peerRefused') {
+        return { kind: 'refused' }
+      }
+      throw peerSendError(error)
     }
   }
 
@@ -455,4 +527,24 @@ export class ApiChatTransport implements ChatTransportPort {
 
 function isSealedRefusal(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'sealed delivery unavailable'
+}
+
+function errorCode(error: unknown): string | undefined {
+  return axios.isAxiosError(error)
+    ? (error.response?.data as { code?: unknown } | undefined)?.code as string | undefined
+    : undefined
+}
+
+/**
+ * The recipient's server does not speak this Chat wire yet (503
+ * `peerUnsupported`): the message waits, in order, until it does. The error
+ * names the code so the queue's failure report says why.
+ */
+export const PEER_UNSUPPORTED = 'peerUnsupported'
+
+function peerSendError(error: unknown): unknown {
+  if (axios.isAxiosError(error) && error.response?.status === 503 && errorCode(error) === PEER_UNSUPPORTED) {
+    return new Error(`${PEER_UNSUPPORTED}: the recipient's server does not support this Chat version yet`)
+  }
+  return error
 }

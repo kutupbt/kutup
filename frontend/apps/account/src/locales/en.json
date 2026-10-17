@@ -31,33 +31,37 @@
     "keys": "Encryption keys",
     "mailSending": "Mail sending",
     "mailGroups": "Mail groups",
-    "feedback": "Feedback"
+    "feedback": "Feedback",
+    "referralCodes": "Referral codes"
   },
   "auth": {
     "fields": {
-      "email": "Email",
       "password": "Password",
       "username": "Username",
       "newPassword": "New password",
       "confirmPassword": "Repeat password"
     },
     "validation": {
-      "emailRequired": "Enter your email address.",
-      "emailInvalid": "Enter a valid email address.",
       "passwordRequired": "Enter a password.",
       "passwordsDiffer": "The passwords do not match.",
       "passwordTooWeak": "Choose a stronger password — longer, and not a common word or pattern.",
-      "username": "3–32 characters: lowercase letters, numbers, _ and -."
+      "username": "3–32 characters: lowercase letters, numbers, _ and -.",
+      "usernameRequired": "Enter your username."
     },
     "errors": {
       "locked": "Too many attempts. Wait a few minutes, then try again.",
       "network": "The server could not be reached. Check your connection and try again.",
-      "signInFailed": "Sign-in failed. Check your email and password.",
+      "signInFailed": "Sign-in failed. Check your username and password.",
       "totpFailed": "That code did not work. Enter the current code from your authenticator app.",
       "keyGenerationFailed": "Your keys could not be created on this device. Try again.",
-      "emailTaken": "That email already has an account. Sign in instead, or go back and use another email.",
       "usernameTaken": "That username is taken. Go back and choose another.",
-      "generic": "Something went wrong. Try again."
+      "generic": "Something went wrong. Try again.",
+      "slowDown": "Too many attempts from here. Wait a minute, then try again.",
+      "keysChanged": "This account's keys did not match what the server says. Sign in again; if it keeps happening, tell the server's administrator.",
+      "signInAgain": "The sign-in ended before it finished. Sign in again.",
+      "setupExpired": "Your first sign-in ran out of time, or your temporary password was replaced. Sign in again with the temporary password you have now.",
+      "serverKeyChanged": "The server's sign-in key changed while your account was being made. Try again; if it keeps happening, tell the server's administrator.",
+      "keyBindingTaken": "Your account's keys could not be stored. Try again; if it keeps happening, tell the server's administrator."
     },
     "strength": {
       "label": "Strength: {{strength}}",
@@ -80,7 +84,8 @@
     "totpDescription": "Enter the 6-digit code from your authenticator app.",
     "totpCode": "Authentication code",
     "verify": "Verify",
-    "useAnotherAccount": "Use a different account"
+    "useAnotherAccount": "Use a different account",
+    "nameHint": "Your username, or your Kutup address."
   },
   "newKeys": {
     "continue": "Continue",
@@ -94,7 +99,7 @@
     "warningTitle": "Write it down now",
     "warning": "This phrase is shown once. Nobody — not even your server's administrator — can recover your files without it or your password.",
     "download": "Download as text",
-    "fileHeader": "Kutup recovery phrase for {{email}}. Keep this private and offline.",
+    "fileHeader": "Kutup recovery phrase for {{account}}. Keep this private and offline.",
     "saved": "I have saved my recovery phrase",
     "confirmTitle": "Confirm your recovery phrase",
     "confirmDescription": "Prove you saved it by entering three of its words.",
@@ -110,13 +115,22 @@
     "closedTitle": "Registration is closed",
     "closedDescription": "This server does not accept new accounts. Ask its administrator for one.",
     "backToSignIn": "Back to sign-in",
-    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account."
+    "settingsUnavailable": "The server's registration settings could not be read; it may refuse the account.",
+    "code": "Referral code",
+    "codeHint": "This server admits new accounts with a referral code from its administrators.",
+    "codeOptionalHint": "If someone gave you a code, enter it here.",
+    "haveCode": "Have a referral code?",
+    "codeRequired": "Enter your referral code.",
+    "codeInvalid": "This referral code cannot be used. Check it, or ask for a new one.",
+    "codeRateLimited": "Too many tries from here. Wait a while and try again.",
+    "codeCheckFailed": "The code could not be checked. Try again."
   },
   "firstLogin": {
     "title": "Finish setting up your account",
-    "description": "An administrator created {{email}} for you. Choose your own password to create your encryption keys."
+    "description": "An administrator created the account {{name}} for you. Choose your own password to create your encryption keys."
   },
   "recover": {
+    "nameHint": "Your username, or your Kutup address.",
     "title": "Recover your account",
     "description": "Use your 24-word recovery phrase to choose a new password.",
     "phrase": "Recovery phrase",
@@ -124,7 +138,7 @@
     "phraseInvalid": "That is not a valid recovery phrase — check each word.",
     "signsOutEverywhere": "Every device and app signed in to this account will be signed out.",
     "submit": "Set new password",
-    "failed": "Recovery failed. Check the email and the phrase.",
+    "failed": "Recovery failed. Check the username and the phrase.",
     "doneTitle": "Password changed",
     "doneDescription": "Sign in with your new password. Your files and messages are intact.",
     "signIn": "Sign in",
@@ -162,7 +176,66 @@
       "colourDescription": "Your cursor and highlight colour when editing documents with others.",
       "colourAuto": "Automatic",
       "colourFailed": "The colour could not be saved.",
-      "details": "Account details"
+      "details": "Account details",
+      "address": "Kutup address",
+      "username": {
+        "title": "Username",
+        "description": "Your username is your Kutup address. You can change it: your files, chats, mail and contacts stay with you.",
+        "change": "Change username"
+      },
+      "rename": {
+        "title": "Change your username",
+        "description": "Only your name and address change. People who know you see the new name, and your old address receives mail for a while.",
+        "newName": "New username",
+        "hint": "3 to 32 characters: a–z, 0–9, _ and -.",
+        "checking": "Checking…",
+        "available": "Available.",
+        "takeBack": "One of your earlier names: you can take it back.",
+        "newAddress": "Your new address:",
+        "same": "That is your username now.",
+        "checkFailed": "The name could not be checked. Try again in a moment.",
+        "reason": {
+          "taken": "Someone already has this name.",
+          "held": "This name is held for its earlier owner.",
+          "reserved": "This name is reserved.",
+          "invalid": "Use 3 to 32 characters: a–z, 0–9, _ and -."
+        },
+        "warning": "Your old address, {{address}}, will receive mail for {{receive}} and cannot send. After that it stops receiving, and after {{hold}} someone else can take the name. Update every service that uses the old address now.",
+        "days_one": "{{count}} day",
+        "days_other": "{{count}} days",
+        "windowsFailed": "Kutup could not say how long your old address is kept. Try again later.",
+        "submit": "Change username",
+        "done": "Your username is now {{name}}.",
+        "failed": "Your username could not be changed.",
+        "errors": {
+          "tooSoon": "You can change your username once every 30 days. You can change it again on {{date}}.",
+          "tooSoonNoDate": "You can change your username once every 30 days.",
+          "tooManyHeld": "You hold as many earlier names as an account can while they receive mail. Stop one of them from receiving below, then change your username.",
+          "breakGlass": "This server's emergency administrator account keeps its name.",
+          "setupRequired": "Finish setting up your account first.",
+          "conflict": "Your username changed on another device meanwhile. Close this and try again."
+        }
+      },
+      "names": {
+        "title": "Earlier names",
+        "description": "Names you left are held for you. Each receives mail for a while and cannot send, then is freed for others.",
+        "receivesUntil": "Receives mail until {{date}}",
+        "notReceiving": "No longer receives mail",
+        "freeAt": "Free for others from {{date}}",
+        "takeBack": "Take back",
+        "drop": "Stop receiving",
+        "dropTitle": "Stop receiving mail at {{address}}?",
+        "dropDescription": "Mail to this address bounces from now on. The name stays yours until {{date}}, then anyone can take it.",
+        "dropWarning": "This cannot be undone. You can stop one address every 30 days.",
+        "dropped": "{{address}} no longer receives mail.",
+        "failed": "Your earlier names could not be loaded.",
+        "errors": {
+          "tooSoon": "You can stop one address every 30 days. Next on {{date}}.",
+          "tooSoonNoDate": "You can stop one address every 30 days.",
+          "notHeld": "This name is no longer held for you.",
+          "failed": "Receiving could not be stopped."
+        }
+      }
     },
     "security": {
       "title": "Security",
@@ -183,6 +256,38 @@
       "disableWarning": "Your password alone will then be enough to sign in.",
       "disableFailed": "Two-factor authentication could not be turned off.",
       "disabled": "Two-factor authentication turned off",
+      "password": "Password",
+      "passwordDescription": "Change the password you sign in with. Your files, mail and chats stay as they are: only the key that opens them is sealed again.",
+      "currentPassword": "Current password",
+      "changePassword": "Change password",
+      "passwordChanged": "Password changed. Your other devices are signed out.",
+      "wrongCurrentPassword": "Your current password is not right.",
+      "yourPassword": "Your Kutup password",
+      "wrongPassword": "That is not your Kutup password.",
+      "passwordChangeFailed": "The password could not be changed. Try again.",
+      "passwordSignsOutOthers": "Every other device signed in to your account is signed out. This one stays signed in.",
+      "events": {
+        "title": "Security events",
+        "description": "Changes to how you sign in, newest first. If you do not recognise one, change your password and check Devices & sessions.",
+        "none": "Nothing has changed since your account was made.",
+        "failed": "Security events could not be loaded.",
+        "older": "Show older events",
+        "byAdmin": "By an administrator",
+        "thisDevice": "This device",
+        "device": "{{device}}",
+        "kind": {
+          "passwordChange": "Password changed",
+          "recovery": "Password reset with the recovery phrase",
+          "rotate": "Your sign-in was refreshed",
+          "adminReset": "Password reset by an administrator",
+          "accountReset": "Account reset by an administrator",
+          "rename": "Username changed from {{oldName}} to {{newName}}",
+          "nameDropped": "Stopped receiving mail at {{oldName}}",
+          "nameClosed": "Mail to {{oldName}} stopped by an administrator",
+          "nameFreed": "{{oldName}} freed for others",
+          "other": "A change to your sign-in"
+        }
+      },
       "recovery": "Recovery phrase",
       "recoveryDescription": "The 24 words shown when your account was created.",
       "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline."
@@ -224,7 +329,9 @@
       "revokeFailed": "The device could not be revoked.",
       "revokedToast": "Device revoked",
       "emptyTitle": "No editor devices yet",
-      "emptyDescription": "A device appears here the first time it opens a shared document."
+      "emptyDescription": "A device appears here the first time it opens a shared document.",
+      "inUseCount": "{{count}} of {{max}} devices in use. Devices of ended sign-ins, or unused for 30 days, don't count.",
+      "notInUse": "Not in use"
     },
     "profile": {
       "title": "Profile",
@@ -437,7 +544,7 @@
       "title": "Users",
       "description": "Accounts on this server. Kutup cannot read their data — only its size.",
       "new": "New user",
-      "search": "Search by email or username",
+      "search": "Search by username or address",
       "admin": "Admin",
       "active": "Active",
       "disabled": "Disabled",
@@ -456,6 +563,7 @@
       }
     },
     "newUser": {
+      "usernameHint": "They sign in with it; their address is this name at this server.",
       "title": "New user",
       "description": "The person signs in with a temporary password, then chooses their own; their keys are created on their device.",
       "tempPassword": "Temporary password",
@@ -465,8 +573,8 @@
       "submit": "Create user",
       "failed": "The user could not be created.",
       "createdTitle": "User created",
-      "createdDescription": "Give {{email}} this temporary password. It works until their first sign-in.",
-      "handOver": "Share it privately — not in the same message as the email address. It is not shown again.",
+      "createdDescription": "Give {{name}} this temporary password. It works until their first sign-in.",
+      "handOver": "Share it privately — not in the same message as the username. It is not shown again.",
       "done": "Done"
     },
     "user": {
@@ -481,17 +589,17 @@
       "enableHint": "Let this person sign in again.",
       "disableHint": "Blocks sign-in and ends every session at once. Their data is kept.",
       "enableTitle": "Enable this account?",
-      "enableDescription": "{{email}} will be able to sign in again.",
+      "enableDescription": "{{name}} will be able to sign in again.",
       "disableTitle": "Disable this account?",
-      "disableDescription": "{{email}} is signed out everywhere and cannot sign in until enabled again.",
+      "disableDescription": "{{name}} is signed out everywhere and cannot sign in until enabled again.",
       "promote": "Make administrator",
       "demote": "Remove administrator",
       "promoteHint": "Administrators manage users, server settings and federation.",
       "demoteHint": "Removes access to these administration pages.",
       "promoteTitle": "Make this user an administrator?",
-      "promoteDescription": "{{email}} will be able to manage every account and the server's settings.",
+      "promoteDescription": "{{name}} will be able to manage every account and the server's settings.",
       "demoteTitle": "Remove administrator rights?",
-      "demoteDescription": "{{email}} keeps their account but loses administration access.",
+      "demoteDescription": "{{name}} keeps their account but loses administration access.",
       "quotas": "Storage quota",
       "quotasHint": "Uploads beyond the quota are refused; nothing already stored is removed.",
       "quotasSaved": "Quota saved",
@@ -501,25 +609,32 @@
       "twoFactorOff": "Turn off 2FA",
       "twoFactorHint": "For someone who lost their authenticator. Their password alone will sign them in.",
       "twoFactorTitle": "Turn off two-factor authentication?",
-      "twoFactorDescription": "{{email}} will be able to sign in with just their password until they set 2FA up again.",
+      "twoFactorDescription": "{{name}} will be able to sign in with just their password until they set 2FA up again.",
       "twoFactorDone": "Two-factor authentication turned off",
       "rotate": "New temporary password",
       "rotateHint": "This account has not signed in yet; replacing its temporary password loses nothing.",
+      "yourPassword": "Your own password, to confirm it is you",
+      "wrongAdminPassword": "Your password is not right.",
+      "adminLocked": "Too many attempts with your password. Wait a while and try again.",
+      "adminSlowDown": "Too many attempts from here. Wait a minute, then try again.",
       "rotateTitle": "Replace the temporary password?",
-      "rotateDescription": "The current temporary password for {{email}} stops working.",
+      "rotateDescription": "The current temporary password for {{name}} stops working.",
       "wipe": "Wipe account",
       "wipeHint": "Last resort when both the password and the recovery phrase are lost: deletes all their files and messages and starts the account over.",
       "wipeTitle": "Wipe this account?",
-      "wipeDescription": "Every file, folder, message and key of {{email}} is destroyed. The account restarts with a new temporary password.",
+      "wipeDescription": "Every file, folder, message and key of {{name}} is destroyed. The account restarts with a new temporary password.",
       "wipeWarning": "This cannot be undone. Nobody can recover the data afterwards.",
       "newTempPassword": "New temporary password",
       "delete": "Delete account",
       "deleteHint": "Removes the account and everything it owns.",
       "deleteTitle": "Delete this account?",
-      "deleteDescription": "{{email}} and everything it owns are removed from this server.",
+      "deleteDescription": "{{name}} and everything it owns are removed from this server.",
       "deleteWarning": "This cannot be undone.",
-      "deleted": "{{email}} deleted",
-      "actionFailed": "The action failed."
+      "deleted": "{{name}} deleted",
+      "actionFailed": "The action failed.",
+      "signedUpWith": "Signed up with",
+      "signedUpWithBy": "Code made by {{name}}; used {{when}}",
+      "noReferralCode": "No referral code"
     },
     "reports": {
       "title": "Reports",
@@ -543,10 +658,10 @@
       "dismissed": "Report dismissed",
       "remove": "Take link down",
       "removeTitle": "Take this link down?",
-      "removeDescription": "Anyone who opens it is told it was removed. {{email}} keeps the file and can share it again; every open report on this link is closed.",
+      "removeDescription": "Anyone who opens it is told it was removed. {{name}} keeps the file and can share it again; every open report on this link is closed.",
       "removed": "Link taken down",
       "disableTitle": "Disable this account?",
-      "disableDescription": "{{email}} is signed out everywhere and cannot sign in, and every public link of theirs stops working, until you enable the account again. Their data is kept.",
+      "disableDescription": "{{name}} is signed out everywhere and cannot sign in, and every public link of theirs stops working, until you enable the account again. Their data is kept.",
       "disabled": "Account disabled",
       "actionFailed": "That did not work. Try again.",
       "resolution": {
@@ -592,15 +707,17 @@
         "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
         "shareRemove": "{{admin}} took down a public link of {{target}}",
-        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}"
+        "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}",
+        "registrationCodeCreated": "{{admin}} made a referral code (…{{hint}})",
+        "registrationCodeRevoked": "{{admin}} revoked the referral code …{{hint}}"
       }
     },
     "settings": {
       "title": "Server settings",
       "description": "Defaults and limits for everyone on this server.",
       "accounts": "Accounts",
-      "registration": "Open registration",
-      "registrationHint": "Anyone who can reach this server can create an account. Off: only administrators create accounts.",
+      "registration": "Registration",
+      "registrationHint": "Who may create an account on this server. Administrators can always create accounts.",
       "chat": "Chat",
       "chatHint": "Encrypted message and media delivery on this server.",
       "mailboxDays": "Undelivered messages (days)",
@@ -612,7 +729,12 @@
       "saved": "Settings saved",
       "saveFailed": "The settings could not be saved.",
       "defaultQuota": "Default storage quota (GiB)",
-      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page."
+      "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page.",
+      "registrationMode": {
+        "on": "Open to anyone",
+        "code": "With a referral code",
+        "off": "Closed"
+      }
     },
     "federation": {
       "title": "Federation",
@@ -891,6 +1013,70 @@
       "issueBodyHint": "Who sent the feedback is not included. Edit out anything else personal.",
       "checkedPersonal": "I've removed personal details, and this can be public",
       "openIssue": "Open the issue on GitHub"
+    },
+    "codes": {
+      "title": "Referral codes",
+      "description": "Codes that let people sign up when registration needs one. A code is shown once, when you make it.",
+      "new": "New code",
+      "emptyTitle": "No referral codes yet",
+      "emptyDescription": "Make one to let someone sign up while registration needs a code.",
+      "columns": {
+        "code": "Code",
+        "note": "Note",
+        "uses": "Uses",
+        "expires": "Expires",
+        "state": "State",
+        "actions": "Actions"
+      },
+      "madeBy": "Made by {{name}}, {{when}}",
+      "usesOf": "{{uses}} of {{max}}",
+      "usesUnlimited": "{{uses}} (no limit)",
+      "never": "Never",
+      "state": {
+        "active": "Active",
+        "expired": "Expired",
+        "usedUp": "Used up",
+        "revoked": "Revoked"
+      },
+      "usedBy": "Used by",
+      "usedByFor": "Who used the code …{{hint}}",
+      "revoke": "Revoke",
+      "revokeFor": "Revoke the code …{{hint}}",
+      "revokeTitle": "Revoke this referral code?",
+      "revokeDescription": "The code …{{hint}} stops working at once. Accounts already made with it stay.",
+      "revokeFailed": "The code could not be revoked.",
+      "revoked": "Referral code revoked",
+      "newTitle": "New referral code",
+      "newDescription": "Choose how long it works and how many accounts it may create.",
+      "note": "Note",
+      "noteHint": "Who or what the code is for. Only administrators see it.",
+      "noteTooLong": "A note is at most 200 characters.",
+      "expires": "Works for",
+      "expiry": {
+        "day": "1 day",
+        "week": "7 days",
+        "month": "30 days",
+        "never": "No expiry"
+      },
+      "usesLabel": "Accounts it may create",
+      "usesHint": "Each sign-up with the code uses one.",
+      "limit": {
+        "one": "One",
+        "number": "A number",
+        "unlimited": "No limit"
+      },
+      "howMany": "How many",
+      "howManyRange": "From 1 to {{max}}.",
+      "createFailed": "The code could not be made.",
+      "make": "Make code",
+      "madeTitle": "Your referral code",
+      "madeDescription": "Copy it now: it is not shown again. Afterwards you see only its last four characters.",
+      "theCode": "The referral code",
+      "copyCode": "Copy code",
+      "copyLink": "Copy sign-up link",
+      "done": "Done",
+      "usesTitle": "Accounts made with …{{hint}}",
+      "noNote": "No note"
     }
   }
 }

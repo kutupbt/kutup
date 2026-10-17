@@ -23,7 +23,12 @@ function browserBarcodeDetector(): BarcodeDetectorConstructor | undefined {
   return (window as typeof window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
 }
 
-const VERIFY_PAYLOAD_PREFIX = 'kutup://verify/chat/v1/'
+/**
+ * Every app's safety QR (Chat, Drive): kutup-crypto `safety_number::QR_PREFIX`,
+ * Signal's fingerprint v2 as base64url `CombinedFingerprints`. Each side's code
+ * carries its own half first, so a scan here is the other side's code.
+ */
+const VERIFY_PAYLOAD_PREFIX = 'kutup://verify/v3/'
 
 /**
  * What the dialog shows: the pair's safety number (kutup-crypto

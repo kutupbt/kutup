@@ -20,10 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::PutChatProfileRequest;
-use kutup_chat_proto::{
-    AccountManifestV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferFrameV1,
-    ChatHistoryTransferRequestV1, ContactState, ConversationId,
-};
+use kutup_chat_proto::{AccountManifestV1, ContactState};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -55,7 +52,7 @@ pub struct LocalIdentity {
 pub struct InboxMessage {
     /// Mailbox id (the server's ack handle) — primary key, so redelivery is idempotent.
     pub id: String,
-    /// Sender username (`user@domain` once federation lands).
+    /// The sender's account (`aci:<uuid>@<server>`).
     pub peer: String,
     pub sender_device_id: u32,
     /// The mailbox cursor (monotonic order + dedup key).
@@ -86,7 +83,7 @@ pub struct OutboxSyncLeg {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OutboxEntry {
     pub send_id: String,
-    /// Recipient username (`user@domain` once federation lands).
+    /// The recipient's account (`aci:<uuid>@<server>`).
     pub peer: String,
     /// `serde_json` of the `ChatContent` plaintext.
     pub content: Vec<u8>,
@@ -223,78 +220,6 @@ pub struct SentMessage {
     pub delivered_at: Option<i64>,
     pub delivered: bool,
     pub deduplicated: bool,
-}
-
-/// Immutable display-history copied from another authorized installation.
-/// These rows are deliberately separate from live Signal/MLS state: importing
-/// one cannot advance a ratchet, mailbox cursor, receipt, or group epoch.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ImportedHistoryRecordV1 {
-    /// One-time transfer UUID that established this row's provenance.
-    pub transfer_id: String,
-    /// Stable source-local id, unique within `transfer_id`.
-    pub source_record_id: String,
-    pub source_device_id: u32,
-    pub conversation: ConversationId,
-    pub sender: String,
-    pub sender_device_id: u32,
-    pub outgoing: bool,
-    /// Canonical serialized [`kutup_chat_proto::ChatContent`].
-    pub content: Vec<u8>,
-    pub timestamp_ms: i64,
-    pub delivered: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HistoryTransferRoleV1 {
-    Requester,
-    Responder,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HistoryTransferJournalStateV1 {
-    Requested,
-    Accepted,
-    FramesReady,
-    ImportReady,
-    Completed,
-    Cancelled,
-}
-
-/// Account-private restart journal for one short-lived history transfer. The
-/// ephemeral secret is as sensitive as the device identity and never leaves
-/// the encrypted/native or origin-private/browser client database.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HistoryTransferJournalV1 {
-    pub transfer_id: String,
-    pub role: HistoryTransferRoleV1,
-    pub state: HistoryTransferJournalStateV1,
-    pub request: ChatHistoryTransferRequestV1,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub acceptance: Option<ChatHistoryTransferAcceptanceV1>,
-    pub ephemeral_secret: [u8; 32],
-    pub next_frame_index: u32,
-    pub updated_at_unix: i64,
-}
-
-impl std::fmt::Debug for HistoryTransferJournalV1 {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("HistoryTransferJournalV1")
-            .field("transfer_id", &self.transfer_id)
-            .field("role", &self.role)
-            .field("state", &self.state)
-            .field("request", &self.request)
-            .field("acceptance", &self.acceptance)
-            .field("ephemeral_secret", &"[REDACTED]")
-            .field("next_frame_index", &self.next_frame_index)
-            .field("updated_at_unix", &self.updated_at_unix)
-            .finish()
-    }
 }
 
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
@@ -439,7 +364,7 @@ pub struct ManifestTrust {
     /// Request/routing key used by the local application (may be bare for a
     /// same-origin peer).
     pub peer: String,
-    /// Canonical account address authenticated inside the manifest.
+    /// The account the manifest names, authenticated inside it (`aci:<uuid>@<server>`).
     pub account: String,
     pub incarnation_id: String,
     pub authority_key_id: String,
@@ -610,24 +535,18 @@ pub struct Pending {
     pub(crate) messages: Vec<InboxMessage>,
     /// Outbound history upserts, keyed by `sendId`.
     pub(crate) sent_messages: HashMap<String, SentMessage>,
-    /// Immutable imported display rows keyed by `(transferId, sourceRecordId)`.
-    pub(crate) imported_history: HashMap<(String, String), ImportedHistoryRecordV1>,
-    /// Transfer id → restart journal update/removal.
-    pub(crate) history_transfer_journals: HashMap<String, Option<HistoryTransferJournalV1>>,
-    /// Exact opaque frame update/removal, retained byte-for-byte across retry.
-    pub(crate) history_transfer_frames: HashMap<(String, u32), Option<ChatHistoryTransferFrameV1>>,
     /// Raw inbound journal updates keyed by mailbox id. `None` removes an entry
     /// only after its REST acknowledgement succeeds.
     pub(crate) inbound: HashMap<String, Option<InboundEnvelope>>,
-    /// Peer username → latest accepted signed-manifest trust record.
+    /// Peer account → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
     /// `(peer, incarnation, version)` → immutable complete signed manifest.
     pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecordV1>,
-    /// Canonical peer → local contact/request state.
+    /// Peer account → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
     /// The local account's profile singleton.
     pub(crate) local_profile: Option<LocalProfile>,
-    /// Canonical peer → harvested/decrypted profile state.
+    /// Peer account → harvested/decrypted profile state.
     pub(crate) peer_profiles: HashMap<String, PeerProfile>,
     /// Reject deletes the request plaintext in the same transaction as the
     /// state change, without touching libsignal session/identity state.
@@ -636,7 +555,6 @@ pub struct Pending {
     pub(crate) delete_message_ids: HashSet<String>,
     pub(crate) delete_sent_message_ids: HashSet<String>,
     pub(crate) delete_mls_message_ids: HashSet<String>,
-    pub(crate) delete_imported_history_ids: HashSet<(String, String)>,
     /// Serialized `ReplenishKeysRequest` whose private keys are already durable
     /// but whose server response has not yet been confirmed.
     pub(crate) prekey_upload: Option<Option<Vec<u8>>>,
@@ -686,9 +604,6 @@ impl Pending {
             && self.mls_state.is_none()
             && self.messages.is_empty()
             && self.sent_messages.is_empty()
-            && self.imported_history.is_empty()
-            && self.history_transfer_journals.is_empty()
-            && self.history_transfer_frames.is_empty()
             && self.inbound.is_empty()
             && self.manifest_trust.is_empty()
             && self.manifest_history.is_empty()
@@ -699,7 +614,6 @@ impl Pending {
             && self.delete_message_ids.is_empty()
             && self.delete_sent_message_ids.is_empty()
             && self.delete_mls_message_ids.is_empty()
-            && self.delete_imported_history_ids.is_empty()
             && self.prekey_upload.is_none()
             && self.prekey_rotation.is_none()
             && self.repair_limits.is_none()
@@ -799,37 +713,6 @@ pub trait ChatDb {
     /// All outbound history, oldest first.
     async fn list_sent_messages(&self) -> Result<Vec<SentMessage>>;
 
-    /// One immutable imported display-history row.
-    async fn load_imported_history(
-        &self,
-        transfer_id: &str,
-        source_record_id: &str,
-    ) -> Result<Option<ImportedHistoryRecordV1>> {
-        let _ = (transfer_id, source_record_id);
-        Ok(None)
-    }
-
-    /// All imported display-history rows ordered for presentation.
-    async fn list_imported_history(&self) -> Result<Vec<ImportedHistoryRecordV1>> {
-        Ok(Vec::new())
-    }
-
-    async fn load_history_transfer_journal(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Option<HistoryTransferJournalV1>> {
-        let _ = transfer_id;
-        Ok(None)
-    }
-
-    async fn list_history_transfer_frames(
-        &self,
-        transfer_id: &str,
-    ) -> Result<Vec<ChatHistoryTransferFrameV1>> {
-        let _ = transfer_id;
-        Ok(Vec::new())
-    }
-
     /// Every raw inbound entry, ordered by cursor, including ack retries and
     /// visible dead letters.
     async fn list_inbound(&self) -> Result<Vec<InboundEnvelope>>;
@@ -852,9 +735,9 @@ pub trait ChatDb {
 
     /// The local account's encrypted-profile source state.
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>>;
-    /// One peer profile by canonical address.
+    /// One peer profile by account.
     async fn load_peer_profile(&self, peer: &str) -> Result<Option<PeerProfile>>;
-    /// Every peer profile ordered by canonical address.
+    /// Every peer profile ordered by account.
     async fn list_peer_profiles(&self) -> Result<Vec<PeerProfile>>;
 
     /// Durable prekey publication request, if a prior upload is unconfirmed.
@@ -911,9 +794,13 @@ mod tests {
             content_digest: [3; 32],
             content: vec![4],
             ciphertext: vec![5],
-            expected_recipients: vec!["bob@example.test".into()],
+            expected_recipients: vec![
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test".into()
+            ],
             deliveries: vec![MlsOutboxDelivery {
-                recipient: "bob@example.test".into(),
+                recipient: "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+                    .parse()
+                    .unwrap(),
                 submission: vec![6],
                 attempts: 0,
                 delivered: false,
@@ -934,7 +821,7 @@ mod tests {
             incarnation: 1,
             mls_group_id: vec![2; 16],
             epoch: 1,
-            sender: "alice@example.test".into(),
+            sender: "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test".into(),
             sender_device_id: 7,
             outgoing: true,
             cursor: None,

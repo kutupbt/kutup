@@ -28,7 +28,7 @@ use wasm_bindgen::prelude::*;
 use zeroize::Zeroize as _;
 
 use crate::{
-    AccountAddress, AccountAuthority, AnonymousMlsRecipientDevice, ChatAttachmentDescriptorV1,
+    AccountAuthority, AccountRef, AnonymousMlsRecipientDevice, ChatAttachmentDescriptorV1,
     ChatContent, ChatError, ChatTransport, ConversationId, Engine, InboundEnvelope,
     IndexedDbChatDb, MlsApplicationEnvelopeContext, MlsClient, MlsControlEnvelopeContext,
     ReceiveReport, Result, SendOutcome, VerifiedMlsCredential, VerifiedMlsKeyPackage,
@@ -38,29 +38,29 @@ use crate::{
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
-  fetchBundles(username: string): Promise<unknown>;
-  fetchSyncBundles(username: string, currentDeviceId: number): Promise<unknown>;
+  fetchBundles(account: string): Promise<unknown>;
+  fetchSyncBundles(account: string, currentDeviceId: number): Promise<unknown>;
   fetchMlsOrderingPolicy(domain: string): Promise<unknown>;
-  fetchManifest(username: string): Promise<unknown | null>;
-  fetchManifestHistory(username: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
+  fetchManifest(account: string): Promise<unknown | null>;
+  fetchManifestHistory(account: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
   fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
   fetchSenderCertificate(deviceId: number): Promise<unknown>;
-  fetchSealedBundles(username: string, capability: string): Promise<unknown>;
+  fetchSealedBundles(account: string, capability: string): Promise<unknown>;
   publishManifest(manifest: unknown): Promise<unknown>;
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>;
-  storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean>;
+  storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean>;
   fetchOwnProfile(): Promise<unknown | null>;
   publishProfile(profile: unknown): Promise<unknown>;
-  fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>;
+  fetchProfile(account: string, version: string, accessKey: string): Promise<unknown | null>;
   prekeyCount(deviceId: number): Promise<unknown>;
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>;
-  sendMessage(username: string, request: unknown): Promise<
+  sendMessage(account: string, request: unknown): Promise<
     | { kind: "delivered"; deduplicated?: boolean }
     | { kind: "mismatch"; mismatch: unknown }
   >;
-  sendSealedMessage(username: string, request: unknown): Promise<
+  sendSealedMessage(account: string, request: unknown): Promise<
     | { kind: "delivered"; deduplicated?: boolean }
     | { kind: "mismatch"; mismatch: unknown }
   >;
@@ -77,7 +77,7 @@ export interface KutupChatContentView {
   kind: string;
   sentAt: string;
   seq: string;
-  messageId?: string;
+  messageId: string;
   replyTo?: string;
   body: unknown;
   text?: string;
@@ -109,20 +109,21 @@ export interface KutupChatContentView {
   expiresAtMs?: number;
 }
 
-export interface KutupChatAccountAddress {
-  username: string;
-  server?: string;
+/** An account, for good (docs/plans/account-ids.md): never an address. */
+export interface KutupChatAccount {
+  server: string;
+  accountId: string;
 }
 
 export type KutupChatConversationId =
-  | { kind: "direct"; address: KutupChatAccountAddress }
+  | { kind: "direct"; account: KutupChatAccount }
   | { kind: "group"; groupId: string };
 
 export interface KutupChatHistoryEntry {
   id: string;
   conversation: KutupChatConversationId;
-  /** @deprecated Use conversation. Retained while existing web/native callers migrate. */
-  peer: string;
+  /** Who wrote it: an account's string form, `aci:<uuid>@<server>` (this account's own when outgoing). Which chat: `conversation`. */
+  sender: string;
   direction: "incoming" | "outgoing";
   senderDeviceId?: number;
   cursor?: string;
@@ -175,13 +176,13 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchBundles)]
     async fn js_fetch_bundles(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchSyncBundles)]
     async fn js_fetch_sync_bundles(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         current_device_id: u32,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -194,13 +195,13 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
     async fn js_fetch_manifest(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchManifestHistory)]
     async fn js_fetch_manifest_history(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         from_sequence: &str,
         to_sequence: &str,
         page_from_sequence: &str,
@@ -233,7 +234,7 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchSealedBundles)]
     async fn js_fetch_sealed_bundles(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         capability: &str,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -266,7 +267,7 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = fetchProfile)]
     async fn js_fetch_profile(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         version: &str,
         access_key: &str,
     ) -> std::result::Result<JsValue, JsValue>;
@@ -287,14 +288,14 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = sendMessage)]
     async fn js_send_message(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = sendSealedMessage)]
     async fn js_send_sealed_message(
         this: &JsChatTransport,
-        username: &str,
+        account: &str,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -349,10 +350,10 @@ impl ChatTransport for BrowserTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_bundles(username)
+                .js_fetch_bundles(account)
                 .await
                 .map_err(transport_error)?,
         )
@@ -360,12 +361,12 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_sync_bundles(
         &self,
-        username: &str,
+        account: &str,
         current_device_id: u32,
     ) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_sync_bundles(username, current_device_id)
+                .js_fetch_sync_bundles(account, current_device_id)
                 .await
                 .map_err(transport_error)?,
         )
@@ -383,10 +384,10 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest(&self, username: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV1>> {
         from_transport(
             self.js
-                .js_fetch_manifest(username)
+                .js_fetch_manifest(account)
                 .await
                 .map_err(transport_error)?,
         )
@@ -394,7 +395,7 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_manifest_history(
         &self,
-        username: &str,
+        account: &str,
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
@@ -402,7 +403,7 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_fetch_manifest_history(
-                    username,
+                    account,
                     &from_sequence.to_string(),
                     &to_sequence.to_string(),
                     &page_from_sequence.to_string(),
@@ -462,12 +463,12 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_sealed_bundles(
         &self,
-        username: &str,
+        account: &str,
         capability: &[u8; 16],
     ) -> Result<UserPreKeyBundlesResponse> {
         from_transport(
             self.js
-                .js_fetch_sealed_bundles(username, &STANDARD.encode(capability))
+                .js_fetch_sealed_bundles(account, &STANDARD.encode(capability))
                 .await
                 .map_err(transport_error)?,
         )
@@ -494,10 +495,10 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn store_identity_pins(&self, record: &crate::IdentityPinsRecord) -> Result<bool> {
+    async fn store_identity_pins(&self, write: &crate::IdentityPinsWrite) -> Result<bool> {
         from_transport(
             self.js
-                .js_store_identity_pins(to_transport(record)?)
+                .js_store_identity_pins(to_transport(write)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -526,13 +527,13 @@ impl ChatTransport for BrowserTransport {
 
     async fn fetch_profile(
         &self,
-        username: &str,
+        account: &str,
         version: &str,
         access_key: &[u8],
     ) -> Result<Option<ChatProfileResponse>> {
         from_transport(
             self.js
-                .js_fetch_profile(username, version, &STANDARD.encode(access_key))
+                .js_fetch_profile(account, version, &STANDARD.encode(access_key))
                 .await
                 .map_err(transport_error)?,
         )
@@ -559,10 +560,10 @@ impl ChatTransport for BrowserTransport {
         Ok(())
     }
 
-    async fn send(&self, username: &str, req: &SendMessagesRequest) -> Result<SendOutcome> {
+    async fn send(&self, account: &str, req: &SendMessagesRequest) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
-                .js_send_message(username, to_transport(req)?)
+                .js_send_message(account, to_transport(req)?)
                 .await
                 .map_err(transport_error)?,
         )?;
@@ -581,12 +582,12 @@ impl ChatTransport for BrowserTransport {
 
     async fn send_sealed(
         &self,
-        username: &str,
+        account: &str,
         request: &kutup_chat_proto::SealedMessageSubmissionV1,
     ) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
-                .js_send_sealed_message(username, to_transport(request)?)
+                .js_send_sealed_message(account, to_transport(request)?)
                 .await
                 .map_err(transport_error)?,
         )?;
@@ -694,21 +695,14 @@ impl WasmChatClient {
         use crate::timeline::{Source, EXPIRY_START};
         let db = self.engine.session().db().as_ref();
         let mut start_sent = Vec::new();
-        let mut start_imported = Vec::new();
         for start in crate::timeline::flagged(db, directory, key, EXPIRY_START).await? {
             match start.source {
                 Source::Sent => start_sent.extend(db.load_sent_message(&start.id).await?),
-                Source::Imported => {
-                    if let Some((transfer, record)) = start.id.split_once('\u{0}') {
-                        start_imported.extend(db.load_imported_history(transfer, record).await?);
-                    }
-                }
                 Source::Inbox | Source::Mls => {}
             }
         }
         crate::session::collect_disappearing_expiry_starts(
             &start_sent,
-            &start_imported,
             self.engine.session().user(),
         )
     }
@@ -725,25 +719,18 @@ impl WasmChatClient {
             return Ok(None);
         }
         let db = self.engine.session().db().as_ref();
+        let me = self.engine.session().user();
         let built = match entry.source {
             Source::Inbox => match db.load_message(&entry.id).await? {
                 Some(message) => Some(HistoryEntry::incoming(message)?),
                 None => None,
             },
             Source::Sent => match db.load_sent_message(&entry.id).await? {
-                Some(message) => Some(HistoryEntry::outgoing(message)?),
+                Some(message) => Some(HistoryEntry::outgoing(message, me)?),
                 None => None,
             },
             Source::Mls => match db.load_mls_message(&entry.id).await? {
-                Some(message) => Some(HistoryEntry::mls(message)?),
-                None => None,
-            },
-            Source::Imported => match entry.id.split_once('\u{0}') {
-                Some((transfer, record)) => match db.load_imported_history(transfer, record).await?
-                {
-                    Some(message) => Some(HistoryEntry::imported(message)?),
-                    None => None,
-                },
+                Some(message) => Some(HistoryEntry::mls(message, me)?),
                 None => None,
             },
         };
@@ -768,6 +755,7 @@ impl WasmChatClient {
         if newest && key.starts_with("group:") {
             let delivered: std::collections::HashSet<String> =
                 entries.iter().map(|entry| entry.id.clone()).collect();
+            let me = self.engine.session().user().to_owned();
             let mut pending = Vec::new();
             for outgoing in self.mls_client().pending_application_messages().await? {
                 let group = uuid::Uuid::from_bytes(outgoing.conversation_id).to_string();
@@ -778,7 +766,7 @@ impl WasmChatClient {
                 {
                     continue;
                 }
-                let mut entry = HistoryEntry::mls_pending(outgoing)?;
+                let mut entry = HistoryEntry::mls_pending(outgoing, &me)?;
                 entry.apply_disappearing_deadline(&starts);
                 pending.push(entry);
             }
@@ -824,14 +812,19 @@ struct ConversationPageView {
 #[wasm_bindgen]
 impl WasmChatClient {
     /// Open or restart-safely register the local device, then publish its
-    /// account-signed manifest. The database name must be account scoped.
+    /// account-signed manifest. The database name must be account scoped;
+    /// `account` is this account's string form, `aci:<uuid>@<server>`;
+    /// `display_name` is the name a first profile starts with (the
+    /// username); `binding` is the account's key binding
+    /// (`session.envelopeBinding`), which its own seals bind.
     #[wasm_bindgen(js_name = open)]
     pub async fn open(
         database_name: String,
-        user: String,
-        server_name: String,
+        account: String,
+        display_name: String,
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
+        binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let master_key: [u8; 32] = master_key
@@ -839,7 +832,7 @@ impl WasmChatClient {
             .map_err(|_| js_error("chat account authority requires a 32-byte master key"))?;
         let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
         let profile_wrapping_key =
-            crate::profile::derive_wrapping_key(&master_key).map_err(chat_error)?;
+            crate::profile::derive_wrapping_key(&master_key, &binding).map_err(chat_error)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name, &master_key)
                 .await
@@ -847,13 +840,16 @@ impl WasmChatClient {
         );
         let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
         let mut rng = OsRng.unwrap_err();
-        let mut engine = Engine::register(db, transport, user.clone(), 50, &mut rng)
+        // The device's account, for good: its string form.
+        let account = crate::address::parse_account(&account)
+            .map_err(chat_error)?
+            .to_string();
+        let mut engine = Engine::register(db, transport, account, 50, &mut rng)
             .await
             .map_err(chat_error)?;
-        engine.set_local_server(&server_name).map_err(chat_error)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
-            .enable_identity_pins(&master_key)
+            .enable_identity_pins(&master_key, &binding)
             .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
@@ -861,7 +857,7 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         engine
-            .initialize_profile(&profile_wrapping_key, &user, &mut rng)
+            .initialize_profile(&profile_wrapping_key, &display_name, &mut rng)
             .await
             .map_err(chat_error)?;
         Ok(Self {
@@ -939,7 +935,7 @@ impl WasmChatClient {
     ) -> std::result::Result<JsValue, JsValue> {
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("invalid MLS conversation id"))?;
-        let creator: AccountAddress = from_transport(creator).map_err(chat_error)?;
+        let creator: AccountRef = from_transport(creator).map_err(chat_error)?;
         let authority_policies: Vec<kutup_chat_proto::MlsOrderingServicePolicyV1> =
             from_transport(authority_policies).map_err(chat_error)?;
         let group_info: Option<kutup_chat_proto::MlsGroupInfoV1> =
@@ -1897,7 +1893,7 @@ impl WasmChatClient {
         capability: Vec<u8>,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let capability: [u8; 16] = capability.try_into().map_err(|_| {
             chat_error(ChatError::Invalid(
                 "MLS delivery capability must contain exactly 16 bytes".into(),
@@ -1923,7 +1919,7 @@ impl WasmChatClient {
         incarnation: String,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
         let verified = self
@@ -2414,7 +2410,7 @@ impl WasmChatClient {
         packages: JsValue,
         now_seconds: String,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let capability: [u8; 16] = capability
             .try_into()
             .map_err(|_| js_error("MLS delivery capability must be 16 bytes"))?;
@@ -2469,7 +2465,7 @@ impl WasmChatClient {
         send_id: String,
         envelope: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let send_id = uuid::Uuid::parse_str(&send_id)
             .map_err(|_| js_error("MLS application send id must be a UUID"))?;
         let envelope: AnonymousMlsDeviceEnvelopeV1 =
@@ -2517,7 +2513,7 @@ impl WasmChatClient {
                 .map_err(|_| js_error("MLS mailbox send id must be a UUID"))?,
             server_timestamp: parse_i64_string("MLS server timestamp", &server_timestamp)?,
         };
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let envelope: AnonymousMlsDeviceEnvelopeV1 =
             from_transport(envelope).map_err(chat_error)?;
         let expected_sender: VerifiedMlsCredential =
@@ -2579,7 +2575,7 @@ impl WasmChatClient {
         incarnation: String,
         recipient: JsValue,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let conversation_id = uuid::Uuid::parse_str(&conversation_id)
             .map_err(|_| js_error("MLS conversation id must be a UUID"))?;
         let capability = self
@@ -2604,7 +2600,7 @@ impl WasmChatClient {
         devices: JsValue,
         mls_ciphertext: Vec<u8>,
     ) -> std::result::Result<JsValue, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let send_id = uuid::Uuid::parse_str(&send_id)
             .map_err(|_| js_error("anonymous MLS send id must be a UUID"))?;
         let capability: [u8; 16] = capability
@@ -2627,7 +2623,7 @@ impl WasmChatClient {
         send_id: String,
         envelope: JsValue,
     ) -> std::result::Result<Vec<u8>, JsValue> {
-        let recipient: AccountAddress = from_transport(recipient).map_err(chat_error)?;
+        let recipient: AccountRef = from_transport(recipient).map_err(chat_error)?;
         let send_id = uuid::Uuid::parse_str(&send_id)
             .map_err(|_| js_error("anonymous MLS send id must be a UUID"))?;
         let envelope: AnonymousMlsDeviceEnvelopeV1 =
@@ -2905,6 +2901,36 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    /// The line saying `peer` (an account key) changed their username from
+    /// `previous` to `current`, step `sequence` of their own verified rename
+    /// chain; written once. True when it was written now.
+    #[wasm_bindgen(js_name = recordPeerRenamed)]
+    pub async fn record_peer_renamed(
+        &mut self,
+        peer: String,
+        previous: String,
+        current: String,
+        sequence: f64,
+    ) -> std::result::Result<bool, JsValue> {
+        if !(sequence.is_finite()
+            && sequence >= 1.0
+            && sequence.fract() == 0.0
+            && sequence <= 9_007_199_254_740_991.0)
+        {
+            return Err(js_error("a rename sequence is a positive integer"));
+        }
+        let body = kutup_chat_proto::PeerRenamedBody {
+            previous,
+            current,
+            sequence: sequence as u64,
+        };
+        self.engine
+            .session_mut()
+            .record_peer_renamed(&peer, &body)
+            .await
+            .map_err(chat_error)
+    }
+
     #[wasm_bindgen(js_name = sendDisappearingTimer)]
     pub async fn send_disappearing_timer(
         &mut self,
@@ -3146,20 +3172,14 @@ impl WasmChatClient {
             .mls_application_history()
             .await
             .map_err(chat_error)?;
-        let imported = self
-            .engine
-            .session()
-            .imported_history()
-            .await
-            .map_err(chat_error)?;
         let expiry_starts = self
             .engine
             .session()
             .disappearing_expiry_starts()
             .await
             .map_err(chat_error)?;
-        let mut history =
-            Vec::with_capacity(incoming.len() + outgoing.len() + mls.len() + imported.len());
+        let me = self.engine.session().user().to_owned();
+        let mut history = Vec::with_capacity(incoming.len() + outgoing.len() + mls.len());
         for message in incoming {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
@@ -3172,7 +3192,7 @@ impl WasmChatClient {
             if is_contact_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            let mut entry = HistoryEntry::outgoing(message).map_err(chat_error)?;
+            let mut entry = HistoryEntry::outgoing(message, &me).map_err(chat_error)?;
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
@@ -3180,7 +3200,7 @@ impl WasmChatClient {
             if is_invisible_control(&message.content).map_err(chat_error)? {
                 continue;
             }
-            let mut entry = HistoryEntry::mls(message).map_err(chat_error)?;
+            let mut entry = HistoryEntry::mls(message, &me).map_err(chat_error)?;
             entry.apply_disappearing_deadline(&expiry_starts);
             history.push(entry);
         }
@@ -3200,17 +3220,9 @@ impl WasmChatClient {
             {
                 continue;
             }
-            let mut pending = HistoryEntry::mls_pending(entry).map_err(chat_error)?;
+            let mut pending = HistoryEntry::mls_pending(entry, &me).map_err(chat_error)?;
             pending.apply_disappearing_deadline(&expiry_starts);
             history.push(pending);
-        }
-        for message in imported {
-            if is_invisible_control(&message.content).map_err(chat_error)? {
-                continue;
-            }
-            let mut entry = HistoryEntry::imported(message).map_err(chat_error)?;
-            entry.apply_disappearing_deadline(&expiry_starts);
-            history.push(entry);
         }
         history.sort_by(|left, right| {
             left.timestamp_ms
@@ -3843,8 +3855,7 @@ struct ContentView {
     kind: String,
     sent_at: String,
     seq: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message_id: Option<String>,
+    message_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_to: Option<String>,
     body: serde_json::Value,
@@ -3903,6 +3914,12 @@ struct ContentView {
     /// Stands where a message from the peer could not be read.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     undecryptable: bool,
+    /// The local line saying the peer's safety number changed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    safety_number_changed: bool,
+    /// The local line saying the peer changed their username.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_renamed: Option<kutup_chat_proto::PeerRenamedBody>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forwarded: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -3933,6 +3950,8 @@ impl From<ChatContent> for ContentView {
         let sticker_removed = content.as_sticker_removed();
         let group_update = content.as_group_update();
         let undecryptable = content.is_undecryptable();
+        let safety_number_changed = content.is_safety_number_changed();
+        let peer_renamed = content.as_peer_renamed();
         let extras = content.extras().unwrap_or_default();
         let poll = content.as_poll();
         let location = content.as_location();
@@ -3976,6 +3995,8 @@ impl From<ChatContent> for ContentView {
             mentions: extras.mentions,
             link_preview: extras.link_preview,
             undecryptable,
+            safety_number_changed,
+            peer_renamed,
             forwarded: extras.forwarded,
             view_once: extras.view_once,
             expires_after_seconds,
@@ -4009,8 +4030,10 @@ fn parse_receipt_state(
 struct HistoryEntry {
     id: String,
     conversation: ConversationId,
-    /// Compatibility field for the current direct-only web UI release.
-    peer: String,
+    /// Who wrote it: an account's string form, `aci:<uuid>@<server>`, this
+    /// account's own for an outgoing entry. Which chat it belongs to is
+    /// `conversation`.
+    sender: String,
     direction: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     sender_device_id: Option<u32>,
@@ -4030,28 +4053,26 @@ impl HistoryEntry {
         let base_ms = if self.direction == "outgoing" {
             Some(self.timestamp_ms)
         } else {
-            self.content.message_id.as_ref().and_then(|message_id| {
-                starts
-                    .get(&(self.conversation.key(), message_id.clone()))
-                    .copied()
-            })
+            starts
+                .get(&(self.conversation.key(), self.content.message_id.clone()))
+                .copied()
         };
         self.content.expires_at_ms =
             base_ms.map(|base_ms| base_ms.saturating_add(i64::from(seconds).saturating_mul(1_000)));
     }
 
     fn incoming(message: crate::InboxMessage) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        let id = content
-            .message_id
-            .clone()
-            .unwrap_or_else(|| message.id.clone());
+        let content = crate::timeline::content_or_unsupported(
+            &message.content,
+            &message.id,
+            iso_time(message.received_at),
+        );
+        let id = content.message_id.clone();
         let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
             id,
             conversation,
-            peer: message.peer,
+            sender: message.peer,
             direction: "incoming",
             sender_device_id: Some(message.sender_device_id),
             cursor: Some(message.cursor.to_string()),
@@ -4062,14 +4083,17 @@ impl HistoryEntry {
         })
     }
 
-    fn outgoing(message: crate::SentMessage) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
+    fn outgoing(message: crate::SentMessage, me: &str) -> Result<Self> {
+        let content = crate::timeline::content_or_unsupported(
+            &message.content,
+            &message.send_id,
+            iso_time(message.created_at),
+        );
         let conversation = direct_conversation(&message.peer)?;
         Ok(Self {
             id: message.send_id,
             conversation,
-            peer: message.peer,
+            sender: me.to_owned(),
             direction: "outgoing",
             sender_device_id: (message.sender_device_id != 0).then_some(message.sender_device_id),
             cursor: None,
@@ -4081,16 +4105,14 @@ impl HistoryEntry {
     }
 
     /// A group message this device is still delivering.
-    fn mls_pending(entry: crate::MlsOutboxEntry) -> Result<Self> {
+    fn mls_pending(entry: crate::MlsOutboxEntry, me: &str) -> Result<Self> {
         let content = serde_json::from_slice::<ChatContent>(&entry.content)
             .map_err(|error| ChatError::Content(error.to_string()))?;
         let group_id = uuid::Uuid::from_bytes(entry.conversation_id).to_string();
         Ok(Self {
             id: entry.send_id,
-            conversation: ConversationId::Group {
-                group_id: group_id.clone(),
-            },
-            peer: group_id,
+            conversation: ConversationId::Group { group_id },
+            sender: me.to_owned(),
             direction: "outgoing",
             sender_device_id: None,
             cursor: None,
@@ -4101,17 +4123,18 @@ impl HistoryEntry {
         })
     }
 
-    fn mls(message: crate::MlsHistoryMessage) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
+    fn mls(message: crate::MlsHistoryMessage, me: &str) -> Result<Self> {
+        let content = crate::timeline::content_or_unsupported(
+            &message.content,
+            &message.message_id,
+            iso_time(message.timestamp_ms),
+        );
         let group_id = uuid::Uuid::from_bytes(message.conversation_id).to_string();
         Ok(Self {
             id: message.message_id,
-            conversation: ConversationId::Group {
-                group_id: group_id.clone(),
-            },
-            peer: if message.outgoing {
-                group_id
+            conversation: ConversationId::Group { group_id },
+            sender: if message.outgoing {
+                me.to_owned()
             } else {
                 message.sender
             },
@@ -4128,69 +4151,41 @@ impl HistoryEntry {
             content: content.into(),
         })
     }
-
-    fn imported(message: crate::ImportedHistoryRecordV1) -> Result<Self> {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        let peer = match &message.conversation {
-            ConversationId::Direct { address } => address.canonical(),
-            ConversationId::Group { group_id } if message.outgoing => group_id.clone(),
-            ConversationId::Group { .. } => message.sender.clone(),
-        };
-        Ok(Self {
-            id: format!(
-                "imported:{}:{}",
-                message.transfer_id, message.source_record_id
-            ),
-            conversation: message.conversation,
-            peer,
-            direction: if message.outgoing {
-                "outgoing"
-            } else {
-                "incoming"
-            },
-            sender_device_id: (!message.outgoing).then_some(message.sender_device_id),
-            cursor: None,
-            timestamp_ms: message.timestamp_ms,
-            delivered: message.delivered,
-            deduplicated: false,
-            content: content.into(),
-        })
-    }
 }
 
 fn direct_conversation(peer: &str) -> Result<ConversationId> {
-    let address = peer
-        .parse::<AccountAddress>()
+    let account = crate::address::parse_account(peer)
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
-    Ok(ConversationId::direct(address))
+    Ok(ConversationId::direct(account))
 }
 
+/// Content that does not decode is no control: it shows as unsupported.
 fn is_contact_control(bytes: &[u8]) -> Result<bool> {
-    let content = serde_json::from_slice::<ChatContent>(bytes)
-        .map_err(|error| ChatError::Content(error.to_string()))?;
-    Ok(matches!(
-        content.kind.as_str(),
-        kutup_chat_proto::content::kind::CONTACT_CONTROL
-            | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
-            | kutup_chat_proto::content::kind::TYPING
-            | kutup_chat_proto::content::kind::CALL
-            | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
-    ))
+    Ok(crate::timeline::decodes_to(bytes, |kind| {
+        matches!(
+            kind,
+            kutup_chat_proto::content::kind::CONTACT_CONTROL
+                | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+                | kutup_chat_proto::content::kind::TYPING
+                | kutup_chat_proto::content::kind::CALL
+                | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
+        )
+    }))
 }
 
+/// Content that does not decode is no control: it shows as unsupported.
 fn is_invisible_control(bytes: &[u8]) -> Result<bool> {
-    let content = serde_json::from_slice::<ChatContent>(bytes)
-        .map_err(|error| ChatError::Content(error.to_string()))?;
-    Ok(matches!(
-        content.kind.as_str(),
-        kutup_chat_proto::content::kind::GROUP_CONTROL
-            | kutup_chat_proto::content::kind::CONTACT_CONTROL
-            | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
-            | kutup_chat_proto::content::kind::TYPING
-            | kutup_chat_proto::content::kind::CALL
-            | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
-    ))
+    Ok(crate::timeline::decodes_to(bytes, |kind| {
+        matches!(
+            kind,
+            kutup_chat_proto::content::kind::GROUP_CONTROL
+                | kutup_chat_proto::content::kind::CONTACT_CONTROL
+                | kutup_chat_proto::content::kind::PROFILE_KEY_UPDATE
+                | kutup_chat_proto::content::kind::TYPING
+                | kutup_chat_proto::content::kind::CALL
+                | kutup_chat_proto::content::kind::DISAPPEARING_EXPIRY_START
+        )
+    }))
 }
 
 #[derive(Serialize)]
@@ -4586,12 +4581,18 @@ pub fn account_profile_open(
     master_key: Vec<u8>,
     current: JsValue,
     account: String,
+    binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = master_key_input(master_key)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
-    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
-        .map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(
+        &master_key,
+        &current,
+        &crate::address::parse_account(&account).map_err(chat_error)?,
+        &binding,
+    )
+    .map_err(chat_error)?;
     to_output(&AccountProfileView {
         display_name: profile.display_name,
         about: profile.about,
@@ -4626,12 +4627,18 @@ pub fn account_profile_key(
     master_key: Vec<u8>,
     current: JsValue,
     account: String,
+    binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = master_key_input(master_key)?;
     let current: kutup_chat_proto::PutChatProfileRequest =
         from_transport(current).map_err(chat_error)?;
-    let profile = crate::profile::open_account_profile(&master_key, &current, &account)
-        .map_err(chat_error)?;
+    let profile = crate::profile::open_account_profile(
+        &master_key,
+        &current,
+        &crate::address::parse_account(&account).map_err(chat_error)?,
+        &binding,
+    )
+    .map_err(chat_error)?;
     to_output(&profile_lookup_of(&profile.key)?)
 }
 
@@ -4672,6 +4679,7 @@ pub fn account_profile_seal(
     current: JsValue,
     update: JsValue,
     account: String,
+    binding: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = master_key_input(master_key)?;
     let current: Option<kutup_chat_proto::PutChatProfileRequest> =
@@ -4696,7 +4704,8 @@ pub fn account_profile_seal(
             avatar_content_type: update.avatar_content_type,
             about: update.about,
         },
-        &account,
+        &crate::address::parse_account(&account).map_err(chat_error)?,
+        &binding,
         &mut rng,
     )
     .map_err(chat_error)?;
@@ -4843,6 +4852,14 @@ fn js_value_message(value: &JsValue) -> String {
                 .and_then(|message| message.as_string())
         })
         .unwrap_or_else(|| format!("JavaScript transport rejected: {value:?}"))
+}
+
+/// `millis` since the epoch, as RFC 3339.
+fn iso_time(millis: i64) -> String {
+    js_sys::Date::new(&JsValue::from_f64(millis as f64))
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
 }
 
 fn now_rfc3339() -> String {

@@ -1,7 +1,9 @@
 //! Checked-in vectors for mail address keys (docs/plans/mail-address-keys.md):
 //! a fixed key, its fingerprints, its sealed envelope, and a signed key-list
 //! chain. Regenerate only for a deliberate format change:
-//! `KUTUP_WRITE_MAIL_VECTORS=1 cargo test -p kutup-crypto --test mail_key_vectors -- --ignored`.
+//! `KUTUP_WRITE_MAIL_VECTORS=1 cargo test -p kutup-crypto --features mail --test mail_key_vectors -- --ignored`
+//! (`=reseal` re-seals the envelope only, keeping the keys; `=lists` signs the
+//! key lists again, keeping the keys).
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -23,7 +25,7 @@ const PATH: &str = concat!(
 #[serde(rename_all = "camelCase")]
 struct Vectors {
     address: String,
-    login_email: String,
+    binding: String,
     master_key: String,
     created_at: u32,
     secret_key: String,
@@ -60,7 +62,6 @@ fn lists(
     second: MailKeyEntryV1,
 ) -> Vec<SignedMailKeyListV1> {
     let base = MailKeyListV1 {
-        account: address.into(),
         incarnation_id: arr(&identity.incarnation_id()),
         authority_key_id: arr(&identity.authority_key_id()),
         address: address.into(),
@@ -95,6 +96,51 @@ fn lists(
 #[test]
 #[ignore = "writes the vectors file"]
 fn write_vectors() {
+    // `reseal`: only the envelope again, the keys kept (an envelope format
+    // change); `1`: everything new.
+    if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() == Ok("reseal") {
+        let mut v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
+        let sealed = seal_address_key_with_nonce(
+            &b64(&v.master_key),
+            &v.binding,
+            &v.address,
+            &b64(&v.secret_key),
+            &b64(&v.envelope_nonce),
+        )
+        .unwrap();
+        v.envelope = STANDARD.encode(sealed);
+        std::fs::write(PATH, serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
+        return;
+    }
+    // `lists`: only the key lists again, the keys kept (a key-list format
+    // change).
+    if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() == Ok("lists") {
+        let mut v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
+        let identity =
+            AccountIdentityKeysV1::derive(&b64(&v.master_key).try_into().unwrap()).unwrap();
+        let entry = |fingerprint: &str, sha256: &str| MailKeyEntryV1 {
+            fingerprint: hex::decode(fingerprint).unwrap().try_into().unwrap(),
+            sha256_fingerprint: hex::decode(sha256).unwrap().try_into().unwrap(),
+            primary: true,
+            flags: DEFAULT_FLAGS,
+        };
+        let chain = lists(
+            &identity,
+            &v.address,
+            entry(&v.fingerprint, &v.sha256_fingerprint),
+            entry(&v.second_key_fingerprint, &v.second_key_sha256_fingerprint),
+        );
+        v.key_lists = chain
+            .iter()
+            .map(|list| KeyListVector {
+                data: STANDARD.encode(&list.data),
+                signature: STANDARD.encode(list.signature),
+                hash: hex::encode(list.hash()),
+            })
+            .collect();
+        std::fs::write(PATH, serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
+        return;
+    }
     if std::env::var("KUTUP_WRITE_MAIL_VECTORS").as_deref() != Ok("1") {
         return;
     }
@@ -105,7 +151,7 @@ fn write_vectors() {
     let nonce = [0x24u8; 24];
     let envelope = seal_address_key_with_nonce(
         &master,
-        "Alice@Example.com",
+        "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
         address,
         &key.secret_key,
         &nonce,
@@ -130,7 +176,7 @@ fn write_vectors() {
     );
     let vectors = Vectors {
         address: address.into(),
-        login_email: "Alice@Example.com".into(),
+        binding: "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90".into(),
         master_key: STANDARD.encode(master),
         created_at: 1_790_000_000,
         secret_key: STANDARD.encode(&*key.secret_key),
@@ -169,7 +215,7 @@ fn checked_in_vectors_hold() {
     // and it opens only for its own address, fingerprint and account.
     let sealed = seal_address_key_with_nonce(
         &master,
-        &v.login_email,
+        &v.binding,
         &v.address,
         &b64(&v.secret_key),
         &b64(&v.envelope_nonce),
@@ -179,7 +225,7 @@ fn checked_in_vectors_hold() {
     let opened = open_address_key(
         &b64(&v.envelope),
         &master,
-        &v.login_email,
+        &v.binding,
         &v.address,
         &fingerprint,
     )
@@ -188,7 +234,7 @@ fn checked_in_vectors_hold() {
     assert!(open_address_key(
         &b64(&v.envelope),
         &master,
-        &v.login_email,
+        &v.binding,
         "bob@kutup.dev",
         &fingerprint
     )

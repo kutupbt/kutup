@@ -31,33 +31,37 @@
     "keys": "Şifreleme anahtarları",
     "mailSending": "Posta gönderimi",
     "mailGroups": "Posta grupları",
-    "feedback": "Geri bildirim"
+    "feedback": "Geri bildirim",
+    "referralCodes": "Davet kodları"
   },
   "auth": {
     "fields": {
-      "email": "E-posta",
       "password": "Parola",
       "username": "Kullanıcı adı",
       "newPassword": "Yeni parola",
       "confirmPassword": "Parolayı tekrarlayın"
     },
     "validation": {
-      "emailRequired": "E-posta adresinizi girin.",
-      "emailInvalid": "Geçerli bir e-posta adresi girin.",
       "passwordRequired": "Bir parola girin.",
       "passwordsDiffer": "Parolalar eşleşmiyor.",
       "passwordTooWeak": "Daha güçlü bir parola seçin — daha uzun ve yaygın bir sözcük ya da desen olmayan.",
-      "username": "3–32 karakter: küçük harf, rakam, _ ve -."
+      "username": "3–32 karakter: küçük harf, rakam, _ ve -.",
+      "usernameRequired": "Kullanıcı adınızı girin."
     },
     "errors": {
       "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
       "network": "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
-      "signInFailed": "Giriş yapılamadı. E-postanızı ve parolanızı kontrol edin.",
+      "signInFailed": "Giriş yapılamadı. Kullanıcı adınızı ve parolanızı kontrol edin.",
       "totpFailed": "Kod geçersiz. Doğrulayıcı uygulamanızdaki güncel kodu girin.",
       "keyGenerationFailed": "Anahtarlarınız bu cihazda oluşturulamadı. Yeniden deneyin.",
-      "emailTaken": "Bu e-postanın zaten bir hesabı var. Giriş yapın ya da geri dönüp başka bir e-posta kullanın.",
       "usernameTaken": "Bu kullanıcı adı alınmış. Geri dönüp başka bir ad seçin.",
-      "generic": "Bir şeyler ters gitti. Yeniden deneyin."
+      "generic": "Bir şeyler ters gitti. Yeniden deneyin.",
+      "slowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
+      "keysChanged": "Bu hesabın anahtarları sunucunun söyledikleriyle eşleşmedi. Yeniden oturum açın; tekrar ederse sunucu yöneticisine bildirin.",
+      "signInAgain": "Oturum açma tamamlanmadan sona erdi. Yeniden oturum açın.",
+      "setupExpired": "İlk oturum açmanızın süresi doldu ya da geçici parolanız değiştirildi. Elinizdeki geçici parolayla yeniden oturum açın.",
+      "serverKeyChanged": "Hesabınız oluşturulurken sunucunun oturum açma anahtarı değişti. Yeniden deneyin; tekrar ederse sunucu yöneticisine bildirin.",
+      "keyBindingTaken": "Hesabınızın anahtarları kaydedilemedi. Yeniden deneyin; tekrar ederse sunucu yöneticisine bildirin."
     },
     "strength": {
       "label": "Güç: {{strength}}",
@@ -80,7 +84,8 @@
     "totpDescription": "Doğrulayıcı uygulamanızdaki 6 haneli kodu girin.",
     "totpCode": "Doğrulama kodu",
     "verify": "Doğrula",
-    "useAnotherAccount": "Başka bir hesap kullan"
+    "useAnotherAccount": "Başka bir hesap kullan",
+    "nameHint": "Kullanıcı adınız veya Kutup adresiniz."
   },
   "newKeys": {
     "continue": "Devam",
@@ -94,7 +99,7 @@
     "warningTitle": "Şimdi not alın",
     "warning": "Bu ifade yalnızca bir kez gösterilir. Bu ifade ya da parolanız olmadan kimse — sunucunuzun yöneticisi bile — dosyalarınızı kurtaramaz.",
     "download": "Metin olarak indir",
-    "fileHeader": "{{email}} için Kutup kurtarma ifadesi. Gizli ve çevrimdışı saklayın.",
+    "fileHeader": "{{account}} için Kutup kurtarma ifadesi. Gizli ve çevrimdışı saklayın.",
     "saved": "Kurtarma ifademi kaydettim",
     "confirmTitle": "Kurtarma ifadenizi doğrulayın",
     "confirmDescription": "Kaydettiğinizi göstermek için üç sözcüğünü girin.",
@@ -110,13 +115,22 @@
     "closedTitle": "Kayıt kapalı",
     "closedDescription": "Bu sunucu yeni hesap kabul etmiyor. Yöneticisinden bir hesap isteyin.",
     "backToSignIn": "Girişe dön",
-    "settingsUnavailable": "Sunucunun kayıt ayarları okunamadı; hesap reddedilebilir."
+    "settingsUnavailable": "Sunucunun kayıt ayarları okunamadı; hesap reddedilebilir.",
+    "code": "Davet kodu",
+    "codeHint": "Bu sunucu yeni hesapları yöneticilerinin verdiği bir davet koduyla kabul eder.",
+    "codeOptionalHint": "Size bir kod verildiyse buraya girin.",
+    "haveCode": "Davet kodunuz var mı?",
+    "codeRequired": "Davet kodunuzu girin.",
+    "codeInvalid": "Bu davet kodu kullanılamıyor. Kontrol edin ya da yeni bir kod isteyin.",
+    "codeRateLimited": "Buradan çok fazla deneme yapıldı. Bir süre bekleyip yeniden deneyin.",
+    "codeCheckFailed": "Kod kontrol edilemedi. Yeniden deneyin."
   },
   "firstLogin": {
     "title": "Hesabınızın kurulumunu tamamlayın",
-    "description": "Bir yönetici sizin için {{email}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
+    "description": "Bir yönetici sizin için {{name}} hesabını oluşturdu. Şifreleme anahtarlarınızı oluşturmak için kendi parolanızı seçin."
   },
   "recover": {
+    "nameHint": "Kullanıcı adınız ya da Kutup adresiniz.",
     "title": "Hesabınızı kurtarın",
     "description": "Yeni bir parola seçmek için 24 sözcüklük kurtarma ifadenizi kullanın.",
     "phrase": "Kurtarma ifadesi",
@@ -124,7 +138,7 @@
     "phraseInvalid": "Bu geçerli bir kurtarma ifadesi değil — her sözcüğü kontrol edin.",
     "signsOutEverywhere": "Bu hesapla oturum açmış tüm cihaz ve uygulamaların oturumu kapanır.",
     "submit": "Yeni parolayı belirle",
-    "failed": "Kurtarma başarısız. E-postayı ve ifadeyi kontrol edin.",
+    "failed": "Kurtarma başarısız. Kullanıcı adını ve ifadeyi kontrol edin.",
     "doneTitle": "Parola değiştirildi",
     "doneDescription": "Yeni parolanızla giriş yapın. Dosyalarınız ve mesajlarınız yerinde.",
     "signIn": "Giriş yap",
@@ -162,7 +176,66 @@
       "colourDescription": "Başkalarıyla belge düzenlerken imleç ve vurgu renginiz.",
       "colourAuto": "Otomatik",
       "colourFailed": "Renk kaydedilemedi.",
-      "details": "Hesap bilgileri"
+      "details": "Hesap bilgileri",
+      "address": "Kutup adresi",
+      "username": {
+        "title": "Kullanıcı adı",
+        "description": "Kullanıcı adınız Kutup adresinizdir. Değiştirebilirsiniz: dosyalarınız, sohbetleriniz, postalarınız ve kişileriniz sizde kalır.",
+        "change": "Kullanıcı adını değiştir"
+      },
+      "rename": {
+        "title": "Kullanıcı adınızı değiştirin",
+        "description": "Yalnızca adınız ve adresiniz değişir. Sizi tanıyanlar yeni adı görür; eski adresiniz bir süre posta almaya devam eder.",
+        "newName": "Yeni kullanıcı adı",
+        "hint": "3 ile 32 karakter: a–z, 0–9, _ ve -.",
+        "checking": "Denetleniyor…",
+        "available": "Kullanılabilir.",
+        "takeBack": "Önceki adlarınızdan biri: geri alabilirsiniz.",
+        "newAddress": "Yeni adresiniz:",
+        "same": "Kullanıcı adınız zaten bu.",
+        "checkFailed": "Ad denetlenemedi. Birazdan yeniden deneyin.",
+        "reason": {
+          "taken": "Bu ad başka birinde.",
+          "held": "Bu ad önceki sahibi için ayrılmış.",
+          "reserved": "Bu ad ayrılmış.",
+          "invalid": "3 ile 32 karakter kullanın: a–z, 0–9, _ ve -."
+        },
+        "warning": "Eski adresiniz {{address}}, {{receive}} boyunca posta alır ve posta gönderemez. Ardından posta almayı bırakır; {{hold}} sonra ad başkası tarafından alınabilir. Eski adresi kullanan her hizmeti şimdi güncelleyin.",
+        "days_one": "{{count}} gün",
+        "days_other": "{{count}} gün",
+        "windowsFailed": "Kutup eski adresinizin ne kadar tutulacağını bildiremedi. Daha sonra yeniden deneyin.",
+        "submit": "Kullanıcı adını değiştir",
+        "done": "Kullanıcı adınız artık {{name}}.",
+        "failed": "Kullanıcı adınız değiştirilemedi.",
+        "errors": {
+          "tooSoon": "Kullanıcı adınızı 30 günde bir değiştirebilirsiniz. Yeniden değiştirebileceğiniz tarih: {{date}}.",
+          "tooSoonNoDate": "Kullanıcı adınızı 30 günde bir değiştirebilirsiniz.",
+          "tooManyHeld": "Bir hesabın posta alırken tutabileceği kadar önceki adınız var. Aşağıdan birinin posta alımını durdurun, ardından kullanıcı adınızı değiştirin.",
+          "breakGlass": "Bu sunucunun acil durum yönetici hesabının adı değişmez.",
+          "setupRequired": "Önce hesabınızın kurulumunu tamamlayın.",
+          "conflict": "Kullanıcı adınız bu arada başka bir cihazda değişti. Bunu kapatıp yeniden deneyin."
+        }
+      },
+      "names": {
+        "title": "Önceki adlar",
+        "description": "Bıraktığınız adlar sizin için ayrılır. Her biri bir süre posta alır ve gönderemez, ardından başkalarına açılır.",
+        "receivesUntil": "{{date}} tarihine kadar posta alır",
+        "notReceiving": "Artık posta almıyor",
+        "freeAt": "{{date}} tarihinden sonra başkalarına açık",
+        "takeBack": "Geri al",
+        "drop": "Posta almayı durdur",
+        "dropTitle": "{{address}} adresine posta alımı durdurulsun mu?",
+        "dropDescription": "Bu adrese gelen postalar bundan sonra geri döner. Ad {{date}} tarihine kadar sizde kalır, ardından herkes alabilir.",
+        "dropWarning": "Bu geri alınamaz. 30 günde bir adresin posta alımını durdurabilirsiniz.",
+        "dropped": "{{address}} artık posta almıyor.",
+        "failed": "Önceki adlarınız yüklenemedi.",
+        "errors": {
+          "tooSoon": "30 günde bir adresin posta alımını durdurabilirsiniz. Sonraki tarih: {{date}}.",
+          "tooSoonNoDate": "30 günde bir adresin posta alımını durdurabilirsiniz.",
+          "notHeld": "Bu ad artık sizin için ayrılmış değil.",
+          "failed": "Posta alımı durdurulamadı."
+        }
+      }
     },
     "security": {
       "title": "Güvenlik",
@@ -183,6 +256,38 @@
       "disableWarning": "Bundan sonra giriş için yalnızca parolanız yeterli olur.",
       "disableFailed": "İki adımlı doğrulama kapatılamadı.",
       "disabled": "İki adımlı doğrulama kapatıldı",
+      "password": "Parola",
+      "passwordDescription": "Giriş yaptığınız parolayı değiştirin. Dosyalarınız, e-postalarınız ve sohbetleriniz olduğu gibi kalır: yalnızca onları açan anahtar yeniden mühürlenir.",
+      "currentPassword": "Geçerli parola",
+      "changePassword": "Parolayı değiştir",
+      "passwordChanged": "Parola değiştirildi. Diğer cihazlarınızın oturumu kapatıldı.",
+      "wrongCurrentPassword": "Geçerli parolanız doğru değil.",
+      "yourPassword": "Kutup parolanız",
+      "wrongPassword": "Bu, Kutup parolanız değil.",
+      "passwordChangeFailed": "Parola değiştirilemedi. Yeniden deneyin.",
+      "passwordSignsOutOthers": "Hesabınıza giriş yapmış diğer tüm cihazların oturumu kapatılır. Bu cihaz oturumda kalır.",
+      "events": {
+        "title": "Güvenlik olayları",
+        "description": "Giriş yönteminizdeki değişiklikler, en yenisi önce. Tanımadığınız bir olay görürseniz parolanızı değiştirin ve Cihazlar ve oturumlar'a bakın.",
+        "none": "Hesabınız oluşturulduğundan beri hiçbir şey değişmedi.",
+        "failed": "Güvenlik olayları yüklenemedi.",
+        "older": "Daha eski olayları göster",
+        "byAdmin": "Bir yönetici tarafından",
+        "thisDevice": "Bu cihaz",
+        "device": "{{device}}",
+        "kind": {
+          "passwordChange": "Parola değiştirildi",
+          "recovery": "Parola kurtarma ifadesiyle sıfırlandı",
+          "rotate": "Girişiniz yenilendi",
+          "adminReset": "Parola bir yönetici tarafından sıfırlandı",
+          "accountReset": "Hesap bir yönetici tarafından sıfırlandı",
+          "rename": "Kullanıcı adı {{oldName}} yerine {{newName}} oldu",
+          "nameDropped": "{{oldName}} adresine posta alımı durduruldu",
+          "nameClosed": "{{oldName}} adresine posta alımı bir yönetici tarafından durduruldu",
+          "nameFreed": "{{oldName}} başkalarına açıldı",
+          "other": "Girişinizde bir değişiklik"
+        }
+      },
       "recovery": "Kurtarma ifadesi",
       "recoveryDescription": "Hesabınız oluşturulurken gösterilen 24 sözcük.",
       "recoveryNote": "Unutulan bir parolayı sıfırlamanın tek yolu kurtarma ifadenizdir. Kutup onu saklamaz ve yeniden gösteremez — kaydettiğiniz kopyayı güvenli ve çevrimdışı bir yerde tutun."
@@ -224,7 +329,9 @@
       "revokeFailed": "Cihaz iptal edilemedi.",
       "revokedToast": "Cihaz iptal edildi",
       "emptyTitle": "Henüz düzenleme cihazı yok",
-      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür."
+      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür.",
+      "inUseCount": "{{max}} cihazdan {{count}} tanesi kullanımda. Oturumu kapanmış ya da 30 gündür kullanılmayan cihazlar sayılmaz.",
+      "notInUse": "Kullanımda değil"
     },
     "profile": {
       "title": "Profil",
@@ -437,7 +544,7 @@
       "title": "Kullanıcılar",
       "description": "Bu sunucudaki hesaplar. Kutup verilerini okuyamaz — yalnızca boyutunu bilir.",
       "new": "Yeni kullanıcı",
-      "search": "E-posta ya da kullanıcı adıyla ara",
+      "search": "Kullanıcı adı ya da adresle ara",
       "admin": "Yönetici",
       "active": "Etkin",
       "disabled": "Devre dışı",
@@ -456,6 +563,7 @@
       }
     },
     "newUser": {
+      "usernameHint": "Bununla giriş yapar; adresi bu adın bu sunucudaki hâlidir.",
       "title": "Yeni kullanıcı",
       "description": "Kişi geçici bir parolayla giriş yapar, ardından kendi parolasını seçer; anahtarları kendi cihazında oluşturulur.",
       "tempPassword": "Geçici parola",
@@ -465,8 +573,8 @@
       "submit": "Kullanıcı oluştur",
       "failed": "Kullanıcı oluşturulamadı.",
       "createdTitle": "Kullanıcı oluşturuldu",
-      "createdDescription": "{{email}} için bu geçici parolayı iletin. İlk girişe kadar geçerlidir.",
-      "handOver": "Özel olarak paylaşın — e-posta adresiyle aynı mesajda değil. Yeniden gösterilmez.",
+      "createdDescription": "{{name}} için bu geçici parolayı iletin. İlk girişe kadar geçerlidir.",
+      "handOver": "Özel olarak paylaşın — kullanıcı adıyla aynı mesajda değil. Yeniden gösterilmez.",
       "done": "Tamam"
     },
     "user": {
@@ -481,17 +589,17 @@
       "enableHint": "Bu kişinin yeniden giriş yapmasına izin verin.",
       "disableHint": "Girişi engeller ve tüm oturumları hemen sonlandırır. Verileri korunur.",
       "enableTitle": "Hesap etkinleştirilsin mi?",
-      "enableDescription": "{{email}} yeniden giriş yapabilecek.",
+      "enableDescription": "{{name}} yeniden giriş yapabilecek.",
       "disableTitle": "Hesap devre dışı bırakılsın mı?",
-      "disableDescription": "{{email}} her yerde oturumdan çıkarılır ve yeniden etkinleştirilene kadar giriş yapamaz.",
+      "disableDescription": "{{name}} her yerde oturumdan çıkarılır ve yeniden etkinleştirilene kadar giriş yapamaz.",
       "promote": "Yönetici yap",
       "demote": "Yöneticiliği kaldır",
       "promoteHint": "Yöneticiler kullanıcıları, sunucu ayarlarını ve federasyonu yönetir.",
       "demoteHint": "Bu yönetim sayfalarına erişimi kaldırır.",
       "promoteTitle": "Bu kullanıcı yönetici yapılsın mı?",
-      "promoteDescription": "{{email}} tüm hesapları ve sunucu ayarlarını yönetebilecek.",
+      "promoteDescription": "{{name}} tüm hesapları ve sunucu ayarlarını yönetebilecek.",
       "demoteTitle": "Yöneticilik kaldırılsın mı?",
-      "demoteDescription": "{{email}} hesabını korur ancak yönetim erişimini kaybeder.",
+      "demoteDescription": "{{name}} hesabını korur ancak yönetim erişimini kaybeder.",
       "quotas": "Depolama kotası",
       "quotasHint": "Kotayı aşan yüklemeler reddedilir; zaten saklanan hiçbir şey silinmez.",
       "quotasSaved": "Kota kaydedildi",
@@ -501,25 +609,32 @@
       "twoFactorOff": "2FA'yı kapat",
       "twoFactorHint": "Doğrulayıcısını kaybeden biri için. Yalnızca parolası ile giriş yapabilir.",
       "twoFactorTitle": "İki adımlı doğrulama kapatılsın mı?",
-      "twoFactorDescription": "{{email}}, 2FA'yı yeniden kurana kadar yalnızca parolasıyla giriş yapabilecek.",
+      "twoFactorDescription": "{{name}}, 2FA'yı yeniden kurana kadar yalnızca parolasıyla giriş yapabilecek.",
       "twoFactorDone": "İki adımlı doğrulama kapatıldı",
       "rotate": "Yeni geçici parola",
       "rotateHint": "Bu hesap henüz giriş yapmadı; geçici parolasını değiştirmek hiçbir şey kaybettirmez.",
+      "yourPassword": "Siz olduğunuzu doğrulamak için kendi parolanız",
+      "wrongAdminPassword": "Parolanız doğru değil.",
+      "adminLocked": "Parolanızla çok fazla deneme yapıldı. Bir süre bekleyip yeniden deneyin.",
+      "adminSlowDown": "Buradan çok fazla deneme yapıldı. Bir dakika bekleyip yeniden deneyin.",
       "rotateTitle": "Geçici parola değiştirilsin mi?",
-      "rotateDescription": "{{email}} için mevcut geçici parola geçersiz olur.",
+      "rotateDescription": "{{name}} için mevcut geçici parola geçersiz olur.",
       "wipe": "Hesabı sıfırla",
       "wipeHint": "Hem parola hem kurtarma ifadesi kaybolduğunda son çare: tüm dosya ve mesajlarını siler ve hesabı baştan başlatır.",
       "wipeTitle": "Bu hesap sıfırlansın mı?",
-      "wipeDescription": "{{email}} hesabına ait her dosya, klasör, mesaj ve anahtar yok edilir. Hesap yeni bir geçici parolayla yeniden başlar.",
+      "wipeDescription": "{{name}} hesabına ait her dosya, klasör, mesaj ve anahtar yok edilir. Hesap yeni bir geçici parolayla yeniden başlar.",
       "wipeWarning": "Bu geri alınamaz. Veriler sonradan kimse tarafından kurtarılamaz.",
       "newTempPassword": "Yeni geçici parola",
       "delete": "Hesabı sil",
       "deleteHint": "Hesabı ve sahip olduğu her şeyi kaldırır.",
       "deleteTitle": "Bu hesap silinsin mi?",
-      "deleteDescription": "{{email}} ve sahip olduğu her şey bu sunucudan kaldırılır.",
+      "deleteDescription": "{{name}} ve sahip olduğu her şey bu sunucudan kaldırılır.",
       "deleteWarning": "Bu geri alınamaz.",
-      "deleted": "{{email}} silindi",
-      "actionFailed": "İşlem başarısız oldu."
+      "deleted": "{{name}} silindi",
+      "actionFailed": "İşlem başarısız oldu.",
+      "signedUpWith": "Kayıt olduğu kod",
+      "signedUpWithBy": "Kodu {{name}} oluşturdu; {{when}} kullanıldı",
+      "noReferralCode": "Davet kodu yok"
     },
     "reports": {
       "title": "Bildirimler",
@@ -543,10 +658,10 @@
       "dismissed": "Bildirim kapatıldı",
       "remove": "Bağlantıyı kaldır",
       "removeTitle": "Bu bağlantı kaldırılsın mı?",
-      "removeDescription": "Bağlantıyı açan herkese kaldırıldığı söylenir. {{email}} dosyayı tutar ve yeniden paylaşabilir; bu bağlantıdaki tüm açık bildirimler kapatılır.",
+      "removeDescription": "Bağlantıyı açan herkese kaldırıldığı söylenir. {{name}} dosyayı tutar ve yeniden paylaşabilir; bu bağlantıdaki tüm açık bildirimler kapatılır.",
       "removed": "Bağlantı kaldırıldı",
       "disableTitle": "Bu hesap devre dışı bırakılsın mı?",
-      "disableDescription": "{{email}} her yerden çıkış yapar ve giriş yapamaz; herkese açık tüm bağlantıları da hesabı yeniden etkinleştirene kadar çalışmaz. Verileri saklanır.",
+      "disableDescription": "{{name}} her yerden çıkış yapar ve giriş yapamaz; herkese açık tüm bağlantıları da hesabı yeniden etkinleştirene kadar çalışmaz. Verileri saklanır.",
       "disabled": "Hesap devre dışı bırakıldı",
       "actionFailed": "Bu işe yaramadı. Yeniden deneyin.",
       "resolution": {
@@ -592,15 +707,17 @@
         "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",
-        "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı"
+        "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı",
+        "registrationCodeCreated": "{{admin}} bir davet kodu oluşturdu (…{{hint}})",
+        "registrationCodeRevoked": "{{admin}} …{{hint}} davet kodunu iptal etti"
       }
     },
     "settings": {
       "title": "Sunucu ayarları",
       "description": "Bu sunucudaki herkes için varsayılanlar ve sınırlar.",
       "accounts": "Hesaplar",
-      "registration": "Açık kayıt",
-      "registrationHint": "Bu sunucuya erişebilen herkes hesap oluşturabilir. Kapalıyken hesapları yalnızca yöneticiler oluşturur.",
+      "registration": "Kayıt",
+      "registrationHint": "Bu sunucuda kimlerin hesap açabileceği. Yöneticiler her zaman hesap açabilir.",
       "chat": "İleti",
       "chatHint": "Bu sunucuda şifreli mesaj ve medya teslimi.",
       "mailboxDays": "Teslim edilmemiş mesajlar (gün)",
@@ -612,7 +729,12 @@
       "saved": "Ayarlar kaydedildi",
       "saveFailed": "Ayarlar kaydedilemedi.",
       "defaultQuota": "Varsayılan depolama kotası (GiB)",
-      "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin."
+      "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin.",
+      "registrationMode": {
+        "on": "Herkese açık",
+        "code": "Davet koduyla",
+        "off": "Kapalı"
+      }
     },
     "federation": {
       "title": "Federasyon",
@@ -891,6 +1013,70 @@
       "issueBodyHint": "Geri bildirimi kimin gönderdiği eklenmez. Kişisel olan başka her şeyi çıkarın.",
       "checkedPersonal": "Kişisel ayrıntıları çıkardım, bu herkese açık olabilir",
       "openIssue": "Konuyu GitHub'da aç"
+    },
+    "codes": {
+      "title": "Davet kodları",
+      "description": "Kayıt için kod gerektiğinde insanların hesap açmasını sağlayan kodlar. Bir kod yalnızca oluşturulduğunda bir kez gösterilir.",
+      "new": "Yeni kod",
+      "emptyTitle": "Henüz davet kodu yok",
+      "emptyDescription": "Kayıt için kod gerektiğinde birinin hesap açabilmesi için bir kod oluşturun.",
+      "columns": {
+        "code": "Kod",
+        "note": "Not",
+        "uses": "Kullanım",
+        "expires": "Bitiş",
+        "state": "Durum",
+        "actions": "İşlemler"
+      },
+      "madeBy": "{{name}} oluşturdu, {{when}}",
+      "usesOf": "{{uses}} / {{max}}",
+      "usesUnlimited": "{{uses}} (sınırsız)",
+      "never": "Hiçbir zaman",
+      "state": {
+        "active": "Etkin",
+        "expired": "Süresi doldu",
+        "usedUp": "Tükendi",
+        "revoked": "İptal edildi"
+      },
+      "usedBy": "Kullananlar",
+      "usedByFor": "…{{hint}} kodunu kullananlar",
+      "revoke": "İptal et",
+      "revokeFor": "…{{hint}} kodunu iptal et",
+      "revokeTitle": "Bu davet kodu iptal edilsin mi?",
+      "revokeDescription": "…{{hint}} kodu hemen çalışmaz olur. Onunla açılmış hesaplar kalır.",
+      "revokeFailed": "Kod iptal edilemedi.",
+      "revoked": "Davet kodu iptal edildi",
+      "newTitle": "Yeni davet kodu",
+      "newDescription": "Ne kadar süre çalışacağını ve kaç hesap açabileceğini seçin.",
+      "note": "Not",
+      "noteHint": "Kodun kimin ya da ne için olduğu. Yalnızca yöneticiler görür.",
+      "noteTooLong": "Not en fazla 200 karakter olabilir.",
+      "expires": "Geçerlilik",
+      "expiry": {
+        "day": "1 gün",
+        "week": "7 gün",
+        "month": "30 gün",
+        "never": "Süresiz"
+      },
+      "usesLabel": "Açabileceği hesap sayısı",
+      "usesHint": "Kodla yapılan her kayıt bir hak kullanır.",
+      "limit": {
+        "one": "Bir",
+        "number": "Bir sayı",
+        "unlimited": "Sınırsız"
+      },
+      "howMany": "Kaç tane",
+      "howManyRange": "1 ile {{max}} arasında.",
+      "createFailed": "Kod oluşturulamadı.",
+      "make": "Kodu oluştur",
+      "madeTitle": "Davet kodunuz",
+      "madeDescription": "Şimdi kopyalayın: bir daha gösterilmez. Sonrasında yalnızca son dört karakterini görürsünüz.",
+      "theCode": "Davet kodu",
+      "copyCode": "Kodu kopyala",
+      "copyLink": "Kayıt bağlantısını kopyala",
+      "done": "Tamam",
+      "usesTitle": "…{{hint}} ile açılan hesaplar",
+      "noNote": "Not yok"
     }
   }
 }

@@ -5,7 +5,8 @@
   "boot": {
     "opening": "Belgeleriniz açılıyor…",
     "failedTitle": "Ofis açılamadı",
-    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   },
   "notFound": {
     "title": "Sayfa bulunamadı",

@@ -28,6 +28,7 @@ const keys = {
   masterKey: new Uint8Array(32).fill(1),
   privateKey: new Uint8Array(32).fill(2),
   publicKey: 'cHVi',
+  keyBinding: '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',
 }
 const sk = 'A'.repeat(43) // base64url of 32 zero bytes
 
@@ -48,6 +49,11 @@ describe('keys', () => {
   it('round-trip and reject malformed payloads', () => {
     expect(decodeKeys(encodeKeys(keys))).toEqual(keys)
     expect(() => decodeKeys(new TextEncoder().encode('{"v":2}'))).toThrow()
+    // The old encoding carried no binding; a binding of the wrong form is refused.
+    const old = JSON.parse(new TextDecoder().decode(encodeKeys(keys))) as Record<string, unknown>
+    expect(() => decodeKeys(new TextEncoder().encode(JSON.stringify({ ...old, v: 1 })))).toThrow()
+    expect(() => decodeKeys(new TextEncoder().encode(JSON.stringify({ ...old, keyBinding: 'ada@kutup.dev' })))).toThrow()
+    expect(() => encodeKeys({ ...keys, keyBinding: '' })).toThrow(/key binding/)
     const short = encodeKeys({ ...keys, masterKey: new Uint8Array(16) })
     expect(() => decodeKeys(short)).toThrow(/wrong length/)
   })
@@ -78,9 +84,9 @@ describe('requestFork', () => {
 
 describe('produceFork', () => {
   it('sends the child to the origin the server names, key only in the fragment', async () => {
-    setSession({ sessionId: 's', ...keys, email: 'a@b.c', username: null, isAdmin: false,
+    setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, isAdmin: false,
       storageQuotaBytes: 0, storageUsedBytes: 0, totpEnabled: false, color: null,
-      currentDeviceId: null }, 'token')
+      currentDeviceId: null, device: null }, 'token')
     post.mockResolvedValue({ data: { selector: 'SEL', childOrigin: 'https://drive.example.org' } })
     const url = new URL(await produceFork('drive', 'st_1'))
     expect(post).toHaveBeenCalledWith('/auth/forks', { childClientType: 'web-drive', payload: 'ENVELOPE' })
@@ -94,9 +100,9 @@ describe('produceFork', () => {
   })
 
   it('refuses a malformed state', async () => {
-    setSession({ sessionId: 's', ...keys, email: 'a@b.c', username: null, isAdmin: false,
+    setSession({ sessionId: 's', ...keys, address: 'a@b.c', envelopeBinding: keys.keyBinding, username: null, isAdmin: false,
       storageQuotaBytes: 0, storageUsedBytes: 0, totpEnabled: false, color: null,
-      currentDeviceId: null }, 'token')
+      currentDeviceId: null, device: null }, 'token')
     await expect(produceFork('drive', 'bad state/..')).rejects.toThrow(/state/)
   })
 })

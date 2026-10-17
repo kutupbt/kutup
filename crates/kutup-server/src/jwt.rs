@@ -26,6 +26,11 @@ pub struct Claims {
     /// Server-side session id; set on access tokens only.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sid: String,
+    /// Setup and pre-auth tokens: the account's credential epoch when the
+    /// password was proved (base64url), so the token is good only while the
+    /// account's record is still that one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ep: String,
     pub exp: i64,
     pub iat: i64,
 }
@@ -49,6 +54,7 @@ fn base_claims(user_id: &str, is_admin: bool, sub: &str, ttl_secs: i64) -> Claim
         is_admin,
         sub: sub.to_string(),
         sid: String::new(),
+        ep: String::new(),
         exp: now + ttl_secs,
         iat: now,
     }
@@ -66,26 +72,54 @@ pub fn generate_access_token(
     sign(&claims, secret)
 }
 
-/// 15-minute first-login setup token — mirrors `GenerateSetupToken`.
+fn with_epoch(mut claims: Claims, epoch: &[u8]) -> Claims {
+    use base64::Engine as _;
+    claims.ep = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(epoch);
+    claims
+}
+
+/// 15-minute first-login setup token, bound to the credential epoch of the
+/// temporary password it was signed in with.
 pub fn generate_setup_token(
     user_id: &str,
+    epoch: &[u8],
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
     sign(
-        &base_claims(user_id, false, "setup", SETUP_TTL_SECS),
+        &with_epoch(base_claims(user_id, false, "setup", SETUP_TTL_SECS), epoch),
         secret,
     )
 }
 
-/// 5-minute TOTP-challenge token — mirrors `GeneratePreAuthToken`.
+/// 5-minute TOTP-challenge token, bound to the credential epoch of the
+/// password it follows.
 pub fn generate_pre_auth_token(
     user_id: &str,
+    epoch: &[u8],
     secret: &str,
 ) -> Result<String, jsonwebtoken::errors::Error> {
     sign(
-        &base_claims(user_id, false, "pre-auth", PRE_AUTH_TTL_SECS),
+        &with_epoch(
+            base_claims(user_id, false, "pre-auth", PRE_AUTH_TTL_SECS),
+            epoch,
+        ),
         secret,
     )
+}
+
+/// A setup or pre-auth token's user id and credential epoch.
+fn special(token: &str, secret: &str, sub: &str) -> Result<(String, Vec<u8>), String> {
+    use base64::Engine as _;
+    let claims = validate_token(token, secret).map_err(|e| e.to_string())?;
+    if claims.sub != sub {
+        return Err(format!("not a {sub} token"));
+    }
+    let epoch = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&claims.ep)
+        .ok()
+        .filter(|epoch| epoch.len() == 16)
+        .ok_or_else(|| "token has no credential epoch".to_string())?;
+    Ok((claims.user_id, epoch))
 }
 
 /// Verifies an HS256 token's signature + expiry — mirrors `ValidateToken`. Rejects
@@ -103,22 +137,30 @@ pub fn validate_token(token: &str, secret: &str) -> Result<Claims, jsonwebtoken:
     Ok(data.claims)
 }
 
-/// Validates a setup token and returns its userID — mirrors `ValidateSetupToken`.
-pub fn validate_setup_token(token: &str, secret: &str) -> Result<String, String> {
-    let claims = validate_token(token, secret).map_err(|e| e.to_string())?;
-    if claims.sub != "setup" {
-        return Err("not a setup token".to_string());
-    }
-    Ok(claims.user_id)
+/// Whether `token` is one this server signed as a setup token, expired or
+/// not: only to say which refusal a client gets (an expired setup token
+/// means signing in again), never to accept it.
+pub fn is_setup_token_signed(token: &str, secret: &str) -> bool {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = false;
+    validation.validate_aud = false;
+    validation.required_spec_claims.clear();
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .is_ok_and(|data| data.claims.sub == "setup")
 }
 
-/// Validates a pre-auth token and returns its userID — mirrors `ValidatePreAuthToken`.
-pub fn validate_pre_auth_token(token: &str, secret: &str) -> Result<String, String> {
-    let claims = validate_token(token, secret).map_err(|e| e.to_string())?;
-    if claims.sub != "pre-auth" {
-        return Err("not a pre-auth token".to_string());
-    }
-    Ok(claims.user_id)
+/// Validates a setup token: its user id and credential epoch.
+pub fn validate_setup_token(token: &str, secret: &str) -> Result<(String, Vec<u8>), String> {
+    special(token, secret, "setup")
+}
+
+/// Validates a pre-auth token: its user id and credential epoch.
+pub fn validate_pre_auth_token(token: &str, secret: &str) -> Result<(String, Vec<u8>), String> {
+    special(token, secret, "pre-auth")
 }
 
 /// Validates an access token (header or `?token=`) and returns `(userID, sessionID)`.
@@ -160,18 +202,40 @@ mod tests {
 
     #[test]
     fn setup_and_pre_auth_subjects_are_enforced() {
-        let setup = generate_setup_token("u2", SECRET).unwrap();
-        assert_eq!(validate_setup_token(&setup, SECRET).unwrap(), "u2");
+        let setup = generate_setup_token("u2", &[2; 16], SECRET).unwrap();
+        assert_eq!(
+            validate_setup_token(&setup, SECRET).unwrap(),
+            ("u2".to_string(), vec![2; 16])
+        );
         assert!(validate_pre_auth_token(&setup, SECRET).is_err());
 
-        let pre = generate_pre_auth_token("u3", SECRET).unwrap();
-        assert_eq!(validate_pre_auth_token(&pre, SECRET).unwrap(), "u3");
+        let pre = generate_pre_auth_token("u3", &[3; 16], SECRET).unwrap();
+        assert_eq!(
+            validate_pre_auth_token(&pre, SECRET).unwrap(),
+            ("u3".to_string(), vec![3; 16])
+        );
         assert!(validate_setup_token(&pre, SECRET).is_err());
     }
 
     #[test]
+    fn an_expired_setup_token_is_still_known_as_one() {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let mut claims = base_claims("u7", false, "setup", SETUP_TTL_SECS);
+        claims.exp = now - 10;
+        let expired = sign(&claims, SECRET).unwrap();
+        assert!(validate_setup_token(&expired, SECRET).is_err());
+        assert!(is_setup_token_signed(&expired, SECRET));
+        let access = generate_access_token("u7", false, "s7", SECRET).unwrap();
+        assert!(!is_setup_token_signed(&access, SECRET));
+        assert!(!is_setup_token_signed(
+            &expired,
+            "another-secret-also-32-bytes-long-yeah"
+        ));
+    }
+
+    #[test]
     fn access_validation_rejects_special_tokens() {
-        let setup = generate_setup_token("u4", SECRET).unwrap();
+        let setup = generate_setup_token("u4", &[4; 16], SECRET).unwrap();
         assert!(validate_access_token(&setup, SECRET).is_err());
         let access = generate_access_token("u4", false, "s4", SECRET).unwrap();
         assert_eq!(
@@ -188,6 +252,7 @@ mod tests {
             is_admin: false,
             sub: String::new(),
             sid: String::new(),
+            ep: String::new(),
             exp: now + 60,
             iat: now,
         };
@@ -204,6 +269,7 @@ mod tests {
             is_admin: false,
             sub: String::new(),
             sid: String::new(),
+            ep: String::new(),
             exp: now - 10,
             iat: now - 100,
         };

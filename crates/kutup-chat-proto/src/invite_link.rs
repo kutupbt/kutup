@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::mls::decode_canonical_base64;
-use crate::{AccountAddress, MlsGroupAvatarV1, MlsGroupInfoV1};
+use crate::{MlsGroupAvatarV1, MlsGroupInfoV1};
+use kutup_crypto::account_ref::AccountRef;
 
 /// Link ids and tokens: standard base64 of 32 bytes.
 pub const INVITE_LINK_TOKEN_BYTES: usize = 32;
@@ -76,20 +77,13 @@ impl InviteLinkPreviewV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InviteJoinRequestV1 {
-    pub requester: AccountAddress,
+    /// Who asks: an account; its server is the domain to check.
+    pub requester: AccountRef,
     pub created_at_ms: i64,
 }
 
 impl InviteJoinRequestV1 {
     pub fn validate(&self) -> Result<(), String> {
-        let canonical: AccountAddress = self
-            .requester
-            .canonical()
-            .parse()
-            .map_err(|error: crate::AddressError| error.to_string())?;
-        if canonical != self.requester || self.requester.server.is_none() {
-            return Err("an invite request names a canonical account".into());
-        }
         if !(0..=crate::MAX_SAFE_CLOCK_MS).contains(&self.created_at_ms) {
             return Err("an invite request time is out of range".into());
         }
@@ -352,19 +346,25 @@ mod tests {
     }
 
     #[test]
-    fn requests_name_a_canonical_account() {
+    fn requests_name_an_account() {
         let request = InviteJoinRequestV1 {
-            requester: "bob@b.test".parse().unwrap(),
+            requester: AccountRef::new("b.test", "00000000-0000-4000-8000-000000000002").unwrap(),
             created_at_ms: 1,
         };
         request.validate().unwrap();
-        let local = InviteJoinRequestV1 {
-            requester: AccountAddress {
-                username: "bob".into(),
-                server: None,
-            },
-            created_at_ms: 1,
-        };
-        assert!(local.validate().is_err());
+        // An address, or a bare username, is not an account.
+        for requester in [
+            serde_json::json!({ "username": "bob" }),
+            serde_json::json!({ "username": "bob", "server": "b.test" }),
+            serde_json::json!("bob@b.test"),
+        ] {
+            assert!(
+                serde_json::from_value::<InviteJoinRequestV1>(serde_json::json!({
+                    "requester": requester,
+                    "createdAtMs": 1
+                }))
+                .is_err()
+            );
+        }
     }
 }

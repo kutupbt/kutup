@@ -1,11 +1,6 @@
 // High-level crypto operations for registration and login flows.
 import { getSodium } from './sodium'
-import {
-  ACCOUNT_PROTECTION_DEFAULTS,
-  deriveAccountProtectionKeys,
-  deriveRecoveryAuthProof,
-  generateAccountProtectionSalt,
-} from './kdf'
+import { deriveRecoveryAuthProof } from './kdf'
 import { fromBase64, toBase64 } from './base64'
 import {
   ACCOUNT_ENVELOPE_PURPOSE,
@@ -44,13 +39,7 @@ export type {
 } from './chatMedia'
 // The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,
 // kept out of this barrel so only the pages that use it load it.
-export {
-  ACCOUNT_PROTECTION_DEFAULTS,
-  ACCOUNT_PROTECTION_SUITE_V1,
-  deriveAccountProtectionKeys,
-  deriveRecoveryAuthProof,
-  generateAccountProtectionSalt,
-} from './kdf'
+export { deriveRecoveryAuthProof } from './kdf'
 export { generateKey } from './symmetric'
 export { fromBase64, toBase64 } from './base64'
 export { deriveAccountIdentityKeys } from './identity'
@@ -68,6 +57,7 @@ export {
   encryptMailPgpAsGroup,
   exportMailAddressKey,
   generateMailAddressKey,
+  foldAddress,
   generateMailGroupKey,
   importMailAddressKey,
   inspectExternalMailKey,
@@ -75,6 +65,10 @@ export {
   openMailGroupMessage,
   openMailMessage,
   reshareMailGroupKey,
+  newMailGroupSigner,
+  reshareMailGroupSigner,
+  signMailGroupKeyList,
+  verifyMailGroupKeyChain,
   signMailKeyList,
   verifyMailCleartext,
   verifyMailDetachedSignature,
@@ -90,6 +84,9 @@ export type {
   ExternalMailKey,
   GeneratedMailAddressKey,
   GeneratedMailGroupKey,
+  GroupKeyChainView,
+  GroupKeyMember,
+  GroupSignerHolder,
   GroupMailKey,
   MailKeyEntry,
   MailKeyListInput,
@@ -99,7 +96,8 @@ export type {
   SignedMailKeyList,
 } from './mailKey'
 export { openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
-export type { ContactSummary, MailNameKind } from './contactCard'
+export type { ContactSummary, MailNameKind, Revisioned } from './contactCard'
+export { OlderThanSeenError, RevisionGuard, revisionGuard, memoryRevisionStore, type RevisionStore } from './revisionGuard'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,
@@ -158,89 +156,78 @@ export {
   sealAccountEnvelope,
 } from './accountEnvelope'
 
-export interface RegistrationKeys {
-  // For API call
-  masterKeyEnvelope: string      // canonical base64 AccountEnvelopeV1
-  recoveryKeyEnvelope: string    // canonical base64 AccountEnvelopeV1
+/**
+ * A new account's keys, before any password: the master key, the recovery
+ * phrase and its envelope, and the account identity. The password envelope
+ * comes from OPAQUE (`@kutup/crypto/opaqueWorker`), sealed under its export key.
+ */
+export interface AccountKeySet {
+  recoveryKeyEnvelope: string // canonical base64 AccountEnvelopeV1
   drivePrivateKeyEnvelope: string // canonical base64 AccountEnvelopeV1
-  publicKey: string             // base64
+  publicKey: string // base64
   accountAuthorityPublicKey: string
   accountAuthorityKeyId: string
   accountIncarnationId: string
   driveSigningPublicKey: string
-  accountProtectionSuite: number
-  accountProtectionSalt: string // base64
-  argonMemoryKib: number
-  argonIterations: number
-  argonParallelism: number
-  loginKey: string              // base64 — sent to server for bcrypt storage
-  recoveryProof: string         // base64 derived proof; cannot decrypt the recovery wrap
-  // For display to user (NEVER sent to server)
-  mnemonic: string              // 24-word BIP39
-  // In-memory only — held in Redux, never persisted
+  recoveryProof: string // base64 derived proof; cannot decrypt the recovery wrap
+  // For display to the user (never sent to the server)
+  mnemonic: string // 24-word BIP39
+  // In memory only
   masterKey: Uint8Array
   privateKey: Uint8Array
 }
 
-// generateRegistrationKeys derives the full Ente-style key hierarchy.
-// This runs in the KDF web worker for the Argon2id calls.
-export async function generateRegistrationKeys(
-  password: string,
-  loginEmail: string,
-): Promise<RegistrationKeys> {
+/** Fresh account keys bound to `binding` (no password involved: no Argon2id). */
+export async function generateAccountKeySet(binding: string): Promise<AccountKeySet> {
   const sodium = await getSodium()
-
-  // 1. Generate master key (256-bit random, NEVER leaves client unencrypted)
+  // The master key (256-bit random, never leaves the client unencrypted) and
+  // the recovery key (256-bit random, the 24-word phrase shown once).
   const masterKey = sodium.randombytes_buf(32)
-
-  // 2. Generate recovery key (256-bit random → BIP39 mnemonic, shown once)
   const recoveryKeyEntropy = sodium.randombytes_buf(32)
+  try {
+    return await sealAccountKeySet(masterKey, recoveryKeyEntropy, binding)
+  } finally {
+    recoveryKeyEntropy.fill(0)
+  }
+}
+
+/**
+ * The same keys bound to another binding (the one drawn was taken): the
+ * recovery phrase and the master key stay, so nothing shown to the user
+ * changes; the records bound to the binding are sealed again.
+ */
+export async function rebindAccountKeySet(keys: AccountKeySet, binding: string): Promise<AccountKeySet> {
+  const { decodeMnemonic } = await import('./mnemonic')
+  const recoveryKeyEntropy = decodeMnemonic(keys.mnemonic)
+  try {
+    return await sealAccountKeySet(keys.masterKey, recoveryKeyEntropy, binding)
+  } finally {
+    recoveryKeyEntropy.fill(0)
+  }
+}
+
+async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint8Array, binding: string): Promise<AccountKeySet> {
   const { encodeMnemonic } = await import('./mnemonic')
   const mnemonic = encodeMnemonic(recoveryKeyEntropy)
-
-  // 3. One Argon2id root; Rust expands purpose-separated KEK and login keys.
-  const accountProtectionSalt = generateAccountProtectionSalt()
-  const accountProtection = {
-    ...ACCOUNT_PROTECTION_DEFAULTS,
-    salt: toBase64(accountProtectionSalt),
-  }
-  const { keyEncryptionKey, loginKey } = await deriveAccountProtectionKeys(
-    password,
-    accountProtection,
-  )
-  const recoveryProof = await deriveRecoveryAuthProof(
-    toBase64(recoveryKeyEntropy),
-    loginEmail,
-  )
-
-  // 5. Derive the purpose-separated account identity. Account keys and their
-  // typed private-key envelope are owned by the canonical Rust implementation.
+  const recoveryProof = await deriveRecoveryAuthProof(toBase64(recoveryKeyEntropy), binding)
+  // The purpose-separated account identity; Rust owns the keys and envelopes.
+  // It derives from the master key alone, so it does not change with the binding.
   const accountIdentity = await deriveAccountIdentityKeys(toBase64(masterKey))
   const driveHpkePublicKey = fromBase64(accountIdentity.driveHpkePublicKey)
   const driveHpkePrivateKey = fromBase64(accountIdentity.driveHpkePrivateKey)
-
-  // 6–8. Rust owns the suite-bearing, purpose- and account-bound envelopes.
-  const masterKeyEnvelope = await sealAccountEnvelope(
-    masterKey,
-    keyEncryptionKey,
-    ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
-    loginEmail,
-  )
   const recoveryKeyEnvelope = await sealAccountEnvelope(
     masterKey,
     recoveryKeyEntropy,
     ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
-    loginEmail,
+    binding,
   )
   const drivePrivateKeyEnvelope = await sealAccountEnvelope(
     driveHpkePrivateKey,
     masterKey,
     ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    loginEmail,
+    binding,
   )
-
   return {
-    masterKeyEnvelope,
     recoveryKeyEnvelope,
     drivePrivateKeyEnvelope,
     publicKey: toBase64(driveHpkePublicKey),
@@ -248,12 +235,6 @@ export async function generateRegistrationKeys(
     accountAuthorityKeyId: accountIdentity.authorityKeyId,
     accountIncarnationId: accountIdentity.incarnationId,
     driveSigningPublicKey: accountIdentity.driveSigningPublicKey,
-    accountProtectionSuite: accountProtection.suite,
-    accountProtectionSalt: accountProtection.salt,
-    argonMemoryKib: accountProtection.memoryKib,
-    argonIterations: accountProtection.iterations,
-    argonParallelism: accountProtection.parallelism,
-    loginKey: toBase64(loginKey),
     recoveryProof,
     mnemonic,
     masterKey,
@@ -266,29 +247,16 @@ export interface LoginResult {
   privateKey: Uint8Array
 }
 
-// decryptMasterKey runs after login — decrypts masterKey using derived keyEncryptionKey.
-export async function decryptMasterKey(
-  masterKeyEnvelope: string,
-  keyEncryptionKey: Uint8Array,
-  loginEmail: string,
-): Promise<Uint8Array> {
-  return openAccountEnvelope(
-    masterKeyEnvelope,
-    keyEncryptionKey,
-    ACCOUNT_ENVELOPE_PURPOSE.passwordMasterKey,
-    loginEmail,
-  )
-}
-
 export async function decryptPrivateKey(
   drivePrivateKeyEnvelope: string,
   masterKey: Uint8Array,
-  loginEmail: string,
+  binding: string,
 ): Promise<Uint8Array> {
   return openAccountEnvelope(
     drivePrivateKeyEnvelope,
     masterKey,
     ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    loginEmail,
+    binding,
   )
 }
+export { yjsSeedClientId } from './yjsSeed'

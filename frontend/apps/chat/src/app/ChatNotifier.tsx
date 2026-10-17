@@ -30,7 +30,7 @@ export function ChatNotifier({ unread }: { unread: number }) {
   const { lists } = useAccountState()
   const readThrough = useReadThrough()
   const self = chat.self
-  const address = self?.address ?? ''
+  const address = self?.key ?? ''
   const [tabs, setTabs] = useState<NotifyTabs | null>(null)
   const baseTitle = useRef(document.title)
   const seenEntries = useRef<Set<string> | null>(null)
@@ -155,7 +155,7 @@ export function ChatNotifier({ unread }: { unread: number }) {
     if (fresh.length === 0 || !tabs.isNotifier) return
     const blocked = new Set(chat.snapshot.contacts.filter((c) => c.state === 'blocked').map((c) => c.peer))
     const notices = noticesFor(fresh, history, {
-      selfAddress: address,
+      selfKey: address,
       nowMs: Date.now(),
       lists,
       readThrough,

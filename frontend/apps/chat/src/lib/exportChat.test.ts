@@ -12,7 +12,7 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
     entry: { id: text, timestampMs: at.getTime(), content: { kind: 'text', text } } as unknown as ChatHistoryEntry,
     id: text,
     author,
-    outgoing: author === 'me@a.test',
+    outgoing: author === 'aci:00000000-0000-4000-8000-00000000000e@a.test',
     mutation: null,
     replyTo: null,
     replyToMutation: null,
@@ -22,6 +22,8 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
     groupUpdate: null,
     callLog: null,
     undecryptable: null,
+    safetyChanged: false,
+    renamed: null,
     groupCall: null,
     viewedOnce: null,
     poll: null,
@@ -34,19 +36,19 @@ function view(author: string, at: Date, text: string, extra: Partial<MessageView
 describe('chatTranscript', () => {
   it('keeps a place\'s coordinates', () => {
     const at = new Date(2026, 8, 25, 14, 3)
-    const place = view('bob@a.test', at, 'x', {
+    const place = view('aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', at, 'x', {
       entry: { id: 'p', timestampMs: at.getTime(), content: { kind: 'location', location: { lat: 40.9904, lon: 29.0231, label: 'Pier' } } } as unknown as ChatHistoryEntry,
     })
-    const text = chatTranscript('Bob', [place], { self: 'me@a.test', nameOf: () => 'Bob', t, exportedAt: at })
+    const text = chatTranscript('Bob', [place], { self: 'aci:00000000-0000-4000-8000-00000000000e@a.test', nameOf: () => 'Bob', t, exportedAt: at })
     expect(text).toContain('Bob: chat.preview.location:{"label":"Pier"} (40.99040, 29.02310)')
   })
 
   it('writes one line per message with time and sender', () => {
     const at = new Date(2026, 8, 25, 14, 3)
     const text = chatTranscript('Bob', [
-      view('bob@a.test', at, 'hello'),
-      view('me@a.test', at, 'hi', { mutation: { editedText: 'hi!', deleted: false } }),
-    ], { self: 'me@a.test', nameOf: (a) => (a === 'me@a.test' ? 'You' : 'Bob'), t, exportedAt: at })
+      view('aci:00000000-0000-4000-8000-81b637d8fcd2@a.test', at, 'hello'),
+      view('aci:00000000-0000-4000-8000-00000000000e@a.test', at, 'hi', { mutation: { editedText: 'hi!', deleted: false } }),
+    ], { self: 'aci:00000000-0000-4000-8000-00000000000e@a.test', nameOf: (a) => (a === 'aci:00000000-0000-4000-8000-00000000000e@a.test' ? 'You' : 'Bob'), t, exportedAt: at })
     const lines = text.trim().split('\n')
     expect(lines[0]).toContain('chat.export.header')
     expect(lines[3]).toBe('[2026-09-25 14:03] Bob: hello')

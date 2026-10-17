@@ -1,0 +1,56 @@
+{
+  "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+  "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+  "profileKey": "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE=",
+  "profileVersion": "9359fe5c77f52bcc6e0247b1ddfdc8d0b2ffcbc9f1e0fe695af02c4a10dda84f",
+  "revision": 3,
+  "sourceDeviceId": 2,
+  "nonce": "RERERERERERERERERERERERERERERERE",
+  "wrappingKey": "ntVXxWsHQXCzfyfnL9b34RonSXB8I+BYI1Cc4JzAK4g=",
+  "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhY=",
+  "refused": [
+    {
+      "case": "another account's key binding",
+      "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
+      "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhY="
+    },
+    {
+      "case": "the address instead of the key binding",
+      "binding": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhY="
+    },
+    {
+      "case": "another account in the header",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "account": "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+      "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhY="
+    },
+    {
+      "case": "magic changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "wrappedKey": "S1VUUFBFMgAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhY="
+    },
+    {
+      "case": "purpose changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "wrappedKey": "S1VUUFBFMQAAAQEAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhY="
+    },
+    {
+      "case": "ciphertext changed",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADDbrY6WNVr3xrJCCbOAU3Iewff1rdBTAHzsn2wa2Pzmid43tWAbIZSdKhxpnqhynhc="
+    },
+    {
+      "case": "wrapped under the v1 key (master key only)",
+      "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+      "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+      "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAMAAAACk1n+XHf1K8xuAkex3f3I0LL/y8nx4P5pWvAsShDdqE8AGwAJa3V0dXAuZGV2AAAAAAAAQACAACvYBsl/DkRERERERERERERERERERERERERERERERAAAADCZ+HCB1GL6PbEIi3dgLajt8uHMFJlrCgnMigDLLMVMcxmkvQrtRZh4VGahjJWZaPU="
+    }
+  ]
+}

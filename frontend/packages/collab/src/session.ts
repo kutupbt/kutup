@@ -14,46 +14,36 @@
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { yjsSeedClientId } from '@kutup/crypto/yjsSeed'
 import api from '@kutup/session/client'
-import { updateSession } from '@kutup/session/store'
-import { claimSeed, listVersions, localBase, registerDevice } from './api'
+import { claimSeed, listDevices, listVersions, localBase, newestYjsVersion } from './api'
 import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from './cryptoFrame'
-import { encodePubKeyB64, generateDeviceKeypair, loadKeypair, saveKeypair } from './devices'
+import { currentDevice, deviceRefused, renewRequested } from './currentDevice'
 import { KIND } from './envelope'
 import { buildAwarenessName, randomSenderSeqPrefix, withAlpha } from './identity'
 import { SnapshotTrigger } from './snapshot'
 import { collabSocketUrl } from './socketUrl'
 import { CollabTransport, type HelloMsg, type PositionMsg } from './transport'
 
-// Dedupes concurrent registerDevice() calls within one browser session
-// (a StrictMode double mount must not create two device rows).
-const devicePromises = new Map<string, Promise<number>>()
-
-function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
-  let pending = devicePromises.get(pubKeyB64)
-  if (!pending) {
-    pending = registerDevice(pubKeyB64, label).then((r) => r.deviceId)
-    devicePromises.set(pubKeyB64, pending)
-  }
-  return pending
-}
-
 /**
  * The first content of a file no one has edited yet, as one Yjs update by a
- * client id derived from the file: every tab builds the same bytes, so an
+ * client id derived from the file and that content (`yjsSeedClientId`):
+ * every peer seeding from the same content builds the same bytes, so an
  * editor's seed and a viewer's local copy are the same item and merge
- * instead of doubling. `fill` writes the content into the fresh document.
+ * instead of doubling, while seeds from different content (an older and a
+ * newer upload) are different items and never overwrite each other. `fill`
+ * writes the content into the fresh document.
  */
-export function deterministicSeed(fileId: string, fill: (doc: Y.Doc) => void): Uint8Array {
-  const doc = new Y.Doc()
-  // FNV-1a over the id: a stable uint32, as Yjs client ids are.
-  let id = 0x811c9dc5
-  for (let i = 0; i < fileId.length; i++) id = Math.imul(id ^ fileId.charCodeAt(i), 0x01000193) >>> 0
-  doc.clientID = id
-  fill(doc)
-  const update = Y.encodeStateAsUpdate(doc)
-  doc.destroy()
-  return update
+export async function deterministicSeed(fileId: string, fill: (doc: Y.Doc) => void): Promise<Uint8Array> {
+  const encode = (clientID: number) => {
+    const doc = new Y.Doc()
+    doc.clientID = clientID
+    fill(doc)
+    const update = Y.encodeStateAsUpdate(doc)
+    doc.destroy()
+    return update
+  }
+  return encode(await yjsSeedClientId(fileId, encode(0)))
 }
 
 export type RestoreChoice = 'save-and-restore' | 'restore-only'
@@ -75,15 +65,13 @@ export interface CollabSessionOptions {
   readOnly: boolean
   /** The signed-in user, for the cursor label. */
   username: string | null
-  /** This browser's collaboration device id, if already registered. */
-  storedDeviceId: number | null
   cursorColor: string
   /**
    * The first content, for a file that has never been saved: the seed
    * update (see `deterministicSeed`) and whether the document is still
    * empty (so a late seed never lands on top of edits).
    */
-  seed?: { update: () => Uint8Array; isEmpty: (doc: Y.Doc) => boolean }
+  seed?: { update: () => Promise<Uint8Array>; isEmpty: (doc: Y.Doc) => boolean }
   /** Replace the live document's content with an old state's (restore). */
   replaceContent: (live: Y.Doc, old: Y.Doc) => void
   /** Labels for the versions a restore saves. */
@@ -129,21 +117,10 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   const { fileId, fileKey, keyGeneration, fileKeyAt, readOnly, signal } = options
   const base = options.base ?? localBase(fileId)
 
-  // 1. A device keypair and registered device id.
-  let keypair = loadKeypair()
-  if (!keypair) {
-    keypair = await generateDeviceKeypair()
-    saveKeypair(keypair)
-  }
-  let deviceId = options.storedDeviceId
-  if (!deviceId) {
-    deviceId = await ensureRegistered(encodePubKeyB64(keypair.publicKey), navigator.userAgent.slice(0, 80))
-    if (signal.aborted) return null
-    updateSession({ currentDeviceId: deviceId })
-  }
+  // 1. This sign-in's collaboration device (throws TooManyDevicesError
+  // when the account has 20 in use). Replaced if the server stops taking it.
+  let dev = await currentDevice()
   if (signal.aborted) return null
-  const kp = keypair
-  const device = deviceId
 
   // 2. The document and awareness. Each tab has its own name and colour.
   const doc = new Y.Doc()
@@ -219,9 +196,9 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       const frame = await encryptCollabFrameV1(
         update,
         KIND.YJS_UPDATE,
-        { fileId, keyGeneration, docKeyId, deviceId: BigInt(device), sequence: outboundSeq },
+        { fileId, keyGeneration, docKeyId, deviceId: BigInt(dev.deviceId), sequence: outboundSeq },
         fileKey,
-        kp.privateKey,
+        dev.keypair.privateKey,
       )
       // Loading the file's content into a new document is not an edit.
       transport?.send(frame, { edit: origin !== 'seed' })
@@ -244,9 +221,9 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       const frame = await encryptCollabFrameV1(
         update,
         KIND.YJS_AWARENESS,
-        { fileId, keyGeneration, docKeyId, deviceId: BigInt(device), sequence: outboundSeq },
+        { fileId, keyGeneration, docKeyId, deviceId: BigInt(dev.deviceId), sequence: outboundSeq },
         fileKey,
-        kp.privateKey,
+        dev.keypair.privateKey,
       )
       transport?.send(frame, { edit: false })
     })()
@@ -268,10 +245,11 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   let maySeed = false
   let neverSaved = false
   try {
-    const versions = await listVersions(fileId, base)
-    neverSaved = versions.length === 0
-    if (versions.length > 0) {
-      const latest = versions[0]
+    // Only Yjs state is decoded here: a whole-file version (never offered
+    // for these files, but stored all the same) is left alone.
+    const latest = newestYjsVersion(await listVersions(fileId, base))
+    neverSaved = latest === undefined
+    if (latest) {
       const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
       const blob = new Uint8Array(r.data as ArrayBuffer)
       if (blob.length > 0) {
@@ -292,6 +270,17 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   } catch (error) {
     console.warn('collab: failed to load initial content, starting empty', error)
   }
+  // The first content, made now (it is derived through the crypto module)
+  // and applied when the relay says hello.
+  let seedUpdate: Uint8Array | null = null
+  if (options.seed && (maySeed || (readOnly && neverSaved))) {
+    try {
+      seedUpdate = await options.seed.update()
+    } catch (error) {
+      console.warn('collab: could not make the first content, opening without it', error)
+      maySeed = false
+    }
+  }
 
   const close = () => {
     trigger?.destroy()
@@ -309,8 +298,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   // A saved version trimmed the log past where this document was: merge
   // that version in (merging is safe), and the log continues from there.
   const catchUp = async () => {
-    const versions = await listVersions(fileId, base)
-    const latest = versions[0]
+    const latest = newestYjsVersion(await listVersions(fileId, base))
     if (!latest) return 0
     const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
     const blob = new Uint8Array(r.data as ArrayBuffer)
@@ -323,7 +311,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
 
   // 6. The relay: replays what came after the saved state, then live frames.
   transport = new CollabTransport({
-    url: () => collabSocketUrl(fileId, device, base),
+    url: () => collabSocketUrl(fileId, dev.deviceId, base),
     lastSeenSeq: () => applied,
     onPosition: async (message: PositionMsg) => {
       if (message.type === 'stored') {
@@ -336,6 +324,19 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       // Frames arrive, and are applied, before the position that follows them.
       if (message.type === 'replayed') options.onReplayed?.(message.throughSeq)
     },
+    // The server may have stopped taking this device (revoked under
+    // Account → Devices): checked, and replaced if so; frames sealed from
+    // then on carry the new one.
+    onRefused: async () => {
+      const id = dev.deviceId
+      const trusted = await listDevices()
+        .then((rows) => rows.some((row) => row.deviceId === id && row.trusted))
+        .catch(() => null)
+      if (trusted === false && (await deviceRefused())) dev = await currentDevice()
+    },
+    onRenewDevice: (deviceIds) => {
+      void renewRequested(deviceIds).catch(() => undefined)
+    },
     onHello: (hello: HelloMsg) => {
       docKeyId = hello.currentDocKeyId
       // Continue after the server's record of this device's sequence.
@@ -345,14 +346,14 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       }
       const seed = options.seed
       // The seed claim was ours: insert the first content now, once.
-      if (seed && maySeed && seed.isEmpty(doc)) {
-        Y.applyUpdate(doc, seed.update(), 'seed')
+      if (seed && seedUpdate && maySeed && seed.isEmpty(doc)) {
+        Y.applyUpdate(doc, seedUpdate, 'seed')
         maySeed = false
       }
       // A viewer of a file no editor has opened yet shows the first content
       // locally (not sent); an editor's seed, when it comes, is the same item.
-      if (seed && readOnly && neverSaved && hello.headSeq === 0 && seed.isEmpty(doc)) {
-        Y.applyUpdate(doc, seed.update(), 'remote')
+      if (seed && seedUpdate && readOnly && neverSaved && hello.headSeq === 0 && seed.isEmpty(doc)) {
+        Y.applyUpdate(doc, seedUpdate, 'remote')
       }
       options.onStatus('ready')
     },

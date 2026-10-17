@@ -215,7 +215,12 @@
         "trademark": "ONLYOFFICE is a trademark of Ascensio System SIA. Kutup is not affiliated with or endorsed by ONLYOFFICE."
       }
     },
-    "viewOnly": "View only"
+    "viewOnly": "View only",
+    "devices": {
+      "tooMany": "You have 20 devices in use. Remove one under Account → Devices to edit here.",
+      "removed": "This browser's editing device was removed. Reopen the document to keep editing.",
+      "manage": "Manage devices"
+    }
   },
   "file": {
     "opening": "Opening…",
@@ -249,7 +254,8 @@
     "myFiles": "My files",
     "sharedWithMe": "Shared with me",
     "sharedBy": "From {{name}}",
-    "sharedByOwner": "Shared with you by {{sharer}}; owned by {{owner}}"
+    "sharedByOwner": "Shared with you by {{sharer}}; owned by {{owner}}",
+    "replacedUnsentLost": "This document was replaced; your unsent changes were not kept."
   },
   "viewer": {
     "imageUnreadable": "This browser can't display this image. Download it to open it on your device."

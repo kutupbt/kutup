@@ -33,8 +33,8 @@ export interface OfficeEditorProps {
   base?: SessionBase
   /** Claim `base` as the room's new base once (after a restore). */
   resetBase?: boolean
-  /** The session's base is elsewhere: reopen from it (latest when omitted). */
-  onOutdated?: (base?: SessionBase) => void
+  /** The session's base is elsewhere: reopen from it (latest when omitted); `reset`: it was replaced. */
+  onOutdated?: (base?: SessionBase, reset?: boolean) => void
   /** False: no session and no live editing (a public link's page). */
   live?: boolean
 }
@@ -51,4 +51,6 @@ export interface WhiteboardEditorProps {
   initialBytes?: Uint8Array
   /** View-only access. */
   readOnly?: boolean
+  /** The file was replaced (a new version from Drive, a restore): reopen from the newest. */
+  onOutdated?: (base?: SessionBase, reset?: boolean) => void
 }

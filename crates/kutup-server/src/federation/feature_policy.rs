@@ -373,7 +373,7 @@ async fn fetch_remote_envelope(
         .send(
             domain,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!("/api/fed/policies/{feature}"),
                 query: sequence.map(|value| format!("sequence={value}")),
@@ -429,7 +429,7 @@ pub(crate) async fn get_federated_feature_policy(
             &path,
             raw_query.as_deref(),
             &[],
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let envelope = match federation

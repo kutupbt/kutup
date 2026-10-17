@@ -39,7 +39,7 @@ impl ChatHttpClient for MockHttp {
                     body_json: r#"{"deviceId":7}"#.into(),
                 })
             }
-            (ChatHttpMethod::Get, "/chat/users/alice/manifest") => {
+            (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/manifest?server=chat.test") => {
                 let manifest = self.manifest.lock().unwrap().clone();
                 Ok(match manifest {
                     Some(body_json) => ChatHttpResponse {
@@ -62,7 +62,7 @@ impl ChatHttpClient for MockHttp {
                     body_json: serde_json::to_string(&response).unwrap(),
                 })
             }
-            (ChatHttpMethod::Get, "/chat/users/alice/keys?syncDeviceId=7") => {
+            (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/keys?syncDeviceId=7&server=chat.test") => {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
                 let manifest: AccountManifestV1 = serde_json::from_str(
                     self.manifest
@@ -75,7 +75,7 @@ impl ChatHttpClient for MockHttp {
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json: serde_json::json!({
-                        "username": "alice@chat.test",
+                        "account": { "server": "chat.test", "accountId": "00000000-0000-4000-8000-2bd806c97f0e" },
                         "devices": [{
                             "deviceId": 7,
                             "registrationId": registration["registrationId"],
@@ -96,6 +96,8 @@ impl ChatHttpClient for MockHttp {
     }
 }
 
+const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.test";
+
 #[test]
 fn encrypted_install_registers_once_and_reopens() {
     let directory = tempfile::tempdir().unwrap();
@@ -106,14 +108,14 @@ fn encrypted_install_registers_once_and_reopens() {
     let first = futures_executor::block_on(open_native_chat_client(
         database.clone(),
         vec![3; 32],
-        "alice".into(),
-        "chat.test".into(),
+        ALICE.into(),
         vec![9; 32],
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
         http.clone(),
     ))
     .unwrap();
     assert_eq!(first.device_id(), 7);
-    assert_eq!(first.user(), "alice");
+    assert_eq!(first.user(), ALICE);
     assert_eq!(
         futures_executor::block_on(first.pending_send_count()).unwrap(),
         0
@@ -124,7 +126,7 @@ fn encrypted_install_registers_once_and_reopens() {
 
     let note = futures_executor::block_on(first.send_text(
         "native-note-1".into(),
-        "alice".into(),
+        ALICE.into(),
         "2026-07-16T12:00:00Z".into(),
         "remember on mobile".into(),
     ))
@@ -133,7 +135,8 @@ fn encrypted_install_registers_once_and_reopens() {
     assert_eq!(note.attempts, 0);
     let history = futures_executor::block_on(first.history()).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].peer, "alice");
+    assert_eq!(history[0].conversation, ALICE);
+    assert_eq!(history[0].sender, ALICE);
     assert_eq!(
         history[0].content.text.as_deref(),
         Some("remember on mobile")
@@ -143,9 +146,9 @@ fn encrypted_install_registers_once_and_reopens() {
     let wrong_key = futures_executor::block_on(open_native_chat_client(
         database.clone(),
         vec![4; 32],
-        "alice".into(),
-        "chat.test".into(),
+        ALICE.into(),
         vec![9; 32],
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
         http.clone(),
     ));
     assert!(matches!(wrong_key, Err(KutupChatError::Storage { .. })));
@@ -153,9 +156,9 @@ fn encrypted_install_registers_once_and_reopens() {
     let second = futures_executor::block_on(open_native_chat_client(
         database,
         vec![3; 32],
-        "alice".into(),
-        "chat.test".into(),
+        ALICE.into(),
         vec![9; 32],
+        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
         http.clone(),
     ))
     .unwrap();

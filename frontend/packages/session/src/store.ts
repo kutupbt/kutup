@@ -7,12 +7,19 @@
 // this module.
 
 import { useSyncExternalStore } from 'react'
+import type { DeviceKeys } from './keys'
 
 export interface Session {
   /** The server-side session (auth_sessions.id) this app origin holds. */
   sessionId: string
   userId: string
-  email: string
+  /** The account's Kutup address (`username@<domain>`): its identity, shown in menus. */
+  address: string
+  /**
+   * What the account's sealed keys are bound to (docs/plans/account-identity.md):
+   * its key binding. Every seal and open uses it; it names no one.
+   */
+  envelopeBinding: string
   username: string | null
   isAdmin: boolean
   storageQuotaBytes: number
@@ -24,6 +31,8 @@ export interface Session {
   masterKey: Uint8Array
   privateKey: Uint8Array
   currentDeviceId: number | null
+  /** This sign-in's collaboration device on this origin, once registered (persisted with the keys). */
+  device: DeviceKeys | null
 }
 
 interface State {
@@ -71,6 +80,7 @@ export function clearSession(): void {
   // Best-effort hygiene; the threat model assumes a hostile device wins.
   prev?.masterKey.fill(0)
   prev?.privateKey.fill(0)
+  prev?.device?.privateKey.fill(0)
 }
 
 /** The current session, or null when signed out. */

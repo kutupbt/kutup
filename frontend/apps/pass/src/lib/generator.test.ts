@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_OPTIONS, entropyBits, generatePassword, randomBelow, strengthOf } from './generator'
+import { DEFAULT_OPTIONS, entropyBits, generatePassword, randomBelow, randomVaultKey, strengthOf } from './generator'
 
 describe('the password generator', () => {
   it('makes passwords of the length asked, with every chosen kind', () => {
@@ -39,5 +39,13 @@ describe('the password generator', () => {
     expect(strengthOf('abc')).toBe('weak')
     expect(strengthOf('Summer2024')).toBe('fair')
     expect(strengthOf(generatePassword(DEFAULT_OPTIONS))).toBe('strong')
+  })
+})
+
+describe('randomVaultKey', () => {
+  it('is five groups of five base32 characters, different each time', () => {
+    const keys = new Set(Array.from({ length: 50 }, () => randomVaultKey()))
+    expect(keys.size).toBe(50)
+    for (const key of keys) expect(key).toMatch(/^[0-9a-hjkmnp-tv-z]{5}(-[0-9a-hjkmnp-tv-z]{5}){4}$/)
   })
 })

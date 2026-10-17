@@ -76,3 +76,18 @@ export function strengthOf(password: string): 'weak' | 'fair' | 'strong' {
   const bits = password.length * Math.log2(Math.max(size, 2))
   return bits >= 80 ? 'strong' : bits >= 50 ? 'fair' : 'weak'
 }
+
+/** The characters of a generated vault key: Crockford's base32, lowercase (no i, l, o, u). */
+const VAULT_KEY_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz'
+
+/**
+ * A vault key Kutup Pass generates (docs/plans/pass.md, "Vault keys"): 25
+ * characters of a 32-letter alphabet, 125 bits, in groups of five, easy to
+ * read out and paste into a KeePass app.
+ */
+export function randomVaultKey(): string {
+  // 32 divides 256: a byte's low five bits carry no bias.
+  const bytes = crypto.getRandomValues(new Uint8Array(25))
+  const chars = Array.from(bytes, (byte) => VAULT_KEY_ALPHABET[byte & 31])
+  return [0, 5, 10, 15, 20].map((at) => chars.slice(at, at + 5).join('')).join('-')
+}

@@ -51,6 +51,7 @@ impl NativeChatClient {
         self.device_id
     }
 
+    /// The account this client runs as: `aci:<uuid>@<server>`.
     pub fn user(&self) -> String {
         self.user.clone()
     }
@@ -183,14 +184,16 @@ impl Drop for NativeChatClient {
 
 /// Open or restart-safely register an account's native chat device. Key bytes
 /// are moved to the engine worker, used to unlock/derive state, and zeroized
-/// before the first result crosses back to Swift/Kotlin.
+/// before the first result crosses back to Swift/Kotlin. `binding` is the
+/// account's key binding (the session's `envelopeBinding`), which the
+/// account's own seals bind.
 #[uniffi::export]
 pub async fn open_native_chat_client(
     database_path: String,
     database_key: Vec<u8>,
-    user: String,
-    server_name: String,
+    account: String,
     master_key: Vec<u8>,
+    binding: String,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     if database_path.trim().is_empty() {
@@ -198,16 +201,12 @@ pub async fn open_native_chat_client(
             message: "database path is empty".into(),
         });
     }
-    if user.trim().is_empty() {
-        return Err(KutupChatError::InvalidInput {
-            message: "chat username is empty".into(),
-        });
-    }
-    kutup_chat_proto::AccountAddress::federated("server", &server_name).map_err(|error| {
-        KutupChatError::InvalidInput {
+    // The device's account, for good: its string form `aci:<uuid>@<server>`.
+    let user = kutup_chat_core::parse_account(&account)
+        .map_err(|error| KutupChatError::InvalidInput {
             message: error.to_string(),
-        }
-    })?;
+        })?
+        .to_string();
     let database_key = take_key(database_key, "database key")?;
     let master_key = take_key(master_key, "account master key")?;
     let (commands, receiver) = mpsc::channel();
@@ -221,8 +220,8 @@ pub async fn open_native_chat_client(
                     database_path,
                     database_key,
                     master_key,
+                    binding,
                     user: worker_user,
-                    server_name,
                     http,
                 },
                 receiver,
@@ -257,8 +256,9 @@ struct WorkerConfig {
     database_path: String,
     database_key: [u8; 32],
     master_key: [u8; 32],
+    binding: String,
+    /// The account: `aci:<uuid>@<server>`.
     user: String,
-    server_name: String,
     http: Arc<dyn ChatHttpClient>,
 }
 
@@ -315,9 +315,8 @@ fn worker_main(
         let mut rng = OsRng.unwrap_err();
         let mut engine =
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
-        engine.set_local_server(&config.server_name)?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
-        engine.enable_identity_pins(&config.master_key)?;
+        engine.enable_identity_pins(&config.master_key, &config.binding)?;
         config.master_key.zeroize();
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))
@@ -451,38 +450,15 @@ fn worker_main(
 }
 
 async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
+    let me = engine.session().user().to_owned();
     let incoming = engine.session().history().await?;
     let outgoing = engine.session().sent_history().await?;
     let mut history = Vec::with_capacity(incoming.len() + outgoing.len());
     for message in incoming {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        history.push(ChatHistoryEntry {
-            id: message.id,
-            peer: message.peer,
-            direction: ChatDirection::Incoming,
-            sender_device_id: Some(message.sender_device_id),
-            cursor: Some(message.cursor),
-            timestamp_ms: message.received_at,
-            delivered: true,
-            deduplicated: false,
-            content: content.into(),
-        });
+        history.push(incoming_entry(message)?);
     }
     for message in outgoing {
-        let content = serde_json::from_slice::<ChatContent>(&message.content)
-            .map_err(|error| ChatError::Content(error.to_string()))?;
-        history.push(ChatHistoryEntry {
-            id: message.send_id,
-            peer: message.peer,
-            direction: ChatDirection::Outgoing,
-            sender_device_id: None,
-            cursor: None,
-            timestamp_ms: message.created_at,
-            delivered: message.delivered,
-            deduplicated: message.deduplicated,
-            content: content.into(),
-        });
+        history.push(outgoing_entry(message, &me)?);
     }
     history.sort_by(|left, right| {
         left.timestamp_ms
@@ -490,6 +466,42 @@ async fn history(engine: &Engine) -> Result<Vec<ChatHistoryEntry>> {
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(history)
+}
+
+/// A received message: written by the other account, in its chat.
+fn incoming_entry(message: kutup_chat_core::InboxMessage) -> Result<ChatHistoryEntry> {
+    let content = serde_json::from_slice::<ChatContent>(&message.content)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    Ok(ChatHistoryEntry {
+        id: message.id,
+        conversation: message.peer.clone(),
+        sender: message.peer,
+        direction: ChatDirection::Incoming,
+        sender_device_id: Some(message.sender_device_id),
+        cursor: Some(message.cursor),
+        timestamp_ms: message.received_at,
+        delivered: true,
+        deduplicated: false,
+        content: content.into(),
+    })
+}
+
+/// A sent message: written by this account (`me`), in the other's chat.
+fn outgoing_entry(message: kutup_chat_core::SentMessage, me: &str) -> Result<ChatHistoryEntry> {
+    let content = serde_json::from_slice::<ChatContent>(&message.content)
+        .map_err(|error| ChatError::Content(error.to_string()))?;
+    Ok(ChatHistoryEntry {
+        id: message.send_id,
+        conversation: message.peer,
+        sender: me.to_owned(),
+        direction: ChatDirection::Outgoing,
+        sender_device_id: None,
+        cursor: None,
+        timestamp_ms: message.created_at,
+        delivered: message.delivered,
+        deduplicated: message.deduplicated,
+        content: content.into(),
+    })
 }
 
 fn take_key(mut bytes: Vec<u8>, name: &str) -> Result<[u8; 32]> {
@@ -515,3 +527,53 @@ fn worker_stopped() -> KutupChatError {
 }
 
 uniffi::setup_scaffolding!();
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn content() -> Vec<u8> {
+        serde_json::to_vec(&ChatContent::text_with_id(
+            "m1",
+            "2026-07-16T12:00:00Z",
+            1,
+            "hi",
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_outgoing_entry_is_written_by_this_account_in_the_others_chat() {
+        let entry = outgoing_entry(
+            kutup_chat_core::SentMessage {
+                send_id: "s1".into(),
+                peer: "bob@chat.test".into(),
+                sender_device_id: 7,
+                content: content(),
+                created_at: 1,
+                delivered_at: None,
+                delivered: false,
+                deduplicated: false,
+            },
+            "alice@chat.test",
+        )
+        .unwrap();
+        assert_eq!(entry.conversation, "bob@chat.test");
+        assert_eq!(entry.sender, "alice@chat.test");
+    }
+
+    #[test]
+    fn an_incoming_entry_is_written_by_the_other_account() {
+        let entry = incoming_entry(kutup_chat_core::InboxMessage {
+            id: "m1".into(),
+            peer: "bob@chat.test".into(),
+            sender_device_id: 3,
+            cursor: 9,
+            content: content(),
+            received_at: 1,
+        })
+        .unwrap();
+        assert_eq!(entry.conversation, "bob@chat.test");
+        assert_eq!(entry.sender, "bob@chat.test");
+    }
+}

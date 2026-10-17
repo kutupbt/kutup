@@ -88,7 +88,7 @@ function DetailsBody({ model }: { model: ConversationModel }) {
           <p className="max-w-full break-words text-sm" data-testid="chat-contact-about">{model.profile.about}</p>
         ) : null}
         {model.note ? <p className="text-sm text-muted-foreground">{t('chat.noteToSelfDescription')}</p> : null}
-        {model.address && !model.note ? <ContactEntry address={model.address} name={model.profile?.displayName} /> : null}
+        {model.peer && model.address && !model.note ? <ContactEntry peer={model.peer} address={model.address} name={model.profile?.displayName} /> : null}
         {model.group ? <p className="text-sm text-muted-foreground">{t('chat.group.members', { count: model.group.currentRoster.length })}</p> : null}
         {info?.description ? (
           <p className="max-w-full whitespace-pre-line break-words text-sm" data-testid="chat-group-about">{info.description}</p>
@@ -104,9 +104,9 @@ function DetailsBody({ model }: { model: ConversationModel }) {
       </div>
 
       {model.canSetTimer ? <DisappearingSection model={model} /> : null}
-      {model.address && !model.note ? <SafetySection model={model} /> : null}
+      {model.peer && !model.note ? <SafetySection model={model} /> : null}
       {model.group ? <GroupDetails model={model} group={model.group} /> : null}
-      {model.address && !model.note && model.contact ? <BlockSection model={model} /> : null}
+      {model.peer && !model.note && model.contact ? <BlockSection model={model} /> : null}
     </div>
   )
 }
@@ -174,7 +174,7 @@ function SafetySection({ model }: { model: ConversationModel }) {
   const { service } = useChat()
   const [safety, setSafety] = useState<SafetyNumberV1 | null>(null)
   const [open, setOpen] = useState(false)
-  const peer = model.address!
+  const peer = model.peer!
   useEffect(() => {
     let cancelled = false
     setSafety(null)
@@ -205,7 +205,7 @@ function SafetySection({ model }: { model: ConversationModel }) {
         <SafetyVerificationDialog
           open={open}
           onOpenChange={setOpen}
-          peer={peer}
+          peer={model.title}
           safety={safety}
           onVerify={async (payload: string) => {
             const next = await service!.verifySafetyNumber(peer, payload)
@@ -224,7 +224,7 @@ function BlockSection({ model }: { model: ConversationModel }) {
   const { service } = useChat()
   const [busy, setBusy] = useState(false)
   const blocked = model.contact?.state === 'blocked'
-  const peer = model.address!
+  const peer = model.peer!
   async function toggle() {
     if (!service) return
     setBusy(true)

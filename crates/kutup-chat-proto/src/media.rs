@@ -10,7 +10,7 @@ use kutup_crypto::chat_media::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::AccountAddress;
+use crate::AccountRef;
 
 pub const CHAT_MEDIA_PROTOCOL_VERSION: u16 = 1;
 pub const CHAT_ATTACHMENT_VERSION: u16 = 1;
@@ -181,7 +181,9 @@ pub struct ChatMediaDeliveryOfferV1 {
     pub version: u16,
     pub origin_domain: String,
     pub destination_domain: String,
-    pub recipient: String,
+    /// The recipient's account on the destination (server and account id).
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub operation_id: String,
     pub attachment_id: String,
     #[cfg_attr(feature = "openapi", schema(value_type = u16))]
@@ -206,12 +208,8 @@ impl ChatMediaDeliveryOfferV1 {
         if self.destination_domain != expected_destination {
             return Err("Chat media offer destination does not match".into());
         }
-        let recipient = AccountAddress::from_str(&self.recipient)
-            .map_err(|error| format!("invalid Chat media recipient: {error}"))?;
-        if recipient.canonical() != self.recipient
-            || recipient.server.as_deref() != Some(self.destination_domain.as_str())
-        {
-            return Err("Chat media offer recipient is not canonical for destination".into());
+        if self.recipient.server != self.destination_domain {
+            return Err("Chat media offer recipient is not on the destination".into());
         }
         require_canonical_uuid("operationId", &self.operation_id)?;
         require_canonical_uuid("attachmentId", &self.attachment_id)?;
@@ -470,12 +468,11 @@ impl ChatAttachmentLedgerEntryV1 {
             return Err("Chat attachment conversation reference is invalid".into());
         }
         match self.conversation_kind {
+            // The peer's account (this account's own for Note to Self), in
+            // its one string form, `aci:<uuid>@<server>`.
             ChatMediaConversationKindV1::Direct | ChatMediaConversationKindV1::NoteToSelf => {
-                let address = AccountAddress::from_str(&self.conversation_reference)
-                    .map_err(|error| error.to_string())?;
-                if address.server.is_none() || address.canonical() != self.conversation_reference {
-                    return Err("Chat attachment account reference is not canonical".into());
-                }
+                kutup_crypto::account_ref::AccountRef::from_str(&self.conversation_reference)
+                    .map_err(|_| "Chat attachment account reference is invalid".to_string())?;
             }
             ChatMediaConversationKindV1::MlsGroup => {
                 require_canonical_uuid("conversationReference", &self.conversation_reference)?;
@@ -830,7 +827,7 @@ mod tests {
         ChatAttachmentLedgerEntryV1 {
             version: 1,
             conversation_kind: ChatMediaConversationKindV1::Direct,
-            conversation_reference: "bob@example.org".into(),
+            conversation_reference: "aci:00000000-0000-4000-8000-000000000002@example.org".into(),
             message_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
             storage_reference_id: "22222222-2222-4222-8222-222222222222".into(),
@@ -891,7 +888,7 @@ mod tests {
         let bytes = entry.canonical_bytes().unwrap();
         assert_eq!(
             hex::encode(&bytes),
-            "4b55545043453100000101010200000f626f62406578616d706c652e6f7267aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa1111111111114111811111111111111122222222222242228222222222222222000000000000004c0000018bcfe5680000076361742e6a706700"
+            "4b5554504345310000010101020000346163693a30303030303030302d303030302d343030302d383030302d303030303030303030303032406578616d706c652e6f7267aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa1111111111114111811111111111111122222222222242228222222222222222000000000000004c0000018bcfe5680000076361742e6a706700"
         );
         assert_eq!(
             ChatAttachmentLedgerEntryV1::from_canonical_bytes(&bytes).unwrap(),
@@ -958,7 +955,8 @@ mod tests {
             version: 1,
             origin_domain: "a.example".into(),
             destination_domain: "b.example".into(),
-            recipient: "bob@b.example".into(),
+            recipient: AccountRef::new("b.example", "22222222-2222-4222-8222-222222222222")
+                .unwrap(),
             operation_id: "33333333-3333-4333-8333-333333333333".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
             suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
@@ -986,7 +984,8 @@ mod tests {
             concat!(
                 "{\"version\":1,\"originDomain\":\"a.example\",\"originSequence\":7,",
                 "\"offer\":{\"version\":1,\"originDomain\":\"a.example\",",
-                "\"destinationDomain\":\"b.example\",\"recipient\":\"bob@b.example\",",
+                "\"destinationDomain\":\"b.example\",",
+                "\"recipient\":{\"server\":\"b.example\",\"accountId\":\"22222222-2222-4222-8222-222222222222\"},",
                 "\"operationId\":\"33333333-3333-4333-8333-333333333333\",",
                 "\"attachmentId\":\"11111111-1111-4111-8111-111111111111\",",
                 "\"suite\":1,\"ciphertextBytes\":76,\"ciphertextSha256\":\"",
@@ -1009,7 +1008,8 @@ mod tests {
             version: 1,
             origin_domain: "a.example".into(),
             destination_domain: "b.example".into(),
-            recipient: "bob@b.example".into(),
+            recipient: AccountRef::new("b.example", "22222222-2222-4222-8222-222222222222")
+                .unwrap(),
             operation_id: "33333333-3333-4333-8333-333333333333".into(),
             attachment_id: "11111111-1111-4111-8111-111111111111".into(),
             suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
@@ -1031,9 +1031,12 @@ mod tests {
         offer.ciphertext_bytes = kutup_crypto::chat_media::max_object_ciphertext_bytes() + 1;
         assert!(offer.validate("b.example", 1_000).is_err());
         offer.ciphertext_bytes = object_ciphertext_size(0).unwrap();
-        offer.recipient = "Bob@b.example".into();
+        // A recipient on another server than the destination.
+        offer.recipient =
+            AccountRef::new("c.example", "22222222-2222-4222-8222-222222222222").unwrap();
         assert!(offer.validate("b.example", 1_000).is_err());
-        offer.recipient = "bob@b.example".into();
+        offer.recipient =
+            AccountRef::new("b.example", "22222222-2222-4222-8222-222222222222").unwrap();
         offer.destination_domain = "c.example".into();
         assert!(offer.validate("b.example", 1_000).is_err());
     }

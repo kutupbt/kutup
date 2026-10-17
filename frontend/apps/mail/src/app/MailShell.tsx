@@ -55,6 +55,8 @@ import { SpamUnsubscribeDialog } from '../features/SpamUnsubscribeDialog'
 import { PlacesHost } from '../features/PlacesHost'
 import { PlacesNav } from '../features/PlacesNav'
 import { SaveContactHost } from '../features/SaveContactHost'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 // The composer and its editor load the first time someone writes.
 const Composer = lazy(() => import('../features/Composer').then((m) => ({ default: m.Composer })))
@@ -167,6 +169,8 @@ function SearchBox() {
 export function MailShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const counts = useCounts()
   useNewMailNotifications()
@@ -221,6 +225,7 @@ export function MailShell() {
 
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.mail')}
       switcher={
         <AppSwitcher
@@ -305,8 +310,8 @@ export function MailShell() {
           </Button>
         </Tooltip>
         <UserMenu
-          name={session.username ?? session.email}
-          email={session.email}
+          name={session.username ?? session.address}
+          address={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => window.location.assign(appUrl('account', '/login')))

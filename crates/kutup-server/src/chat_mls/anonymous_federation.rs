@@ -33,7 +33,7 @@ pub(crate) async fn federated_get_anonymous_key_packages(
             "/api/fed/chat/mls/anonymous/key-packages",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {
@@ -54,7 +54,7 @@ pub(crate) async fn federated_get_anonymous_key_packages(
         return signed_federation_error(federation, &authenticated, AppError::bad_request(error));
     }
     if authenticated.destination() != federation.server_name()
-        || request.recipient.server.as_deref() != Some(federation.server_name())
+        || request.recipient.server != federation.server_name()
     {
         return signed_federation_error(federation, &authenticated, unavailable());
     }
@@ -88,7 +88,7 @@ pub(crate) async fn federated_submit_anonymous_message(
             "/api/fed/chat/mls/anonymous/messages",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {
@@ -110,7 +110,7 @@ pub(crate) async fn federated_submit_anonymous_message(
     }
     if authenticated.destination() != federation.server_name()
         || transaction.origin_domain != authenticated.origin()
-        || transaction.submission.recipient.server.as_deref() != Some(federation.server_name())
+        || transaction.submission.recipient.server != federation.server_name()
     {
         return signed_federation_error(
             federation,
@@ -211,7 +211,7 @@ pub(crate) async fn federated_submit_anonymous_message(
     };
     let outcome = MlsRepository::new(state.pool.clone())
         .store_anonymous_submission(
-            &transaction.submission.recipient.username,
+            crate::account_ids::id_of(&transaction.submission.recipient)?,
             &transaction.submission,
             &capability,
             &policy.abuse_limits,
@@ -257,7 +257,11 @@ pub(crate) async fn federated_submit_anonymous_message(
     .await?;
     tx.commit().await?;
     if status == StatusCode::OK {
-        notify_mls_recipient_mailbox(&state, &transaction.submission.recipient.username).await;
+        notify_mls_recipient_mailbox(
+            &state,
+            crate::account_ids::id_of(&transaction.submission.recipient)?,
+        )
+        .await;
     }
     signed_federation_json(federation, &authenticated, status, &response)
 }

@@ -1,1 +1,0 @@
--- No-op; migration 017 owns these columns in the pre-V1 schema.

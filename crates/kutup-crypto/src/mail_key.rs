@@ -31,6 +31,7 @@ use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use crate::account_envelope::{self, AccountEnvelopePurpose};
+use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
 use crate::named_share::canonical_account;
@@ -235,7 +236,7 @@ fn sha256_fingerprint_of(key: &SignedPublicKey) -> Result<[u8; 32]> {
 /// address and the key's own fingerprint.
 pub fn seal_address_key(
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     address: &str,
     secret_key: &[u8],
 ) -> Result<Vec<u8>> {
@@ -244,14 +245,14 @@ pub fn seal_address_key(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
-        login_email,
+        binding,
     )
 }
 
 /// [`seal_address_key`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_address_key_with_nonce(
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     address: &str,
     secret_key: &[u8],
     nonce: &[u8],
@@ -261,7 +262,7 @@ pub fn seal_address_key_with_nonce(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
-        login_email,
+        binding,
         nonce,
     )
 }
@@ -296,7 +297,7 @@ fn secret_key_fingerprint(secret_key: &[u8]) -> Result<[u8; FINGERPRINT_LEN]> {
 pub fn open_address_key(
     envelope: &[u8],
     master_key: &[u8],
-    login_email: &str,
+    binding: &str,
     address: &str,
     fingerprint: &[u8; FINGERPRINT_LEN],
 ) -> Result<Zeroizing<Vec<u8>>> {
@@ -305,7 +306,7 @@ pub fn open_address_key(
         envelope,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
-        login_email,
+        binding,
     )?);
     let mut rest = payload
         .strip_prefix(PRIVATE_KEY_DOMAIN)
@@ -324,24 +325,160 @@ pub fn open_address_key(
     Ok(Zeroizing::new(secret.to_vec()))
 }
 
-/// A shared mailbox's key for one member (docs/plans/mail-groups.md, G1b):
-/// the group's secret key encrypted to the member's address key, an OpenPGP
-/// message only that member opens. The group key itself has the address
-/// key's shape ([`generate_address_key`] for the group's address).
-pub fn seal_group_key_share(member_public_key: &[u8], group_secret_key: &[u8]) -> Result<Vec<u8>> {
-    secret_key_fingerprint(group_secret_key)?;
-    encrypt_binary(member_public_key, group_secret_key)
+/// A shared mailbox's key share's version byte.
+const GROUP_SHARE_VERSION: u8 = 1;
+/// HPKE info and the start of the AAD of a group key share.
+const GROUP_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-key-share/v1\0";
+const GROUP_SHARE_HEADER_LEN: usize = 1 + 32 + 32;
+
+/// Who a group key share is for: the member's account and the account
+/// incarnation whose Drive HPKE key it is sealed to.
+pub struct GroupShareMember<'a> {
+    pub account: &'a AccountRef,
+    /// Lowercase hex of the member's account incarnation id.
+    pub incarnation_id: &'a str,
 }
 
-/// Opens a member's share of a group key with the member's own address key,
-/// checking it is the group key with `group_fingerprint`.
-pub fn open_group_key_share(
-    member_secret_key: &[u8],
+fn group_share_aad(
+    domain: &[u8],
+    group_id: &[u8; 16],
+    bound: &[u8],
+    member: &AccountRef,
+    incarnation: &[u8; 32],
+) -> Vec<u8> {
+    let account = member.bytes();
+    let mut aad = Vec::with_capacity(domain.len() + 16 + bound.len() + account.len() + 32);
+    aad.extend_from_slice(domain);
+    aad.extend_from_slice(group_id);
+    aad.extend_from_slice(bound);
+    aad.extend_from_slice(&account);
+    aad.extend_from_slice(incarnation);
+    aad
+}
+
+/// A secret of a shared mailbox sealed with HPKE (`domain` as its info) to a
+/// member's account-level key, its AAD binding `domain`, the group, `bound`
+/// (what the secret is: a key's fingerprint or public key), the member's
+/// account and its incarnation. The bytes: version, the member's
+/// incarnation id, the HPKE encapsulated key, the ciphertext.
+pub(crate) fn seal_group_secret(
+    domain: &[u8],
+    secret: &[u8],
+    group_id: &str,
+    bound: &[u8],
+    member: &GroupShareMember<'_>,
+    member_hpke_public_key: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
+    let incarnation =
+        crate::named_share::parse_hex_32(member.incarnation_id, "member incarnation")?;
+    let aad = group_share_aad(domain, &group_id, bound, member.account, &incarnation);
+    let mut hpke = crate::named_share::hpke_suite();
+    let (encapsulated, ciphertext) = hpke
+        .seal(
+            &hpke_rs::HpkePublicKey::new(member_hpke_public_key.to_vec()),
+            domain,
+            &aad,
+            secret,
+            None,
+            None,
+            None,
+        )
+        .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
+    if encapsulated.len() != 32 {
+        return Err(CryptoError::Backend(
+            "group share: encapsulated key length".into(),
+        ));
+    }
+    let mut out = Vec::with_capacity(GROUP_SHARE_HEADER_LEN + ciphertext.len());
+    out.push(GROUP_SHARE_VERSION);
+    out.extend_from_slice(&incarnation);
+    out.extend_from_slice(&encapsulated);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Opens [`seal_group_secret`]'s share for `member` with their account-level
+/// HPKE private key.
+pub(crate) fn open_group_secret(
+    domain: &[u8],
     share: &[u8],
-    group_fingerprint: &[u8; FINGERPRINT_LEN],
+    group_id: &str,
+    bound: &[u8],
+    member: &AccountRef,
+    member_hpke_private_key: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
-    let opened = decrypt(member_secret_key, share, None)?;
-    let secret = Zeroizing::new(opened.data.to_vec());
+    group_key_share_incarnation(share)?;
+    let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
+    let incarnation: [u8; 32] = share[1..33].try_into().expect("32 bytes");
+    let aad = group_share_aad(domain, &group_id, bound, member, &incarnation);
+    let hpke = crate::named_share::hpke_suite();
+    Ok(Zeroizing::new(
+        hpke.open(
+            &share[33..GROUP_SHARE_HEADER_LEN],
+            &hpke_rs::HpkePrivateKey::new(member_hpke_private_key.to_vec()),
+            domain,
+            &aad,
+            &share[GROUP_SHARE_HEADER_LEN..],
+            None,
+            None,
+            None,
+        )
+        .map_err(|_| CryptoError::AuthFailed)?,
+    ))
+}
+
+/// A shared mailbox's key for one member (docs/plans/mail-groups.md, G1b;
+/// docs/plans/account-ids.md): the group's secret key sealed with HPKE to
+/// the member's account-level key (their Drive HPKE key, which their Drive
+/// key binding ties to their account id), bound to the group, the group
+/// key, the member's account and its incarnation. One level above their
+/// addresses, as Proton wraps address keys to the user key: a rename keeps
+/// the share.
+pub fn seal_group_key_share(
+    group_secret_key: &[u8],
+    group_id: &str,
+    member: &GroupShareMember<'_>,
+    member_hpke_public_key: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let group_fingerprint = secret_key_fingerprint(group_secret_key)?;
+    seal_group_secret(
+        GROUP_SHARE_DOMAIN,
+        group_secret_key,
+        group_id,
+        &group_fingerprint,
+        member,
+        member_hpke_public_key,
+    )
+}
+
+/// The account incarnation a group share (of a group key or of a group
+/// signing key) is sealed to (lowercase hex), read without opening it: what
+/// the server checks against the member's current keys.
+pub fn group_key_share_incarnation(share: &[u8]) -> Result<String> {
+    if share.len() <= GROUP_SHARE_HEADER_LEN || share[0] != GROUP_SHARE_VERSION {
+        return Err(CryptoError::InvalidInput("not a group key share".into()));
+    }
+    Ok(hex::encode(&share[1..33]))
+}
+
+/// Opens a member's share of a group key with the member's account-level
+/// HPKE private key, for that group, group key and member only.
+pub fn open_group_key_share(
+    share: &[u8],
+    group_id: &str,
+    group_fingerprint: &[u8; FINGERPRINT_LEN],
+    member: &AccountRef,
+    member_hpke_private_key: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    let secret = open_group_secret(
+        GROUP_SHARE_DOMAIN,
+        share,
+        group_id,
+        group_fingerprint,
+        member,
+        member_hpke_private_key,
+    )?;
     if secret_key_fingerprint(&secret)? != *group_fingerprint {
         return Err(CryptoError::AuthFailed);
     }
@@ -1272,8 +1409,9 @@ pub struct MailKeyEntryV1 {
 /// the account authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MailKeyListV1 {
-    /// The account (`username@server`) that owns the address.
-    pub account: String,
+    /// The account's current keys (its incarnation) and the authority that
+    /// signs: the list names no username, so a rename never touches it
+    /// (docs/plans/account-ids.md; Proton's SignedKeyList names keys only).
     pub incarnation_id: [u8; 32],
     pub authority_key_id: [u8; 32],
     pub address: String,
@@ -1294,9 +1432,6 @@ impl MailKeyListV1 {
                 "mail key list: {reason}"
             )))
         };
-        if canonical_account(&self.account)? != self.account {
-            return invalid("account is not canonical");
-        }
         if canonical_address(&self.address)? != self.address {
             return invalid("address is not canonical");
         }
@@ -1336,7 +1471,6 @@ impl MailKeyListV1 {
         let mut out = Vec::with_capacity(256 + self.keys.len() * 57);
         out.extend_from_slice(KEY_LIST_DOMAIN);
         out.extend_from_slice(&KEY_LIST_VERSION.to_be_bytes());
-        push_str(&mut out, &self.account)?;
         out.extend_from_slice(&self.incarnation_id);
         out.extend_from_slice(&self.authority_key_id);
         push_str(&mut out, &self.address)?;
@@ -1366,7 +1500,6 @@ impl MailKeyListV1 {
         if take(&mut rest, 2)? != KEY_LIST_VERSION.to_be_bytes() {
             return Err(refused());
         }
-        let account = take_str(&mut rest)?.to_owned();
         let incarnation_id = take(&mut rest, 32)?.try_into().expect("32 bytes");
         let authority_key_id = take(&mut rest, 32)?.try_into().expect("32 bytes");
         let address = take_str(&mut rest)?.to_owned();
@@ -1404,7 +1537,6 @@ impl MailKeyListV1 {
             return Err(refused());
         }
         let list = Self {
-            account,
             incarnation_id,
             authority_key_id,
             address,
@@ -1488,8 +1620,7 @@ impl SignedMailKeyListV1 {
     /// Checks that `next` directly follows `self` in the same chain.
     pub fn check_successor(&self, next: &Self) -> Result<()> {
         let (before, after) = (&self.list, &next.list);
-        if after.account != before.account
-            || after.address != before.address
+        if after.address != before.address
             || after.incarnation_id != before.incarnation_id
             || after.authority_key_id != before.authority_key_id
             || after.sequence != before.sequence + 1
@@ -1530,6 +1661,57 @@ fn backend(error: impl std::fmt::Display) -> CryptoError {
     CryptoError::Backend(error.to_string())
 }
 
+/// A new address's first key, sealed, with its first signed key list (the
+/// key alone, primary): what an account sends to give an address its key, at
+/// sign-up or in a rename.
+pub struct FirstAddressKey {
+    pub key: GeneratedAddressKey,
+    /// The secret key sealed under the master key for the account's binding.
+    pub private_key_envelope: Vec<u8>,
+    pub key_list: SignedMailKeyListV1,
+}
+
+/// Generates `address`'s first key for the account `identity` (master key
+/// and key binding), created at `created_at_secs`, its list issued at
+/// `issued_at` (RFC 3339).
+pub fn first_address_key(
+    identity: &crate::identity::AccountIdentityKeysV1,
+    master_key: &[u8],
+    binding: &str,
+    address: &str,
+    created_at_secs: u32,
+    issued_at: &str,
+) -> Result<FirstAddressKey> {
+    let address = canonical_address(address)?;
+    let key = generate_address_key(&address, created_at_secs)?;
+    let private_key_envelope = seal_address_key(master_key, binding, &address, &key.secret_key)?;
+    let hex32 = |value: String| -> Result<[u8; 32]> {
+        hex::decode(value)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| CryptoError::InvalidInput("identity id".into()))
+    };
+    let key_list = MailKeyListV1 {
+        incarnation_id: hex32(identity.incarnation_id())?,
+        authority_key_id: hex32(identity.authority_key_id())?,
+        address,
+        sequence: 1,
+        previous_hash: None,
+        issued_at: issued_at.to_owned(),
+        keys: vec![MailKeyEntryV1 {
+            fingerprint: key.fingerprint,
+            sha256_fingerprint: key.sha256_fingerprint,
+            primary: true,
+            flags: DEFAULT_FLAGS,
+        }],
+    }
+    .sign(identity.authority_signing_key())?;
+    Ok(FirstAddressKey {
+        key,
+        private_key_envelope,
+        key_list,
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1607,26 +1789,50 @@ mod tests {
     fn envelopes_bind_address_and_fingerprint() {
         let master = [7u8; 32];
         let key = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
-        let sealed = seal_address_key(&master, "a@example.com", ADDRESS, &key.secret_key).unwrap();
-        let opened =
-            open_address_key(&sealed, &master, "a@example.com", ADDRESS, &key.fingerprint).unwrap();
+        let sealed = seal_address_key(
+            &master,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            ADDRESS,
+            &key.secret_key,
+        )
+        .unwrap();
+        let opened = open_address_key(
+            &sealed,
+            &master,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            ADDRESS,
+            &key.fingerprint,
+        )
+        .unwrap();
         assert_eq!(&opened[..], &key.secret_key[..]);
         assert!(open_address_key(
             &sealed,
             &master,
-            "a@example.com",
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             "bob@kutup.dev",
             &key.fingerprint
         )
         .is_err());
-        assert!(open_address_key(&sealed, &master, "a@example.com", ADDRESS, &[0; 20]).is_err());
-        assert!(
-            open_address_key(&sealed, &master, "b@example.com", ADDRESS, &key.fingerprint).is_err()
-        );
+        assert!(open_address_key(
+            &sealed,
+            &master,
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
+            ADDRESS,
+            &[0; 20]
+        )
+        .is_err());
+        assert!(open_address_key(
+            &sealed,
+            &master,
+            "1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91",
+            ADDRESS,
+            &key.fingerprint
+        )
+        .is_err());
         assert!(open_address_key(
             &sealed,
             &[8; 32],
-            "a@example.com",
+            "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             ADDRESS,
             &key.fingerprint
         )
@@ -1640,7 +1846,6 @@ mod tests {
         keys: Vec<MailKeyEntryV1>,
     ) -> MailKeyListV1 {
         MailKeyListV1 {
-            account: ADDRESS.into(),
             incarnation_id: hex::decode(identity.incarnation_id())
                 .unwrap()
                 .try_into()

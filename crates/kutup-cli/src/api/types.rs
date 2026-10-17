@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
     pub chat: ChatSettings,
+    /// `on`, `code` or `off`.
+    pub registration_mode: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -17,33 +19,25 @@ pub struct ChatSettings {
 
 // --- Auth ---
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreflightResponse {
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginRequest {
-    pub email: String,
-    /// base64-encoded login key.
-    pub login_key: String,
-}
-
 /// Registration bundle — mirrors the backend `RegisterRequest` + the web client's
-/// `generateRegistrationKeys` output. All key material is base64; the server only bcrypts
-/// `login_key` + `recovery_proof` and stores the rest as-is (it never sees plaintext keys).
+/// `generateRegistrationKeys` output. All key material is base64; the password is
+/// an OPAQUE record (docs/plans/opaque.md), and the server never sees a key.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterRequest {
-    pub email: String,
     pub username: String,
-    pub login_key: String,
+    /// The account id the server minted at register/start, and its proof.
+    pub account_id: String,
+    pub account_id_proof: String,
+    /// A referral code, when the server's registration mode asks for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registration_code: Option<String>,
+    /// The account's key binding, drawn here (a UUID v4).
+    pub key_binding: String,
+    /// The password's OPAQUE record (`RegistrationUpload`), base64, and the
+    /// setup register/start answered under.
+    pub opaque_record: String,
+    pub opaque_server_key_id: u16,
     pub master_key_envelope: String,
     pub recovery_key_envelope: String,
     pub drive_private_key_envelope: String,
@@ -52,18 +46,14 @@ pub struct RegisterRequest {
     pub account_authority_key_id: String,
     pub account_incarnation_id: String,
     pub drive_signing_public_key: String,
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
     pub recovery_proof: String,
     /// The account authority's signature over its Drive keys
     /// (docs/plans/drive-identity-pins.md).
     pub drive_key_binding: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+// No Debug: it carries tokens, envelopes and grants.
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginResponse {
     #[serde(default)]
@@ -86,6 +76,15 @@ pub struct LoginResponse {
     pub drive_private_key_envelope: String,
     #[serde(default)]
     pub public_key: String,
+    /// What the account's sealed keys are bound to; only with a session.
+    #[serde(default, rename = "keyBinding")]
+    pub envelope_binding: String,
+    /// The account's record is under a retired setup: re-register the
+    /// password just used, with `grant` (purpose `rotate`).
+    #[serde(default)]
+    pub rotate: bool,
+    #[serde(default)]
+    pub grant: Option<String>,
     #[serde(default)]
     pub requires_totp: bool,
     #[serde(default)]
@@ -102,29 +101,15 @@ pub struct TotpRequest {
 }
 
 /// `GET /auth/recover/preflight` — encrypted recovery-key material. The
-/// server answers unknown emails with deterministic fake data, so a wrong
-/// phrase/email only ever fails client-side at unwrap time.
+/// server answers unknown names with deterministic fake data, so a wrong
+/// phrase/name only ever fails client-side at unwrap time.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoverPreflightResponse {
     #[serde(default)]
+    pub envelope_binding: String,
+    #[serde(default)]
     pub recovery_key_envelope: String,
-}
-
-/// `POST /auth/recover` — rotates the one-root account-protection revision.
-/// `recovery_proof` is HKDF-derived; raw mnemonic entropy never leaves client.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecoverRequest {
-    pub email: String,
-    pub new_login_key: String,
-    pub new_master_key_envelope: String,
-    pub new_account_protection_suite: u16,
-    pub new_account_protection_salt: String,
-    pub new_argon_memory_kib: u32,
-    pub new_argon_iterations: u32,
-    pub new_argon_parallelism: u32,
-    pub recovery_proof: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,8 +140,16 @@ pub struct SetupTotpResponse {
 #[serde(rename_all = "camelCase")]
 pub struct UserMe {
     pub id: String,
-    pub email: String,
+    /// The account's permanent id and its server.
+    pub account_id: String,
+    pub server: String,
+    /// The account's Kutup address.
+    #[serde(default)]
+    pub address: String,
     pub username: String,
+    /// What the account's envelopes are bound to now.
+    #[serde(default)]
+    pub envelope_binding: String,
     #[serde(default)]
     pub is_admin: bool,
     #[serde(default)]
@@ -189,6 +182,10 @@ pub struct Collection {
     pub epoch_statement: String,
     #[serde(default)]
     pub epoch_statement_hash: String,
+    /// A shared folder's owner's server; with `owner_user_id`, the owner.
+    #[serde(default)]
+    pub owner_server: Option<String>,
+    /// Shown only: the owner's address now.
     #[serde(default)]
     pub owner_account: Option<String>,
     #[serde(default)]
@@ -322,6 +319,10 @@ pub struct MoveFileRequest {
     /// Its name's hash in the destination (docs/plans/drive-unique-names.md).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_hash: Option<String>,
+    /// Its content's hash in the destination, from the content SHA-256 its
+    /// metadata holds; none leaves it unknown there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 /// `POST /collections/{id}/move`; `None` moves the folder to the top level.
@@ -378,8 +379,8 @@ pub struct ShareRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FederatedShareRequest {
-    pub recipient_username: String,
     pub recipient_server: String,
+    pub recipient_account_id: String,
     pub named_share_envelope: String,
     pub can_upload: bool,
     pub can_delete: bool,
@@ -419,11 +420,15 @@ pub struct PublicShareResponse {
     pub token: String,
 }
 
+/// An account and its keys, as `/users/by-address` and `/users/by-id` both
+/// answer it, here or on its server.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserByEmail {
-    #[serde(default)]
-    pub user_id: String,
+pub struct AccountLookup {
+    /// Who it is: its server and permanent id (docs/plans/account-ids.md).
+    pub server: String,
+    pub account_id: String,
+    /// `name@server`, the label shown.
     #[serde(default)]
     pub account: String,
     #[serde(default)]
@@ -441,63 +446,23 @@ pub struct UserByEmail {
     pub drive_key_binding: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FedPubKeyResponse {
-    #[serde(default)]
-    pub account: String,
-    #[serde(default)]
-    pub drive_hpke_public_key: String,
-    #[serde(default)]
-    pub account_incarnation_id: String,
-    #[serde(default)]
-    pub drive_signing_public_key: String,
-    #[serde(default)]
-    pub account_authority_public_key: String,
-    #[serde(default)]
-    pub drive_key_binding: Option<String>,
-}
-
 /// The account's sealed identity pin list (`GET/PUT /api/user/identity-pins`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentityPinsRecord {
+    /// The revision in the sealed list's header, as the server read it.
     pub revision: u64,
     pub envelope: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::RecoverRequest;
-
-    // Exact wire keys the server's RecoverRequest deserializes — the guard
-    // for the camelCase mapping of the complete replacement revision.
-    #[test]
-    fn recover_request_keys() {
-        let req = RecoverRequest {
-            email: "a@b.c".into(),
-            new_login_key: "lk".into(),
-            new_master_key_envelope: "envelope".into(),
-            new_account_protection_suite: 1,
-            new_account_protection_salt: "salt".into(),
-            new_argon_memory_kib: 65_536,
-            new_argon_iterations: 3,
-            new_argon_parallelism: 1,
-            recovery_proof: "rp".into(),
-        };
-        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
-        for key in [
-            "email",
-            "newLoginKey",
-            "newMasterKeyEnvelope",
-            "newAccountProtectionSuite",
-            "newAccountProtectionSalt",
-            "newArgonMemoryKib",
-            "newArgonIterations",
-            "newArgonParallelism",
-            "recoveryProof",
-        ] {
-            assert!(v.get(key).is_some(), "missing key {key}");
-        }
-    }
+/// A new sealed list, stored only if the server still holds `base_revision`
+/// (0: none yet); its own revision is in the envelope's header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPinsWrite {
+    pub base_revision: u64,
+    pub envelope: String,
+    /// The next sealed account head (docs/plans/rollback-protection.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }

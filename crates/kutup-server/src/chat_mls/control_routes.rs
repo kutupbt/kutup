@@ -41,7 +41,7 @@ pub(crate) async fn create_conversation(
     let participant_domains: Vec<String> = request
         .members
         .iter()
-        .filter_map(|member| member.address.server.clone())
+        .map(|member| member.account.server.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();

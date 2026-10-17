@@ -1,4 +1,6 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { conflictCode, opaqueRegister } from '@kutup/session/opaque'
+import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import api from '@kutup/session/client'
 import type {
   AdminActivityResponse,
@@ -6,10 +8,14 @@ import type {
   AdminSettings,
   AdminStats,
   BulkFederationPeerRetryResponse,
+  CreatedRegistrationCode,
   FederationDomainRule,
   FederationMinimumTrust,
   FederationMode,
   FederationPeerEvidence,
+  RegistrationCode,
+  RegistrationCodeUse,
+  SignedUpWith,
   UserRow,
 } from '@kutup/session/api-types'
 
@@ -37,6 +43,15 @@ export function useAdminStats() {
   })
 }
 
+/** The domain after the @ of this server's addresses. */
+export function useServerName() {
+  return useQuery({
+    queryKey: ['auth-settings', 'server-name'],
+    staleTime: Infinity,
+    queryFn: async () => (await api.get<{ chat?: { serverName?: string } }>('/auth/settings')).data.chat?.serverName ?? '',
+  })
+}
+
 export function useAdminUsers() {
   return useQuery({
     queryKey: usersKey,
@@ -44,16 +59,47 @@ export function useAdminUsers() {
   })
 }
 
+/**
+ * A temporary password registered for a new key binding (OPAQUE,
+ * docs/plans/opaque.md): the server keeps a record it cannot test guesses
+ * against, and never sees the password. The account sets up its own keys,
+ * and its own password, at its first sign-in.
+ */
+async function temporaryPassword(tempPassword: string, auth: { grant: string } | null) {
+  const draw = async () => {
+    const keyBinding = crypto.randomUUID()
+    return { keyBinding, ...(await opaqueRegister(tempPassword, keyBinding, null, auth)) }
+  }
+  // A binding someone else has is drawn again, once.
+  try {
+    return await draw()
+  } catch (error) {
+    if (conflictCode(error) !== 'keyBindingTaken') throw error
+    return await draw()
+  }
+}
+
+
+/**
+ * A grant to reset `id`: the administrator proves their own password first
+ * (a reauth grant for `adminReset`), which the server exchanges for one bound
+ * to that account.
+ */
+async function resetGrant(id: string, adminPassword: string): Promise<string> {
+  const grant = await accountGrant(adminPassword, 'adminReset')
+  const { data } = await api.post<{ grant: string }>(`/admin/users/${encodeURIComponent(id)}/reset-grant`, { grant })
+  return data.grant
+}
+
 export interface CreateUserInput {
-  email: string
   username: string
   tempPassword: string
   storageQuotaBytes: number
 }
 
 export function useCreateUser() {
-  return useAdminMutation(async (body: CreateUserInput) => {
-    await api.post('/admin/users', body)
+  return useAdminMutation(async ({ username, tempPassword, storageQuotaBytes }: CreateUserInput) => {
+    await api.post('/admin/users', { username, ...(await temporaryPassword(tempPassword, null)), storageQuotaBytes })
   })
 }
 
@@ -75,15 +121,27 @@ export function useForceDisable2fa() {
   })
 }
 
+export interface ResetInput {
+  id: string
+  tempPassword: string
+  /** The administrator's own password, proven again first; read once. */
+  adminPassword: OneUseSecret
+}
+
 export function useRotateTempPassword() {
-  return useAdminMutation(async ({ id, tempPassword }: { id: string; tempPassword: string }) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, { tempPassword })
+  return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
+    const grant = await resetGrant(id, adminPassword.take())
+    await api.post(`/admin/users/${encodeURIComponent(id)}/rotate-temp-password`, {
+      grant,
+      ...(await temporaryPassword(tempPassword, { grant })),
+    })
   })
 }
 
 export function useWipeUser() {
-  return useAdminMutation(async ({ id, tempPassword }: { id: string; tempPassword: string }) => {
-    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { tempPassword })
+  return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
+    const grant = await resetGrant(id, adminPassword.take())
+    await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { grant, ...(await temporaryPassword(tempPassword, { grant })) })
   })
 }
 
@@ -141,6 +199,45 @@ export function useAdminSettings() {
 export function useUpdateAdminSettings() {
   return useAdminMutation(async (body: Partial<AdminSettings>) => {
     await api.put('/admin/settings', body)
+  })
+}
+
+// --- referral codes (docs/plans/registration-codes.md) -------------------
+
+const codesKey = [...adminKey, 'registration-codes'] as const
+
+export function useRegistrationCodes() {
+  return useQuery({
+    queryKey: codesKey,
+    queryFn: async () => (await api.get<RegistrationCode[]>('/admin/registration-codes')).data,
+  })
+}
+
+/** Makes a code; the result holds its text, which the server never returns again. */
+export function useCreateRegistrationCode() {
+  return useAdminMutation(
+    async (body: { note: string; expiresAt: string | null; maxUses: number | null }) =>
+      (await api.post<CreatedRegistrationCode>('/admin/registration-codes', body)).data,
+  )
+}
+
+export function useRevokeRegistrationCode() {
+  return useAdminMutation(async (id: string) => (await api.post<RegistrationCode>(`/admin/registration-codes/${id}/revoke`)).data)
+}
+
+export function useRegistrationCodeUses(id: string | null) {
+  return useQuery({
+    queryKey: [...codesKey, id, 'uses'],
+    enabled: id !== null,
+    queryFn: async () => (await api.get<RegistrationCodeUse[]>(`/admin/registration-codes/${id}/uses`)).data,
+  })
+}
+
+/** The code an account signed up with, or null. */
+export function useUserRegistrationCode(userId: string) {
+  return useQuery({
+    queryKey: [...usersKey, userId, 'registration-code'],
+    queryFn: async () => (await api.get<SignedUpWith | null>(`/admin/users/${userId}/registration-code`)).data,
   })
 }
 
@@ -231,7 +328,6 @@ export interface LinkReport {
   shareCreatedAt: string
   shareRemovedAt: string | null
   ownerUserId: string
-  ownerEmail: string
   ownerUsername: string
   ownerIsActive: boolean
   openReportsOnLink: number
@@ -248,7 +344,6 @@ export interface FeedbackItem {
   createdAt: string
   /** Null when the account was deleted since. */
   userId: string | null
-  userEmail: string | null
   userUsername: string | null
   resolvedAt: string | null
   resolution: 'done' | 'dismissed' | 'forwarded' | null

@@ -1,13 +1,14 @@
 // Names unique in a folder, and files not uploaded twice
 // (docs/plans/drive-unique-names.md):
 //   1. the same file uploaded again is skipped; a different one under a
-//      taken name (case aside) asks Keep both / Replace / Skip;
+//      taken name (case aside) asks Keep both / Replace (a new version of
+//      the file there, office documents too; not notes and code, whose
+//      content is the text editor's state) / Skip;
 //   2. a folder dropped again goes into the folder already there and sends
 //      only what changed, asking once with "apply to all";
 //   3. renames refuse a taken name, case aside — but Turkish İ keeps its dot;
-//   4. items made without hashes (an older client) are filled in when the
-//      owner opens the folder, the later duplicate renamed `name (2)`;
-//   5. a file restored after its name was taken comes back as `name (2)`.
+//   4. a file restored after its name was taken is offered the next free
+//      name, and comes back under it (or stays in the trash).
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
@@ -31,11 +32,14 @@ async function uploadFolder(page: Page, dir: string) {
 const panel = (page: Page) => page.getByRole('region', { name: 'Uploads' })
 const conflict = (page: Page) => page.getByRole('dialog').filter({ hasText: 'is already here' })
 
-/** Uploads created on the server (tus `POST /api/uploads`). */
-function countUploads(page: Page): { count: number } {
-  const seen = { count: 0 }
+/** Uploads created on the server (tus `POST /api/uploads`); `versions`: those of a new version (`versionOf`). */
+function countUploads(page: Page): { count: number; versions: number } {
+  const seen = { count: 0, versions: 0 }
   page.on('request', (r) => {
-    if (r.method() === 'POST' && /\/api\/uploads\/?$/.test(new URL(r.url()).pathname)) seen.count++
+    if (r.method() !== 'POST' || !/\/api\/uploads\/?$/.test(new URL(r.url()).pathname)) return
+    seen.count++
+    const meta = r.headers()['upload-metadata'] ?? ''
+    if (meta.split(',').some((pair) => pair.startsWith('versionOf '))) seen.versions++
   })
   return seen
 }
@@ -55,49 +59,85 @@ test('the same file again is skipped; a different one under a taken name asks', 
   await mkdir(`${dir}/upper`, { recursive: true })
   await mkdir(`${dir}/third`, { recursive: true })
   await mkdir(`${dir}/fourth`, { recursive: true })
-  await writeFile(`${dir}/report.txt`, 'first version')
-  await writeFile(`${dir}/again/report.txt`, 'first version')
-  await writeFile(`${dir}/upper/REPORT.TXT`, 'a different file')
-  await writeFile(`${dir}/third/report.txt`, 'the replacement')
-  await writeFile(`${dir}/fourth/report.txt`, 'never sent')
+  await writeFile(`${dir}/report.dat`, 'first version')
+  await writeFile(`${dir}/again/report.dat`, 'first version')
+  await writeFile(`${dir}/upper/REPORT.DAT`, 'a different file')
+  await writeFile(`${dir}/third/report.dat`, 'the replacement')
+  await writeFile(`${dir}/fourth/report.dat`, 'never sent')
 
-  await upload(page, `${dir}/report.txt`)
-  await expect(item(page, 'report.txt')).toBeVisible({ timeout: 60_000 })
+  await upload(page, `${dir}/report.dat`)
+  await expect(item(page, 'report.dat')).toBeVisible({ timeout: 60_000 })
   await expect.poll(() => uploads.count).toBe(1)
 
   // The same bytes under the same name: nothing is sent.
-  await upload(page, `${dir}/again/report.txt`)
+  await upload(page, `${dir}/again/report.dat`)
   await expect(panel(page).getByText('Already in this folder')).toBeVisible({ timeout: 60_000 })
   expect(uploads.count).toBe(1)
 
   // A different file whose name differs only in case: asked.
-  await upload(page, `${dir}/upper/REPORT.TXT`)
+  await upload(page, `${dir}/upper/REPORT.DAT`)
   await expect(conflict(page)).toBeVisible({ timeout: 60_000 })
-  await expect(conflict(page)).toContainText('“REPORT.TXT” is already here')
-  await expect(conflict(page)).toContainText('“REPORT (2).TXT”')
+  await expect(conflict(page)).toContainText('“REPORT.DAT” is already here')
+  await expect(conflict(page)).toContainText('“REPORT (2).DAT”')
   // One file: nothing to apply to the rest.
   await expect(conflict(page).getByRole('checkbox')).toHaveCount(0)
   await conflict(page).getByRole('button', { name: 'Keep both' }).click()
-  await expect(item(page, 'REPORT (2).TXT')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'report.txt')).toBeVisible()
+  await expect(item(page, 'REPORT (2).DAT')).toBeVisible({ timeout: 60_000 })
+  await expect(item(page, 'report.dat')).toBeVisible()
 
-  // Replace: the one there goes to the trash, the new one takes its name.
-  await upload(page, `${dir}/third/report.txt`)
+  // Replace: the new content becomes the newest version of the file there
+  // (Proton's Replace), uploaded over tus as a version (`versionOf`) — no
+  // new file, nothing in the trash.
+  const beforeReplace = uploads.count
+  await upload(page, `${dir}/third/report.dat`)
   await conflict(page).getByRole('button', { name: 'Replace' }).click()
   await expect(panel(page).getByText('Uploads complete')).toBeVisible({ timeout: 60_000 })
+  expect(uploads.count).toBe(beforeReplace + 1)
+  expect(uploads.versions).toBe(1)
   await page.reload()
-  await expect(item(page, 'report.txt')).toHaveCount(1, { timeout: 60_000 })
-  await expect(item(page, 'report (2).txt')).toHaveCount(0)
+  await expect(item(page, 'report.dat')).toHaveCount(1, { timeout: 60_000 })
+  await expect(item(page, 'report (2).dat')).toHaveCount(0)
   await openSection(page, 'Trash')
-  await expect(item(page, 'report.txt')).toBeVisible({ timeout: 30_000 })
+  await expect(item(page, 'REPORT.DAT')).toHaveCount(0)
+  await expect(item(page, 'report.dat')).toHaveCount(0)
   await openSection(page, 'My files')
+  // The same replacement again is now the same file: skipped.
+  await upload(page, `${dir}/third/report.dat`)
+  await expect(panel(page).getByText('Already in this folder').first()).toBeVisible({ timeout: 60_000 })
 
   // Skip: nothing changes.
   const before = uploads.count
-  await upload(page, `${dir}/fourth/report.txt`)
+  await upload(page, `${dir}/fourth/report.dat`)
   await conflict(page).getByRole('button', { name: 'Skip' }).click()
   await expect(panel(page).getByText('Skipped')).toBeVisible({ timeout: 30_000 })
   expect(uploads.count).toBe(before)
+  await context.close()
+})
+
+test('an office document is replaced as a new version too', async ({ browser }, testInfo) => {
+  // Office documents, PDFs and whiteboards take a Replace like any file
+  // (notes do not: their content is Yjs state). The server sets the version
+  // at the collaboration log's head, and tabs that have the document open
+  // reopen from it; that part needs OnlyOffice open in a second page and is
+  // left to the collaboration specs.
+  const { context, page } = await freshDrive(browser, 'uniquedocx')
+  const uploads = countUploads(page)
+  const dir = testInfo.outputPath('docx')
+  await mkdir(`${dir}/new`, { recursive: true })
+  await writeFile(`${dir}/plan.docx`, 'the first draft')
+  await writeFile(`${dir}/new/plan.docx`, 'the second draft')
+
+  await upload(page, `${dir}/plan.docx`)
+  await expect(item(page, 'plan.docx')).toBeVisible({ timeout: 60_000 })
+  await upload(page, `${dir}/new/plan.docx`)
+  await expect(conflict(page)).toBeVisible({ timeout: 60_000 })
+  await conflict(page).getByRole('button', { name: 'Replace' }).click()
+  await expect(panel(page).getByText('Uploads complete')).toBeVisible({ timeout: 60_000 })
+  expect(uploads.count).toBe(2)
+  expect(uploads.versions).toBe(1)
+  await page.reload()
+  await expect(item(page, 'plan.docx')).toHaveCount(1, { timeout: 60_000 })
+  await expect(item(page, 'plan (2).docx')).toHaveCount(0)
   await context.close()
 })
 
@@ -170,74 +210,35 @@ test('a rename onto a taken name is refused, case aside; Turkish İ keeps its do
   await context.close()
 })
 
-test('items without hashes are filled in, and a restore into a taken name keeps both', async ({ browser }, testInfo) => {
+test('a restore into a taken name is offered the next free name', async ({ browser }, testInfo) => {
   test.slow()
-  const { context, page } = await freshDrive(browser, 'uniquefill')
-  const dir = testInfo.outputPath('fill')
+  const { context, page } = await freshDrive(browser, 'uniquerestore')
+  const dir = testInfo.outputPath('restore')
   await mkdir(`${dir}/second`, { recursive: true })
   await writeFile(`${dir}/plan.txt`, 'one')
   await writeFile(`${dir}/second/plan.txt`, 'two')
 
-  // An older client: no name hashes, and it does not see what is there
-  // (so this one does not stop it either). Nothing is filled in meanwhile.
-  const hiddenFolders = new Set<string>()
-  const hidden: string[] = []
-  let hideFiles = false
-  await context.route('**/name-hashes', (route) => route.abort())
-  await context.route('**/api/collections', async (route) => {
-    const request = route.request()
-    if (request.method() === 'POST') {
-      const body = request.postDataJSON() as Record<string, unknown>
-      delete body.nameHash
-      hiddenFolders.add(String(body.id))
-      return route.continue({ postData: JSON.stringify(body) })
-    }
-    const response = await route.fetch()
-    const rows = (await response.json()) as { id: string }[]
-    // Only the first of each made here is hidden.
-    await route.fulfill({ response, json: rows.filter((r) => !hidden.includes(r.id)) })
-  })
-  await context.route('**/api/collections/*/files', async (route) => {
-    if (!hideFiles) return route.continue()
-    await route.fulfill({ json: [] })
-  })
-  await context.route('**/api/uploads/', async (route) => {
-    const headers = route.request().headers()
-    const meta = headers['upload-metadata']
-    if (route.request().method() !== 'POST' || !meta) return route.continue()
-    const kept = meta.split(',').filter((pair) => !pair.startsWith('nameHash '))
-    await route.continue({ headers: { ...headers, 'upload-metadata': kept.join(',') } })
-  })
-
-  await createFolder(page, 'Same')
-  hidden.push(...hiddenFolders)
-  await page.reload()
-  await createFolder(page, 'Same')
   await upload(page, `${dir}/plan.txt`)
   await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
-  hideFiles = true
-  await page.reload()
+  await itemAction(page, 'plan.txt', 'Move to trash')
+  await expect(item(page, 'plan.txt')).toHaveCount(0, { timeout: 30_000 })
+  // Another file takes the name meanwhile.
   await upload(page, `${dir}/second/plan.txt`)
-  await expect(panel(page).getByText('In My files')).toHaveCount(1, { timeout: 60_000 })
-  await context.unrouteAll({ behavior: 'wait' })
+  await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
 
-  // The owner opens the folder: both pairs are there, and the later of each
-  // is renamed.
-  await page.reload()
-  await expect(item(page, 'Same (2)')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'plan (2).txt')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'Same')).toHaveCount(1)
-  await expect(item(page, 'plan.txt')).toHaveCount(1)
-
-  // A file restored after its name was taken comes back beside it.
-  await itemAction(page, 'plan (2).txt', 'Move to trash')
-  await expect(item(page, 'plan (2).txt')).toHaveCount(0, { timeout: 30_000 })
-  await renameItem(page, 'plan.txt', 'plan (2).txt')
   await openSection(page, 'Trash')
-  await itemAction(page, 'plan (2).txt', 'Restore')
-  await expect(item(page, 'plan (2).txt')).toHaveCount(0, { timeout: 30_000 })
+  const asked = page.getByRole('dialog').filter({ hasText: 'is already there' })
+  // Left in the trash when the person says so.
+  await itemAction(page, 'plan.txt', 'Restore')
+  await expect(asked).toContainText('“plan.txt” is already there', { timeout: 30_000 })
+  await asked.getByRole('button', { name: 'Leave in trash' }).click()
+  await expect(item(page, 'plan.txt')).toBeVisible()
+  // Restored under the name offered.
+  await itemAction(page, 'plan.txt', 'Restore')
+  await asked.getByRole('button', { name: 'Restore as “plan (2).txt”' }).click()
+  await expect(item(page, 'plan.txt')).toHaveCount(0, { timeout: 30_000 })
   await openSection(page, 'My files')
+  await expect(item(page, 'plan.txt')).toBeVisible({ timeout: 60_000 })
   await expect(item(page, 'plan (2).txt')).toBeVisible({ timeout: 60_000 })
-  await expect(item(page, 'plan (3).txt')).toBeVisible({ timeout: 60_000 })
   await context.close()
 })

@@ -9,6 +9,7 @@ use base64::Engine;
 use clap::Subcommand;
 use rand::RngCore;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::api::federation::IncomingShare;
 use crate::api::{
@@ -19,15 +20,16 @@ use crate::context::{require_session, Ctx};
 use crate::cryptohelpers::{decrypt_collection_key, decrypt_collections, find_collection};
 use crate::errors::NotFound;
 use crate::session::Session;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 #[derive(Subcommand)]
 pub enum ShareCmd {
-    /// Share a folder with a Kutup user.
+    /// Share a folder with a Kutup user on this server (user@server).
     Folder {
         collection_id: String,
-        email: String,
+        address: String,
         #[arg(long)]
         upload: bool,
         #[arg(long)]
@@ -97,7 +99,7 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
     match cmd {
         ShareCmd::Folder {
             collection_id,
-            email,
+            address,
             upload,
             delete,
             share_anyway,
@@ -105,7 +107,7 @@ pub fn run(profile: &str, json: bool, cmd: &ShareCmd) -> Result<()> {
             profile,
             json,
             collection_id,
-            email,
+            address,
             *upload,
             *delete,
             *share_anyway,
@@ -172,7 +174,7 @@ fn share_folder(
     profile: &str,
     json: bool,
     collection_id: &str,
-    email: &str,
+    address: &str,
     upload: bool,
     delete: bool,
     share_anyway: bool,
@@ -182,8 +184,8 @@ fn share_folder(
 
     let recipient = ctx
         .client
-        .get_user_by_email(email)
-        .with_context(|| format!("look up user {email}"))?;
+        .get_user_by_address(address)
+        .with_context(|| format!("look up user {address}"))?;
     confirm_recipient(
         &ctx,
         profile,
@@ -198,10 +200,9 @@ fn share_folder(
         .try_into()
         .context("master key must be 32 bytes")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
-    let (_, domain) = recipient
-        .account
-        .split_once('@')
-        .ok_or_else(|| anyhow!("recipient account is invalid"))?;
+    // The address led to this account (server-asserted): the share is to it.
+    let person = AccountRef::new(&recipient.server, &recipient.account_id)
+        .context("the lookup answered no account")?;
     let envelope = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
         &collection_key,
         collection_id,
@@ -211,10 +212,10 @@ fn share_folder(
             .find(|collection| collection.id == collection_id)
             .ok_or_else(|| NotFound(format!("collection {collection_id} not found")))?
             .key_epoch,
-        &format!("{}@{domain}", ctx.session.username),
+        &ctx.session.person()?,
         &identity.incarnation_id(),
         identity.drive_signing_key(),
-        &recipient.account,
+        &person,
         &recipient.account_incarnation_id,
         &b64()
             .decode(&recipient.drive_hpke_public_key)
@@ -225,7 +226,8 @@ fn share_folder(
         .share_collection(
             collection_id,
             &ShareRequest {
-                recipient_user_id: recipient.user_id,
+                // On this server the account id is the user id.
+                recipient_user_id: recipient.account_id,
                 named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
@@ -235,9 +237,11 @@ fn share_folder(
         .context("share")?;
 
     if json {
-        crate::output::print_json(&serde_json::json!({ "shared": collection_id, "with": email }))?;
+        crate::output::print_json(
+            &serde_json::json!({ "shared": collection_id, "with": address }),
+        )?;
     } else {
-        println!("Shared folder with {email}");
+        println!("Shared folder with {address}");
     }
     Ok(())
 }
@@ -278,7 +282,7 @@ fn share_federated(
     delete: bool,
     share_anyway: bool,
 ) -> Result<()> {
-    let (username, server) = target
+    let (_, server) = target
         .rsplit_once('@')
         .filter(|(u, _)| !u.is_empty())
         .ok_or_else(|| anyhow!("format must be username@server (e.g. alice@other.example)"))?;
@@ -288,7 +292,7 @@ fn share_federated(
 
     let remote = ctx
         .client
-        .get_fed_pubkey(username, server)
+        .get_user_by_address(target)
         .context("fetch remote public key")?;
     confirm_recipient(
         &ctx,
@@ -310,15 +314,20 @@ fn share_federated(
         .try_into()
         .context("master key must be 32 bytes")?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key_array)?;
-    let local_domain = ctx.client.settings()?.chat.server_name;
+    // The address led to this account on its server (server-asserted).
+    let person = AccountRef::new(&remote.server, &remote.account_id)
+        .context("the lookup answered no account")?;
+    if person.server != server {
+        bail!("the lookup of {target} answered for an account on another server");
+    }
     let envelope = kutup_crypto::named_share::NamedShareEnvelopeV1::seal(
         &collection_key,
         collection_id,
         collection.key_epoch,
-        &format!("{}@{local_domain}", ctx.session.username),
+        &ctx.session.person()?,
         &identity.incarnation_id(),
         identity.drive_signing_key(),
-        &remote.account,
+        &person,
         &remote.account_incarnation_id,
         &b64()
             .decode(&remote.drive_hpke_public_key)
@@ -330,8 +339,8 @@ fn share_federated(
         .share_federated(
             collection_id,
             &FederatedShareRequest {
-                recipient_username: username.to_string(),
-                recipient_server: server.to_string(),
+                recipient_server: person.server.clone(),
+                recipient_account_id: person.account_id.clone(),
                 named_share_envelope: envelope.encode_b64()?,
                 can_upload: upload,
                 can_delete: delete,
@@ -429,6 +438,7 @@ fn unwrap_shared_collection_key(s: &IncomingShare, sess: &Session) -> Result<Vec
         name_revision: s.name_revision,
         epoch_statement: s.epoch_statement.clone(),
         epoch_statement_hash: s.epoch_statement_hash.clone(),
+        owner_server: Some(s.remote_domain.clone()),
         owner_account: Some(s.owner_account.clone()),
         owner_incarnation_id: Some(s.owner_incarnation_id.clone()),
         owner_drive_signing_public_key: Some(s.owner_signing_public_key.clone()),
@@ -592,8 +602,15 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         name: name.clone(),
         mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as u64,
+        sha256: Some(base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&data))),
         media: None,
     };
+    // Its name's hash in the shared folder (docs/plans/drive-unique-names.md).
+    let keys = shared_keyring(&ctx, &share, &col_key)?;
+    let name_hash = crate::names::name_hash(
+        &crate::names::folder_hash_key(&keys, &share.remote_collection_id)?,
+        &name,
+    )?;
     let record = crate::file_crypto::create(
         &share.remote_collection_id,
         share.key_epoch,
@@ -610,10 +627,14 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
             &record.id,
             &record.metadata_envelope,
             &record.file_key_envelope,
+            &name_hash,
             encrypted,
         )
         .map_err(|err| {
             let hint = match err.downcast_ref::<ApiError>() {
+                Some(e) if e.name_taken.is_some() => {
+                    "an item with this name is already in the share"
+                }
                 Some(e) if e.status == 403 => "share doesn't permit uploads",
                 Some(e) if e.status == 413 => "share upload quota exceeded",
                 _ => "upload",
@@ -668,6 +689,7 @@ fn decrypt_incoming_name(s: &IncomingShare, sess: &Session) -> Result<String> {
         name_revision: s.name_revision,
         epoch_statement: s.epoch_statement.clone(),
         epoch_statement_hash: s.epoch_statement_hash.clone(),
+        owner_server: None,
         owner_account: None,
         owner_incarnation_id: None,
         owner_drive_signing_public_key: None,

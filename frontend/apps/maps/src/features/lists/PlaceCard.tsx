@@ -3,11 +3,13 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { accountOfKey } from '@kutup/crypto/accountRef'
+import { useAccountName } from '@kutup/drive-core/accountName'
+import { personOfAccount, usePeople } from '@kutup/drive-core/people'
 import { addPlace, listTitle, placesOf, removePlace } from '@kutup/map/list'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { formatFileDate } from '@kutup/ui/lib/format'
-import { PersonName } from '../people/PersonName'
 import { samePlace, useAtlas } from './atlasContext'
 import { sendToChat } from './chat'
 import type { ListEntry } from './lists'
@@ -74,15 +76,7 @@ export function PlaceCard() {
       </header>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {place.note ? <p className="whitespace-pre-wrap break-words text-sm">{place.note}</p> : null}
-        {place.addedBy ? (
-          <p className="text-xs text-muted-foreground">
-            <PersonName
-              account={place.addedBy}
-              avatar={false}
-              format={(name) => t('list.addedBy', { name, date: formatFileDate(place.addedAt, i18n.language) })}
-            />
-          </p>
-        ) : null}
+        <AddedBy addedBy={place.addedBy ?? ''} date={formatFileDate(place.addedAt, i18n.language)} />
         <div className="space-y-2">
           <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('card.lists')}</h3>
           {rows.length === 0 ? <p className="text-sm text-muted-foreground">{t('card.noLists')}</p> : null}
@@ -127,4 +121,16 @@ export function PlaceCard() {
       </footer>
     </section>
   )
+}
+
+/** Who added a place, by their name now; the date alone when nobody can say. */
+function AddedBy({ addedBy, date }: { addedBy: string; date: string | null }) {
+  const { t } = useTranslation()
+  const account = accountOfKey(addedBy)
+  const address = useAccountName(account)
+  const people = usePeople()
+  if (!date) return null
+  // Their own profile name once they gave you their key, else their address.
+  const name = account && address.data ? personOfAccount(people.data, account, address.data).name : null
+  return <p className="text-xs text-muted-foreground">{name ? t('list.addedBy', { name, date }) : t('list.addedOn', { date })}</p>
 }

@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
-use crate::mail::sender_rules::{normalise, Kind};
+use crate::mail::sender_rules::{normalise_for, Kind};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -94,7 +94,7 @@ pub async fn set(
         .patterns
         .iter()
         .map(|p| {
-            normalise(p)
+            normalise_for(&state.config.chat_server_name, p)
                 .ok_or_else(|| AppError::bad_request(format!("not an address or domain: {p}")))
         })
         .collect::<AppResult<_>>()?;

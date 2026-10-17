@@ -11,7 +11,7 @@ use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
 use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey, Mode};
 use hpke_rs_rust_crypto::HpkeRustCrypto;
 use kutup_chat_proto::{
-    anonymous_mls_delivery_aad, derive_group_delivery_capability, AccountAddress,
+    anonymous_mls_delivery_aad, derive_group_delivery_capability, AccountRef,
     AnonymousMlsDeviceEnvelopeV1, AnonymousMlsSubmissionV1, MlsAnonymousDeliverySuiteV1,
     ANONYMOUS_MLS_DELIVERY_CONTEXT, MLS_PROTOCOL_VERSION,
 };
@@ -68,10 +68,10 @@ impl MlsClient {
         mls_group_id: &[u8],
         conversation_id: Uuid,
         incarnation: u64,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
     ) -> Result<DerivedMlsDeliveryCapability> {
         validate_group_id(mls_group_id)?;
-        if conversation_id.is_nil() || incarnation == 0 || recipient.server.is_none() {
+        if conversation_id.is_nil() || incarnation == 0 {
             return Err(ChatError::Invalid(
                 "MLS delivery capability identifiers are invalid".into(),
             ));
@@ -115,17 +115,13 @@ impl MlsClient {
     /// delivery. Device keys must come from one account-manifest-verified manifest.
     pub async fn create_anonymous_submission(
         &self,
-        recipient: AccountAddress,
+        recipient: AccountRef,
         send_id: Uuid,
         capability: [u8; 16],
         devices: &[AnonymousMlsRecipientDevice],
         mls_ciphertext: &[u8],
     ) -> Result<AnonymousMlsSubmissionV1> {
-        if recipient.server.is_none()
-            || send_id.is_nil()
-            || devices.is_empty()
-            || devices.len() > 32
-            || mls_ciphertext.is_empty()
+        if send_id.is_nil() || devices.is_empty() || devices.len() > 32 || mls_ciphertext.is_empty()
         {
             return Err(ChatError::Invalid(
                 "anonymous MLS delivery identifiers are invalid".into(),
@@ -189,11 +185,11 @@ impl MlsClient {
     /// verification before its application plaintext is processed.
     pub async fn open_anonymous_envelope(
         &self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         send_id: Uuid,
         envelope: &AnonymousMlsDeviceEnvelopeV1,
     ) -> Result<Vec<u8>> {
-        if recipient.server.is_none() || send_id.is_nil() || envelope.device_id == 0 {
+        if send_id.is_nil() || envelope.device_id == 0 {
             return Err(ChatError::Invalid(
                 "anonymous MLS envelope identifiers are invalid".into(),
             ));
@@ -342,9 +338,17 @@ mod tests {
             let bob_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
             let alice = MlsClient::new(alice_db);
             let bob = MlsClient::new(bob_db);
-            alice.initialize("alice@a.example#1").await.unwrap();
-            let bob_public = bob.initialize("bob@b.example#1").await.unwrap();
-            let recipient: AccountAddress = "bob@b.example".parse().unwrap();
+            alice
+                .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@a.example#1")
+                .await
+                .unwrap();
+            let bob_public = bob
+                .initialize("aci:00000000-0000-4000-8000-81b637d8fcd2@b.example#1")
+                .await
+                .unwrap();
+            let recipient: AccountRef = "aci:00000000-0000-4000-8000-81b637d8fcd2@b.example"
+                .parse()
+                .unwrap();
             let send_id = Uuid::from_u128(7);
             let submission = alice
                 .create_anonymous_submission(

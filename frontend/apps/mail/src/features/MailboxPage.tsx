@@ -64,11 +64,11 @@ const SORTS: ListSort[] = ['newest', 'oldest', 'largest', 'smallest']
 type Lookup = ReturnType<typeof useContactLookup>
 
 /** Who a row names: the sender for received mail, the recipients for sent mail and drafts; by their contact names. */
-function correspondent(message: MailMessage, t: (key: string) => string, contacts: Lookup, own: string): string {
+function correspondent(message: MailMessage, t: (key: string) => string, contacts: Lookup, own: (address: string) => boolean): string {
   // A conversation names everyone who wrote in it, you as "me" (Proton's senders), unless only you did.
   const senders = message.conversation?.senders ?? []
-  if (senders.some((m) => m.address.toLowerCase() !== own)) {
-    return senders.map((m) => (m.address.toLowerCase() === own ? t('list.me') : nameFor(m, contacts.find(m.address)))).join(', ')
+  if (senders.some((m) => !own(m.address))) {
+    return senders.map((m) => (own(m.address) ? t('list.me') : nameFor(m, contacts.find(m.address)))).join(', ')
   }
   if (message.direction === 'outbound') {
     const names = [...message.to, ...message.cc].map((m) => nameFor(m, contacts.find(m.address)))
@@ -187,7 +187,7 @@ export function MailboxPage() {
   const list = byContent ? contentList : serverList
   const total = list.data?.pages[0]?.total ?? null
   const pages = pageCount(total ?? 0, pageSize)
-  const own = account.data?.address.toLowerCase() ?? ''
+  const own = account.data?.isOwnAddress ?? (() => false)
   const [emptying, setEmptying] = useState(false)
   // Trash and Spam can be emptied, and auto-delete applies to them (Proton).
   const unwanted = !placeKind && (fixed === 'trash' || fixed === 'spam') ? fixed : null
@@ -622,13 +622,13 @@ export function MailboxPage() {
                 <Copy />
                 {t('person.copy')}
               </ContextMenuItem>
-              {single.direction === 'inbound' && singlePerson.address.toLowerCase() !== account.data?.address.toLowerCase() ? (
+              {single.direction === 'inbound' && !own(singlePerson.address) ? (
                 <ContextMenuItem onSelect={() => openBlockSender([singlePerson.address.toLowerCase()])}>
                   <Ban />
                   {t('person.block')}
                 </ContextMenuItem>
               ) : null}
-              {!contacts.find(singlePerson.address) && singlePerson.address.toLowerCase() !== account.data?.address.toLowerCase() ? (
+              {!contacts.find(singlePerson.address) && !own(singlePerson.address) ? (
                 <ContextMenuItem onSelect={() => saveContact(singlePerson)}>
                   <UserPlus />
                   {t('person.saveContact')}

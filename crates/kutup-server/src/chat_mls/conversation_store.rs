@@ -27,12 +27,12 @@ impl MlsRepository {
             let mut previous = None;
             for member in &request.members {
                 member.validate().map_err(AppError::bad_request)?;
-                if member.address.server.as_deref() != Some(server_name) {
+                if member.account.server != server_name {
                     return Err(AppError::forbidden(
                         "replicated MLS genesis contains a non-local member",
                     ));
                 }
-                let address = member.address.canonical();
+                let address = member.account.to_string();
                 if previous
                     .as_ref()
                     .is_some_and(|prior: &String| address <= *prior)
@@ -75,16 +75,15 @@ impl MlsRepository {
 
         let mut tx = self.pool.begin().await?;
         if let Some(creator_user_id) = creator_user_id {
-            let creator_username: String =
-                sqlx::query_scalar("SELECT username FROM users WHERE id = $1 FOR UPDATE")
-                    .bind(creator_user_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            let creator_address = format!("{creator_username}@{server_name}");
+            sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+                .bind(creator_user_id)
+                .execute(&mut *tx)
+                .await?;
+            let creator = crate::account_ids::local(server_name, creator_user_id)?;
             if !request
                 .members
                 .iter()
-                .any(|member| member.address.canonical() == creator_address)
+                .any(|member| member.account == creator)
             {
                 return Err(AppError::forbidden(
                     "MLS conversation creator must be in the initial roster",
@@ -92,19 +91,15 @@ impl MlsRepository {
             }
             if request.genesis.kind == MlsConversationKindV1::Group
                 && (request.initial_devices.len() != 1
-                    || request.initial_devices[0].address.canonical() != creator_address)
+                    || request.initial_devices[0].account != creator)
             {
                 return Err(AppError::bad_request(
                     "group genesis must bind exactly the creating account's current MLS device",
                 ));
             }
             for device in &request.initial_devices {
-                let device_user_id: Option<Uuid> = sqlx::query_scalar(
-                    "SELECT id FROM users WHERE username = $1 AND is_active = true",
-                )
-                .bind(&device.address.username)
-                .fetch_optional(&mut *tx)
-                .await?;
+                let device_user_id =
+                    crate::account_ids::local_user(&mut *tx, server_name, &device.account).await?;
                 let device_user_id = device_user_id.ok_or_else(|| {
                     AppError::conflict("an initial MLS device account does not exist")
                 })?;
@@ -154,23 +149,26 @@ impl MlsRepository {
                 ));
             }
             if creator_user_id.is_some() {
-                let existing_devices: Vec<(String, i32)> = sqlx::query_as(
-                    "SELECT u.username, d.device_id
+                let existing_devices: Vec<(Uuid, i32)> = sqlx::query_as(
+                    "SELECT d.user_id, d.device_id
                      FROM chat_mls_local_member_devices d
-                     JOIN users u ON u.id = d.user_id
                      WHERE d.conversation_id = $1 AND d.incarnation = $2
                        AND d.removed_epoch IS NULL
-                     ORDER BY u.username, d.device_id",
+                     ORDER BY d.user_id, d.device_id",
                 )
                 .bind(request.genesis.conversation_id)
                 .bind(request.genesis.incarnation as i64)
                 .fetch_all(&mut *tx)
                 .await?;
-                let requested_devices = request
+                let mut requested_devices = request
                     .initial_devices
                     .iter()
-                    .map(|device| (device.address.username.clone(), device.device_id as i32))
-                    .collect::<Vec<_>>();
+                    .map(|device| {
+                        crate::account_ids::id_of(&device.account)
+                            .map(|id| (id, device.device_id as i32))
+                    })
+                    .collect::<AppResult<Vec<_>>>()?;
+                requested_devices.sort();
                 if existing_devices != requested_devices {
                     return Err(AppError::conflict(
                         "MLS conversation genesis is bound to another initial device set",
@@ -234,11 +232,11 @@ impl MlsRepository {
         for member in request
             .members
             .iter()
-            .filter(|member| member.address.server.as_deref() == Some(server_name))
+            .filter(|member| member.account.server == server_name)
         {
             let local_user_id: Option<Uuid> =
-                sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-                    .bind(&member.address.username)
+                sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active = true")
+                    .bind(crate::account_ids::id_of(&member.account)?)
                     .fetch_optional(&mut *tx)
                     .await?;
             let local_user_id = local_user_id.ok_or_else(|| {
@@ -260,12 +258,12 @@ impl MlsRepository {
             .await?;
         }
         for device in &request.initial_devices {
-            if device.address.server.as_deref() != Some(server_name) {
+            if device.account.server != server_name {
                 continue;
             }
             let local_user_id: Uuid =
-                sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-                    .bind(&device.address.username)
+                sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active = true")
+                    .bind(crate::account_ids::id_of(&device.account)?)
                     .fetch_one(&mut *tx)
                     .await?;
             sqlx::query(

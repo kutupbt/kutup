@@ -18,11 +18,10 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-use crate::api::versions::NewVersion;
 use crate::api::Client;
 use kutup_crypto::asset;
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 pub fn is_excalidraw(name: &str) -> bool {
     name.to_lowercase().ends_with(".excalidraw")
@@ -30,11 +29,14 @@ pub fn is_excalidraw(name: &str) -> bool {
 
 /// Upload-side: extract inline images from the freshly-uploaded whiteboard at
 /// `local_path`, upload them as encrypted assets, and re-snapshot the scene.
+/// `folder` is the file's folder and its names' hash key: the metadata's
+/// size and SHA-256 follow the new snapshot.
 pub fn extract_and_upload(
     client: &Client,
     file_id: &str,
-    file_key: &[u8],
+    file_key: &[u8; 32],
     generation: u32,
+    folder: (&str, &[u8; 32]),
     local_path: &std::path::Path,
 ) -> Result<()> {
     let raw = std::fs::read(local_path).context("re-read excalidraw")?;
@@ -55,22 +57,41 @@ pub fn extract_and_upload(
     // Commit the status:"saved" flips as a fresh snapshot — the web reads the
     // newest snapshot on open, so it won't re-upload these assets.
     let out = serde_json::to_vec(&doc).context("re-encode excalidraw json")?;
-    let blob_context = DriveFileBlobContextV1::new(file_id, generation)?;
-    let encrypted = drive_object::encrypt_file_blob(&out, file_key, blob_context)
-        .context("encrypt snapshot")?;
-    client
-        .create_version(
-            file_id,
-            encrypted,
-            &NewVersion {
-                // The whole scene: a whiteboard version is the file itself.
-                kind: "file".into(),
-                seq_at_snapshot: 0,
-                doc_key_id: 1,
-                ..Default::default()
-            },
-        )
-        .context("store version")?;
+    let (collection_id, hash_key) = folder;
+    let file = client
+        .list_files(collection_id)?
+        .into_iter()
+        .find(|f| f.id == file_id)
+        .context("the whiteboard is not listed in its folder")?;
+    if file.key_generation != generation {
+        anyhow::bail!("the whiteboard's key changed since its upload");
+    }
+    // The whole scene is a whiteboard's version, with its size, SHA-256 and
+    // content hash.
+    let landed = crate::version_upload::upload_version(
+        client,
+        &crate::version_upload::NoRecords,
+        crate::version_upload::VersionRequest {
+            file: &file,
+            file_key,
+            content: crate::version_upload::Content::Bytes(&out),
+            sha256: Sha256::digest(&out).into(),
+            hash_key: Some(hash_key),
+            based_on: None,
+            progress: crate::uploader::Progress::Quiet,
+            crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
+        },
+    )
+    .context("store version")?;
+    match landed {
+        crate::version_upload::Landed::Stored(_) => {}
+        crate::version_upload::Landed::Conflict(error) => {
+            return Err(error.context("store version: the whiteboard changed meanwhile"))
+        }
+        crate::version_upload::Landed::Busy => {
+            anyhow::bail!("store version: another upload of the whiteboard is under way")
+        }
+    }
     eprintln!("  + uploaded {uploaded} image asset(s) and re-snapshotted");
     Ok(())
 }

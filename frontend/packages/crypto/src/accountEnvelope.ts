@@ -6,6 +6,10 @@ export const ACCOUNT_ENVELOPE_PURPOSE = {
   recoveryMasterKey: 2,
   driveHpkePrivateKey: 3,
   chatBackupRoot: 4,
+  /** A mail address's OpenPGP secret key. */
+  mailAddressPrivateKey: 5,
+  /** A Kutup Pass vault's password and key file. */
+  passVaultSecret: 6,
 } as const
 
 export type AccountEnvelopePurpose =
@@ -15,18 +19,19 @@ export async function sealAccountEnvelope(
   plaintext: Uint8Array,
   key: Uint8Array,
   purpose: AccountEnvelopePurpose,
-  loginEmail: string,
+  /** What the account's keys are bound to (`session.envelopeBinding`), never a name. */
+  binding: string,
 ): Promise<string> {
   const module = await getCryptoWasm()
-  return module.sealAccountEnvelope(toBase64(plaintext), toBase64(key), purpose, loginEmail)
+  return module.sealAccountEnvelope(toBase64(plaintext), toBase64(key), purpose, binding)
 }
 
 export async function openAccountEnvelope(
   envelopeBase64: string,
   key: Uint8Array,
   purpose: AccountEnvelopePurpose,
-  loginEmail: string,
+  binding: string,
 ): Promise<Uint8Array> {
   const module = await getCryptoWasm()
-  return fromBase64(module.openAccountEnvelope(envelopeBase64, toBase64(key), purpose, loginEmail))
+  return fromBase64(module.openAccountEnvelope(envelopeBase64, toBase64(key), purpose, binding))
 }

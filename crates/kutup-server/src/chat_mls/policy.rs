@@ -205,6 +205,11 @@ pub(crate) async fn get_policy_history(
         .as_deref()
         .ok_or_else(|| AppError::not_found("MLS federation is not configured"))?;
     let is_local = domain == federation.server_name();
+    // Groups off: no MLS policy is shown, this server's or a peer's, and no
+    // peer is asked for one.
+    if state.mls_ordering.is_none() {
+        return Err(AppError::not_found("MLS service unavailable"));
+    }
     if is_local {
         active_policy(&state).await?;
     } else {

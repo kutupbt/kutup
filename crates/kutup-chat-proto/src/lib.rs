@@ -21,7 +21,6 @@ mod calls;
 pub mod content;
 mod extras;
 pub mod federation;
-mod history_transfer;
 mod identity;
 mod invite_link;
 mod locations;
@@ -59,7 +58,7 @@ pub use content::{
     ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
 };
 pub use content::{
-    ResendBody, SessionControlAction, SessionControlBody, UndecryptableBody,
+    PeerRenamedBody, ResendBody, SessionControlAction, SessionControlBody, UndecryptableBody,
     MAX_SESSION_CONTROL_SEND_IDS,
 };
 pub use extras::{
@@ -69,21 +68,17 @@ pub use federation::{
     FederatedChatTransaction, FederationDeliveryError, FederationDeliveryRejection,
     FederationDeliveryResponse, FEDERATED_CHAT_FEATURE,
 };
-pub use history_transfer::{
-    chat_history_transfer_transcript_hash, ChatHistoryArchiveFinalV1,
-    ChatHistoryArchiveFramePlaintextV1, ChatHistoryArchiveHeaderV1, ChatHistoryArchiveRecordV1,
-    ChatHistoryArchiveRecordsV1, ChatHistoryTransferAcceptanceV1, ChatHistoryTransferCompletionV1,
-    ChatHistoryTransferFrameV1, ChatHistoryTransferRequestV1, CHAT_HISTORY_TRANSFER_TTL_SECONDS,
-    CHAT_HISTORY_TRANSFER_VERSION, MAX_CHAT_HISTORY_TRANSFER_FRAMES,
-    MAX_CHAT_HISTORY_TRANSFER_FRAME_PLAINTEXT, MAX_CHAT_HISTORY_TRANSFER_PLAINTEXT,
-    MAX_CHAT_HISTORY_TRANSFER_RECORDS,
-};
+#[cfg(feature = "openapi")]
+pub use identity::AccountRefSchema;
 pub use identity::{AccountAddress, AddressError, ConversationId};
 pub use invite_link::{
     InviteJoinRequestV1, InviteLinkCallV1, InviteLinkOperationV1, InviteLinkPreviewV1,
     InviteLinkRequestEntryV1, InviteLinkResultV1, InviteRequestStatusV1, INVITE_LINK_TOKEN_BYTES,
     MAX_INVITE_PREVIEW_SEALED_BYTES, MAX_INVITE_REQUEST_SEALED_BYTES, MAX_PENDING_INVITE_REQUESTS,
 };
+/// A person across servers: their server and permanent account id
+/// (docs/plans/account-ids.md).
+pub use kutup_crypto::account_ref::AccountRef;
 pub use locations::{
     LiveLocationBody, LiveLocationStopBody, LocationBody, MAX_LIVE_LOCATION_MS,
     MAX_LOCATION_LABEL_CHARS,
@@ -346,8 +341,11 @@ pub struct AccountManifestDriveKeysV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountManifestV1 {
     pub manifest_version: u16,
-    /// Canonical local or federated routing address; never a display name.
-    pub account: String,
+    /// The account: its server and permanent account id (docs/plans/account-ids.md),
+    /// never a name. The server refuses a manifest naming any other account than
+    /// the one publishing it.
+    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+    pub account: AccountRef,
     /// Domain-separated SHA-256 identifier derived from the authority public
     /// key. A destructive account wipe necessarily starts another incarnation.
     pub incarnation_id: String,
@@ -378,7 +376,7 @@ impl AccountManifestV1 {
         let mut out = Vec::with_capacity(256 + self.devices.len() * 96);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.manifest_version.to_be_bytes());
-        push_string(&mut out, &self.account)?;
+        out.extend_from_slice(&self.account.bytes());
         out.extend_from_slice(&decode_lower_hex_32("incarnationId", &self.incarnation_id)?);
         out.extend_from_slice(&self.sequence.to_be_bytes());
         push_optional(&mut out, self.previous_hash.as_deref())?;
@@ -448,13 +446,6 @@ impl AccountManifestV1 {
 
         if self.manifest_version != ACCOUNT_MANIFEST_VERSION {
             return Err("unsupported account manifest version".into());
-        }
-        let account: AccountAddress = self
-            .account
-            .parse()
-            .map_err(|error: AddressError| error.to_string())?;
-        if account.canonical() != self.account {
-            return Err("manifest account is not canonical".into());
         }
         if self.sequence == 0 {
             return Err("manifest sequence must be positive".into());
@@ -572,7 +563,8 @@ pub const MAX_ACCOUNT_MANIFEST_HISTORY_PAGE: usize = 64;
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountManifestHistoryPageV1 {
-    pub account: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+    pub account: AccountRef,
     pub from_sequence: u64,
     pub to_sequence: u64,
     pub manifests: Vec<AccountManifestV1>,
@@ -582,12 +574,7 @@ pub struct AccountManifestHistoryPageV1 {
 
 impl AccountManifestHistoryPageV1 {
     pub fn validate(&self) -> Result<(), String> {
-        let account: AccountAddress = self
-            .account
-            .parse()
-            .map_err(|error: AddressError| error.to_string())?;
-        if account.canonical() != self.account
-            || self.from_sequence == 0
+        if self.from_sequence == 0
             || self.to_sequence < self.from_sequence
             || self.manifests.is_empty()
             || self.manifests.len() > MAX_ACCOUNT_MANIFEST_HISTORY_PAGE
@@ -702,14 +689,17 @@ pub struct DevicePreKeyBundle {
     pub one_time_pre_key: Option<EcPreKey>,
 }
 
-/// `GET /api/chat/users/{username}/keys` — bundles for every active device.
+/// `GET /api/chat/accounts/{accountId}/keys` — bundles for every active device.
 /// A 1:1 conversation encrypts to all of the peer's devices (and the sender's other
 /// devices, for sync — the client fetches its own bundle list too).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UserPreKeyBundlesResponse {
-    pub username: String,
+    /// The account the bundles are for (server and account id); a client
+    /// checks it is the one it asked for and the one the manifest names.
+    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
+    pub account: AccountRef,
     pub devices: Vec<DevicePreKeyBundle>,
     /// The signed device manifest (§5.3). A verifying client checks each
     /// returned bundle against it before establishing a session. Absence is
@@ -785,12 +775,12 @@ pub struct DeliveredEnvelope {
     /// and the client-side dedup key (tolerates a WS envelope and its
     /// REST-drained twin). Server-assigned; ordered `(cursor)`.
     pub cursor: u64,
-    /// [ADD→RSV] Sender address, `Option` from v1 so sealed sender (which
-    /// removes it) is not a breaking change. Local phase: bare username;
-    /// `user@domain` for remote senders once federation lands; `None` under
-    /// sealed sender. See `docs/chat-protocol.md` §8.1.
+    /// The sender's account (server and account id), never a name; `None`
+    /// under sealed sender. See `docs/chat-protocol.md` §8.1 and
+    /// docs/plans/account-ids.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sender: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<AccountRefSchema>))]
+    pub sender: Option<AccountRef>,
     /// True when `content` is a serialized libsignal unidentified-sender
     /// message. Such rows intentionally carry no sender metadata.
     #[serde(default)]
@@ -838,10 +828,6 @@ pub enum ChatWsServerMessage {
     /// Sent after connect once the pre-existing mailbox backlog should be drained via
     /// REST (avoids replaying a large backlog through the socket).
     DrainMailbox,
-    /// An account-local history-transfer request or state change is available.
-    /// The socket carries no archive metadata; clients fetch authenticated
-    /// opaque relay state over REST.
-    HistoryTransferAvailable { transfer_id: String },
     /// This account's device list changed: a device was registered or
     /// removed, or a new signed manifest was published. It says nothing
     /// more; each device fetches and verifies the list itself.
@@ -980,7 +966,8 @@ mod tests {
         let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
         let mut manifest = AccountManifestV1 {
             manifest_version: ACCOUNT_MANIFEST_VERSION,
-            account: "alice@example.test".into(),
+            account: AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap(),
             incarnation_id: hex::encode(incarnation.finalize()),
             sequence: 1,
             previous_hash: None,
@@ -1085,10 +1072,19 @@ mod tests {
 
     #[test]
     fn delivered_envelope_has_cursor_and_optional_sender() {
-        let src = r#"{"id":"m1","cursor":42,"sender":"alice","senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
+        let src = r#"{"id":"m1","cursor":42,"sender":{"server":"a.example","accountId":"a11ce000-0000-4000-8000-000000000001"},"senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
         let e: DeliveredEnvelope = serde_json::from_str(src).unwrap();
         assert_eq!(e.cursor, 42);
-        assert_eq!(e.sender.as_deref(), Some("alice"));
+        assert_eq!(
+            e.sender.map(|sender| sender.to_string()).as_deref(),
+            Some("aci:a11ce000-0000-4000-8000-000000000001@a.example")
+        );
+        // A sender named by a name is refused.
+        let named = src.replace(
+            r#"{"server":"a.example","accountId":"a11ce000-0000-4000-8000-000000000001"}"#,
+            r#""alice""#,
+        );
+        assert!(serde_json::from_str::<DeliveredEnvelope>(&named).is_err());
         // Sealed-sender / future: absent sender still deserializes.
         let sealed = r#"{"id":"m2","cursor":43,"senderDeviceId":1,"envelopeType":"message","suite":1,"content":"AA","serverTimestamp":"2026-07-13T10:00:00Z"}"#;
         let e2: DeliveredEnvelope = serde_json::from_str(sealed).unwrap();

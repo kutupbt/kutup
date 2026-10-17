@@ -1,9 +1,12 @@
+import type { AccountRef } from '@kutup/crypto/accountRef'
+
+export type { AccountRef }
 export interface ChatContentView {
   version: number
   kind: string
   sentAt: string
   seq: string
-  messageId?: string
+  messageId: string
   replyTo?: string
   body: unknown
   text?: string
@@ -42,6 +45,10 @@ export interface ChatContentView {
   groupUpdate?: ChatGroupUpdate
   /** Stands where a message from the peer could not be read. */
   undecryptable?: boolean
+  /** This device's line saying the peer's safety number changed (never sent). */
+  safetyNumberChanged?: boolean
+  /** This device's line saying the peer changed their username, from their own verified rename chain (never sent). */
+  peerRenamed?: { previous: string; current: string; sequence: number }
   mentions?: ChatMentionV1[]
   linkPreview?: ChatLinkPreviewV1
   forwarded?: boolean
@@ -78,11 +85,11 @@ export interface ChatReadPositionV1 {
   readThroughMs: number
 }
 
-/** `length` UTF-16 units from `start` of the text stand for `member` (canonical address). */
+/** `length` UTF-16 units from `start` of the text stand for `member`. */
 export interface ChatMentionV1 {
   start: number
   length: number
-  member: string
+  member: AccountRef
 }
 
 /** A preview of an https link in the text, made by the sender. */
@@ -117,21 +124,21 @@ export const STICKER_IMAGE_MAX_BYTES = 48 * 1024
 
 export const LINK_PREVIEW_IMAGE_MAX_BYTES = 24 * 1024
 
-/** One visible change of an applied group Commit (members are canonical addresses). */
+/** One visible change of an applied group Commit. */
 export type ChatGroupUpdateChange =
   | { type: 'nameChanged'; name: string }
   | { type: 'descriptionChanged'; description: string }
   | { type: 'pictureChanged'; removed: boolean }
-  | { type: 'memberAdded' | 'memberRemoved' | 'memberLeft'; member: string }
-  | { type: 'adminGranted' | 'adminRevoked' | 'ownerAdded' | 'ownerRemoved'; member: string }
+  | { type: 'memberAdded' | 'memberRemoved' | 'memberLeft'; member: AccountRef }
+  | { type: 'adminGranted' | 'adminRevoked' | 'ownerAdded' | 'ownerRemoved'; member: AccountRef }
   | { type: 'sendersChanged' | 'editorsChanged'; administratorsOnly: boolean }
   | { type: 'inviteLinkEnabled' | 'inviteLinkApprovalChanged'; approvalRequired: boolean }
   | { type: 'inviteLinkDisabled' | 'inviteLinkReset' }
   | { type: 'closed' }
 
 export interface ChatGroupUpdate {
-  /** Who made the change (canonical address). */
-  actor: string
+  /** Who made the change. */
+  actor: AccountRef
   changes: ChatGroupUpdateChange[]
 }
 
@@ -185,8 +192,8 @@ export const LIVE_LOCATION_MAX_MS = 8 * 3600 * 1000
 export interface ChatViewOnceOpenedV1 {
   conversation: ConversationId
   messageId: string
-  /** Canonical address of its sender. */
-  sender: string
+  /** Who sent it. */
+  sender: AccountRef
   timestampMs: number
   video: boolean
 }
@@ -287,13 +294,8 @@ export interface ChatAttachmentLedgerEntryV1 {
   driveFileId?: string
 }
 
-export interface AccountAddress {
-  username: string
-  server?: string
-}
-
 export type ConversationId =
-  | { kind: 'direct'; address: AccountAddress }
+  | { kind: 'direct'; account: AccountRef }
   | { kind: 'group'; groupId: string }
 
 /**
@@ -308,8 +310,8 @@ export interface ChangeMark {
 export interface ChatHistoryEntry {
   id: string
   conversation: ConversationId
-  /** @deprecated Use conversation. */
-  peer: string
+  /** Who wrote it: an account's key, `aci:<uuid>@<server>` (this account's own when outgoing). Which chat: `conversation`. */
+  sender: string
   direction: 'incoming' | 'outgoing'
   senderDeviceId?: number
   cursor?: string
@@ -417,7 +419,7 @@ export interface ChatGroupCall {
 
 /** A call signal received from `peer`'s device `senderDeviceId`. */
 export interface ChatCallEvent {
-  /** Canonical address of the other person. */
+  /** The other person's account key. */
   peer: string
   senderDeviceId: number
   sentAt: string
@@ -555,7 +557,7 @@ export interface MlsInvitationFeedback {
   protocolVersion: number
   conversationId: string
   incarnation: number
-  member: AccountAddress
+  member: AccountRef
   invitedEpoch: number
   decision: 'accepted' | 'rejected' | 'expired'
   decidedAt: number
@@ -589,7 +591,7 @@ export interface LocalMlsGroupState {
 }
 
 export interface MlsConversationDevice {
-  address: AccountAddress
+  account: AccountRef
   deviceId: number
 }
 
@@ -655,7 +657,7 @@ export interface LocalMlsConversationRecord {
       createdAt: number
     }
     members: Array<{
-      address: AccountAddress
+      account: AccountRef
       isAdmin: boolean
       ownerId?: string
     }>
@@ -680,7 +682,7 @@ export interface LocalMlsConversationRecord {
   currentGroupInfo?: MlsGroupInfo
   /** This account asked to leave: read-only here until an administrator removes it. */
   left?: boolean
-  /** Members who asked to leave and are not removed yet (canonical addresses). */
+  /** Members who asked to leave and are not removed yet (account keys). */
   departingMembers?: string[]
 }
 
@@ -718,7 +720,7 @@ export interface InviteLinkPreview {
 }
 
 export interface InviteJoinRequest {
-  requester: AccountAddress
+  requester: AccountRef
   createdAtMs: number
 }
 
@@ -839,7 +841,7 @@ export interface InviteLinkCrypto {
 /** Someone waiting for an administrator to let them in (administrators see these). */
 export interface GroupJoinRequest {
   conversationId: string
-  /** Canonical address. */
+  /** The requester's account key. */
   requester: string
   createdAtMs: number
 }
@@ -868,7 +870,7 @@ export interface PreparedMlsGroupGenesis {
 }
 
 export interface MlsConversationMember {
-  address: AccountAddress
+  account: AccountRef
   isAdmin: boolean
   ownerId?: string
 }
@@ -944,8 +946,8 @@ export interface MlsGroupAuthorizationPolicy {
   policyVersion: 1
   sequence: number
   applicationSenders: 1 | 2
-  /** Who may change the group's information: 1 members, 2 (or absent) administrators. */
-  groupInfoEditors?: 1 | 2
+  /** Who may change the group's information: 1 members, 2 administrators. */
+  groupInfoEditors: 1 | 2
 }
 
 export interface MlsGroupCryptographicPolicy {
@@ -963,7 +965,7 @@ export interface MlsOwnerCandidate {
   protocolVersion: number
   conversationId: string
   incarnation: number
-  account: AccountAddress
+  account: AccountRef
   ownerId: string
   publicKey: string
   createdAt: number
@@ -1072,7 +1074,7 @@ export interface PendingMlsOwnerChange {
 
 export interface PendingMlsOwnerApprovalRequest {
   mlsGroupId: number[]
-  requester: AccountAddress
+  requester: AccountRef
   request: {
     protocolVersion: number
     ownerSetSequence: number
@@ -1203,7 +1205,7 @@ export interface MlsIncarnationRecovery {
 
 export interface RecoverMlsConversationRequest {
   recovery: MlsIncarnationRecovery
-  creator: AccountAddress
+  creator: AccountRef
   creatorDeviceId: number
   members: MlsConversationMember[]
   deliveries: unknown[]
@@ -1301,7 +1303,7 @@ export interface AnonymousMlsDeviceEnvelope {
 
 export interface AnonymousMlsSubmission {
   protocolVersion: number
-  recipient: AccountAddress
+  recipient: AccountRef
   sendId: string
   capability: string
   suite: string
@@ -1341,15 +1343,15 @@ export interface AppliedInboundMlsApplication {
 
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
-  fetchBundles(username: string): Promise<unknown>
+  fetchBundles(account: string): Promise<unknown>
   fetchSyncBundles(
-    username: string,
+    account: string,
     currentDeviceId: number,
   ): Promise<unknown>
   fetchMlsOrderingPolicy(domain: string): Promise<unknown>
-  fetchManifest(username: string): Promise<unknown | null>
+  fetchManifest(account: string): Promise<unknown | null>
   fetchManifestHistory(
-    username: string,
+    account: string,
     fromSequence: string,
     toSequence: string,
     pageFromSequence: string,
@@ -1357,17 +1359,17 @@ export interface ChatTransportPort {
   fetchSealedSenderPolicy(domain: string): Promise<unknown>
   fetchSenderCertificate(deviceId: number): Promise<unknown>
   fetchSealedBundles(
-    username: string,
+    account: string,
     capability: string,
   ): Promise<unknown>
   publishManifest(manifest: unknown): Promise<unknown>
   /** The account's synced identity pins (docs/plans/drive-identity-pins.md); null before the first. */
   fetchIdentityPins(): Promise<{ revision: number; envelope: string } | null>
-  /** Store the next revision; false when another app stored it first. */
-  storeIdentityPins(record: { revision: number; envelope: string }): Promise<boolean>
+  /** Stores a new list if the server still holds `baseRevision` (0: none yet); false when another app wrote first. */
+  storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean>
   fetchOwnProfile(): Promise<unknown | null>
   publishProfile(profile: unknown): Promise<unknown>
-  fetchProfile(username: string, version: string, accessKey: string): Promise<unknown | null>
+  fetchProfile(account: string, version: string, accessKey: string): Promise<unknown | null>
   prekeyCount(deviceId: number): Promise<unknown>
   replenishPrekeys(deviceId: number, request: unknown): Promise<void>
   publishMlsKeyPackages(request: unknown): Promise<unknown>
@@ -1404,14 +1406,14 @@ export interface ChatTransportPort {
   fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown>
   submitAnonymousMlsMessage(request: unknown): Promise<unknown>
   sendMessage(
-    username: string,
+    account: string,
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
     | { kind: 'mismatch'; mismatch: unknown }
   >
   sendSealedMessage(
-    username: string,
+    account: string,
     request: unknown,
   ): Promise<
     | { kind: 'delivered'; deduplicated?: boolean }
@@ -1438,7 +1440,7 @@ export interface WasmChatClientHandle {
   prepareMlsGroupGenesis(
     conversationId: string,
     mlsGroupId: Uint8Array,
-    creator: AccountAddress,
+    creator: AccountRef,
     authorityPolicies: unknown[],
     createdAtSeconds: string,
     groupInfo: MlsGroupInfo | null,
@@ -1633,12 +1635,12 @@ export interface WasmChatClientHandle {
     domain: string,
   ): Promise<VerifiedMlsOrderingPolicyHistory>
   fetchVerifiedMlsKeyPackages(
-    recipient: AccountAddress,
+    recipient: AccountRef,
     capability: Uint8Array,
     nowSeconds: string,
   ): Promise<unknown[]>
   fetchVerifiedIdentifiedMlsKeyPackages(
-    recipient: AccountAddress,
+    recipient: AccountRef,
     conversationId: string,
     incarnation: string,
     nowSeconds: string,
@@ -1771,7 +1773,7 @@ export interface WasmChatClientHandle {
   pendingMlsApplicationMessages(): Promise<MlsOutboxEntry[]>
   stageMlsApplicationDelivery(
     sendId: string,
-    recipient: AccountAddress,
+    recipient: AccountRef,
     capability: Uint8Array,
     packages: unknown[],
     nowSeconds: string,
@@ -1790,7 +1792,7 @@ export interface WasmChatClientHandle {
     deduplicated: boolean,
   ): Promise<MlsHistoryMessage | null>
   inspectAnonymousMlsApplicationEnvelope(
-    recipient: AccountAddress,
+    recipient: AccountRef,
     sendId: string,
     envelope: AnonymousMlsDeviceEnvelope,
   ): Promise<MlsApplicationInspection>
@@ -1802,7 +1804,7 @@ export interface WasmChatClientHandle {
     cursor: string,
     sendId: string,
     serverTimestamp: string,
-    recipient: AccountAddress,
+    recipient: AccountRef,
     envelope: AnonymousMlsDeviceEnvelope,
     expectedSender: VerifiedMlsCredential,
   ): Promise<AppliedInboundMlsApplication>
@@ -1817,17 +1819,17 @@ export interface WasmChatClientHandle {
     mlsGroupId: Uint8Array,
     conversationId: string,
     incarnation: string,
-    recipient: AccountAddress,
+    recipient: AccountRef,
   ): Promise<DerivedMlsDeliveryCapability>
   createAnonymousMlsSubmission(
-    recipient: AccountAddress,
+    recipient: AccountRef,
     sendId: string,
     capability: Uint8Array,
     devices: unknown,
     mlsCiphertext: Uint8Array,
   ): Promise<unknown>
   openAnonymousMlsEnvelope(
-    recipient: AccountAddress,
+    recipient: AccountRef,
     sendId: string,
     envelope: unknown,
   ): Promise<Uint8Array>
@@ -1933,6 +1935,8 @@ export interface WasmChatClientHandle {
   sendCallSignal(sendId: string, peer: string, sentAt: string, signal: ChatCallSignal): Promise<SendSummary>
   refreshProfile(): Promise<void>
   recordCallLog(peer: string, body: ChatCallLog): Promise<void>
+  /** The line saying `peer` changed their username (one step of their verified rename chain); once. True when written now. */
+  recordPeerRenamed(peer: string, previous: string, current: string, sequence: number): Promise<boolean>
   sendDisappearingTimer(
     sendId: string,
     peer: string,
@@ -1999,16 +2003,22 @@ export interface ProfileLookup {
 }
 
 export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
-  /** The account's own profile key, from the master key. */
-  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string): ProfileLookup
+  /**
+   * The account's own profile key, from the master key and the key binding
+   * (`session.envelopeBinding`) its own copy is wrapped to.
+   */
+  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string, binding: string): ProfileLookup
   /** Where to fetch a profile, from its key (standard base64). */
   profileLookup(key: string): ProfileLookup
   /** Open someone's fetched profile with their key (standard base64). */
   profileOpenPeer(peer: string, encrypted: unknown, key: string): AccountProfileView
-  /** Open the account's profile from the master key (no chat device). */
-  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string): AccountProfileView
-  /** Seal the next profile revision (or the first) as the account app. */
-  accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string): unknown
+  /** Open the account's profile from the master key and key binding (no chat device). */
+  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string, binding: string): AccountProfileView
+  /**
+   * Seal the next profile revision (or the first) as the account app: the
+   * profile names `account`; its own copy of the key binds `binding`.
+   */
+  accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string, binding: string): unknown
   /** Seal small browser-side values for an account scope, one purpose each. */
   sealLocalData(masterKey: Uint8Array, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
   /** Open what `sealLocalData` sealed; a value that does not open is `null`. */
@@ -2021,6 +2031,8 @@ export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
       serverName: string,
       sealedSenderEnabled: boolean,
       masterKey: Uint8Array,
+      /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
+      binding: string,
       transport: ChatTransportPort,
     ): Promise<WasmChatClientHandle>
   }

@@ -27,7 +27,7 @@ export function LimitsDialog({ sender, onClose, onSave, pending }: { sender: Mai
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('admin.mailSending.limitsTitle', { name: sender.username || sender.email })}</DialogTitle>
+          <DialogTitle>{t('admin.mailSending.limitsTitle', { name: sender.username })}</DialogTitle>
           <DialogDescription>{t('admin.mailSending.limitsDescription')}</DialogDescription>
         </DialogHeader>
         <Field label={t('admin.mailSending.perHour')}>

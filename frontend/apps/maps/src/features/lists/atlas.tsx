@@ -1,9 +1,12 @@
+import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
+import { accountKeyOf } from '@kutup/crypto/accountRef'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { TooManyDevicesError } from '@kutup/collab/currentDevice'
 import { filesKey } from '@kutup/drive-core/files'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
@@ -24,7 +27,7 @@ async function editOnce(
   file: DriveFile,
   folder: Folder,
   change: (doc: Y.Doc) => void,
-  identity: { username: string | null; deviceId: number | null; color: string },
+  identity: { username: string | null; color: string },
   labels: { preRestore: () => string; restored: () => string },
 ): Promise<void> {
   if (!file.fileKey) throw new Error('file is not open')
@@ -44,7 +47,6 @@ async function editOnce(
     fileKeyAt: (generation) => fileKeyAt(file, generation),
     readOnly: false,
     username: identity.username,
-    storedDeviceId: identity.deviceId,
     cursorColor: identity.color,
     seed: {
       update: () => deterministicSeed(file.id, (doc) => fillDoc(doc, initial)),
@@ -113,19 +115,25 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
         file = await rekeyFile(entry.folder, file)
         void queryClient.invalidateQueries({ queryKey: filesKey(entry.folder.id) })
       }
-      await editOnce(
+      try {
+        await editOnce(
         file,
         entry.folder,
         change,
-        { username: account.username, deviceId: account.currentDeviceId, color: account.color ?? getCursorColor() },
+        { username: account.username, color: account.color ?? getCursorColor() },
         {
           preRestore: () => t('list.preRestoreLabel', { time: new Date().toLocaleString() }),
           restored: () => t('list.restoredLabel', { time: new Date().toLocaleString() }),
         },
-      )
+        )
+      } catch (error) {
+        if (!(error instanceof TooManyDevicesError)) throw error
+        toast.error(t('list.tooManyDevices'))
+        return
+      }
       await queryClient.invalidateQueries({ queryKey: savedPlacesKey(entry.file.id) })
     },
-    [open, queryClient, account.username, account.currentDeviceId, account.color, t],
+    [open, queryClient, account.username, account.color, t],
   )
 
   const colors = useMemo(() => listColors(lists.map((l) => ({ id: l.file.id, createdAt: l.file.createdAt }))), [lists])
@@ -144,10 +152,10 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
       showPlace,
       editable,
       write,
-      me: identity.data?.account ?? null,
+      me: identity.data ? accountKeyOf(identity.data.accountRef) : null,
       colorOf,
     }),
-    [lists, loading, error, placesOf, saved.loading, open, shown, editable, write, identity.data?.account, colorOf],
+    [lists, loading, error, placesOf, saved.loading, open, shown, editable, write, identity.data, colorOf],
   )
   return <AtlasContext.Provider value={atlas}>{children}</AtlasContext.Provider>
 }

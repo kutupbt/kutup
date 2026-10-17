@@ -271,7 +271,7 @@ impl MlsClient {
         let mut member_joined_epochs = private_control
             .roster
             .iter()
-            .map(|member| (member.address.canonical(), 0))
+            .map(|member| (member.account.to_string(), 0))
             .collect::<BTreeMap<_, _>>();
         member_joined_epochs.insert(local_address.clone(), private_control.epoch);
         let mut accepted_invitation_epochs = member_joined_epochs
@@ -486,7 +486,7 @@ impl MlsClient {
         if !conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == sender_address)
+            .any(|member| member.account.to_string() == sender_address)
         {
             return Err(ChatError::Trust(
                 "MLS roster Commit sender is not a member of the pinned roster".into(),

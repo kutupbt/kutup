@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { getChatState } from '../app/chatStore'
 
 // The group link being looked at, if any: opened from /join, from a link in
 // a message, or pasted; one dialog at the top of the app shows it.
@@ -11,8 +12,9 @@ function set(next: string | null): void {
   for (const listener of listeners) listener()
 }
 
-/** Show what `url` leads to; `''` asks for a link to paste. */
+/** Show what `url` leads to; `''` asks for a link to paste. Nothing on a server without groups. */
 export function openJoinLink(url: string): void {
+  if (getChatState().capabilities?.mlsGroups !== true) return
   set(url)
 }
 

@@ -169,6 +169,7 @@ pub(crate) async fn collection_rows(
                 name_revision: revision,
                 epoch_statement: statement,
                 epoch_statement_hash: statement_hash,
+                owner_server: None,
                 owner_account: None,
                 owner_incarnation_id: None,
                 owner_drive_signing_public_key: None,
@@ -211,8 +212,7 @@ pub(crate) async fn collection_rows(
     .bind(user_id)
     .bind(kind)
     .fetch_all(&state.pool)
-    .await
-    .unwrap_or_default();
+    .await?;
 
     for row in shared {
         // Compute this user's usage in the shared collection when an upload quota applies.
@@ -223,9 +223,7 @@ pub(crate) async fn collection_rows(
             .bind(row.id)
             .bind(user_id)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+            .await?;
             Some(used.unwrap_or(0))
         } else {
             None
@@ -247,6 +245,7 @@ pub(crate) async fn collection_rows(
             name_revision: row.name_revision,
             epoch_statement: row.epoch_statement,
             epoch_statement_hash: row.epoch_statement_hash,
+            owner_server: Some(domain.to_owned()),
             owner_account: Some(format!("{owner_username}@{domain}")),
             owner_incarnation_id: Some(row.owner_incarnation_id),
             owner_drive_signing_public_key: Some(row.owner_signing_public_key),
@@ -343,7 +342,15 @@ pub(crate) async fn create_owned_collection(
         .map_err(|_| AppError::bad_request("invalid collection epoch statement"))?;
     let statement_hash = epoch_statement.statement_hash();
 
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
+    // Folders keep names unique, so a new one claims its name; albums are
+    // not in the folder tree.
+    let name_hash = if kind == "folder" {
+        Some(crate::drive_names::require_name_hash(
+            req.name_hash.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let mut tx = state.pool.begin().await?;
     if let Some(parent_id) = parent {
         let parent_owned: bool = sqlx::query_scalar(
@@ -357,8 +364,6 @@ pub(crate) async fn create_owned_collection(
             return Err(AppError::bad_request("invalid parent collection"));
         }
     }
-    // Folders keep names unique; albums are not in the folder tree.
-    let name_hash = if kind == "folder" { name_hash } else { None };
     if let Some(hash) = &name_hash {
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
@@ -479,6 +484,7 @@ pub async fn get_collection(
             name_revision: revision,
             epoch_statement: statement,
             epoch_statement_hash: statement_hash,
+            owner_server: None,
             owner_account: None,
             owner_incarnation_id: None,
             owner_drive_signing_public_key: None,
@@ -544,6 +550,7 @@ pub async fn get_collection(
         name_revision: row.name_revision,
         epoch_statement: row.epoch_statement,
         epoch_statement_hash: row.epoch_statement_hash,
+        owner_server: Some(domain.to_owned()),
         owner_account: Some(format!("{owner_username}@{domain}")),
         owner_incarnation_id: Some(row.owner_incarnation_id),
         owner_drive_signing_public_key: Some(row.owner_signing_public_key),
@@ -580,7 +587,6 @@ pub async fn update_collection(
     let user_id = trusted_uuid(&user.user_id)?;
     let coll_id = coll_id_or_404(&id)?;
 
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
     let mut tx = state.pool.begin().await?;
     let current: Option<(i32, i64, Option<Uuid>, String)> = sqlx::query_as(
         "SELECT key_epoch, name_revision, parent_collection_id, kind FROM collections
@@ -593,15 +599,17 @@ pub async fn update_collection(
     let Some((epoch, current_revision, parent, kind)) = current else {
         return Err(AppError::not_found("not found"));
     };
-    // A new name without its hash (an older client) leaves the old hash
-    // wrong: it is cleared, and the name is not kept unique until a client
-    // fills it in again.
-    let name_hash = if kind == "folder" { name_hash } else { None };
-    if let Some(hash) = &name_hash {
+    // A folder's new name comes with its hash (the owner holds the parent's
+    // key); an album has none.
+    let name_hash = if kind == "folder" {
+        let hash = crate::drive_names::require_name_hash(req.name_hash.as_deref())?;
         let place = crate::drive_names::Place::of(parent, user_id);
         crate::drive_names::lock_place(&mut tx, place).await?;
-        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(coll_id)).await?;
-    }
+        crate::drive_names::ensure_name_free(&mut tx, place, &hash, Some(coll_id)).await?;
+        Some(hash)
+    } else {
+        None
+    };
     if req.name_revision != current_revision.saturating_add(1) {
         return Err(AppError::conflict(
             "collection name revision must advance by exactly one",
@@ -797,22 +805,8 @@ pub async fn share_collection(
     .await?
     .ok_or_else(|| AppError::bad_request("invalid recipient"))?;
     let domain = state.config.chat_server_name.as_str();
-    let sender_account = format!(
-        "{}@{domain}",
-        sender
-            .0
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| AppError::conflict("sender identity is unavailable"))?
-    );
-    let recipient_account = format!(
-        "{}@{domain}",
-        recipient
-            .0
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| AppError::conflict("recipient identity is unavailable"))?
-    );
+    let sender_account = crate::account_ids::local(domain, sharer_id)?;
+    let recipient_account = crate::account_ids::local(domain, recipient_id)?;
     let sender_signing_key = decode_public_key(&sender.2)?;
     let named_share = NamedShareEnvelopeV1::decode_b64(&req.named_share_envelope)
         .map_err(|_| AppError::bad_request("invalid named share envelope"))?;

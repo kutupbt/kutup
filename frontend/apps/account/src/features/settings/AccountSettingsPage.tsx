@@ -9,6 +9,7 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { useMe } from './api'
+import { UsernameSection } from './UsernameSection'
 
 export function AccountSettingsPage() {
   const { t, i18n } = useTranslation()
@@ -22,7 +23,9 @@ export function AccountSettingsPage() {
       <Section title={t('settings.account.details')}>
         <Card>
           <CardContent className="grid gap-5 p-5 sm:grid-cols-2">
-            <Fact label={t('auth.fields.email')}>{session.email}</Fact>
+            <Fact label={t('settings.account.address')}>
+              <Mono>{session.address}</Mono>
+            </Fact>
             <Fact label={t('auth.fields.username')}>
               {session.username ? <Mono>{session.username}</Mono> : t('settings.account.noUsername')}
             </Fact>
@@ -43,6 +46,7 @@ export function AccountSettingsPage() {
         {me.isError ? <Alert variant="error">{apiErrorMessage(me.error, t('common.tryAgain'))}</Alert> : null}
       </Section>
 
+      <UsernameSection />
     </PageBody>
   )
 }

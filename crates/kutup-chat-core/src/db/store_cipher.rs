@@ -311,13 +311,6 @@ pub(crate) mod keys {
         out
     }
 
-    pub(crate) fn text_number(left: &str, right: u32) -> Vec<u8> {
-        let mut out = vec![b'q'];
-        prefixed(&mut out, left);
-        out.extend_from_slice(&right.to_be_bytes());
-        out
-    }
-
     pub(crate) fn triple(first: &str, second: &str, third: &str) -> Vec<u8> {
         let mut out = vec![b't'];
         prefixed(&mut out, first);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { disappearingMessageExpiresAt, isVisibleChatMessage } from '@kutup/chat-core/disappearing'
-import { conversationKey, directAddress } from '@kutup/chat-core/identity'
+import { conversationKey, directKey } from '@kutup/chat-core/identity'
 import type { ChatHistoryEntry, ConversationId } from '@kutup/chat-core/types'
 import { useJoinedMeetingsSync } from '../features/callLinks/useMeetings'
 import { parseConversationKey } from '../features/list/paths'
@@ -66,9 +66,9 @@ export function ChatJobs() {
       const id = message.content.messageId
       if (message.direction !== 'incoming' || !id || !isVisibleChatMessage(message, nowMs)) continue
       if (message.conversation.kind === 'direct') {
-        const peer = directAddress(message.conversation)
+        const peer = directKey(message.conversation)
         const state = peer ? contacts.get(peer)?.state : undefined
-        if (!peer || (peer !== self.address && state !== 'accepted' && state !== 'pendingOutgoing')) continue
+        if (!peer || (peer !== self.key && state !== 'accepted' && state !== 'pendingOutgoing')) continue
       } else if (!activeGroups.has(message.conversation.groupId)) {
         continue
       }
@@ -146,7 +146,7 @@ export function ChatJobs() {
       if (!synced.current.has(flight)) {
         synced.current.add(flight)
         const { conversation, timestampMs } = anchor
-        const id = anchor.content.messageId!
+        const id = anchor.content.messageId
         work.push(() => service.markReadThrough(conversation, id, timestampMs))
       }
     }

@@ -568,9 +568,9 @@ pub(super) fn provider_from_snapshot(bytes: &[u8]) -> Result<(KutupMlsProvider, 
         validate_group_id(&group_id)?;
         let account = entry
             .account
-            .parse::<kutup_chat_proto::AccountAddress>()
+            .parse::<kutup_chat_proto::AccountRef>()
             .map_err(|error| ChatError::Db(error.to_string()))?;
-        if account.server.is_none() || account.canonical() != entry.account {
+        if account.to_string() != entry.account {
             return Err(ChatError::Db(
                 "MLS owner candidate account is not canonical and federated".into(),
             ));

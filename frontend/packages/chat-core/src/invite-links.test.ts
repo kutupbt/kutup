@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { InviteLinkService, inviteFragmentFromUrl, inviteLinkUrl } from './invite-links'
 import type { MlsConversationService } from './mls-service'
+import { parseAccount } from './identity'
 import type {
   ChatTransportPort,
   InviteLinkCrypto,
@@ -31,10 +32,7 @@ function group(admins: string[], members: string[], link = LINK): LocalMlsConver
   return {
     status: 'active',
     request: { genesis: { conversationId: 'g1', incarnation: 1 } },
-    currentRoster: roster.map(([address, isAdmin]) => {
-      const [username, server] = address.split('@')
-      return { address: { username, server }, isAdmin }
-    }),
+    currentRoster: roster.map(([key, isAdmin]) => ({ account: parseAccount(key)!, isAdmin })),
     currentGroupInfo: { sequence: 2, name: 'Hikers', inviteLink: link },
   } as unknown as LocalMlsConversationRecord
 }
@@ -48,11 +46,11 @@ function harness(record: LocalMlsConversationRecord, requests: Array<{ requester
         return {
           result: 'requests',
           requests: requests.map((request, index) => {
-            const [username, server] = request.requester.split('@')
+            const requester = parseAccount(request.requester)!
             return {
               requestId: `r${index}`,
               originDomain: request.origin,
-              request: JSON.stringify({ requester: { username, server }, createdAtMs: 1 }),
+              request: JSON.stringify({ requester, createdAtMs: 1 }),
               status: 'pending' as const,
               createdAtMs: request.at ?? Date.now(),
             }
@@ -71,12 +69,11 @@ function harness(record: LocalMlsConversationRecord, requests: Array<{ requester
   }
   const storage = new Map<string, string>()
   const service = (self: string) => {
-    const [username, server] = self.split('@')
     return new InviteLinkService(
       mls as unknown as MlsConversationService,
       transport,
       crypto,
-      { username, server },
+      parseAccount(self)!,
       {
         getItem: (key) => storage.get(key) ?? null,
         setItem: (key, value) => void storage.set(key, value),
@@ -100,57 +97,57 @@ describe('group link URLs', () => {
 
 describe('administrators', () => {
   it('the first administrator adds people when no approval is needed', async () => {
-    const h = harness(group(['ali@a.test', 'zed@a.test'], []), [{ requester: 'bob@b.test', origin: 'b.test' }])
-    await h.service('ali@a.test').reconcileRequests(true)
-    expect(h.mls.addMember).toHaveBeenCalledWith('g1', { username: 'bob', server: 'b.test' })
+    const h = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test', 'aci:00000000-0000-4000-8000-ae8f5080a348@a.test'], []), [{ requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', origin: 'b.test' }])
+    await h.service('aci:00000000-0000-4000-8000-94419b99b12c@a.test').reconcileRequests(true)
+    expect(h.mls.addMember).toHaveBeenCalledWith('g1', { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' })
     expect(h.calls).toContainEqual(expect.objectContaining({ op: 'decide', requestId: 'r0', approve: true }))
 
     // Another administrator waits, unless the request is old.
-    const other = harness(group(['ali@a.test', 'zed@a.test'], []), [{ requester: 'bob@b.test', origin: 'b.test' }])
-    const zed = other.service('zed@a.test')
+    const other = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test', 'aci:00000000-0000-4000-8000-ae8f5080a348@a.test'], []), [{ requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', origin: 'b.test' }])
+    const zed = other.service('aci:00000000-0000-4000-8000-ae8f5080a348@a.test')
     await zed.reconcileRequests(true)
     expect(other.mls.addMember).not.toHaveBeenCalled()
-    expect(zed.joinRequests()).toEqual([{ conversationId: 'g1', requester: 'bob@b.test', createdAtMs: expect.any(Number) }])
-    const late = harness(group(['ali@a.test', 'zed@a.test'], []), [{ requester: 'bob@b.test', origin: 'b.test', at: Date.now() - 10 * 60_000 }])
-    await late.service('zed@a.test').reconcileRequests(true)
+    expect(zed.joinRequests()).toEqual([{ conversationId: 'g1', requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', createdAtMs: expect.any(Number) }])
+    const late = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test', 'aci:00000000-0000-4000-8000-ae8f5080a348@a.test'], []), [{ requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', origin: 'b.test', at: Date.now() - 10 * 60_000 }])
+    await late.service('aci:00000000-0000-4000-8000-ae8f5080a348@a.test').reconcileRequests(true)
     expect(late.mls.addMember).toHaveBeenCalled()
   })
 
   it('waits for a decision when approval is needed, and decides for every copy', async () => {
     const h = harness(
-      group(['ali@a.test'], [], { ...LINK, approvalRequired: true }),
-      [{ requester: 'bob@b.test', origin: 'b.test' }, { requester: 'bob@b.test', origin: 'b.test' }],
+      group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test'], [], { ...LINK, approvalRequired: true }),
+      [{ requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', origin: 'b.test' }, { requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', origin: 'b.test' }],
     )
-    const ali = h.service('ali@a.test')
+    const ali = h.service('aci:00000000-0000-4000-8000-94419b99b12c@a.test')
     await ali.reconcileRequests(true)
     expect(h.mls.addMember).not.toHaveBeenCalled()
     expect(ali.joinRequests()).toHaveLength(1)
-    await ali.decide('g1', 'bob@b.test', true)
+    await ali.decide('g1', 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', true)
     expect(h.mls.addMember).toHaveBeenCalledTimes(1)
     expect(h.calls.filter((call) => call.op === 'decide')).toHaveLength(2)
     expect(ali.joinRequests()).toEqual([])
   })
 
   it('turns away a request naming another server, and approves members', async () => {
-    const h = harness(group(['ali@a.test'], ['cem@c.test']), [
-      { requester: 'bob@b.test', origin: 'evil.test' },
-      { requester: 'cem@c.test', origin: 'c.test' },
+    const h = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test'], ['aci:00000000-0000-4000-8000-b1331f460eb4@c.test']), [
+      { requester: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', origin: 'evil.test' },
+      { requester: 'aci:00000000-0000-4000-8000-b1331f460eb4@c.test', origin: 'c.test' },
     ])
-    await h.service('ali@a.test').reconcileRequests(true)
+    await h.service('aci:00000000-0000-4000-8000-94419b99b12c@a.test').reconcileRequests(true)
     expect(h.mls.addMember).not.toHaveBeenCalled()
     expect(h.calls).toContainEqual(expect.objectContaining({ op: 'decide', requestId: 'r0', approve: false }))
     expect(h.calls).toContainEqual(expect.objectContaining({ op: 'decide', requestId: 'r1', approve: true }))
   })
 
   it('members who are not administrators leave the mailbox alone', async () => {
-    const h = harness(group(['ali@a.test'], ['bob@b.test']), [{ requester: 'dan@d.test', origin: 'd.test' }])
-    await h.service('bob@b.test').reconcileRequests(true)
+    const h = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test'], ['aci:00000000-0000-4000-8000-81b637d8fcd2@b.test']), [{ requester: 'aci:00000000-0000-4000-8000-ec4f2dbb3b14@d.test', origin: 'd.test' }])
+    await h.service('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test').reconcileRequests(true)
     expect(h.calls).toEqual([])
   })
 
   it('a reset stores the new mailbox first and deletes the old one after', async () => {
-    const h = harness(group(['ali@a.test'], []), [])
-    await h.service('ali@a.test').change('g1', { kind: 'reset' })
+    const h = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test'], []), [])
+    await h.service('aci:00000000-0000-4000-8000-94419b99b12c@a.test').change('g1', { kind: 'reset' })
     expect(h.calls.map((call) => `${call.op}:${call.linkId}`)).toEqual(['put:id:bmV3', 'delete:id:c2VjcmV0'])
     expect(h.mls.setGroupInfo).toHaveBeenCalledWith('g1', expect.objectContaining({
       name: 'Hikers',
@@ -161,9 +158,9 @@ describe('administrators', () => {
 
 describe('requesters', () => {
   it('accepts the invitation its request led to', async () => {
-    const h = harness(group(['ali@a.test'], []), [])
+    const h = harness(group(['aci:00000000-0000-4000-8000-94419b99b12c@a.test'], []), [])
     h.mls.conversations.mockResolvedValue([])
-    const bob = h.service('bob@b.test')
+    const bob = h.service('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test')
     const lookup = {
       link: LINK,
       linkId: 'id:c2VjcmV0',

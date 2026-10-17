@@ -59,7 +59,21 @@ export class VaultHandle {
 
   /** Opens a vault's file contents; a wrong key or a file that is no vault throws {@link VaultError}. */
   static async open(contents: Uint8Array, key: VaultKeyInput): Promise<VaultHandle> {
-    return new VaultHandle(await call<number>({ call: 'open', contents, password: key.password, keyFile: key.keyFile }))
+    return new VaultHandle(await call<number>({ call: 'open', contents, password: key.password, passwordHash: key.passwordHash ?? null, keyFile: key.keyFile }))
+  }
+
+  /**
+   * What the account keeps of this vault's key (kutup_pass::kept), sealed for
+   * `binding` and `fileId` at `revision`: the key this vault was opened or
+   * made with. `generated`: its password is one Kutup Pass made. Base64.
+   */
+  keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): Promise<string> {
+    return call({ call: 'keepKey', handle: this.handle, masterKey, binding, fileId, revision, generated })
+  }
+
+  /** Whether the kept key `envelope` is the key this vault is open with (checked in the worker). */
+  keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): Promise<boolean> {
+    return call({ call: 'keptKeyIsMine', handle: this.handle, envelope, masterKey, binding, fileId })
   }
 
   view(): Promise<VaultView> {
@@ -108,9 +122,20 @@ export class VaultHandle {
   }
 }
 
-/** A key file as a vault secret keeps it (large files as their SHA-256). */
-export function keyFileSecret(contents: Uint8Array): Promise<Uint8Array> {
-  return call({ call: 'keyFileSecret', contents })
+/** A kept vault key, opened (kutup_pass::kept): bytes in base64. */
+export interface KeptKey {
+  /** SHA-256 of the password, which opens the vault in its place. */
+  passwordHash: string | null
+  keyFile: string | null
+  /** The password, when Kutup Pass generated it (to show). */
+  generatedPassword: string | null
+  /** The revision it was kept at. */
+  revision: number
+}
+
+/** Opens what the account keeps for vault `fileId`; throws when it does not open. */
+export function openKept(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): Promise<KeptKey> {
+  return call({ call: 'openKept', envelope, masterKey, binding, fileId })
 }
 
 /** Reads another password manager's export, changing nothing. */

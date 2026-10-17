@@ -5,18 +5,22 @@
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
+    /// The keys the OPAQUE server setups are sealed under
+    /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
+    pub opaque_setup_keys: crate::opaque_setup::OpaqueSetupKeys,
     pub s3_endpoint: String,
     pub s3_access_key: String,
     pub s3_secret_key: String,
     pub s3_bucket: String,
     pub s3_region: String,
     pub app_env: String,
-    /// The single bootstrap admin account, `email:username:password`. Created at first boot;
-    /// this is the protected "break-glass" admin. From `ADMIN_ACCOUNT`.
+    /// The single bootstrap admin account, `username:password` (the password
+    /// may hold colons). Created at first boot; this is the
+    /// protected "break-glass" admin. From `ADMIN_ACCOUNT`.
     pub admin_account: String,
-    /// Email of the break-glass admin, derived from `admin_account`. Never demotable/
+    /// Username of the break-glass admin, from `admin_account`. Never demotable/
     /// disableable/deletable via the API/UI. Empty when `ADMIN_ACCOUNT` is unset.
-    pub break_glass_admin_email: String,
+    pub break_glass_admin_username: String,
     /// e.g. `https://kutup.example.com` — published as the federation API base.
     pub server_url: String,
     /// Comma-separated CORS allowlist (`*` allowed in dev only).
@@ -83,6 +87,13 @@ pub struct Config {
     /// Authentication-Results it writes, the only one trusted for DMARC.
     pub mail_hostname: String,
     pub mail_folders_per_account: i64,
+    /// `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS`: the first values of
+    /// the name holds administrators set (`site_settings::name_holds`).
+    pub name_hold_days: i64,
+    pub old_address_receive_days: i64,
+    /// `NAME_SWEEP_SECONDS`: how often old addresses are closed and held
+    /// names freed on their dates (an hour; seconds on test stacks).
+    pub name_sweep_seconds: i64,
     pub mail_labels_per_account: i64,
     /// Filters an account may have switched on (`MAIL_FILTERS_PER_ACCOUNT`).
     pub mail_filters_per_account: i64,
@@ -99,11 +110,22 @@ pub struct Config {
     pub federation_signing_key: String,
     /// Rotation candidate consumed only by the explicit maintenance command.
     pub federation_next_signing_key: String,
-    /// Test-only HTTP/private-network escape hatch for the v2 stack.
+    /// Test-only HTTP/private-network escape hatch for the v2 stack
+    /// (`FEDERATION_TEST_ALLOW_PRIVATE`; APP_ENV=test only).
     pub federation_test_allow_private: bool,
-    /// Offer group chats and group calls (`CHAT_GROUPS`, default on). Off,
-    /// the server reports no groups, refuses the group routes, and the apps
-    /// show direct chats only; groups made earlier stay stored, unreachable.
+    /// Test stacks: every rate limit's default raised (`RATE_LIMITS_RELAXED`;
+    /// APP_ENV=test only).
+    pub rate_limits_relaxed: bool,
+    /// The registration mode written once, at startup, into a database that
+    /// has none (`REGISTRATION_MODE`: on, code or off; default off). Never
+    /// read after that: the stored mode is the only source
+    /// (docs/plans/registration-codes.md).
+    pub registration_mode: crate::registration::RegistrationMode,
+    /// Offer group chats and group calls (`CHAT_GROUPS`, default off: groups
+    /// return with the pairwise group design that replaces MLS, roadmap).
+    /// Off, the server reports no groups, refuses the group routes, and the
+    /// apps show direct chats only; groups made earlier stay stored,
+    /// unreachable.
     pub chat_groups: bool,
     /// Fetch pages for Chat link previews on behalf of this server's users
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
@@ -180,6 +202,23 @@ pub struct AppOrigins {
 }
 
 impl AppOrigins {
+    /// Placeholders while a configuration error is reported.
+    fn unset() -> Self {
+        let none = String::new;
+        AppOrigins {
+            account: none(),
+            drive: none(),
+            chat: none(),
+            office: none(),
+            editor: none(),
+            maps: none(),
+            photos: none(),
+            contacts: none(),
+            mail: none(),
+            pass: none(),
+        }
+    }
+
     /// The origin a forked child session must be consumed from.
     pub fn for_client(&self, client: crate::sessions::ClientType) -> Option<&str> {
         use crate::sessions::ClientType;
@@ -268,10 +307,49 @@ impl Config {
     /// Loads config from the environment, panicking on missing required vars or
     /// a too-short JWT secret (mirrors the Go `Load`).
     pub fn load() -> Config {
-        let app_env = get_env("APP_ENV", "development");
+        let env = Env::process();
+        let cfg = Self::from_env(&env);
+        if let Err(errors) = env.finish() {
+            eprintln!("kutup-server: the configuration is not valid:");
+            for error in errors {
+                eprintln!("  {error}");
+            }
+            std::process::exit(2);
+        }
+        cfg
+    }
+
+    /// Reads every setting through `env`, which records each value it cannot
+    /// read (a number that is not one, an unknown choice) instead of falling
+    /// back to a default: a typo must stop the server, not change what it does.
+    fn from_env(env: &Env) -> Config {
+        let get_env = |key: &str, fallback: &str| env.string(key, fallback);
+        let get_env_i64 = |key: &str, fallback: i64| env.int(key, fallback);
+        let get_env_bool = |key: &str, fallback: bool| env.bool(key, fallback);
+        let must_env = |key: &str| env.required(key);
+        let app_env = env.choice(
+            "APP_ENV",
+            "development",
+            &["development", "test", "production"],
+        );
+        let rate_limits_relaxed = env.bool("RATE_LIMITS_RELAXED", false);
+        if rate_limits_relaxed && app_env != "test" {
+            env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
+        }
+        crate::ratelimit::configure(env, rate_limits_relaxed);
+        let registration_mode = crate::registration::RegistrationMode::parse(&env.choice(
+            "REGISTRATION_MODE",
+            "off",
+            &["on", "code", "off"],
+        ))
+        .unwrap_or(crate::registration::RegistrationMode::Off);
+        let federation_test_allow_private = env.bool("FEDERATION_TEST_ALLOW_PRIVATE", false);
+        if federation_test_allow_private && app_env != "test" {
+            env.error("FEDERATION_TEST_ALLOW_PRIVATE may only be enabled with APP_ENV=test");
+        }
         let chat_max_active_devices = get_env_i64("CHAT_MAX_ACTIVE_DEVICES", 10);
         if !(1..=10).contains(&chat_max_active_devices) {
-            panic!("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
+            env.error("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
         }
         let chat_media_max_plaintext_bytes = get_env_i64(
             "CHAT_MEDIA_MAX_PLAINTEXT_BYTES",
@@ -280,17 +358,21 @@ impl Config {
         if !(1..=kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64)
             .contains(&chat_media_max_plaintext_bytes)
         {
-            panic!("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
+            env.error("CHAT_MEDIA_MAX_PLAINTEXT_BYTES must be between 1 and 2147483648");
         }
         let chat_mailbox_retention_days = get_env_i64("CHAT_MAILBOX_RETENTION_DAYS", 30);
-        crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
-            .unwrap_or_else(|error| panic!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
+        if let Err(error) =
+            crate::site_settings::validate_chat_delivery_retention_days(chat_mailbox_retention_days)
+        {
+            env.error(format!("CHAT_MAILBOX_RETENTION_DAYS: {error}"));
+        }
         let chat_media_delivery_retention_days =
             get_env_i64("CHAT_MEDIA_DELIVERY_RETENTION_DAYS", 45);
-        crate::site_settings::validate_chat_delivery_retention_days(
+        if let Err(error) = crate::site_settings::validate_chat_delivery_retention_days(
             chat_media_delivery_retention_days,
-        )
-        .unwrap_or_else(|error| panic!("CHAT_MEDIA_DELIVERY_RETENTION_DAYS: {error}"));
+        ) {
+            env.error(format!("CHAT_MEDIA_DELIVERY_RETENTION_DAYS: {error}"));
+        }
         let federation_server_name = get_env("FEDERATION_SERVER_NAME", "");
         let chat_server_name = get_env(
             "CHAT_SERVER_NAME",
@@ -300,18 +382,31 @@ impl Config {
                 &federation_server_name
             },
         );
-        kutup_federation_proto::validate_server_name(&chat_server_name).unwrap_or_else(|error| {
-            panic!("CHAT_SERVER_NAME must be a canonical DNS name: {error}")
-        });
+        if let Err(error) = kutup_federation_proto::validate_server_name(&chat_server_name) {
+            env.error(format!(
+                "CHAT_SERVER_NAME must be a canonical DNS name: {error}"
+            ));
+        }
         if !federation_server_name.is_empty() && chat_server_name != federation_server_name {
-            panic!(
-                "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured"
+            env.error(
+                "CHAT_SERVER_NAME must match FEDERATION_SERVER_NAME when federation is configured",
             );
         }
         let app_env_for_apps = app_env.clone();
         let cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
+            opaque_setup_keys: {
+                let value = env.opaque_setup_keys();
+                if value.is_empty() {
+                    Default::default()
+                } else {
+                    crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
+                        env.error(format!("OPAQUE_SETUP_KEYS: {error}"));
+                        Default::default()
+                    })
+                }
+            },
             s3_endpoint: must_env("S3_ENDPOINT"),
             s3_access_key: must_env("S3_ACCESS_KEY"),
             s3_secret_key: must_env("S3_SECRET_KEY"),
@@ -319,13 +414,14 @@ impl Config {
             s3_region: get_env("S3_REGION", "us-east-1"),
             app_env,
             admin_account: get_env("ADMIN_ACCOUNT", ""),
-            break_glass_admin_email: break_glass_email(&get_env("ADMIN_ACCOUNT", "")),
+            break_glass_admin_username: break_glass_username(&get_env("ADMIN_ACCOUNT", "")),
             server_url: get_env("SERVER_URL", "http://kutup.local"),
             allowed_origins: get_env("ALLOWED_ORIGINS", "https://localhost:38443"),
             storage_total_bytes: get_env_i64("STORAGE_TOTAL_BYTES", 0),
             // Set but blank turns the probe off (a store other than SeaweedFS).
-            seaweedfs_master_url: std::env::var("SEAWEEDFS_MASTER_URL")
-                .unwrap_or_else(|_| "http://seaweedfs-master:9333".to_string()),
+            seaweedfs_master_url: env
+                .raw("SEAWEEDFS_MASTER_URL")
+                .unwrap_or_else(|| "http://seaweedfs-master:9333".to_string()),
             trash_retention_days: get_env_i64("TRASH_RETENTION_DAYS", 30),
             chat_mailbox_retention_days,
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
@@ -340,31 +436,53 @@ impl Config {
             mail_send_per_hour: get_env_i64("MAIL_SEND_RECIPIENTS_PER_HOUR", 100),
             mail_send_per_day: get_env_i64("MAIL_SEND_RECIPIENTS_PER_DAY", 500),
             mail_test_key_origin: get_env("MAIL_TEST_KEY_ORIGIN", ""),
-            mail_outside_sending: OutsideSending::parse(&get_env("MAIL_OUTSIDE_SENDING", "off")),
-            mail_batch_chunk: get_env_i64("MAIL_BATCH_CHUNK", 5_000).max(1) as usize,
+            mail_outside_sending: OutsideSending::parse(&env.choice(
+                "MAIL_OUTSIDE_SENDING",
+                "off",
+                &["off", "admins", "on"],
+            )),
+            mail_batch_chunk: match get_env_i64("MAIL_BATCH_CHUNK", 5_000) {
+                0 => {
+                    env.error("MAIL_BATCH_CHUNK must be at least 1");
+                    1
+                }
+                chunk => chunk as usize,
+            },
             mail_default_delay_send_seconds: match get_env_i64(
                 "MAIL_DEFAULT_DELAY_SEND_SECONDS",
                 10,
             ) {
                 seconds @ (0 | 5 | 10 | 20) => seconds as i32,
-                _ => 10,
+                _ => {
+                    env.error("MAIL_DEFAULT_DELAY_SEND_SECONDS must be 0, 5, 10 or 20");
+                    10
+                }
             },
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
+            name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
+            old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),
+            name_sweep_seconds: get_env_i64("NAME_SWEEP_SECONDS", 3600).clamp(1, 86_400),
             mail_labels_per_account: get_env_i64("MAIL_LABELS_PER_ACCOUNT", 500),
             mail_filters_per_account: get_env_i64("MAIL_FILTERS_PER_ACCOUNT", 200),
             mail_sender_rules_per_account: get_env_i64("MAIL_SENDER_RULES_PER_ACCOUNT", 5000),
             feedback_github_repository: github_repository(&get_env(
                 "FEEDBACK_GITHUB_REPOSITORY",
                 "kutupbt/kutup",
-            )),
+            ))
+            .unwrap_or_else(|error| {
+                env.error(error);
+                None
+            }),
             federation_server_name,
             federation_signing_key: get_env("FEDERATION_SIGNING_KEY", ""),
             federation_next_signing_key: get_env("FEDERATION_NEXT_SIGNING_KEY", ""),
-            federation_test_allow_private: get_env_bool("FEDERATION_TEST_ALLOW_PRIVATE", false),
-            chat_groups: get_env_bool("CHAT_GROUPS", true),
+            federation_test_allow_private,
+            rate_limits_relaxed,
+            registration_mode,
+            chat_groups: get_env_bool("CHAT_GROUPS", false),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
             chat_web_push_hosts: get_env(
@@ -387,43 +505,70 @@ impl Config {
             ),
             chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
             chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
-            apps: resolve_app_origins(|k| std::env::var(k).ok(), &app_env_for_apps)
-                .unwrap_or_else(|error| panic!("app origins: {error}")),
+            apps: resolve_app_origins(|k| env.raw(k), &app_env_for_apps).unwrap_or_else(|error| {
+                env.error(format!("app origins: {error}"));
+                AppOrigins::unset()
+            }),
         };
+        for origin in cfg.allowed_origins.split(',').map(str::trim) {
+            if origin == "*" {
+                if cfg.app_env == "production" {
+                    env.error("ALLOWED_ORIGINS may not be * when APP_ENV=production");
+                }
+            } else if canonical_origin("ALLOWED_ORIGINS", origin).is_err() {
+                env.error(format!(
+                    "ALLOWED_ORIGINS: {origin:?} is not an http(s) origin"
+                ));
+            }
+        }
+        if url::Url::parse(&cfg.server_url).is_err() {
+            env.error("SERVER_URL must be a URL");
+        }
         if cfg.jwt_secret.len() < 32 {
-            panic!("JWT_SECRET must be at least 32 characters long");
+            env.error("JWT_SECRET must be at least 32 characters long");
         }
         if !cfg.mail_inbound_token.is_empty() && cfg.mail_inbound_token.len() < 32 {
-            panic!("MAIL_INBOUND_TOKEN must be at least 32 characters long");
+            env.error("MAIL_INBOUND_TOKEN must be at least 32 characters long");
+        }
+        if !cfg.admin_account.trim().is_empty() && parse_admin_account(&cfg.admin_account).is_none()
+        {
+            env.error(
+                "ADMIN_ACCOUNT must be username:password (a username of 3 to 32 lowercase letters, digits, _ or -)",
+            );
         }
         cfg
     }
 }
 
-/// Extracts the break-glass admin's email (the first field of `email:username:password`) —
-/// mirrors `breakGlassEmail`. Empty when the account is unset or malformed.
-fn break_glass_email(admin_account: &str) -> String {
-    let acct = admin_account.trim();
-    if acct.is_empty() {
-        return String::new();
-    }
-    let parts: Vec<&str> = acct.splitn(3, ':').collect();
-    if parts.len() != 3 {
-        return String::new();
-    }
-    parts[0].trim().to_string()
+/// The break-glass admin's username (the first field of `username:password`).
+/// Empty when the account is unset or malformed.
+fn break_glass_username(admin_account: &str) -> String {
+    parse_admin_account(admin_account)
+        .map(|(username, _)| username)
+        .unwrap_or_default()
 }
 
-fn must_env(key: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| panic!("required environment variable not set: {key}"))
+/// `ADMIN_ACCOUNT` as `(username, password)`: `username:password` (the
+/// password may hold colons). A username that is not one an account may
+/// have (lowercase letters, digits, `_` and `-`, 3 to 32) is refused, since
+/// it could never sign in — so is the retired `email:username:password`.
+pub(crate) fn parse_admin_account(admin_account: &str) -> Option<(String, String)> {
+    let (username, password) = admin_account.trim().split_once(':')?;
+    let username = username.trim();
+    let valid = (3..=32).contains(&username.len())
+        && username
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+    (valid && !password.trim().is_empty())
+        .then(|| (username.to_string(), password.trim().to_string()))
 }
 
 /// `owner/repo` on GitHub, or `off`. Anything else stops the server: a
 /// mistyped repository would send people somewhere unexpected.
-fn github_repository(value: &str) -> Option<String> {
+fn github_repository(value: &str) -> Result<Option<String>, String> {
     let value = value.trim();
     if value.eq_ignore_ascii_case("off") {
-        return None;
+        return Ok(None);
     }
     let part = |p: &str| {
         !p.is_empty()
@@ -432,39 +577,225 @@ fn github_repository(value: &str) -> Option<String> {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     match value.split_once('/') {
-        Some((owner, repo)) if part(owner) && part(repo) => Some(value.to_string()),
-        _ => panic!("FEEDBACK_GITHUB_REPOSITORY must be owner/repo or off, not {value:?}"),
+        Some((owner, repo)) if part(owner) && part(repo) => Ok(Some(value.to_string())),
+        _ => Err(format!(
+            "FEEDBACK_GITHUB_REPOSITORY must be owner/repo or off, not {value:?}"
+        )),
     }
 }
 
-fn get_env(key: &str, fallback: &str) -> String {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => v,
-        _ => fallback.to_string(),
-    }
+/// The environment as the server reads it: each value checked as it is read,
+/// every problem recorded, all of them reported at once by `finish`.
+type Lookup = Box<dyn Fn(&str) -> Option<String>>;
+
+pub(crate) struct Env {
+    lookup: Lookup,
+    names: Box<dyn Fn() -> Vec<String>>,
+    errors: std::cell::RefCell<Vec<String>>,
+    /// Every name looked up: `.env.example` must list each one.
+    read: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
-fn get_env_i64(key: &str, fallback: i64) -> i64 {
-    match std::env::var(key) {
-        Ok(v) if !v.is_empty() => v.parse().ok().filter(|&n| n >= 0).unwrap_or(fallback),
-        _ => fallback,
+impl Env {
+    /// The process environment.
+    pub(crate) fn process() -> Self {
+        Self {
+            lookup: Box::new(|key| std::env::var(key).ok()),
+            names: Box::new(|| {
+                std::env::vars_os()
+                    .filter_map(|(k, _)| k.into_string().ok())
+                    .collect()
+            }),
+            errors: std::cell::RefCell::new(Vec::new()),
+            read: Default::default(),
+        }
     }
-}
 
-fn get_env_bool(key: &str, fallback: bool) -> bool {
-    match std::env::var(key) {
-        Ok(value) if !value.is_empty() => match value.to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" => true,
-            "0" | "false" | "no" => false,
-            _ => fallback,
-        },
-        _ => fallback,
+    /// A fixed set of variables (tests).
+    #[cfg(test)]
+    pub(crate) fn from_pairs(pairs: &[(&str, &str)]) -> Self {
+        let map: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let names: Vec<String> = map.keys().cloned().collect();
+        Self {
+            lookup: Box::new(move |key| map.get(key).cloned()),
+            names: Box::new(move || names.clone()),
+            errors: std::cell::RefCell::new(Vec::new()),
+            read: Default::default(),
+        }
+    }
+
+    pub(crate) fn error(&self, message: impl Into<String>) {
+        self.errors.borrow_mut().push(message.into());
+    }
+
+    /// The value as set, even when blank.
+    pub(crate) fn raw(&self, key: &str) -> Option<String> {
+        self.read.borrow_mut().insert(key.to_owned());
+        (self.lookup)(key)
+    }
+
+    /// The value, or `None` when unset or blank.
+    fn set(&self, key: &str) -> Option<String> {
+        self.raw(key).filter(|value| !value.trim().is_empty())
+    }
+
+    pub(crate) fn string(&self, key: &str, fallback: &str) -> String {
+        self.set(key).unwrap_or_else(|| fallback.to_string())
+    }
+
+    /// `OPAQUE_SETUP_KEYS`, or the file `OPAQUE_SETUP_KEYS_FILE` names (a
+    /// secret mounted as a file): exactly one of the two. Blank on an error.
+    fn opaque_setup_keys(&self) -> String {
+        match (
+            self.set("OPAQUE_SETUP_KEYS"),
+            self.set("OPAQUE_SETUP_KEYS_FILE"),
+        ) {
+            (Some(value), None) => value,
+            (None, Some(path)) => match std::fs::read_to_string(path.trim()) {
+                Ok(value) if !value.trim().is_empty() => value.trim().to_owned(),
+                Ok(_) => {
+                    self.error("OPAQUE_SETUP_KEYS_FILE names an empty file");
+                    String::new()
+                }
+                Err(error) => {
+                    self.error(format!("OPAQUE_SETUP_KEYS_FILE: {error}"));
+                    String::new()
+                }
+            },
+            (Some(_), Some(_)) => {
+                self.error("set OPAQUE_SETUP_KEYS or OPAQUE_SETUP_KEYS_FILE, not both");
+                String::new()
+            }
+            (None, None) => {
+                self.error("OPAQUE_SETUP_KEYS (or OPAQUE_SETUP_KEYS_FILE) is required");
+                String::new()
+            }
+        }
+    }
+
+    pub(crate) fn required(&self, key: &str) -> String {
+        self.set(key).unwrap_or_else(|| {
+            self.error(format!("{key} is required"));
+            String::new()
+        })
+    }
+
+    /// A whole number of zero or more.
+    pub(crate) fn int(&self, key: &str, fallback: i64) -> i64 {
+        match self.set(key) {
+            None => fallback,
+            Some(value) => match value.trim().parse::<i64>() {
+                Ok(n) if n >= 0 => n,
+                _ => {
+                    self.error(format!(
+                        "{key} must be a whole number of 0 or more, not {value:?}"
+                    ));
+                    fallback
+                }
+            },
+        }
+    }
+
+    /// A whole number of one or more.
+    pub(crate) fn positive(&self, key: &str, fallback: u64) -> u64 {
+        match self.set(key) {
+            None => fallback,
+            Some(value) => match value.trim().parse::<u64>() {
+                Ok(n) if n > 0 => n,
+                _ => {
+                    self.error(format!(
+                        "{key} must be a whole number of 1 or more, not {value:?}"
+                    ));
+                    fallback
+                }
+            },
+        }
+    }
+
+    pub(crate) fn bool(&self, key: &str, fallback: bool) -> bool {
+        match self.set(key) {
+            None => fallback,
+            Some(value) => match value.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" => true,
+                "0" | "false" | "no" => false,
+                _ => {
+                    self.error(format!("{key} must be true or false, not {value:?}"));
+                    fallback
+                }
+            },
+        }
+    }
+
+    /// One of `choices` (compared without case), lowercased.
+    pub(crate) fn choice(&self, key: &str, fallback: &str, choices: &[&str]) -> String {
+        match self.set(key) {
+            None => fallback.to_string(),
+            Some(value) => {
+                let value = value.trim().to_ascii_lowercase();
+                if choices.contains(&value.as_str()) {
+                    value
+                } else {
+                    self.error(format!(
+                        "{key} must be one of {}, not {value:?}",
+                        choices.join(", ")
+                    ));
+                    fallback.to_string()
+                }
+            }
+        }
+    }
+
+    /// The set names starting with `prefix` that `known` does not list.
+    pub(crate) fn unknown_with_prefix(
+        &self,
+        prefix: &str,
+        known: &[(&str, u64)],
+    ) -> Option<Vec<String>> {
+        let names = (self.names)();
+        let unknown: Vec<String> = names
+            .into_iter()
+            .filter(|name| name.starts_with(prefix) && !known.iter().any(|(k, _)| k == name))
+            .collect();
+        (!unknown.is_empty()).then_some(unknown)
+    }
+
+    /// Every problem found, or `Ok` when there was none.
+    pub(crate) fn finish(&self) -> Result<(), Vec<String>> {
+        let errors = self.errors.take();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_account_is_read_as_its_owner_meant() {
+        let read = |v: &str| parse_admin_account(v);
+        assert_eq!(
+            read("admin:secret"),
+            Some(("admin".into(), "secret".into()))
+        );
+        // A password with colons stays whole.
+        assert_eq!(read("admin:pa:ss"), Some(("admin".into(), "pa:ss".into())));
+        // The retired `email:username:password` form is refused, not misread.
+        assert_eq!(read("a@b.c:admin:pa:ss"), None);
+        assert_eq!(break_glass_username("a@b.c:admin:x"), "");
+        // A username no account may have, or no password: refused.
+        assert_eq!(read("Admin:secret"), None);
+        assert_eq!(read("ad:secret"), None);
+        assert_eq!(read("admin:"), None);
+        assert_eq!(read("admin"), None);
+        assert_eq!(break_glass_username("admin:x"), "admin");
+    }
     use std::collections::HashMap;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -631,6 +962,137 @@ mod outside_sending_tests {
 }
 
 #[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    const REQUIRED: &[(&str, &str)] = &[
+        ("DATABASE_URL", "postgres://x"),
+        ("JWT_SECRET", "0123456789abcdef0123456789abcdef"),
+        (
+            "OPAQUE_SETUP_KEYS",
+            "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ),
+        ("S3_ENDPOINT", "http://s3"),
+        ("S3_ACCESS_KEY", "a"),
+        ("S3_SECRET_KEY", "b"),
+    ];
+
+    fn errors(extra: &[(&str, &str)]) -> Vec<String> {
+        let pairs: Vec<(&str, &str)> = REQUIRED.iter().chain(extra).copied().collect();
+        let env = Env::from_pairs(&pairs);
+        Config::from_env(&env);
+        env.finish().err().unwrap_or_default()
+    }
+
+    #[test]
+    fn a_valid_environment_has_no_errors() {
+        assert_eq!(errors(&[]), Vec::<String>::new());
+        assert_eq!(
+            errors(&[("APP_ENV", "test"), ("RATE_LIMITS_RELAXED", "true")]),
+            Vec::<String>::new()
+        );
+        // Test stacks only: not development (the default) either.
+        assert!(errors(&[("RATE_LIMITS_RELAXED", "true")])
+            .iter()
+            .any(|e| e.starts_with("RATE_LIMITS_RELAXED")));
+    }
+
+    #[test]
+    fn every_bad_value_is_reported_not_defaulted() {
+        let found = errors(&[
+            ("APP_ENV", "prod"),
+            ("TRASH_RETENTION_DAYS", "thirty"),
+            ("CHAT_GROUPS", "maybe"),
+            ("MAIL_OUTSIDE_SENDING", "yes"),
+            ("MAIL_DEFAULT_DELAY_SEND_SECONDS", "7"),
+            ("RATE_LIMIT_LOGIN_PER_MIN", "0"),
+            ("RATE_LIMIT_LOGN_PER_MIN", "50"),
+            ("ADMIN_ACCOUNT", "a@b.c:admin:pw"),
+        ]);
+        for name in [
+            "APP_ENV",
+            "TRASH_RETENTION_DAYS",
+            "CHAT_GROUPS",
+            "MAIL_OUTSIDE_SENDING",
+            "MAIL_DEFAULT_DELAY_SEND_SECONDS",
+            "RATE_LIMIT_LOGIN_PER_MIN",
+            "RATE_LIMIT_LOGN_PER_MIN",
+            "ADMIN_ACCOUNT",
+        ] {
+            assert!(
+                found.iter().any(|e| e.starts_with(name)),
+                "{name} not reported: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_required_values_are_all_reported() {
+        let env = Env::from_pairs(&[]);
+        Config::from_env(&env);
+        let found = env.finish().unwrap_err();
+        for (name, _) in REQUIRED {
+            assert!(
+                found.iter().any(|e| e.starts_with(name)),
+                "{name}: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_switches_are_refused_in_production() {
+        let found = errors(&[
+            ("APP_ENV", "production"),
+            ("KUTUP_BASE_DOMAIN", "example.org"),
+            ("RATE_LIMITS_RELAXED", "true"),
+            ("FEDERATION_TEST_ALLOW_PRIVATE", "true"),
+            ("ALLOWED_ORIGINS", "*"),
+        ]);
+        for name in [
+            "RATE_LIMITS_RELAXED",
+            "FEDERATION_TEST_ALLOW_PRIVATE",
+            "ALLOWED_ORIGINS",
+        ] {
+            assert!(
+                found.iter().any(|e| e.starts_with(name)),
+                "{name}: {found:?}"
+            );
+        }
+        // The private-peer switch is for APP_ENV=test only.
+        assert!(errors(&[("FEDERATION_TEST_ALLOW_PRIVATE", "true")])
+            .iter()
+            .any(|e| e.starts_with("FEDERATION_TEST_ALLOW_PRIVATE")));
+    }
+
+    #[test]
+    fn opaque_setup_keys_from_a_file_or_the_variable_not_both() {
+        let dir = std::env::temp_dir().join(format!("kutup-opaque-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("keys");
+        std::fs::write(&file, "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n").unwrap();
+        let path = file.to_str().unwrap();
+        let without: Vec<(&str, &str)> = REQUIRED
+            .iter()
+            .filter(|(k, _)| *k != "OPAQUE_SETUP_KEYS")
+            .copied()
+            .collect();
+        let env =
+            Env::from_pairs(&[without.as_slice(), &[("OPAQUE_SETUP_KEYS_FILE", path)]].concat());
+        assert_eq!(
+            env.opaque_setup_keys(),
+            "1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+        assert!(env.errors.borrow().is_empty());
+        let both = Env::from_pairs(&[REQUIRED, &[("OPAQUE_SETUP_KEYS_FILE", path)]].concat());
+        assert_eq!(both.opaque_setup_keys(), "");
+        assert!(both.errors.borrow()[0].contains("not both"));
+        let neither = Env::from_pairs(&without);
+        assert_eq!(neither.opaque_setup_keys(), "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod feedback_repository_tests {
     use super::github_repository;
 
@@ -638,25 +1100,202 @@ mod feedback_repository_tests {
     fn owner_slash_repo_or_off() {
         assert_eq!(
             github_repository("kutupbt/kutup"),
-            Some("kutupbt/kutup".into())
+            Ok(Some("kutupbt/kutup".into()))
         );
         assert_eq!(
             github_repository(" my-org/my.repo_2 "),
-            Some("my-org/my.repo_2".into())
+            Ok(Some("my-org/my.repo_2".into()))
         );
-        assert_eq!(github_repository("off"), None);
-        assert_eq!(github_repository("OFF"), None);
+        assert_eq!(github_repository("off"), Ok(None));
+        assert_eq!(github_repository("OFF"), Ok(None));
     }
 
     #[test]
-    #[should_panic(expected = "FEEDBACK_GITHUB_REPOSITORY")]
-    fn a_url_is_refused() {
-        github_repository("https://github.com/kutupbt/kutup");
+    fn a_url_or_a_bare_name_is_refused() {
+        for value in ["https://github.com/kutupbt/kutup", "kutup"] {
+            assert!(github_repository(value)
+                .unwrap_err()
+                .contains("FEEDBACK_GITHUB_REPOSITORY"));
+        }
+    }
+}
+
+/// `.env.example` is the one list of settings (docs/self-hosting.md): every
+/// name the server reads and every name a compose file or script reads, each
+/// exactly once, nothing else; and each setting the server reads reaches the
+/// backend container from `.env`, unless Compose sets it itself.
+#[cfg(test)]
+mod env_example {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+    /// Read by a compose file or a script, not by the server: the name and a
+    /// file that reads it.
+    const OUTSIDE_THE_SERVER: &[(&str, &str)] = &[
+        ("POSTGRES_PASSWORD", "docker-compose.yml"),
+        ("POSTGRES_DB", "docker-compose.yml"),
+        ("POSTGRES_USER", "docker-compose.yml"),
+        ("KUTUP_HTTP_PORT", "docker-compose.yml"),
+        ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
+        ("CHAT_TURN_REALM", "docker-compose.yml"),
+        ("CHAT_SFU_TURN_DOMAIN", "docker-compose.yml"),
+        ("KUTUP_ACME_EMAIL", "docker-compose.acme.yml"),
+        ("KUTUP_ACME_DOMAINS", "docker-compose.acme.yml"),
+        ("KUTUP_ACME_EXTRA_DOMAINS", "docker-compose.acme.yml"),
+        ("KUTUP_ACME_STAGING", "docker-compose.acme.yml"),
+        ("STALWART_ADMIN_SECRET", "docker-compose.mail.yml"),
+        ("MAIL_SMTP_PORT", "docker-compose.mail.yml"),
+        ("KUTUP_SERVER_IMAGE", "docker-compose.images.yml"),
+        ("KUTUP_WEB_IMAGE", "docker-compose.images.yml"),
+        (
+            "KUTUP_STALWART_SETUP_IMAGE",
+            "docker-compose.mail-images.yml",
+        ),
+        ("KUTUP_BACKUP_PASSPHRASE", "scripts/backup-postgres.sh"),
+        ("KUTUP_BACKUP_KEEP_DAYS", "scripts/backup-postgres.sh"),
+    ];
+
+    /// Read by the server, but not from `.env` under Compose: it builds or
+    /// fixes them itself (DATABASE_URL from POSTGRES_*, the cache directory,
+    /// the port and mail's addresses inside its network, OPAQUE_SETUP_KEYS in
+    /// place of the file) or only test stacks set them.
+    const NOT_FROM_ENV_FILE: &[&str] = &[
+        "DATABASE_URL",
+        "MAPS_CACHE_DIR",
+        "PORT",
+        "MAIL_LMTP_BIND",
+        "MAIL_SUBMISSION_ADDR",
+        "OPAQUE_SETUP_KEYS_FILE",
+        "MAIL_TEST_KEY_ORIGIN",
+    ];
+
+    /// The compose files a self-hoster combines (docs/self-hosting.md).
+    const COMPOSE_FILES: &[&str] = &[
+        "docker-compose.yml",
+        "docker-compose.mail.yml",
+        "docker-compose.acme.yml",
+        "docker-compose.external-s3.yml",
+        "docker-compose.images.yml",
+        "docker-compose.mail-images.yml",
+    ];
+
+    fn file(path: &str) -> String {
+        std::fs::read_to_string(format!("{ROOT}/{path}"))
+            .unwrap_or_else(|error| panic!("{path}: {error}"))
+    }
+
+    /// Names read straight from the process environment, outside `Env`
+    /// (`PORT`, the OpenTelemetry settings): the quoted name in
+    /// `env::var("…")` or `nonempty_env("…")`, outside test modules.
+    fn read_directly() -> BTreeSet<String> {
+        fn walk(dir: &std::path::Path, found: &mut BTreeSet<String>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, found);
+                    continue;
+                }
+                // Rust files only; a `*tests.rs` file is a test module.
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).unwrap();
+                let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+                for call in ["env::var(\"", "nonempty_env(\""] {
+                    for rest in code.split(call).skip(1) {
+                        let name: String = rest
+                            .chars()
+                            .take_while(|c| {
+                                c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_'
+                            })
+                            .collect();
+                        if !name.is_empty() {
+                            found.insert(name);
+                        }
+                    }
+                }
+            }
+        }
+        let mut found = BTreeSet::new();
+        walk(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut found,
+        );
+        found
+    }
+
+    /// Every name the server reads: all of `Config::from_env` (each read is
+    /// unconditional), the rate limits it checks, and the direct reads.
+    fn server_reads() -> BTreeSet<String> {
+        let env = Env::from_pairs(&[]);
+        Config::from_env(&env);
+        let mut names = env.read.take();
+        names.extend(read_directly());
+        names
+    }
+
+    /// Each setting `.env.example` lists, as `NAME=` or commented `# NAME=`.
+    fn listed() -> Vec<String> {
+        file(".env.example")
+            .lines()
+            .filter_map(|line| {
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                let (name, _) = line.split_once('=')?;
+                (!name.is_empty()
+                    && name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+                .then(|| name.to_owned())
+            })
+            .collect()
     }
 
     #[test]
-    #[should_panic(expected = "FEEDBACK_GITHUB_REPOSITORY")]
-    fn a_bare_name_is_refused() {
-        github_repository("kutup");
+    fn env_example_lists_every_setting_once() {
+        let listed = listed();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let twice: Vec<&String> = listed
+            .iter()
+            .filter(|name| !seen.insert((*name).clone()))
+            .collect();
+        assert!(
+            twice.is_empty(),
+            ".env.example lists these twice: {twice:?}"
+        );
+
+        for (name, path) in OUTSIDE_THE_SERVER {
+            assert!(file(path).contains(name), "{path} does not read {name}");
+        }
+        let server = server_reads();
+        let mut expected = server.clone();
+        expected.extend(OUTSIDE_THE_SERVER.iter().map(|(name, _)| name.to_string()));
+        let missing: Vec<&String> = expected.difference(&seen).collect();
+        assert!(
+            missing.is_empty(),
+            "read but not in .env.example: {missing:?}"
+        );
+        let unread: Vec<&String> = seen.difference(&expected).collect();
+        assert!(
+            unread.is_empty(),
+            "in .env.example but read by nothing (or add it to OUTSIDE_THE_SERVER): {unread:?}"
+        );
+    }
+
+    #[test]
+    fn every_setting_reaches_the_backend_from_the_env_file() {
+        let compose: String = COMPOSE_FILES.iter().map(|path| file(path)).collect();
+        let unwired: Vec<String> = server_reads()
+            .into_iter()
+            .filter(|name| !NOT_FROM_ENV_FILE.contains(&name.as_str()))
+            .filter(|name| !compose.contains(&format!("{name}: ${{{name}")))
+            .collect();
+        assert!(
+            unwired.is_empty(),
+            "the server reads these, but no compose file passes them from .env: {unwired:?}"
+        );
     }
 }

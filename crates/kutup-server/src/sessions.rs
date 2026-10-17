@@ -173,22 +173,37 @@ pub struct LiveSession {
     pub user_id: Uuid,
     pub client: ClientType,
     pub is_admin: bool,
+    /// A digest of the account's security state (its password hash, 2FA,
+    /// role, username and key binding). Never sent as is: the session
+    /// version header is an HMAC of it (`middleware::session_version`).
+    pub version: String,
 }
 
 /// Confirms the session is neither revoked nor expired and the user is still
 /// active. Called for every authenticated request.
 pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<LiveSession> {
-    let row: Option<(String, bool)> = sqlx::query_as(
-        "SELECT s.client_type, u.is_admin
+    let row: Option<(String, bool, String)> = sqlx::query_as(
+        "SELECT s.client_type, u.is_admin,
+                encode(sha256(convert_to(
+                    length(COALESCE(encode(u.opaque_record, 'hex'), '')) || ':' ||
+                    COALESCE(encode(u.opaque_record, 'hex'), '') ||
+                    u.totp_enabled::text || ',' || u.is_admin::text || ',' ||
+                    length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
+                    length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
+                    'UTF8')), 'hex')
          FROM auth_sessions s JOIN users u ON u.id = s.user_id
          WHERE s.id = $1 AND s.user_id = $2 AND s.revoked_at IS NULL
-           AND s.expires_at > now() AND u.is_active",
+           AND s.expires_at > now() AND u.is_active
+           -- A forked session lives only while its sign-in does.
+           AND NOT EXISTS (SELECT 1 FROM auth_sessions p
+                           WHERE p.id = s.parent_session_id AND p.revoked_at IS NOT NULL)",
     )
     .bind(session_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await?;
-    let (client_type, is_admin) = row.ok_or_else(|| AppError::unauthorized("unauthorized"))?;
+    let (client_type, is_admin, version) =
+        row.ok_or_else(|| AppError::unauthorized("unauthorized"))?;
     let client =
         ClientType::parse(&client_type).ok_or_else(|| AppError::unauthorized("unauthorized"))?;
     Ok(LiveSession {
@@ -196,6 +211,7 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
         user_id,
         client,
         is_admin,
+        version,
     })
 }
 
@@ -282,6 +298,8 @@ pub async fn refresh(
                 user_id,
                 client,
                 is_admin,
+                // A refresh answers no account request; the next one says it.
+                version: String::new(),
             },
             refresh_token: next,
         });
@@ -325,6 +343,7 @@ pub async fn refresh(
             user_id,
             client,
             is_admin,
+            version: String::new(),
         },
     })
 }
@@ -390,13 +409,26 @@ pub async fn revoke_all_for_user(
     user_id: Uuid,
     keep: Option<Uuid>,
 ) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    revoke_all_for_user_in(&mut tx, user_id, keep).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// [`revoke_all_for_user`] inside `tx`, so a credential change and the end
+/// of the sign-ins it ends commit together.
+pub async fn revoke_all_for_user_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    keep: Option<Uuid>,
+) -> AppResult<()> {
     let keep_root: Option<Uuid> = match keep {
         Some(id) => {
             sqlx::query_scalar(
                 "SELECT COALESCE(parent_session_id, id) FROM auth_sessions WHERE id = $1",
             )
             .bind(id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await?
         }
         None => None,
@@ -408,7 +440,7 @@ pub async fn revoke_all_for_user(
     )
     .bind(user_id)
     .bind(keep_root)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -508,7 +540,8 @@ pub async fn consume_fork(
     }
     let parent: Option<(Uuid, bool)> = sqlx::query_as(
         "SELECT s.user_id, u.is_admin FROM auth_sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active",
+         WHERE s.id = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.is_active
+         FOR UPDATE OF s",
     )
     .bind(parent_id)
     .fetch_optional(&mut *tx)

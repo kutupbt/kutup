@@ -8,7 +8,7 @@ impl MlsClient {
     /// durable secret-tree generation.
     pub async fn inspect_anonymous_application_envelope(
         &self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         send_id: Uuid,
         envelope: &AnonymousMlsDeviceEnvelopeV1,
     ) -> Result<MlsApplicationInspection> {
@@ -36,7 +36,7 @@ impl MlsClient {
     pub async fn apply_anonymous_application_envelope(
         &self,
         context: &MlsApplicationEnvelopeContext,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         envelope: &AnonymousMlsDeviceEnvelopeV1,
         expected_sender: &VerifiedMlsCredential,
     ) -> Result<AppliedInboundMlsApplication> {
@@ -111,7 +111,7 @@ impl MlsClient {
         let expected_message_id = context.send_id.to_string();
         if content.v == 0
             || content.v > ChatContent::VERSION
-            || content.message_id.as_deref() != Some(expected_message_id.as_str())
+            || content.message_id != expected_message_id.as_str()
             || content.sent_at.is_empty()
             || content.sent_at.len() > 128
         {
@@ -176,7 +176,7 @@ impl MlsClient {
         let sender_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == sender)
+            .find(|member| member.account.to_string() == sender)
             .ok_or_else(|| {
                 ChatError::Trust("MLS application sender is absent from the roster".into())
             })?;
@@ -198,7 +198,7 @@ impl MlsClient {
                     candidate.verify().map_err(ChatError::Trust)?;
                     if candidate.conversation_id != conversation.request.genesis.conversation_id
                         || candidate.incarnation != conversation.request.genesis.incarnation
-                        || candidate.account.canonical() != sender
+                        || candidate.account.to_string() != sender
                         || candidate.created_at < conversation.request.genesis.created_at
                         || candidate.created_at
                             > context
@@ -207,7 +207,7 @@ impl MlsClient {
                         || !conversation
                             .current_roster
                             .iter()
-                            .any(|member| member.address.canonical() == sender)
+                            .any(|member| member.account.to_string() == sender)
                     {
                         return Err(ChatError::Trust(
                             "MLS owner candidate differs from its authenticated group sender"
@@ -488,7 +488,7 @@ impl MlsClient {
             let sender_is_admin = conversation
                 .current_roster
                 .iter()
-                .any(|member| member.address.canonical() == sender && member.is_admin);
+                .any(|member| member.account.to_string() == sender && member.is_admin);
             if !is_group_control
                 && conversation
                     .current_authorization_policy
@@ -697,7 +697,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_text().map(|body| body.text) != Some(text.to_owned())
                 || content.reply_to.as_deref() != reply_to
@@ -727,7 +727,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -816,7 +816,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -832,7 +832,7 @@ impl MlsClient {
             .checked_add(1)
             .ok_or_else(|| ChatError::Invalid("MLS sender sequence overflow".into()))?;
         let content = build(seq).map_err(ChatError::Invalid)?;
-        if content.message_id.as_deref() != Some(send_id) {
+        if content.message_id != send_id {
             return Err(ChatError::Invalid(
                 "MLS content id must match its send id".into(),
             ));
@@ -888,7 +888,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_reaction() != Some(expected)
             {
@@ -912,7 +912,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -981,7 +981,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_message_mutation() != Some(expected)
             {
@@ -1005,7 +1005,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -1075,7 +1075,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_receipt() != Some(expected)
             {
@@ -1099,7 +1099,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -1160,7 +1160,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_typing() != Some(kutup_chat_proto::TypingBody { active })
             {
@@ -1184,7 +1184,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -1245,7 +1245,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_disappearing_timer() != Some(expected)
             {
@@ -1269,7 +1269,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -1363,7 +1363,7 @@ impl MlsClient {
             if existing.conversation_id != *conversation_id.as_bytes()
                 || existing.incarnation != incarnation
                 || existing.mls_group_id != mls_group_id
-                || content.message_id.as_deref() != Some(send_id)
+                || content.message_id != send_id
                 || content.sent_at != sent_at
                 || content.as_attachment().as_ref() != Some(&descriptor)
                 || content
@@ -1392,7 +1392,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &self_account)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -1529,7 +1529,7 @@ impl MlsClient {
                 let local_is_admin = conversation
                     .current_roster
                     .iter()
-                    .any(|member| member.address.canonical() == local_address && member.is_admin);
+                    .any(|member| member.account.to_string() == local_address && member.is_admin);
                 if !local_is_admin {
                     return Err(ChatError::Trust(
                         "local MLS sender is not permitted by group policy".into(),
@@ -1596,7 +1596,7 @@ impl MlsClient {
     pub async fn stage_application_delivery(
         &self,
         send_id: &str,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         capability: [u8; 16],
         packages: &[VerifiedMlsKeyPackage],
         now_seconds: i64,
@@ -1606,12 +1606,11 @@ impl MlsClient {
             .load_mls_outbox(send_id)
             .await?
             .ok_or_else(|| ChatError::Invalid("unknown MLS send id".into()))?;
-        let canonical_recipient = recipient.canonical();
-        if recipient.server.is_none()
-            || entry
-                .expected_recipients
-                .binary_search(&canonical_recipient)
-                .is_err()
+        let canonical_recipient = recipient.to_string();
+        if entry
+            .expected_recipients
+            .binary_search(&canonical_recipient)
+            .is_err()
         {
             return Err(ChatError::Trust(
                 "MLS application recipient is absent from the captured roster".into(),

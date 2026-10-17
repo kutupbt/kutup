@@ -1,11 +1,11 @@
-import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useQuery, type QueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { createOwnedCollectionV1, openOwnedCollectionV1, openSharedCollectionV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { CollectionRow } from '@kutup/session/api-types'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { ROOT_NAME, type Folder } from './model'
-import { atTopLevel, fillInNames, nameHashIn } from './names'
+import { atTopLevel, nameHashIn } from './names'
 
 export const foldersKey = ['folders'] as const
 
@@ -65,13 +65,13 @@ export async function openRow(row: CollectionRowWithTimes, me: DriveIdentity): P
           {
             ...row,
             namedShareEnvelope: row.namedShareEnvelope ?? '',
-            ownerAccount: row.ownerAccount ?? '',
+            ownerServer: row.ownerServer ?? '',
             ownerIncarnationId: row.ownerIncarnationId ?? '',
             ownerDriveSigningPublicKey: row.ownerDriveSigningPublicKey ?? '',
             ownerAuthorityPublicKey: row.ownerAuthorityPublicKey ?? '',
           },
           me.privateKey,
-          me.account,
+          me.accountRef,
           me.incarnationId,
         ),
       )
@@ -112,13 +112,13 @@ export async function openRemote(share: IncomingShare, me: DriveIdentity): Promi
         nameRevision: share.nameRevision,
         epochStatement: share.epochStatement,
         epochStatementHash: share.epochStatementHash,
-        ownerAccount: share.ownerAccount,
+        ownerServer: share.remoteDomain,
         ownerIncarnationId: share.ownerIncarnationId,
         ownerDriveSigningPublicKey: share.ownerSigningPublicKey,
         ownerAuthorityPublicKey: share.ownerAuthorityPublicKey,
       },
       me.privateKey,
-      me.account,
+      me.accountRef,
       me.incarnationId,
     ),
   )
@@ -209,23 +209,6 @@ async function loadFolders(me: DriveIdentity): Promise<FolderIndex> {
   return index(folders)
 }
 
-const filling = new Set<string>()
-
-/**
- * Fill in the name hashes of the account's top-level folders made before
- * names were kept unique (docs/plans/drive-unique-names.md), in the
- * background; the folders reload when anything changed.
- */
-function fillTopLevel(folders: FolderIndex, me: DriveIdentity, queryClient: QueryClient) {
-  const top = folders.all.filter((f) => f.source === 'owned' && !f.parentId)
-  if (!top.some((f) => !f.nameHash) || filling.has(me.userId)) return
-  filling.add(me.userId)
-  void fillInNames(atTopLevel(me.masterKey), [], top, me.userId, null)
-    .then((changed) => (changed ? queryClient.invalidateQueries({ queryKey: foldersKey }) : undefined))
-    .catch((error) => console.warn('names: could not fill in top-level names', error))
-    .finally(() => filling.delete(me.userId))
-}
-
 /** Every folder the account can see — owned, shared with it, and federated — decrypted. */
 /**
  * The folder index as last loaded. It is cached per account
@@ -240,13 +223,11 @@ export function cachedFolderIndex(queryClient: QueryClient): FolderIndex | undef
 
 export function useFolders() {
   const identity = useDriveIdentity()
-  const queryClient = useQueryClient()
   return useQuery({
     queryKey: [...foldersKey, identity.data?.userId],
     enabled: identity.isSuccess,
     queryFn: async () => {
       const folders = await loadFolders(identity.data!)
-      fillTopLevel(folders, identity.data!, queryClient)
       return folders
     },
   })

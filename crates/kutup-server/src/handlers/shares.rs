@@ -166,18 +166,18 @@ pub async fn create_public_share(
 const MAX_LINK_HOURS: i64 = 10 * 366 * 24;
 
 /// Whether a shared folder is live (not trashed, not gone).
-async fn collection_live(state: &AppState, collection_id: Uuid) -> bool {
+async fn collection_live(state: &AppState, collection_id: Uuid) -> AppResult<bool> {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM collections WHERE id = $1 AND deleted_at IS NULL)",
     )
     .bind(collection_id)
     .fetch_one(&state.pool)
     .await
-    .unwrap_or(false)
+    .map_err(Into::into)
 }
 
 /// Whether a linked file is live (it and its folder not trashed, not gone).
-async fn file_live(state: &AppState, file_id: Uuid) -> bool {
+async fn file_live(state: &AppState, file_id: Uuid) -> AppResult<bool> {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
                         WHERE f.id = $1 AND f.deleted_at IS NULL AND c.deleted_at IS NULL)",
@@ -185,15 +185,15 @@ async fn file_live(state: &AppState, file_id: Uuid) -> bool {
     .bind(file_id)
     .fetch_one(&state.pool)
     .await
-    .unwrap_or(false)
+    .map_err(Into::into)
 }
 
 /// Whether a link's target is live, whichever kind it is.
-async fn target_live(state: &AppState, share_type: &str, target_id: Uuid) -> bool {
+async fn target_live(state: &AppState, share_type: &str, target_id: Uuid) -> AppResult<bool> {
     match share_type {
         "collection" => collection_live(state, target_id).await,
         "file" => file_live(state, target_id).await,
-        _ => false,
+        _ => Ok(false),
     }
 }
 
@@ -263,9 +263,7 @@ pub async fn get_public_share(
     )
     .bind(&token)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     let Some((
         id,
         share_type,
@@ -286,7 +284,7 @@ pub async fn get_public_share(
         }
     }
     // Dark while its folder (or file) is in the trash, like the downloads.
-    if !target_live(&state, &share_type, target_id).await {
+    if !target_live(&state, &share_type, target_id).await? {
         return Err(AppError::not_found("not found"));
     }
     let file = if share_type == "file" {
@@ -354,7 +352,7 @@ pub async fn public_share_epochs(
     if expires_at.is_some_and(|exp| OffsetDateTime::now_utc() > exp) {
         return Err(AppError::new(StatusCode::GONE, "link expired"));
     }
-    if !collection_live(&state, target_id).await {
+    if !collection_live(&state, target_id).await? {
         return Err(AppError::not_found("not found"));
     }
     Ok(
@@ -403,9 +401,7 @@ pub async fn list_public_share_files(
     )
     .bind(&token)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     let Some((target_id, share_type, expires_at)) = meta else {
         return Err(AppError::not_found("not found"));
     };
@@ -418,7 +414,7 @@ pub async fn list_public_share_files(
         return Err(AppError::bad_request("not a collection share"));
     }
     // A trashed collection's share links go dark until it is restored.
-    if !collection_live(&state, target_id).await {
+    if !collection_live(&state, target_id).await? {
         return Err(AppError::not_found("not found"));
     }
 
@@ -502,9 +498,7 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
     )
     .bind(token)
     .fetch_optional(&state.pool)
-    .await
-    .ok()
-    .flatten();
+    .await?;
     let Some((target_id, share_type, expires_at)) = meta else {
         return Err(AppError::not_found("not found"));
     };
@@ -519,9 +513,7 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
         sqlx::query_scalar("SELECT collection_id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(fid)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten();
+            .await?;
     let Some(coll_id) = coll_id else {
         return Err(AppError::not_found("not found"));
     };
@@ -537,15 +529,14 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
                 .bind(target_id)
                 .bind(fid)
                 .fetch_one(&state.pool)
-                .await
-                .unwrap_or(false),
+                .await?,
             "file" => fid == target_id,
             _ => false,
         };
     if !reaches {
         return Err(AppError::forbidden("forbidden"));
     }
-    if !target_live(state, &share_type, target_id).await {
+    if !target_live(state, &share_type, target_id).await? {
         return Err(AppError::not_found("not found"));
     }
 
@@ -572,26 +563,22 @@ pub async fn public_share_state(
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let fid = link_reaches(&state, &token, &file_id).await?;
-    let latest: Option<(String, String, i64, i32)> = sqlx::query_as(
-        "SELECT storage_path, s3_version_id, size_bytes, key_generation FROM file_versions
+    let latest: Option<(String, i32)> = sqlx::query_as(
+        "SELECT storage_path, key_generation FROM file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, s3_version_id, _, key_generation)) = latest else {
+    let Some((path, key_generation)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
-    let (body, size) = if s3_version_id.is_empty() {
-        state.storage.get_object(&path).await
-    } else {
-        state
-            .storage
-            .get_object_version(&path, &s3_version_id)
-            .await
-    }
-    .map_err(|_| AppError::internal("storage"))?;
+    let (body, size) = state
+        .storage
+        .get_object(&path)
+        .await
+        .map_err(|_| AppError::internal("storage"))?;
     Ok(octet_stream_response(
         body,
         size,

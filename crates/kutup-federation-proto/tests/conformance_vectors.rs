@@ -68,7 +68,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
             vec![
                 FederationCapabilityId::identity_v1(),
                 FederationCapabilityId::drive_v1(),
-                FederationCapabilityId::chat_v1(),
+                FederationCapabilityId::chat_v2(),
             ],
             rotation,
             1_700_000_200,
@@ -89,7 +89,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         content_type: request_value["contentType"].as_str().unwrap().into(),
         body: body(request_value),
         federation_version: FederationProtocolVersion::V2,
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         origin: request_value["origin"].as_str().unwrap().into(),
         destination: request_value["destination"].as_str().unwrap().into(),
     };
@@ -115,6 +115,21 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         1_700_000_400,
     )
     .unwrap();
+    // Negative cases: the feature is a signed component, so the same headers
+    // do not verify a request for another feature; and the retired chat.v1
+    // does not even parse.
+    let mut other_feature = signed_request.request.clone();
+    other_feature.feature = FederationFeature::DriveV1;
+    assert!(FederationVerifiedRequest::verify(
+        other_feature,
+        serde_json::from_value(http["requestHeaders"].clone()).unwrap(),
+        &rotated_key.verifying_key().to_bytes(),
+        1_700_000_400,
+    )
+    .is_err());
+    let mut retired = http["request"].clone();
+    retired["feature"] = Value::from("chat.v1");
+    assert!(serde_json::from_value::<FederationFeature>(retired["feature"].clone()).is_err());
 
     let response_value = &http["response"];
     let response = FederationHttpResponse {
@@ -122,7 +137,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         content_type: response_value["contentType"].as_str().unwrap().into(),
         body: body(response_value),
         federation_version: FederationProtocolVersion::V2,
-        feature: FederationFeature::ChatV1,
+        feature: FederationFeature::ChatV2,
         origin: response_value["origin"].as_str().unwrap().into(),
         destination: response_value["destination"].as_str().unwrap().into(),
     };

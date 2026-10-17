@@ -33,7 +33,8 @@ pub struct MoveFileRequest {
     /// The file's current key sealed under the destination's key.
     pub file_key_envelope: String,
     /// Its name's and content's hashes under the destination's hash key
-    /// (docs/plans/drive-unique-names.md); they belong to the folder.
+    /// (docs/plans/drive-unique-names.md); they belong to the folder. The
+    /// name hash is required, as Proton's move recomputes its `Hash`.
     #[serde(default)]
     pub name_hash: Option<String>,
     #[serde(default)]
@@ -145,15 +146,12 @@ pub async fn move_file(
         )
         .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    // The hashes belong to the folder: the destination's, or none (an older
-    // client) until a client fills them in.
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
+    // The hashes belong to the folder: recomputed under the destination's key.
+    let name_hash = crate::drive_names::require_name_hash(req.name_hash.as_deref())?;
     let content_hash = crate::drive_names::parse_content_hash(req.content_hash.as_deref())?;
-    if let Some(hash) = &name_hash {
-        let place = crate::drive_names::Place::Folder(to);
-        crate::drive_names::lock_place(&mut tx, place).await?;
-        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(file_id)).await?;
-    }
+    let place = crate::drive_names::Place::Folder(to);
+    crate::drive_names::lock_place(&mut tx, place).await?;
+    crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(file_id)).await?;
     sqlx::query(
         "UPDATE files SET collection_id = $2, key_epoch = $3, file_key_envelope = $4,
                           name_hash = $5, content_hash = $6
@@ -263,12 +261,10 @@ pub async fn move_collection(
             ));
         }
     }
-    let name_hash = crate::drive_names::parse_name_hash(req.name_hash.as_deref())?;
-    if let Some(hash) = &name_hash {
-        let place = crate::drive_names::Place::of(parent, user_id);
-        crate::drive_names::lock_place(&mut tx, place).await?;
-        crate::drive_names::ensure_name_free(&mut tx, place, hash, Some(folder)).await?;
-    }
+    let name_hash = crate::drive_names::require_name_hash(req.name_hash.as_deref())?;
+    let place = crate::drive_names::Place::of(parent, user_id);
+    crate::drive_names::lock_place(&mut tx, place).await?;
+    crate::drive_names::ensure_name_free(&mut tx, place, &name_hash, Some(folder)).await?;
     sqlx::query("UPDATE collections SET parent_collection_id = $2, name_hash = $3 WHERE id = $1")
         .bind(folder)
         .bind(parent)

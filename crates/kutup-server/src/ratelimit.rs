@@ -2,29 +2,98 @@
 //!
 //! Three layers of protection, all process-local state:
 //!  - **Per-IP sliding-window limiters** — login, login preflight, register, recovery,
-//!    federation user-lookup, and the admin API. Defaults are env-overridable (see the
-//!    `RATE_LIMIT_*` statics below).
-//!  - **Per-account login lockout** — N failed password attempts for an email lock that
-//!    email out for a cooldown (defaults 5 / 15 min; `LOGIN_LOCKOUT_THRESHOLD`,
-//!    `LOGIN_LOCKOUT_MINUTES`). Keyed by a hash of the lowercased email and applied to
-//!    unknown emails too, so the lockout is not an account-existence oracle.
+//!    federation user-lookup, and the admin API. Defaults are env-overridable (`LIMITS`
+//!    below, read and checked at boot); `RATE_LIMITS_RELAXED` raises them on test stacks.
+//!  - **Sign-in lockout and ceiling** — N wrong secrets for one account from one client
+//!    IP lock that pair out (defaults 5 / 15 min; `LOGIN_LOCKOUT_THRESHOLD`,
+//!    `LOGIN_LOCKOUT_MINUTES`), and wrong secrets from clients the account does not
+//!    know are capped per account (`LOGIN_ACCOUNT_CEILING`); see `auth_check`.
 //!  - **Per-pre-auth-token TOTP tracker** — blocks a token for 15 min after 5 failures.
 //!
 //! `spawn_cleanup` runs the periodic pruning for all of the above.
 
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-/// Reads a positive integer limit from the environment, falling back to `default`.
-/// Read once at first use (the limiter statics), i.e. at process start in practice.
+/// Every limit the environment may set, with its default. A `RATE_LIMIT_*`
+/// name not listed here stops the server (a typo would silently keep the
+/// default).
+const LIMITS: &[(&str, u64)] = &[
+    ("RATE_LIMIT_RECOVERY_PER_HOUR", 5),
+    ("RATE_LIMIT_FED_USERS_PER_MIN", 60),
+    ("RATE_LIMIT_LOGIN_PER_MIN", 10),
+    ("RATE_LIMIT_FORK_PER_MIN", 120),
+    ("RATE_LIMIT_CALL_LINK_PER_MIN", 60),
+    ("RATE_LIMIT_CALL_LINK_POLL_PER_MIN", 600),
+    // Retired with the login preflight (OPAQUE has none): still accepted, so
+    // a server whose environment sets it starts; it limits nothing.
+    ("RATE_LIMIT_PREFLIGHT_PER_MIN", 20),
+    ("RATE_LIMIT_USER_LOOKUP_PER_MIN", 30),
+    ("RATE_LIMIT_REGISTER_PER_HOUR", 10),
+    ("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30),
+    ("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20),
+    ("RATE_LIMIT_REPORT_PER_HOUR", 20),
+    ("RATE_LIMIT_FEEDBACK_PER_HOUR", 10),
+    ("RATE_LIMIT_ADMIN_PER_MIN", 120),
+    ("RATE_LIMIT_CHAT_KEYS_PER_MIN", 30),
+    ("RATE_LIMIT_CHAT_KEYS_IP_PER_MIN", 120),
+    ("RATE_LIMIT_CHAT_ANONYMOUS_IP_PER_MIN", 60),
+    ("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120),
+    ("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN", 600),
+    ("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20),
+    ("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300),
+    ("RATE_LIMIT_RENAME_CHECKS_PER_15_MIN", 30),
+    ("RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN", 60),
+    ("RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN", 120),
+    ("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120),
+    ("RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN", 600),
+    ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
+    ("LOGIN_LOCKOUT_THRESHOLD", 5),
+    ("LOGIN_LOCKOUT_MINUTES", 15),
+    ("LOGIN_ACCOUNT_CEILING", 20),
+    ("LOGIN_ACCOUNT_DAILY_CEILING", 200),
+    ("LOGIN_SOURCE_DAILY_CEILING", 20),
+];
+
+/// What a rate limit's default becomes on a test stack (`RATE_LIMITS_RELAXED`):
+/// high enough that a test suite signing in hundreds of times never meets
+/// it. The per-account lockout keeps its defaults: tests rarely miss a
+/// password, and some check that the lockout comes.
+const RELAXED: u64 = 100_000;
+
+static CONFIGURED: OnceLock<HashMap<&'static str, u64>> = OnceLock::new();
+
+/// Reads every limit through the boot-time configuration pass (`Env`
+/// records a bad value), before any limiter is first used.
+pub(crate) fn configure(env: &crate::config::Env, relaxed: bool) {
+    if let Some(unknown) = env.unknown_with_prefix("RATE_LIMIT_", LIMITS) {
+        for name in unknown {
+            env.error(format!("{name} is not a rate limit this server has"));
+        }
+    }
+    let limits = LIMITS
+        .iter()
+        .map(|&(name, default)| {
+            let default = if relaxed && name.starts_with("RATE_LIMIT_") {
+                RELAXED
+            } else {
+                default
+            };
+            (name, env.positive(name, default))
+        })
+        .collect();
+    let _ = CONFIGURED.set(limits);
+}
+
+/// A limit as configured at boot; its default where nothing configured it
+/// (unit tests).
 fn env_limit(var: &str, default: u64) -> u64 {
-    std::env::var(var)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|v| *v > 0)
+    CONFIGURED
+        .get()
+        .and_then(|limits| limits.get(var).copied())
         .unwrap_or(default)
 }
 
@@ -55,6 +124,15 @@ impl RateLimiter {
         }
         times.push(now);
         true
+    }
+
+    /// Gives back the newest event of `key` (an attempt that turned out
+    /// right).
+    pub fn pop(&self, key: &str) {
+        let mut map = self.requests.lock().unwrap();
+        if let Some(times) = map.get_mut(key) {
+            times.pop();
+        }
     }
 
     /// Drops empty/expired entries — mirrors the Go `cleanup` goroutine body.
@@ -117,13 +195,6 @@ pub static CALL_LINK_POLL: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
-/// Login preflight: 20 / minute / IP (`RATE_LIMIT_PREFLIGHT_PER_MIN`).
-pub static PREFLIGHT: LazyLock<RateLimiter> = LazyLock::new(|| {
-    RateLimiter::new(
-        env_limit("RATE_LIMIT_PREFLIGHT_PER_MIN", 20) as usize,
-        Duration::from_secs(60),
-    )
-});
 /// Looking a user up by email: 30 / minute / IP (`RATE_LIMIT_USER_LOOKUP_PER_MIN`).
 /// Sharing needs a handful; a higher rate is someone enumerating accounts.
 pub static USER_LOOKUP: LazyLock<RateLimiter> = LazyLock::new(|| {
@@ -137,6 +208,23 @@ pub static USER_LOOKUP: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static REGISTER: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_REGISTER_PER_HOUR", 10) as usize,
+        Duration::from_secs(3600),
+    )
+});
+/// Checking a referral code before signing up: 30 / hour / IP, valid or not
+/// (`RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR`).
+pub static REGISTRATION_CODE_CHECK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30) as usize,
+        Duration::from_secs(3600),
+    )
+});
+/// Referral codes that admitted no one, from checks and sign-ups together:
+/// 20 / hour / IP (`RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR`), so a
+/// code cannot be guessed (100 bits would hold anyway).
+pub static REGISTRATION_CODE_FAILURES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20) as usize,
         Duration::from_secs(3600),
     )
 });
@@ -195,9 +283,10 @@ pub static CHAT_ANONYMOUS_IP: LazyLock<RateLimiter> = LazyLock::new(|| {
 
 // --- per-account login lockout ---
 
-/// Failed-password tracker keyed by (hashed, lowercased) email. Separate from the
-/// per-IP limiter so a distributed attack on one account still locks out, and applied
-/// to unknown emails too so lockout responses don't reveal whether an account exists.
+/// Wrong-secret tracker for the sign-in check (`auth_check`), keyed by a hash
+/// of what the caller locks (an account or name with a client). Each attempt
+/// takes its slot before the check (`reserve`), so parallel attempts get no
+/// more than the threshold; a right secret clears it.
 pub struct LoginLockout {
     state: Mutex<LockoutState>,
     threshold: u32,
@@ -205,7 +294,8 @@ pub struct LoginLockout {
 }
 
 struct LockoutState {
-    failures: HashMap<String, u32>,
+    /// Attempts counted, and when the last one came.
+    failures: HashMap<String, (u32, Instant)>,
     locked_at: HashMap<String, Instant>,
 }
 
@@ -221,61 +311,66 @@ impl LoginLockout {
         }
     }
 
-    fn key(email: &str) -> String {
-        hash_token(&email.to_lowercase())
+    fn key(subject: &str) -> String {
+        hash_token(&subject.to_lowercase())
     }
 
-    /// Whether this email is currently locked out (expired locks are cleared lazily).
-    pub fn is_locked(&self, email: &str) -> bool {
-        let key = Self::key(email);
-        let mut st = self.state.lock().unwrap();
-        if let Some(at) = st.locked_at.get(&key).copied() {
+    fn locked(&self, st: &mut LockoutState, key: &str) -> bool {
+        if let Some(at) = st.locked_at.get(key).copied() {
             if at.elapsed() < self.ttl {
                 return true;
             }
-            st.locked_at.remove(&key);
-            st.failures.remove(&key);
+            st.locked_at.remove(key);
+            st.failures.remove(key);
         }
         false
     }
 
-    /// Records a password-check outcome. Success clears the counter; the Nth
-    /// consecutive failure locks the email for the cooldown.
-    pub fn record(&self, email: &str, success: bool) {
-        let key = Self::key(email);
+    /// Whether `subject` is locked out now.
+    #[cfg(test)]
+    fn is_locked(&self, subject: &str) -> bool {
+        let key = Self::key(subject);
         let mut st = self.state.lock().unwrap();
-        if success {
-            st.failures.remove(&key);
-            st.locked_at.remove(&key);
-            return;
+        self.locked(&mut st, &key)
+    }
+
+    /// Takes a slot for one attempt: `false` while locked. The attempt counts
+    /// as a miss until [`Self::succeeded`] says otherwise; the threshold-th
+    /// one locks the subject for the cooldown.
+    pub fn reserve(&self, subject: &str) -> bool {
+        let key = Self::key(subject);
+        let mut st = self.state.lock().unwrap();
+        if self.locked(&mut st, &key) {
+            return false;
         }
-        let count = st.failures.entry(key.clone()).or_insert(0);
-        *count += 1;
-        if *count >= self.threshold {
-            st.locked_at.insert(key, Instant::now());
+        let now = Instant::now();
+        let entry = st.failures.entry(key.clone()).or_insert((0, now));
+        if entry.1.elapsed() >= self.ttl {
+            *entry = (0, now);
         }
+        entry.0 += 1;
+        entry.1 = now;
+        if entry.0 >= self.threshold {
+            st.locked_at.insert(key, now);
+        }
+        true
+    }
+
+    /// A right secret: the subject's misses (and any lock) are cleared.
+    pub fn succeeded(&self, subject: &str) {
+        let key = Self::key(subject);
+        let mut st = self.state.lock().unwrap();
+        st.failures.remove(&key);
+        st.locked_at.remove(&key);
     }
 
     fn cleanup(&self) {
         let mut st = self.state.lock().unwrap();
         let ttl = self.ttl;
-        let expired: Vec<String> = st
-            .locked_at
-            .iter()
-            .filter(|(_, at)| at.elapsed() >= ttl)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in &expired {
-            st.locked_at.remove(key);
-            st.failures.remove(key);
-        }
-        // Failure counters that never reached the threshold also expire with the TTL —
-        // simplest honest pruning without per-entry timestamps: drop them all; a real
-        // attacker re-accumulates within one cleanup interval anyway, a real user gets
-        // a fresh allowance.
-        if expired.is_empty() && st.failures.len() > 10_000 {
-            st.failures.clear();
-        }
+        st.locked_at.retain(|_, at| at.elapsed() < ttl);
+        // Counters expire one by one with the window: spraying many
+        // subjects never resets anyone else's.
+        st.failures.retain(|_, (_, last)| last.elapsed() < ttl);
     }
 }
 
@@ -284,6 +379,184 @@ pub static LOGIN_LOCKOUT: LazyLock<LoginLockout> = LazyLock::new(|| {
     LoginLockout::new(
         env_limit("LOGIN_LOCKOUT_THRESHOLD", 5) as u32,
         Duration::from_secs(env_limit("LOGIN_LOCKOUT_MINUTES", 15) * 60),
+    )
+});
+
+/// Attempts on one account from clients it does not know, all of them
+/// together, in the lockout's window (`LOGIN_ACCOUNT_CEILING`, 20) and per
+/// day (`LOGIN_ACCOUNT_DAILY_CEILING`, 200): the cap on guessing spread over
+/// many addresses (`auth_check`). Slots are taken before the check and given
+/// back on a right secret.
+pub static LOGIN_CEILING: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("LOGIN_ACCOUNT_CEILING", 20) as usize,
+        Duration::from_secs(env_limit("LOGIN_LOCKOUT_MINUTES", 15) * 60),
+    )
+});
+
+pub static LOGIN_DAILY_CEILING: LazyLock<WindowCounter> = LazyLock::new(|| {
+    WindowCounter::new(
+        env_limit("LOGIN_ACCOUNT_DAILY_CEILING", 200) as u32,
+        Duration::from_secs(24 * 3600),
+    )
+});
+
+/// One source's share of an account's daily ceiling
+/// (`LOGIN_SOURCE_DAILY_CEILING`, 20 a day per account and client): a
+/// single address (or IPv6 /64) cannot use up the whole day alone.
+pub static LOGIN_SOURCE_DAILY: LazyLock<WindowCounter> = LazyLock::new(|| {
+    WindowCounter::new(
+        env_limit("LOGIN_SOURCE_DAILY_CEILING", 20) as u32,
+        Duration::from_secs(24 * 3600),
+    )
+});
+
+/// Counts per key over fixed windows, in a fixed-size table addressed by the
+/// key's hash: memory stays the same however many keys are sprayed, and
+/// nothing needs pruning. Two keys sharing a slot only make each other
+/// stricter.
+pub struct WindowCounter {
+    slots: Mutex<Vec<(u64, u32)>>,
+    limit: u32,
+    window_secs: u64,
+}
+
+const WINDOW_COUNTER_SLOTS: usize = 1 << 16;
+
+impl WindowCounter {
+    pub(crate) fn new(limit: u32, window: Duration) -> Self {
+        Self {
+            slots: Mutex::new(vec![(0, 0); WINDOW_COUNTER_SLOTS]),
+            limit,
+            window_secs: window.as_secs().max(1),
+        }
+    }
+
+    fn slot(key: &str) -> usize {
+        let digest = Sha256::digest(key.as_bytes());
+        (u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize)
+            % WINDOW_COUNTER_SLOTS
+    }
+
+    fn window_now(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            / self.window_secs
+    }
+
+    /// Takes one from `key`'s allowance in this window; `false` when none is left.
+    pub fn allow(&self, key: &str) -> bool {
+        let window = self.window_now();
+        let mut slots = self.slots.lock().unwrap();
+        let slot = &mut slots[Self::slot(key)];
+        if slot.0 != window {
+            *slot = (window, 0);
+        }
+        if slot.1 >= self.limit {
+            return false;
+        }
+        slot.1 += 1;
+        true
+    }
+
+    /// Gives one back (an attempt that turned out right).
+    pub fn pop(&self, key: &str) {
+        let window = self.window_now();
+        let mut slots = self.slots.lock().unwrap();
+        let slot = &mut slots[Self::slot(key)];
+        if slot.0 == window {
+            slot.1 = slot.1.saturating_sub(1);
+        }
+    }
+}
+
+/// Name checks (`available-hashes`): 120 a minute per account, enough for
+/// "Keep both" over a large upload, not for guessing names fast.
+pub static AVAILABLE_HASHES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_AVAILABLE_HASHES_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Collaboration frames sent over HTTP (`POST …/collab/frames`, the CLI's
+/// way in): 600 a minute per device, as many as a busy editing tab keeps.
+pub static COLLAB_FRAME_POSTS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_COLLAB_FRAME_POSTS_PER_MIN", 600) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Device registration challenges: 20 a minute per account (a tab or the
+/// CLI asks for one each time it registers a device).
+pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN", 20) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Account head reads (the head, its chain, a scope's index): 300 a minute
+/// per account, far above what a device checking before each listed write
+/// needs.
+pub static ACCOUNT_HEAD_READS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_ACCOUNT_HEAD_READS_PER_MIN", 300) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Another server's renames asked of it (a lookup that found nothing fresh
+/// kept): 60 per 15 minutes per account, so lookups cannot hammer a peer.
+pub static RENAME_LOOKUPS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_RENAME_LOOKUPS_PER_15_MIN", 60) as usize,
+        Duration::from_secs(15 * 60),
+    )
+});
+
+/// Fetches of renames from one peer: 120 a minute per peer, whoever asks.
+/// Accounts one account asks of one peer by id (real fetches only: answers
+/// kept a short while serve the rest): 120 a minute per caller and peer.
+pub static ACCOUNT_PEER_FETCHES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+pub static RENAME_PEER_FETCHES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_RENAME_PEER_FETCHES_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Rename announces taken from one peer: 600 a minute.
+pub static RENAME_ANNOUNCES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN", 600) as usize,
+        Duration::from_secs(60),
+    )
+});
+
+/// Name checks before a rename: 30 per 15 minutes per account (registration
+/// already says whether a name is taken).
+pub static RENAME_CHECKS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_RENAME_CHECKS_PER_15_MIN", 30) as usize,
+        Duration::from_secs(15 * 60),
+    )
+});
+
+/// Device announces from another server: 60 a minute per (server, share).
+pub static COLLAB_DEVICE_ANNOUNCES: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
     )
 });
 
@@ -305,7 +578,7 @@ static TOTP_TRACKER: LazyLock<Mutex<TotpTracker>> = LazyLock::new(|| {
 });
 
 /// SHA-256 hex of a token — mirrors `hashToken` (tokens are never stored in the clear).
-fn hash_token(token: &str) -> String {
+pub(crate) fn hash_token(token: &str) -> String {
     let digest = Sha256::digest(token.as_bytes());
     hex::encode(digest)
 }
@@ -364,8 +637,14 @@ pub fn spawn_cleanup() {
             tick.tick().await;
             RECOVERY.cleanup();
             FED_USERS.cleanup();
+            RENAME_CHECKS.cleanup();
+            RENAME_LOOKUPS.cleanup();
+            RENAME_PEER_FETCHES.cleanup();
+            ACCOUNT_PEER_FETCHES.cleanup();
+            RENAME_ANNOUNCES.cleanup();
             LOGIN.cleanup();
-            PREFLIGHT.cleanup();
+            REGISTRATION_CODE_CHECK.cleanup();
+            REGISTRATION_CODE_FAILURES.cleanup();
             FORK.cleanup();
             CALL_LINK.cleanup();
             CALL_LINK_POLL.cleanup();
@@ -375,6 +654,11 @@ pub fn spawn_cleanup() {
             CHAT_KEYS_ACCOUNT.cleanup();
             CHAT_KEYS_IP.cleanup();
             LOGIN_LOCKOUT.cleanup();
+            LOGIN_CEILING.cleanup();
+            AVAILABLE_HASHES.cleanup();
+            COLLAB_FRAME_POSTS.cleanup();
+            DEVICE_CHALLENGES.cleanup();
+            COLLAB_DEVICE_ANNOUNCES.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();
@@ -417,31 +701,58 @@ mod tests {
     #[test]
     fn lockout_trips_after_threshold_and_expires() {
         let lo = LoginLockout::new(3, Duration::from_millis(50));
-        let email = "User@Example.com";
-        lo.record(email, false);
-        lo.record(email, false);
-        assert!(!lo.is_locked(email));
-        lo.record(email, false); // 3rd failure locks
-                                 // Case-insensitive: the lowercased variant is the same key.
-        assert!(lo.is_locked("user@example.com"));
-        // Lock expires after the TTL.
+        let subject = "account:A";
+        assert!(lo.reserve(subject));
+        assert!(lo.reserve(subject));
+        assert!(!lo.is_locked(subject));
+        assert!(lo.reserve(subject)); // the 3rd attempt still runs, and locks
+        assert!(lo.is_locked(subject));
+        assert!(!lo.reserve(subject));
+        // The lock expires after the TTL, and the counter with it.
         std::thread::sleep(Duration::from_millis(60));
-        assert!(!lo.is_locked(email));
-        // And the counter was reset with it.
-        lo.record(email, false);
-        assert!(!lo.is_locked(email));
+        assert!(lo.reserve(subject));
+        assert!(!lo.is_locked(subject));
     }
 
     #[test]
     fn lockout_success_clears_failures() {
         let lo = LoginLockout::new(3, Duration::from_secs(60));
-        let email = "b@example.com";
-        lo.record(email, false);
-        lo.record(email, false);
-        lo.record(email, true); // correct password resets the counter
-        lo.record(email, false);
-        lo.record(email, false);
-        assert!(!lo.is_locked(email));
+        let subject = "account:B";
+        lo.reserve(subject);
+        lo.reserve(subject);
+        lo.succeeded(subject); // a right secret resets the counter
+        lo.reserve(subject);
+        lo.reserve(subject);
+        assert!(!lo.is_locked(subject));
+    }
+
+    #[test]
+    fn window_counters_stay_fixed_size_and_give_back() {
+        let counter = WindowCounter::new(3, Duration::from_secs(3600));
+        assert!(counter.allow("a"));
+        assert!(counter.allow("a"));
+        assert!(counter.allow("a"));
+        assert!(!counter.allow("a"));
+        counter.pop("a");
+        assert!(counter.allow("a"));
+        // Spraying keys never grows it.
+        for i in 0..200_000 {
+            counter.allow(&format!("spray-{i}"));
+        }
+        assert_eq!(counter.slots.lock().unwrap().len(), WINDOW_COUNTER_SLOTS);
+    }
+
+    #[test]
+    fn lockout_cleanup_keeps_other_subjects_counters() {
+        let lo = LoginLockout::new(3, Duration::from_secs(60));
+        lo.reserve("victim");
+        lo.reserve("victim");
+        for i in 0..20_000 {
+            lo.reserve(&format!("spray-{i}"));
+        }
+        lo.cleanup();
+        lo.reserve("victim");
+        assert!(lo.is_locked("victim"));
     }
 
     #[test]

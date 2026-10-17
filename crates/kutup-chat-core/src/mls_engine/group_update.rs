@@ -64,29 +64,29 @@ pub(super) fn group_update_changes(
         facts
             .roster
             .iter()
-            .map(|member| (member.address.canonical(), member.clone()))
+            .map(|member| (member.account.to_string(), member.clone()))
             .collect::<BTreeMap<_, _>>()
     };
     let (before_roster, after_roster) = (roster(previous), roster(next));
-    for (address, _) in after_roster
+    for (_, entry) in after_roster
         .iter()
         .filter(|(address, _)| !before_roster.contains_key(*address))
     {
         changes.push(GroupUpdateChange::MemberAdded {
-            member: address.clone(),
+            member: entry.account.clone(),
         });
     }
-    for (address, _) in before_roster
+    for (address, entry) in before_roster
         .iter()
         .filter(|(address, _)| !after_roster.contains_key(*address))
     {
         changes.push(if departed.contains(address) {
             GroupUpdateChange::MemberLeft {
-                member: address.clone(),
+                member: entry.account.clone(),
             }
         } else {
             GroupUpdateChange::MemberRemoved {
-                member: address.clone(),
+                member: entry.account.clone(),
             }
         });
     }
@@ -96,10 +96,10 @@ pub(super) fn group_update_changes(
         };
         match (before_member.is_admin, after_member.is_admin) {
             (false, true) => changes.push(GroupUpdateChange::AdminGranted {
-                member: address.clone(),
+                member: after_member.account.clone(),
             }),
             (true, false) => changes.push(GroupUpdateChange::AdminRevoked {
-                member: address.clone(),
+                member: after_member.account.clone(),
             }),
             _ => {}
         }
@@ -108,10 +108,10 @@ pub(super) fn group_update_changes(
             after_member.owner_id.is_some(),
         ) {
             (false, true) => changes.push(GroupUpdateChange::OwnerAdded {
-                member: address.clone(),
+                member: after_member.account.clone(),
             }),
             (true, false) => changes.push(GroupUpdateChange::OwnerRemoved {
-                member: address.clone(),
+                member: after_member.account.clone(),
             }),
             _ => {}
         }
@@ -181,7 +181,7 @@ pub(super) fn group_update_record(
         block.epoch_after,
         block.block_hash().map_err(ChatError::Protocol)?.as_bytes(),
         GroupUpdateBody {
-            actor: actor.to_owned(),
+            actor: crate::address::parse_account(actor)?,
             changes,
         },
         actor_device_id,
@@ -216,9 +216,9 @@ pub(super) fn left_notice_record(
         epoch,
         record_id.as_bytes(),
         GroupUpdateBody {
-            actor: local_address.to_owned(),
+            actor: crate::address::parse_account(local_address)?,
             changes: vec![GroupUpdateChange::MemberLeft {
-                member: local_address.to_owned(),
+                member: crate::address::parse_account(local_address)?,
             }],
         },
         local_device_id,
@@ -257,8 +257,8 @@ fn notice_record(
             .decode(&conversation.request.genesis.mls_group_id)
             .map_err(|_| ChatError::Db("pinned MLS GroupId is not base64".into()))?,
         epoch,
-        outgoing: body.actor == local_address,
-        sender: body.actor,
+        outgoing: body.actor.to_string() == local_address,
+        sender: body.actor.to_string(),
         sender_device_id: actor_device_id,
         cursor: None,
         transport_digest,
@@ -297,7 +297,7 @@ mod tests {
 
     fn member(address: &str, is_admin: bool, owner: Option<&str>) -> MlsConversationMemberV1 {
         MlsConversationMemberV1 {
-            address: address.parse().unwrap(),
+            account: address.parse().unwrap(),
             is_admin,
             owner_id: owner.map(str::to_owned),
         }
@@ -317,14 +317,38 @@ mod tests {
     fn describes_what_one_commit_changed() {
         let policy = MlsGroupAuthorizationPolicyV1::members_default();
         let before_roster = vec![
-            member("ali@a.test", true, Some("o1")),
-            member("bob@b.test", false, None),
-            member("cem@c.test", false, None),
+            member(
+                "aci:00000000-0000-4000-8000-94419b99b12c@a.test",
+                true,
+                Some("o1"),
+            ),
+            member(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test",
+                false,
+                None,
+            ),
+            member(
+                "aci:00000000-0000-4000-8000-b1331f460eb4@c.test",
+                false,
+                None,
+            ),
         ];
         let after_roster = vec![
-            member("ali@a.test", true, Some("o1")),
-            member("bob@b.test", true, None),
-            member("dan@d.test", false, None),
+            member(
+                "aci:00000000-0000-4000-8000-94419b99b12c@a.test",
+                true,
+                Some("o1"),
+            ),
+            member(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test",
+                true,
+                None,
+            ),
+            member(
+                "aci:00000000-0000-4000-8000-ec4f2dbb3b14@d.test",
+                false,
+                None,
+            ),
         ];
         let (before_info, after_info) = (info("Hikers", ""), info("Hikers 2", "walks"));
         let after_policy = MlsGroupAuthorizationPolicyV1 {
@@ -345,7 +369,8 @@ mod tests {
             policy: &after_policy,
             closed: true,
         };
-        let departed = BTreeSet::from(["cem@c.test".to_string()]);
+        let departed =
+            BTreeSet::from(["aci:00000000-0000-4000-8000-b1331f460eb4@c.test".to_string()]);
         assert_eq!(
             group_update_changes(&before, &after, &departed),
             vec![
@@ -356,13 +381,19 @@ mod tests {
                     description: "walks".into()
                 },
                 GroupUpdateChange::MemberAdded {
-                    member: "dan@d.test".into()
+                    member: "aci:00000000-0000-4000-8000-ec4f2dbb3b14@d.test"
+                        .parse()
+                        .unwrap()
                 },
                 GroupUpdateChange::MemberLeft {
-                    member: "cem@c.test".into()
+                    member: "aci:00000000-0000-4000-8000-b1331f460eb4@c.test"
+                        .parse()
+                        .unwrap()
                 },
                 GroupUpdateChange::AdminGranted {
-                    member: "bob@b.test".into()
+                    member: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test"
+                        .parse()
+                        .unwrap()
                 },
                 GroupUpdateChange::SendersChanged {
                     administrators_only: true
@@ -379,7 +410,11 @@ mod tests {
     #[test]
     fn describes_group_link_changes() {
         let policy = MlsGroupAuthorizationPolicyV1::members_default();
-        let roster = vec![member("ali@a.test", true, Some("o1"))];
+        let roster = vec![member(
+            "aci:00000000-0000-4000-8000-94419b99b12c@a.test",
+            true,
+            Some("o1"),
+        )];
         let with = |secret: u8, approval_required: bool| {
             info("Hikers", "").map(|info| MlsGroupInfoV1 {
                 invite_link: Some(kutup_chat_proto::MlsGroupInviteLinkV1 {

@@ -36,6 +36,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The migrations check compares with the base branch (or, on master,
+          # the commit before), so it needs history.
+          fetch-depth: 0
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Set up Rust
@@ -46,6 +50,11 @@ jobs:
         with:
           shared-key: security-static
       - name: Static checks
+        env:
+          # What is applied anywhere is what master has shipped, so every
+          # branch (stacked ones included) is checked against master; on
+          # master itself the script compares with the commit before.
+          KUTUP_MIGRATION_BASE: origin/master
         run: scripts/gate.sh static
 
   rust-workspace:
@@ -121,7 +130,9 @@ jobs:
     # run when it reaches master.
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # A cold-cache build of the server plus the live tests (a new crypto
+    # dependency invalidates the cache).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Install protobuf compiler
@@ -151,10 +162,16 @@ jobs:
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
       POSTGRES_PASSWORD: chat-backup-ci-postgres
       JWT_SECRET: chat-backup-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dE="
       APP_ENV: test
-      # The batch registers more test accounts than the default ten an hour
-      # from one address allows (spec 40's last test was refused since #60).
-      RATE_LIMIT_REGISTER_PER_HOUR: "100"
+      # A test stack (APP_ENV=test): every per-address limit raised, as one
+      # browser batch registers and signs in far more than a person does.
+      RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
+      # Groups are off by default (until the pairwise design); the group
+      # specs in this suite still run (36, 38, 48).
+      CHAT_GROUPS: "true"
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443
@@ -256,14 +273,17 @@ jobs:
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
       POSTGRES_PASSWORD: mail-browser-ci-postgres
       JWT_SECRET: mail-browser-ci-jwt-secret-at-least-32-bytes
+      OPAQUE_SETUP_KEYS: "1:wsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsI="
       APP_ENV: test
-      # The batch registers more test accounts than the default ten an hour
-      # from one address allows.
-      RATE_LIMIT_REGISTER_PER_HOUR: "100"
+      # A test stack (APP_ENV=test): every per-address limit raised, as one
+      # browser batch registers and signs in far more than a person does.
+      RATE_LIMITS_RELAXED: "true"
+      # Test stacks register their own accounts.
+      REGISTRATION_MODE: "on"
       # The Mail specs: the test administrator (tests/e2e/fixtures/apps.ts)
       # and outside sending on for spec 58's pause notice; spec 59 turns it
       # off in Administration and back on (tests/e2e/README.md).
-      ADMIN_ACCOUNT: "admin@kutup.dev:admin:Bootstrap*Temporary123"
+      ADMIN_ACCOUNT: "admin:Bootstrap*Temporary123"
       MAIL_OUTSIDE_SENDING: "on"
       # Sends go at once in the browser specs; spec 102 turns undo send on.
       MAIL_DEFAULT_DELAY_SEND_SECONDS: "0"
@@ -342,6 +362,8 @@ jobs:
         run: scripts/gate.sh browser contacts
       - name: Run the Pass browser specs
         run: scripts/gate.sh browser pass
+      - name: Run the Account browser specs
+        run: scripts/gate.sh browser account
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single

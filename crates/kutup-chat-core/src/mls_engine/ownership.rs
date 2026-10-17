@@ -133,10 +133,10 @@ impl MlsClient {
         let (provider, mut metadata) = self.load_provider().await?;
         let conversation = active_conversation_for_group(&metadata, mls_group_id)?.clone();
         let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
-        let account: AccountAddress =
+        let account: AccountRef =
             local_address
                 .parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
+                .map_err(|error: kutup_crypto::error::CryptoError| {
                     ChatError::Invalid(error.to_string())
                 })?;
         if let Some(existing) = metadata
@@ -150,7 +150,7 @@ impl MlsClient {
         if !conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == local_address)
+            .any(|member| member.account.to_string() == local_address)
         {
             return Err(ChatError::Trust(
                 "only a current group member can create an owner candidate".into(),
@@ -268,7 +268,7 @@ impl MlsClient {
         let expected_recipients = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .filter(|address| address != &local_address)
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
@@ -288,7 +288,7 @@ impl MlsClient {
             kind: kutup_chat_proto::content::kind::GROUP_CONTROL.into(),
             sent_at: candidate.created_at.to_string(),
             seq,
-            message_id: Some(send_id.clone()),
+            message_id: send_id.clone(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -374,7 +374,7 @@ impl MlsClient {
         let local_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == local_address)
+            .find(|member| member.account.to_string() == local_address)
             .ok_or_else(|| {
                 ChatError::Trust("local account is absent from the MLS roster".into())
             })?;
@@ -717,7 +717,7 @@ impl MlsClient {
             .ok()
             .is_some_and(|owner| {
                 conversation.current_roster.iter().any(|member| {
-                    member.address.canonical() == local_address
+                    member.account.to_string() == local_address
                         && member.owner_id.as_deref() == Some(owner.owner_id.as_str())
                 })
             });
@@ -764,7 +764,7 @@ pub(super) fn prune_owner_candidates_for_roster(
     let group_key = BASE64.encode(mls_group_id);
     let retained_accounts = roster
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     let remove_candidate_map =
         if let Some(candidates) = metadata.owner_candidates.get_mut(&group_key) {
@@ -826,11 +826,11 @@ pub(super) fn validate_owner_role_transition(
 ) -> Result<()> {
     let previous_by_address = previous
         .iter()
-        .map(|member| (member.address.canonical(), member))
+        .map(|member| (member.account.to_string(), member))
         .collect::<BTreeMap<_, _>>();
     let next_by_address = next
         .iter()
-        .map(|member| (member.address.canonical(), member))
+        .map(|member| (member.account.to_string(), member))
         .collect::<BTreeMap<_, _>>();
     if previous_by_address.len() != previous.len()
         || next_by_address.len() != next.len()
@@ -868,12 +868,12 @@ pub(super) fn promote_local_owner_candidate(
     let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
     let previous_owner_id = previous_roster
         .iter()
-        .find(|member| member.address.canonical() == local_address)
+        .find(|member| member.account.to_string() == local_address)
         .and_then(|member| member.owner_id.as_deref());
     let Some(owner_id) = private_control
         .roster
         .iter()
-        .find(|member| member.address.canonical() == local_address)
+        .find(|member| member.account.to_string() == local_address)
         .and_then(|member| member.owner_id.as_deref())
     else {
         return Ok(());
@@ -949,11 +949,11 @@ pub(super) fn validate_new_owner_candidates(
     let previous = conversation
         .current_roster
         .iter()
-        .map(|member| (member.address.canonical(), member.owner_id.as_deref()))
+        .map(|member| (member.account.to_string(), member.owner_id.as_deref()))
         .collect::<BTreeMap<_, _>>();
     let candidates = metadata.owner_candidates.get(group_key);
     for member in next_roster {
-        let address = member.address.canonical();
+        let address = member.account.to_string();
         let Some(owner_id) = member.owner_id.as_deref() else {
             continue;
         };
@@ -973,7 +973,7 @@ pub(super) fn validate_new_owner_candidates(
             .ok_or_else(|| ChatError::Trust("new MLS owner is absent from its owner set".into()))?;
         if candidate.conversation_id != conversation.request.genesis.conversation_id
             || candidate.incarnation != conversation.request.genesis.incarnation
-            || candidate.account.canonical() != address
+            || candidate.account.to_string() != address
             || candidate.owner_id != owner_id
             || candidate.public_key != declared.public_key
         {

@@ -3,10 +3,9 @@ import { openFileRecordV1, type FileMetadataV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { fileKind } from './kinds'
-import { cachedFolderIndex, foldersKey } from './folders'
+import { foldersKey } from './folders'
 import { folderKeyAt } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
-import { fillInNames, inFolder } from './names'
 
 export const filesKey = (folderId: string) => ['files', folderId] as const
 
@@ -53,8 +52,10 @@ export function toDriveFile(
     name,
     mimeType: result?.metadata.mimeType ?? 'application/octet-stream',
     size: result?.metadata.size ?? 0,
+    sha256: result?.metadata.sha256 ?? null,
     media: result?.metadata.media ?? null,
     fileKey: result?.fileKey ?? null,
+    fileKeyEnvelope: row.fileKeyEnvelope,
     originalKeyGeneration: row.originalKeyGeneration,
     contentKeyGeneration: row.contentKeyGeneration,
     keyHistory: row.keyHistory ?? [],
@@ -79,32 +80,6 @@ export async function loadFolderFiles(folder: Folder): Promise<DriveFile[]> {
       : `/drive/federation/shares/${location.shareId}/files`,
   )
   return Promise.all(data.map((row) => openRow(row, folder)))
-}
-
-const filling = new Set<string>()
-
-/**
- * Fill in the name hashes of what is in a folder its owner opens, made
- * before names were kept unique or by a client that sent none
- * (docs/plans/drive-unique-names.md), in the background; the listing
- * reloads when anything changed.
- */
-function fillFolder(folder: Folder, files: DriveFile[], queryClient: ReturnType<typeof useQueryClient>) {
-  if (!folder.canManage || folder.source !== 'owned' || filling.has(folder.id)) return
-  const subfolders = cachedFolderIndex(queryClient)?.childrenOf(folder.id) ?? []
-  if (!files.some((f) => !f.nameHash) && !subfolders.some((f) => !f.nameHash)) return
-  filling.add(folder.id)
-  void fillInNames(inFolder(folder), files, subfolders, folder.ownerUserId, folder)
-    .then((changed) =>
-      changed
-        ? Promise.all([
-            queryClient.invalidateQueries({ queryKey: filesKey(folder.id) }),
-            queryClient.invalidateQueries({ queryKey: foldersKey }),
-          ])
-        : undefined,
-    )
-    .catch((error) => console.warn('names: could not fill in names', error))
-    .finally(() => filling.delete(folder.id))
 }
 
 /** The key of the account's whole listing (`GET /drive/files`); under `['files']`, so every change refreshes it. */
@@ -154,7 +129,6 @@ export function useFolderFiles(folder: Folder | undefined) {
           .then(() => queryClient.invalidateQueries({ queryKey: foldersKey }))
           .catch(() => {})
       }
-      fillFolder(folder!, files, queryClient)
       return files
     },
   })

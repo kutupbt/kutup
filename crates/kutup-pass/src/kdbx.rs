@@ -3,7 +3,8 @@
 //! Every KDBX version in use today (3.1, 4.0, 4.1) opens; vaults are always
 //! saved as KDBX 4.1, the only version the library writes, as KeePassXC
 //! upgrades older files on save. A vault's key is the KeePass composite key:
-//! a password, a key file, or both.
+//! a password (or its SHA-256, the password's part of the composite key,
+//! which is what Kutup Pass keeps), a key file, or both.
 
 use keepass::config::{DatabaseVersion, InnerCipherConfig};
 use keepass::error::{DatabaseKeyError, DatabaseOpenError, DatabaseSaveError};
@@ -13,14 +14,19 @@ use zeroize::Zeroizing;
 /// The composite key of a vault: a password, a key file, or both.
 #[derive(Clone, Default)]
 pub struct VaultKey {
-    password: Option<Zeroizing<String>>,
-    key_file: Option<Zeroizing<Vec<u8>>>,
+    pub(crate) password: Option<Zeroizing<String>>,
+    pub(crate) password_hash: Option<Zeroizing<[u8; 32]>>,
+    pub(crate) key_file: Option<Zeroizing<Vec<u8>>>,
 }
 
 impl std::fmt::Debug for VaultKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VaultKey")
             .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .field(
+                "password_hash",
+                &self.password_hash.as_ref().map(|_| "[redacted]"),
+            )
             .field("key_file", &self.key_file.as_ref().map(|_| "[redacted]"))
             .finish()
     }
@@ -38,6 +44,43 @@ impl VaultKey {
         self
     }
 
+    /// Adds the vault password as its SHA-256 (the password's part of the
+    /// composite key), which opens and saves the vault as the password does.
+    pub fn with_password_hash(mut self, hash: &[u8; 32]) -> Self {
+        self.password_hash = Some(Zeroizing::new(*hash));
+        self
+    }
+
+    /// The password's hash, when that is how the key holds the password.
+    pub fn password_hash(&self) -> Option<&[u8; 32]> {
+        self.password_hash.as_deref()
+    }
+
+    /// The key file's contents, if the key has one.
+    pub fn key_file(&self) -> Option<&[u8]> {
+        self.key_file.as_deref().map(Vec::as_slice)
+    }
+
+    /// Whether `other` is the same composite key: the same password part
+    /// (a password and its SHA-256 are the same part) and the same key file
+    /// element, so each opens what the other does.
+    pub fn same_as(&self, other: &VaultKey) -> bool {
+        use sha2::{Digest as _, Sha256};
+        let password = |key: &VaultKey| -> Option<[u8; 32]> {
+            match (&key.password, &key.password_hash) {
+                (Some(password), _) => Some(Sha256::digest(password.as_bytes()).into()),
+                (None, Some(hash)) => Some(**hash),
+                (None, None) => None,
+            }
+        };
+        let element = |key: &VaultKey| {
+            key.key_file
+                .as_deref()
+                .and_then(|file| keepass::key_file_element(file))
+        };
+        password(self) == password(other) && element(self) == element(other)
+    }
+
     /// Adds the contents of a key file (any of KeePass's key file kinds).
     pub fn with_key_file(mut self, contents: &[u8]) -> Self {
         self.key_file = Some(Zeroizing::new(contents.to_vec()));
@@ -45,12 +88,14 @@ impl VaultKey {
     }
 
     fn database_key(&self) -> Result<DatabaseKey, KdbxError> {
-        if self.password.is_none() && self.key_file.is_none() {
+        if self.password.is_none() && self.password_hash.is_none() && self.key_file.is_none() {
             return Err(KdbxError::EmptyKey);
         }
         let mut key = DatabaseKey::new();
         if let Some(password) = &self.password {
             key = key.with_password(password);
+        } else if let Some(hash) = &self.password_hash {
+            key = key.with_password_hash(hash);
         }
         if let Some(contents) = &self.key_file {
             key = key
@@ -65,18 +110,21 @@ impl VaultKey {
 /// (`kutup_crypto::pass_vault::MAX_KEY_FILE_BYTES`).
 pub const MAX_KEPT_KEY_FILE_BYTES: usize = 2048;
 
-/// A key file as a vault secret keeps it: small files (KeePass's XML, 32-byte
-/// and hex key files) as they are; any larger file as its SHA-256, which
-/// KeePass treats as the same key (it hashes files that are none of those
-/// kinds, and uses a 32-byte file directly). Check that the result opens the
-/// vault before keeping it.
-pub fn key_file_secret(contents: &[u8]) -> Vec<u8> {
-    use sha2::{Digest as _, Sha256};
-    if contents.len() <= MAX_KEPT_KEY_FILE_BYTES {
-        contents.to_vec()
-    } else {
-        Sha256::digest(contents).to_vec()
+/// A key file as a vault secret keeps it: the key element KeePass derives
+/// from it (`keepass::key_file_element`: an XML key file's key, a 32-byte or
+/// hex key file's bytes, any other file's SHA-256), which opens the vault as
+/// the file does, whatever its size or padding. Kept as those 32 bytes when,
+/// read back as a key file, they give the same element (a 32-byte key file
+/// is used as it is); an unusual key file whose element is not 32 bytes is
+/// kept as it is, if it fits. `None`: it cannot be kept.
+pub fn key_file_secret(contents: &[u8]) -> Option<Vec<u8>> {
+    let element = Zeroizing::new(keepass::key_file_element(contents)?);
+    if element.len() == 32
+        && keepass::key_file_element(&element).as_deref() == Some(element.as_slice())
+    {
+        return Some(element.to_vec());
     }
+    (contents.len() <= MAX_KEPT_KEY_FILE_BYTES).then(|| contents.to_vec())
 }
 
 /// Why a vault could not be opened or saved.
@@ -155,15 +203,79 @@ mod tests {
     }
 
     #[test]
-    fn a_large_key_file_is_kept_as_its_hash() {
-        let large: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
-        let key = VaultKey::new().with_password("p").with_key_file(&large);
-        let bytes = save(&sample(), &key).unwrap();
-        let kept = key_file_secret(&large);
-        assert_eq!(kept.len(), 32);
-        let reopened = VaultKey::new().with_password("p").with_key_file(&kept);
-        assert!(open(&bytes, &reopened).is_ok());
-        assert_eq!(key_file_secret(b"<KeyFile/>"), b"<KeyFile/>");
+    fn the_passwords_hash_opens_and_saves_as_the_password_does() {
+        use sha2::{Digest, Sha256};
+        let hash: [u8; 32] = Sha256::digest("parola-çğ".as_bytes()).into();
+        let file = b"a key file".to_vec();
+        for (by_password, by_hash) in [
+            (
+                VaultKey::new().with_password("parola-çğ"),
+                VaultKey::new().with_password_hash(&hash),
+            ),
+            (
+                VaultKey::new()
+                    .with_password("parola-çğ")
+                    .with_key_file(&file),
+                VaultKey::new()
+                    .with_password_hash(&hash)
+                    .with_key_file(&file),
+            ),
+        ] {
+            let saved = save(&sample(), &by_password).unwrap();
+            assert!(open(&saved, &by_hash).is_ok());
+            let saved = save(&sample(), &by_hash).unwrap();
+            assert!(open(&saved, &by_password).is_ok());
+        }
+        let wrong: [u8; 32] = Sha256::digest(b"other").into();
+        let saved = save(&sample(), &VaultKey::new().with_password("parola-çğ")).unwrap();
+        assert!(open(&saved, &VaultKey::new().with_password_hash(&wrong)).is_err());
+    }
+
+    #[test]
+    fn the_same_key_however_it_is_held() {
+        use sha2::{Digest as _, Sha256};
+        let hash: [u8; 32] = Sha256::digest(b"p").into();
+        let by_password = VaultKey::new().with_password("p").with_key_file(&[7; 32]);
+        let by_hash = VaultKey::new()
+            .with_password_hash(&hash)
+            .with_key_file(&[7; 32]);
+        assert!(by_password.same_as(&by_hash));
+        assert!(!by_password.same_as(&VaultKey::new().with_password("q").with_key_file(&[7; 32])));
+        assert!(!by_password.same_as(&VaultKey::new().with_password("p")));
+        assert!(!VaultKey::new()
+            .with_password("p")
+            .same_as(&VaultKey::new().with_key_file(&[7; 32])));
+    }
+
+    /// Every kind of key file is kept as 32 bytes that open the vault as it does.
+    #[test]
+    fn a_key_file_is_kept_as_its_key_element() {
+        let bare: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+        let xml_v2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<KeyFile><Meta><Version>2.0</Version></Meta><Key><Data Hash=\"A65F1F33\">6E0A1A8C 6D8F4B2E 9C7A1F52 0B3D4E5F 61728394 A5B6C7D8 E9FA0B1C 2D3E4F50</Data></Key></KeyFile>\n";
+        // An XML key file padded past 2048 bytes is still its 32-byte key,
+        // not a hash of the whole file.
+        let xml_padded = xml_v2.replace("<Meta>", &format!("<!--{}--><Meta>", " ".repeat(4000)));
+        let xml_v1 = format!(
+            "<KeyFile><Meta><Version>1.00</Version></Meta><Key><Data>{}</Data></Key></KeyFile>",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [9u8; 32])
+        );
+        let hex_file = "ab".repeat(32);
+        for file in [
+            bare,
+            xml_v2.as_bytes().to_vec(),
+            xml_padded.into_bytes(),
+            xml_v1.into_bytes(),
+            hex_file.into_bytes(),
+            vec![7u8; 32],
+            b"<KeyFile/>".to_vec(),
+        ] {
+            let key = VaultKey::new().with_password("p").with_key_file(&file);
+            let bytes = save(&sample(), &key).unwrap();
+            let kept = key_file_secret(&file).unwrap();
+            assert_eq!(kept.len(), 32, "{}", String::from_utf8_lossy(&file[..20]));
+            let reopened = VaultKey::new().with_password("p").with_key_file(&kept);
+            assert!(open(&bytes, &reopened).is_ok());
+        }
     }
 
     #[test]

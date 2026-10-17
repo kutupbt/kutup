@@ -79,7 +79,7 @@ export function ReportsPage() {
           open
           onOpenChange={(o) => !o && close()}
           title={t('admin.reports.removeTitle')}
-          description={t('admin.reports.removeDescription', { email: pending.report.ownerEmail })}
+          description={t('admin.reports.removeDescription', { name: pending.report.ownerUsername })}
           submit={t('admin.reports.remove')}
           pending={remove.isPending}
           error={remove.error}
@@ -99,7 +99,7 @@ export function ReportsPage() {
           open
           onOpenChange={(o) => !o && close()}
           title={t('admin.reports.disableTitle')}
-          description={t('admin.reports.disableDescription', { email: pending.report.ownerEmail })}
+          description={t('admin.reports.disableDescription', { name: pending.report.ownerUsername })}
           submit={t('admin.user.disable')}
           pending={update.isPending}
           error={update.error}
@@ -155,7 +155,7 @@ function ReportCard({
         <dt className="text-muted-foreground">{t('admin.reports.owner')}</dt>
         <dd className="flex min-w-0 flex-wrap items-center gap-2">
           <Link to={`/admin/users/${report.ownerUserId}`} className="truncate font-medium hover:underline">
-            {report.ownerEmail}
+            {report.ownerUsername}
           </Link>
           {report.ownerIsActive ? null : <Badge variant="neutral">{t('admin.users.disabled')}</Badge>}
         </dd>

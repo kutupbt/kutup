@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { Contact } from '@kutup/contacts-core/model'
+import { currentAddressOf } from '@kutup/drive-core/identityPins'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { addressKeys, NoKutupAddress } from '@kutup/mail-core/keys'
 import type { Mailbox } from '@kutup/mail-core/mime'
@@ -41,7 +42,9 @@ function useKutupAccount(address: string, enabled: boolean) {
     retry: false,
     queryFn: () =>
       addressKeys(address).then(
-        (keys) => keys.account,
+        // An old address's account goes by another name now: Chat and calls
+        // go to the name it has (its verified rename chain says which).
+        (keys) => currentAddressOf(keys.address, keys.authorityPublicKey),
         (error: unknown) => {
           if (error instanceof NoKutupAddress) return null
           throw error
@@ -50,9 +53,12 @@ function useKutupAccount(address: string, enabled: boolean) {
   })
 }
 
-/** Where Chat opens a direct conversation (`apps/chat` `pathForAddress`). */
-function chatUrl(account: string, call?: 'audio') {
-  return appUrl('chat', `/c/${encodeURIComponent(`direct:${account}`)}${call ? `?call=${call}` : ''}`)
+/**
+ * Chat with someone by their address (`apps/chat` `/to/:address`): Chat
+ * looks the address up and checks it, then opens that account's chat.
+ */
+function chatUrl(address: string, call?: 'audio') {
+  return appUrl('chat', `/to/${encodeURIComponent(address)}${call ? `?call=${call}` : ''}`)
 }
 
 function Item({ icon, children, onClick }: { icon: ReactNode; children: ReactNode; onClick: () => void }) {

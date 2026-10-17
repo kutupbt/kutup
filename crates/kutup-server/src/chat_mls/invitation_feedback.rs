@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kutup_chat_proto::{
-    AccountAddress, MlsDeliveryCapabilityKindV1, MlsInvitationFeedbackDecisionV1,
+    AccountRef, MlsDeliveryCapabilityKindV1, MlsInvitationFeedbackDecisionV1,
     MlsInvitationFeedbackV1, MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1,
     PublishMlsDeliveryCapabilityV1, MLS_INVITATION_FEEDBACK_VERSION,
 };
@@ -52,10 +52,9 @@ pub(super) async fn record_ready_invitation_feedback(
         .server_name()
         .to_owned();
     let mut tx = state.pool.begin().await?;
-    let row: Option<(String, Option<String>, i64)> = sqlx::query_as(
-        "SELECT u.username, m.invited_by_domain, m.joined_epoch
+    let row: Option<(Option<String>, i64)> = sqlx::query_as(
+        "SELECT m.invited_by_domain, m.joined_epoch
          FROM chat_mls_local_members m
-         JOIN users u ON u.id = m.user_id
          WHERE m.conversation_id = $1 AND m.incarnation = $2
            AND m.user_id = $3 AND m.membership_status = 'active'
            AND m.removed_epoch IS NULL",
@@ -65,13 +64,11 @@ pub(super) async fn record_ready_invitation_feedback(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((username, Some(invited_by_domain), invited_epoch)) = row else {
+    let Some((Some(invited_by_domain), invited_epoch)) = row else {
         tx.commit().await?;
         return Ok(());
     };
-    let member: AccountAddress = format!("{username}@{local_domain}")
-        .parse()
-        .map_err(|_| AppError::internal("stored MLS invitation account is invalid"))?;
+    let member = crate::account_ids::local(&local_domain, user_id)?;
     let exists = invitation_feedback_exists(
         &mut tx,
         &local_domain,
@@ -109,7 +106,7 @@ async fn invitation_feedback_exists(
     destination: &str,
     conversation_id: Uuid,
     incarnation: u64,
-    member: &AccountAddress,
+    member: &AccountRef,
     invited_epoch: i64,
 ) -> AppResult<bool> {
     let exists: bool = if destination == local_domain {
@@ -117,12 +114,12 @@ async fn invitation_feedback_exists(
             "SELECT EXISTS(
                  SELECT 1 FROM chat_mls_invitation_feedback
                  WHERE conversation_id = $1 AND incarnation = $2
-                   AND member_address = $3 AND invited_epoch = $4
+                   AND member_account = $3 AND invited_epoch = $4
              )",
         )
         .bind(conversation_id)
         .bind(incarnation as i64)
-        .bind(member.canonical())
+        .bind(member.to_string())
         .bind(invited_epoch)
         .fetch_one(&mut **tx)
         .await?
@@ -131,14 +128,14 @@ async fn invitation_feedback_exists(
             "SELECT EXISTS(
                  SELECT 1 FROM chat_mls_invitation_feedback_outbox
                  WHERE destination = $1 AND conversation_id = $2
-                   AND incarnation = $3 AND member_address = $4
+                   AND incarnation = $3 AND member_account = $4
                    AND invited_epoch = $5
              )",
         )
         .bind(destination)
         .bind(conversation_id)
         .bind(incarnation as i64)
-        .bind(member.canonical())
+        .bind(member.to_string())
         .bind(invited_epoch)
         .fetch_one(&mut **tx)
         .await?
@@ -162,17 +159,17 @@ pub(super) async fn persist_invitation_feedback(
     } else {
         let inserted = sqlx::query(
             "INSERT INTO chat_mls_invitation_feedback_outbox
-                 (destination, conversation_id, incarnation, member_address,
+                 (destination, conversation_id, incarnation, member_account,
                   invited_epoch, feedback_digest, feedback)
              VALUES ($1,$2,$3,$4,$5,$6,$7)
              ON CONFLICT (destination, conversation_id, incarnation,
-                          member_address, invited_epoch)
+                          member_account, invited_epoch)
              DO NOTHING",
         )
         .bind(destination)
         .bind(feedback.conversation_id)
         .bind(feedback.incarnation as i64)
-        .bind(feedback.member.canonical())
+        .bind(feedback.member.to_string())
         .bind(feedback.invited_epoch as i64)
         .bind(&digest)
         .bind(&value)
@@ -183,13 +180,13 @@ pub(super) async fn persist_invitation_feedback(
                 "SELECT feedback_digest
                  FROM chat_mls_invitation_feedback_outbox
                  WHERE destination = $1 AND conversation_id = $2
-                   AND incarnation = $3 AND member_address = $4
+                   AND incarnation = $3 AND member_account = $4
                    AND invited_epoch = $5",
             )
             .bind(destination)
             .bind(feedback.conversation_id)
             .bind(feedback.incarnation as i64)
-            .bind(feedback.member.canonical())
+            .bind(feedback.member.to_string())
             .bind(feedback.invited_epoch as i64)
             .fetch_optional(&mut **tx)
             .await?;
@@ -221,7 +218,7 @@ pub(crate) async fn list_invitation_feedback(
                AND administrator.membership_status = 'active'
                AND administrator.removed_epoch IS NULL
          )
-         ORDER BY f.received_at DESC, f.conversation_id, f.member_address
+         ORDER BY f.received_at DESC, f.conversation_id, f.member_account
          LIMIT 256",
     )
     .bind(user_id)
@@ -268,7 +265,7 @@ pub(crate) async fn federated_record_invitation_feedback(
             "/api/fed/chat/mls/invitation-feedback",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     if let Err(error) = active_policy(&state).await {
@@ -288,7 +285,7 @@ pub(crate) async fn federated_record_invitation_feedback(
         return signed_federation_error(federation, &authenticated, AppError::bad_request(error));
     }
     if authenticated.destination() != federation.server_name()
-        || feedback.member.server.as_deref() != Some(authenticated.origin())
+        || feedback.member.server != authenticated.origin()
     {
         return signed_federation_error(
             federation,
@@ -349,7 +346,7 @@ async fn verify_and_store_federated_feedback(
             && delivery
                 .local_members_after
                 .iter()
-                .any(|member| member.address == feedback.member)
+                .any(|member| member.account == feedback.member)
         {
             matched_finalized_at = Some(finalized_at);
             break;
@@ -393,15 +390,15 @@ async fn insert_feedback(
         .map_err(|_| AppError::bad_request("MLS invitation feedback clock is invalid"))?;
     let inserted = sqlx::query(
         "INSERT INTO chat_mls_invitation_feedback
-             (conversation_id, incarnation, member_address, invited_epoch,
+             (conversation_id, incarnation, member_account, invited_epoch,
               source_domain, decision, decided_at, feedback_digest, feedback)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         ON CONFLICT (conversation_id, incarnation, member_address, invited_epoch)
+         ON CONFLICT (conversation_id, incarnation, member_account, invited_epoch)
          DO NOTHING",
     )
     .bind(feedback.conversation_id)
     .bind(feedback.incarnation as i64)
-    .bind(feedback.member.canonical())
+    .bind(feedback.member.to_string())
     .bind(feedback.invited_epoch as i64)
     .bind(source_domain)
     .bind(decision)
@@ -415,11 +412,11 @@ async fn insert_feedback(
             "SELECT feedback_digest
              FROM chat_mls_invitation_feedback
              WHERE conversation_id = $1 AND incarnation = $2
-               AND member_address = $3 AND invited_epoch = $4",
+               AND member_account = $3 AND invited_epoch = $4",
         )
         .bind(feedback.conversation_id)
         .bind(feedback.incarnation as i64)
-        .bind(feedback.member.canonical())
+        .bind(feedback.member.to_string())
         .bind(feedback.invited_epoch as i64)
         .fetch_optional(&mut **tx)
         .await?;
@@ -434,7 +431,7 @@ async fn insert_feedback(
 
 pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResult<()> {
     let row: Option<InvitationFeedbackOutboxRow> = sqlx::query_as(
-        "SELECT destination, conversation_id, incarnation, member_address,
+        "SELECT destination, conversation_id, incarnation, member_account,
                 invited_epoch, feedback_digest, feedback, attempts
          FROM chat_mls_invitation_feedback_outbox
          WHERE state = 'pending' AND next_attempt_at <= now()
@@ -447,7 +444,7 @@ pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResul
         destination,
         conversation_id,
         incarnation,
-        member_address,
+        member_account,
         invited_epoch,
         digest,
         value,
@@ -468,7 +465,7 @@ pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResul
     })?;
     if feedback.conversation_id != conversation_id
         || feedback.incarnation != incarnation as u64
-        || feedback.member.canonical() != member_address
+        || feedback.member.to_string() != member_account
         || feedback.invited_epoch != invited_epoch as u64
         || feedback.feedback_digest().map_err(AppError::internal)? != digest
     {
@@ -486,7 +483,7 @@ pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResul
             .send(
                 &destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/invitation-feedback".into(),
                     query: None,
@@ -535,13 +532,13 @@ pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResul
                  SET state = 'delivered', attempts = attempts + 1,
                      last_error_class = NULL, updated_at = now()
                  WHERE destination = $1 AND conversation_id = $2
-                   AND incarnation = $3 AND member_address = $4
+                   AND incarnation = $3 AND member_account = $4
                    AND invited_epoch = $5 AND state = 'pending'",
             )
             .bind(&destination)
             .bind(conversation_id)
             .bind(incarnation)
-            .bind(&member_address)
+            .bind(&member_account)
             .bind(invited_epoch)
             .execute(&state.pool)
             .await?;
@@ -565,13 +562,13 @@ pub(super) async fn retry_invitation_feedback_once(state: &AppState) -> AppResul
                      next_attempt_at = now() + make_interval(secs => $6),
                      last_error_class = $7, updated_at = now()
                  WHERE destination = $1 AND conversation_id = $2
-                   AND incarnation = $3 AND member_address = $4
+                   AND incarnation = $3 AND member_account = $4
                    AND invited_epoch = $5 AND state = 'pending'",
             )
             .bind(&destination)
             .bind(conversation_id)
             .bind(incarnation)
-            .bind(&member_address)
+            .bind(&member_account)
             .bind(invited_epoch)
             .bind(delay_seconds as f64)
             .bind(failure_class)

@@ -5,6 +5,7 @@ import { isAxiosError } from 'axios'
 import { loadAppDirectory } from './apps'
 import { consumeFork, hasForkInLocation, pendingForkReturnTo, requestFork, UnrequestedForkError, type ForkChild } from './fork'
 import { restoreSession } from './persist'
+import { KeyBindingMismatchError } from './profile'
 
 export type ChildBootResult =
   /** Signed in; `next` is where a just-consumed fork asked to go. */
@@ -75,6 +76,9 @@ async function boot(app: ForkChild): Promise<ChildBootResult> {
   } catch (error) {
     // Someone else's link: as if it were not there, landing on the home.
     if (error instanceof UnrequestedForkError) return withoutFork(app, '/')
+    // The server names another key binding than the keys carry: asking the
+    // account app again would get the same answer.
+    if (error instanceof KeyBindingMismatchError) throw error
     if (isAxiosError(error) && !error.response) throw error
     return askAccount(app, returnTo)
   }

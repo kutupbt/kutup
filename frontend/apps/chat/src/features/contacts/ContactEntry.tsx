@@ -1,8 +1,8 @@
 import { BookUser, UserPlus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useContactLookup } from '@kutup/contacts-core/api'
 import { appUrl } from '@kutup/session/apps'
 import { Button } from '@kutup/ui/components/button'
+import { useContactFor } from './contactFor'
 import { useSaveContact } from './saveContactState'
 
 /**
@@ -11,12 +11,12 @@ import { useSaveContact } from './saveContactState'
  * its own, so a person who is not in it can be saved from here, and one who
  * is opens in Contacts.
  */
-export function ContactEntry({ address, name }: { address: string; name?: string }) {
+export function ContactEntry({ peer, address, name }: { peer: string; address: string; name?: string }) {
   const { t } = useTranslation()
-  const contacts = useContactLookup()
+  const { ready, card: contact, taken } = useContactFor(peer, address)
   const save = useSaveContact()
-  if (!contacts.ready) return null
-  const contact = contacts.find(address)
+  // A card saved for this address is someone else's: nothing to show or save.
+  if (!ready || taken) return null
   if (contact) {
     return (
       <p className="flex items-center gap-1.5 text-sm text-muted-foreground" data-testid="chat-in-contacts">

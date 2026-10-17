@@ -12,8 +12,14 @@ use sqlx::PgPool;
 pub(crate) enum GeneratedKey {
     FederationIdentity,
     MlsControl,
-    /// Signs shared mailboxes' key lists (docs/plans/mail-groups.md).
-    MailGroupAuthority,
+    /// The HMAC key of the answers for names that are no account
+    /// (docs/plans/account-identity.md): its own, so rotating any other
+    /// secret changes none of them.
+    FakeAccounts,
+    /// The HMAC key referral codes are stored under
+    /// (docs/plans/registration-codes.md): its own, so rotating any other
+    /// secret voids no open code.
+    RegistrationCodes,
 }
 
 impl GeneratedKey {
@@ -21,7 +27,8 @@ impl GeneratedKey {
         match self {
             Self::FederationIdentity => "federation-identity",
             Self::MlsControl => "mls-control",
-            Self::MailGroupAuthority => "mail-group-authority",
+            Self::FakeAccounts => "fake-accounts",
+            Self::RegistrationCodes => "registration-codes",
         }
     }
 }

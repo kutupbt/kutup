@@ -8,3 +8,9 @@ services:
   backend:
     ports:
       - "127.0.0.1:${KUTUP_BACKUP_TEST_PORT:-39083}:3000"
+    environment:
+      # Meetings by link (call_links_live). No SFU runs: the tests only mint
+      # tokens, and `.invalid` never resolves.
+      CHAT_SFU_URL: ws://sfu.invalid
+      CHAT_SFU_API_KEY: backup-test-sfu-key
+      CHAT_SFU_API_SECRET: backup-test-sfu-secret-at-least-32-characters

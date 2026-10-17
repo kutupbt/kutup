@@ -14,16 +14,21 @@ import { UserMenu } from '@kutup/ui/components/user-menu'
 import { usePeople } from '@kutup/drive-core/people'
 import { SearchBox } from '../features/search/SearchBox'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 /** Drive's frame: New, My files / Shared with me / Trash, storage, account menu. */
 export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   // Exchange profile keys with the people you share with while Drive is open.
   usePeople()
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.drive')}
       flush
       switcher={
@@ -61,8 +66,8 @@ export function DriveShell({ primaryAction }: { primaryAction?: ReactNode }) {
       headerStart={<SearchBox />}
       headerEnd={
         <UserMenu
-          name={session.username ?? session.email}
-          email={session.email}
+          name={session.username ?? session.address}
+          address={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => window.location.assign(appUrl('account', '/login')))

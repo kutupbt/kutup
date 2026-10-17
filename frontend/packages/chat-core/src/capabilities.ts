@@ -1,6 +1,6 @@
 import { loadServerSettings } from '@kutup/session/apps'
 import type { ChatCapabilities } from './types'
-import { parseAccountAddress } from './identity'
+import { parseAddress } from './identity'
 import { DIRECT_CHAT_SUITE, isDirectChatSuiteId } from './suites'
 
 const PROTOCOL_VERSION = 1
@@ -9,7 +9,7 @@ const REQUIRED_SUITE = DIRECT_CHAT_SUITE.PqxdhTripleRatchetV1
 export function isSupportedChat(capabilities: ChatCapabilities | null | undefined): boolean {
   const serverName = capabilities?.serverName
   const canonicalServer = serverName
-    ? parseAccountAddress(`server@${serverName}`)?.server === serverName
+    ? parseAddress(`server@${serverName}`)?.server === serverName
     : false
   return Boolean(
     capabilities?.enabled &&

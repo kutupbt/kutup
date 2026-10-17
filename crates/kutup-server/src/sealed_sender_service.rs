@@ -255,7 +255,7 @@ impl SealedSenderService {
 
     fn issue(
         &self,
-        canonical_sender: String,
+        sender: String,
         device_id: u32,
         identity_key: PublicKey,
         now: OffsetDateTime,
@@ -276,7 +276,7 @@ impl SealedSenderService {
             .ok_or_else(|| AppError::internal("sender certificate expiry is invalid"))?;
         let mut rng = OsRng.unwrap_err();
         let certificate = SenderCertificate::new(
-            canonical_sender,
+            sender,
             None,
             identity_key,
             device_id,
@@ -314,18 +314,17 @@ pub(crate) async fn issue_sender_certificate(
         .as_ref()
         .ok_or_else(|| AppError::not_found("sealed sender is not enabled"))?;
     let user_id = trusted_uuid(&auth.user_id)?;
-    let row: Option<(String, String)> = sqlx::query_as(
+    let row: Option<String> = sqlx::query_scalar(
         "UPDATE chat_devices d SET last_seen_at = now()
          FROM users u
          WHERE d.user_id = $1 AND d.device_id = $2 AND u.id = d.user_id AND u.is_active = true
-         RETURNING u.username, d.identity_key",
+         RETURNING d.identity_key",
     )
     .bind(user_id)
     .bind(query.device_id as i32)
     .fetch_optional(&state.pool)
     .await?;
-    let (username, encoded_identity) =
-        row.ok_or_else(|| AppError::not_found("no such chat device"))?;
+    let encoded_identity = row.ok_or_else(|| AppError::not_found("no such chat device"))?;
     let identity_bytes = STANDARD
         .decode(&encoded_identity)
         .map_err(|_| AppError::internal("stored chat identity key is invalid"))?;
@@ -335,9 +334,12 @@ pub(crate) async fn issue_sender_certificate(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::internal("sealed sender requires federation"))?;
-    let canonical_sender = format!("{username}@{}", federation.server_name());
+    // The sender is their account, as Signal's certificate names the ACI:
+    // `aci:<account id>@<server>`, never a name (docs/plans/account-ids.md).
+    let sender = kutup_chat_proto::AccountRef::new(federation.server_name(), &user_id.to_string())
+        .map_err(|_| AppError::internal("account id is invalid"))?;
     let (certificate, expires_at, certificate_id) = match service.issue(
-        canonical_sender,
+        sender.to_string(),
         query.device_id,
         identity_key,
         OffsetDateTime::now_utc(),

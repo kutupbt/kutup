@@ -1,9 +1,9 @@
 import {
-  canonicalAccountAddress,
+  accountKey,
   conversationKey,
-  directAddress,
+  directKey,
   directConversation,
-  parseAccountAddress,
+  parseAccount,
 } from '@kutup/chat-core/identity'
 import { foldLiveLocations, type LiveShareState } from './liveLocations'
 import { isVisibleChatMessage, reduceDisappearingTimers } from '@kutup/chat-core/disappearing'
@@ -32,15 +32,14 @@ import type {
 // timer changes) in one list; these functions fold them together. Pure, so
 // the rules are tested once instead of living inside components.
 
-/** Who wrote an entry: this account for outgoing ones, else the peer. */
-export function messageActor(message: ChatHistoryEntry, selfAddress: string): string | null {
-  if (message.direction === 'outgoing') return selfAddress
-  return message.conversation.kind === 'direct' ? directAddress(message.conversation) : message.peer
+/** Who wrote an entry: this account for outgoing ones, else its sender. */
+export function messageActor(message: ChatHistoryEntry, selfKey: string): string {
+  return message.direction === 'outgoing' ? selfKey : message.sender
 }
 
 /** The id other entries (replies, reactions, edits) point at. */
 export function messageIdOf(message: ChatHistoryEntry): string {
-  return message.content.messageId ?? message.id
+  return message.content.messageId
 }
 
 export interface MessageMutationState {
@@ -55,11 +54,11 @@ export interface MessageMutationState {
  */
 export function foldMutations(
   history: readonly ChatHistoryEntry[],
-  selfAddress: string,
+  selfKey: string,
 ): Map<string, MessageMutationState> {
   const targets = new Map<string, ChatHistoryEntry>()
   for (const message of history) {
-    if (message.content.messageId && !message.content.mutation) targets.set(message.content.messageId, message)
+    if (!message.content.mutation) targets.set(message.content.messageId, message)
   }
   const edits = new Map<string, ChatHistoryEntry>()
   const deleted = new Set<string>()
@@ -68,8 +67,8 @@ export function foldMutations(
     if (!mutation) continue
     const target = targets.get(mutation.targetMessageId)
     if (!target || conversationKey(message.conversation) !== conversationKey(target.conversation)) continue
-    const actor = messageActor(message, selfAddress)
-    if (!actor || actor !== messageActor(target, selfAddress)) continue
+    const actor = messageActor(message, selfKey)
+    if (!actor || actor !== messageActor(target, selfKey)) continue
     if (mutation.operation === 'delete') {
       deleted.add(mutation.targetMessageId)
       continue
@@ -90,16 +89,16 @@ export function foldReactions(
   history: readonly ChatHistoryEntry[],
   key: string,
   targetIds: ReadonlySet<string>,
-  selfAddress: string,
+  selfKey: string,
 ): Map<string, ReactionAggregate[]> {
   const operations: ReactionOperation[] = []
   for (const message of history) {
     const reaction = message.content.reaction
     if (!reaction || conversationKey(message.conversation) !== key || !targetIds.has(reaction.targetMessageId)) continue
-    const reactor = messageActor(message, selfAddress)
+    const reactor = messageActor(message, selfKey)
     if (reactor) operations.push({ message, reaction, reactor })
   }
-  return aggregateLatestReactions(operations, targetIds, selfAddress)
+  return aggregateLatestReactions(operations, targetIds, selfKey)
 }
 
 export interface ReceiptState {
@@ -111,7 +110,7 @@ export interface ReceiptState {
 /** Receipts for this account's own messages, counted per other person. */
 export function foldReceipts(
   history: readonly ChatHistoryEntry[],
-  selfAddress: string,
+  selfKey: string,
 ): Map<string, ReceiptState> {
   const own = new Map<string, ChatHistoryEntry>()
   for (const message of history) {
@@ -121,8 +120,8 @@ export function foldReceipts(
   for (const message of history) {
     const receipt = message.content.receipt
     if (!receipt || message.direction !== 'incoming') continue
-    const actor = messageActor(message, selfAddress)
-    if (!actor || actor === selfAddress) continue
+    const actor = messageActor(message, selfKey)
+    if (!actor || actor === selfKey) continue
     for (const id of receipt.messageIds) {
       const target = own.get(id)
       if (!target || conversationKey(target.conversation) !== conversationKey(message.conversation)) continue
@@ -155,8 +154,8 @@ export interface ConversationSummary {
   key: string
   conversation: ConversationId
   kind: ConversationKind
-  /** The peer's canonical address, for direct conversations and notes. */
-  address: string | null
+  /** The other account's key, for direct conversations and notes (this account's own). */
+  peer: string | null
   /** The newest visible message, if any. */
   last: ChatHistoryEntry | null
   /** When it last changed, for ordering (newest first). */
@@ -184,7 +183,7 @@ export function groupIdOf(group: LocalMlsConversationRecord): string {
  * groups whose history survives without a live group ("protected
  * history"), newest first.
  */
-export function conversationList(data: ChatData, selfAddress: string, nowMs: number): ConversationSummary[] {
+export function conversationList(data: ChatData, selfKey: string, nowMs: number): ConversationSummary[] {
   const contacts = new Map(data.contacts.map((c) => [c.peer, c]))
   const profiles = new Map(data.profiles.map((p) => [p.peer, p]))
   const latest = new Map<string, ChatHistoryEntry>()
@@ -201,19 +200,19 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
   for (const [key, message] of latest) {
     const conversation = message.conversation
     if (conversation.kind === 'direct') {
-      const address = directAddress(conversation)
-      if (!address) continue
-      const contact = contacts.get(address) ?? null
+      const peer = directKey(conversation)
+      if (!peer) continue
+      const contact = contacts.get(peer) ?? null
       if (contact?.state === 'rejected') continue
       items.set(key, {
         key,
         conversation,
-        kind: address === selfAddress ? 'note' : 'direct',
-        address,
+        kind: peer === selfKey ? 'note' : 'direct',
+        peer,
         last: message,
         activityMs: message.timestampMs,
         contact,
-        profile: profiles.get(address) ?? null,
+        profile: profiles.get(peer) ?? null,
         groupInfo: null,
       })
     } else if (!liveGroups.has(conversation.groupId)) {
@@ -221,7 +220,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
         key,
         conversation,
         kind: 'history',
-        address: null,
+        peer: null,
         last: message,
         activityMs: message.timestampMs,
         contact: null,
@@ -233,16 +232,16 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
   // A request whose messages are not here (yet) still shows.
   for (const contact of data.contacts) {
     if (contact.state !== 'pendingIncoming') continue
-    const address = parseAccountAddress(contact.peer)
-    if (!address) continue
-    const conversation = directConversation(address)
+    const account = parseAccount(contact.peer)
+    if (!account) continue
+    const conversation = directConversation(account)
     const key = conversationKey(conversation)
     if (items.has(key)) continue
     items.set(key, {
       key,
       conversation,
       kind: 'direct',
-      address: canonicalAccountAddress(address),
+      peer: contact.peer,
       last: null,
       activityMs: contact.updatedAtMs,
       contact,
@@ -258,7 +257,7 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
       key,
       conversation,
       kind: 'group',
-      address: null,
+      peer: null,
       last,
       activityMs: last?.timestampMs ?? groupCreatedMs(group),
       contact: null,
@@ -272,7 +271,8 @@ export function conversationList(data: ChatData, selfAddress: string, nowMs: num
 export interface MessageRequest {
   key: string
   conversation: ConversationId
-  address: string
+  /** The other account's key. */
+  peer: string
   contact: ContactRecord
   profile: PeerChatProfile | null
   last: ChatHistoryEntry | null
@@ -284,13 +284,13 @@ export function messageRequests(data: ChatData, nowMs: number): MessageRequest[]
   return data.contacts
     .filter((contact) => contact.state === 'pendingIncoming')
     .flatMap((contact) => {
-      const address = parseAccountAddress(contact.peer)
-      if (!address) return []
-      const conversation = directConversation(address)
+      const account = parseAccount(contact.peer)
+      if (!account) return []
+      const conversation = directConversation(account)
       const key = conversationKey(conversation)
       const last =
         data.history.filter((m) => conversationKey(m.conversation) === key && isVisibleChatMessage(m, nowMs)).at(-1) ?? null
-      return [{ key, conversation, address: canonicalAccountAddress(address), contact, profile: profiles.get(contact.peer) ?? null, last }]
+      return [{ key, conversation, peer: contact.peer, contact, profile: profiles.get(contact.peer) ?? null, last }]
     })
     .sort((a, b) => b.contact.updatedAtMs - a.contact.updatedAtMs)
 }
@@ -298,7 +298,7 @@ export function messageRequests(data: ChatData, nowMs: number): MessageRequest[]
 export interface MessageView {
   entry: ChatHistoryEntry
   id: string
-  /** Who wrote it (canonical address). */
+  /** Who wrote it (the account's key). */
   author: string
   outgoing: boolean
   mutation: MessageMutationState | null
@@ -319,6 +319,10 @@ export interface MessageView {
    * `lost` when it could not be named to ask for.
    */
   undecryptable: 'waiting' | 'lost' | null
+  /** The other person's safety number changed here (Signal's line in the thread). */
+  safetyChanged: boolean
+  /** The other person changed their username (their own verified rename chain). */
+  renamed: { previous: string; current: string } | null
   /** A group call someone started. */
   groupCall: ChatGroupCall | null
   /** A view-once photo or video already opened: only "Viewed" is left. */
@@ -341,7 +345,7 @@ export function undecryptableState(entry: ChatHistoryEntry): 'waiting' | 'lost' 
 
 export interface PollState {
   poll: ChatPollV1
-  /** Each voter's current choice (canonical address → option indexes). */
+  /** Each voter's current choice (account key → option indexes). */
   votes: Map<string, number[]>
   /** Ended by its author. */
   ended: boolean
@@ -353,7 +357,7 @@ export interface PollState {
  * in a single-choice poll, is ignored; only the author ends a poll, and
  * votes after that do not count.
  */
-export function foldPolls(history: readonly ChatHistoryEntry[], selfAddress: string): Map<string, PollState> {
+export function foldPolls(history: readonly ChatHistoryEntry[], selfKey: string): Map<string, PollState> {
   const polls = new Map<string, { entry: ChatHistoryEntry; poll: ChatPollV1; endedAt: number | null }>()
   for (const message of history) {
     if (message.content.poll && message.content.messageId) {
@@ -362,7 +366,7 @@ export function foldPolls(history: readonly ChatHistoryEntry[], selfAddress: str
   }
   const sameAuthorAndConversation = (message: ChatHistoryEntry, target: ChatHistoryEntry) =>
     conversationKey(message.conversation) === conversationKey(target.conversation) &&
-    messageActor(message, selfAddress) === messageActor(target, selfAddress)
+    messageActor(message, selfKey) === messageActor(target, selfKey)
   for (const message of history) {
     const end = message.content.pollTerminate
     const target = end ? polls.get(end.targetMessageId) : undefined
@@ -378,7 +382,7 @@ export function foldPolls(history: readonly ChatHistoryEntry[], selfAddress: str
     if (target.endedAt !== null && message.timestampMs > target.endedAt) continue
     if (vote.options.some((index) => index >= target.poll.options.length)) continue
     if (!target.poll.allowMultiple && vote.options.length > 1) continue
-    const voter = messageActor(message, selfAddress)
+    const voter = messageActor(message, selfKey)
     if (!voter) continue
     const byVoter = latest.get(vote.targetMessageId) ?? new Map<string, ChatHistoryEntry>()
     const previous = byVoter.get(voter)
@@ -406,7 +410,7 @@ export function isGroupNotice(message: ChatHistoryEntry): boolean {
 export function threadView(
   history: readonly ChatHistoryEntry[],
   key: string,
-  selfAddress: string,
+  selfKey: string,
   nowMs: number,
 ): MessageView[] {
   const inThread = history.filter((m) => conversationKey(m.conversation) === key)
@@ -418,14 +422,14 @@ export function threadView(
       body &&
       message.direction === 'outgoing' &&
       message.conversation.kind === 'direct' &&
-      directAddress(message.conversation) === selfAddress &&
+      directKey(message.conversation) === selfKey &&
       conversationKey(body.conversation) === key
     ) {
       opened.set(body.messageId, body)
     }
   }
-  const polls = foldPolls(inThread, selfAddress)
-  const liveShares = foldLiveLocations(inThread, (m) => messageActor(m, selfAddress))
+  const polls = foldPolls(inThread, selfKey)
+  const liveShares = foldLiveLocations(inThread, (m) => messageActor(m, selfKey))
   // "Alice ended the poll": the author's own end, once, as a notice.
   const endNotices = new Set<ChatHistoryEntry>()
   const noticed = new Set<string>()
@@ -433,7 +437,7 @@ export function threadView(
     const end = message.content.pollTerminate
     if (!end || noticed.has(end.targetMessageId) || !polls.get(end.targetMessageId)?.ended) continue
     const target = inThread.find((m) => m.content.messageId === end.targetMessageId)
-    if (target && messageActor(target, selfAddress) === messageActor(message, selfAddress)) {
+    if (target && messageActor(target, selfKey) === messageActor(message, selfKey)) {
       endNotices.add(message)
       noticed.add(end.targetMessageId)
     }
@@ -449,22 +453,22 @@ export function threadView(
   }
   const shown = inThread.filter(
     (m) =>
-      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
-      !(m.content.messageId && opened.has(m.content.messageId)) &&
+      (m.content.disappearingTimer || isGroupNotice(m) || m.content.callLog || m.content.undecryptable || m.content.safetyNumberChanged || m.content.peerRenamed || m.content.groupCall?.event === 'started' || endNotices.has(m) || isVisibleChatMessage(m, nowMs)) &&
+      !opened.has(m.content.messageId) &&
       !repeatedStart(m),
   )
   const byId = new Map(shown.map((m) => [messageIdOf(m), m]))
-  const mutations = foldMutations(inThread, selfAddress)
+  const mutations = foldMutations(inThread, selfKey)
   const targetIds = new Set(shown.flatMap((m) => (m.content.messageId ? [m.content.messageId] : [])))
-  const reactions = foldReactions(inThread, key, targetIds, selfAddress)
-  const receipts = foldReceipts(inThread, selfAddress)
+  const reactions = foldReactions(inThread, key, targetIds, selfKey)
+  const receipts = foldReceipts(inThread, selfKey)
   const views = shown.map((entry): MessageView => {
     const id = messageIdOf(entry)
     const replyTo = entry.content.replyTo ? (byId.get(entry.content.replyTo) ?? null) : null
     return {
       entry,
       id,
-      author: messageActor(entry, selfAddress) ?? entry.peer,
+      author: messageActor(entry, selfKey),
       outgoing: entry.direction === 'outgoing',
       mutation: mutations.get(id) ?? null,
       replyTo,
@@ -475,6 +479,10 @@ export function threadView(
       groupUpdate: isGroupNotice(entry) ? entry.content.groupUpdate! : null,
       callLog: entry.content.callLog ?? null,
       undecryptable: undecryptableState(entry),
+      safetyChanged: entry.content.safetyNumberChanged === true,
+      renamed: entry.content.peerRenamed
+        ? { previous: entry.content.peerRenamed.previous, current: entry.content.peerRenamed.current }
+        : null,
       groupCall: entry.content.groupCall?.event === 'started' ? entry.content.groupCall : null,
       viewedOnce: null,
       poll: entry.content.poll ? (polls.get(id) ?? null) : null,
@@ -486,20 +494,21 @@ export function threadView(
   })
   if (opened.size === 0) return views
   const placeholders = [...opened.values()].map((body): MessageView => {
-    const outgoing = body.sender === selfAddress
+    const sender = accountKey(body.sender)
+    const outgoing = sender === selfKey
     return {
       entry: {
         id: `viewed:${body.messageId}`,
         conversation: body.conversation,
-        peer: body.sender,
+        sender,
         direction: outgoing ? 'outgoing' : 'incoming',
         timestampMs: body.timestampMs,
         delivered: true,
         deduplicated: false,
-        content: { version: 1, kind: 'viewOnceViewed', sentAt: '', seq: '0', body: null },
+        content: { version: 1, kind: 'viewOnceViewed', sentAt: '', seq: '0', messageId: body.messageId, body: null },
       },
       id: body.messageId,
-      author: body.sender,
+      author: sender,
       outgoing,
       mutation: null,
       replyTo: null,
@@ -510,6 +519,8 @@ export function threadView(
       groupUpdate: null,
       callLog: null,
       undecryptable: null,
+      safetyChanged: false,
+      renamed: null,
       groupCall: null,
       viewedOnce: { video: body.video },
       poll: null,
@@ -544,17 +555,17 @@ export function unreadCounts(
   return counts
 }
 
-/** Conversations with an unread incoming message that mentions `selfAddress`. */
+/** Conversations with an unread incoming message that mentions `selfKey`. */
 export function unreadMentions(
   history: readonly ChatHistoryEntry[],
   readUpTo: Readonly<Record<string, number>>,
-  selfAddress: string,
+  selfKey: string,
   nowMs: number,
 ): Set<string> {
   const keys = new Set<string>()
   for (const message of history) {
     if (message.direction !== 'incoming' || !message.content.mentions?.length) continue
-    if (!message.content.mentions.some((mention) => mention.member === selfAddress)) continue
+    if (!message.content.mentions.some((mention) => accountKey(mention.member) === selfKey)) continue
     if (!isVisibleChatMessage(message, nowMs)) continue
     const key = conversationKey(message.conversation)
     if (message.timestampMs > (readUpTo[key] ?? 0)) keys.add(key)

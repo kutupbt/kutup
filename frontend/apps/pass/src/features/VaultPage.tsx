@@ -1,5 +1,6 @@
-import { ArrowLeft, FileUp, Folder, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
+import { ArrowLeft, Eye, FileUp, Folder, FolderPlus, Image as ImageIcon, KeyRound, Lock, MoreHorizontal, Pencil, Plus, Search, ShieldCheck, Trash, Trash2, Vault } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -19,8 +20,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { cn } from '@kutup/ui/lib/cn'
 import { asNameTaken } from '@kutup/drive-core/names'
+import { useRequiredSession } from '@kutup/session/store'
 import { useRenameFile } from '@kutup/drive-core/mutations'
-import { useForgetVaultKey, useVaultSecrets } from '../drive/secrets'
+import { keptGeneratedPassword, keptKeyKind, useForgetVaultKey, useVaultSecrets } from '../drive/secrets'
+import { VaultKeyDialog } from './VaultKeyDialog'
 import { refreshVaultFile, useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
 import { lockVault, useSessionState, useVaultSession } from '../sync/openVaults'
 import type { VaultSession } from '../sync/vaultSession'
@@ -98,6 +101,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [emptyingBin, setEmptyingBin] = useState(false)
   const [renamingVault, setRenamingVault] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [showingKey, setShowingKey] = useState(false)
+  const [forgettingGenerated, setForgettingGenerated] = useState(false)
 
   // Another device's save is taken in when the tab comes back, and now and then.
   useEffect(() => {
@@ -130,6 +135,21 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   }, [view.entries, groupId, viewingBin, needle])
   const entry = entryId ? view.entries.find((e) => e.id === entryId) : undefined
   const kept = secrets.data?.some((s) => s.fileId === fileId) ?? false
+  const signedIn = useRequiredSession()
+  // Whether the kept key is one Kutup Pass generated (only that is shown);
+  // the key itself is not held here.
+  const generatedKey =
+    useQuery({
+      queryKey: ['pass', 'generated-key', fileId, secrets.dataUpdatedAt],
+      queryFn: async () => (await keptGeneratedPassword(signedIn, secrets.data, fileId!)) !== null,
+      enabled: kept,
+      gcTime: 0,
+    }).data === true
+  const forget = () =>
+    void forgetKey(fileId!).then(
+      () => toast.success(t('vault.keyForgotten')),
+      () => toast.error(t('vault.forgetFailed')),
+    )
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const toReview = view.entries.filter((e) => e.review.length > 0 && !e.inRecycleBin).length
   const pictures = useMemo(() => iconSources(view), [view])
@@ -205,12 +225,20 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                   {t('import.open')}
                 </DropdownMenuItem>
               ) : null}
+              {generatedKey ? (
+                <DropdownMenuItem onSelect={() => setShowingKey(true)}>
+                  <Eye />
+                  {t('vaultKey.show')}
+                </DropdownMenuItem>
+              ) : null}
               {kept ? (
                 <DropdownMenuItem
                   onSelect={() =>
-                    void forgetKey(fileId!).then(
-                      () => toast.success(t('vault.keyForgotten')),
-                      () => toast.error(t('vault.forgetFailed')),
+                    // Asked now, not from what the menu showed: a key Kutup
+                    // Pass generated, or one that cannot be told, warns first.
+                    void keptKeyKind(signedIn, secrets.data, fileId!).then(
+                      (kind) => (kind === 'chosen' ? forget() : setForgettingGenerated(true)),
+                      () => setForgettingGenerated(true),
                     )
                   }
                 >
@@ -446,6 +474,24 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
           const file = await refreshVaultFile(vault.folder, vault.file)
           await renameFile.mutateAsync({ folder: vault.folder, file, name: `${name}.kdbx` })
           await session.apply({ op: 'updateVault', name, description: view.description, defaultUserName: view.defaultUserName })
+        }}
+      />
+      <VaultKeyDialog
+        open={showingKey}
+        onOpenChange={setShowingKey}
+        vaultName={title}
+        reveal={() => keptGeneratedPassword(signedIn, secrets.data, fileId!)}
+      />
+      <ConfirmDestructive
+        open={forgettingGenerated}
+        onOpenChange={setForgettingGenerated}
+        title={t('vaultKey.forgetTitle')}
+        description={t('vaultKey.forgetDescription')}
+        submit={t('vault.forgetKey')}
+        errorFallback={t('vault.forgetFailed')}
+        onConfirm={() => {
+          setForgettingGenerated(false)
+          forget()
         }}
       />
       <ConfirmDestructive

@@ -31,7 +31,7 @@ export interface LiveShareDeps {
   sender: ShareSender
   /** This account's server name: streams live there. */
   server: string
-  /** This account's canonical address. */
+  /** This account's key, `aci:<uuid>@<server>`. */
   self: string
   /** A group's member accounts now; null for a 1:1 chat. */
   rosterOf: (conversation: ConversationId) => string[] | null

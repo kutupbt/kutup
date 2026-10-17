@@ -21,6 +21,8 @@ import { useAtlas } from '../features/lists/atlasContext'
 import { PlaceCard } from '../features/lists/PlaceCard'
 import { PlaceDialog, type PlaceDraft } from '../features/lists/PlaceDialog'
 import { StageContext, type Scene, type SceneHandlers, type Stage } from './stage'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 const MapView = lazy(() => import('@kutup/map/MapView').then((m) => ({ default: m.MapView })))
 
@@ -36,6 +38,8 @@ const EMPTY_DRAFT: PlaceDraft = { name: '', note: '', lat: null, lon: null }
 export function MapsLayout() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const effective = useEffectiveMap()
   const config = useMapConfig()
@@ -178,14 +182,15 @@ export function MapsLayout() {
               ]}
             />
             <UserMenu
-              name={session.username ?? session.email}
-              email={session.email}
+              name={session.username ?? session.address}
+              address={session.address}
               settingsHref={appUrl('account', '/settings/profile')}
               onSignOut={() => {
                 void signOut().then(() => window.location.assign(appUrl('account', '/login')))
               }}
             />
           </header>
+          <HeadStateBanner {...accountHeadState} />
           <div className="flex min-h-0 flex-1 flex-col border-t border-border">
             <Outlet />
           </div>

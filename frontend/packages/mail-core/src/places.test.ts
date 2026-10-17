@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { flattenFolders, folderPath, heightOf, nameIsFree, reorder, type MailFolder, type MailPlaces } from './places'
 
 function folder(id: string, name: string, depth: number, children: MailFolder[] = [], parentId: string | null = null): MailFolder {
-  return { id, parentId, name, color: '#8080ff', position: 0, expanded: true, notify: true, depth, children }
+  return { id, parentId, name, color: '#8080ff', position: 0, expanded: true, notify: true, nameRevision: 1, depth, children }
 }
 
 describe('places', () => {

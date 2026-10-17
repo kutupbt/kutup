@@ -4,6 +4,8 @@
 //! KDBX 4.1 and merges it with another version, all with the same Rust code
 //! `kutup sync` uses. Key derivation is slow on purpose: run it in a worker.
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use chrono::{DateTime, NaiveDateTime};
 use kutup_pass::edit::{self, Op};
 use kutup_pass::keepass::db::EntryId;
@@ -57,6 +59,9 @@ struct MergeOutcome {
 pub struct Vault {
     db: Database,
     key: VaultKey,
+    /// The key was changed and not saved since: Drive's copy still opens
+    /// with the old one, so the new one is not kept yet.
+    key_unsaved: bool,
 }
 
 #[wasm_bindgen]
@@ -70,19 +75,47 @@ impl Vault {
     ) -> Result<Vault, JsValue> {
         let key = key(password, key_file)?;
         let db = edit::new_vault(name, time(now_ms)?).map_err(js_error)?;
-        Ok(Vault { db, key })
+        Ok(Vault {
+            db,
+            key,
+            key_unsaved: false,
+        })
     }
 
     /// Opens a vault's file contents. Fails with a wrong key or a file that
-    /// is not a KeePass vault.
+    /// is not a KeePass vault. The password may be given as its SHA-256
+    /// (`password_hash`, what Kutup Pass keeps), which opens and saves the
+    /// vault as the password does.
     pub fn open(
         contents: &[u8],
         password: Option<String>,
+        password_hash: Option<Vec<u8>>,
         key_file: Option<Vec<u8>>,
     ) -> Result<Vault, JsValue> {
-        let key = key(password, key_file)?;
+        let key = match password_hash {
+            Some(hash) if password.is_none() => {
+                // Wiped once used, the copy too.
+                let hash = zeroize::Zeroizing::new(hash);
+                let hash: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+                    hash.as_slice()
+                        .try_into()
+                        .map_err(|_| js_error("a password hash is 32 bytes"))?,
+                );
+                let mut key = VaultKey::new().with_password_hash(&hash);
+                if let Some(file) = key_file {
+                    key = key.with_key_file(&file);
+                }
+                key
+            }
+            Some(_) => return Err(js_error("give the password or its hash, not both")),
+            None => key(password, key_file)?,
+        };
         let db = kutup_pass::open(contents, &key).map_err(js_error)?;
-        Ok(Vault { db, key })
+        Ok(Vault {
+            db,
+            key,
+            key_unsaved: false,
+        })
     }
 
     /// The whole vault: `kutup_pass::view::VaultView`.
@@ -126,8 +159,10 @@ impl Vault {
     }
 
     /// The vault as KDBX 4.1 file contents.
-    pub fn save(&self) -> Result<Vec<u8>, JsValue> {
-        kutup_pass::save(&self.db, &self.key).map_err(js_error)
+    pub fn save(&mut self) -> Result<Vec<u8>, JsValue> {
+        let saved = kutup_pass::save(&self.db, &self.key).map_err(js_error)?;
+        self.key_unsaved = false;
+        Ok(saved)
     }
 
     /// Merges this vault (ours) with `theirs` against `base` (the version
@@ -171,6 +206,59 @@ impl Vault {
         })
     }
 
+    /// What the account keeps of this vault's key (docs/plans/pass.md, "Vault
+    /// secrets"), sealed under the master key for `binding` and vault
+    /// `file_id`: the key this vault was opened or made with, so it is known
+    /// to open it. `generated`: its password is one Kutup Pass made, kept to
+    /// be shown. Base64. Fails for a vault opened with a kept key (only its
+    /// password's hash is known here), and after `changeKey` until `save`
+    /// (Drive's copy still opens with the old key).
+    #[wasm_bindgen(js_name = keepKey)]
+    pub fn keep_key(
+        &self,
+        master_key: &[u8],
+        binding: &str,
+        file_id: &str,
+        revision: f64,
+        generated: bool,
+    ) -> Result<String, JsValue> {
+        if self.key_unsaved {
+            return Err(js_error(
+                "save the vault with its new key before keeping it",
+            ));
+        }
+        let sealed = kutup_pass::kept::seal(
+            master_key,
+            binding,
+            &vault_id(file_id)?,
+            revision_arg(revision)?,
+            &self.key,
+            generated,
+        )
+        .map_err(js_error)?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// Whether the kept key `envelope` (base64) is the key this vault is open
+    /// with: then keeping this vault's key again is not needed. False for one
+    /// that does not open here.
+    #[wasm_bindgen(js_name = keptKeyIsMine)]
+    pub fn kept_key_is_mine(
+        &self,
+        envelope: &str,
+        master_key: &[u8],
+        binding: &str,
+        file_id: &str,
+    ) -> Result<bool, JsValue> {
+        let Ok(envelope) = STANDARD.decode(envelope) else {
+            return Ok(false);
+        };
+        Ok(
+            kutup_pass::kept::open(&envelope, master_key, binding, &vault_id(file_id)?)
+                .is_ok_and(|kept| kept.key.same_as(&self.key)),
+        )
+    }
+
     /// Changes the vault's key (saved with the next `save`).
     #[wasm_bindgen(js_name = changeKey)]
     pub fn change_key(
@@ -180,15 +268,59 @@ impl Vault {
         now_ms: f64,
     ) -> Result<(), JsValue> {
         self.key = key(password, key_file)?;
+        self.key_unsaved = true;
         self.db.meta.master_key_changed = Some(time(now_ms)?);
         Ok(())
     }
 }
 
-/// A key file as a vault secret keeps it (`kutup_pass::key_file_secret`).
-#[wasm_bindgen(js_name = keyFileSecret)]
-pub fn key_file_secret(contents: &[u8]) -> Vec<u8> {
-    kutup_pass::key_file_secret(contents)
+/// A revision from JavaScript: a positive safe integer (unix milliseconds).
+fn revision_arg(revision: f64) -> Result<u64, JsValue> {
+    if revision.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&revision) {
+        return Err(js_error("revision must be a positive safe integer"));
+    }
+    Ok(revision as u64)
+}
+
+fn vault_id(file_id: &str) -> Result<[u8; 16], JsValue> {
+    Ok(*uuid::Uuid::parse_str(file_id)
+        .map_err(|_| js_error("a vault's file id is a UUID"))?
+        .as_bytes())
+}
+
+/// A kept vault key, opened, for JavaScript (bytes in base64).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeptView {
+    /// SHA-256 of the password: what opens the vault in place of it.
+    password_hash: Option<String>,
+    key_file: Option<String>,
+    /// The password, when Kutup Pass generated it (to show).
+    generated_password: Option<String>,
+    /// The revision it was kept at; the next keep goes on top of it.
+    revision: f64,
+}
+
+/// Opens what the account keeps for vault `fileId` (base64):
+/// `{ passwordHash, keyFile, generatedPassword }`.
+#[wasm_bindgen(js_name = openKept)]
+pub fn open_kept(
+    envelope: &str,
+    master_key: &[u8],
+    binding: &str,
+    file_id: &str,
+) -> Result<JsValue, JsValue> {
+    let envelope = STANDARD
+        .decode(envelope)
+        .map_err(|_| js_error("a kept key is base64"))?;
+    let kept = kutup_pass::kept::open(&envelope, master_key, binding, &vault_id(file_id)?)
+        .map_err(js_error)?;
+    to_js(&KeptView {
+        password_hash: kept.key.password_hash().map(|hash| STANDARD.encode(hash)),
+        key_file: kept.key.key_file().map(|file| STANDARD.encode(file)),
+        generated_password: kept.generated_password.as_deref().cloned(),
+        revision: kept.revision as f64,
+    })
 }
 
 /// An import read but not applied: what it would make.

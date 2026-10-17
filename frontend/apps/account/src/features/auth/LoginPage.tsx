@@ -1,9 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
+import { OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { useSession } from '@kutup/session/store'
 import { sanitizeNext } from '@kutup/session/sessionSync'
 import { Alert } from '@kutup/ui/components/alert'
@@ -12,14 +13,14 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { AuthLayout } from './AuthLayout'
-import { authErrorMessage } from './errors'
-import { completeTotp, signIn, type TotpChallenge } from './flows'
+import { authErrorMessage, bodyCode } from './errors'
+import { abandonTotp, completeTotp, signIn, type TotpChallenge } from './flows'
 import { setPendingSetup } from './pendingSetup'
 
 /**
- * Sign-in: email + password, then a TOTP code when the account has 2FA.
- * The server answers a missing account and a wrong password identically; the
- * form does not try to tell them apart.
+ * Sign-in: username (or Kutup address) + password, then a TOTP code when the
+ * account has 2FA. The server answers a missing account and a wrong password
+ * identically; the form does not try to tell them apart.
  */
 export function LoginPage() {
   const { t } = useTranslation()
@@ -30,10 +31,19 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<TotpChallenge | null>(null)
   const [code, setCode] = useState('')
   const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(
+    // Sent back from a first sign-in whose setup token ran out.
+    () => (params.get('setup') === 'expired' ? t('auth.errors.setupExpired') : null),
+  )
+
+  // A sign-in waiting for its code ends with this page, or when another
+  // replaces it: its worker holds the password and the export key.
+  useEffect(() => () => {
+    if (challenge) abandonTotp(challenge)
+  }, [challenge])
 
   const schema = z.object({
-    email: z.string().trim().min(1, t('auth.validation.emailRequired')),
+    name: z.string().trim().min(1, t('auth.validation.usernameRequired')),
     password: z.string().min(1, t('auth.validation.passwordRequired')),
   })
   const {
@@ -42,23 +52,27 @@ export function LoginPage() {
     formState: { errors },
   } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { email: '', password: '' },
+    defaultValues: { name: '', password: '' },
   })
 
   if (session && !pending) return <Navigate to={next} replace />
 
-  const onCredentials = handleSubmit(async ({ email, password }) => {
+  const signedIn = () => {
+    void navigate(next, { replace: true })
+  }
+
+  const onCredentials = handleSubmit(async ({ name, password }) => {
     setError(null)
     setPending(true)
     try {
-      const result = await signIn(email.trim(), password)
+      const result = await signIn(name.trim(), password)
       if (result.kind === 'setup') {
         setPendingSetup(result.setup)
         void navigate(`/first-login?next=${encodeURIComponent(next)}`, { replace: true })
       } else if (result.kind === 'totp') {
         setChallenge(result.challenge)
       } else {
-        void navigate(next, { replace: true })
+        signedIn()
       }
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.signInFailed'))
@@ -73,10 +87,18 @@ export function LoginPage() {
     setError(null)
     setPending(true)
     try {
-      await completeTotp(challenge, code.trim())
-      void navigate(next, { replace: true })
+      const result = await completeTotp(challenge, code.trim())
+      if (result.kind === 'signedIn') signedIn()
     } catch (err) {
-      setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
+      if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'preAuthInvalid') {
+        // The sign-in itself ended (it failed after the code, its first step
+        // expired, or the password changed meanwhile): start over.
+        setChallenge(null)
+        setCode('')
+        setError(t('auth.errors.signInAgain'))
+      } else {
+        setError(authErrorMessage(err, t, 'auth.errors.totpFailed'))
+      }
     } finally {
       setPending(false)
     }
@@ -109,7 +131,7 @@ export function LoginPage() {
             variant="link"
             className="w-full"
             onClick={() => {
-              challenge.keyEncryptionKey.fill(0)
+              abandonTotp(challenge)
               setChallenge(null)
               setCode('')
               setError(null)
@@ -125,9 +147,9 @@ export function LoginPage() {
   return (
     <AuthLayout title={t('login.title')} description={t('login.description')}>
       <form className="space-y-4" onSubmit={(e) => void onCredentials(e)} noValidate>
-        <Field label={t('auth.fields.email')} error={errors.email?.message} required>
+        <Field label={t('auth.fields.username')} error={errors.name?.message} description={t('login.nameHint')} required>
           {(field) => (
-            <Input {...field} {...register('email')} type="email" autoComplete="username" autoFocus />
+            <Input {...field} {...register('name')} autoComplete="username" autoCapitalize="off" spellCheck={false} autoFocus />
           )}
         </Field>
         <Field label={t('auth.fields.password')} error={errors.password?.message} required>

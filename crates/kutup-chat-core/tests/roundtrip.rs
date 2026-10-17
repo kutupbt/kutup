@@ -43,7 +43,7 @@ fn wrap(env: kutup_chat_proto::OutgoingEnvelope, sender: &str, cursor: u64) -> D
     DeliveredEnvelope {
         id: format!("mailbox-{cursor}"),
         cursor,
-        sender: Some(sender.to_string()),
+        sender: Some(sender.parse().unwrap()),
         sealed_sender: false,
         sender_device_id: 1,
         envelope_type: env.envelope_type,
@@ -84,7 +84,7 @@ fn one_to_one_text_round_trip_through_wire_types() {
     // Both parties generate + "register" (device id 1 each, assigned by server).
     let mut alice = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
-        "alice",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         20,
         &mut rng,
@@ -92,15 +92,19 @@ fn one_to_one_text_round_trip_through_wire_types() {
     .unwrap();
     let mut bob = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
-        "bob",
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
         20,
         &mut rng,
     ))
     .unwrap();
 
-    let bob_addr = ChatAddress::local("bob", 1);
-    let alice_addr = ChatAddress::local("alice", 1);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let alice_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test", 1)
+            .unwrap();
     let bob_reg = bob.registration().unwrap().registration_id;
     let alice_reg = alice.registration().unwrap().registration_id;
 
@@ -114,7 +118,7 @@ fn one_to_one_text_round_trip_through_wire_types() {
 
     // Alice establishes to Bob's bundle and sends a text.
     block_on(alice.establish(&bob_addr, &bob_bundle, &mut rng)).unwrap();
-    let msg1 = ChatContent::text("2026-07-13T10:00:00Z", 1, "hello bob 👋");
+    let msg1 = ChatContent::text_with_id("m1", "2026-07-13T10:00:00Z", 1, "hello bob 👋");
     let env1 = block_on(alice.encrypt(&bob_addr, bob_reg, &msg1, &mut rng)).unwrap();
     // The first message must be a session-establishing PreKey envelope.
     assert_eq!(env1.envelope_type, kutup_chat_proto::EnvelopeType::PreKey);
@@ -122,30 +126,55 @@ fn one_to_one_text_round_trip_through_wire_types() {
     assert_eq!(env1.registration_id, bob_reg);
 
     // Bob decrypts it straight off the wire.
-    let delivered1 = wrap(env1, "alice", 1);
+    let delivered1 = wrap(
+        env1,
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+    );
     let got1 = block_on(bob.decrypt(&alice_addr, &delivered1, &mut rng)).unwrap();
     assert_eq!(got1.as_text().unwrap().text, "hello bob 👋");
     assert_eq!(got1.seq, 1);
 
     // Bob replies; steady-state messages are Message envelopes.
-    let msg2 = ChatContent::text("2026-07-13T10:00:01Z", 1, "hi alice");
+    let msg2 = ChatContent::text_with_id("m2", "2026-07-13T10:00:01Z", 1, "hi alice");
     let env2 = block_on(bob.encrypt(&alice_addr, alice_reg, &msg2, &mut rng)).unwrap();
     assert_eq!(env2.envelope_type, kutup_chat_proto::EnvelopeType::Message);
-    let delivered2 = wrap(env2, "bob", 2);
+    let delivered2 = wrap(
+        env2,
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+        2,
+    );
     let got2 = block_on(alice.decrypt(&bob_addr, &delivered2, &mut rng)).unwrap();
     assert_eq!(got2.as_text().unwrap().text, "hi alice");
 
     // Several more rounds to tick the ratchet in both directions.
     for round in 2..8u64 {
-        let m = ChatContent::text("t", round, format!("a->b {round}"));
+        let m = ChatContent::text_with_id("m3", "t", round, format!("a->b {round}"));
         let e = block_on(alice.encrypt(&bob_addr, bob_reg, &m, &mut rng)).unwrap();
-        let d =
-            block_on(bob.decrypt(&alice_addr, &wrap(e, "alice", round + 10), &mut rng)).unwrap();
+        let d = block_on(bob.decrypt(
+            &alice_addr,
+            &wrap(
+                e,
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+                round + 10,
+            ),
+            &mut rng,
+        ))
+        .unwrap();
         assert_eq!(d.as_text().unwrap().text, format!("a->b {round}"));
 
-        let m = ChatContent::text("t", round, format!("b->a {round}"));
+        let m = ChatContent::text_with_id("m4", "t", round, format!("b->a {round}"));
         let e = block_on(bob.encrypt(&alice_addr, alice_reg, &m, &mut rng)).unwrap();
-        let d = block_on(alice.decrypt(&bob_addr, &wrap(e, "bob", round + 20), &mut rng)).unwrap();
+        let d = block_on(alice.decrypt(
+            &bob_addr,
+            &wrap(
+                e,
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+                round + 20,
+            ),
+            &mut rng,
+        ))
+        .unwrap();
         assert_eq!(d.as_text().unwrap().text, format!("b->a {round}"));
     }
 }
@@ -153,18 +182,35 @@ fn one_to_one_text_round_trip_through_wire_types() {
 #[test]
 fn device_state_survives_reopen() {
     let mut rng = OsRng.unwrap_err();
-    let alice_db = TempDb::new("alice");
-    let bob_db = TempDb::new("bob");
+    let alice_db = TempDb::new("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test");
+    let bob_db = TempDb::new("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test");
 
-    let bob_addr = ChatAddress::local("bob", 1);
-    let alice_addr = ChatAddress::local("alice", 1);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let alice_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test", 1)
+            .unwrap();
 
     // Session 1: establish and exchange one message each way, then drop both
     // sessions (closing their SQLite connections).
     let (bob_reg, alice_reg) = {
-        let mut alice =
-            block_on(Session::generate(alice_db.open(), "alice", 1, 10, &mut rng)).unwrap();
-        let mut bob = block_on(Session::generate(bob_db.open(), "bob", 1, 10, &mut rng)).unwrap();
+        let mut alice = block_on(Session::generate(
+            alice_db.open(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            1,
+            10,
+            &mut rng,
+        ))
+        .unwrap();
+        let mut bob = block_on(Session::generate(
+            bob_db.open(),
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            1,
+            10,
+            &mut rng,
+        ))
+        .unwrap();
         let bob_reg = bob.registration().unwrap().registration_id;
         let alice_reg = alice.registration().unwrap().registration_id;
 
@@ -176,11 +222,20 @@ fn device_state_survives_reopen() {
         let e = block_on(alice.encrypt(
             &bob_addr,
             bob_reg,
-            &ChatContent::text("t", 1, "before restart"),
+            &ChatContent::text_with_id("m5", "t", 1, "before restart"),
             &mut rng,
         ))
         .unwrap();
-        let got = block_on(bob.decrypt(&alice_addr, &wrap(e, "alice", 1), &mut rng)).unwrap();
+        let got = block_on(bob.decrypt(
+            &alice_addr,
+            &wrap(
+                e,
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+                1,
+            ),
+            &mut rng,
+        ))
+        .unwrap();
         assert_eq!(got.as_text().unwrap().text, "before restart");
 
         (bob_reg, alice_reg)
@@ -189,8 +244,18 @@ fn device_state_survives_reopen() {
     // Session 2: reopen both devices from disk. Their ratchet state must continue
     // seamlessly — a message encrypted after reopen decrypts after reopen.
     {
-        let mut alice = block_on(Session::open(alice_db.open(), "alice", 1)).unwrap();
-        let mut bob = block_on(Session::open(bob_db.open(), "bob", 1)).unwrap();
+        let mut alice = block_on(Session::open(
+            alice_db.open(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            1,
+        ))
+        .unwrap();
+        let mut bob = block_on(Session::open(
+            bob_db.open(),
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            1,
+        ))
+        .unwrap();
         // Opened devices don't carry a fresh registration payload.
         assert!(alice.registration().is_none());
         assert!(bob.registration().is_none());
@@ -199,22 +264,40 @@ fn device_state_survives_reopen() {
         let e = block_on(alice.encrypt(
             &bob_addr,
             bob_reg,
-            &ChatContent::text("t", 2, "after restart"),
+            &ChatContent::text_with_id("m6", "t", 2, "after restart"),
             &mut rng,
         ))
         .unwrap();
-        let got = block_on(bob.decrypt(&alice_addr, &wrap(e, "alice", 2), &mut rng)).unwrap();
+        let got = block_on(bob.decrypt(
+            &alice_addr,
+            &wrap(
+                e,
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+                2,
+            ),
+            &mut rng,
+        ))
+        .unwrap();
         assert_eq!(got.as_text().unwrap().text, "after restart");
 
         // And the reverse direction, proving Bob's state persisted too.
         let e = block_on(bob.encrypt(
             &alice_addr,
             alice_reg,
-            &ChatContent::text("t", 3, "reply after restart"),
+            &ChatContent::text_with_id("m7", "t", 3, "reply after restart"),
             &mut rng,
         ))
         .unwrap();
-        let got = block_on(alice.decrypt(&bob_addr, &wrap(e, "bob", 3), &mut rng)).unwrap();
+        let got = block_on(alice.decrypt(
+            &bob_addr,
+            &wrap(
+                e,
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+                3,
+            ),
+            &mut rng,
+        ))
+        .unwrap();
         assert_eq!(got.as_text().unwrap().text, "reply after restart");
     }
 }
@@ -224,7 +307,7 @@ fn tampered_ciphertext_is_rejected() {
     let mut rng = OsRng.unwrap_err();
     let mut alice = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
-        "alice",
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
         5,
         &mut rng,
@@ -232,18 +315,22 @@ fn tampered_ciphertext_is_rejected() {
     .unwrap();
     let mut bob = block_on(Session::generate(
         Rc::new(SqliteChatDb::open_in_memory().unwrap()),
-        "bob",
+        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
         5,
         &mut rng,
     ))
     .unwrap();
-    let bob_addr = ChatAddress::local("bob", 1);
-    let alice_addr = ChatAddress::local("alice", 1);
+    let bob_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test", 1)
+            .unwrap();
+    let alice_addr =
+        ChatAddress::from_sender("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test", 1)
+            .unwrap();
 
     let bundle = serve_bundle(bob.registration().unwrap(), 1);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
-    let msg = ChatContent::text("t", 1, "secret");
+    let msg = ChatContent::text_with_id("m8", "t", 1, "secret");
     let mut env = block_on(alice.encrypt(
         &bob_addr,
         bob.registration().unwrap().registration_id,
@@ -261,7 +348,11 @@ fn tampered_ciphertext_is_rejected() {
     raw[n / 2] ^= 0x01;
     env.content = base64::engine::general_purpose::STANDARD.encode(&raw);
 
-    let delivered = wrap(env, "alice", 1);
+    let delivered = wrap(
+        env,
+        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+        1,
+    );
     assert!(
         block_on(bob.decrypt(&alice_addr, &delivered, &mut rng)).is_err(),
         "tampered ciphertext must be rejected"

@@ -3,7 +3,7 @@ import { Copy } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import type { UserRow } from '@kutup/session/api-types'
@@ -28,11 +28,14 @@ import {
   useForceDisable2fa,
   useRotateTempPassword,
   useUpdateUser,
+  useUserRegistrationCode,
   useWipeUser,
 } from './api'
+import { OneUseSecret } from '@kutup/session/reauth'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
 import { MailSendingCard } from './MailSending'
 import { UserStatus } from './UsersPage'
+import { ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
 
 function ActionRow({ title, description, action }: { title: string; description: string; action: ReactNode }) {
   return (
@@ -117,6 +120,40 @@ type Pending =
   | { kind: 'wipe'; password: string }
   | { kind: 'delete' }
 
+/** Which referral code the account signed up with (docs/plans/registration-codes.md). */
+function SignedUpWithFact({ userId }: { userId: string }) {
+  const { t, i18n } = useTranslation()
+  const code = useUserRegistrationCode(userId)
+  if (code.isPending || code.isError) return null
+  return (
+    <Fact label={t('admin.user.signedUpWith')}>
+      {code.data ? (
+        <>
+          <Link to="/admin/codes" className="font-medium text-primary hover:underline">
+            <Mono>…{code.data.hint}</Mono>
+          </Link>
+          {code.data.note ? <span className="text-muted-foreground"> · {code.data.note}</span> : null}
+          <div className="text-xs text-muted-foreground">
+            {t('admin.user.signedUpWithBy', {
+              name: code.data.createdBy ?? t('admin.activity.deletedUser'),
+              when: formatInstant(code.data.usedAt, i18n.language),
+            })}
+          </div>
+        </>
+      ) : (
+        t('admin.user.noReferralCode')
+      )}
+    </Fact>
+  )
+}
+
+/** What to say when proving the administrator's password failed, or the action itself. */
+function reauthFailure(error: unknown, t: ReturnType<typeof useTranslation>['t']): string {
+  if (error instanceof WrongPasswordError) return t('admin.user.wrongAdminPassword')
+  if (error instanceof ReauthLockedError) return t(error.reason === 'rateLimited' ? 'admin.user.adminSlowDown' : 'admin.user.adminLocked')
+  return t('admin.user.actionFailed')
+}
+
 export function UserPage() {
   const { t, i18n } = useTranslation()
   const { id = '' } = useParams()
@@ -162,7 +199,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t(disabling ? 'admin.user.disableTitle' : 'admin.user.enableTitle')}
-            description={t(disabling ? 'admin.user.disableDescription' : 'admin.user.enableDescription', { email: user.email })}
+            description={t(disabling ? 'admin.user.disableDescription' : 'admin.user.enableDescription', { name: user.username })}
             submit={t(disabling ? 'admin.user.disable' : 'admin.user.enable')}
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
             onConfirm={() => update.mutate({ id: user.id, patch: { isActive: !disabling } }, { onSuccess: close })} />
@@ -174,7 +211,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t(promoting ? 'admin.user.promoteTitle' : 'admin.user.demoteTitle')}
-            description={t(promoting ? 'admin.user.promoteDescription' : 'admin.user.demoteDescription', { email: user.email })}
+            description={t(promoting ? 'admin.user.promoteDescription' : 'admin.user.demoteDescription', { name: user.username })}
             submit={t(promoting ? 'admin.user.promote' : 'admin.user.demote')}
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
             onConfirm={() => update.mutate({ id: user.id, patch: { isAdmin: promoting } }, { onSuccess: close })} />
@@ -184,7 +221,7 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t('admin.user.twoFactorTitle')}
-            description={t('admin.user.twoFactorDescription', { email: user.email })}
+            description={t('admin.user.twoFactorDescription', { name: user.username })}
             submit={t('admin.user.twoFactorOff')}
             pending={disable2fa.isPending} error={disable2fa.error} errorFallback={t('admin.user.actionFailed')}
             onConfirm={() => disable2fa.mutate(user.id, { onSuccess: () => { toast.success(t('admin.user.twoFactorDone')); close() } })} />
@@ -193,10 +230,11 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common} warningVariant="warn"
             title={t('admin.user.rotateTitle')}
-            description={t('admin.user.rotateDescription', { email: user.email })}
+            description={t('admin.user.rotateDescription', { name: user.username })}
             submit={t('admin.user.rotate')}
-            pending={rotate.isPending} error={rotate.error} errorFallback={t('admin.user.actionFailed')}
-            onConfirm={() => rotate.mutate({ id: user.id, tempPassword: pending.password }, {
+            passwordLabel={t('admin.user.yourPassword')}
+            pending={rotate.isPending} error={rotate.error} errorFallback={reauthFailure(rotate.error, t)}
+            onConfirm={(adminPassword) => rotate.mutate({ id: user.id, tempPassword: pending.password, adminPassword: new OneUseSecret(adminPassword) }, {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )
@@ -204,12 +242,13 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t('admin.user.wipeTitle')}
-            description={t('admin.user.wipeDescription', { email: user.email })}
+            description={t('admin.user.wipeDescription', { name: user.username })}
             warning={t('admin.user.wipeWarning')}
-            confirmPhrase={user.email}
+            confirmPhrase={user.username}
             submit={t('admin.user.wipe')}
-            pending={wipe.isPending} error={wipe.error} errorFallback={t('admin.user.actionFailed')}
-            onConfirm={() => wipe.mutate({ id: user.id, tempPassword: pending.password }, {
+            passwordLabel={t('admin.user.yourPassword')}
+            pending={wipe.isPending} error={wipe.error} errorFallback={reauthFailure(wipe.error, t)}
+            onConfirm={(adminPassword) => wipe.mutate({ id: user.id, tempPassword: pending.password, adminPassword: new OneUseSecret(adminPassword) }, {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )
@@ -217,13 +256,13 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t('admin.user.deleteTitle')}
-            description={t('admin.user.deleteDescription', { email: user.email })}
+            description={t('admin.user.deleteDescription', { name: user.username })}
             warning={t('admin.user.deleteWarning')}
-            confirmPhrase={user.email}
+            confirmPhrase={user.username}
             submit={t('admin.user.delete')}
             pending={remove.isPending} error={remove.error} errorFallback={t('admin.user.actionFailed')}
             onConfirm={() => remove.mutate(user.id, {
-              onSuccess: () => { toast.success(t('admin.user.deleted', { email: user.email })); void navigate('/admin/users') },
+              onSuccess: () => { toast.success(t('admin.user.deleted', { name: user.username })); void navigate('/admin/users') },
             })} />
         )
     }
@@ -231,9 +270,9 @@ export function UserPage() {
 
   return (
     <PageBody width="prose">
-      <Breadcrumb items={[{ label: t('nav.users'), to: '/admin/users' }, { label: user.email }]} />
+      <Breadcrumb items={[{ label: t('nav.users'), to: '/admin/users' }, { label: user.username }]} />
       <div className="space-y-2">
-        <PageHeader title={user.email} />
+        <PageHeader title={user.username} />
         <div className="flex flex-wrap items-center gap-2">
           <UserStatus user={user} />
           {user.isAdmin ? <Badge>{t('admin.users.admin')}</Badge> : null}
@@ -250,6 +289,7 @@ export function UserPage() {
             {formatBytes(user.storageUsedBytes, lang)} / {formatBytes(user.storageQuotaBytes, lang)}
           </Fact>
           <Fact label={t('admin.users.columns.twoFactor')}>{user.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</Fact>
+          <SignedUpWithFact userId={user.id} />
         </CardContent>
       </Card>
 

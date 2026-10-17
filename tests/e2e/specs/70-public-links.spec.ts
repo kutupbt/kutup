@@ -52,12 +52,6 @@ test('a note shared by link opens on Office, read-only, saying who shared it', a
   await expect(page.locator('.prose')).toContainText('Hello from a public note', { timeout: 60_000 })
   await expect(page.locator('.cm-content')).toHaveCount(0)
 
-  // The same link at Drive's address (as made before documents moved) lands here.
-  const token = new URL(link).pathname.split('/')[2]
-  await page.goto(appUrl('drive', `/s/${token}${new URL(link).hash}`))
-  await expect(page).toHaveURL(new RegExp(`^${appOrigin('office')}/s/${token}`), { timeout: 60_000 })
-  await expect(page.locator('.prose')).toContainText('Hello from a public note', { timeout: 60_000 })
-
   // Without its key, nothing opens.
   await page.goto(link.split('#')[0])
   await expect(page.getByText('This link is incomplete')).toBeVisible({ timeout: 60_000 })
@@ -159,7 +153,7 @@ test('anyone reports a link; an administrator takes it down', async ({ browser }
   await reports.goto(appUrl('account', '/admin/reports'))
   const card = reports.getByTestId('link-report').filter({ hasText: complaint })
   await expect(card).toBeVisible({ timeout: 60_000 })
-  await expect(card).toContainText(alice.email)
+  await expect(card).toContainText(alice.username)
   await expect(card.getByRole('link', { name: 'Open the link' })).toHaveAttribute('href', link)
   await card.getByRole('button', { name: 'Take link down' }).click()
   await reports.getByRole('alertdialog').getByRole('button', { name: 'Take link down' }).click()

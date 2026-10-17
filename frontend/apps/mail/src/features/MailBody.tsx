@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useAddImageSender, useImageSenders, useMailSettings } from '@kutup/mail-core/api'
+import { useAddImageSender, useImageSenders, useMailSettings, useSenderKey } from '@kutup/mail-core/api'
 import type { ParsedMessage } from '@kutup/mail-core/mime'
 import { plainTextDocument, sanitizeMailHtml, type FrameLook, type SanitizedHtml } from '@kutup/mail-core/sanitize'
 import type { CleanedLink } from '@kutup/mail-core/trackingLinks'
@@ -74,8 +74,11 @@ export function MailBody({ parsed, suspicious = false, sender }: { parsed: Parse
   // Remote images load at once when the reader said so for every sender or
   // for this one (never in Spam); otherwise after the reader's question.
   const imageSenders = useImageSenders()
+  const senderKey = useSenderKey(sender)
   const addImageSender = useAddImageSender()
-  const trusted = !suspicious && (settings.data?.remoteImages === 'always' || (!!sender && (imageSenders.data?.some((s) => s.address === sender.toLowerCase()) ?? false)))
+  const trusted =
+    !suspicious &&
+    (settings.data?.remoteImages === 'always' || (!!senderKey.data && (imageSenders.data?.some((s) => s.address === senderKey.data) ?? false)))
   const [loaded, setLoaded] = useState(false)
   const allowRemote = loaded || trusted
   // Proton's "Auto show embedded images": the message's own images, on unless turned off.

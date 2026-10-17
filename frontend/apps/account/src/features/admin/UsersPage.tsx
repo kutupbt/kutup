@@ -14,7 +14,7 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
-import { useAdminStats, useAdminUsers } from './api'
+import { useAdminStats, useAdminUsers, useServerName } from './api'
 
 function Stat({ label, value, detail }: { label: string; value: string | null; detail?: string | null }) {
   return (
@@ -41,12 +41,15 @@ export function UsersPage() {
   const [query, setQuery] = useState('')
   const lang = i18n.language
 
-  // Names are the one thing admins search by; the list is small enough to filter here.
+  // An account is its username (and its address); the list is small enough to filter here.
+  const server = useServerName().data ?? ''
+  const addressOf = (u: UserRow) => (server ? `${u.username}@${server}` : u.username)
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
     const all = users.data ?? []
-    return q ? all.filter((u) => u.email.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)) : all
-  }, [users.data, query])
+    const at = (u: UserRow) => (server ? `${u.username}@${server}` : u.username)
+    return q ? all.filter((u) => at(u).includes(q)) : all
+  }, [users.data, query, server])
 
   const capacity = stats.data?.storageTotalBytes
     ? t('admin.overview.ofCapacity', { total: formatBytes(stats.data.storageTotalBytes, lang) })
@@ -118,10 +121,10 @@ export function UsersPage() {
                   >
                     <TableCell>
                       <Link to={`/admin/users/${u.id}`} className="font-medium text-foreground hover:underline" onClick={(e) => e.stopPropagation()}>
-                        {u.email}
+                        {u.username}
                       </Link>
                       <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        {u.username}
+                        {addressOf(u)}
                         {u.isAdmin ? (
                           <span className="inline-flex items-center gap-0.5 text-xs text-primary">
                             <ShieldCheck className="size-3" />

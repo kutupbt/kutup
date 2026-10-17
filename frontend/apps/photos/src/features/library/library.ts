@@ -144,10 +144,13 @@ export function useLibrary() {
   )
 }
 
-/** "name + hash" of every photo that has a hash, to its file id: how duplicates are found. */
+/**
+ * "name + content SHA-256" of every photo whose metadata has one, to its
+ * file id: how duplicates are found.
+ */
 export function duplicateKeys(photos: readonly Photo[]): Map<string, string> {
   const keys = new Map<string, string>()
-  for (const p of photos) if (p.media?.hash && p.file.name) keys.set(duplicateKey(p.file.name, p.media.hash), p.id)
+  for (const p of photos) if (p.file.sha256 && p.file.name) keys.set(duplicateKey(p.file.name, p.file.sha256), p.id)
   return keys
 }
 

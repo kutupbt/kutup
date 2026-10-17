@@ -1,15 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
-import { appUrl, finishNewKeys, newAccount, openDrive, registerAccount, signIn, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
+import { ADMIN_PASSWORD, appUrl, finishNewKeys, newAccount, openDrive, registerAccount, signIn, signInAsAdmin, submitThroughRateLimit } from '../fixtures/apps'
 import { createNote, item, noteLive, openItem } from '../fixtures/drive'
 
 const PASSWORD = 'Deneme123*DriveIdentityPassword'
 const NEW_PASSWORD = 'Deneme123*DriveIdentityAfterWipe'
 
-/** Shares the note open on `page` with `email`; returns the dialog. */
-async function shareOpenNote(page: Page, email: string) {
+/** Shares the note open on `page` with `address`; returns the dialog. */
+async function shareOpenNote(page: Page, address: string) {
   await page.getByRole('button', { name: 'Share', exact: true }).click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('Email or Kutup address').fill(email)
+  await dialog.getByLabel('Kutup address').fill(address)
   await dialog.getByRole('button', { name: 'Share', exact: true }).click()
   return dialog
 }
@@ -33,7 +33,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   const first = await createNote(aliceDrive)
   await noteLive(aliceDrive)
   const shared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
-  await shareOpenNote(aliceDrive, bob.email)
+  await shareOpenNote(aliceDrive, bob.address)
   expect((await shared).status()).toBe(204)
   await a.close()
 
@@ -50,21 +50,23 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await signInAsAdmin(admin)
   const adminPage = await admin.newPage()
   await adminPage.goto(appUrl('account', '/admin/users'))
-  await adminPage.getByPlaceholder('Search by email or username').fill(alice.email)
-  await adminPage.getByRole('row').filter({ hasText: alice.email }).first().click()
+  await adminPage.getByPlaceholder('Search by username or address').fill(alice.username)
+  await adminPage.getByRole('row').filter({ hasText: alice.username }).first().click()
   await adminPage.getByRole('button', { name: 'Wipe account', exact: true }).click()
   const confirm = adminPage.getByRole('alertdialog')
-  await confirm.getByRole('textbox').fill(alice.email)
-  await confirm.getByRole('button', { name: 'Wipe account', exact: true }).click()
+  await confirm.getByLabel(`Type ${alice.username} to confirm`).fill(alice.username)
   const copy = adminPage.getByRole('button', { name: 'Copy' }).first()
-  await expect(copy).toBeVisible({ timeout: 30_000 })
+  // The administrator proves it is them (as spec 28), through the edge's sign-in limit.
+  await submitThroughRateLimit(adminPage, 'Wipe account', copy, () =>
+    confirm.getByLabel('Your own password, to confirm it is you').fill(ADMIN_PASSWORD),
+  )
   const temporary = (await copy.locator('xpath=preceding-sibling::*[1]').textContent())!.trim()
   await admin.close()
 
   const a2 = await browser.newContext()
   const setup = await a2.newPage()
   await setup.goto(appUrl('account', '/login'))
-  await setup.getByLabel('Email', { exact: true }).fill(alice.email)
+  await setup.getByLabel('Username', { exact: true }).fill(alice.username)
   await setup.getByLabel('Password', { exact: true }).fill(temporary)
   await submitThroughRateLimit(setup, 'Sign in', setup.getByRole('heading', { name: 'Finish setting up your account' }))
   await finishNewKeys(setup, NEW_PASSWORD)
@@ -73,7 +75,7 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await noteLive(aliceDrive)
   const aliceSecondUrl = aliceDrive.url()
   const reshared = aliceDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
-  await shareOpenNote(aliceDrive, bob.email)
+  await shareOpenNote(aliceDrive, bob.address)
   expect((await reshared).status()).toBe(204)
   await a2.close()
 
@@ -86,12 +88,14 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   const bobDrive = await openDrive(b)
   await createNote(bobDrive)
   await noteLive(bobDrive)
-  const dialog = await shareOpenNote(bobDrive, alice.email)
+  const dialog = await shareOpenNote(bobDrive, alice.address)
   await expect(dialog.getByText(/identity changed/)).toBeVisible({ timeout: 30_000 })
   const anyway = bobDrive.waitForResponse((r) => r.request().method() === 'POST' && /\/api\/files\/[^/]+\/share$/.test(new URL(r.url()).pathname))
   await dialog.getByTestId('identity-share-anyway').click()
   expect((await anyway).status()).toBe(204)
   await bobDrive.keyboard.press('Escape')
+  // Done with this tab: one page of Bob's from here on.
+  await bobDrive.close()
 
   // On her file, Bob trusts the new identity; the warnings go.
   await bobPage.goto(appUrl('drive', '/shared'))
@@ -122,7 +126,10 @@ test("a person's new identity is warned about until trusted", async ({ browser }
   await bobPage.getByTestId('identity-verify-open').first().click()
   await expect(bobPage.getByTestId('drive-safety-number')).toHaveText(aliceNumber, { timeout: 30_000 })
   await bobPage.getByLabel(/paste/i).fill(payload)
+  // The verification is stored in the pin list before the page moves on.
+  const verified = bobPage.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname.endsWith('/user/identity-pins'))
   await bobPage.getByRole('button', { name: 'Verify exact match' }).click()
+  expect((await verified).status()).toBe(204)
   await bobPage.keyboard.press('Escape')
   await bobPage.goto(appUrl('drive', '/shared'))
   await expect(bobPage.getByTestId('identity-verified').first()).toBeVisible({ timeout: 60_000 })

@@ -5,7 +5,8 @@
   "boot": {
     "opening": "Opening your maps…",
     "failedTitle": "Maps could not open",
-    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again."
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again.",
+    "keysChanged": "This account's keys changed on the server since you signed in. Sign in again."
   },
   "notFound": {
     "title": "Page not found",
@@ -99,6 +100,7 @@
     "removePlace": "Remove",
     "removed": "Removed {{name}}",
     "addedBy": "Added by {{name}} on {{date}}",
+    "addedOn": "Added on {{date}}",
     "tooMany": "This map has as many places as it can hold.",
     "mapLabel": "Map of {{title}}",
     "quota": "Your storage is full, so changes are no longer saved as versions.",
@@ -120,7 +122,8 @@
     "importFailed": "The file could not be imported.",
     "placeCount_one": "{{count}} place",
     "placeCount_other": "{{count}} places",
-    "rightClickHint": "Or right-click the map where the place is."
+    "rightClickHint": "Or right-click the map where the place is.",
+    "tooManyDevices": "You have 20 devices in use. Remove one under Account → Devices to edit lists here."
   },
   "place": {
     "addTitle": "Add a place",

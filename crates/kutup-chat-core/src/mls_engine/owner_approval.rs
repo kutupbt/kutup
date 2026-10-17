@@ -14,21 +14,15 @@ const OWNER_APPROVAL_REQUEST_LIFETIME_SECONDS: i64 = 7 * 24 * 60 * 60;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PendingMlsOwnerApprovalRequest {
     pub mls_group_id: Vec<u8>,
-    pub requester: AccountAddress,
+    pub requester: AccountRef,
     pub request: MlsOwnerApprovalRequestV1,
 }
 
 impl PendingMlsOwnerApprovalRequest {
     pub(super) fn validate_durable(&self) -> Result<()> {
         validate_group_id(&self.mls_group_id)?;
+        // The requester is an account, checked whole when it was read.
         self.request.validate().map_err(ChatError::Db)?;
-        if self.requester.server.is_none()
-            || self.requester.canonical() != self.requester.to_string()
-        {
-            return Err(ChatError::Db(
-                "MLS owner approval requester is not canonical and federated".into(),
-            ));
-        }
         Ok(())
     }
 }
@@ -201,12 +195,12 @@ impl MlsClient {
             .current_roster
             .iter()
             .filter(|member| {
-                member.address.canonical() != local_address
+                member.account.to_string() != local_address
                     && member.owner_id.as_deref().is_some_and(|owner_id| {
                         conversation.current_owner_set.owner(owner_id).is_some()
                     })
             })
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .collect::<Vec<_>>();
         if expected_recipients.is_empty() {
             return Err(ChatError::Trust(
@@ -256,7 +250,7 @@ impl MlsClient {
         let local_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == local_address)
+            .find(|member| member.account.to_string() == local_address)
             .ok_or_else(|| {
                 ChatError::Trust("local account is absent from the MLS roster".into())
             })?;
@@ -313,7 +307,7 @@ impl MlsClient {
                 id_material: format!("{request_hash}:{}", approval.owner_id).as_bytes(),
                 sent_at_seconds: approved_at_seconds,
                 body: MlsGroupControlBodyV1::OwnerApproval { approval },
-                expected_recipients: vec![pending.requester.canonical()],
+                expected_recipients: vec![pending.requester.to_string()],
             })
             .await?;
         let (provider, mut metadata) = self.load_provider().await?;
@@ -387,7 +381,7 @@ impl MlsClient {
                 || existing.mls_group_id != mls_group_id
                 || existing.expected_recipients != expected_recipients
                 || content.kind != kutup_chat_proto::content::kind::GROUP_CONTROL
-                || content.message_id.as_deref() != Some(send_id.as_str())
+                || content.message_id != send_id.as_str()
                 || content.sent_at != sent_at_seconds.to_string()
                 || existing_body != body
             {
@@ -410,7 +404,7 @@ impl MlsClient {
                 || history.incarnation != conversation.request.genesis.incarnation
                 || history.mls_group_id != mls_group_id
                 || content.kind != kutup_chat_proto::content::kind::GROUP_CONTROL
-                || content.message_id.as_deref() != Some(send_id.as_str())
+                || content.message_id != send_id.as_str()
                 || content.sent_at != sent_at_seconds.to_string()
                 || existing_body != body
             {
@@ -432,7 +426,7 @@ impl MlsClient {
             kind: kutup_chat_proto::content::kind::GROUP_CONTROL.into(),
             sent_at: sent_at_seconds.to_string(),
             seq,
-            message_id: Some(send_id.clone()),
+            message_id: send_id.clone(),
             reply_to: None,
             profile_key: None,
             profile_suite: None,
@@ -473,7 +467,7 @@ pub(super) fn record_owner_approval_request(
     let sender_member = conversation
         .current_roster
         .iter()
-        .find(|member| member.address.canonical() == sender)
+        .find(|member| member.account.to_string() == sender)
         .ok_or_else(|| {
             ChatError::Trust("MLS approval requester is absent from the roster".into())
         })?;
@@ -488,7 +482,7 @@ pub(super) fn record_owner_approval_request(
     }
     let (local_address, _) = parse_device_credential_identity(&metadata.credential_identity)?;
     let local_is_owner = conversation.current_roster.iter().any(|member| {
-        member.address.canonical() == local_address
+        member.account.to_string() == local_address
             && member
                 .owner_id
                 .as_deref()
@@ -658,9 +652,9 @@ pub(super) fn record_owner_approval_request(
             ))
         }
     }
-    let requester: AccountAddress = sender
+    let requester: AccountRef = sender
         .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
+        .map_err(|error: kutup_crypto::error::CryptoError| ChatError::Trust(error.to_string()))?;
     let pending = PendingMlsOwnerApprovalRequest {
         mls_group_id: mls_group_id.to_vec(),
         requester,
@@ -690,7 +684,7 @@ pub(super) fn record_owner_approval(
     let sender_member = conversation
         .current_roster
         .iter()
-        .find(|member| member.address.canonical() == sender)
+        .find(|member| member.account.to_string() == sender)
         .ok_or_else(|| ChatError::Trust("MLS approving owner is absent from the roster".into()))?;
     if sender_member.owner_id.as_deref() != Some(approval.owner_id.as_str()) {
         return Err(ChatError::Trust(

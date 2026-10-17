@@ -1,6 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, UserRound, Users } from 'lucide-react'
+import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, Ticket, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -11,6 +11,8 @@ import { useEnsureMailKeys } from '../features/keys/mailKeys'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 function SectionLabel({ children }: { children: string }) {
   return (
@@ -24,12 +26,15 @@ export function AccountShell() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   // Every address gets its encryption key right after sign-in.
   useEnsureMailKeys()
 
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.account')}
       switcher={
         <AppSwitcher
@@ -63,6 +68,7 @@ export function AccountShell() {
             <>
               <SectionLabel>{t('nav.admin')}</SectionLabel>
               <SidebarNavLink to="/admin/users" icon={<Users />} label={t('nav.users')} />
+              <SidebarNavLink to="/admin/codes" icon={<Ticket />} label={t('nav.referralCodes')} />
               <SidebarNavLink to="/admin/reports" icon={<Flag />} label={t('nav.reports')} />
               <SidebarNavLink to="/admin/feedback" icon={<MessageSquareText />} label={t('nav.feedback')} />
               <SidebarNavLink to="/admin/activity" icon={<Activity />} label={t('nav.activity')} />
@@ -77,8 +83,8 @@ export function AccountShell() {
       }
       headerEnd={
         <UserMenu
-          name={session.username ?? session.email}
-          email={session.email}
+          name={session.username ?? session.address}
+          address={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             void signOut().then(() => navigate('/login', { replace: true }))

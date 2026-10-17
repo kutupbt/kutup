@@ -12,7 +12,7 @@ import type { PollState } from '../../state/views'
  */
 export function PollBody({
   state,
-  selfAddress,
+  selfKey,
   outgoing,
   canVote,
   nameOf,
@@ -20,7 +20,7 @@ export function PollBody({
   onEnd,
 }: {
   state: PollState
-  selfAddress: string
+  selfKey: string
   outgoing: boolean
   canVote: boolean
   nameOf: (address: string) => string
@@ -29,7 +29,7 @@ export function PollBody({
 }) {
   const { t } = useTranslation()
   const { poll, votes, ended } = state
-  const mine = votes.get(selfAddress) ?? []
+  const mine = votes.get(selfKey) ?? []
   const counts = poll.options.map((_, index) => [...votes.values()].filter((choice) => choice.includes(index)).length)
   const voters = votes.size
   const open = canVote && !ended

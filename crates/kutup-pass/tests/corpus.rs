@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use kutup_pass::keepass::Database;
 use kutup_pass::{merge, open, save, VaultKey};
+use sha2::{Digest, Sha256};
 
 /// The passwords KeePassXC's tests use for these vaults.
 const PASSWORDS: [&str; 9] = [
@@ -51,21 +52,34 @@ fn corpus() -> Option<PathBuf> {
     beside
 }
 
-fn keys(dir: &Path, name: &str) -> Vec<VaultKey> {
+/// The keys to try, each with the same key as Kutup Pass keeps it (the
+/// password as its SHA-256), when it has a password.
+fn keys(dir: &Path, name: &str) -> Vec<(VaultKey, Option<VaultKey>)> {
     let stem = name.trim_end_matches(".kdbx");
     let key_file = ["key", "keyx"]
         .iter()
         .find_map(|ext| std::fs::read(dir.join(format!("{stem}.{ext}"))).ok());
-    let mut keys: Vec<VaultKey> = PASSWORDS
+    let mut keys: Vec<(VaultKey, Option<VaultKey>)> = PASSWORDS
         .iter()
-        .map(|password| VaultKey::new().with_password(password))
+        .map(|password| {
+            let hash: [u8; 32] = Sha256::digest(password.as_bytes()).into();
+            (
+                VaultKey::new().with_password(password),
+                Some(VaultKey::new().with_password_hash(&hash)),
+            )
+        })
         .collect();
     if let Some(file) = key_file {
         keys = keys
             .into_iter()
-            .map(|key| key.with_key_file(&file))
+            .map(|(key, hashed)| {
+                (
+                    key.with_key_file(&file),
+                    hashed.map(|k| k.with_key_file(&file)),
+                )
+            })
             .collect();
-        keys.push(VaultKey::new().with_key_file(&file));
+        keys.push((VaultKey::new().with_key_file(&file), None));
     }
     keys
 }
@@ -94,11 +108,20 @@ fn keepassxc_vaults_round_trip_and_merge_with_themselves() {
         let bytes = std::fs::read(dir.join(&name)).unwrap();
         let opened = keys(&dir, &name)
             .into_iter()
-            .find_map(|key| open(&bytes, &key).ok().map(|db| (db, key)));
-        let Some((db, key)) = opened else {
+            .find_map(|(key, hashed)| open(&bytes, &key).ok().map(|db| (db, key, hashed)));
+        let Some((db, key, hashed)) = opened else {
             assert!(UNSUPPORTED.contains(&name.as_str()), "{name} did not open");
             continue;
         };
+        // What Kutup Pass keeps opens it too, and what it saves opens with
+        // the password.
+        if let Some(hashed) = hashed {
+            let by_hash = open(&bytes, &hashed)
+                .unwrap_or_else(|error| panic!("{name} by its password's hash: {error}"));
+            assert_eq!(content(&by_hash), content(&db), "{name} by hash");
+            open(&save(&db, &hashed).unwrap(), &key)
+                .unwrap_or_else(|error| panic!("{name} saved by hash: {error}"));
+        }
         let reopened =
             open(&save(&db, &key).unwrap(), &key).unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(

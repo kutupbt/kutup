@@ -6,3 +6,4 @@ specs/150-pass-import.spec.ts
 specs/151-pass-pin.spec.ts
 specs/152-pass-site-icons.spec.ts
 specs/153-pass-custom-icons.spec.ts
+specs/154-pass-vault-keys.spec.ts

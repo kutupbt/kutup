@@ -65,7 +65,7 @@ async fn preferences_of(state: &AppState, user_id: Uuid) -> AppResult<PhotosPref
     let mut library_folder_ids = Vec::with_capacity(listed.len());
     for id in listed {
         // A folder unshared since it was added drops out.
-        if Some(id) != upload && can_access_collection(&state.pool, user_id, id).await {
+        if Some(id) != upload && can_access_collection(&state.pool, user_id, id).await? {
             library_folder_ids.push(id);
         }
     }
@@ -117,7 +117,7 @@ pub async fn put_preferences(
         if folders.contains(&id) || Some(id) == request.upload_folder_id {
             continue;
         }
-        if !can_access_collection(&state.pool, user_id, id).await {
+        if !can_access_collection(&state.pool, user_id, id).await? {
             return Err(AppError::bad_request("a library folder you cannot open"));
         }
         folders.push(id);

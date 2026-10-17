@@ -10,7 +10,7 @@ const place = (name: string, note: string, lat: number, lon: number): Place => (
   note,
   lat,
   lon,
-  addedBy: 'a@example.org',
+  addedBy: 'aci:00000000-0000-4000-8000-000000000001@example.org',
   addedAt: '2026-01-01T00:00:00Z',
 })
 

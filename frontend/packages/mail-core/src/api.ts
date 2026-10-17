@@ -21,10 +21,12 @@ import {
   type GroupMailKey,
   type SealedMailKey,
 } from '@kutup/crypto'
+import { addressFolder, foldAddress } from '@kutup/crypto/accountRename'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { useAccountAddress, useContacts } from '@kutup/contacts-core/api'
 import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-core/model'
 import api from '@kutup/session/client'
-import { useRequiredSession } from '@kutup/session/store'
+import { useRequiredSession, type Session } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { sanitizeSignature } from './sanitize'
@@ -156,8 +158,29 @@ export interface MailAccount {
   publicKey: string
   /** The primary key: it signs, and new mail is encrypted to it. */
   key: SealedMailKey
-  /** The address's other keys, which still open mail encrypted to them before a new key took over. */
+  /**
+   * The address's other keys, which still open mail encrypted to them before
+   * a new key took over, and the keys of the account's earlier addresses
+   * (docs/plans/username-renames.md), which open the mail sent to them.
+   */
   olderKeys: SealedMailKey[]
+  /** Every address the account holds (current first, then old ones not yet freed): none but the current one sends. */
+  addresses: string[]
+  /** The public keys of all of them: what the account's own signatures are checked with. */
+  ownPublicKeys: string[]
+  /** Whether `address` is one of the account's, in any spelling (compared folded). */
+  isOwnAddress: (address: string | null | undefined) => boolean
+  /**
+   * What opens this account's shares of shared mailboxes' keys: the account
+   * (its server and id) and its account-level HPKE private key (base64).
+   */
+  groupHolder: GroupKeyHolderOf
+}
+
+/** The account a group key share is sealed to, with the key that opens it. */
+export interface GroupKeyHolderOf {
+  account: AccountRef
+  hpkePrivateKey: string
 }
 
 /** Opens a shared mailbox's message with the newest group key that opens it. */
@@ -209,44 +232,94 @@ export class NoAddressKey extends Error {
   }
 }
 
+/** One of the account's addresses, as `GET /api/mail/addresses` lists them. */
+export interface OwnAddressRow {
+  id: string
+  address: string
+  state: 'active' | 'receiving' | 'closed' | 'freed'
+  keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean }[]
+}
+
+/**
+ * The account as Mail uses it, from its addresses: the current (`active`)
+ * one sends; the earlier ones (docs/plans/username-renames.md) keep the keys
+ * that open the mail sent to them, each sealed for its own address. `fold`
+ * is `foldAddress`: the account's own addresses are known in any spelling.
+ */
+export function mailAccountOf(
+  rows: readonly OwnAddressRow[],
+  identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
+  session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
+  fold: (address: string) => string | null,
+  /** The account itself, as `/user/me` names it: its server and id. */
+  self: AccountRef,
+): MailAccount {
+  const current = rows.find((row) => row.state === 'active')
+  const primary = current?.keys.find((k) => k.primary)
+  if (!current || !primary) throw new NoAddressKey()
+  const earlier = rows.filter((row) => row !== current)
+  // A freed name may be someone else's now: its keys only open the mail it
+  // received while it was this account's, and it is never "me". Receiving
+  // and closed names stay the account's own (it holds them).
+  const held = rows.filter((row) => row.state !== 'freed')
+  const own = new Set(held.map((row) => fold(row.address)).filter((folded) => folded !== null))
+  const sealed = (row: OwnAddressRow) => (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
+    masterKeyBase64: toBase64(session.masterKey),
+    binding: session.envelopeBinding,
+    address: row.address,
+    envelope: key.privateKeyEnvelope,
+    fingerprint: key.fingerprint,
+  })
+  return {
+    address: current.address,
+    domain: current.address.split('@')[1] ?? '',
+    name: identity?.displayName || session.username || '',
+    signature: sanitizeSignature(identity?.signature ?? ''),
+    publicKey: primary.publicKey,
+    key: sealed(current)(primary),
+    olderKeys: [
+      ...current.keys.filter((k) => k !== primary).map(sealed(current)),
+      ...earlier.flatMap((row) => row.keys.map(sealed(row))),
+    ],
+    addresses: [current.address, ...earlier.filter((row) => row.state !== 'freed').map((row) => row.address)],
+    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => row.keys.filter((k) => k !== primary).map((k) => k.publicKey))],
+    isOwnAddress: (candidate) => {
+      if (!candidate) return false
+      const folded = fold(candidate)
+      return folded !== null && own.has(folded)
+    },
+    groupHolder: {
+      account: { server: self.server, accountId: self.accountId },
+      hpkePrivateKey: toBase64(session.privateKey),
+    },
+  }
+}
+
 export function useMailAccount() {
   const session = useRequiredSession()
   return useQuery({
-    queryKey: ['mail', 'account', session.sessionId],
+    // A rename (here or in another app) changes the session's address: the
+    // account is read again, with the new address first.
+    queryKey: ['mail', 'account', session.sessionId, session.address],
     staleTime: Infinity,
     retry: (count, error) => !(error instanceof NoAddressKey) && count < 1,
     queryFn: async (): Promise<MailAccount> => {
-      const { data } = await api.get<
-        { id: string; address: string; keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean }[] }[]
-      >('/mail/addresses')
-      let address = data[0]
-      if (address && address.keys.length === 0) {
+      // The current address sends; the earlier ones (after a rename) only
+      // keep the keys their mail opens with.
+      let { data } = await api.get<OwnAddressRow[]>('/mail/addresses')
+      const active = data.find((row) => row.state === 'active')
+      if (active && active.keys.length === 0) {
         // Not made at sign-in yet (or that failed): make it now.
-        await addFirstAddressKey(session, address).catch(() => undefined)
-        address = (await api.get<typeof data>('/mail/addresses')).data[0]
+        await addFirstAddressKey(session, active).catch(() => undefined)
+        data = (await api.get<OwnAddressRow[]>('/mail/addresses')).data
       }
-      const primary = address?.keys.find((k) => k.primary)
-      if (!address || !primary) throw new NoAddressKey()
       const identity = await api
         .get<MailIdentity>('/mail/identity')
         .then((r) => r.data)
         .catch(() => null)
-      const sealed = (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
-        masterKeyBase64: toBase64(session.masterKey),
-        loginEmail: session.email,
-        address: address.address,
-        envelope: key.privateKeyEnvelope,
-        fingerprint: key.fingerprint,
-      })
-      return {
-        address: address.address,
-        domain: address.address.split('@')[1] ?? '',
-        name: identity?.displayName || session.username || '',
-        signature: sanitizeSignature(identity?.signature ?? ''),
-        publicKey: primary.publicKey,
-        key: sealed(primary),
-        olderKeys: address.keys.filter((k) => k !== primary).map(sealed),
-      }
+      // The account as shares name it: by `/user/me`, never by a mail domain.
+      const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
+      return mailAccountOf(data, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
     },
   })
 }
@@ -517,8 +590,9 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   const open = scope ? (bytes: Uint8Array, signer?: string) => openWithGroupKeys(scope.keys, bytes, signer) : (bytes: Uint8Array, signer?: string) => openWithKeys(account, bytes, signer)
   const sender = message.from?.address
   let candidates: string[] = []
-  if (sender === account.address) {
-    candidates = [account.publicKey]
+  if (account.isOwnAddress(sender)) {
+    // Sent from this account, perhaps from an address it had before.
+    candidates = account.ownPublicKeys
   } else if (sender && message.protection === 'end_to_end') {
     candidates = await addressKeys(sender)
       .then((keys) => keys.all)
@@ -763,6 +837,25 @@ export function useSearchAddresses(group?: string, enabled = true) {
 }
 
 const imageSendersKey = ['mail', 'image-senders'] as const
+
+/**
+ * A sender's address as the account's sender lists keep it: one of this
+ * server's folded (any spelling of a name is the one sender), any other
+ * lowercased.
+ */
+export function useSenderKey(address: string | null | undefined) {
+  const account = useMailAccount()
+  const domain = account.data?.domain.toLowerCase()
+  return useQuery({
+    queryKey: ['mail', 'sender-key', address?.trim().toLowerCase(), domain],
+    enabled: !!address && !!domain,
+    staleTime: Infinity,
+    queryFn: async () => {
+      const lower = address!.trim().toLowerCase()
+      return lower.endsWith(`@${domain}`) ? ((await foldAddress(lower)) ?? lower) : lower
+    },
+  })
+}
 
 /** Senders whose remote images always load (chosen when loading them). */
 export function useImageSenders() {

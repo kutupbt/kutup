@@ -52,7 +52,7 @@ export function GroupCallRinger() {
       if (Date.now() - entry.timestampMs > RING_MS || inCall || !callController()?.ringsHere) continue
       const group = snapshot.groups.find((g) => g.request.genesis.conversationId === (entry.conversation as { groupId: string }).groupId)
       if (!group || group.currentRoster.length > RING_GROUP_SIZE) continue
-      setRinging({ groupId: group.request.genesis.conversationId, call, starter: entry.peer, atMs: entry.timestampMs })
+      setRinging({ groupId: group.request.genesis.conversationId, call, starter: entry.sender, atMs: entry.timestampMs })
     }
   }, [snapshot.history, snapshot.groups, loaded, inCall])
 
@@ -73,7 +73,7 @@ export function GroupCallRinger() {
   const profiles = new Map(snapshot.profiles.map((p) => [p.peer, p]))
   const group = ringing ? snapshot.groups.find((g) => g.request.genesis.conversationId === ringing.groupId) : undefined
   const title = ringing ? groupTitle(ringing.groupId, t, group?.currentGroupInfo) : ''
-  const starter = ringing ? personName(ringing.starter, profiles, self?.address ?? '', t) : ''
+  const starter = ringing ? personName(ringing.starter, profiles, self?.key ?? '', t) : ''
 
   useEffect(() => {
     if (!ringing) return

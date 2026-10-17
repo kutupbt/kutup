@@ -21,12 +21,11 @@ const DB_FILE: &str = "kutup.redb";
 
 /// `(key -> value)` blobs. `data` holds the encrypted session.
 const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
-/// Legacy v1 sync table — dropped on open (records were write-only: the old
-/// engine never compared them, so nothing of value is lost).
-const SYNC_V1: TableDefinition<&str, &[u8]> = TableDefinition::new("sync");
 /// Sync state v2, keyed `"{pair}|f|{rel_path}"` / `"{pair}|d|{rel_dir}"`
 /// where `pair` = sha256(collection_id ++ "\0" ++ canonical_local_root).
 const SYNC_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_state");
+/// The CLI's collaboration device (encrypted), key `device`.
+const COLLAB_DEVICE: TableDefinition<&str, &[u8]> = TableDefinition::new("collab_device");
 /// Interrupted-upload resume records, keyed `"{collection_id}\n{canonical_path}"`.
 const RESUME: TableDefinition<&str, &[u8]> = TableDefinition::new("resume");
 
@@ -40,8 +39,16 @@ fn keyring_service(profile: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct Session {
     pub server: String,
-    pub email: String,
+    /// What the account signed in with: its username or Kutup address.
+    pub name: String,
+    /// What the account's sealed keys are bound to: its key binding, as the
+    /// sign-in told it.
+    pub envelope_binding: String,
+    /// The account's permanent id (`users.id`) and its server's name: who
+    /// this account is to everyone (docs/plans/account-ids.md).
     pub user_id: String,
+    pub server_name: String,
+    /// Shown only: the account's username, as `/user/me` last said.
     pub username: String,
     pub access_token: String,
     pub refresh_token: String,
@@ -54,6 +61,19 @@ pub struct Session {
     pub drive_private_key_envelope: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
+}
+
+impl Session {
+    /// The string every seal and open uses (docs/plans/account-identity.md).
+    pub fn binding(&self) -> &str {
+        &self.envelope_binding
+    }
+
+    /// This account as every share and binding names it.
+    pub fn person(&self) -> Result<kutup_crypto::account_ref::AccountRef> {
+        kutup_crypto::account_ref::AccountRef::new(&self.server_name, &self.user_id)
+            .map_err(|_| anyhow!("this session's account is not known: run 'kutup login' again"))
+    }
 }
 
 impl Session {
@@ -90,7 +110,6 @@ impl Store {
             wtx.open_table(SESSION)?;
             wtx.open_table(SYNC_STATE)?;
             wtx.open_table(RESUME)?;
-            let _ = wtx.delete_table(SYNC_V1);
             wtx.commit()?;
         }
         let mut store = Store {
@@ -195,6 +214,46 @@ impl Store {
         {
             let mut t = wtx.open_table(SESSION)?;
             t.remove("data")?;
+            // The device belongs to the account signed out of.
+            let mut t = wtx.open_table(COLLAB_DEVICE)?;
+            t.remove("device")?;
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    /// The collaboration device this profile registered, if any.
+    pub fn collab_device(&self) -> Result<Option<CollabDevice>> {
+        let rtx = self.db.begin_read()?;
+        let t = match rtx.open_table(COLLAB_DEVICE) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let Some(v) = t.get("device")? else {
+            return Ok(None);
+        };
+        if !self.has_device_key() {
+            return Ok(None);
+        }
+        let data = self.decrypt(v.value())?;
+        Ok(Some(serde_json::from_slice(&data)?))
+    }
+
+    /// Keeps the collaboration device (`None`: forgets it).
+    pub fn put_collab_device(&self, device: Option<&CollabDevice>) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(COLLAB_DEVICE)?;
+            match device {
+                Some(device) => {
+                    let encrypted = self.encrypt(&serde_json::to_vec(device)?)?;
+                    t.insert("device", encrypted.as_slice())?;
+                }
+                None => {
+                    t.remove("device")?;
+                }
+            }
         }
         wtx.commit()?;
         Ok(())
@@ -231,7 +290,31 @@ impl Store {
     }
 
     pub fn delete_sync_file(&self, pair: &str, rel: &str) -> Result<()> {
+        self.sync_state_delete(&format!("{pair}|y|{rel}"))?;
         self.sync_state_delete(&format!("{pair}|f|{rel}"))
+    }
+
+    /// The Yjs state a note or list was last in sync at (encrypted: it
+    /// holds the document).
+    pub fn yjs_base(&self, pair: &str, rel: &str) -> Result<Option<YjsBase>> {
+        let rtx = self.db.begin_read()?;
+        let t = rtx.open_table(SYNC_STATE)?;
+        let Some(v) = t.get(format!("{pair}|y|{rel}").as_str())? else {
+            return Ok(None);
+        };
+        if !self.has_device_key() {
+            return Ok(None);
+        }
+        Ok(serde_json::from_slice(&self.decrypt(v.value())?).ok())
+    }
+
+    pub fn delete_yjs_base(&self, pair: &str, rel: &str) -> Result<()> {
+        self.sync_state_delete(&format!("{pair}|y|{rel}"))
+    }
+
+    pub fn put_yjs_base(&self, pair: &str, rel: &str, base: &YjsBase) -> Result<()> {
+        let encrypted = self.encrypt(&serde_json::to_vec(base)?)?;
+        self.sync_state_put(&format!("{pair}|y|{rel}"), &encrypted)
     }
 
     /// All file records for a pair, as `(rel_path, state)`.
@@ -377,6 +460,12 @@ pub struct ResumeState {
     pub created_at: i64,
     /// Bumped after each successful PATCH; drives idle sweeping.
     pub updated_at: i64,
+    /// A new version's upload: the file it is a version of (empty for a new
+    /// file), sealed at `key_generation`.
+    #[serde(default)]
+    pub version_of: String,
+    #[serde(default)]
+    pub key_generation: u32,
 }
 
 /// Sync pair id: one synced (collection, local dir) combination.
@@ -409,6 +498,56 @@ pub struct SyncFileState {
     /// change signal (`files.updated_at` is never bumped server-side).
     pub remote_version_id: String,
     pub synced_at: i64,
+}
+
+/// The CLI's collaboration device (docs/plans/device-registration.md): the
+/// key its frames are signed with, registered for one account on one server.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollabDevice {
+    pub server: String,
+    pub user_id: String,
+    pub device_id: i64,
+    /// The Ed25519 seed, base64.
+    pub seed: String,
+    /// When the account's statement for it was signed (renewed after 15 days).
+    pub issued_at_ms: i64,
+}
+
+/// Where a note or place list was last in sync (docs/plans/cli-yjs-sync.md):
+/// its Yjs state then, which a local edit is diffed against so edits made
+/// elsewhere since merge instead of being undone.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YjsBase {
+    pub file_id: String,
+    /// Yjs V2, base64: what the file on disk held at the last sync (with any
+    /// edit of it in `pending` already in).
+    pub state: String,
+    /// Every frame of the log up to here is in `state`.
+    pub seq: i64,
+    /// Updates (Yjs V1, base64) sent or being sent and not yet acknowledged:
+    /// sent again, byte for byte, by the next run (Yjs drops a repeat by
+    /// its client and clock), never made again as new operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
+    /// A merged file being written: the next run tells from the file whether
+    /// it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writing: Option<YjsWriting>,
+}
+
+/// A write of a merged document in progress.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YjsWriting {
+    /// SHA-256 (hex) of the file before, and of what is being written.
+    pub before: String,
+    pub after: String,
+    /// The merged state (Yjs V2, base64) and its log position: the base once
+    /// the file holds `after`.
+    pub state: String,
+    pub seq: i64,
 }
 
 /// Base record for one synced sub-directory ↔ sub-collection.
@@ -496,7 +635,8 @@ mod tests {
             assert!(store.has_device_key());
             assert!(store.load_session().unwrap().is_none());
             let sess = Session {
-                email: "a@b.c".into(),
+                name: "a@b.c".into(),
+                envelope_binding: String::new(),
                 username: "alice".into(),
                 master_key: "bWtleQ==".into(),
                 ..Default::default()
@@ -506,7 +646,7 @@ mod tests {
         {
             let store = Store::open(profile).unwrap();
             let loaded = store.load_session().unwrap().expect("session present");
-            assert_eq!(loaded.email, "a@b.c");
+            assert_eq!(loaded.name, "a@b.c");
             assert_eq!(loaded.username, "alice");
             assert_eq!(loaded.master_key, "bWtleQ==");
             store.clear_session().unwrap();

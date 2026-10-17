@@ -9,11 +9,9 @@
 //! sit on chunk boundaries because the CLI ships one chunk per PATCH and the
 //! server advances by whole PATCH bodies.
 
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -39,26 +37,6 @@ pub enum Progress {
     Quiet,
 }
 
-/// How an upload's name is kept unique in its folder
-/// (docs/plans/drive-unique-names.md).
-#[derive(Clone, Copy)]
-pub enum Naming {
-    /// The name's hash goes with the upload: the server refuses a taken
-    /// name before anything is sent.
-    Claim([u8; 32]),
-    /// No name hash now: the file replaces one that holds the name, and the
-    /// caller claims it once that one is gone. Its content hash is recorded.
-    After([u8; 32]),
-}
-
-impl Naming {
-    fn hash_key(self) -> [u8; 32] {
-        match self {
-            Naming::Claim(key) | Naming::After(key) => key,
-        }
-    }
-}
-
 /// Exact collection context and execution policy for one upload.
 pub struct UploadRequest<'a> {
     pub collection_id: &'a str,
@@ -66,10 +44,15 @@ pub struct UploadRequest<'a> {
     pub collection_key: &'a [u8],
     pub resume: bool,
     pub progress: Progress,
-    /// The folder's hash key and how the name is claimed.
-    pub naming: Naming,
+    /// The folder's hash key: the name's hash goes with the upload, so the
+    /// server refuses a taken name before anything is sent
+    /// (docs/plans/drive-unique-names.md).
+    pub hash_key: [u8; 32],
     /// The name to upload under, when not the local file's own.
     pub name: Option<&'a str>,
+    /// The content's SHA-256 when the caller has it already; read from the
+    /// file otherwise.
+    pub sha256: Option<[u8; 32]>,
 }
 
 /// A finished upload: the server file id + the file key (the whiteboard
@@ -83,46 +66,57 @@ pub struct Uploaded {
     pub name: String,
 }
 
-/// The plaintext as encryption reads it, hashed on the way: every upload
-/// (a resumed one too) reads the file from its start, in order.
-struct HashingReader {
-    inner: File,
-    digest: Rc<RefCell<Sha256>>,
-}
-
-impl Read for HashingReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        self.digest.borrow_mut().update(&buf[..n]);
-        Ok(n)
+/// A local file's SHA-256, read in 1 MiB pieces.
+pub(crate) fn sha256_file(path: &Path) -> Result<[u8; 32]> {
+    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        digest.update(&buf[..n]);
     }
-}
-
-fn hashing(file: File) -> (HashingReader, Rc<RefCell<Sha256>>) {
-    let digest = Rc::new(RefCell::new(Sha256::new()));
-    (
-        HashingReader {
-            inner: file,
-            digest: Rc::clone(&digest),
-        },
-        digest,
-    )
+    Ok(digest.finalize().into())
 }
 
 /// Records the finished file's content hash; best effort (without it, the
 /// same file uploaded again is not recognised as already there).
-fn record_content_hash(
+pub(crate) fn record_content_hash(
     client: &Client,
     file_id: &str,
-    naming: Naming,
-    digest: Rc<RefCell<Sha256>>,
+    hash_key: &[u8; 32],
+    sha256: &[u8; 32],
 ) {
-    let sha: [u8; 32] = digest.borrow().clone().finalize().into();
-    let recorded = crate::names::content_hash(&naming.hash_key(), &sha)
+    let recorded = crate::names::content_hash(hash_key, sha256)
         .and_then(|hash| client.set_content_hash(file_id, &hash));
     if let Err(e) = recorded {
         eprintln!("warning: could not record the content hash of {file_id}: {e:#}");
     }
+}
+
+/// After a new whole-file version of `file` (its content now `size` bytes
+/// with SHA-256 `sha256`): the metadata's size and SHA-256 follow, the name
+/// stays, and the content hash is recorded again, which the version
+/// cleared (docs/plans/drive-unique-names.md).
+pub(crate) fn follow_new_content(
+    client: &Client,
+    file: &crate::api::File,
+    file_key: &[u8; 32],
+    hash_key: &[u8; 32],
+    size: u64,
+    sha256: &[u8; 32],
+) -> Result<()> {
+    let mut meta = file_crypto::open_metadata(file, file_key).context("decrypt file metadata")?;
+    meta.size = size;
+    meta.sha256 = Some(b64().encode(sha256));
+    let request = file_crypto::rename_request(file, file_key, &meta)?;
+    client
+        .update_file_metadata(&file.id, &request)
+        .context("update file metadata")?;
+    record_content_hash(client, &file.id, hash_key, sha256);
+    Ok(())
 }
 
 pub(crate) fn now_unix() -> i64 {
@@ -157,8 +151,9 @@ pub fn upload_streaming(
         collection_key,
         resume,
         progress,
-        naming,
+        hash_key,
         name,
+        sha256,
     } = request;
     let name = name
         .map(str::to_string)
@@ -169,6 +164,10 @@ pub fn upload_streaming(
     let meta_fs = std::fs::metadata(local_path)?;
     let plain_size = meta_fs.len() as i64;
     let (mtime_secs, mtime_nanos) = mtime_parts(&meta_fs);
+    let sha256 = match sha256 {
+        Some(sha256) => sha256,
+        None => sha256_file(local_path)?,
+    };
 
     if let Some(rec) = store.get_resume(&resume_key)? {
         let unchanged = rec.plain_size == plain_size
@@ -185,7 +184,8 @@ pub fn upload_streaming(
                 collection_id,
                 collection_key,
                 &progress,
-                naming,
+                &hash_key,
+                &sha256,
                 &name,
             )? {
                 return Ok(done);
@@ -203,6 +203,7 @@ pub fn upload_streaming(
         name: name.clone(),
         mime_type: guess_mime(local_path),
         size: plain_size as u64,
+        sha256: Some(b64().encode(sha256)),
         media: None,
     };
     let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;
@@ -216,18 +217,14 @@ pub fn upload_streaming(
             collection_id,
             &record.metadata_envelope,
             &record.file_key_envelope,
-            match naming {
-                Naming::Claim(key) => Some(crate::names::name_hash(&key, &name)?),
-                Naming::After(_) => None,
-            }
-            .as_deref(),
+            &crate::names::name_hash(&hash_key, &name)?,
         )
         .context("tus create")?;
     if file_id_hint != record.id {
         bail!("tus create returned a different file id");
     }
 
-    let (file, digest) = hashing(File::open(local_path)?);
+    let file = File::open(local_path)?;
     let blob_context = DriveFileBlobContextV1::new(&record.id, record.key_generation)?;
     let up = StreamUploader::new(file, &record.file_key, plain_size, blob_context)?;
 
@@ -244,17 +241,18 @@ pub fn upload_streaming(
         mtime_nanos,
         created_at: now,
         updated_at: now,
+        ..Default::default()
     };
     // Persist BEFORE the first PATCH: a crash at any later point leaves a
     // record + server session, which is exactly what resume needs.
     store.save_resume(&resume_key, &rec)?;
 
     let bar = make_bar(&progress, plain_size, &name);
-    let patched_id = run_patches(client, store, &resume_key, &mut rec, up, 0, &bar)?;
+    let patched_id = run_patches(client, store, &resume_key, &mut rec, up, 0, &bar, &sha256)?;
     let _ = store.delete_resume(&resume_key);
 
     let file_id = pick_file_id(patched_id, &rec)?;
-    record_content_hash(client, &file_id, naming, digest);
+    record_content_hash(client, &file_id, &hash_key, &sha256);
     Ok(Uploaded {
         file_id,
         file_key: record.file_key,
@@ -277,7 +275,8 @@ fn try_resume(
     collection_id: &str,
     collection_key: &[u8],
     progress: &Progress,
-    naming: Naming,
+    hash_key: &[u8; 32],
+    sha256: &[u8; 32],
     name: &str,
 ) -> Result<Option<Uploaded>> {
     match client.tus_head(&rec.upload_id)? {
@@ -333,7 +332,7 @@ fn try_resume(
                 }
             };
 
-            let (file, digest) = hashing(File::open(local_path)?);
+            let file = File::open(local_path)?;
             let blob_context =
                 DriveFileBlobContextV1::new(&rec.file_id, file_crypto::FIRST_GENERATION)?;
             let up = match StreamUploader::resume(
@@ -360,11 +359,13 @@ fn try_resume(
             bar.set_position(up.plain_read() as u64);
 
             let mut rec = rec.clone();
-            let patched_id = run_patches(client, store, resume_key, &mut rec, up, offset, &bar)?;
+            let patched_id = run_patches(
+                client, store, resume_key, &mut rec, up, offset, &bar, sha256,
+            )?;
             let _ = store.delete_resume(resume_key);
 
             let file_id = pick_file_id(patched_id, &rec)?;
-            record_content_hash(client, &file_id, naming, digest);
+            record_content_hash(client, &file_id, hash_key, sha256);
             Ok(Some(Uploaded {
                 file_id,
                 file_key,
@@ -378,20 +379,39 @@ fn try_resume(
 /// Ships remaining chunks. On a permanent (4xx) rejection the session and
 /// local state are dropped; on a transient failure the state is kept and the
 /// error tells the user to rerun.
+#[allow(clippy::too_many_arguments)]
 fn run_patches(
     client: &Client,
     store: &Store,
     resume_key: &str,
     rec: &mut ResumeState,
-    mut up: StreamUploader<HashingReader>,
+    mut up: StreamUploader<File>,
     mut offset: i64,
     bar: &ProgressBar,
+    sha256: &[u8; 32],
 ) -> Result<String> {
     let mut file_id = String::new();
     #[cfg(feature = "fail-inject")]
     let mut patches_done: u32 = 0;
     loop {
-        let Some(chunk) = up.next_chunk()? else { break };
+        // The last part goes only once what was sealed is what was hashed
+        // (and sealed in the metadata); a changed file cancels the upload.
+        let next = up.next_chunk().and_then(|chunk| match chunk {
+            Some(_) if up.finished() => up.check_sha256(sha256).map(|()| chunk),
+            chunk => Ok(chunk),
+        });
+        let chunk = match next {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(err) => {
+                bar.finish_and_clear();
+                if err.is::<crate::transfer::ChangedWhileUploading>() {
+                    let _ = client.tus_delete(&rec.upload_id);
+                    let _ = store.delete_resume(resume_key);
+                }
+                return Err(err);
+            }
+        };
         match client.tus_patch(&rec.upload_id, offset, chunk) {
             Ok((new_offset, final_id)) => {
                 offset = new_offset;
@@ -412,6 +432,11 @@ fn run_patches(
                 if is_permanent(&err) {
                     let _ = client.tus_delete(&rec.upload_id);
                     let _ = store.delete_resume(resume_key);
+                    if matches!(err.downcast_ref::<ApiError>(), Some(e) if e.status == 403) {
+                        return Err(err.context(
+                            "access to the folder was lost during the upload; it was discarded",
+                        ));
+                    }
                     return Err(err);
                 }
                 let pct = offset * 100 / rec.cipher_total.max(1);
@@ -428,7 +453,7 @@ fn run_patches(
 
 /// A 4xx (other than timeout/rate-limit) means the server rejected the
 /// upload outright; retrying the same session is pointless.
-fn is_permanent(err: &anyhow::Error) -> bool {
+pub(crate) fn is_permanent(err: &anyhow::Error) -> bool {
     matches!(err.downcast_ref::<ApiError>(),
              Some(e) if e.status < 500 && e.status != 408 && e.status != 429)
 }
@@ -460,7 +485,7 @@ fn unwrap_file_key(
     .context("unwrap resumed file key")
 }
 
-fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {
+pub(crate) fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -468,7 +493,7 @@ fn mtime_parts(meta: &std::fs::Metadata) -> (i64, u32) {
         .unwrap_or((0, 0))
 }
 
-fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> ProgressBar {
+pub(crate) fn make_bar(progress: &Progress, plain_total: i64, name: &str) -> ProgressBar {
     match progress {
         Progress::Bar => crate::output::progress_bar(Some(plain_total.max(0) as u64), name),
         Progress::Quiet => ProgressBar::hidden(),

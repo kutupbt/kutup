@@ -4,20 +4,19 @@
 //! bindings, sizes and fetch capabilities. It never receives a profile key or
 //! plaintext name/avatar.
 
-use std::str::FromStr;
-
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use crate::AccountAddress;
+use crate::AccountRef;
 
 const MAGIC: &[u8; 8] = b"KUTPPE1\0";
 const FIXED_PREFIX_BYTES: usize = 8 + 2 + 1 + 1 + 8 + 4 + 32 + 2;
 const NONCE_BYTES: usize = 24;
 const LENGTH_BYTES: usize = 4;
 const TAG_BYTES: usize = 16;
-const MAX_ACCOUNT_BYTES: usize = 286;
+/// An account's bytes (`AccountRef::bytes`): its server, length-prefixed, and its id.
+const MAX_ACCOUNT_BYTES: usize = 2 + 253 + 16;
 pub const PROFILE_NAME_PADDED_LENGTHS: [usize; 2] = [53, 257];
 /// Signal's padding buckets for the profile "about" text.
 pub const PROFILE_ABOUT_PADDED_LENGTHS: [usize; 3] = [128, 254, 512];
@@ -117,7 +116,9 @@ pub const ACCOUNT_PROFILE_SOURCE: u32 = 128;
 pub struct ProfileEnvelopeContextV1 {
     pub suite: ProfileSuiteId,
     pub purpose: ProfileEnvelopePurpose,
-    pub account: String,
+    /// The profile's owner: their server and permanent account id, never a
+    /// name (docs/plans/account-ids.md).
+    pub account: AccountRef,
     pub profile_version: [u8; 32],
     pub revision: u64,
     pub source_device_id: u32,
@@ -126,18 +127,11 @@ pub struct ProfileEnvelopeContextV1 {
 impl ProfileEnvelopeContextV1 {
     pub fn new(
         purpose: ProfileEnvelopePurpose,
-        account: &str,
+        account: &AccountRef,
         profile_version: &str,
         revision: u64,
         source_device_id: u32,
     ) -> Result<Self, String> {
-        let address = AccountAddress::from_str(account).map_err(|error| error.to_string())?;
-        if address.server.is_none()
-            || address.canonical() != account
-            || account.len() > MAX_ACCOUNT_BYTES
-        {
-            return Err("encrypted profile account must be a canonical federated address".into());
-        }
         let version = hex::decode(profile_version)
             .map_err(|_| "profile version must be lowercase SHA-256 hex".to_string())?;
         if version.len() != 32 || hex::encode(&version) != profile_version {
@@ -149,7 +143,7 @@ impl ProfileEnvelopeContextV1 {
         Ok(Self {
             suite: ProfileSuiteId::XChaCha20Poly1305V1,
             purpose,
-            account: account.to_string(),
+            account: account.clone(),
             profile_version: version.try_into().expect("32-byte profile version"),
             revision,
             source_device_id,
@@ -162,7 +156,7 @@ impl ProfileEnvelopeContextV1 {
 
     /// Stable context used by the profile module's purpose-specific HKDF.
     pub fn key_derivation_info(&self) -> Vec<u8> {
-        let account = self.account.as_bytes();
+        let account = self.account.bytes();
         let mut info = Vec::with_capacity(2 + 1 + 8 + 4 + 32 + 2 + account.len());
         info.extend_from_slice(&self.suite.as_u16().to_be_bytes());
         info.push(self.purpose.as_u8());
@@ -170,7 +164,7 @@ impl ProfileEnvelopeContextV1 {
         info.extend_from_slice(&self.source_device_id.to_be_bytes());
         info.extend_from_slice(&self.profile_version);
         info.extend_from_slice(&(account.len() as u16).to_be_bytes());
-        info.extend_from_slice(account);
+        info.extend_from_slice(&account);
         info
     }
 }
@@ -191,7 +185,7 @@ pub fn encode_profile_envelope_header(
     context
         .purpose
         .validate_ciphertext_len(ciphertext_len as usize)?;
-    let account = context.account.as_bytes();
+    let account = context.account.bytes();
     let mut header =
         Vec::with_capacity(FIXED_PREFIX_BYTES + account.len() + NONCE_BYTES + LENGTH_BYTES);
     header.extend_from_slice(MAGIC);
@@ -202,7 +196,7 @@ pub fn encode_profile_envelope_header(
     header.extend_from_slice(&context.source_device_id.to_be_bytes());
     header.extend_from_slice(&context.profile_version);
     header.extend_from_slice(&(account.len() as u16).to_be_bytes());
-    header.extend_from_slice(account);
+    header.extend_from_slice(&account);
     header.extend_from_slice(nonce);
     header.extend_from_slice(&ciphertext_len.to_be_bytes());
     Ok(header)
@@ -241,11 +235,14 @@ pub fn decode_profile_envelope(encoded: &str) -> Result<DecodedProfileEnvelopeV1
     if bytes.len() < header_len + TAG_BYTES {
         return Err("encrypted profile envelope is truncated".into());
     }
-    let account = std::str::from_utf8(&bytes[FIXED_PREFIX_BYTES..account_end])
-        .map_err(|_| "encrypted profile account is not UTF-8".to_string())?;
+    let (account, read) = AccountRef::read(&bytes[FIXED_PREFIX_BYTES..account_end])
+        .map_err(|_| "encrypted profile account is invalid".to_string())?;
+    if read != account_len {
+        return Err("encrypted profile account has trailing bytes".into());
+    }
     let context = ProfileEnvelopeContextV1::new(
         purpose,
-        account,
+        &account,
         &hex::encode(version),
         revision,
         source_device_id,
@@ -279,8 +276,10 @@ pub fn decode_profile_envelope(encoded: &str) -> Result<DecodedProfileEnvelopeV1
 #[serde(rename_all = "camelCase")]
 pub struct PutChatProfileRequest {
     pub suite: ProfileSuiteId,
-    /// Canonical profile owner. Also authenticated inside every envelope.
-    pub account: String,
+    /// The profile's owner (server and account id). Also authenticated
+    /// inside every envelope.
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub account: AccountRef,
     /// Lowercase hex profile version derived from the 32-byte profile key.
     pub version: String,
     pub revision: u64,
@@ -306,7 +305,8 @@ pub type OwnChatProfileResponse = PutChatProfileRequest;
 #[serde(rename_all = "camelCase")]
 pub struct ChatProfileResponse {
     pub suite: ProfileSuiteId,
-    pub account: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub account: AccountRef,
     pub version: String,
     pub revision: u64,
     pub source_device_id: u32,
@@ -336,11 +336,17 @@ impl From<&PutChatProfileRequest> for ChatProfileResponse {
 mod tests {
     use super::*;
 
+    fn alice() -> AccountRef {
+        "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test"
+            .parse()
+            .unwrap()
+    }
+
     #[test]
     fn peer_response_omits_owner_recovery_and_verifier() {
         let owner = PutChatProfileRequest {
             suite: ProfileSuiteId::XChaCha20Poly1305V1,
-            account: "alice@example.test".into(),
+            account: alice(),
             version: "01".repeat(32),
             revision: 4,
             source_device_id: 2,
@@ -360,7 +366,7 @@ mod tests {
     fn profile_envelope_parser_rejects_unknown_suite_and_trailing_data() {
         let context = ProfileEnvelopeContextV1::new(
             ProfileEnvelopePurpose::WrappedProfileKey,
-            "alice@example.test",
+            &alice(),
             &"01".repeat(32),
             1,
             1,
@@ -376,6 +382,14 @@ mod tests {
         assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
         encoded[8] = 0;
         encoded.push(0);
+        assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
+        encoded.pop();
+
+        // The account slot holds exactly one account's bytes: one more byte
+        // in its length (taken from the nonce) is refused.
+        let length_at = FIXED_PREFIX_BYTES - 2;
+        let length = u16::from_be_bytes([encoded[length_at], encoded[length_at + 1]]);
+        encoded[length_at..length_at + 2].copy_from_slice(&(length + 1).to_be_bytes());
         assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
     }
 }

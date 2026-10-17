@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { Download, ExternalLink } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { opensInOffice } from '@kutup/drive-core/editorKind'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { publicDocumentUrl } from '@kutup/editors/paths'
-import { appUrl, loadAppDirectory } from '@kutup/session/apps'
+import { loadAppDirectory } from '@kutup/session/apps'
 import { downloadPublicFile, loadShare, publicFailure, type PublicFile } from '@kutup/editors/public/share'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
@@ -19,11 +19,6 @@ import { fileKind } from '@kutup/drive-core/kinds'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
-
-/** A link to one document, on Office: the same token and key. */
-function officeLinkUrl(token: string): string {
-  return appUrl('office', `/s/${encodeURIComponent(token)}${window.location.hash}`)
-}
 
 /** A document opens on Office (docs/architecture.md, "File editor route"), the link's key going along. */
 function documentUrl(token: string, file: PublicFile): string | null {
@@ -47,13 +42,6 @@ export function PublicSharePage() {
     retry: false,
   })
   const files = useMemo(() => share.data?.files ?? [], [share.data])
-  // A link to one document: its page is on Office (a link made before it was).
-  const single = share.data?.shareType === 'file' ? files[0] : undefined
-  const moved = single?.name && opensInOffice(single.name) ? officeLinkUrl(token) : null
-  useEffect(() => {
-    if (moved) window.location.replace(moved)
-  }, [moved])
-
   const byId = useMemo(() => new Map(files.map((f) => [f.row.id, f])), [files])
   const items: ExplorerItem[] = files.map((f) => ({
     type: 'file',
@@ -92,7 +80,7 @@ export function PublicSharePage() {
           <ThemeToggle onChrome={false} />
         </span>
       </header>
-      {share.isPending || moved ? <LoadingPanel label={t('public.decrypting')} /> : null}
+      {share.isPending ? <LoadingPanel label={t('public.decrypting')} /> : null}
       {failure ? (
         <div className="mx-auto w-full max-w-lg p-6">
           <Alert variant="error" title={t(`public.failure.${failure}.title`)}>
@@ -100,7 +88,7 @@ export function PublicSharePage() {
           </Alert>
         </div>
       ) : null}
-      {share.data && !moved ? (
+      {share.data ? (
         <>
           <PublicNotice owner={share.data.ownerAccount} token={token} />
           <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 md:px-6">

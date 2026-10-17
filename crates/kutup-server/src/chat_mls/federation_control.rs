@@ -53,7 +53,7 @@ pub(super) async fn replicate_genesis(
                 request
                     .members
                     .iter()
-                    .filter(|member| member.address.server.as_deref() == Some(destination.as_str()))
+                    .filter(|member| member.account.server == destination.as_str())
                     .cloned()
                     .collect()
             } else {
@@ -67,7 +67,7 @@ pub(super) async fn replicate_genesis(
             .send(
                 &destination,
                 FederationRequestSpec {
-                    feature: FederationFeature::ChatV1,
+                    feature: FederationFeature::ChatV2,
                     method: Method::POST,
                     path: "/api/fed/chat/mls/control/genesis".into(),
                     query: None,
@@ -142,7 +142,7 @@ pub(super) async fn request_remote_ordering_vote(
         .send(
             authority_domain,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::POST,
                 path: "/api/fed/chat/mls/control/votes".into(),
                 query: None,

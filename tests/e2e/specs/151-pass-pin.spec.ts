@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { appUrl, newAccount, registerAccount, submitThroughRateLimit } from '../fixtures/apps'
 import { createVault, openPass } from '../fixtures/pass'
 
 const PASSWORD = 'Deneme123*PassPinAccount'
@@ -36,9 +36,11 @@ test('pass: a PIN set with the account password opens locked vaults; three wrong
   await expect(dialog.getByText('The two PINs differ.')).toBeVisible()
   await expect(dialog.getByRole('button', { name: 'Set PIN' })).toBeDisabled()
   await dialog.getByLabel('The PIN again').fill('246802')
-  await dialog.getByRole('button', { name: 'Set PIN' }).click()
-  await expect(dialog).toBeHidden({ timeout: 30_000 })
-  await expect(page.getByText('Your account has a PIN.')).toBeVisible()
+  // Proving the password is a sign-in attempt: through the edge's limit.
+  await submitThroughRateLimit(page, 'Set PIN', page.getByText('Your account has a PIN.'), () =>
+    dialog.getByLabel('Your Kutup password').fill(PASSWORD),
+  )
+  await expect(dialog).toBeHidden()
   await expect(page.getByRole('combobox', { name: 'After a lock, open vaults with' })).toHaveText('My PIN')
 
   // Locked: the PIN opens it; the sixth digit sends it.
@@ -74,11 +76,12 @@ test('pass: the PIN is removed with the account password, and a removed PIN fall
   await page.getByRole('combobox', { name: 'After a lock, open vaults with' }).click()
   await page.getByRole('option', { name: 'My PIN' }).click()
   const set = page.getByRole('dialog', { name: 'Set a PIN' })
-  await set.getByLabel('Your Kutup password').fill(PASSWORD)
   await set.getByLabel('New PIN (six digits)').fill('135790')
   await set.getByLabel('The PIN again').fill('135790')
-  await set.getByRole('button', { name: 'Set PIN' }).click()
-  await expect(set).toBeHidden({ timeout: 30_000 })
+  // Proving the password is a sign-in attempt: through the edge's limit.
+  await submitThroughRateLimit(page, 'Set PIN', page.getByText('PIN set').first(), () =>
+    set.getByLabel('Your Kutup password').fill(PASSWORD),
+  )
 
   // Removed from a second tab (as another device would), while this one is locked.
   await page.goto(vaultUrl)
@@ -88,19 +91,19 @@ test('pass: the PIN is removed with the account password, and a removed PIN fall
   await other.goto(appUrl('pass'))
   await other.getByRole('button', { name: 'Remove PIN' }).click()
   const remove = other.getByRole('dialog', { name: 'Remove the PIN' })
-  await remove.getByLabel('Your Kutup password').fill('not-my-password')
-  await remove.getByRole('button', { name: 'Remove PIN' }).click()
-  await expect(remove.getByText('That is not your Kutup password.')).toBeVisible({ timeout: 30_000 })
-  await remove.getByLabel('Your Kutup password').fill(PASSWORD)
-  await remove.getByRole('button', { name: 'Remove PIN' }).click()
-  await expect(remove).toBeHidden({ timeout: 30_000 })
+  await submitThroughRateLimit(other, 'Remove PIN', remove.getByText('That is not your Kutup password.'), () =>
+    remove.getByLabel('Your Kutup password').fill('not-my-password'),
+  )
+  await submitThroughRateLimit(other, 'Remove PIN', other.getByText('PIN removed').first(), () =>
+    remove.getByLabel('Your Kutup password').fill(PASSWORD),
+  )
   await expect(other.getByRole('combobox', { name: 'After a lock, open vaults with' })).toHaveText('My Kutup password')
   await other.close()
 
   await page.getByLabel('PIN', { exact: true }).fill('135790')
   await expect(page.getByText(/The PIN was removed/)).toBeVisible({ timeout: 30_000 })
-  await page.getByLabel('Your Kutup password').fill(PASSWORD)
-  await page.getByRole('button', { name: 'Unlock with my password' }).click()
-  await expect(page.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
+  await submitThroughRateLimit(page, 'Unlock with my password', page.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 }), () =>
+    page.getByLabel('Your Kutup password').fill(PASSWORD),
+  )
   await context.close()
 })

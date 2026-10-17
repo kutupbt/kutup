@@ -6,9 +6,8 @@ use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountAddress, MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1,
-    PendingMlsInvitationV1, RespondMlsInvitationResponseV1, RespondMlsInvitationV1,
-    MLS_INVITATION_FEEDBACK_VERSION,
+    MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, PendingMlsInvitationV1,
+    RespondMlsInvitationResponseV1, RespondMlsInvitationV1, MLS_INVITATION_FEEDBACK_VERSION,
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -21,20 +20,20 @@ use crate::middleware::AuthUser;
 use crate::telemetry;
 use crate::AppState;
 
-type InvitationResponseRow = (String, Option<OffsetDateTime>, i64, Option<String>, String);
+type InvitationResponseRow = (String, Option<OffsetDateTime>, i64, Option<String>, Uuid);
 
 pub(crate) async fn list_invitations(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
-    let local_domain = state
+    state
         .federation
         .as_ref()
-        .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?
-        .server_name();
+        .ok_or_else(|| AppError::not_found("MLS federation unavailable"))?;
     let user_id = trusted_uuid(&auth.user_id)?;
-    expire_invitations(&state, user_id, local_domain).await?;
+    // A read changes nothing: expired invitations are left out here (by
+    // time) and expired, with their notices, by the jobs loop.
     let rows: Vec<(Uuid, i64, Vec<u8>, i64, OffsetDateTime)> = sqlx::query_as(
         "SELECT m.conversation_id, m.incarnation, i.mls_group_id,
                 m.joined_epoch, m.invitation_expires_at
@@ -91,7 +90,7 @@ pub(crate) async fn respond_invitation(
     let mut tx = state.pool.begin().await?;
     let row: Option<InvitationResponseRow> = sqlx::query_as(
         "SELECT m.membership_status, m.invitation_expires_at, m.joined_epoch,
-                m.invited_by_domain, u.username
+                m.invited_by_domain, u.id
          FROM chat_mls_local_members m
          JOIN users u ON u.id = m.user_id
          WHERE m.conversation_id = $1 AND m.incarnation = $2
@@ -103,7 +102,7 @@ pub(crate) async fn respond_invitation(
     .bind(user_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (status, expires_at, invited_epoch, invited_by_domain, username) =
+    let (status, expires_at, invited_epoch, invited_by_domain, member_id) =
         row.ok_or_else(|| AppError::not_found("MLS invitation not found"))?;
     let requested_status = if request.accept { "active" } else { "rejected" };
     if status == requested_status {
@@ -125,7 +124,7 @@ pub(crate) async fn respond_invitation(
         let feedback = invitation_feedback(
             request.conversation_id,
             request.incarnation,
-            &username,
+            member_id,
             &local_domain,
             invited_epoch,
             MlsInvitationFeedbackDecisionV1::Expired,
@@ -187,7 +186,7 @@ pub(crate) async fn respond_invitation(
         let feedback = invitation_feedback(
             request.conversation_id,
             request.incarnation,
-            &username,
+            member_id,
             &local_domain,
             invited_epoch,
             MlsInvitationFeedbackDecisionV1::Rejected,
@@ -239,9 +238,58 @@ pub(crate) async fn respond_invitation(
     .into_response())
 }
 
+/// How often expired invitations are expired, with their federation notices.
+const INVITATION_EXPIRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Expires due invitations for every account, in the background: a GET of
+/// the list never writes (docs/contributing.md). Not with groups off: no
+/// invitation is pending or answered then, so none expires either.
+pub(crate) fn spawn_invitation_expiry(state: AppState) {
+    if state.mls_ordering.is_none() {
+        return;
+    }
+    let Some(local_domain) = state
+        .federation
+        .as_ref()
+        .map(|f| f.server_name().to_owned())
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(INVITATION_EXPIRY_INTERVAL);
+        loop {
+            tick.tick().await;
+            if let Err(error) = expire_due_invitations(&state, &local_domain).await {
+                tracing::warn!(error = %error.message, "expiring MLS invitations failed");
+            }
+        }
+    });
+}
+
+async fn expire_due_invitations(state: &AppState, local_domain: &str) -> AppResult<()> {
+    // The longest-expired first, so one account that fails cannot keep
+    // every other account's expiry (and its notices) waiting.
+    let users: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT user_id FROM chat_mls_local_members
+          WHERE membership_status = 'pending' AND removed_epoch IS NULL
+            AND invitation_expires_at <= now()
+          GROUP BY user_id
+          ORDER BY min(invitation_expires_at)
+          LIMIT 500",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    for user_id in users {
+        if let Err(error) = expire_invitations(state, user_id, local_domain).await {
+            tracing::warn!(%user_id, error = %error.message, "expiring this account's MLS invitations failed");
+        }
+    }
+    Ok(())
+}
+
 async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str) -> AppResult<()> {
     let mut tx = state.pool.begin().await?;
-    let conversations: Vec<(Uuid, i64, i64, String, String)> = sqlx::query_as(
+    let conversations: Vec<(Uuid, i64, i64, String, Uuid)> = sqlx::query_as(
         "WITH expired AS (
              UPDATE chat_mls_local_members
              SET membership_status = 'rejected', invitation_expires_at = NULL
@@ -251,14 +299,14 @@ async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str)
                        invited_by_domain, user_id
          )
          SELECT expired.conversation_id, expired.incarnation,
-                expired.joined_epoch, expired.invited_by_domain, users.username
+                expired.joined_epoch, expired.invited_by_domain, users.id
          FROM expired
          JOIN users ON users.id = expired.user_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
-    for (conversation_id, incarnation, invited_epoch, invited_by_domain, username) in conversations
+    for (conversation_id, incarnation, invited_epoch, invited_by_domain, member_id) in conversations
     {
         let incarnation = u64::try_from(incarnation)
             .map_err(|_| AppError::internal("stored MLS incarnation is invalid"))?;
@@ -274,7 +322,7 @@ async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str)
         let feedback = invitation_feedback(
             conversation_id,
             incarnation,
-            &username,
+            member_id,
             local_domain,
             invited_epoch,
             MlsInvitationFeedbackDecisionV1::Expired,
@@ -288,14 +336,12 @@ async fn expire_invitations(state: &AppState, user_id: Uuid, local_domain: &str)
 fn invitation_feedback(
     conversation_id: Uuid,
     incarnation: u64,
-    username: &str,
+    member_id: Uuid,
     local_domain: &str,
     invited_epoch: i64,
     decision: MlsInvitationFeedbackDecisionV1,
 ) -> AppResult<MlsInvitationFeedbackV1> {
-    let member: AccountAddress = format!("{username}@{local_domain}")
-        .parse()
-        .map_err(|_| AppError::internal("stored MLS invitation account is invalid"))?;
+    let member = crate::account_ids::local(local_domain, member_id)?;
     let feedback = MlsInvitationFeedbackV1 {
         protocol_version: MLS_INVITATION_FEEDBACK_VERSION,
         conversation_id,

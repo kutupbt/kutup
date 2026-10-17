@@ -9,7 +9,7 @@ function entry(id: string, expiresAtMs?: number): ChatHistoryEntry {
   return {
     id,
     conversation: { kind: 'group', groupId: 'g1' },
-    peer: '',
+    sender: '',
     direction: 'incoming',
     timestampMs: 1,
     delivered: true,
@@ -151,7 +151,7 @@ describe('ChatService history', () => {
       createAttachmentLedgerEntry: vi.fn(async (_c: unknown, _m: string, descriptor: { attachmentId: string }) => {
         entered.add(descriptor.attachmentId)
       }),
-      username: 'me',
+      account: { server: 'kutup.test', accountId: '00000000-0000-4000-8000-0000000000e1' },
       capabilities: { serverName: 'kutup.test' },
     })
     const reference = (id: string) => ({ data: { attachmentId: id, storageReferenceId: 'r', ciphertextBytes: 10, ciphertextSha256: 'h' } })

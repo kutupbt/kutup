@@ -6,8 +6,8 @@ import type {
 } from './types'
 
 const conversationId = '4cc2114c-8015-4e78-9af8-2f5f71c18cf1'
-const alice = { username: 'alice', server: 'a.test' }
-const bob = { username: 'bob', server: 'b.test' }
+const alice = { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' }
+const bob = { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' }
 
 function group(isAdmin = true): LocalMlsConversationRecord {
   return {
@@ -16,17 +16,17 @@ function group(isAdmin = true): LocalMlsConversationRecord {
         conversationId,
         incarnation: 1,
       },
-      members: [{ address: alice, isAdmin: true }],
+      members: [{ account: alice, isAdmin: true }],
     },
     currentRoster: [
-      { address: alice, isAdmin },
-      { address: bob, isAdmin: false },
+      { account: alice, isAdmin },
+      { account: bob, isAdmin: false },
     ],
     memberJoinedEpochs: new Map([
-      ['alice@a.test', 0],
-      ['bob@b.test', 1],
+      ['aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', 0],
+      ['aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', 1],
     ]),
-    acceptedInvitationEpochs: new Map([['alice@a.test', 0]]),
+    acceptedInvitationEpochs: new Map([['aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', 0]]),
   } as unknown as LocalMlsConversationRecord
 }
 
@@ -44,8 +44,8 @@ function feedback(decision: MlsInvitationFeedback['decision']): MlsInvitationFee
 
 describe('MLS group invitation readiness', () => {
   it('blocks an administrator until a later member accepts', () => {
-    expect(mlsGroupInvitationReadiness(group(), [], 'alice@a.test')).toEqual({
-      pending: ['bob@b.test'],
+    expect(mlsGroupInvitationReadiness(group(), [], 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')).toEqual({
+      pending: ['aci:00000000-0000-4000-8000-81b637d8fcd2@b.test'],
       refused: [],
       blocksSending: true,
     })
@@ -53,35 +53,35 @@ describe('MLS group invitation readiness', () => {
 
   it('unblocks only an authenticated accepted receipt', () => {
     expect(
-      mlsGroupInvitationReadiness(group(), [feedback('accepted')], 'alice@a.test'),
+      mlsGroupInvitationReadiness(group(), [feedback('accepted')], 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test'),
     ).toEqual({ pending: [], refused: [], blocksSending: false })
     expect(
-      mlsGroupInvitationReadiness(group(), [feedback('rejected')], 'alice@a.test'),
+      mlsGroupInvitationReadiness(group(), [feedback('rejected')], 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test'),
     ).toEqual({
       pending: [],
-      refused: ['bob@b.test'],
+      refused: ['aci:00000000-0000-4000-8000-81b637d8fcd2@b.test'],
       blocksSending: true,
     })
   })
 
   it('accepts the MLS-encrypted receipt and rejects an old re-add receipt', () => {
     const accepted = group()
-    accepted.acceptedInvitationEpochs.set('bob@b.test', 1)
-    expect(mlsGroupInvitationReadiness(accepted, [], 'alice@a.test')).toEqual({
+    accepted.acceptedInvitationEpochs.set('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', 1)
+    expect(mlsGroupInvitationReadiness(accepted, [], 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')).toEqual({
       pending: [],
       refused: [],
       blocksSending: false,
     })
-    accepted.memberJoinedEpochs.set('bob@b.test', 3)
-    expect(mlsGroupInvitationReadiness(accepted, [], 'alice@a.test')).toEqual({
-      pending: ['bob@b.test'],
+    accepted.memberJoinedEpochs.set('aci:00000000-0000-4000-8000-81b637d8fcd2@b.test', 3)
+    expect(mlsGroupInvitationReadiness(accepted, [], 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')).toEqual({
+      pending: ['aci:00000000-0000-4000-8000-81b637d8fcd2@b.test'],
       refused: [],
       blocksSending: true,
     })
   })
 
   it('does not infer missing feedback for non-administrators', () => {
-    expect(mlsGroupInvitationReadiness(group(false), [], 'alice@a.test')).toEqual({
+    expect(mlsGroupInvitationReadiness(group(false), [], 'aci:00000000-0000-4000-8000-2bd806c97f0e@a.test')).toEqual({
       pending: [],
       refused: [],
       blocksSending: false,

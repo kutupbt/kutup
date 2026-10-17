@@ -68,7 +68,7 @@ pub async fn upload(
     }
     // The same right as saving a version: whoever may change the content
     // may change its picture.
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let (collection_id, key_generation): (Uuid, i32) = sqlx::query_as(
@@ -188,8 +188,9 @@ pub async fn upload(
         }
         return Err(AppError::internal("commit"));
     }
-    // The superseded object, exactly (the bucket is versioned: overwriting
-    // alone would keep it until the lifecycle expired it).
+    // The superseded object, exactly, where the bucket is versioned
+    // (overwriting alone would keep it there until the lifecycle expired it);
+    // on an unversioned bucket the overwrite replaced it already.
     if let Some((_, _, old)) = previous.filter(|(_, _, old)| !old.is_empty() && *old != version_id)
     {
         let _ = state.storage.delete_object_version(&path, &old).await;
@@ -199,7 +200,11 @@ pub async fn upload(
 
 /// A file in its owner's trash (on its own, not inside a trashed folder):
 /// its owner, who may restore it, may still see its picture (Photos' trash).
-async fn owns_trashed_file(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) -> bool {
+async fn owns_trashed_file(
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    file_id: Uuid,
+) -> Result<bool, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM files f JOIN collections c ON c.id = f.collection_id
                         WHERE f.id = $1 AND f.trash_root_id = f.id AND c.owner_user_id = $2
@@ -209,7 +214,6 @@ async fn owns_trashed_file(pool: &sqlx::PgPool, user_id: Uuid, file_id: Uuid) ->
     .bind(user_id)
     .fetch_one(pool)
     .await
-    .unwrap_or(false)
 }
 
 /// `GET /api/files/{fileId}/thumbnails/{variant}` — the envelope.
@@ -236,8 +240,8 @@ pub async fn download(
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
     let variant = parse_variant(&variant)?;
-    if !can_access_file(&state.pool, user_id, fid).await
-        && !owns_trashed_file(&state.pool, user_id, fid).await
+    if !can_access_file(&state.pool, user_id, fid).await?
+        && !owns_trashed_file(&state.pool, user_id, fid).await?
     {
         return Err(AppError::forbidden("forbidden"));
     }
@@ -299,7 +303,7 @@ pub async fn delete(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let fid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await {
+    if !crate::drive_writes::can_write_file(&state.pool, user_id, fid).await? {
         return Err(AppError::forbidden("forbidden"));
     }
     let mut tx = state.pool.begin().await?;

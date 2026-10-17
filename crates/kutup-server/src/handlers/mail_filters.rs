@@ -5,13 +5,12 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::mail::filters::{self, Actions, Condition, Destination, Match};
@@ -39,11 +38,7 @@ pub struct MailFilter {
 }
 
 fn check_sealed(name: &str) -> AppResult<()> {
-    let bytes = STANDARD
-        .decode(name)
-        .map_err(|_| AppError::bad_request("name is not base64"))?;
-    kutup_crypto::mail_names::inspect_name(&bytes)
-        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))
+    crate::revisions::mail_name(name).map(drop)
 }
 
 /// The folder and labels a filter names are the account's own.
@@ -147,6 +142,9 @@ pub struct CreateMailFilter {
     pub actions: Actions,
     /// `manual` (the default) or `sender`.
     pub source: Option<String>,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 fn enabled() -> bool {
@@ -203,6 +201,9 @@ pub async fn create(
     if request.enabled {
         check_enabled_limit(&state, user_id, None).await?;
     }
+    let head = NextHead::parse(request.head.as_deref())?;
+    let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let inserted = sqlx::query(
         "INSERT INTO mail_filters (id, user_id, name_sealed, enabled, position, match, conditions, actions, source)
          SELECT $1, $2, $3, $4, COALESCE(MAX(position) + 1, 0), $5, $6, $7, $8
@@ -217,12 +218,14 @@ pub async fn create(
     .bind(serde_json::to_value(&request.conditions).expect("serialisable"))
     .bind(serde_json::to_value(&request.actions).expect("serialisable"))
     .bind(source)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     if inserted == 0 {
         return Err(AppError::conflict("that id is taken"));
     }
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -230,11 +233,18 @@ pub async fn create(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateMailFilter {
     pub name: Option<String>,
+    /// With a new `name`: the revision of the name the rename started from.
+    pub base_name_revision: Option<i64>,
     pub enabled: Option<bool>,
     #[serde(rename = "match")]
     pub rule: Option<Match>,
     pub conditions: Option<Vec<Condition>>,
     pub actions: Option<Actions>,
+    /// With a new `name`: the next sealed account head (base64), once the
+    /// account keeps one. Switching on or off and what it matches or does are
+    /// not rollback-protected (not sealed).
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `PATCH /api/mail/filters/{id}` — rename, switch on or off, change what it matches or does.
@@ -260,16 +270,17 @@ pub async fn update(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
-    let current: Option<(serde_json::Value, serde_json::Value)> = sqlx::query_as(
-        "SELECT conditions, actions FROM mail_filters WHERE user_id = $1 AND id = $2",
+    let current: Option<(serde_json::Value, serde_json::Value, String)> = sqlx::query_as(
+        "SELECT conditions, actions, name_sealed FROM mail_filters WHERE user_id = $1 AND id = $2",
     )
     .bind(user_id)
     .bind(id)
     .fetch_optional(&state.pool)
     .await?;
-    let (conditions, actions) = current.ok_or_else(|| AppError::not_found("no such filter"))?;
+    let (conditions, actions, stored_name) =
+        current.ok_or_else(|| AppError::not_found("no such filter"))?;
     if let Some(name) = &request.name {
-        check_sealed(name)?;
+        crate::revisions::check_rename(&stored_name, name, request.base_name_revision)?;
     }
     let conditions: Vec<Condition> = match request.conditions {
         Some(conditions) => conditions,
@@ -286,14 +297,17 @@ pub async fn update(
     if request.enabled == Some(true) {
         check_enabled_limit(&state, user_id, Some(id)).await?;
     }
-    sqlx::query(
+    let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
+    let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
+    let updated = sqlx::query(
         "UPDATE mail_filters SET
              name_sealed = COALESCE($3, name_sealed),
              enabled = COALESCE($4, enabled),
              match = COALESCE($5, match),
              conditions = $6,
              actions = $7
-          WHERE user_id = $1 AND id = $2",
+          WHERE user_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $8)",
     )
     .bind(user_id)
     .bind(id)
@@ -306,8 +320,24 @@ pub async fn update(
     )
     .bind(serde_json::to_value(&conditions).expect("serialisable"))
     .bind(serde_json::to_value(&actions).expect("serialisable"))
-    .execute(&state.pool)
+    .bind(&stored_name)
+    .execute(&mut *tx)
     .await?;
+    if updated.rows_affected() == 0 {
+        drop(tx);
+        let now: Option<String> = sqlx::query_scalar(
+            "SELECT name_sealed FROM mail_filters WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+        return Err(crate::revisions::rename_lost(now, "no such filter"));
+    }
+    if request.name.is_some() {
+        account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -318,24 +348,31 @@ pub async fn update(
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Filter id")),
+    request_body(content = crate::account_heads::HeadOnly, description = "The next head, once the account keeps one"),
     responses((status = 204, description = "Deleted"), (status = 404, description = "No such filter"))
 )]
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such filter"))?;
+    let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
+    let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let removed = sqlx::query("DELETE FROM mail_filters WHERE user_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if removed == 0 {
         return Err(AppError::not_found("no such filter"));
     }
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -4,49 +4,95 @@
 //! Each person keeps, per vault they can open, the vault's key sealed under
 //! their master key. The server checks the envelope is that account's vault
 //! secret and that the vault is theirs to open; a trashed vault's secret is
-//! kept but unlisted, and a purged vault takes its secrets with it.
+//! kept but unlisted, and a purged vault's secret stays (unreachable but
+//! listed in the account head's index) until its owner forgets it
+//! (docs/plans/rollback-protection.md §9).
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test pass_live -- --nocapture
 
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecretV1};
+use kutup_crypto::pass_vault::{open_vault_secret, password_hash, seal_vault_secret, VaultSecret};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use zeroize::Zeroizing;
 
 mod common;
 use common::*;
 
-fn secret(password: &str) -> VaultSecretV1 {
-    VaultSecretV1 {
-        password: Some(Zeroizing::new(password.to_owned())),
-        key_file: None,
-    }
+fn secret(password: &str) -> VaultSecret {
+    VaultSecret::chosen(Some(password), None)
+}
+
+/// A revision above every one sealed before in this test.
+fn next_revision() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(1_791_633_600_000);
+    LAST.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 fn sealed_for(user: &User, file_id: &str, password: &str) -> String {
     let id = uuid::Uuid::parse_str(file_id).unwrap();
     b64(&seal_vault_secret(
         &user.master_key,
-        &user.email,
+        &user.binding,
         id.as_bytes(),
+        next_revision(),
         &secret(password),
     )
     .unwrap())
 }
 
-fn put(c: &Client, base: &str, user: &User, file_id: &str, envelope: &str) -> StatusCode {
+/// The revision of `user`'s secret for `file_id` now (0: none).
+fn current_revision(c: &Client, base: &str, user: &User, file_id: &str) -> u64 {
+    list(c, base, user)
+        .iter()
+        .find(|row| row["fileId"] == file_id)
+        .map(|row| {
+            let envelope =
+                account_envelope::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
+            account_envelope::inspect(&envelope)
+                .unwrap()
+                .revision
+                .unwrap()
+        })
+        .unwrap_or(0)
+}
+
+fn put_on(
+    c: &Client,
+    base: &str,
+    user: &User,
+    file_id: &str,
+    envelope: &str,
+    on: u64,
+) -> reqwest::blocking::Response {
     bearer(
         c.put(format!("{base}/api/pass/vault-secrets/{file_id}")),
         &user.token,
     )
-    .json(&json!({ "envelope": envelope }))
+    .json(&json!({ "envelope": envelope, "baseRevision": on }))
     .send()
     .unwrap()
-    .status()
+}
+
+/// Keeps `envelope` on top of what `user` keeps now.
+fn put(c: &Client, base: &str, user: &User, file_id: &str, envelope: &str) -> StatusCode {
+    let on = current_revision(c, base, user, file_id);
+    put_on(c, base, user, file_id, envelope, on).status()
+}
+
+/// Removes a file for good (trash, then purge): the gates check that a purged
+/// account leaves nothing stored behind, so these tests leave nothing either.
+fn purge_file(c: &Client, base: &str, user: &User, file_id: &str) {
+    bearer(c.delete(format!("{base}/api/files/{file_id}")), &user.token)
+        .send()
+        .unwrap();
+    let purged = bearer(c.delete(format!("{base}/api/trash/{file_id}")), &user.token)
+        .send()
+        .unwrap();
+    assert_eq!(purged.status(), StatusCode::NO_CONTENT, "purge {file_id}");
 }
 
 fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
@@ -105,9 +151,11 @@ fn vault_secrets() {
     let envelope =
         account_envelope::decode_canonical_b64(mine[0]["envelope"].as_str().unwrap()).unwrap();
     let id = uuid::Uuid::parse_str(&vault.id).unwrap();
-    let opened =
-        open_vault_secret(&envelope, &owner.master_key, &owner.email, id.as_bytes()).unwrap();
-    assert_eq!(opened.password.unwrap().as_str(), "o");
+    let (opened, _) =
+        open_vault_secret(&envelope, &owner.master_key, &owner.binding, id.as_bytes()).unwrap();
+    // Only the password's hash is kept.
+    assert_eq!(opened.password_hash, Some(password_hash("o")));
+    assert!(opened.generated_password.is_none());
     assert_eq!(list(&c, &base, &member).len(), 1);
 
     // Replacing one keeps one.
@@ -122,6 +170,68 @@ fn vault_secrets() {
         StatusCode::NO_CONTENT
     );
     assert_eq!(list(&c, &base, &owner).len(), 1);
+
+    // Two devices keeping the first key of a vault at once: one is stored,
+    // the other gets the 409, never a silent overwrite.
+    let fresh = seal_file(&folder, &uuid(), b"another KeePass file");
+    assert!(upload(&c, &base, &owner.token, &folder, &fresh)
+        .status()
+        .is_success());
+    let envelopes: Vec<String> = (0..6)
+        .map(|i| sealed_for(&owner, &fresh.id, &format!("first-{i}")))
+        .collect();
+    let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = envelopes
+            .iter()
+            .map(|envelope| {
+                let (c, base, owner, id) = (&c, &base, &owner, &fresh.id);
+                scope.spawn(move || put_on(c, base, owner, id, envelope, 0).status())
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::NO_CONTENT)
+            .count(),
+        1,
+        "{statuses:?}"
+    );
+    assert!(statuses
+        .iter()
+        .all(|s| *s == StatusCode::NO_CONTENT || *s == StatusCode::CONFLICT));
+    // Removed again: the rest of this test counts the first vault's.
+    purge_file(&c, &base, &owner, &fresh.id);
+
+    // Kept only on top of the key the change started from: a device that
+    // read the first one does not overwrite the second, nor does an older
+    // revision.
+    let kept_now = current_revision(&c, &base, &owner, &vault.id);
+    let late = put_on(
+        &c,
+        &base,
+        &owner,
+        &vault.id,
+        &sealed_for(&owner, &vault.id, "o3"),
+        0,
+    );
+    assert_eq!(late.status(), StatusCode::CONFLICT);
+    let late: Value = late.json().unwrap();
+    assert_eq!(late["code"], "revision_conflict");
+    assert_eq!(late["revision"].as_u64(), Some(kept_now));
+    let older = b64(&seal_vault_secret(
+        &owner.master_key,
+        &owner.binding,
+        id.as_bytes(),
+        kept_now,
+        &secret("o4"),
+    )
+    .unwrap());
+    assert_eq!(
+        put_on(&c, &base, &owner, &vault.id, &older, kept_now).status(),
+        StatusCode::BAD_REQUEST
+    );
 
     // Refused: someone who cannot open the vault; another account's
     // envelope; an envelope of another purpose; not base64.
@@ -146,10 +256,10 @@ fn vault_secrets() {
         StatusCode::BAD_REQUEST
     );
     let other_purpose = account_envelope::seal_b64(
-        b"x",
+        &[1u8; 32],
         &owner.master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
-        &owner.email,
+        &owner.binding,
     )
     .unwrap();
     assert_eq!(
@@ -225,6 +335,8 @@ fn vault_secrets() {
     .send()
     .unwrap();
     assert_eq!(list(&c, &base, &owner).len(), 0);
+    // Nothing left stored by this test.
+    assert_eq!(used(&c, &base, &owner.token), 0);
 }
 
 #[test]
@@ -238,85 +350,66 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
         .build()
         .unwrap();
     let user = register(&c, &base);
-    // The login key from the public preflight, as the app derives it.
-    let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight"))
-        .query(&[("email", &user.email)])
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let salt = account_envelope::decode_canonical_b64(
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-    )
-    .unwrap();
-    let derive = |password: &str| {
-        let keys = kutup_crypto::kdf::derive_account_protection_keys(
+    // A reauth is a sign-in exchange (docs/plans/opaque.md) whose answer is a
+    // one-time grant, not a session.
+    let reauth = |password: &str, token: Option<&str>| {
+        let (status, body, _) = opaque_login(
+            &c,
+            &base,
+            &user.username,
             password,
-            &salt,
-            kutup_crypto::kdf::AccountProtectionParameters::V1,
-        )
-        .unwrap();
-        b64(keys.login_key.as_slice())
+            "reauth",
+            Some("pass"),
+            token,
+        );
+        (status, body)
     };
-    let reauth = |login_key: &str| {
-        bearer(c.post(format!("{base}/api/user/reauth")), &user.token)
-            .json(&json!({ "loginKey": login_key }))
-            .send()
-            .unwrap()
-            .status()
-    };
-    let right = derive("integrity-pw-123456");
-    let wrong = derive("not-the-password");
-    assert_eq!(reauth(&right), StatusCode::NO_CONTENT);
-    assert_eq!(reauth(&wrong), StatusCode::UNAUTHORIZED);
-    // Signed out: refused.
+    let (status, body) = reauth(&user.password, Some(&user.token));
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["grant"].as_str().unwrap().starts_with("kg1_"));
+    assert!(
+        body.get("accessToken").is_none(),
+        "no session from a reauth"
+    );
+    // A wrong password fails in the client; the server never sees a finish.
     assert_eq!(
-        c.post(format!("{base}/api/user/reauth"))
-            .json(&json!({ "loginKey": right }))
-            .send()
-            .unwrap()
-            .status(),
+        reauth("not-the-password", Some(&user.token)).0,
         StatusCode::UNAUTHORIZED
     );
-    // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): misses
-    // here count, and then even the right password waits.
+    // Signed out: refused.
+    assert_eq!(reauth(&user.password, None).0, StatusCode::UNAUTHORIZED);
+    // A reauth names no account (it is the session's own): naming one,
+    // another account's or not, is refused.
+    let other = register(&c, &base);
+    let (_, ke1) = kutup_crypto::opaque::client_login_start(&other.password).unwrap();
+    let named = bearer(c.post(format!("{base}/api/auth/login/start")), &user.token)
+        .header("x-kutup-client", "cli")
+        .json(
+            &json!({ "name": other.username, "credentialRequest": b64(&ke1),
+                       "purpose": "reauth", "for": "pass" }),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(named.status(), StatusCode::BAD_REQUEST);
+    // The sign-in lockout (LOGIN_LOCKOUT_THRESHOLD, 5 by default): every
+    // start counts, finished or not, and then even the right password waits.
     let mut locked = false;
     for _ in 0..10 {
-        if reauth(&wrong) == StatusCode::TOO_MANY_REQUESTS {
+        if reauth("not-the-password", Some(&user.token)).0 == StatusCode::TOO_MANY_REQUESTS {
             locked = true;
             break;
         }
     }
     assert!(locked, "the lockout never came");
-    assert_eq!(reauth(&right), StatusCode::TOO_MANY_REQUESTS);
-}
-
-/// The login key for `password`, from the public preflight, as the app
-/// derives it.
-fn login_key(c: &Client, base: &str, user: &User, password: &str) -> String {
-    let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight"))
-        .query(&[("email", &user.email)])
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let salt = account_envelope::decode_canonical_b64(
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-    )
-    .unwrap();
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        password,
-        &salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    b64(keys.login_key.as_slice())
+    assert_eq!(
+        reauth(&user.password, Some(&user.token)).0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    purge_accounts(&c, &base, &[&user, &other]);
 }
 
 #[test]
-fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() {
+fn pin_is_set_with_a_fresh_grant_and_three_misses_end_the_sign_in() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         return;
     };
@@ -326,8 +419,6 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
         .build()
         .unwrap();
     let user = register(&c, &base);
-    let right = login_key(&c, &base, &user, "integrity-pw-123456");
-    let wrong = login_key(&c, &base, &user, "not-the-password");
     let status = || -> Value {
         bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
             .send()
@@ -335,12 +426,13 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
             .json()
             .unwrap()
     };
-    let set = |login_key: &str, pin: &str| {
-        bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
-            .json(&json!({ "loginKey": login_key, "pin": pin }))
+    let set = |grant: &str, pin: &str| {
+        let response = bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
+            .json(&json!({ "grant": grant, "pin": pin }))
             .send()
-            .unwrap()
-            .status()
+            .unwrap();
+        let code = response.status();
+        (code, response.json::<Value>().unwrap_or(Value::Null))
     };
     let verify = |pin: &str| {
         let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), &user.token)
@@ -354,24 +446,40 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
 
     assert_eq!(status()["set"], false);
     assert_eq!(verify("123456").1["error"], "noPin");
-    // Six digits, and the account password.
-    assert_eq!(set(&right, "12345"), StatusCode::BAD_REQUEST);
-    assert_eq!(set(&right, "12345a"), StatusCode::BAD_REQUEST);
-    assert_eq!(set(&wrong, "246802"), StatusCode::UNAUTHORIZED);
-    assert_eq!(set(&right, "246802"), StatusCode::NO_CONTENT);
+    // Six digits (checked first: no grant spent on a typo).
+    let grant = reauth_grant(&c, &base, &user, "pass");
+    assert_eq!(set(&grant, "12345").0, StatusCode::BAD_REQUEST);
+    assert_eq!(set(&grant, "12345a").0, StatusCode::BAD_REQUEST);
+    // A grant for something else, or none: refused.
+    let totp = reauth_grant(&c, &base, &user, "totp");
+    let (code, body) = set(&totp, "246802");
+    assert_eq!(
+        (code, &body["code"]),
+        (StatusCode::FORBIDDEN, &json!("grantInvalid"))
+    );
+    assert_eq!(set("kg1_not-a-grant", "246802").0, StatusCode::FORBIDDEN);
+    assert_eq!(set(&grant, "246802").0, StatusCode::NO_CONTENT);
+    // Used once.
+    assert_eq!(set(&grant, "246802").0, StatusCode::FORBIDDEN);
     assert_eq!(status()["set"], true);
 
     assert_eq!(verify("246802").0, StatusCode::NO_CONTENT);
     let (code, body) = verify("111111");
     assert_eq!(code, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({ "error": "wrongPin", "attemptsLeft": 2 }));
+    assert_eq!(
+        body,
+        json!({ "error": "wrongPin", "code": "wrongPin", "attemptsLeft": 2 })
+    );
     // A right PIN starts the count again.
     assert_eq!(verify("246802").0, StatusCode::NO_CONTENT);
     assert_eq!(verify("111111").1["attemptsLeft"], 2);
     assert_eq!(verify("222222").1["attemptsLeft"], 1);
     let (code, body) = verify("333333");
     assert_eq!(code, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({ "error": "signedOut", "attemptsLeft": 0 }));
+    assert_eq!(
+        body,
+        json!({ "error": "signedOut", "code": "signedOut", "attemptsLeft": 0 })
+    );
     // The sign-in has ended: the session is refused.
     assert_eq!(
         bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
@@ -380,10 +488,11 @@ fn pin_is_set_with_the_password_checked_here_and_three_misses_end_the_sign_in() 
             .status(),
         StatusCode::UNAUTHORIZED
     );
+    purge_accounts(&c, &base, &[&user]);
 }
 
 #[test]
-fn pin_is_removed_only_with_the_password() {
+fn pin_is_removed_only_with_a_grant_of_this_sign_in() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         return;
     };
@@ -393,31 +502,36 @@ fn pin_is_removed_only_with_the_password() {
         .build()
         .unwrap();
     let user = register(&c, &base);
-    let right = login_key(&c, &base, &user, "integrity-pw-123456");
-    let wrong = login_key(&c, &base, &user, "not-the-password");
-    let pin = |method: reqwest::Method, body: Value| {
-        bearer(
-            c.request(method, format!("{base}/api/pass/pin")),
-            &user.token,
-        )
-        .json(&body)
-        .send()
-        .unwrap()
-        .status()
+    let pin = |method: reqwest::Method, token: &str, body: Value| {
+        bearer(c.request(method, format!("{base}/api/pass/pin")), token)
+            .json(&body)
+            .send()
+            .unwrap()
+            .status()
     };
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
         pin(
             reqwest::Method::PUT,
-            json!({ "loginKey": right, "pin": "135790" })
+            &user.token,
+            json!({ "grant": grant, "pin": "135790" })
         ),
         StatusCode::NO_CONTENT
     );
+    // Another sign-in of the account cannot use this one's grant.
+    let other = sign_in_token(&c, &base, &user);
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
-        pin(reqwest::Method::DELETE, json!({ "loginKey": wrong })),
-        StatusCode::UNAUTHORIZED
+        pin(reqwest::Method::DELETE, &other, json!({ "grant": grant })),
+        StatusCode::FORBIDDEN
     );
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
-        pin(reqwest::Method::DELETE, json!({ "loginKey": right })),
+        pin(
+            reqwest::Method::DELETE,
+            &user.token,
+            json!({ "grant": grant })
+        ),
         StatusCode::NO_CONTENT
     );
     let status: Value = bearer(c.get(format!("{base}/api/pass/pin")), &user.token)
@@ -426,19 +540,12 @@ fn pin_is_removed_only_with_the_password() {
         .json()
         .unwrap();
     assert_eq!(status["set"], false);
+    purge_accounts(&c, &base, &[&user]);
 }
 
 /// A second sign-in of `user` (another device): its access token.
-fn sign_in(c: &Client, base: &str, user: &User) -> String {
-    let login_key = login_key(c, base, user, "integrity-pw-123456");
-    let r = c
-        .post(format!("{base}/api/auth/login"))
-        .header("x-kutup-client", "cli")
-        .json(&json!({ "email": user.email, "loginKey": login_key }))
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "login: {}", r.status());
-    r.json::<Value>().unwrap()["accessToken"]
+fn sign_in_token(c: &Client, base: &str, user: &User) -> String {
+    sign_in(c, base, &user.username, &user.password)["accessToken"]
         .as_str()
         .unwrap()
         .to_owned()
@@ -455,16 +562,16 @@ fn pin_tries_are_counted_per_sign_in() {
         .build()
         .unwrap();
     let user = register(&c, &base);
-    let right = login_key(&c, &base, &user, "integrity-pw-123456");
+    let grant = reauth_grant(&c, &base, &user, "pass");
     assert_eq!(
         bearer(c.put(format!("{base}/api/pass/pin")), &user.token)
-            .json(&json!({ "loginKey": right, "pin": "975310" }))
+            .json(&json!({ "grant": grant, "pin": "975310" }))
             .send()
             .unwrap()
             .status(),
         StatusCode::NO_CONTENT
     );
-    let other = sign_in(&c, &base, &user);
+    let other = sign_in_token(&c, &base, &user);
     let verify = |token: &str, pin: &str| -> Value {
         let response = bearer(c.post(format!("{base}/api/pass/pin/verify")), token)
             .json(&json!({ "pin": pin }))
@@ -660,4 +767,21 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     let back = list(&c, &base, &member);
     assert_eq!(back.len(), 1);
     assert_eq!(back[0]["fileId"], vault.id.as_str());
+
+    // Purged, the vault leaves the kept key for its owner to forget (never
+    // dropped by the server, which could not write a head for it): hidden
+    // from the list, gone once forgotten.
+    purge_file(&c, &base, &owner, &vault.id);
+    assert_eq!(held(), 1, "kept until forgotten");
+    assert_eq!(list(&c, &base, &member).len(), 0);
+    let forgot = bearer(
+        c.post(format!("{base}/api/pass/vault-secrets/forget")),
+        &member.token,
+    )
+    .json(&json!({ "fileIds": [vault.id] }))
+    .send()
+    .unwrap();
+    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
+    assert_eq!(held(), 0, "forgotten");
+    assert_eq!(used(&c, &base, &owner.token), 0);
 }

@@ -389,7 +389,7 @@ async fn fetch_remote(
         .send(
             server,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::GET,
                 path: format!("/api/fed/chat/live-locations/{stream_id}"),
                 query: None,
@@ -472,7 +472,7 @@ pub async fn federated_read(
     let federation = stack(&state)?;
     let uri = format!("/api/fed/chat/live-locations/{stream_id}");
     let authenticated = federation
-        .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV1)
+        .authenticate_inbound(&headers, "GET", &uri, None, &[], FederationFeature::ChatV2)
         .await?;
     let result = async {
         let stream = stream_id_of(&stream_id)?;

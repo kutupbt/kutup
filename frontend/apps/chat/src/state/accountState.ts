@@ -1,4 +1,4 @@
-import { conversationKey, directAddress } from '@kutup/chat-core/identity'
+import { conversationKey, directKey } from '@kutup/chat-core/identity'
 import type { ChatConversationStateV1, ChatHistoryEntry, ChatStickerV1, ConversationId } from '@kutup/chat-core/types'
 import { messageIdOf } from './views'
 
@@ -38,11 +38,11 @@ export interface AccountState {
   readThrough: Map<string, number>
 }
 
-function isOwnControl(message: ChatHistoryEntry, selfAddress: string): boolean {
+function isOwnControl(message: ChatHistoryEntry, selfKey: string): boolean {
   return (
     message.direction === 'outgoing' &&
     message.conversation.kind === 'direct' &&
-    directAddress(message.conversation) === selfAddress
+    directKey(message.conversation) === selfKey
   )
 }
 
@@ -50,7 +50,7 @@ function newer(a: ChatConversationStateV1, b: ChatConversationStateV1): boolean 
   return a.revision !== b.revision ? a.revision > b.revision : a.sourceDeviceId > b.sourceDeviceId
 }
 
-export function foldAccountState(history: readonly ChatHistoryEntry[], selfAddress: string): AccountState {
+export function foldAccountState(history: readonly ChatHistoryEntry[], selfKey: string): AccountState {
   const states = new Map<string, ChatConversationStateV1>()
   const saved = new Map<string, ChatStickerV1>()
   const removed = new Set<string>()
@@ -58,7 +58,7 @@ export function foldAccountState(history: readonly ChatHistoryEntry[], selfAddre
   const localTime = new Map<string, number>()
   for (const message of history) {
     localTime.set(messageIdOf(message), message.timestampMs)
-    if (!isOwnControl(message, selfAddress)) continue
+    if (!isOwnControl(message, selfKey)) continue
     const state = message.content.conversationState
     if (state) {
       const key = conversationKey(state.conversation)

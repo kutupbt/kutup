@@ -11,12 +11,14 @@
 //!   KUTUP_LIVE_SERVER=https://localhost:38443 KUTUP_INSECURE_TLS=1 \
 //!     cargo test -p kutup-server --test chat_live -- --nocapture
 
+mod common;
+
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
     AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestPublicationV1, AccountManifestV1, AppendChatBackupSegmentRequestV1,
+    AccountManifestPublicationV1, AccountManifestV1, AccountRef, AppendChatBackupSegmentRequestV1,
     ChatBackupManifestV1, ChatBackupMediaReferenceV1, ChatBackupSignerAuthorizationV1,
     CommitChatBackupManifestRequestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1,
@@ -33,7 +35,7 @@ fn b64(b: &[u8]) -> String {
 }
 
 fn opaque_profile_envelope(
-    account: &str,
+    account: &AccountRef,
     version: &str,
     revision: u64,
     source_device_id: u32,
@@ -68,205 +70,39 @@ fn client() -> Client {
         .unwrap()
 }
 
-fn login_with_password(c: &Client, base: &str, email: &str, password: &str) -> String {
-    let preflight: Value = c
-        .get(format!("{base}/api/auth/login/preflight?email={email}"))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    if preflight["accountProtectionSuite"] == 0 {
-        let bootstrap: Value = c
-            .post(format!("{base}/api/auth/login"))
-            .json(&json!({ "email": email, "loginKey": b64(password.as_bytes()) }))
-            .send()
-            .unwrap()
-            .json()
-            .unwrap();
-        assert_eq!(bootstrap["requiresSetup"], true);
-        let setup_token = bootstrap["setupToken"].as_str().expect("setup token");
-        let mut rng = rand::thread_rng();
-        let mut master_key = [0u8; 32];
-        let mut recovery_entropy = [0u8; 32];
-        let mut salt = [0u8; 16];
-        rng.fill_bytes(&mut master_key);
-        rng.fill_bytes(&mut recovery_entropy);
-        rng.fill_bytes(&mut salt);
-        let parameters = kutup_crypto::kdf::AccountProtectionParameters::V1;
-        let keys =
-            kutup_crypto::kdf::derive_account_protection_keys(password, &salt, parameters).unwrap();
-        let recovery_proof =
-            kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, email).unwrap();
-        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
-        use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-        let setup = json!({
-            "email": email,
-            "username": "backupadmin",
-            "loginKey": b64(keys.login_key.as_slice()),
-            "masterKeyEnvelope": account_envelope::seal_b64(
-                &master_key, keys.key_encryption_key.as_slice(),
-                AccountEnvelopePurpose::PasswordMasterKey, email).unwrap(),
-            "recoveryKeyEnvelope": account_envelope::seal_b64(
-                &master_key, &recovery_entropy,
-                AccountEnvelopePurpose::RecoveryMasterKey, email).unwrap(),
-            "drivePrivateKeyEnvelope": account_envelope::seal_b64(
-                identity.drive_hpke_private_key(), &master_key,
-                AccountEnvelopePurpose::DriveHpkePrivateKey, email).unwrap(),
-            "publicKey": b64(&identity.drive_hpke_public_key()),
-            "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
-            "accountAuthorityKeyId": identity.authority_key_id(),
-            "accountIncarnationId": identity.incarnation_id(),
-            "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-            "accountProtectionSuite": 1,
-            "accountProtectionSalt": b64(&salt),
-            "argonMemoryKib": parameters.memory_kib,
-            "argonIterations": parameters.iterations,
-            "argonParallelism": parameters.parallelism,
-            "recoveryProof": b64(recovery_proof.as_slice()),
-        });
-        let completed = c
-            .post(format!("{base}/api/auth/complete-setup"))
-            .bearer_auth(setup_token)
-            .json(&setup)
-            .send()
-            .unwrap();
-        assert_eq!(completed.status(), StatusCode::OK, "test admin setup");
-        return completed.json::<Value>().unwrap()["accessToken"]
-            .as_str()
-            .unwrap()
-            .to_string();
-    }
-    let parameters = kutup_crypto::kdf::AccountProtectionParameters {
-        memory_kib: preflight["argonMemoryKib"].as_u64().unwrap() as u32,
-        iterations: preflight["argonIterations"].as_u64().unwrap() as u32,
-        parallelism: preflight["argonParallelism"].as_u64().unwrap() as u32,
-    };
-    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
-        password,
-        preflight["accountProtectionSalt"].as_str().unwrap(),
-        parameters,
-    )
-    .unwrap();
-    let response = c
-        .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
-        .send()
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "test admin login");
-    response.json::<Value>().unwrap()["accessToken"]
-        .as_str()
-        .unwrap()
-        .to_string()
-}
-
-/// Registers a fresh account and returns `(email, username, access_token)`.
+/// Registers a fresh account, then signs it in (OPAQUE, as the CLI):
+/// `(key binding, username, access_token, …)`. The token is the sign-in's,
+/// not the one registration answers.
 fn register_and_login(
     c: &Client,
     base: &str,
     tag: &str,
-) -> (String, String, String, String, SigningKey, String, [u8; 32]) {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let email = format!("chat-{tag}-{ts}@example.com");
-    let username = format!("chat{tag}{}", ts % 100000);
-    let password = "chat-pw-123456";
-
-    let mut rng = rand::thread_rng();
-    let mut master_key = [0u8; 32];
-    let mut recovery_entropy = [0u8; 32];
-    let mut account_protection_salt = [0u8; 16];
-    rng.fill_bytes(&mut master_key);
-    rng.fill_bytes(&mut recovery_entropy);
-    rng.fill_bytes(&mut account_protection_salt);
-
-    let keys = kutup_crypto::kdf::derive_account_protection_keys(
-        password,
-        &account_protection_salt,
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    let recovery_proof =
-        kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &email).unwrap();
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
-    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-    let master_key_envelope = account_envelope::seal_b64(
-        &master_key,
-        keys.key_encryption_key.as_slice(),
-        AccountEnvelopePurpose::PasswordMasterKey,
-        &email,
-    )
-    .unwrap();
-    let recovery_key_envelope = account_envelope::seal_b64(
-        &master_key,
-        &recovery_entropy,
-        AccountEnvelopePurpose::RecoveryMasterKey,
-        &email,
-    )
-    .unwrap();
-    let drive_private_key_envelope = account_envelope::seal_b64(
-        identity.drive_hpke_private_key(),
-        &master_key,
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &email,
-    )
-    .unwrap();
-
-    let reg = json!({
-        "email": email, "username": username,
-        "loginKey": b64(keys.login_key.as_slice()),
-        "masterKeyEnvelope": master_key_envelope,
-        "recoveryKeyEnvelope": recovery_key_envelope,
-        "drivePrivateKeyEnvelope": drive_private_key_envelope,
-        "publicKey": b64(&identity.drive_hpke_public_key()),
-        "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
-        "accountAuthorityKeyId": identity.authority_key_id(),
-        "accountIncarnationId": identity.incarnation_id(),
-        "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
-        "accountProtectionSuite": 1,
-        "accountProtectionSalt": b64(&account_protection_salt),
-        "argonMemoryKib": 65536, "argonIterations": 3, "argonParallelism": 1,
-        "recoveryProof": b64(recovery_proof.as_slice()),
-    });
-    let r = c
-        .post(format!("{base}/api/auth/register"))
-        .json(&reg)
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "register {tag}: {}", r.status());
-
-    // login: preflight → derive login key from returned salt → POST login.
-    let pf: Value = c
-        .get(format!("{base}/api/auth/login/preflight?email={email}"))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let keys = kutup_crypto::kdf::derive_account_protection_keys_b64(
-        password,
-        pf["accountProtectionSalt"].as_str().unwrap(),
-        kutup_crypto::kdf::AccountProtectionParameters::V1,
-    )
-    .unwrap();
-    let resp: Value = c
-        .post(format!("{base}/api/auth/login"))
-        .json(&json!({ "email": email, "loginKey": b64(keys.login_key.as_slice()) }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let token = resp["accessToken"].as_str().unwrap().to_string();
+) -> (
+    String,
+    AccountRef,
+    String,
+    String,
+    SigningKey,
+    String,
+    [u8; 32],
+) {
+    let user = common::register(c, base);
+    let session = common::sign_in(c, base, &user.username, &user.password);
+    let token = session["accessToken"]
+        .as_str()
+        .unwrap_or_else(|| panic!("sign-in {tag}: {session}"))
+        .to_string();
+    let identity = &user.identity;
     let authority = identity.authority_signing_key().clone();
     let drive_signing_public_key = b64(&identity.drive_signing_public_key());
     (
-        email,
-        username,
+        user.binding.clone(),
+        user.person.clone(),
         token,
         b64(&identity.drive_hpke_public_key()),
         authority,
         drive_signing_public_key,
-        master_key,
+        user.master_key,
     )
 }
 
@@ -394,48 +230,27 @@ fn publish_manifest(
     base: &str,
     token: &str,
     signing: &SigningKey,
-    account: &str,
+    account: &AccountRef,
     drive_public_key: &str,
     drive_signing_public_key: &str,
     sequence: u64,
     previous_hash: Option<String>,
     devices: Vec<AccountManifestDeviceV1>,
 ) -> AccountManifestV1 {
-    let public = signing.verifying_key();
-    let mut incarnation = Sha256::new();
-    incarnation.update(b"kutup/account-incarnation/v1\0");
-    incarnation.update(public.as_bytes());
-    let mut manifest = AccountManifestV1 {
-        manifest_version: 1,
-        account: account.into(),
-        incarnation_id: hex::encode(incarnation.finalize()),
+    let manifest = signed_manifest(
+        signing,
+        account,
+        drive_public_key,
+        drive_signing_public_key,
         sequence,
         previous_hash,
-        drive: AccountManifestDriveKeysV1 {
-            suite: AccountIdentitySuiteId::X25519Ed25519V1,
-            hpke_public_key: drive_public_key.into(),
-            share_signing_public_key: drive_signing_public_key.into(),
-        },
         devices,
-        issued_at: time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap(),
-        authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
-        self_authority_key: b64(public.as_bytes()),
-        signature: String::new(),
-    };
-    manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
-    manifest.verify().unwrap();
+    );
     // Publication is idempotent, so a transient transport failure can retry
     // the exact manifest without publishing different bytes.
     let mut response = None;
     for attempt in 0..3 {
-        let candidate = c
-            .post(format!("{base}/api/chat/manifest"))
-            .bearer_auth(token)
-            .json(&manifest)
-            .send()
-            .unwrap();
+        let candidate = post_manifest(c, base, token, &manifest);
         if candidate.status() != StatusCode::SERVICE_UNAVAILABLE || attempt == 2 {
             response = Some(candidate);
             break;
@@ -454,11 +269,61 @@ fn publish_manifest(
     manifest
 }
 
+fn post_manifest(
+    c: &Client,
+    base: &str,
+    token: &str,
+    manifest: &AccountManifestV1,
+) -> reqwest::blocking::Response {
+    c.post(format!("{base}/api/chat/manifest"))
+        .bearer_auth(token)
+        .json(manifest)
+        .send()
+        .unwrap()
+}
+
+fn signed_manifest(
+    signing: &SigningKey,
+    account: &AccountRef,
+    drive_public_key: &str,
+    drive_signing_public_key: &str,
+    sequence: u64,
+    previous_hash: Option<String>,
+    devices: Vec<AccountManifestDeviceV1>,
+) -> AccountManifestV1 {
+    let public = signing.verifying_key();
+    let mut incarnation = Sha256::new();
+    incarnation.update(b"kutup/account-incarnation/v1\0");
+    incarnation.update(public.as_bytes());
+    let mut manifest = AccountManifestV1 {
+        manifest_version: 1,
+        account: account.clone(),
+        incarnation_id: hex::encode(incarnation.finalize()),
+        sequence,
+        previous_hash,
+        drive: AccountManifestDriveKeysV1 {
+            suite: AccountIdentitySuiteId::X25519Ed25519V1,
+            hpke_public_key: drive_public_key.into(),
+            share_signing_public_key: drive_signing_public_key.into(),
+        },
+        devices,
+        issued_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap(),
+        authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
+        self_authority_key: b64(public.as_bytes()),
+        signature: String::new(),
+    };
+    manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
+    manifest.verify().unwrap();
+    manifest
+}
+
 #[allow(clippy::too_many_arguments)]
 fn chat_backup_lifecycle(
     c: &Client,
     base: &str,
-    email: &str,
+    binding: &str,
     owner_token: &str,
     foreign_token: &str,
     master_key: &[u8; 32],
@@ -521,7 +386,7 @@ fn chat_backup_lifecycle(
             &backup_root,
             master_key,
             AccountEnvelopePurpose::ChatBackupRoot,
-            email,
+            binding,
         )
         .unwrap(),
         signer_authorization: authorization.clone(),
@@ -548,7 +413,7 @@ fn chat_backup_lifecycle(
         &[0x92; 32],
         master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
-        email,
+        binding,
     )
     .unwrap();
     assert_eq!(
@@ -1278,10 +1143,10 @@ fn chat_v1_contract() {
     let c = client();
     let live_admin = std::env::var("KUTUP_LIVE_ADMIN").ok();
     let admin_token = live_admin.as_deref().map(|admin| {
-        let (email, password) = admin
+        let (name, password) = admin
             .split_once(':')
-            .expect("KUTUP_LIVE_ADMIN must be email:password");
-        login_with_password(&c, &base, email, password)
+            .expect("KUTUP_LIVE_ADMIN must be username:password");
+        common::admin_token(&c, &base, password, name)
     });
 
     // Capability block is unauthenticated (§10).
@@ -1306,7 +1171,7 @@ fn chat_v1_contract() {
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
-    let (email_a, ua, ta, drive_a, authority_a, drive_sign_a, master_a) =
+    let (binding_a, ua, ta, drive_a, authority_a, drive_sign_a, master_a) =
         register_and_login(&c, &base, "a");
     let (_eb, ub, tb, drive_b, authority_b, drive_sign_b, _master_b) =
         register_and_login(&c, &base, "b");
@@ -1314,14 +1179,42 @@ fn chat_v1_contract() {
         .as_str()
         .expect("Chat capability has a server name")
         .to_string();
-    let account_a = format!("{ua}@{domain}");
-    let account_b = format!("{ub}@{domain}");
+    // Chat names accounts by id (docs/plans/account-ids.md).
+    let (account_a, account_b) = (ua, ub);
+    assert_eq!(account_a.server, domain);
     println!("ok  - two accounts registered + logged in");
 
     let (dev_a, reg_a, identity_a) = register_chat_device(&c, &base, &ta);
     let (interrupted_a, _, _) = register_chat_device(&c, &base, &ta);
     let (dev_b, reg_b, identity_b) = register_chat_device(&c, &base, &tb);
     println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
+
+    // A manifest names the caller's own account: another account id here,
+    // or the caller's id on another server, is refused (and changes nothing).
+    let device_a = AccountManifestDeviceV1 {
+        device_id: dev_a,
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        identity_key: identity_a.clone(),
+        registration_id: reg_a,
+        mls: None,
+    };
+    for wrong in [
+        AccountRef::new(&domain, &Uuid::new_v4().to_string()).unwrap(),
+        AccountRef::new("elsewhere.example", &account_a.account_id).unwrap(),
+    ] {
+        let manifest = signed_manifest(
+            &authority_a,
+            &wrong,
+            &drive_a,
+            &drive_sign_a,
+            1,
+            None,
+            vec![device_a.clone()],
+        );
+        let refused = post_manifest(&c, &base, &ta, &manifest);
+        assert_eq!(refused.status(), StatusCode::CONFLICT, "{wrong}");
+    }
+    println!("ok  - a manifest naming another account is refused");
 
     let manifest_a1 = publish_manifest(
         &c,
@@ -1341,6 +1234,30 @@ fn chat_v1_contract() {
             mls: None,
         }],
     );
+    // `?server=` naming this server is this server; a spelling that is not
+    // the canonical name is refused, never looked up elsewhere.
+    for query in ["", "?server=", "?server=UPPER"] {
+        let url = match query {
+            "?server=" => format!(
+                "{base}/api/chat/accounts/{}/manifest?server={domain}",
+                account_a.account_id
+            ),
+            "?server=UPPER" => format!(
+                "{base}/api/chat/accounts/{}/manifest?server={}",
+                account_a.account_id,
+                domain.to_uppercase()
+            ),
+            _ => format!("{base}/api/chat/accounts/{}/manifest", account_a.account_id),
+        };
+        let r = c.get(&url).bearer_auth(&tb).send().unwrap();
+        if query == "?server=UPPER" {
+            assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{url}");
+        } else {
+            assert_eq!(r.status(), StatusCode::OK, "{url}");
+            assert_eq!(r.json::<AccountManifestV1>().unwrap(), manifest_a1, "{url}");
+        }
+    }
+    println!("ok  - ?server= with this server's name resolves here");
     let devices_after_first_manifest: Value = c
         .get(format!("{base}/api/chat/device"))
         .bearer_auth(&ta)
@@ -1381,7 +1298,7 @@ fn chat_v1_contract() {
     chat_backup_lifecycle(
         &c,
         &base,
-        &email_a,
+        &binding_a,
         &ta,
         &tb,
         &master_a,
@@ -1398,7 +1315,7 @@ fn chat_v1_contract() {
     let profile_v1_version = "11".repeat(32);
     let profile_v1 = json!({
         "suite": 1,
-        "account": account_a,
+        "account": &account_a,
         "version": profile_v1_version,
         "revision": 1,
         "sourceDeviceId": dev_a,
@@ -1418,7 +1335,8 @@ fn chat_v1_contract() {
 
     let denied = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/profile/{}",
+            "{base}/api/chat/accounts/{}/profile/{}",
+            account_a.account_id,
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1429,7 +1347,8 @@ fn chat_v1_contract() {
 
     let visible_v1: Value = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/profile/{}",
+            "{base}/api/chat/accounts/{}/profile/{}",
+            account_a.account_id,
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1448,7 +1367,7 @@ fn chat_v1_contract() {
     let profile_v2_version = "12".repeat(32);
     let profile_v2 = json!({
         "suite": 1,
-        "account": account_a,
+        "account": &account_a,
         "version": profile_v2_version,
         "revision": 2,
         "sourceDeviceId": dev_a,
@@ -1474,7 +1393,8 @@ fn chat_v1_contract() {
     assert_eq!(owner, profile_v2);
     let old_still_visible = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/profile/{}",
+            "{base}/api/chat/accounts/{}/profile/{}",
+            account_a.account_id,
             profile_v1["version"].as_str().unwrap()
         ))
         .bearer_auth(&tb)
@@ -1517,7 +1437,8 @@ fn chat_v1_contract() {
     );
     let sync_bundles_value: Value = c
         .get(format!(
-            "{base}/api/chat/users/{ua}/keys?syncDeviceId={dev_a}"
+            "{base}/api/chat/accounts/{}/keys?syncDeviceId={dev_a}",
+            account_a.account_id
         ))
         .bearer_auth(&ta)
         .send()
@@ -1583,7 +1504,7 @@ fn chat_v1_contract() {
         .unwrap();
     let own_envelopes = own_page["envelopes"].as_array().unwrap();
     assert_eq!(own_envelopes.len(), 1);
-    assert_eq!(own_envelopes[0]["sender"], ua);
+    assert_eq!(own_envelopes[0]["sender"], json!(account_a));
     assert_eq!(own_envelopes[0]["senderDeviceId"], dev_a);
     println!("ok  - encrypted transcript routed only to the linked device");
 
@@ -1602,7 +1523,10 @@ fn chat_v1_contract() {
 
     // A fetches B's bundles: kyber always present, one-time EC consumed.
     let bundles_value: Value = c
-        .get(format!("{base}/api/chat/users/{ub}/keys"))
+        .get(format!(
+            "{base}/api/chat/accounts/{}/keys",
+            account_b.account_id
+        ))
         .bearer_auth(&ta)
         .send()
         .unwrap()
@@ -1624,16 +1548,19 @@ fn chat_v1_contract() {
     println!("ok  - bundle fetch + account-signed manifest binding");
 
     let send = |send_id: &str, dev: u32, reg: u32, content: &str| {
-        c.post(format!("{base}/api/chat/users/{ub}/messages"))
-            .bearer_auth(&ta)
-            .json(&json!({
-                "senderDeviceId": dev_a,
-                "sendId": send_id,
-                "envelopes": [ { "deviceId": dev, "registrationId": reg,
-                                 "envelopeType": "message", "suite": 1, "content": content } ],
-            }))
-            .send()
-            .unwrap()
+        c.post(format!(
+            "{base}/api/chat/accounts/{}/messages",
+            account_b.account_id
+        ))
+        .bearer_auth(&ta)
+        .json(&json!({
+            "senderDeviceId": dev_a,
+            "sendId": send_id,
+            "envelopes": [ { "deviceId": dev, "registrationId": reg,
+                             "envelopeType": "message", "suite": 1, "content": content } ],
+        }))
+        .send()
+        .unwrap()
     };
 
     // Correct send.
@@ -1694,7 +1621,11 @@ fn chat_v1_contract() {
     assert_eq!(envs.len(), 1, "limit=1 returns one");
     assert_eq!(page["more"], true, "more pages");
     let c0 = envs[0]["cursor"].as_u64().unwrap();
-    assert_eq!(envs[0]["sender"], json!(ua), "sender is A's username");
+    assert_eq!(
+        envs[0]["sender"],
+        json!(account_a),
+        "sender is A's full address"
+    );
     let first_id = envs[0]["id"].as_str().unwrap().to_string();
     println!("ok  - drain page 1 (cursor={c0})");
 

@@ -1,0 +1,260 @@
+{
+  "masterKey": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+  "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
+  "incarnationId": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "retention": 1000,
+  "device": "device-alpha",
+  "writer": "317bb084ab6b9696ca627e4f1eec1bbb80bdbeed54e087e436e6f43efee5d579",
+  "indexes": [
+    [
+      [
+        "uid-alice",
+        1790000000001
+      ]
+    ],
+    [
+      [
+        "uid-alice",
+        1790000000001
+      ],
+      [
+        "uid-bob",
+        1790000000002
+      ]
+    ],
+    [
+      [
+        "uid-bob",
+        1790000000002
+      ],
+      [
+        "uid-alice",
+        1790000000003
+      ]
+    ]
+  ],
+  "heads": [
+    "{\"incarnationId\":\"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"sequence\":1,\"writer\":\"317bb084ab6b9696ca627e4f1eec1bbb80bdbeed54e087e436e6f43efee5d579\",\"scopes\":[{\"scope\":\"contacts\",\"count\":1,\"digest\":\"09b6a0f0eaac2dfc082f9949114aec52e35a82b0444e60747019b54864e2f904\"}]}",
+    "{\"incarnationId\":\"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"sequence\":2,\"previous\":\"ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e\",\"writer\":\"317bb084ab6b9696ca627e4f1eec1bbb80bdbeed54e087e436e6f43efee5d579\",\"scopes\":[{\"scope\":\"contacts\",\"count\":2,\"digest\":\"e5fa0f3e70b64afd23f6c47e134dc767128a9ab62362344ca1dab52ae18a7075\"}]}",
+    "{\"incarnationId\":\"5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\",\"sequence\":3,\"previous\":\"d188990621b7f0b5fc69190e611133d1ecf168358cd90e3e0cf1aa62af59677f\",\"writer\":\"317bb084ab6b9696ca627e4f1eec1bbb80bdbeed54e087e436e6f43efee5d579\",\"scopes\":[{\"scope\":\"contacts\",\"count\":2,\"digest\":\"0c7dd33dca7ad5e212c86b8a3dfcda382ce647dddcde320e1f6a760a888a350d\"}]}"
+  ],
+  "sealed": [
+    "S1VUQUgxAAAAAQAAAAAAAAABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBGDcB38Vbtd3V4rdA0y+KQurkkXg/DL2yyZPq7kJBV/Rw40glcZTjY0mwVAmAZn1AkGyKpUpYjc4zIkesWqbhGbeFvGO7fkbxnp9JxCPW3M+5FnZG0llrS/8xOSfZKUpZVR/ril9hxVSSFUdneuJZ2U3je+/W1ToGjFdNpEk5Xpm+Q/FNCmJO3Y2y+8v9L8eeei3WdwBIRdu1QmBJ4GbhIBK9FRaPyqx/L8N6DqRUeC6ZPYmVnr/7oSUN6gFhGVdp6D6OrCPvQKSnBoosU0UuftVZGw+jvkM7N/StJXvVkTkblbSrtM8E4/DDCKyqpb6g0diFlj8yI2rmkAT/aBZppEYEzAGDWOH6BO9L74fnrJUKcFQ5yCF1CkSNm6PTLUI4EGPeT6er1ksSnp/rF5lXLOUohg==",
+    "S1VUQUgxAAAAAQAAAAAAAAACAgICAgICAgICAgICAgICAgICAgICAgICMw+ZLWqiNmE5GMUnnFEY0WZ6y0+T7Z1AnSAv9f2NsP48yBS3uWrrvkEnszpxOGy02yRVMGgq9gpxct59I+6FD/hEx5hgbUWLFmfuLhe+mNlTMvrR+oPfTss6sZLLelb+aw49Inol8B6mbhXfrsiQjtv5cMmDXVvLEzCwOALMa5sB2Wl/AiLVeD7KW8n+NZIqfEvJWep6v5H0l+eabwegr+1bhjjQDYEFTkz1om2GK6m7gjnu8qHJbK1a5POKPETac2sgcZOFK51/6JGVSSy5PC/QTbVXfvk7YjMDmSr4zyvo2Xv1572flT8ED4mN/xhmLTSej1BXovm+Hzt4lyWp7WXttrMoZFroZojInMzYcw8HAO67PlricLbwmwDT7R/cRja6H6jMdxfcd5IMwmp01v+6gwhzLfgZakhWw04SCjsdefGEWxRNoLJdJMEFs/G8/1RZZuAvKQZ4SvgKgeb2cOxcN8esGABCKgjIXBFzSeEB++C/0QBvwBvtRn3/M+diQg==",
+    "S1VUQUgxAAAAAQAAAAAAAAADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDaACjPAVXUqhPmTKwY0bruhbP4PyCcbkbvpfY3gryWjhjeHkfswva6spnt4DJEL4u8i1FJnqFXtk9AW3TieLSPC97iPcq5N2eTnT1RnyULt+yTpqPuVMLnrJltD0I+Bf0oih7UCw8kWwVhWcgF+/3Yg0ETDuKiVCiTyCg3t8tygMCJgJMoFEK+PGeB9lyV3xiv+byhhc5OG7t9rFLA9YsPTjxbemK3Md/zkUzrenpk8DJ2LXpzSY7kEPpxIEXvQe/k9N639V0pu4mE/xErKFBwdgpk60RcHN5guSxMobmQ4738fBsSpFpMAI1IREtCaLtzWCXAi1hxIUoUdUh8OLczu4vPbjYXZybuTy2Bypjwute0wfTanHXzTUjm2NzPtPnbK/LumuocB/SYNHKJ2a2ZYEjwoDb5F7Rghgu/5shon4ml9cW5I99Of4CLvITbhCPJw/Wfqy94zAaZfreCNs+/ujP8TavqZHmxd48AhhmFr/BUYDrFZq3CpkwJ0C2qlqYZg=="
+  ],
+  "anchors": [
+    {
+      "sequence": 1,
+      "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+    },
+    {
+      "sequence": 2,
+      "digest": "d188990621b7f0b5fc69190e611133d1ecf168358cd90e3e0cf1aa62af59677f"
+    },
+    {
+      "sequence": 3,
+      "digest": "96fead8726e59ca8707cb3808f00f470317284b01d3dd08ff9a4cfe6b29872f1"
+    }
+  ],
+  "forked": "S1VUQUgxAAAAAQAAAAAAAAACCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJQByXEJCwHgx0cJAQzgL+wYVH7FZ2o/7A8oTsQ9THo4WVB2oggoJ4F3e/qmBxX6M7eegaldJcs8FS/JS4VezUjUmoSHGe9+8a6lEDnl3D3BxD81+6TLpKlwWfLs0+hfvCj0ORCLWMtPDkyRR32VRND+dkrhIDxZ3DEx/otGbbXDrWqVvwxGInLeLtK8ZftKj8/Jekg/P2RZZ9R1Dgi3aOWQc2M6edvyetxaaF730bQN+JNWjhvv7mqJWAYJOuFaNF7yITVawxwCYNHSCdjguGkXrMHYAG+IYfbvW5PEbk9CWM2kDEY7AheEISxKmAKVLyiWsJusMbSSYyGB22/yOqzXSap/ZfRrfxwXntM8rXg8aPewImm8D/cpJrqL8dOGphgk+Pggq2r7N8sibSSDGiDlt/KFNuC+TeNsOn8L5MAM5bKt6CtM+msPyHkoTuREoVoaQ6qcGnLWbMn+nJ5dqpP5oJDZKgbyKWuhN8UJqmuUo5sAdmSrGEgB+ZAhPOhN6Zcg==",
+  "far": "S1VUQUgxAAAAAQAAAAAAAAPqCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKGx6DLRg3Ge+wsuOWQkYtNB69RJBZhMDz99oUC/TebJYeZHswIF9C1ptm+EKhqlA7IoQDDpewffveIAPkWU1fs4sl4f/t6Ig2yBS8Vyx+eKNHue/U1wlT6dE3eik4ZnLAs7C602DNSwOwZnhiguCYUPEZ2Au+Q/1NiGR4PTm/VmNw7xIr32s1Kp1OUYteOX2an4KvBgxuHRyHO05myPhq2tBuampGiQotpFBXeW+3NrVWYOXqX9omHPkGMHEMCN1fEKwIA0N9INzFy8RNDNTCqr5HRkGLjDiaUvieh2T7AYX5U/94MKgWT2RKbc7OhHr5w1g+d/LMMsV4iRuwRmfDK7k4gCAlBWGNK0JeaNNok0tIQLmdg9Ac+zSxSifRhnxExym7yNSqGMwIu4Eux0ugXgmw2ikZNYXbGyr3vrjTjC+ehYmtGcH4QbgME2xsr7VdsyV2c1ecFJvtyIXcSLyXaBDE0lB6LlM/4UX9kb3Lu/2G3YRh3yAzgVnZqFi5eL1GzEvbbA==",
+  "near": "S1VUQUgxAAAAAQAAAAAAAAPpCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLV/xQFkYeapuOWndJc0kBC7YZ/YZ9ymUbenjkbVUogA33s74unTnkggUH8cnFLddsTLlYc8lmxqUNKxf64bEHM9GDaAaHhdCQQBn2Xn8KimS0COiLumubB/myz5pugizsg+mnV8Sxrk2Pv1P18O+Kk79FazafsU+si38DGQZTbEJiGCFT40FuL0WLh0aqdwLoGz152oQd9hpKbnkPW7G5dYTU+5E61M1U33zkJqw+JHg6tyrfksNG1/HvG/KpmrgYN81Z/abp7iqX0aMQpUBlXW8luKebbANuVF+3o7qRiSO4UnQqgbRtekiySEOT9Vsj+DHlb8mmIjbrm8D9VvxJdxUqGUDkdZqL2zi8aO5SZH97/sSbauZqmLdP2RjLB9lMO4mmrB9kAwT8nb8i6kFA91oQSccttv5lniavvT91x0gMqlBkwnflcbICo7Qaa3+ylQB3/Wfe+7V4+Sejo+UMnYj70T1xuHjHYUVqqVUXY9cTIS4NMQsLfm6Qilk77+A+5kiryA==",
+  "checks": [
+    {
+      "case": "no history: trusted from now on",
+      "anchor": null,
+      "current": "2",
+      "segment": null,
+      "status": {
+        "kind": "fresh"
+      }
+    },
+    {
+      "case": "the same head",
+      "anchor": 1,
+      "current": "1",
+      "segment": null,
+      "status": {
+        "kind": "current"
+      }
+    },
+    {
+      "case": "a later head descending from the anchor",
+      "anchor": 0,
+      "current": "2",
+      "segment": [
+        "0",
+        "1",
+        "2"
+      ],
+      "status": {
+        "kind": "extends"
+      }
+    },
+    {
+      "case": "an older head: rolled back",
+      "anchor": 2,
+      "current": "0",
+      "segment": null,
+      "status": {
+        "kind": "rollback"
+      }
+    },
+    {
+      "case": "another head at the anchor's sequence: forked",
+      "anchor": 1,
+      "current": "forked",
+      "segment": null,
+      "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a chain withheld within the server's window: forked",
+      "anchor": 0,
+      "current": "2",
+      "segment": null,
+      "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a chain withheld beyond the server's window: too old",
+      "anchor": 0,
+      "current": "far",
+      "segment": null,
+      "status": {
+        "kind": "tooOld"
+      }
+    },
+    {
+      "case": "a gap exactly the window wide, withheld: forked",
+      "anchor": 0,
+      "current": "near",
+      "segment": null,
+      "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a segment that starts elsewhere: forked",
+      "anchor": 0,
+      "current": "2",
+      "segment": [
+        "forked",
+        "1",
+        "2"
+      ],
+      "status": {
+        "kind": "fork"
+      }
+    },
+    {
+      "case": "a spliced segment: forked",
+      "anchor": 0,
+      "current": "2",
+      "segment": [
+        "0",
+        "forked",
+        "2"
+      ],
+      "status": {
+        "kind": "fork"
+      }
+    }
+  ],
+  "refusedIndexes": [
+    {
+      "case": "a value rolled back",
+      "index": [
+        [
+          "uid-bob",
+          1790000000002
+        ],
+        [
+          "uid-alice",
+          1790000000001
+        ]
+      ]
+    },
+    {
+      "case": "a value dropped",
+      "index": [
+        [
+          "uid-bob",
+          1790000000002
+        ]
+      ]
+    },
+    {
+      "case": "a value brought back",
+      "index": [
+        [
+          "uid-bob",
+          1790000000002
+        ],
+        [
+          "uid-alice",
+          1790000000003
+        ],
+        [
+          "uid-carol",
+          1790000000000
+        ]
+      ]
+    }
+  ],
+  "reanchored": {
+    "from": {
+      "sequence": 3,
+      "digest": "96fead8726e59ca8707cb3808f00f470317284b01d3dd08ff9a4cfe6b29872f1"
+    },
+    "to": {
+      "sequence": 1,
+      "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+    },
+    "status": {
+      "kind": "rollback"
+    },
+    "atMs": 1791000000000
+  },
+  "localName": "ca3cae3480ba424d7016545499d372a90d6de5ba2dfd0ff08261d5f08bc490c3",
+  "localState": {
+    "incarnationId": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+    "deviceId": "device-alpha",
+    "anchor": {
+      "sequence": 1,
+      "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+    },
+    "anchoredAtMs": 1791000000000,
+    "log": [
+      {
+        "kind": "startedFresh",
+        "anchor": {
+          "sequence": 1,
+          "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+        },
+        "atMs": 1790500000000
+      },
+      {
+        "kind": "reanchored",
+        "record": {
+          "from": {
+            "sequence": 3,
+            "digest": "96fead8726e59ca8707cb3808f00f470317284b01d3dd08ff9a4cfe6b29872f1"
+          },
+          "to": {
+            "sequence": 1,
+            "digest": "ad17d4424429999e90dcc3ce7984a54b3889e6b7d51a1efe5e2ab97caaea336e"
+          },
+          "status": {
+            "kind": "rollback"
+          },
+          "atMs": 1791000000000
+        }
+      }
+    ]
+  },
+  "localSealed": "S1VUQUwxAAAAAUJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQtIcWcKDCDh4TcEjg/U1Tor0RMkwjTOsojCflUV3bfrJ/9pWAANKRu5W0siq2SZtLLssrGW/jzjonTloJSyY4lJT0aKL+COX32FMS+S7kip8UH2ttZzC7raLYLySWLmT6RkgHpL+PF7S0xxrwcE/eojav1ztDQpGjlAbXBTtJik2Klk93AJaCG/wJpaQXMpA5XP0RK7j8g36bY2Ea2uvxgFVk97gm7Wj0Lm5Zsavlmvbo29LEA863amziP+6AqAUdghzp7QcTmsGekYgGHmycJZnFWcbFvhvlcAgj/VCJS68Mdw4Wl+K9b8EbfGdZf3zal+CDG28yx5mJzFcv0HisSHv11Q23dCM8hyRLYRuNOH4mvV/yr/gQcK83uQjKo6jNY1HU7YJVDugS/zsgkeIJwlW/7nTS+SqdwwU+KG81E7TBZwGFazo0SGXGDjuqlPos/+jzRuL95kVQB+oWydLpBOLt1WKi34lG9Dy5+WG6OOxLbJo+RNePnBCAztmzvOtyzJvHrALFLFbfRxVl+aHhT3ttZ0EuJsHwL7Qgv6ab3wuKLo4rH8o4DFsFgXqPqpyLmjPaTMLWl/Ddzqq3VDRzDzJ91D5H17EJ1tVEigOJfsPKqtQvSL3yBvnUGIDhBC9RA5Mac4NjE/KkTiQ9E7wRo3Od+EI6Ptmi7RQtWU0E8wzMybTW4v+e4brJL/2RZ631NNoGYa4DZWGafpF8YJwKAMkJwXewu1an74l7mT7zAWR0Pa2DW8sHauFBFMQvMh+Ia9eN9IhZg+ymUAsG/h1XFTBT06xr8oHvUXZP/Q25V7brPOJU3WYELKnvtNg4dbrLQlcqoiWzyZKGsBlFy65Eu/DBsdEbtzm1lO8cAnL+bdA68/5a84aFnBLl+pnkfdgmToW3QADIDrrDlRPOzs="
+}

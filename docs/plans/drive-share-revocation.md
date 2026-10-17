@@ -111,7 +111,7 @@ A link's key now also goes to the owner: `PublicLinkKey = 9`, sealed under
 the owner's master key, with object = link id and parent = owner. This lets
 the owner list links, copy them again, and re-wrap each link at the new
 epoch when rotating, so a kept link keeps working. Deleting a link rotates.
-Links made before this change have no owner copy; rotation deletes them.
+Every link has an owner copy (`public_shares.owner_link_key_envelope` is required).
 
 ### Federated recipients
 

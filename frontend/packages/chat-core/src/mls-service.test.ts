@@ -110,7 +110,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       },
       members: [
         {
-          address: { username: 'alice', server: 'alpha.example' },
+          account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
           isAdmin: true,
           ownerId: '22'.repeat(32),
         },
@@ -121,13 +121,13 @@ function pendingGenesis(): LocalMlsConversationRecord {
     lastFinalizedEpoch: 0,
     currentRoster: [
       {
-        address: { username: 'alice', server: 'alpha.example' },
+        account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         isAdmin: true,
         ownerId: '22'.repeat(32),
       },
     ],
-    memberJoinedEpochs: new Map([['alice@alpha.example', 0]]),
-    acceptedInvitationEpochs: new Map([['alice@alpha.example', 0]]),
+    memberJoinedEpochs: new Map([['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example', 0]]),
+    acceptedInvitationEpochs: new Map([['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example', 0]]),
     currentAuthoritySet: {
       sequence: 1,
       authorities: [
@@ -153,6 +153,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       policyVersion: 1,
       sequence: 1,
       applicationSenders: 1,
+      groupInfoEditors: 2,
     },
     genesisCryptographicPolicy: {
       policyVersion: 1,
@@ -168,6 +169,7 @@ function pendingGenesis(): LocalMlsConversationRecord {
       policyVersion: 1,
       sequence: 1,
       applicationSenders: 1,
+      groupInfoEditors: 2,
     },
     currentCryptographicPolicy: {
       policyVersion: 1,
@@ -205,7 +207,7 @@ function invitationFeedback(): MlsInvitationFeedback {
     protocolVersion: 1,
     conversationId,
     incarnation: 1,
-    member: { username: 'bobby', server: 'beta.example' },
+    member: { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
     invitedEpoch: 1,
     decision: 'rejected',
     decidedAt: 1_700_000_100,
@@ -217,12 +219,12 @@ function pendingMembership() {
     mlsGroupId: [...genesisGroupBytes],
     nextRoster: [
       {
-        address: { username: 'alice', server: 'alpha.example' },
+        account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         isAdmin: true,
         ownerId: '22'.repeat(32),
       },
       {
-        address: { username: 'bobby', server: 'beta.example' },
+        account: { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
         isAdmin: false,
       },
     ],
@@ -256,10 +258,10 @@ function finalizedMembership() {
     lastBlockHash: controlBlockHash,
     currentRoster: pendingMembership().nextRoster,
     memberJoinedEpochs: new Map([
-      ['alice@alpha.example', 0],
-      ['bobby@beta.example', 1],
+      ['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example', 0],
+      ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example', 1],
     ]),
-    acceptedInvitationEpochs: new Map([['alice@alpha.example', 0]]),
+    acceptedInvitationEpochs: new Map([['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example', 0]]),
   }
   return {
     group: { mlsGroupId: [...genesisGroupBytes], epoch: 1 },
@@ -402,6 +404,7 @@ function pendingPolicy() {
       policyVersion: 1 as const,
       sequence: 2,
       applicationSenders: 2 as const,
+      groupInfoEditors: 2 as const,
     },
     currentRoster: activeGenesis().currentRoster,
     deliveries: [{ destination: 'alpha.example', deliveryDigest: '71'.repeat(32) }],
@@ -478,7 +481,7 @@ function pendingRecovery() {
     newMlsGroupId: [...recoveryGroupBytes],
     request: {
       recovery: recoveryStatement(),
-      creator: { username: 'alice', server: 'alpha.example' },
+      creator: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       creatorDeviceId: 7,
       members: recoveryPrevious().currentRoster,
       deliveries: [
@@ -505,13 +508,13 @@ function finalizedRecovery() {
     currentRoster: previous.currentRoster,
     memberJoinedEpochs: new Map(
       previous.currentRoster.map(member => [
-        `${member.address.username}@${member.address.server}`,
+        `aci:${member.account.accountId}@${member.account.server}`,
         1,
       ] as const),
     ),
     acceptedInvitationEpochs: new Map(
       previous.currentRoster.map(member => [
-        `${member.address.username}@${member.address.server}`,
+        `aci:${member.account.accountId}@${member.account.server}`,
         1,
       ] as const),
     ),
@@ -532,7 +535,7 @@ function finalizedRecovery() {
 function ownerApprovalRequest(): PendingMlsOwnerApprovalRequest {
   return {
     mlsGroupId: [...genesisGroupBytes],
-    requester: { username: 'alice', server: 'alpha.example' },
+    requester: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
     request: {
       protocolVersion: 1,
       ownerSetSequence: 1,
@@ -562,7 +565,7 @@ function applicationOutboxEntry() {
     contentDigest: [...new Uint8Array(32).fill(6)],
     content: [1, 2, 3],
     ciphertext: [4, 5, 6],
-    expectedRecipients: ['bobby@beta.example'],
+    expectedRecipients: ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example'],
     deliveries: [],
     createdAt: 1_700_000_000_000,
     attempts: 0,
@@ -572,7 +575,7 @@ function applicationOutboxEntry() {
 function harness(
   existing: LocalMlsGroupState | null = null,
   localRecords: LocalMlsConversationRecord[] = [pendingGenesis()],
-  selfAddress = { username: 'bobby', server: 'beta.example' },
+  selfAddress = { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
 ) {
   const client = {
     deviceId: 7,
@@ -614,7 +617,7 @@ function harness(
     }),
     mlsGroupDevices: vi.fn().mockResolvedValue([
       {
-        address: { username: 'alice', server: 'alpha.example' },
+        account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         deviceId: 7,
       },
     ]),
@@ -651,7 +654,7 @@ function harness(
       protocolVersion: 1,
       conversationId,
       incarnation: 1,
-      account: { username: 'bobby', server: 'beta.example' },
+      account: { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
       ownerId: '44'.repeat(32),
       publicKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(4))),
       createdAt: 1_700_000_000,
@@ -707,10 +710,10 @@ function harness(
     buildMlsPolicyCommitRequest: vi.fn().mockResolvedValue({ finalized: 'policy-request' }),
     finalizeMlsPolicyChange: vi.fn().mockResolvedValue(finalizedPolicy()),
     fetchVerifiedIdentifiedMlsKeyPackages: vi.fn().mockImplementation(
-      async (recipient: { username: string; server: string }) => [{
+      async (recipient: { server: string; accountId: string }) => [{
         wire: { deviceId: 7 },
         credential: {
-          credentialIdentity: `${recipient.username}@${recipient.server}#7`,
+          credentialIdentity: `aci:${recipient.accountId}@${recipient.server}#7`,
           credentialPublicKey: [...new Uint8Array(32).fill(4)],
         },
         anonymousDeliveryPublicKey: [...new Uint8Array(32).fill(5)],
@@ -744,19 +747,19 @@ function harness(
       },
       claimedMembers: [
         {
-          credentialIdentity: 'alice@example.test#7',
+          credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
           credentialPublicKey: [...new Uint8Array(32).fill(4)],
         },
       ],
     }),
     resolveMlsWelcomeClaims: vi.fn().mockResolvedValue([
       {
-        credentialIdentity: 'alice@example.test#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     ]),
     resolveMlsSenderClaim: vi.fn().mockResolvedValue({
-      credentialIdentity: 'alice@example.test#7',
+      credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
       credentialPublicKey: [...new Uint8Array(32).fill(4)],
     }),
     processedMlsControlEnvelope: vi.fn().mockResolvedValue(null),
@@ -767,7 +770,7 @@ function harness(
       commitHash: 'cd'.repeat(32),
       claimedMembers: [
         {
-          credentialIdentity: 'alice@example.test#7',
+          credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
           credentialPublicKey: [...new Uint8Array(32).fill(4)],
         },
       ],
@@ -794,7 +797,7 @@ function harness(
       idempotent: false,
     }),
     fetchVerifiedMlsKeyPackages: vi.fn().mockResolvedValue([
-      { wire: { deviceId: 7 }, credential: { credentialIdentity: 'bob@example.test#7' } },
+      { wire: { deviceId: 7 }, credential: { credentialIdentity: 'aci:00000000-0000-4000-8000-81b637d8fcd2@example.test#7' } },
     ]),
     createMlsTextMessage: vi.fn().mockResolvedValue({
       sendId,
@@ -805,7 +808,7 @@ function harness(
       contentDigest: [...new Uint8Array(32).fill(6)],
       content: [1, 2, 3],
       ciphertext: [4, 5, 6],
-      expectedRecipients: ['bobby@beta.example'],
+      expectedRecipients: ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example'],
       deliveries: [],
       createdAt: 1_700_000_000_000,
       attempts: 0,
@@ -819,7 +822,7 @@ function harness(
       contentDigest: [...new Uint8Array(32).fill(6)],
       content: [1, 2, 3],
       ciphertext: [4, 5, 6],
-      expectedRecipients: ['bobby@beta.example'],
+      expectedRecipients: ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example'],
       deliveries: [],
       createdAt: 1_700_000_000_000,
       attempts: 0,
@@ -833,7 +836,7 @@ function harness(
       contentDigest: [...new Uint8Array(32).fill(6)],
       content: [1, 2, 3],
       ciphertext: [4, 5, 6],
-      expectedRecipients: ['bobby@beta.example'],
+      expectedRecipients: ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example'],
       deliveries: [],
       createdAt: 1_700_000_000_000,
       attempts: 0,
@@ -847,7 +850,7 @@ function harness(
       contentDigest: [...new Uint8Array(32).fill(6)],
       content: [1, 2, 3],
       ciphertext: [4, 5, 6],
-      expectedRecipients: ['bobby@beta.example'],
+      expectedRecipients: ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example'],
       deliveries: [],
       createdAt: 1_700_000_000_000,
       attempts: 0,
@@ -863,7 +866,7 @@ function harness(
     }),
     stageMlsApplicationDelivery: vi.fn().mockImplementation(async (
       _sendId: string,
-      recipient: { username: string; server: string },
+      recipient: { server: string; accountId: string },
     ) => ({
       entry: {
         sendId,
@@ -874,9 +877,9 @@ function harness(
         contentDigest: [...new Uint8Array(32).fill(6)],
         content: [1, 2, 3],
         ciphertext: [4, 5, 6],
-        expectedRecipients: ['bobby@beta.example'],
+        expectedRecipients: ['aci:00000000-0000-4000-8000-69ff8042237a@beta.example'],
         deliveries: [{
-          recipient: `${recipient.username}@${recipient.server}`,
+          recipient: `aci:${recipient.accountId}@${recipient.server}`,
           submission: [7, 8, 9],
           attempts: 0,
           delivered: false,
@@ -896,7 +899,7 @@ function harness(
       incarnation: 1,
       epoch: 1,
       claimedSender: {
-        credentialIdentity: 'alice@example.test#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     }),
@@ -909,7 +912,7 @@ function harness(
         incarnation: 1,
         mlsGroupId: [...genesisGroupBytes],
         epoch: 1,
-        sender: 'alice@example.test',
+        sender: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test',
         senderDeviceId: 7,
         outgoing: false,
         cursor: 1,
@@ -1090,7 +1093,7 @@ describe('MlsConversationService', () => {
     const { client, transport, service } = harness()
     await expect(
       service.createGroup(
-        { username: 'alice', server: 'alpha.example' },
+        { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         ['beta.example', 'alpha.example'],
       ),
     ).resolves.toEqual({
@@ -1108,7 +1111,7 @@ describe('MlsConversationService', () => {
     expect(client.prepareMlsGroupGenesis).toHaveBeenCalledWith(
       conversationId,
       genesisGroupBytes,
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       [
         { canonicalDomain: 'alpha.example' },
         { canonicalDomain: 'beta.example' },
@@ -1172,7 +1175,7 @@ describe('MlsConversationService', () => {
     })
     const { client, transport, service } = harness(null, [activeGenesis()])
     const nextRoster = pendingMembership().nextRoster
-    const additions = [{ wire: { deviceId: 7 }, credential: { credentialIdentity: 'bobby@beta.example#7' } }]
+    const additions = [{ wire: { deviceId: 7 }, credential: { credentialIdentity: 'aci:00000000-0000-4000-8000-69ff8042237a@beta.example#7' } }]
     await expect(
       service.changeGroupMembership(conversationId, nextRoster, additions),
     ).resolves.toEqual(finalizedMembership())
@@ -1211,7 +1214,7 @@ describe('MlsConversationService', () => {
     const { client, service } = harness(null, [active])
     await expect(service.setAdministrator(
       conversationId,
-      { username: 'bobby', server: 'beta.example' },
+      { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
       true,
     )).resolves.toEqual(finalizedMembership())
     expect(client.prepareMlsMembershipChange).toHaveBeenCalledWith(
@@ -1220,7 +1223,7 @@ describe('MlsConversationService', () => {
       [
         pendingMembership().nextRoster[0],
         {
-          address: { username: 'bobby', server: 'beta.example' },
+          account: { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
           isAdmin: true,
         },
       ],
@@ -1255,12 +1258,12 @@ describe('MlsConversationService', () => {
 
   it('names a new group from the start', async () => {
     const { client, service } = harness(null, [])
-    await service.createGroup({ username: 'alice', server: 'alpha.example' }, ['alpha.example'], ' Trail crew ')
+    await service.createGroup({ server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' }, ['alpha.example'], ' Trail crew ')
       .catch(() => undefined)
     expect(client.prepareMlsGroupGenesis).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(Uint8Array),
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       expect.any(Array),
       expect.stringMatching(/^[0-9]+$/),
       { sequence: 1, name: 'Trail crew' },
@@ -1269,27 +1272,27 @@ describe('MlsConversationService', () => {
 
   it('removes members who asked to leave from the first staying administrator only', async () => {
     const roster = [
-      { address: { username: 'alice', server: 'alpha.example' }, isAdmin: true, ownerId: 'owner' },
-      { address: { username: 'bobby', server: 'beta.example' }, isAdmin: true },
-      { address: { username: 'carol', server: 'gamma.example' }, isAdmin: false },
+      { account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' }, isAdmin: true, ownerId: 'owner' },
+      { account: { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' }, isAdmin: true },
+      { account: { server: 'gamma.example', accountId: '00000000-0000-4000-8000-f4c26d9074c2' }, isAdmin: false },
     ]
     const group = {
       ...activeGenesis(),
       currentRoster: roster,
-      departingMembers: ['carol@gamma.example'],
+      departingMembers: ['aci:00000000-0000-4000-8000-f4c26d9074c2@gamma.example'],
     }
     // Alice is the first administrator by address: she removes Carol.
-    const first = harness(null, [group], { username: 'alice', server: 'alpha.example' })
+    const first = harness(null, [group], { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' })
     const firstRemove = vi.spyOn(first.service, 'removeMember').mockResolvedValue(finalizedMembership())
     await first.service.reconcileDepartures()
-    expect(firstRemove).toHaveBeenCalledWith(conversationId, roster[2].address)
+    expect(firstRemove).toHaveBeenCalledWith(conversationId, roster[2].account)
     // Bobby is an administrator too, but not the first: he leaves it to Alice.
-    const second = harness(null, [group], { username: 'bobby', server: 'beta.example' })
+    const second = harness(null, [group], { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' })
     const secondRemove = vi.spyOn(second.service, 'removeMember').mockResolvedValue(finalizedMembership())
     await second.service.reconcileDepartures()
     expect(secondRemove).not.toHaveBeenCalled()
     // An owner who asks to leave is not removed by an ordinary Commit.
-    const owner = harness(null, [{ ...group, departingMembers: ['alice@alpha.example'] }], { username: 'bobby', server: 'beta.example' })
+    const owner = harness(null, [{ ...group, departingMembers: ['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example'] }], { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' })
     const ownerRemove = vi.spyOn(owner.service, 'removeMember').mockResolvedValue(finalizedMembership())
     await owner.service.reconcileDepartures()
     expect(ownerRemove).not.toHaveBeenCalled()
@@ -1312,7 +1315,7 @@ describe('MlsConversationService', () => {
     const { client, service } = harness(null, [active])
     await expect(service.setAdministrator(
       conversationId,
-      { username: 'bobby', server: 'beta.example' },
+      { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
       false,
     )).rejects.toThrow(/already in the requested state/)
     expect(client.prepareMlsMembershipChange).not.toHaveBeenCalled()
@@ -1508,7 +1511,7 @@ describe('MlsConversationService', () => {
     const { client, transport, service } = harness(
       null,
       [activeGenesis()],
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
     )
     vi.mocked(client.mlsPolicyChangeHasOwnerQuorum).mockResolvedValueOnce(false)
     vi.mocked(client.createMlsOwnerApprovalRequestMessage)
@@ -1524,6 +1527,7 @@ describe('MlsConversationService', () => {
         policyVersion: 1,
         sequence: 2,
         applicationSenders: 2,
+        groupInfoEditors: 2,
       },
       expect.stringMatching(/^[0-9]+$/),
     )
@@ -1567,7 +1571,7 @@ describe('MlsConversationService', () => {
     const { client, transport, service } = harness(
       null,
       [recoveryPrevious()],
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
     )
 
     await expect(service.recoverConversation(conversationId)).resolves.toEqual(
@@ -1582,7 +1586,7 @@ describe('MlsConversationService', () => {
       [{ canonicalDomain: 'alpha.example' }],
       [expect.objectContaining({
         credential: expect.objectContaining({
-          credentialIdentity: 'bobby@beta.example#7',
+          credentialIdentity: 'aci:00000000-0000-4000-8000-69ff8042237a@beta.example#7',
         }),
       })],
       expect.stringMatching(/^[0-9]+$/),
@@ -1671,7 +1675,7 @@ describe('MlsConversationService', () => {
     const { client, service } = harness(
       null,
       [activeGenesis()],
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
     )
     vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockResolvedValue([{
       wire: {
@@ -1683,7 +1687,7 @@ describe('MlsConversationService', () => {
         expiresAt: 1_800_000_000,
       },
       credential: {
-        credentialIdentity: 'alice@alpha.example#8',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#8',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
       anonymousDeliveryPublicKey: [...new Uint8Array(32).fill(5)],
@@ -1691,7 +1695,7 @@ describe('MlsConversationService', () => {
 
     await expect(service.reconcileLinkedDevices([7, 8])).resolves.toHaveLength(1)
     expect(client.fetchVerifiedIdentifiedMlsKeyPackages).toHaveBeenCalledWith(
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       conversationId,
       '1',
       expect.stringMatching(/^[0-9]+$/),
@@ -1706,18 +1710,18 @@ describe('MlsConversationService', () => {
     expect(addedPackages).toHaveLength(1)
     expect(addedPackages[0]).toMatchObject({
       wire: { deviceId: 8 },
-      credential: { credentialIdentity: 'alice@alpha.example#8' },
+      credential: { credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#8' },
     })
     expect(addCall[3]).toEqual([])
     expect(addCall[4]).toMatch(/^[0-9]+$/)
 
     vi.mocked(client.mlsGroupDevices).mockResolvedValue([
       {
-        address: { username: 'alice', server: 'alpha.example' },
+        account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         deviceId: 7,
       },
       {
-        address: { username: 'alice', server: 'alpha.example' },
+        account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         deviceId: 8,
       },
     ])
@@ -1734,13 +1738,13 @@ describe('MlsConversationService', () => {
   })
 
   describe('a fellow member whose devices changed', () => {
-    const alice = { username: 'alice', server: 'alpha.example' }
-    const bob = { username: 'bob', server: 'alpha.example' }
-    const carol = { username: 'carol', server: 'alpha.example' }
+    const alice = { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' }
+    const bob = { server: 'alpha.example', accountId: '00000000-0000-4000-8000-81b637d8fcd2' }
+    const carol = { server: 'alpha.example', accountId: '00000000-0000-4000-8000-f4c26d9074c2' }
     const group = (members: Array<typeof alice>) => ({
       ...activeGenesis(),
-      currentRoster: members.map((address, index) => ({
-        address,
+      currentRoster: members.map((account, index) => ({
+        account,
         isAdmin: index === 0,
         ...(index === 0 ? { ownerId: '22'.repeat(32) } : {}),
       })),
@@ -1755,7 +1759,7 @@ describe('MlsConversationService', () => {
         expiresAt: 1_800_000_000,
       },
       credential: {
-        credentialIdentity: `${address.username}@${address.server}#${deviceId}`,
+        credentialIdentity: `aci:${address.accountId}@${address.server}#${deviceId}`,
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
       anonymousDeliveryPublicKey: [...new Uint8Array(32).fill(5)],
@@ -1765,26 +1769,26 @@ describe('MlsConversationService', () => {
       vi.stubGlobal('crypto', { randomUUID: () => proposalId, getRandomValues: (value: Uint8Array) => value })
       const { client, service } = harness(null, [group([alice, bob])], alice)
       vi.mocked(client.mlsGroupDevices).mockResolvedValue([
-        { address: alice, deviceId: 7 },
-        { address: bob, deviceId: 1 },
+        { account: alice, deviceId: 7 },
+        { account: bob, deviceId: 1 },
       ])
       // Bob replaced his only device: his signed manifest now lists device 2.
       vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([2])
       vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockResolvedValue([packageFor(bob, 2)])
 
       await expect(service.reconcileMemberDevices()).resolves.toHaveLength(1)
-      expect(client.verifiedManifestMlsDeviceIds).toHaveBeenCalledWith('bob@alpha.example')
+      expect(client.verifiedManifestMlsDeviceIds).toHaveBeenCalledWith('aci:00000000-0000-4000-8000-81b637d8fcd2@alpha.example')
       const call = vi.mocked(client.prepareMlsDeviceSync).mock.calls[0]
       expect((call[2] as Array<{ wire: { deviceId: number } }>).map(added => added.wire.deviceId)).toEqual([2])
       expect(call[3]).toEqual([1])
-      expect(call[5]).toBe('bob@alpha.example')
+      expect(call[5]).toBe('aci:00000000-0000-4000-8000-81b637d8fcd2@alpha.example')
     })
 
     it('leaves a group alone whose members\' devices are in line, or not ready', async () => {
       const { client, service } = harness(null, [group([alice, bob])], alice)
       vi.mocked(client.mlsGroupDevices).mockResolvedValue([
-        { address: alice, deviceId: 7 },
-        { address: bob, deviceId: 1 },
+        { account: alice, deviceId: 7 },
+        { account: bob, deviceId: 1 },
       ])
       vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([1])
       await expect(service.reconcileMemberDevices()).resolves.toEqual([])
@@ -1805,12 +1809,12 @@ describe('MlsConversationService', () => {
         // Carol's device changed. Alice is first by address; this is Bob.
         const { client, service } = harness(null, [group([alice, bob, carol])], bob)
         vi.mocked(client.mlsGroupDevices).mockResolvedValue([
-          { address: alice, deviceId: 1 },
-          { address: bob, deviceId: 7 },
-          { address: carol, deviceId: 1 },
+          { account: alice, deviceId: 1 },
+          { account: bob, deviceId: 7 },
+          { account: carol, deviceId: 1 },
         ])
         vi.mocked(client.verifiedManifestMlsDeviceIds).mockImplementation(async (account: string) =>
-          account === 'carol@alpha.example' ? [2] : [1])
+          account === 'aci:00000000-0000-4000-8000-f4c26d9074c2@alpha.example' ? [2] : [1])
         vi.mocked(client.fetchVerifiedIdentifiedMlsKeyPackages).mockResolvedValue([packageFor(carol, 2)])
 
         await expect(service.reconcileMemberDevices()).resolves.toEqual([])
@@ -1818,7 +1822,7 @@ describe('MlsConversationService', () => {
         // Alice has not done it within her turn: Bob does.
         vi.advanceTimersByTime(3 * 60 * 1000)
         await expect(service.reconcileMemberDevices()).resolves.toHaveLength(1)
-        expect(vi.mocked(client.prepareMlsDeviceSync).mock.calls[0][5]).toBe('carol@alpha.example')
+        expect(vi.mocked(client.prepareMlsDeviceSync).mock.calls[0][5]).toBe('aci:00000000-0000-4000-8000-f4c26d9074c2@alpha.example')
       } finally {
         vi.useRealTimers()
       }
@@ -1827,8 +1831,8 @@ describe('MlsConversationService', () => {
     it('does nothing from a device that is not itself in the group', async () => {
       const { client, service } = harness(null, [group([alice, bob])], alice)
       vi.mocked(client.mlsGroupDevices).mockResolvedValue([
-        { address: alice, deviceId: 3 },
-        { address: bob, deviceId: 1 },
+        { account: alice, deviceId: 3 },
+        { account: bob, deviceId: 1 },
       ])
       vi.mocked(client.verifiedManifestMlsDeviceIds).mockResolvedValue([2])
       await expect(service.reconcileMemberDevices()).resolves.toEqual([])
@@ -1840,7 +1844,7 @@ describe('MlsConversationService', () => {
     const { client, transport, service } = harness(
       null,
       [],
-      { username: 'alice', server: 'alpha.example' },
+      { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
     )
     vi.mocked(transport.listMlsInvitations).mockResolvedValue([])
     vi.mocked(transport.fetchMlsControlHistory).mockResolvedValue({
@@ -1881,12 +1885,12 @@ describe('MlsConversationService', () => {
     const capability = new Uint8Array(16).fill(8)
     await expect(
       service.fetchVerifiedKeyPackages(
-        { username: 'bob', server: 'example.test' },
+        { server: 'example.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' },
         capability,
       ),
     ).resolves.toHaveLength(1)
     expect(client.fetchVerifiedMlsKeyPackages).toHaveBeenCalledWith(
-      { username: 'bob', server: 'example.test' },
+      { server: 'example.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' },
       capability,
       expect.stringMatching(/^[0-9]+$/),
     )
@@ -1924,21 +1928,21 @@ describe('MlsConversationService', () => {
     )
 
     expect(client.fetchVerifiedMlsKeyPackages).toHaveBeenCalledWith(
-      { username: 'bobby', server: 'beta.example' },
+      { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
       new Uint8Array(16).fill(8),
       expect.stringMatching(/^[0-9]+$/),
     )
     expect(client.stageMlsApplicationDelivery).toHaveBeenCalledOnce()
     expect(client.noteMlsApplicationDeliveryAttempt).toHaveBeenCalledWith(
       sendId,
-      'bobby@beta.example',
+      'aci:00000000-0000-4000-8000-69ff8042237a@beta.example',
     )
     expect(transport.submitAnonymousMlsMessage).toHaveBeenCalledWith({
       envelopes: [{ deviceId: 7 }],
     })
     expect(client.markMlsApplicationRecipientDelivered).toHaveBeenCalledWith(
       sendId,
-      'bobby@beta.example',
+      'aci:00000000-0000-4000-8000-69ff8042237a@beta.example',
       false,
     )
   })
@@ -2137,7 +2141,7 @@ describe('MlsConversationService', () => {
       }),
     ])
     expect(client.resolveMlsSenderClaim).toHaveBeenCalledWith({
-      credentialIdentity: 'alice@example.test#7',
+      credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
       credentialPublicKey: [...new Uint8Array(32).fill(4)],
     })
     expect(client.resolveMlsWelcomeClaims).not.toHaveBeenCalled()
@@ -2146,10 +2150,10 @@ describe('MlsConversationService', () => {
       '1',
       sendId,
       '1700000000',
-      { username: 'bobby', server: 'beta.example' },
+      { server: 'beta.example', accountId: '00000000-0000-4000-8000-69ff8042237a' },
       anonymousEnvelope,
       {
-        credentialIdentity: 'alice@example.test#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     )
@@ -2165,7 +2169,7 @@ describe('MlsConversationService', () => {
     })
     expect(client.resolveMlsWelcomeClaims).toHaveBeenCalledWith([
       {
-        credentialIdentity: 'alice@example.test#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     ])
@@ -2198,10 +2202,10 @@ describe('MlsConversationService', () => {
     expect(transport.listMlsInvitationFeedback).toHaveBeenCalledOnce()
 
     vi.mocked(transport.listMlsInvitationFeedback).mockResolvedValue([
-      { ...invitationFeedback(), member: { username: 'bobby', server: 'BETA.example' } },
+      { ...invitationFeedback(), member: { server: 'BETA.example', accountId: '00000000-0000-4000-8000-69ff8042237a' } },
     ])
     await expect(service.invitationFeedback()).rejects.toThrow(
-      'MLS account address is not canonical',
+      'MLS operation requires a canonical account',
     )
   })
 
@@ -2209,7 +2213,7 @@ describe('MlsConversationService', () => {
     const { client, transport, service } = harness()
     await expect(service.inspectInvitation(invitation())).resolves.toMatchObject({
       epoch: 1,
-      claimedMembers: [{ credentialIdentity: 'alice@example.test#7' }],
+      claimedMembers: [{ credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#7' }],
     })
     expect(client.inspectMlsWelcome).toHaveBeenCalledOnce()
     expect(client.resolveMlsWelcomeClaims).not.toHaveBeenCalled()
@@ -2267,11 +2271,11 @@ describe('MlsConversationService', () => {
     })
     const claims = [
       {
-        credentialIdentity: 'alice@alpha.example#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#7',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
       {
-        credentialIdentity: 'bobby@beta.example#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-69ff8042237a@beta.example#7',
         credentialPublicKey: [...new Uint8Array(32).fill(5)],
       },
     ]
@@ -2347,7 +2351,7 @@ describe('MlsConversationService', () => {
     const { client, service } = harness()
     vi.mocked(client.resolveMlsWelcomeClaims).mockResolvedValueOnce([
       {
-        credentialIdentity: 'mallory@example.test#7',
+        credentialIdentity: 'aci:00000000-0000-4000-8000-c0a497761b17@example.test#7',
         credentialPublicKey: [...new Uint8Array(32).fill(4)],
       },
     ])

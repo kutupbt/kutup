@@ -63,7 +63,8 @@
       "view": "Güvenlik numarasını göster",
       "verifiedStatus": "Bu güvenlik numarasını doğruladın.",
       "changedStatus": "Güvenlik numarası değişti. Hassas bir şey paylaşmadan önce yeniden doğrula.",
-      "unverifiedStatus": "Arada kimse olmadığından emin olmak için güvenlik numarasını {{name}} ile yüz yüze ya da bir aramada karşılaştır."
+      "unverifiedStatus": "Arada kimse olmadığından emin olmak için güvenlik numarasını {{name}} ile yüz yüze ya da bir aramada karşılaştır.",
+      "changedNotice": "{{name}} ile güvenlik numaran değişti."
     },
     "groupSecurity": {
       "ownerTitle": "Sahip yetkilendirmesi",
@@ -221,7 +222,10 @@
       "capabilities": "Kutup bu sunucunun güvenli sohbet desteğini kontrol edemedi.",
       "unavailable": "Güvenli sohbet geçici olarak kullanılamıyor.",
       "invalidAddress": "Geçerli bir kullanıcı adı veya kullanıcı@sunucu adresi girin.",
-      "groupSend": "Mesaj gruba gönderilemedi. Yeniden dene."
+      "groupSend": "Mesaj gruba gönderilemedi. Yeniden dene.",
+      "notFound": "Bu adreste bir Kutup hesabı yok.",
+      "renamed": "{{address}} artık {{now}}.",
+      "lookupFailed": "Bu adres aranamadı. Yeniden dene."
     },
     "mutations": {
       "edit": "Mesajı düzenle",
@@ -287,6 +291,7 @@
       "settingDescription": "Yazarken bunu gösterin ve başkaları yazarken görün. Kapalıyken ne gönderirsiniz ne de görürsünüz."
     },
     "you": "Sen",
+    "someone": "Biri",
     "backToList": "Sohbetlere dön",
     "encryptedIntro": "Buradaki mesajlar ve dosyalar uçtan uca şifrelidir: yalnızca sohbetteki kişiler okuyabilir.",
     "nav": {
@@ -739,7 +744,8 @@
         "unnamed": "Bağlantısını açmadan önce gruba bir ad verin."
       },
       "bannerRequests_one": "{{count}} kişi katılmak istiyor",
-      "bannerRequests_other": "{{count}} kişi katılmak istiyor"
+      "bannerRequests_other": "{{count}} kişi katılmak istiyor",
+      "groupsOff": "Bu sunucuda grup sohbetleri yok."
     },
     "notifications": {
       "appName": "Kutup İleti",
@@ -1069,11 +1075,23 @@
       "dismiss": "Kapat",
       "inContacts": "Kişileriniz arasında.",
       "view": "Kişiyi görüntüle"
-    }
+    },
+    "peerWaiting": "{{server}} henüz bu Chat sürümünü desteklemiyor. Mesajlarınız bekler ve desteklediği anda gönderilir.",
+    "someoneElse": {
+      "knownAs": "Bu, {{name}} olarak tanıdığın hesap.",
+      "openAnyway": "Yine de aç",
+      "continueAnyway": "Yine de devam et"
+    },
+    "openAddress": {
+      "looking": "{{address}} aranıyor…",
+      "back": "Sohbetlere dön"
+    },
+    "renamedNotice": "{{from}} kullanıcı adını {{to}} olarak değiştirdi."
   },
   "boot": {
     "opening": "İleti açılıyor…",
     "failedTitle": "İleti açılamadı",
-    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınla oturum açma tamamlanmadı. Bağlantını kontrol edip yeniden dene."
+    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınla oturum açma tamamlanmadı. Bağlantını kontrol edip yeniden dene.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   }
 }

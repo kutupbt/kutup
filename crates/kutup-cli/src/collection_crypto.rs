@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::api::{Collection, CreateCollectionRequest, RenameCollectionRequest};
 use crate::session::Session;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::identity::AccountIdentityKeysV1;
@@ -81,10 +82,13 @@ pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Resul
                 .as_deref()
                 .ok_or_else(|| anyhow!("named share envelope is missing"))?,
         )?;
-        let owner_account = col
-            .owner_account
-            .as_deref()
-            .ok_or_else(|| anyhow!("share owner account is missing"))?;
+        let owner = AccountRef::new(
+            col.owner_server
+                .as_deref()
+                .ok_or_else(|| anyhow!("share owner server is missing"))?,
+            &col.owner_user_id,
+        )
+        .context("share owner")?;
         let owner_incarnation = col
             .owner_incarnation_id
             .as_deref()
@@ -101,10 +105,10 @@ pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Resul
         envelope.open(
             &col.id,
             col.key_epoch,
-            owner_account,
+            &owner,
             owner_incarnation,
             &sender_signing,
-            &envelope.recipient_account,
+            &session.person()?,
             &identity.incarnation_id(),
             &session.private_key_bytes()?,
         )?
@@ -232,6 +236,7 @@ mod tests {
                 name_revision: 1,
                 epoch_statement: created.epoch_statement,
                 epoch_statement_hash: statement.statement_hash(),
+                owner_server: None,
                 owner_account: None,
                 owner_incarnation_id: None,
                 owner_drive_signing_public_key: None,

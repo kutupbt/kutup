@@ -15,8 +15,8 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Spinner } from '@kutup/ui/components/states'
 import { useRemoveAlbumAccess, type Album } from './albums'
-import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
-import { IdentityShareWarning, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
+import { IdentityNotConfirmed, RecipientRenamed } from '@kutup/drive-core/identityPins'
+import { IdentityShareWarning, RecipientRenamedNotice, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 
 /**
  * Share an album (docs/plans/photos.md): its key sealed to each person's
@@ -88,7 +88,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
         },
         onError: (error) => {
           // Shown in the dialog, with the choice to share anyway.
-          if (error instanceof IdentityNotConfirmed) return
+          if (error instanceof IdentityNotConfirmed || error instanceof RecipientRenamed) return
           toast.error(error instanceof RecipientNotFound ? t('share.notFound') : t('share.failed'))
         },
       },
@@ -112,7 +112,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             if (email.trim()) share()
           }}
         >
-          <Field label={t('share.email')}>
+          <Field label={t('share.address')}>
             {(field) => <ContactSuggestInput {...field} type="email" value={email} onValueChange={setEmail} />}
           </Field>
           <div className="flex items-center gap-2">
@@ -122,6 +122,15 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           <p className="text-xs text-muted-foreground">{t('share.otherServersHint')}</p>
           {shareFolder.error instanceof IdentityNotConfirmed ? (
             <IdentityShareWarning error={shareFolder.error} onShareAnyway={() => share(true)} />
+          ) : null}
+          {shareFolder.error instanceof RecipientRenamed ? (
+            <RecipientRenamedNotice
+              error={shareFolder.error}
+              onUseNow={(now) => {
+                setEmail(now)
+                shareFolder.reset()
+              }}
+            />
           ) : null}
           <div className="flex justify-end">
             <Button type="submit" disabled={!email.trim() || shareFolder.isPending}>
@@ -235,11 +244,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             {links.map((link) => (
               <li key={link.id} className="flex items-center gap-2 px-3 py-2">
                 <p className="min-w-0 flex-1 truncate text-sm">{t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}</p>
-                {link.ownerLinkKeyEnvelope ? (
-                  <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
-                    <Copy />
-                  </Button>
-                ) : null}
+                <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
+                  <Copy />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"

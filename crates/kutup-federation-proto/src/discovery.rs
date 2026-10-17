@@ -34,8 +34,8 @@ pub enum FederationDiscoveryTransportPolicy {
 pub struct FederationCapabilityId(String);
 
 impl FederationCapabilityId {
-    pub fn chat_v1() -> Self {
-        Self("chat.v1".into())
+    pub fn chat_v2() -> Self {
+        Self("chat.v2".into())
     }
 
     pub fn drive_v1() -> Self {
@@ -399,7 +399,7 @@ mod tests {
             vec![
                 FederationCapabilityId::identity_v1(),
                 FederationCapabilityId::drive_v1(),
-                FederationCapabilityId::chat_v1(),
+                FederationCapabilityId::chat_v2(),
             ],
             identity,
             200,
@@ -418,7 +418,7 @@ mod tests {
                 .iter()
                 .map(FederationCapabilityId::as_str)
                 .collect::<Vec<_>>(),
-            ["chat.v1", "drive.v1", "identity.v1"]
+            ["chat.v2", "drive.v1", "identity.v1"]
         );
         discovery.verify_genesis_at("alpha.example", 500).unwrap();
     }
@@ -516,14 +516,14 @@ mod tests {
 
     #[test]
     fn capabilities_are_closed_format_sorted_and_unique() {
-        for invalid in ["chat", "Chat.v1", ".chat", "chat.", "chat..v1", "chat_v1"] {
+        for invalid in ["chat", "Chat.v1", ".chat", "chat.", "chat..v1", "chat_v2"] {
             assert!(invalid.parse::<FederationCapabilityId>().is_err());
         }
         let (key, identity) = identity();
         assert!(FederationDiscoveryV2::sign(
             "alpha.example",
             "https://fed.example",
-            vec![FederationCapabilityId::chat_v1()],
+            vec![FederationCapabilityId::chat_v2()],
             identity,
             200,
             3_800,

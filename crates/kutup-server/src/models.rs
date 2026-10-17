@@ -48,13 +48,18 @@ pub struct MessageResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsResponse {
-    pub registration_enabled: bool,
+    /// Who may register: `on`, `code` (with a referral code) or `off`.
+    pub registration_mode: crate::registration::RegistrationMode,
     /// Chat feature advertisement (docs/chat-protocol.md §10). A client
     /// feature-gates chat on this and must not show chat UI when absent/disabled.
     pub chat: kutup_chat_proto::ChatCapabilities,
     /// Where each Kutup web app lives (server config; see docs/self-hosting.md).
     pub apps: crate::config::AppOrigins,
     pub feedback: FeedbackSettings,
+    /// Days a name an account leaves stays held before anyone may take it.
+    pub name_hold_days: i64,
+    /// Days a renamed account's old address still receives.
+    pub old_address_receive_days: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.
@@ -69,24 +74,18 @@ pub struct FeedbackSettings {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminSettingsResponse {
-    pub registration_enabled: bool,
+    /// Who may register: `on`, `code` (with a referral code) or `off`.
+    pub registration_mode: crate::registration::RegistrationMode,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
     /// Retention for unread Direct and MLS mailbox ciphertext. Zero disables expiry.
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
     pub chat_media_delivery_retention_days: i64,
-}
-
-/// `GET /api/auth/login/preflight` — mirrors `handlers.PreflightLoginResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PreflightLoginResponse {
-    pub account_protection_suite: u16,
-    pub account_protection_salt: String,
-    pub argon_memory_kib: u32,
-    pub argon_iterations: u32,
-    pub argon_parallelism: u32,
+    /// Days a name an account left stays held before anyone may take it.
+    pub name_hold_days: i64,
+    /// Days a renamed account's old address still receives (at most the hold).
+    pub old_address_receive_days: i64,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -94,6 +93,8 @@ pub struct PreflightLoginResponse {
 #[serde(rename_all = "camelCase")]
 pub struct PreflightRecoverResponse {
     pub recovery_key_envelope: String,
+    /// What the envelopes carry now (the recovery check is derived with it too).
+    pub envelope_binding: String,
 }
 
 /// `POST /api/auth/refresh` — mirrors `handlers.RefreshResponse`.
@@ -112,7 +113,14 @@ pub struct RefreshResponse {
 #[serde(rename_all = "camelCase")]
 pub struct MeResponse {
     pub id: String,
-    pub email: String,
+    /// The account's permanent id (= `id`), with `server` what names the
+    /// account everywhere (docs/plans/account-ids.md).
+    pub account_id: String,
+    pub server: String,
+    /// The account's Kutup address (`username@<domain>`): its identity.
+    pub address: String,
+    /// What the account's envelopes carry now (docs/plans/account-identity.md).
+    pub envelope_binding: String,
     pub username: String,
     pub public_key: String,
     pub totp_enabled: bool,
@@ -122,9 +130,18 @@ pub struct MeResponse {
     pub color: String,
     /// How long this account's file versions are kept (days).
     pub version_retention_days: i32,
-    /// Whether the account signed its Drive key binding (it does so at
-    /// sign-in when not; docs/plans/drive-identity-pins.md).
-    pub has_drive_key_binding: bool,
+    /// Where the account's rename chain stands (`sequence` 0 and no `digest`
+    /// before a first rename): what its own devices anchor to.
+    pub renames: RenameAnchor,
+}
+
+/// The account's rename chain as its devices remember it.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameAnchor {
+    pub sequence: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 /// Generic success — mirrors `handlers.OkResponse`.
@@ -148,23 +165,6 @@ pub struct TotpCodeRequest {
     pub code: String,
 }
 
-/// `GET /api/users/by-email/:email` — mirrors `handlers.UserLookupResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UserLookupResponse {
-    pub user_id: String,
-    pub account: String,
-    pub drive_hpke_public_key: String,
-    pub account_incarnation_id: String,
-    pub drive_signing_public_key: String,
-    /// The account authority, whose hash is the incarnation id.
-    pub account_authority_public_key: String,
-    /// The authority's signature over the Drive keys; absent for an account
-    /// that has not signed one yet.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub drive_key_binding: Option<String>,
-}
-
 /// Collection list/get row — mirrors `handlers.CollectionRow`.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +180,11 @@ pub struct CollectionRow {
     pub name_revision: i64,
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
+    /// A shared folder's owner: their server, with `owner_user_id` their
+    /// account id (the share's envelope names them by both).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_server: Option<String>,
+    /// Shown only: the owner's address now (server-asserted).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_account: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,6 +234,7 @@ pub struct CreateCollectionRequest {
     pub parent_collection_id: Option<String>,
     /// The name's hash under the parent's hash key, or at the top level
     /// the account's top-level one (docs/plans/drive-unique-names.md).
+    /// Required for a folder; ignored for an album.
     pub name_hash: Option<String>,
 }
 
@@ -367,6 +373,9 @@ pub struct TrashFolderRow {
     pub epoch_statement: String,
     pub epoch_statement_hash: String,
     pub color: Option<String>,
+    /// Where a restore puts it: its parent while that folder is live, else
+    /// the top level (null). Its name is hashed there (`409 name_taken`).
+    pub parent_collection_id: Option<String>,
     /// Files trashed together with this folder (its whole subtree).
     pub items: i64,
     #[serde(with = "time::serde::rfc3339")]
@@ -435,29 +444,14 @@ pub struct PublicShareResponse {
     pub expires_at: Option<OffsetDateTime>,
 }
 
-/// Admin user row — mirrors `handlers.UserRow`.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UserRow {
-    pub id: String,
-    pub email: String,
-    pub username: String,
-    pub storage_quota_bytes: i64,
-    pub storage_used_bytes: i64,
-    pub is_admin: bool,
-    pub is_active: bool,
-    pub totp_enabled: bool,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-}
-
 /// `POST /api/admin/users` body — mirrors `handlers.CreateAdminUserRequest`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateAdminUserRequest {
-    pub email: String,
     pub username: String,
-    pub temp_password: String,
+    /// The temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    pub setup: crate::handlers::admin::TempRegistration,
     pub storage_quota_bytes: i64,
 }
 
@@ -474,10 +468,12 @@ pub struct UpdateAdminUserRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
-    pub registration_enabled: Option<bool>,
+    pub registration_mode: Option<crate::registration::RegistrationMode>,
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,
+    pub name_hold_days: Option<i64>,
+    pub old_address_receive_days: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
@@ -533,6 +529,7 @@ mod tests {
             name_revision: 1,
             epoch_statement: "statement".into(),
             epoch_statement_hash: "11".repeat(32),
+            owner_server: None,
             owner_account: None,
             owner_incarnation_id: None,
             owner_drive_signing_public_key: None,

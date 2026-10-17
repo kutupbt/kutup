@@ -148,8 +148,7 @@ struct KdfVec {
 #[derive(Deserialize)]
 struct RecoveryAuthVec {
     entropy: String,
-    #[serde(rename = "loginEmail")]
-    login_email: String,
+    binding: String,
     expected: String,
 }
 #[derive(Deserialize)]
@@ -174,8 +173,12 @@ struct AccountEnvelopeVec {
     plaintext: String,
     key: String,
     purpose: u8,
-    #[serde(rename = "loginEmail")]
-    login_email: String,
+    binding: String,
+    #[serde(rename = "objectId", default)]
+    object_id: String,
+    /// The AEAD key derived for this envelope.
+    #[serde(rename = "aeadKey", default)]
+    aead_key: String,
     nonce: String,
     envelope: String,
 }
@@ -193,6 +196,21 @@ struct DriveEnvelopeVec {
     parent_id: String,
     nonce: String,
     envelope: String,
+    /// Well-encrypted envelopes whose padding is wrong: refused on open.
+    #[serde(rename = "invalidPadding")]
+    invalid_padding: Vec<String>,
+    /// Envelopes whose sealed length the policy refuses before decryption.
+    #[serde(rename = "invalidSealedLength")]
+    invalid_sealed_length: Vec<String>,
+    /// A plaintext of `len` bytes seals to `sealed_len` bytes, or is refused.
+    limits: Vec<DriveEnvelopeLimit>,
+}
+#[derive(Deserialize)]
+struct DriveEnvelopeLimit {
+    purpose: u8,
+    len: usize,
+    #[serde(rename = "sealedLen")]
+    sealed_len: Option<usize>,
 }
 #[derive(Deserialize)]
 struct DriveFileBlobVec {
@@ -328,7 +346,7 @@ fn kdf_matches_go() {
 #[test]
 fn recovery_auth_proof_vector() {
     let v = load_crypto().recovery_auth;
-    let proof = kdf::derive_recovery_auth_proof(&b64(&v.entropy), &v.login_email).unwrap();
+    let proof = kdf::derive_recovery_auth_proof(&b64(&v.entropy), &v.binding).unwrap();
     assert_eq!(proof.as_slice(), &b64(&v.expected));
 }
 
@@ -361,20 +379,76 @@ fn account_identity_vector() {
 fn account_envelope_vector() {
     let vector = load_crypto().account_envelope;
     let purpose = AccountEnvelopePurpose::try_from(vector.purpose).unwrap();
-    let envelope = account_envelope::seal_with_nonce(
+    // A key binding, an object, a key derived for them.
+    let object = b64(&vector.object_id);
+    let envelope = account_envelope::seal_suite(
+        account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
         &b64(&vector.plaintext),
         &b64(&vector.key),
         purpose,
-        &vector.login_email,
+        &vector.binding,
+        &object,
+        purpose.policy().mutable.then_some(1),
         &b64(&vector.nonce),
     )
     .unwrap();
-    assert_eq!(envelope, b64(&vector.envelope));
     assert_eq!(
-        account_envelope::open(&envelope, &b64(&vector.key), purpose, "alice@example.com",)
-            .unwrap(),
-        b64(&vector.plaintext)
+        base64::engine::general_purpose::STANDARD.encode(&envelope),
+        vector.envelope
     );
+    assert_eq!(
+        account_envelope::open_revision(
+            &envelope,
+            &b64(&vector.key),
+            purpose,
+            &vector.binding,
+            &object
+        )
+        .unwrap(),
+        (b64(&vector.plaintext), 1)
+    );
+    // The per-envelope key, pinned.
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(
+            account_envelope::v2_aead_key_for_vectors(
+                &b64(&vector.key),
+                purpose,
+                &vector.binding,
+                &object
+            )
+            .unwrap()
+        ),
+        vector.aead_key
+    );
+    // Refused: another object, binding or purpose; the suite byte turned to
+    // the retired 1; the object id in the header changed.
+    let key = b64(&vector.key);
+    let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
+        account_envelope::open_revision(envelope, &key, purpose, binding, object).is_err()
+    };
+    assert!(refused(&envelope, purpose, &vector.binding, &[0; 16]));
+    assert!(refused(
+        &envelope,
+        purpose,
+        "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+        &object
+    ));
+    assert!(refused(
+        &envelope,
+        AccountEnvelopePurpose::PasswordMasterKey,
+        &vector.binding,
+        &object
+    ));
+    let mut downgraded = envelope.clone();
+    downgraded[9] = 1;
+    assert!(refused(&downgraded, purpose, &vector.binding, &object));
+    assert!(refused(&downgraded, purpose, &vector.binding, &[]));
+    let object_at = 14 + vector.binding.len() + 1;
+    let mut moved = envelope.clone();
+    moved[object_at] ^= 0x01;
+    let mut moved_object = object.clone();
+    moved_object[0] ^= 0x01;
+    assert!(refused(&moved, purpose, &vector.binding, &moved_object));
 }
 
 #[test]
@@ -400,6 +474,48 @@ fn drive_envelope_vector() {
         drive_envelope::open(&envelope, &b64(&vector.root_key), context).unwrap(),
         b64(&vector.plaintext)
     );
+    for bad in &vector.invalid_padding {
+        assert!(drive_envelope::open(&b64(bad), &b64(&vector.root_key), context).is_err());
+    }
+    for bad in &vector.invalid_sealed_length {
+        assert!(drive_envelope::validate(&b64(bad), context).is_err());
+        assert!(drive_envelope::open(&b64(bad), &b64(&vector.root_key), context).is_err());
+    }
+    for limit in &vector.limits {
+        let context = DriveEnvelopeContextV1::new(
+            DriveEnvelopePurpose::try_from(limit.purpose).unwrap(),
+            vector.epoch,
+            vector.revision,
+            &vector.object_id,
+            &vector.parent_id,
+        )
+        .unwrap();
+        let sealed = drive_envelope::seal(&vec![b'a'; limit.len], &b64(&vector.root_key), context);
+        match limit.sealed_len {
+            Some(len) => {
+                let sealed = sealed.unwrap();
+                assert_eq!(
+                    sealed.len(),
+                    len,
+                    "purpose {} len {}",
+                    limit.purpose,
+                    limit.len
+                );
+                assert_eq!(
+                    drive_envelope::open(&sealed, &b64(&vector.root_key), context)
+                        .unwrap()
+                        .len(),
+                    limit.len
+                );
+            }
+            None => assert!(
+                sealed.is_err(),
+                "purpose {} len {}",
+                limit.purpose,
+                limit.len
+            ),
+        }
+    }
 }
 
 #[test]
@@ -866,6 +982,17 @@ fn print_drive_names_vectors() {
         "ISTANBUL.md",
         "İstanbul.md",
         "şeker.txt",
+        // Turkish dotless ı stays itself; capital I folds to i: different names.
+        "ılık.txt",
+        "ILIK.txt",
+        // Capital sigma folds to final ς at the true end of a word, and to σ
+        // where a letter follows (".txt" counts: the dot is case-ignorable).
+        "ΟΔΟΣ.txt",
+        "οδος.txt",
+        "οδοσ.txt",
+        "ΟΔΟΣ",
+        "οδος",
+        "οδοσ",
     ]
     .iter()
     .map(|name| {
@@ -926,4 +1053,404 @@ fn drive_names_vector() {
         drive_names::content_hash(&hash_key, &digest).unwrap(),
         content["hash"].as_str().unwrap()
     );
+}
+
+/// Prints the `driveEnvelope` negatives for `tests/vectors/crypto.json`:
+/// well-encrypted envelopes with one padding fault each (`invalidPadding`),
+/// and with a sealed length the policy refuses before decryption
+/// (`invalidSealedLength`).
+/// `cargo test -p kutup-crypto --test vectors print_drive_envelope_negatives -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_drive_envelope_negatives() {
+    use base64::Engine as _;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let v = load_crypto().drive_envelope;
+    let context = DriveEnvelopeContextV1::new(
+        DriveEnvelopePurpose::try_from(v.purpose).unwrap(),
+        v.epoch,
+        v.revision,
+        &v.object_id,
+        &v.parent_id,
+    )
+    .unwrap();
+    let key = b64(&v.root_key);
+    let nonce = b64(&v.nonce);
+    let seal = |body: &[u8]| {
+        e(&drive_envelope::seal_unchecked_for_vectors(body, &key, context, &nonce).unwrap())
+    };
+    let padded = |text: &[u8], len: usize| {
+        let mut b = text.to_vec();
+        b.push(0x80);
+        b.resize(len, 0);
+        b
+    };
+    let mut marker_then_byte = b"projects".to_vec();
+    marker_then_byte.extend([0x80, 0x01]);
+    marker_then_byte.resize(256, 0);
+    let invalid_padding = [
+        seal(&[0u8; 256]),               // no marker
+        seal(&marker_then_byte),         // a non-zero byte after the marker
+        seal(&padded(b"projects", 512)), // more padding than the policy gives
+        seal(&padded(b"", 256)),         // an empty name
+    ];
+    let invalid_sealed_length = [
+        seal(&padded(b"projects", 300)),    // not a whole bucket
+        seal(&padded(&[b'a'; 1100], 1536)), // a whole bucket past the padded maximum
+    ];
+    println!(
+        "{}",
+        serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
+    );
+}
+
+/// Collaboration devices (kutup-crypto/src/device_registration.rs): the
+/// account authority's statement for a device key (over a server challenge
+/// and a time) and its revocation, kept together.
+#[test]
+fn device_registration_vector() {
+    use kutup_crypto::device_registration as dr;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["deviceRegistration"];
+    let key32 = |field: &str| -> [u8; 32] { b64(v[field].as_str().unwrap()).try_into().unwrap() };
+    let identity =
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&key32("masterKey")).unwrap();
+    let authority = identity.authority_public_key();
+    let (device, challenge) = (key32("devicePublicKey"), key32("challenge"));
+    let server = v["server"].as_str().unwrap();
+    let statement = dr::DeviceStatement {
+        server,
+        user_id: v["userId"].as_str().unwrap(),
+        device_public: &device,
+        purpose: dr::PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: v["issuedAtMs"].as_i64().unwrap(),
+    };
+    let signature = dr::sign(&identity, &statement).unwrap();
+    assert_eq!(signature, v["signature"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
+        v["signingBytes"].as_str().unwrap()
+    );
+    dr::verify(&authority, &statement, &signature).unwrap();
+    let other = key32("otherAuthorityPublicKey");
+    assert!(dr::verify(&other, &statement, &signature).is_err());
+    let later = dr::DeviceStatement {
+        issued_at_ms: statement.issued_at_ms + 1,
+        ..statement
+    };
+    assert!(dr::verify(&authority, &later, &signature).is_err());
+    let r = &v["revocation"];
+    let revoked_at = r["revokedAtMs"].as_i64().unwrap();
+    let revocation = dr::sign_revocation(&identity, server, &device, revoked_at).unwrap();
+    assert_eq!(revocation, r["signature"].as_str().unwrap());
+    assert_eq!(
+        hex::encode(
+            dr::revocation_bytes(&identity.incarnation_id(), server, &device, revoked_at).unwrap()
+        ),
+        r["signingBytes"].as_str().unwrap()
+    );
+    dr::verify_revocation(&authority, server, &device, revoked_at, &revocation).unwrap();
+    assert!(dr::verify_revocation(&other, server, &device, revoked_at, &revocation).is_err());
+}
+
+#[test]
+#[ignore]
+fn print_device_registration_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::device_registration as dr;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x44; 32]).unwrap();
+    let (server, user) = ("kutup.dev", "11111111-1111-4111-8111-111111111111");
+    let (device, challenge, at) = ([0x55u8; 32], [0x66u8; 32], 1_790_000_000_000i64);
+    let statement = dr::DeviceStatement {
+        server,
+        user_id: user,
+        device_public: &device,
+        purpose: dr::PURPOSE_COLLAB_FRAMES,
+        challenge: &challenge,
+        issued_at_ms: at,
+    };
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Collaboration devices signed by their account (kutup-crypto/src/device_registration.rs): the authority signs the incarnation, the server, the account, the device key, its purpose (1: collaboration frames), the server's one-time challenge and the time; and, to revoke it, the incarnation, server, key and time.",
+            "masterKey": e(&[0x33; 32]),
+            "otherAuthorityPublicKey": e(&other.authority_public_key()),
+            "server": server, "userId": user,
+            "devicePublicKey": e(&device), "challenge": e(&challenge), "issuedAtMs": at,
+            "signingBytes": hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
+            "signature": dr::sign(&identity, &statement).unwrap(),
+            "revocation": {
+                "revokedAtMs": at + 1000,
+                "signingBytes": hex::encode(dr::revocation_bytes(&identity.incarnation_id(), server, &device, at + 1000).unwrap()),
+                "signature": dr::sign_revocation(&identity, server, &device, at + 1000).unwrap(),
+            },
+        })
+    );
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SafetyNumberVec {
+    /// `aci:<uuid>@<server>`.
+    local_account: String,
+    /// Raw 32-byte Ed25519 authority keys, base64, no type prefix.
+    local_authority: String,
+    peer_account: String,
+    peer_authority: String,
+    fingerprint: String,
+    /// The local side's QR payload; the peer's has the halves swapped.
+    local_qr_payload: String,
+    peer_qr_payload: String,
+    /// The peer after a reset: same account, another authority, another number.
+    reset_authority: String,
+    reset_fingerprint: String,
+    /// The peer's authority under another account id: another number.
+    other_account: String,
+    other_account_fingerprint: String,
+}
+
+/// The safety number (Signal's fingerprint v2 over the account reference and
+/// the authority): a rename keeps it; a reset, or another account, changes it.
+#[test]
+fn safety_number_vector() {
+    use kutup_crypto::account_ref::AccountRef;
+    use kutup_crypto::safety_number;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v: SafetyNumberVec = serde_json::from_value(all["safetyNumber"].clone()).unwrap();
+    let key = |s: &str| -> [u8; 32] { b64(s).try_into().unwrap() };
+    let acct = |s: &str| -> AccountRef { s.parse().unwrap() };
+    let (local, peer) = (acct(&v.local_account), acct(&v.peer_account));
+    let mine = safety_number::derive(
+        &local,
+        &key(&v.local_authority),
+        &peer,
+        &key(&v.peer_authority),
+    )
+    .unwrap();
+    let theirs = safety_number::derive(
+        &peer,
+        &key(&v.peer_authority),
+        &local,
+        &key(&v.local_authority),
+    )
+    .unwrap();
+    assert_eq!(mine.fingerprint, v.fingerprint);
+    assert_eq!(theirs.fingerprint, v.fingerprint);
+    assert_eq!(mine.qr_payload, v.local_qr_payload);
+    assert_eq!(theirs.qr_payload, v.peer_qr_payload);
+    assert!(safety_number::matches_qr_payload(&mine, &v.peer_qr_payload));
+    assert!(safety_number::matches_qr_payload(
+        &theirs,
+        &v.local_qr_payload
+    ));
+    let reset = safety_number::derive(
+        &local,
+        &key(&v.local_authority),
+        &peer,
+        &key(&v.reset_authority),
+    )
+    .unwrap();
+    assert_eq!(reset.fingerprint, v.reset_fingerprint);
+    assert!(!safety_number::matches_qr_payload(
+        &reset,
+        &v.peer_qr_payload
+    ));
+    let other = safety_number::derive(
+        &local,
+        &key(&v.local_authority),
+        &acct(&v.other_account),
+        &key(&v.peer_authority),
+    )
+    .unwrap();
+    assert_eq!(other.fingerprint, v.other_account_fingerprint);
+}
+
+#[test]
+#[ignore]
+fn print_safety_number_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::account_ref::AccountRef;
+    use kutup_crypto::safety_number;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let local: AccountRef = "aci:3f1c6a52-8d0e-4b7a-9c21-5e4d8f0a1b2c@kutup.dev"
+        .parse()
+        .unwrap();
+    let peer: AccountRef = "aci:9a7b5c3d-1e2f-4a6b-8c0d-2e4f6a8b0c1d@example.org"
+        .parse()
+        .unwrap();
+    let other: AccountRef = "aci:c2d4e6f8-0a1b-4c3d-9e5f-7a9b1c3d5e7f@example.org"
+        .parse()
+        .unwrap();
+    let (a, b, c) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+    let mine = safety_number::derive(&local, &a, &peer, &b).unwrap();
+    let theirs = safety_number::derive(&peer, &b, &local, &a).unwrap();
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Safety numbers (kutup-crypto/src/safety_number.rs, V3): Signal's fingerprint v2 (5200 x SHA-512 per side, 2 x 30 digits, CombinedFingerprints QR) with the stable id AccountRef::bytes() and the identity key the raw 32-byte Ed25519 account authority (no type prefix). A rename keeps the number; a reset or another account changes it.",
+            "localAccount": local.to_string(), "localAuthority": e(&a),
+            "peerAccount": peer.to_string(), "peerAuthority": e(&b),
+            "fingerprint": mine.fingerprint,
+            "localQrPayload": mine.qr_payload, "peerQrPayload": theirs.qr_payload,
+            "resetAuthority": e(&c),
+            "resetFingerprint": safety_number::derive(&local, &a, &peer, &c).unwrap().fingerprint,
+            "otherAccount": other.to_string(),
+            "otherAccountFingerprint": safety_number::derive(&local, &a, &other, &b).unwrap().fingerprint,
+        })
+    );
+}
+
+/// Account renames (kutup-crypto/src/account_rename.rs): a chain signed by
+/// the account authority; broken, rolled-back or foreign chains are refused.
+#[test]
+fn account_rename_vector() {
+    use kutup_crypto::account_rename::{self, AccountRenameV1};
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["accountRename"];
+    let master: [u8; 32] = b64(v["masterKey"].as_str().unwrap()).try_into().unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+    let authority = identity.authority_public_key();
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD.encode(authority),
+        v["authorityPublicKey"]
+    );
+    let chain: Vec<AccountRenameV1> = serde_json::from_value(v["chain"].clone()).unwrap();
+    // Signatures are deterministic (Ed25519): the same chain signs again.
+    for statement in &chain {
+        let again = account_rename::sign(
+            &identity,
+            statement.sequence,
+            &statement.previous,
+            &statement.current,
+            statement.issued_at_ms,
+        )
+        .unwrap();
+        assert_eq!(&again, statement);
+    }
+    assert_eq!(
+        hex::encode(
+            account_rename::signing_bytes(
+                &chain[0].incarnation_id,
+                chain[0].sequence,
+                &chain[0].previous,
+                &chain[0].current,
+                chain[0].issued_at_ms
+            )
+            .unwrap()
+        ),
+        v["firstSigningBytes"].as_str().unwrap()
+    );
+    let view = account_rename::verify_chain(&authority, &chain).unwrap();
+    assert_eq!(view.first, v["first"].as_str().unwrap());
+    assert_eq!(view.current, v["current"].as_str().unwrap());
+    let shorter = account_rename::verify_chain(&authority, &chain[..1]).unwrap();
+    assert!(view.extends(&shorter) && !shorter.extends(&view));
+    for bad in v["invalidChains"].as_array().unwrap() {
+        let parsed: Result<Vec<AccountRenameV1>, _> = serde_json::from_value(bad["chain"].clone());
+        if let Ok(parsed) = parsed {
+            assert!(
+                account_rename::verify_chain(&authority, &parsed).is_err(),
+                "{}",
+                bad["why"]
+            );
+        }
+    }
+    let other: [u8; 32] = b64(v["otherAuthorityPublicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    assert!(account_rename::verify_chain(&other, &chain).is_err());
+}
+
+#[test]
+#[ignore]
+fn print_account_rename_vector() {
+    use base64::Engine as _;
+    use kutup_crypto::account_rename;
+    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x11; 32]).unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+    let t = 1_790_000_000_000i64;
+    let first =
+        account_rename::sign(&identity, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    let second =
+        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
+    let gap = account_rename::sign(&identity, 2, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    let unlinked =
+        account_rename::sign(&identity, 2, "bob@kutup.dev", "ali@kutup.dev", t + 1000).unwrap();
+    let backwards =
+        account_rename::sign(&identity, 2, "alicia@kutup.dev", "ali@kutup.dev", t - 1000).unwrap();
+    let mut tampered = second.clone();
+    tampered.current = "mallory@kutup.dev".into();
+    let mut foreign =
+        account_rename::sign(&other, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();
+    foreign.incarnation_id = identity.incarnation_id();
+    let mut moved = first.clone();
+    moved.current = "alicia@other.dev".into();
+    println!(
+        "{}",
+        serde_json::json!({
+            "description": "Account renames (kutup-crypto/src/account_rename.rs): statements signed by the account authority, chained 1, 2, …; a client accepts only chains that verify and extend what it saw.",
+            "masterKey": e(&[0x11; 32]),
+            "authorityPublicKey": e(&identity.authority_public_key()),
+            "otherAuthorityPublicKey": e(&other.authority_public_key()),
+            "chain": [first, second],
+            "firstSigningBytes": hex::encode(account_rename::signing_bytes(&first.incarnation_id, 1, &first.previous, &first.current, t).unwrap()),
+            "first": "alice@kutup.dev",
+            "current": "ali@kutup.dev",
+            "invalidChains": [
+                { "why": "starts at 2", "chain": [gap] },
+                { "why": "does not link", "chain": [first, unlinked] },
+                { "why": "out of time order", "chain": [first, backwards] },
+                { "why": "tampered", "chain": [first, tampered] },
+                { "why": "signed by another authority", "chain": [foreign] },
+                { "why": "another server", "chain": [moved] },
+                { "why": "empty", "chain": [] }
+            ]
+        })
+    );
+}
+
+/// A person across servers: the same table the web checks through WASM.
+#[test]
+fn account_ref_vector() {
+    use kutup_crypto::account_ref::AccountRef;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["accountRef"];
+    for case in v["valid"].as_array().unwrap() {
+        let string = case["string"].as_str().unwrap();
+        let person: AccountRef = string.parse().unwrap();
+        assert_eq!(person.server, case["server"].as_str().unwrap());
+        assert_eq!(person.account_id, case["accountId"].as_str().unwrap());
+        assert_eq!(person.to_string(), string);
+        assert_eq!(hex::encode(person.bytes()), case["bytes"].as_str().unwrap());
+        let json = serde_json::json!({ "server": case["server"], "accountId": case["accountId"] });
+        assert_eq!(serde_json::from_value::<AccountRef>(json).unwrap(), person);
+    }
+    for bad in v["invalid"].as_array().unwrap() {
+        let bad = bad.as_str().unwrap();
+        assert!(bad.parse::<AccountRef>().is_err(), "{bad}");
+    }
+}
+
+/// Folded names: the same table the web checks through WASM.
+#[test]
+fn name_fold_vector() {
+    use kutup_crypto::names;
+    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
+    let v = &all["nameFold"];
+    for pair in v["names"].as_array().unwrap() {
+        assert_eq!(
+            names::fold(pair[0].as_str().unwrap()),
+            pair[1].as_str().unwrap()
+        );
+    }
+    for pair in v["addresses"].as_array().unwrap() {
+        assert_eq!(
+            names::fold_address(pair[0].as_str().unwrap()).as_deref(),
+            pair[1].as_str()
+        );
+    }
 }

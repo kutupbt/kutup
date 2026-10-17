@@ -69,8 +69,8 @@ export function PinDialog({
         setError(t('unlock.wrongAccountPassword'))
         return
       }
-      if (result === 'paused') {
-        setError(t('unlock.paused'))
+      if (result === 'paused' || result === 'slowDown') {
+        setError(t(result === 'slowDown' ? 'unlock.slowDown' : 'unlock.paused'))
         return
       }
       await refresh()

@@ -11,7 +11,8 @@ import { Explorer } from '../explorer/Explorer'
 import { useExplorerPrefs } from '../explorer/prefs'
 import { filterItems, itemKey, sortItems, type ExplorerItem } from '../explorer/sort'
 import { Toolbar } from '../explorer/Toolbar'
-import { useEmptyTrash, usePurge, useRestore, useTrash, type TrashEntry } from '@kutup/drive-core/trash'
+import { RestoreCancelled, useEmptyTrash, usePurge, useRestore, useTrash, type TrashEntry } from '@kutup/drive-core/trash'
+import { useRestoreNameDialog } from '@kutup/drive-ui/RestoreNameDialog'
 
 /**
  * Trash, as the same mixed list (sorted by when things were deleted unless
@@ -21,7 +22,8 @@ import { useEmptyTrash, usePurge, useRestore, useTrash, type TrashEntry } from '
 export function TrashPage() {
   const { t, i18n } = useTranslation()
   const trash = useTrash()
-  const restore = useRestore()
+  const restoreName = useRestoreNameDialog()
+  const restore = useRestore(restoreName.ask)
   const purge = usePurge()
   const empty = useEmptyTrash()
   const [prefs, updatePrefs] = useExplorerPrefs()
@@ -45,16 +47,20 @@ export function TrashPage() {
   const shown = sortItems(filterItems(items, prefs.kinds), prefs.sort, i18n.language)
 
   const doRestore = (entry: TrashEntry) =>
-    restore.mutate(entry.id, {
+    restore.mutate(entry, {
       onSuccess: () => toast.success(t('trash.restored', { name: entry.name ?? t('drive.encrypted') })),
-      onError: (error) =>
-        toast.error(apiErrorCode(error) === 'conflict' ? t('trash.restoreParentFirst') : apiErrorMessage(error, t('trash.restoreFailed'))),
+      onError: (error) => {
+        // Left in the trash by choice: nothing to say.
+        if (error instanceof RestoreCancelled) return
+        toast.error(apiErrorCode(error) === 'conflict' ? t('trash.restoreParentFirst') : apiErrorMessage(error, t('trash.restoreFailed')))
+      },
     })
 
   if (trash.isPending) return <LoadingPanel label={t('common.loading')} />
 
   return (
     <div className="flex min-h-[calc(100svh-3.5rem)] flex-col">
+      {restoreName.dialog}
       <div className="sticky top-14 z-20 flex min-h-12 flex-wrap items-center gap-2 border-b border-border bg-background/95 px-3 py-1.5 backdrop-blur-sm md:px-6">
         <h1 className="min-w-0 flex-1 font-display text-lg font-semibold">{t('nav.trash')}</h1>
         {items.length > 0 ? (

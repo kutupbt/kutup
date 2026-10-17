@@ -6,8 +6,13 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod account_heads;
+mod account_ids;
+mod account_names;
 mod albums;
+mod auth_check;
 mod calls;
+mod change_feed;
 mod chat_federation;
 mod chat_hub;
 mod chat_media_federation;
@@ -24,6 +29,7 @@ mod drive_writes;
 mod error;
 mod federation;
 mod file_content;
+mod grants;
 mod handlers;
 mod hub;
 mod jobs;
@@ -33,12 +39,18 @@ mod mail;
 mod maps;
 mod middleware;
 mod models;
+mod opaque_setup;
 mod openapi;
 mod photos;
 mod public_fetch;
 mod ratelimit;
+mod registration;
+mod remote_devices;
+mod remote_renames;
+mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
+mod security_events;
 mod server_keys;
 mod sessions;
 mod site_settings;
@@ -121,17 +133,55 @@ pub struct AppState {
     pub(crate) maps: Arc<maps::MapService>,
     /// Live editing across servers (docs/plans/collab-federation.md).
     pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
+    /// The OPAQUE setups (docs/plans/opaque.md §5), opened at startup.
+    pub(crate) opaque: Arc<opaque_setup::OpaqueServer>,
+}
+
+const USAGE: &str = "usage: kutup-server [serve]
+       kutup-server check-config
+       kutup-server storage-check
+       kutup-server orphan-sweep [--delete] [--age-floor=<dur>] [--page-sleep=<dur>] [--prefix=<p>]
+       kutup-server federation-identity rotate
+       kutup-server feature-policy rotate <sealed-sender|mls-ordering>";
+
+/// Whether `rest` (the arguments after the program name) is a command this
+/// build has. `orphan-sweep` checks its own flags.
+fn known_command(rest: &[String]) -> bool {
+    let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+    matches!(
+        rest.as_slice(),
+        [] | ["serve"]
+            | ["check-config"]
+            | ["storage-check"]
+            | ["orphan-sweep", ..]
+            | ["federation-identity", "rotate"]
+            | ["feature-policy", "rotate", "sealed-sender" | "mls-ordering"]
+    )
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _telemetry = telemetry::init()?;
 
+    let args: Vec<String> = std::env::args().collect();
+    // Only a known command runs; anything else (a typo, a subcommand this
+    // build does not have) stops here, before the configuration or the
+    // database is touched, so it can never start a second server.
+    if !known_command(&args[1.min(args.len())..]) {
+        eprintln!("{USAGE}");
+        std::process::exit(2);
+    }
     let config = Config::load();
+    // `check-config`: read and check every setting, touch nothing (no
+    // database, no migrations). Exit 0, or 2 with every problem listed (from
+    // `Config::load`); deploys run it against the new image first.
+    if args.get(1..).is_some_and(|rest| rest == ["check-config"]) {
+        println!("kutup-server: the configuration is valid");
+        return Ok(());
+    }
     let pool = db::connect(&config.database_url).await?;
     db::migrate(&pool).await?;
     tracing::info!("migrations applied");
-    let args: Vec<String> = std::env::args().collect();
     if args
         .get(1)
         .is_some_and(|value| value == "federation-identity")
@@ -301,8 +351,27 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(code);
     }
 
+    // A new database takes its registration mode from REGISTRATION_MODE; after
+    // that only administrators change it. A failure leaves registration closed.
+    if let Err(error) = registration::seed_mode(&pool, config.registration_mode).await {
+        tracing::error!(%error, "could not seed the registration mode; registration stays closed");
+    }
+
     // Seed the break-glass admin account from ADMIN_ACCOUNT — mirrors main.bootstrapAdmin.
-    bootstrap_admin(&pool, &config.admin_account).await;
+    // The OPAQUE setups: a wrong OPAQUE_SETUP_KEYS stops here, before any
+    // sign-in could fail for everyone.
+    let opaque = Arc::new(
+        opaque_setup::OpaqueServer::load(&pool, &config.opaque_setup_keys)
+            .await
+            .map_err(anyhow::Error::msg)?,
+    );
+    bootstrap_admin(
+        &pool,
+        &opaque,
+        &config.admin_account,
+        &config.chat_server_name,
+    )
+    .await;
 
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
@@ -353,6 +422,7 @@ async fn main() -> anyhow::Result<()> {
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
+        opaque,
         pool,
         config: Arc::new(config),
         storage,
@@ -372,9 +442,14 @@ async fn main() -> anyhow::Result<()> {
             sealed_sender.spawn_maintenance(state.pool.clone(), Arc::clone(federation));
         }
     }
+    // Old addresses past their receiving, names past their hold.
+    account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+    // Announces of this server's renames to its peers.
+    remote_renames::spawn_announcer(state.clone());
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     chat_mls::spawn_retry_worker(state.clone());
+    chat_mls::spawn_invitation_expiry(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
@@ -435,71 +510,152 @@ async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> any
     Ok(())
 }
 
-/// Seeds the single break-glass admin account from `ADMIN_ACCOUNT` (`email:username:password`).
+/// Seeds the single break-glass admin account from `ADMIN_ACCOUNT` (`username:password`).
 /// This account is the protected break-glass admin (never demotable/disableable/deletable; see
 /// the guards in `handlers/admin.rs`); other admins are promoted in-app. The admin must complete
 /// first-login setup to establish their E2EE key material — mirrors `main.bootstrapAdmin`.
-async fn bootstrap_admin(pool: &PgPool, account_env: &str) {
+async fn bootstrap_admin(
+    pool: &PgPool,
+    opaque: &Arc<opaque_setup::OpaqueServer>,
+    account_env: &str,
+    server_name: &str,
+) {
     if account_env.is_empty() {
         return;
     }
-    let parts: Vec<&str> = account_env.trim().splitn(3, ':').collect();
-    if parts.len() != 3 {
-        tracing::warn!(
-            "bootstrapAdmin: malformed ADMIN_ACCOUNT (expected email:username:password)"
+    let Some((username, password)) = crate::config::parse_admin_account(account_env) else {
+        tracing::error!(
+            "bootstrapAdmin: ADMIN_ACCOUNT is not username:password (a username of 3 to 32 lowercase letters, digits, _ or -; the old email:username:password form is no longer read) — no admin account is seeded"
         );
         return;
-    }
-    let (email, username, password) = (parts[0].trim(), parts[1].trim(), parts[2].trim());
-    if email.is_empty() || username.is_empty() || password.is_empty() {
-        tracing::warn!("bootstrapAdmin: ADMIN_ACCOUNT has an empty field — skipping");
-        return;
-    }
+    };
+    let (username, password) = (username.as_str(), password.as_str());
 
-    let exists: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email=$1")
-        .bind(email)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+    // A failed check is not "no admin yet": nothing is created on an error.
+    // Any name in that folded form counts, held ones too (the break-glass
+    // account cannot be renamed; a held spelling is never re-created).
+    let exists: Option<i64> = match sqlx::query_scalar(
+        "SELECT COUNT(*) FROM account_names WHERE folded = kutup_fold($1)",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(exists) => exists,
+        Err(error) => {
+            tracing::error!(%error, "bootstrapAdmin: could not check for the account; not creating it");
+            return;
+        }
+    };
     if exists.unwrap_or(0) > 0 {
         return;
     }
 
-    let hash = match bcrypt::hash(password, 10) {
-        Ok(h) => h,
+    // Registered as any temporary password is, by both halves of OPAQUE here
+    // (the one place the server holds a password: it was given this one),
+    // under a key binding drawn now. Only when the account does not exist:
+    // never again on a later start, which would end its sign-ins.
+    let key_binding = uuid::Uuid::new_v4().to_string();
+    let registered = {
+        let opaque = opaque.clone();
+        let (password, key_binding) = (password.to_string(), key_binding.clone());
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<u8>, u16)> {
+            let (key_id, secrets) = opaque.current();
+            let (registering, request) =
+                kutup_crypto::opaque::client_registration_start(&password)?;
+            let response = kutup_crypto::opaque::server_registration_response(
+                secrets,
+                &request,
+                &key_binding,
+            )?;
+            let upload = registering.finish(&response)?.record;
+            Ok((
+                kutup_crypto::opaque::server_registration_record(&upload)?,
+                key_id,
+            ))
+        })
+        .await
+    };
+    let (opaque_record, opaque_server_key_id) = match registered {
+        Ok(Ok(registered)) => registered,
+        Ok(Err(e)) => {
+            tracing::warn!("bootstrapAdmin: registering the password failed: {e}");
+            return;
+        }
         Err(e) => {
-            tracing::warn!("bootstrapAdmin: bcrypt error for {email}: {e}");
+            tracing::warn!("bootstrapAdmin: registering the password failed: {e}");
             return;
         }
     };
 
-    let storage_quota_bytes = crate::storage_pool::default_quota(pool)
-        .await
-        .unwrap_or(crate::storage_pool::DEFAULT_QUOTA_BYTES);
-    let res = sqlx::query(
+    let storage_quota_bytes = match crate::storage_pool::default_quota(pool).await {
+        Ok(quota) => quota,
+        Err(error) => {
+            tracing::error!(%error, "bootstrapAdmin: could not read the default quota; not creating the account");
+            return;
+        }
+    };
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::warn!("bootstrapAdmin: {e}");
+            return;
+        }
+    };
+    let res: Result<uuid::Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
-            email, username, login_key_hash,
+            username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
             master_key_envelope, recovery_key_envelope,
             drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
-            account_protection_suite, account_protection_salt,
-            argon_memory_kib, argon_iterations, argon_parallelism,
-            is_admin, is_first_login, storage_quota_bytes
-        ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,true,true,$4)"#,
+            is_admin, is_first_login, storage_quota_bytes, is_break_glass
+        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',true,true,$6,true)
+        RETURNING id"#,
     )
-    .bind(email)
     .bind(username)
-    .bind(&hash)
+    .bind(&key_binding)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id as i16)
     .bind(storage_quota_bytes)
-    .execute(pool)
+    .fetch_one(&mut *tx)
     .await;
-    match res {
-        Ok(_) => tracing::info!(
-            "bootstrapAdmin: created break-glass admin account {email} (@{username})"
+    let created = match res {
+        Ok(id) => match crate::account_names::claim(&mut tx, username, id, None).await {
+            Ok(()) => {
+                crate::handlers::mail_keys::create_own_address(&mut tx, server_name, id, username)
+                    .await
+            }
+            Err(e) => {
+                tracing::warn!("bootstrapAdmin: the name @{username} is taken: {e:?}");
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::warn!("bootstrapAdmin: insert error for @{username}: {e}");
+            return;
+        }
+    };
+    match created {
+        Ok(true) => match tx.commit().await {
+            Ok(()) => {
+                tracing::info!("bootstrapAdmin: created break-glass admin account @{username}")
+            }
+            Err(e) => tracing::warn!("bootstrapAdmin: commit error for @{username}: {e}"),
+        },
+        // The account to get back in with must exist: stop, loudly.
+        Ok(false) => {
+            tracing::error!(
+                "bootstrapAdmin: break-glass admin NOT created: the address of @{username} is taken (a group or another account); choose another ADMIN_ACCOUNT username"
+            );
+            eprintln!("kutup-server: ADMIN_ACCOUNT's username @{username} is taken by a group or another account's address");
+            std::process::exit(2);
+        }
+        Err(e) => tracing::warn!(
+            "bootstrapAdmin: address error for @{username}: {}",
+            e.message
         ),
-        Err(e) => tracing::warn!("bootstrapAdmin: insert error for {email}: {e}"),
     }
 }
 
@@ -568,12 +724,20 @@ fn build_router(state: AppState) -> Router {
             post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
         )
         .route(
-            "/api/auth/login/preflight",
-            get(auth::get_login_preflight).route_layer(from_fn(middleware::rate_limit_preflight)),
+            "/api/auth/registration-code/check",
+            post(auth::check_registration_code)
+                .route_layer(from_fn(middleware::rate_limit_registration_code_check)),
+        )
+        // OPAQUE sign-in (docs/plans/opaque.md): every start is one attempt.
+        .route(
+            "/api/auth/login/start",
+            post(handlers::opaque::login_start)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
-            "/api/auth/login",
-            post(auth::login).route_layer(from_fn(middleware::rate_limit_login)),
+            "/api/auth/login/finish",
+            post(handlers::opaque::login_finish).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/auth/login/2fa",
@@ -584,8 +748,20 @@ fn build_router(state: AppState) -> Router {
             get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
         )
         .route(
-            "/api/auth/recover",
-            post(auth::recover).route_layer(from_fn(middleware::rate_limit_recovery)),
+            "/api/auth/recover/grant",
+            post(auth::recover_grant).route_layer(from_fn(middleware::rate_limit_recovery)),
+        )
+        // OPAQUE registration: each start is one query of an OPRF key, so it
+        // is limited as a sign-in attempt is.
+        .route(
+            "/api/auth/opaque/register/start",
+            post(handlers::opaque::register_start)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/auth/opaque/register/finish",
+            post(handlers::opaque::register_finish).route_layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/api/auth/refresh", post(auth::refresh))
         .route("/api/auth/complete-setup", post(auth::complete_setup))
@@ -611,8 +787,36 @@ fn build_router(state: AppState) -> Router {
         // --- User routes (authenticated via the AuthUser extractor) ---
         .route("/api/user/me", get(auth::get_me).patch(auth::update_me))
         .route(
-            "/api/user/drive-key-binding",
-            put(identity::put_drive_key_binding),
+            "/api/admin/names/:name/close",
+            post(handlers::renames::admin_close),
+        )
+        .route(
+            "/api/admin/names/:name/free",
+            post(handlers::renames::admin_free),
+        )
+        .route(
+            "/api/users/renames/:address",
+            get(handlers::renames::chains).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route("/api/user/rename/check", get(handlers::renames::check))
+        .route("/api/user/rename", post(handlers::renames::rename))
+        .route("/api/user/names", get(handlers::renames::names))
+        .route(
+            "/api/user/names/:name",
+            axum::routing::delete(handlers::renames::drop_name),
+        )
+        .route(
+            "/api/account/head",
+            get(handlers::account_heads::head).post(handlers::account_heads::start),
+        )
+        .route("/api/account/heads", get(handlers::account_heads::heads))
+        .route(
+            "/api/account/index/:scope",
+            get(handlers::account_heads::index),
+        )
+        .route(
+            "/api/user/security-events",
+            get(handlers::security_events::list),
         )
         .route(
             "/api/feedback",
@@ -632,6 +836,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/pass/vault-secrets",
             get(handlers::pass::list_vault_secrets),
+        )
+        .route(
+            "/api/pass/vault-secrets/forget",
+            post(handlers::pass::forget_vault_secrets),
         )
         .route(
             "/api/pass/vault-secrets/:file_id",
@@ -661,12 +869,6 @@ fn build_router(state: AppState) -> Router {
             "/api/pass/pin/verify",
             // Bounded by the account's three tries, not the sign-in limit.
             post(handlers::pass::verify_pin).route_layer(DefaultBodyLimit::max(4 * 1024)),
-        )
-        .route(
-            "/api/user/reauth",
-            post(auth::reauth)
-                .route_layer(from_fn(middleware::rate_limit_login))
-                .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route("/api/user/storage", get(handlers::storage::usage))
         .route(
@@ -869,8 +1071,12 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
         .route(
-            "/api/users/by-email/:email",
-            get(auth::get_user_by_email).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+            "/api/users/by-address/:address",
+            get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),
+        )
+        .route(
+            "/api/users/by-id/:accountId",
+            get(handlers::accounts::by_id).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
         .route(
             "/api/users/drive-identities",
@@ -919,10 +1125,6 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/collections",
             get(collections::list_collections).post(collections::create_collection),
-        )
-        .route(
-            "/api/drive/federation/users/:username",
-            get(drive_federation::fetch_remote_user),
         )
         .route(
             "/api/collections/:id",
@@ -1013,12 +1215,12 @@ fn build_router(state: AppState) -> Router {
             put(handlers::name_hashes::set_content_hash),
         )
         .route(
-            "/api/collections/:id/name-hashes",
-            post(handlers::name_hashes::fill_name_hashes),
+            "/api/collections/:id/available-hashes",
+            post(handlers::name_hashes::available_hashes),
         )
         .route(
-            "/api/drive/top-level-name-hashes",
-            post(handlers::name_hashes::fill_top_level_name_hashes),
+            "/api/drive/top-level-available-hashes",
+            post(handlers::name_hashes::top_level_available_hashes),
         )
         .route(
             "/api/collections/:id/move",
@@ -1026,6 +1228,8 @@ fn build_router(state: AppState) -> Router {
         )
         // --- Devices (authenticated) ---
         .route("/api/devices", post(devices::register).get(devices::list))
+        .route("/api/devices/challenge", post(devices::challenge))
+        .route("/api/devices/:id/renew", post(devices::renew))
         .route("/api/devices/:id", delete(devices::revoke))
         // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
@@ -1098,15 +1302,15 @@ fn build_router(state: AppState) -> Router {
             get(sealed_sender_service::get_domain_policy),
         )
         .route(
-            "/api/chat/users/:username/profile/:version",
+            "/api/chat/accounts/:account_id/profile/:version",
             get(chat::get_user_profile),
         )
         .route(
-            "/api/chat/users/:username/manifest",
+            "/api/chat/accounts/:account_id/manifest",
             get(chat::get_user_manifest),
         )
         .route(
-            "/api/chat/users/:username/manifest-history",
+            "/api/chat/accounts/:account_id/manifest-history",
             get(chat::get_manifest_history).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route("/api/chat/keys", put(chat::replenish_keys))
@@ -1190,23 +1394,23 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/users/:username/keys",
+            "/api/chat/accounts/:account_id/keys",
             get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
         .route(
-            "/api/chat/anonymous/users/:username/keys",
+            "/api/chat/anonymous/accounts/:account_id/keys",
             post(chat::get_anonymous_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/anonymous/users/:username/messages",
+            "/api/chat/anonymous/accounts/:account_id/messages",
             post(chat::send_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
-            "/api/chat/users/:username/messages",
+            "/api/chat/accounts/:account_id/messages",
             post(chat::send_messages).route_layer(DefaultBodyLimit::max(FED_CHAT_BODY_LIMIT_BYTES)),
         )
         .route(
@@ -1441,6 +1645,17 @@ fn build_router(state: AppState) -> Router {
         // handler before the upgrade (mirrors Go's PreUpgrade — browsers can't set headers
         // on `new WebSocket`, so the token may arrive via ?token=). ---
         .route("/api/files/:fileId/collab/ws", get(collab::ws))
+        // The log over HTTP, for a peer without a socket (the CLI).
+        .route(
+            "/api/files/:fileId/collab/frames",
+            get(collab::get_frames)
+                .post(collab::post_frame)
+                // One sealed frame at most.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_crypto::envelope::MAX_PLAINTEXT_BYTES
+                        + kutup_crypto::envelope::MIN_PACKED,
+                )),
+        )
         // --- Public shares. Create is authenticated; the read/download endpoints are
         // anonymous (the token is the capability). ---
         .route("/api/share", post(shares::create_public_share))
@@ -1475,12 +1690,12 @@ fn build_router(state: AppState) -> Router {
         // --- Server-to-server endpoints. Every feature uses the shared v2
         // identity, discovery, policy, pinning, replay, and signed transport. ---
         .route(
-            "/api/fed/chat/users/:username/keys",
+            "/api/fed/chat/accounts/:account_id/keys",
             get(chat_federation::get_user_bundles)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/sealed/users/:username/keys",
+            "/api/fed/chat/sealed/accounts/:account_id/keys",
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
@@ -1569,17 +1784,17 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/profile/:version",
+            "/api/fed/chat/accounts/:account_id/profile/:version",
             get(chat_federation::get_user_profile)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/manifest-history",
+            "/api/fed/chat/accounts/:account_id/manifest-history",
             get(chat_federation::get_manifest_history)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/users/:username/manifest",
+            "/api/fed/chat/accounts/:account_id/manifest",
             get(chat_federation::get_manifest)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
@@ -1599,6 +1814,29 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/media/objects",
             post(chat_media_federation::serve_object)
                 .route_layer(DefaultBodyLimit::max(64 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        // Renames, under Chat's and Drive's namespaces alike (the signed
+        // request's feature says which).
+        .route(
+            "/api/fed/chat/names/:username/renames",
+            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/names/:username/renames",
+            get(remote_renames::publish).route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/accounts/renames",
+            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/fed/drive/accounts/renames",
+            post(remote_renames::announce).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/fed/drive/accounts/:accountId",
+            get(handlers::accounts::fed_by_id)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -1652,6 +1890,12 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/drive/collab/devices",
+            post(collab_federation::devices)
+                .route_layer(DefaultBodyLimit::max(256 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -1884,6 +2128,7 @@ fn build_router(state: AppState) -> Router {
                     post(admin::rotate_temp_password),
                 )
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
+                .route("/api/admin/users/:id/reset-grant", post(admin::reset_grant))
                 .route("/api/admin/reports", get(link_reports::list_reports))
                 .route(
                     "/api/admin/reports/:id/dismiss",
@@ -1929,6 +2174,23 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
                 )
+                .route(
+                    "/api/admin/registration-codes",
+                    get(handlers::registration_codes::list)
+                        .post(handlers::registration_codes::create),
+                )
+                .route(
+                    "/api/admin/registration-codes/:id/revoke",
+                    post(handlers::registration_codes::revoke),
+                )
+                .route(
+                    "/api/admin/registration-codes/:id/uses",
+                    get(handlers::registration_codes::uses),
+                )
+                .route(
+                    "/api/admin/users/:id/registration-code",
+                    get(handlers::registration_codes::user_code),
+                )
                 .route("/api/admin/maps", get(maps::admin_get).put(maps::admin_put))
                 .route(
                     "/api/admin/federation",
@@ -1973,6 +2235,7 @@ fn build_router(state: AppState) -> Router {
         // panic recovery turns a handler panic into a 500 (mirrors Fiber's `recover.New()`).
         // NOTE: trailing-slash normalization is applied *outside* the Router in `main` (a
         // `Router::layer` runs only for matched paths, so it can't rescue `/collections/`).
+        .layer(from_fn(middleware::session_version_header))
         .layer(CatchPanicLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
@@ -2153,6 +2416,45 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("upload-length"),
             HeaderName::from_static("x-kutup-key-generation"),
             HeaderName::from_static("x-kutup-version"),
+            HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
             axum::http::header::LOCATION,
         ])
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::known_command;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|a| a.to_string()).collect()
+    }
+
+    #[test]
+    fn only_known_commands_start_anything() {
+        for ok in [
+            &[][..],
+            &["serve"],
+            &["check-config"],
+            &["storage-check"],
+            &["orphan-sweep"],
+            &["orphan-sweep", "--delete"],
+            &["federation-identity", "rotate"],
+            &["feature-policy", "rotate", "mls-ordering"],
+        ] {
+            assert!(known_command(&args(ok)), "{ok:?}");
+        }
+        // A typo, a subcommand an older or newer build has, extra words:
+        // never the server.
+        for refused in [
+            &["check-confg"][..],
+            &["serve", "now"],
+            &["check-config", "--verbose"],
+            &["storage-check", "x"],
+            &["federation-identity"],
+            &["feature-policy", "rotate", "drive"],
+            &["--help"],
+        ] {
+            assert!(!known_command(&args(refused)), "{refused:?}");
+        }
+    }
 }

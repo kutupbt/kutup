@@ -311,6 +311,7 @@ type MessageRow = (
     Vec<String>,
     String,
     bool,
+    String,
 );
 
 async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
@@ -321,13 +322,16 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
         return Ok(());
     }
     let row: Option<MessageRow> = sqlx::query_as(
+        // Mail to an old (receiving) address is answered too, always from
+        // the account's current one: the old address sends nothing.
         "SELECT a.address, m.folder, m.from_address, m.to_list, m.cc_list, m.subject,
                 m.message_id, m.references_list,
-                COALESCE(NULLIF(i.display_name, ''), u.username), u.is_admin
+                COALESCE(NULLIF(i.display_name, ''), u.username), u.is_admin, cur.address
            FROM mail_messages m
            JOIN mail_addresses a ON a.id = m.address_id
            JOIN users u ON u.id = a.user_id
-           LEFT JOIN mail_identities i ON i.address_id = a.id
+           JOIN mail_addresses cur ON cur.user_id = u.id AND cur.state = 'active'
+           LEFT JOIN mail_identities i ON i.address_id = cur.id
           WHERE m.id = $1 AND m.user_id = $2 AND m.direction = 'inbound'",
     )
     .bind(delivered.message)
@@ -335,20 +339,26 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     .fetch_optional(&state.pool)
     .await?;
     // Blocked meanwhile, or deleted already.
-    let Some((own, folder, from, to, cc, subject, message_id, references, name, is_admin)) = row
+    let Some((own, folder, from, to, cc, subject, message_id, references, name, is_admin, current)) =
+        row
     else {
         return Ok(());
     };
+    // Compared as senders are: this server's addresses in any spelling.
+    let key = |address: &str| super::sender_key(&state.config.chat_server_name, address);
+    // Answered at the address as written; remembered as compared.
     let sender = from.trim().to_ascii_lowercase();
+    let sender_key = key(&sender);
     let named =
         to.0.iter()
             .chain(cc.0.iter())
-            .any(|m| m.address.eq_ignore_ascii_case(&own));
+            .any(|m| key(&m.address) == key(&own));
     if matches!(folder.as_str(), "spam" | "trash")
         || !named
         || sender.is_empty()
         || !sender.contains('@')
-        || sender.eq_ignore_ascii_case(&own)
+        || sender_key == key(&own)
+        || sender_key == key(&current)
         || automated_sender(&sender)
     {
         return Ok(());
@@ -376,7 +386,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
          RETURNING sender",
     )
     .bind(delivered.user_id)
-    .bind(&sender)
+    .bind(&sender_key)
     .bind(RESEND_AFTER_DAYS)
     .fetch_optional(&state.pool)
     .await?;
@@ -386,7 +396,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     let reply_id = format!("{}@{}", Uuid::new_v4(), state.config.chat_server_name);
     let raw = compose(&Compose {
         from: &Mailbox {
-            address: own.clone(),
+            address: current.clone(),
             name,
         },
         to: &sender,
@@ -415,7 +425,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
             &format!("kutup@{}", state.config.chat_server_name),
             &state.config.mail_inbound_token,
             super::submit::Envelope {
-                from: &own,
+                from: &current,
                 recipients: std::slice::from_ref(&sender),
                 message: &raw,
             },
@@ -427,7 +437,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
         // Not answered: the next message from them may try again.
         sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender = $2")
             .bind(delivered.user_id)
-            .bind(&sender)
+            .bind(&sender_key)
             .execute(&state.pool)
             .await?;
         return Err(error);
@@ -435,7 +445,7 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     keep_in_sent(
         state,
         delivered.user_id,
-        &own,
+        &current,
         &raw,
         i32::from(local.is_none()),
     )

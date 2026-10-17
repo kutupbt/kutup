@@ -121,7 +121,7 @@ git clone https://github.com/kutupbt/kutup.git
 cd kutup
 cp .env.example .env
 # Edit .env — set strong values for POSTGRES_PASSWORD, JWT_SECRET,
-# S3_SECRET_KEY, ADMIN_ACCOUNT.
+# OPAQUE_SETUP_KEYS, S3_SECRET_KEY, ADMIN_ACCOUNT.
 mkdir -p nginx/certs
 openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout nginx/certs/privkey.pem -out nginx/certs/fullchain.pem \
@@ -144,7 +144,7 @@ development and air-gapped image preparation.
 
 `kutup` is a Rust CLI for the same E2EE primitives as the web — register, login, account recovery, ls, upload (resumable), download, sync, trash, share, versions, devices, 2fa, public-link consumption, file/folder rename. All operations are end-to-end encrypted in your shell; the server only ever sees ciphertext.
 
-Scripting-friendly: every command honors a global `--json` flag (stdout is exactly one JSON document; prompts/progress/status go to stderr, and with `--json` even errors are emitted as JSON on stderr), and exit codes are differentiated — `0` ok, `1` generic, `2` usage, `3` auth/session, `4` not found, `5` network/server. Destructive commands prompt `[y/N]` and take `--yes` for non-interactive use.
+Scripting-friendly: every command honors a global `--json` flag (stdout is exactly one JSON document; prompts/progress/status go to stderr, and with `--json` even errors are emitted as JSON on stderr), and exit codes are differentiated — `0` ok, `1` generic, `2` usage, `3` auth/session, `4` not found, `5` network/server, `6` the account's history on the server was rolled back or forked (see `kutup account state`; `kutup account reanchor` goes on with the server's data). Destructive commands prompt `[y/N]` and take `--yes` for non-interactive use.
 
 **Build from source** (Rust ≥ 1.91.1):
 
@@ -163,10 +163,12 @@ Silicon, and Windows x86-64 and published on GitHub Releases (see
 
 ```sh
 # Create an account (client-side crypto; prints a 24-word recovery phrase once).
-kutup register --server https://your.kutup.host --email you@example.com --username you
+# When the server takes sign-ups only with a referral code, it is asked for
+# (hidden); KUTUP_REGISTRATION_CODE gives it non-interactively.
+kutup register --server https://your.kutup.host --username you
 
 # Login (interactive password prompt; password can also come from KUTUP_PASSWORD).
-kutup login --server https://your.kutup.host --email you@example.com
+kutup login --server https://your.kutup.host --username you
 
 # Against the local Compose stack and its self-signed certificate (which is
 # its own CA, so the CLI's TLS stack refuses it as a server certificate):
@@ -217,6 +219,8 @@ kutup download <file-id> ./local/path/
 # as versions of the same file and concurrent edits are merged entry by
 # entry (Kutup Pass); the vault key comes from the account (kutup pass
 # keep <file-id>), KUTUP_VAULT_PASSWORD / KUTUP_VAULT_KEY_FILE or a prompt.
+# A vault made in Kutup Pass with a random key: `kutup pass show-key
+# <file-id>` prints it, to open the vault in KeePassXC.
 # Deletions propagate only with
 # --delete; --dry-run previews without touching anything.
 kutup sync ./local-folder <folder-id>

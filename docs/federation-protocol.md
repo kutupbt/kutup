@@ -88,7 +88,7 @@ FederationDiscoveryV2 {
   fedVersion: 2,
   server,
   apiBase,
-  capabilities: ["chat.v1", "drive.v1", "identity.v1"],
+  capabilities: ["chat.v2", "drive.v1", "identity.v1"],
   identity,
   identityDocumentHash,
   signedAt,
@@ -102,7 +102,38 @@ is canonical HTTPS without credentials, query, fragment, a default `:443`, or
 a trailing slash. Delegation to a different DNS host is allowed because the
 server identity signs that endpoint. Plain HTTP and private addresses exist
 only behind an explicit `APP_ENV=test` harness guard and are not accepted by
-the production profile.
+the production profile. Peers are checked with the same public-address list as
+every other outbound request (`ssrf::is_public`), which also refuses NAT64,
+6to4 and Teredo addresses: an IPv6-only server behind DNS64 cannot reach
+IPv4-only peers (a known limit; run federation dual-stack).
+
+`chat.v2` is the Chat wire of the clean-slate release: every account is
+`username@server`, every message carries its `messageId`, and the MLS group
+policy always spells out `groupInfoEditors`. It replaced `chat.v1` outright;
+the feature name is also signed into every request (`kutup-federation-feature`),
+so a `chat.v1` server is neither sent to nor accepted. A send to a server whose
+discovery lacks `chat.v2` is not retried every few seconds: it stays queued in
+order, is tried again hourly (an upgraded peer is picked up then), and the
+sending client gets `503` with `code: peerUnsupported` instead of a send that
+never ends. The chat app shows it above that conversation ("<server> does
+not support this Chat version yet"); the message stays queued. A final
+refusal (`peerRefused`) leaves the client's queue as a sealed refusal does.
+
+The same release pads Drive's sealed names and file metadata
+(`DriveEnvelopeV1` purposes 2 and 4, 256-byte buckets, `crate::padding`), and
+requires a name hash on every Drive write. A Drive peer running code from
+before it cannot read names from this release or write into its folders; both
+servers must run the clean-slate release.
+
+A sealed send is refused for good only when the receiver says so for that
+sequence: a signed `400` whose body names it (`refused.sequence`), recorded
+by the receiver so a replay gets the same answer and the next sequence
+meets no gap. The sender then rejects the row (`502 code: peerRefused` to
+the client). Any other `400` (before the sequence was known, or a refusal
+that could not be recorded, such as a reused `sendId`) leaves the send
+pending. A refusal holds for its sequence: a corrected message is a new
+send with a new sequence and `sendId`, never the refused one again.
+Refusals are counted in the origin's rate like deliveries.
 
 The identity's current key signs these deterministic bytes:
 

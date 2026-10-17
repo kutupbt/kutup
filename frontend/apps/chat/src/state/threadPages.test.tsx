@@ -7,12 +7,12 @@ import type { ChatHistoryEntry } from '@kutup/chat-core/types'
 const all: ChatHistoryEntry[] = Array.from({ length: 350 }, (_, i): ChatHistoryEntry => ({
   id: `m${350 - i}`,
   conversation: { kind: 'group', groupId: 'g1' },
-  peer: '',
+  sender: '',
   direction: 'incoming',
   timestampMs: 350 - i,
   delivered: true,
   deduplicated: false,
-  content: { version: 1, kind: 'text', sentAt: '', seq: '1', body: {}, text: '' },
+  content: { version: 1, kind: 'text', sentAt: '', seq: '1', messageId: 'm-15', body: {}, text: '' },
 }))
 
 const conversationPage = vi.fn((_key: string, before: string | undefined, limit: number) => {

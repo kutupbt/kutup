@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { ChatLocationV1 } from '@kutup/chat-core/types'
-import { canonicalAccountAddress, conversationKey, directConversation, parseAccountAddress } from '@kutup/chat-core/identity'
+import { accountKey, conversationKey, directConversation } from '@kutup/chat-core/identity'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Input } from '@kutup/ui/components/input'
@@ -12,6 +12,7 @@ import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
 import { conversationTitle } from '../../lib/names'
+import { accountName } from '../../state/accountNames'
 import { attachmentFile, uploadAndSend } from '../../lib/sendMedia'
 import { closeSharedPlace, useSharedPlace } from '../../lib/sharedPlace'
 import { useNow } from '../../lib/useNow'
@@ -64,15 +65,15 @@ export function ForwardDialog({
 
   const candidates = useMemo(() => {
     const groups = new Map(chat.snapshot.groups.map((group) => [groupIdOf(group), group]))
-    const items = conversationList(chat.snapshot, self.address, now).filter((item) => canForwardTo(item))
+    const items = conversationList(chat.snapshot, self.key, now).filter((item) => canForwardTo(item))
     // Note to Self is always a place to forward to, even before it has a message.
     if (!items.some((item) => item.kind === 'note')) {
-      const conversation = directConversation(parseAccountAddress(self.address)!)
+      const conversation = directConversation(self.account)
       items.push({
         key: conversationKey(conversation),
         conversation,
         kind: 'note',
-        address: self.address,
+        peer: self.key,
         last: null,
         activityMs: 0,
         contact: null,
@@ -91,17 +92,17 @@ export function ForwardDialog({
       if (item.kind !== 'group' || item.conversation.kind !== 'group') return false
       const group = groups.get(item.conversation.groupId)
       if (!group || group.status !== 'active' || group.left) return false
-      const me = group.currentRoster.find((member) => canonicalAccountAddress(member.address) === self.address)
+      const me = group.currentRoster.find((member) => accountKey(member.account) === self.key)
       return group.currentAuthorizationPolicy.applicationSenders === 1 || me?.isAdmin === true
     }
-  }, [chat.snapshot, chat.capabilities, self.address, now, attachment])
+  }, [chat.snapshot, chat.capabilities, self.key, self.account, now, attachment])
 
   const titled = candidates.map((item) => ({
     item,
-    title: conversationTitle(item.conversation, item.address, item.profile, self.address, t, item.groupInfo),
+    title: conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo),
   }))
   const needle = query.trim().toLocaleLowerCase()
-  const shown = needle ? titled.filter(({ title, item }) => `${title} ${item.address ?? ''}`.toLocaleLowerCase().includes(needle)) : titled
+  const shown = needle ? titled.filter(({ title, item }) => `${title} ${(item.peer && accountName(item.peer)) ?? ''}`.toLocaleLowerCase().includes(needle)) : titled
 
   function toggle(key: string) {
     setChosen((current) =>

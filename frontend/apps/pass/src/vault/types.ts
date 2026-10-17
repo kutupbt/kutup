@@ -179,6 +179,8 @@ export interface OtpView {
 /** What opens a vault: a password, a key file, or both. */
 export interface VaultKeyInput {
   password: string | null
+  /** The password given as its SHA-256, as the account keeps it; opens and saves as the password does. */
+  passwordHash?: Uint8Array | null
   keyFile: Uint8Array | null
 }
 

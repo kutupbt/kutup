@@ -10,11 +10,14 @@
 //! methods (e.g. `tus_head` for resume) exist for completeness/future use.
 #![allow(dead_code)]
 
+pub mod account_head;
 pub mod assets;
+pub mod collab;
 pub mod devices;
 pub mod federation;
 pub mod files;
 pub mod identity;
+pub mod opaque;
 pub mod pass;
 pub mod public;
 pub mod sessions;
@@ -45,6 +48,16 @@ pub struct ApiError {
     /// The server's `{"error": "…"}` message when parseable, else the raw
     /// body (or the status reason phrase when the body is empty).
     pub message: String,
+    /// The server's machine-readable `code`, when it gave one.
+    pub code: Option<String>,
+    /// A `409 versionUploading` for an upload of the caller's: its id.
+    pub upload_id: Option<String>,
+    /// A `409 versionUploading`: seconds since the open upload's last part.
+    pub idle_seconds: Option<i64>,
+    /// A `409 versionUploading` with `uploadId`: true when the caller is its
+    /// uploader (it may go on with it), false for the folder's owner (who
+    /// may only cancel it).
+    pub yours: Option<bool>,
     /// A `409 name_taken`: what holds the name in that place
     /// (docs/plans/drive-unique-names.md).
     pub name_taken: Option<NameHolder>,
@@ -92,6 +105,14 @@ impl ApiError {
                 status == 409 && v.get("code").and_then(|c| c.as_str()) == Some("version_conflict")
             })
             .and_then(|v| v.get("current")?.as_str().map(str::to_string));
+        let code = parsed
+            .as_ref()
+            .and_then(|v| v.get("code")?.as_str().map(str::to_string));
+        let upload_id = parsed
+            .as_ref()
+            .and_then(|v| v.get("uploadId")?.as_str().map(str::to_string));
+        let idle_seconds = parsed.as_ref().and_then(|v| v.get("idleSeconds")?.as_i64());
+        let yours = parsed.as_ref().and_then(|v| v.get("yours")?.as_bool());
         let message = parsed
             .and_then(|v| v.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| {
@@ -105,13 +126,17 @@ impl ApiError {
         ApiError {
             status,
             message,
+            code,
+            upload_id,
+            idle_seconds,
+            yours,
             name_taken,
             version_conflict,
         }
     }
 }
 
-/// Percent-encodes one URL path segment (emails in paths may contain
+/// Percent-encodes one URL path segment (addresses in paths may contain
 /// reserved characters like `#`, `?`, or `%`).
 pub(crate) fn path_segment(s: &str) -> String {
     let mut u = reqwest::Url::parse("http://x/").expect("static base url");
@@ -232,24 +257,19 @@ impl Client {
 
     // --- Auth ---
 
-    pub fn register(&self, req: &RegisterRequest) -> Result<()> {
+    /// Creates the account; sign-up answers the session, as a sign-in does.
+    pub fn register(&self, req: &RegisterRequest) -> Result<LoginResponse> {
         let resp = self.post_json("/auth/register", req)?;
+        decode_json(resp)
+    }
+
+    /// Whether a referral code can admit a sign-up now (uses nothing up).
+    pub fn check_registration_code(&self, code: &str) -> Result<()> {
+        let resp = self.post_json(
+            "/auth/registration-code/check",
+            &serde_json::json!({ "code": code }),
+        )?;
         check_ok(resp)
-    }
-
-    pub fn login_preflight(&self, email: &str) -> Result<PreflightResponse> {
-        // .query() form-encodes the value — a raw `+` in an email would
-        // otherwise decode server-side as a space.
-        let resp = self
-            .request(Method::GET, "/auth/login/preflight")
-            .query(&[("email", email)])
-            .send()?;
-        decode_json(resp)
-    }
-
-    pub fn login(&self, req: &LoginRequest) -> Result<LoginResponse> {
-        let resp = self.post_json("/auth/login", req)?;
-        decode_json(resp)
     }
 
     pub fn login_totp(&self, req: &TotpRequest) -> Result<LoginResponse> {
@@ -257,17 +277,12 @@ impl Client {
         decode_json(resp)
     }
 
-    pub fn recover_preflight(&self, email: &str) -> Result<RecoverPreflightResponse> {
+    pub fn recover_preflight(&self, name: &str) -> Result<RecoverPreflightResponse> {
         let resp = self
             .request(Method::GET, "/auth/recover/preflight")
-            .query(&[("email", email)])
+            .query(&[("name", name)])
             .send()?;
         decode_json(resp)
-    }
-
-    pub fn recover(&self, req: &RecoverRequest) -> Result<()> {
-        let resp = self.post_json("/auth/recover", req)?;
-        check_ok(resp)
     }
 
     pub fn refresh_token(&self, refresh_token: &str) -> Result<RefreshResponse> {
@@ -292,18 +307,22 @@ impl Client {
         decode_json(resp)
     }
 
-    pub fn verify_totp(&self, code: &str) -> Result<()> {
-        let resp = self.post_json("/user/2fa/verify", &serde_json::json!({ "code": code }))?;
+    /// `grant`: a `totp` grant from a reauth of this session.
+    pub fn verify_totp(&self, code: &str, grant: &str) -> Result<()> {
+        let resp = self.post_json(
+            "/user/2fa/verify",
+            &serde_json::json!({ "code": code, "grant": grant }),
+        )?;
         check_ok(resp)
     }
 
-    /// DELETE-with-body: the backend requires a current code to disable 2FA (so a stolen
-    /// session can't silently remove it). Mirrors the Go `DisableTOTP`.
-    pub fn disable_totp(&self, code: &str) -> Result<()> {
+    /// DELETE-with-body: turning 2FA off takes a current code and a `totp`
+    /// grant (the password proved again), so a stolen session cannot.
+    pub fn disable_totp(&self, code: &str, grant: &str) -> Result<()> {
         let resp = self
             .request(Method::DELETE, "/user/2fa")
             .header(CONTENT_TYPE, "application/json")
-            .json(&serde_json::json!({ "code": code }))
+            .json(&serde_json::json!({ "code": code, "grant": grant }))
             .send()?;
         check_ok(resp)
     }
@@ -379,33 +398,32 @@ impl Client {
         check_ok(resp)
     }
 
-    /// Gives items of a folder without a name hash theirs; returns the ids
-    /// whose name another item already holds.
-    pub fn fill_name_hashes(
+    /// Which of `hashes` (1 to [`MAX_ASKED_HASHES`]) no item holds in a
+    /// folder, or at the top level for `None`; the caller needs write access
+    /// there (docs/plans/drive-unique-names.md).
+    pub fn available_hashes(
         &self,
-        collection_id: &str,
-        files: &[(String, String)],
-        folders: &[(String, String)],
+        collection_id: Option<&str>,
+        hashes: &[String],
     ) -> Result<Vec<String>> {
-        let items = |list: &[(String, String)]| {
-            list.iter()
-                .map(|(id, hash)| serde_json::json!({ "id": id, "nameHash": hash }))
-                .collect::<Vec<_>>()
+        let path = match collection_id {
+            Some(id) => format!("/collections/{id}/available-hashes"),
+            None => "/drive/top-level-available-hashes".to_string(),
         };
-        let resp = self.post_json(
-            &format!("/collections/{collection_id}/name-hashes"),
-            &serde_json::json!({ "files": items(files), "folders": items(folders) }),
-        )?;
+        let resp = self.post_json(&path, &serde_json::json!({ "hashes": hashes }))?;
         let body: serde_json::Value = decode_json(resp)?;
         Ok(body
-            .get("clashes")
-            .and_then(|c| c.as_array())
+            .get("available")
+            .and_then(|a| a.as_array())
             .into_iter()
             .flatten()
-            .filter_map(|c| c.get("id")?.as_str().map(str::to_string))
+            .filter_map(|h| h.as_str().map(str::to_string))
             .collect())
     }
 }
+
+/// How many hashes one `available_hashes` call may ask about.
+pub const MAX_ASKED_HASHES: usize = 10;
 
 /// Decodes a JSON response, surfacing HTTP >= 400 as an [`ApiError`].
 pub(crate) fn decode_json<T: DeserializeOwned>(resp: Response) -> Result<T> {
@@ -459,6 +477,17 @@ mod tests {
                 .version_conflict
                 .is_none()
         );
+    }
+
+    #[test]
+    fn from_parts_keeps_the_code() {
+        let e = ApiError::from_parts(
+            409,
+            "Conflict",
+            r#"{"error":"name it there","code":"nameNeeded"}"#.into(),
+        );
+        assert_eq!(e.code.as_deref(), Some("nameNeeded"));
+        assert!(e.name_taken.is_none());
     }
 
     #[test]

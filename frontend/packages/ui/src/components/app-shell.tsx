@@ -34,6 +34,8 @@ export interface AppShellProps {
   headerEnd?: ReactNode
   /** Content edge to edge (Drive's file list); pages are padded otherwise. */
   flush?: boolean
+  /** Shown above the content, under the header: the account's state (HeadStateBanner). */
+  banner?: ReactNode
   children: ReactNode
 }
 
@@ -117,6 +119,7 @@ export function AppShell(props: AppShellProps) {
             {props.headerEnd}
           </div>
         </header>
+        {props.banner}
         <main className={cn('min-w-0 flex-1', !props.flush && 'px-4 py-6 md:px-8 md:py-8')}>
           {props.children}
         </main>

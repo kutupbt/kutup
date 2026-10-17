@@ -1,3 +1,0 @@
--- Pre-V1 clean schema: migration 017 creates the client-generated file_id
--- and canonical storage_path directly. Retained as a numbered no-op until
--- the first stable tag.

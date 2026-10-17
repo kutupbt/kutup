@@ -16,6 +16,8 @@ const ACTION_KEYS: Record<string, string> = {
   'report.dismiss': 'reportDismiss',
   'share.remove': 'shareRemove',
   'settings.update': 'settingsUpdate',
+  'registration_code.created': 'registrationCodeCreated',
+  'registration_code.revoked': 'registrationCodeRevoked',
   'maps.settings.update': 'mapsSettingsUpdate',
   'mail.sending.update': 'mailSendingUpdate',
   'mail.outside_sending.update': 'mailOutsideSendingUpdate',
@@ -38,13 +40,14 @@ function text(value: unknown): string {
 }
 
 /**
- * One audit row as a sentence. The target prefers the live email; once the
- * account is deleted, the at-action-time snapshot in `payload.email`.
+ * One audit row as a sentence, naming accounts by username: the live one;
+ * once the account is deleted, the at-action-time snapshot in the payload
+ * (`username`).
  */
 export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
   const admin =
-    e.adminUserId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminEmail ?? t('admin.activity.deletedUser'))
-  const target = e.targetEmail ?? (text(e.payload.email) || t('admin.activity.deletedUser'))
+    e.adminUserId === SYSTEM_ADMIN ? t('admin.activity.system') : (e.adminUsername ?? t('admin.activity.deletedUser'))
+  const target = e.targetUsername ?? (text(e.payload.username) || t('admin.activity.deletedUser'))
   const key = ACTION_KEYS[e.action]
   const values = {
     admin,
@@ -52,6 +55,8 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     domain: text(e.payload.domain),
     feature: text(e.payload.feature),
     mode: text(e.payload.mode),
+    // A referral code's last characters (its text is never logged).
+    hint: text(e.payload.hint),
     // Outside sending's policy, as the page names it.
     from: text(e.payload.from) ? t(`admin.mailSending.policy.${text(e.payload.from)}`) : '',
     to: text(e.payload.to) ? t(`admin.mailSending.policy.${text(e.payload.to)}`) : '',

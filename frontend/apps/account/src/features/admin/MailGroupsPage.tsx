@@ -6,7 +6,10 @@ import { toast } from 'sonner'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { newGroupKey, resolveAccount, type AccountRef, type GroupKind, type MailGroup, type PostPolicy } from '@kutup/mail-core/groups'
 import { GroupDialog } from '@kutup/mail-core/ui/GroupDialog'
+import { driveIdentityOf } from '@kutup/drive-core/identity'
+import { IdentityNotConfirmed } from '@kutup/drive-core/identityPins'
 import api from '@kutup/session/client'
+import { getSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
@@ -20,7 +23,7 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
-import { adminKey } from './api'
+import { adminKey, useServerName } from './api'
 
 // Mail groups for administrators (docs/plans/mail-groups.md): every group,
 // the role addresses first; creating lists and shared mailboxes (a shared
@@ -30,14 +33,6 @@ import { adminKey } from './api'
 const groupsAdminKey = [...adminKey, 'mail', 'groups'] as const
 const GIB = 1024 * 1024 * 1024
 const POLICIES: PostPolicy[] = ['anyone', 'local', 'members', 'managers']
-
-function useServerName() {
-  return useQuery({
-    queryKey: ['auth-settings', 'server-name'],
-    staleTime: Infinity,
-    queryFn: async () => (await api.get<{ chat?: { serverName?: string } }>('/auth/settings')).data.chat?.serverName ?? '',
-  })
-}
 
 export function MailGroupsPage() {
   const { t, i18n } = useTranslation()
@@ -61,7 +56,7 @@ export function MailGroupsPage() {
       void queryClient.invalidateQueries({ queryKey: groupsAdminKey })
     },
   })
-  const ownKeys = account.data ? [account.data.key, ...account.data.olderKeys] : null
+  const ownKeys = account.data?.groupHolder ?? null
 
   return (
     <PageBody>
@@ -210,11 +205,21 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
   const [ownerText, setOwnerText] = useState('')
   const [owners, setOwners] = useState<AccountRef[]>([])
   const [problem, setProblem] = useState<string | null>(null)
+  // An owner whose identity is in doubt: the mailbox's key is sealed to them
+  // only once the administrator says to go on.
+  const [inDoubt, setInDoubt] = useState<IdentityNotConfirmed | null>(null)
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (identityConfirmed: boolean) => {
+      setInDoubt(null)
       const lower = name.trim().toLowerCase()
-      const groupKey = kind === 'shared' ? await newGroupKey(`${lower}@${server.data}`, owners) : undefined
+      // The group's id, drawn here: its key shares are bound to it.
+      const id = crypto.randomUUID()
+      const session = getSession()
+      if (!session) throw new Error('not signed in')
+      const me = await driveIdentityOf(session)
+      const groupKey = kind === 'shared' ? await newGroupKey(`${lower}@${server.data}`, id, owners, { me, confirmed: identityConfirmed }, { kind: 'first', holders: owners }) : undefined
       await api.post('/admin/mail/groups', {
+        id,
         name: lower,
         displayName: displayName.trim(),
         kind,
@@ -229,7 +234,10 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
       void queryClient.invalidateQueries({ queryKey: groupsAdminKey })
       onClose()
     },
-    onError: (error) => setProblem(apiErrorMessage(error, t('admin.mailGroups.createFailed'))),
+    onError: (error) => {
+      if (error instanceof IdentityNotConfirmed) setInDoubt(error)
+      else setProblem(apiErrorMessage(error, t('admin.mailGroups.createFailed')))
+    },
   })
 
   async function addOwner() {
@@ -257,7 +265,7 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
           className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault()
-            if (valid) create.mutate()
+            if (valid) create.mutate(false)
           }}
         >
           <Field label={t('admin.mailGroups.name')} description={server.data ? t('admin.mailGroups.nameHint', { address: `${name.trim().toLowerCase() || 'team'}@${server.data}` }) : undefined}>
@@ -341,6 +349,14 @@ function CreateGroupDialog({ onClose }: { onClose: () => void }) {
               </Button>
             </div>
           </div>
+          {inDoubt ? (
+            <Alert variant="error" title={t(`identityCheck.${inDoubt.status.kind}.title`, { name: inDoubt.account })}>
+              <p>{t('mailGroups.identityInDoubt', { account: inDoubt.account })}</p>
+              <Button type="button" className="mt-2" size="sm" variant="outline" onClick={() => create.mutate(true)}>
+                {t('mailGroups.shareKeysAnyway')}
+              </Button>
+            </Alert>
+          ) : null}
           {problem ? <Alert variant="error">{problem}</Alert> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>

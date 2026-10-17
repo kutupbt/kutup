@@ -302,7 +302,9 @@ mod tests {
         assert!(other.open_preview(&sealed).is_err());
 
         let request = InviteJoinRequestV1 {
-            requester: "bob@b.test".parse().unwrap(),
+            requester: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test"
+                .parse()
+                .unwrap(),
             created_at_ms: 5,
         };
         let sealed = keys.seal_request(&request).unwrap();

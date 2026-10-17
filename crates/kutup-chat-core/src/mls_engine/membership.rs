@@ -451,7 +451,7 @@ pub(super) fn build_pending_membership_change(
     } = input;
     let next_addresses = next_roster
         .iter()
-        .map(|member| member.address.canonical())
+        .map(|member| member.account.to_string())
         .collect::<BTreeSet<_>>();
     let previous_participant_domains = participant_domains(&conversation.current_roster)?;
     let next_participant_domains = participant_domains(next_roster)?;
@@ -476,18 +476,18 @@ pub(super) fn build_pending_membership_change(
         {
             continue;
         }
-        let recipient: AccountAddress = address
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-        let destination = recipient
-            .server
-            .clone()
-            .ok_or_else(|| ChatError::Trust("MLS member has no federation domain".into()))?;
+        let recipient: AccountRef =
+            address
+                .parse()
+                .map_err(|error: kutup_crypto::error::CryptoError| {
+                    ChatError::Trust(error.to_string())
+                })?;
+        let destination = recipient.server.clone();
         devices_by_domain
             .entry(destination.clone())
             .or_default()
             .push(MlsConversationDeviceV1 {
-                address: recipient.clone(),
+                account: recipient.clone(),
                 device_id: *device_id,
             });
         if address == &local_device.0 && device_id == &local_device.1 {
@@ -511,21 +511,18 @@ pub(super) fn build_pending_membership_change(
         for addition in additions {
             let (address, device_id) =
                 parse_device_credential_identity(&addition.credential.credential_identity)?;
-            let recipient: AccountAddress =
+            let recipient: AccountRef =
                 address
                     .parse()
-                    .map_err(|error: kutup_chat_proto::AddressError| {
+                    .map_err(|error: kutup_crypto::error::CryptoError| {
                         ChatError::Trust(error.to_string())
                     })?;
-            let destination = recipient
-                .server
-                .clone()
-                .ok_or_else(|| ChatError::Trust("MLS member has no federation domain".into()))?;
+            let destination = recipient.server.clone();
             devices_by_domain
                 .entry(destination.clone())
                 .or_default()
                 .push(MlsConversationDeviceV1 {
-                    address: recipient.clone(),
+                    account: recipient.clone(),
                     device_id,
                 });
             envelopes_by_domain
@@ -545,21 +542,21 @@ pub(super) fn build_pending_membership_change(
     for destination in affected_domains {
         let mut local_members_after = next_roster
             .iter()
-            .filter(|member| member.address.server.as_deref() == Some(destination.as_str()))
+            .filter(|member| member.account.server == destination.as_str())
             .cloned()
             .collect::<Vec<_>>();
-        local_members_after.sort_by_key(|member| member.address.canonical());
+        local_members_after.sort_by_key(|member| member.account.to_string());
         let mut envelopes = envelopes_by_domain.remove(&destination).unwrap_or_default();
         envelopes.sort_by_key(|envelope| {
             (
-                envelope.recipient.canonical(),
+                envelope.recipient.to_string(),
                 envelope.device_id,
                 u16::from(envelope.kind),
                 envelope.envelope_id,
             )
         });
         let mut local_devices_after = devices_by_domain.remove(&destination).unwrap_or_default();
-        local_devices_after.sort_by_key(|device| (device.address.canonical(), device.device_id));
+        local_devices_after.sort_by_key(|device| (device.account.to_string(), device.device_id));
         let delivery = MlsMembershipDeliveryV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id: conversation.request.genesis.conversation_id,

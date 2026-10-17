@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountAddress, AccountManifestV1, AnonymousMlsKeyPackageRequestV1, ChatContent,
+    AccountManifestV1, AccountRef, AnonymousMlsKeyPackageRequestV1, ChatContent,
     ContactControlBody, ContactState, IdentifiedMlsKeyPackageRequestV1, MlsCipherSuiteId,
     MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse, SealedMessageSubmissionV1,
     SealedOutgoingEnvelopeV1, SendMessagesRequest, MLS_PROTOCOL_VERSION,
@@ -81,9 +81,9 @@ pub struct ReceiveReport {
     pub synced: Vec<String>,
     /// Mailbox ids containing authenticated linked-device contact controls.
     pub contact_synced: Vec<String>,
-    /// Canonical peers whose invisible profile-key control was processed.
+    /// Peer accounts whose invisible profile-key control was processed.
     pub profile_key_updated: Vec<String>,
-    /// Canonical peers whose encrypted server profile was refreshed.
+    /// Peer accounts whose encrypted server profile was refreshed.
     pub profiles_refreshed: Vec<String>,
     /// Mailbox ids decrypted and acknowledged without retaining plaintext
     /// because the sender is locally blocked.
@@ -130,6 +130,11 @@ pub enum ChatEvent {
     MessageSynced(Box<SentMessage>),
     MessageSent(SendSummary),
     IdentityChanged(Vec<crate::ChatAddress>),
+    /// A peer's pinned identity was quarantined for another one: its thread
+    /// has the "safety number changed" line (`peer` is the account key).
+    SafetyNumberChanged {
+        peer: String,
+    },
     InboundNeedsAttention {
         id: String,
         kind: InboundFailureKind,
@@ -162,7 +167,6 @@ pub struct Engine {
     state: EngineState,
     events: VecDeque<ChatEvent>,
     manifest_policy: ManifestPolicy,
-    local_server: Option<String>,
     sealed_sender_enabled: bool,
     /// The devices of each account as last fetched and verified this run
     /// (`bundles_for_send`). Never used to establish a session.
@@ -220,7 +224,6 @@ impl Engine {
             state: EngineState::Stopped,
             events: VecDeque::new(),
             manifest_policy,
-            local_server: None,
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
             known_devices_at: BTreeMap::new(),
@@ -235,13 +238,11 @@ impl Engine {
     }
 
     /// Share identities with the account's other apps through its synced
-    /// identity pins (docs/plans/drive-identity-pins.md). Needs the local
-    /// server bound (`set_local_server`): the list is sealed to the account's
-    /// canonical address.
-    pub fn enable_identity_pins(&mut self, master_key: &[u8; 32]) -> Result<()> {
-        let owner = self.canonical_self()?;
+    /// identity pins (docs/plans/drive-identity-pins.md). The list is sealed
+    /// to the account's key binding (`binding`), never to its address.
+    pub fn enable_identity_pins(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
         self.identity_pins = Some(crate::identity_sync::IdentityPinsSync::new(
-            owner, master_key,
+            binding, master_key,
         )?);
         Ok(())
     }
@@ -278,9 +279,15 @@ impl Engine {
                 self.session.mark_authority_verified(peer).await?;
             }
             Ok(Reconcile::Quarantine) => {
-                self.session
+                let (_, changed) = self
+                    .session
                     .quarantine_authority(peer, DIFFERS_FROM_SYNCED, None)
                     .await?;
+                if changed {
+                    self.events.push_back(ChatEvent::SafetyNumberChanged {
+                        peer: peer.to_string(),
+                    });
+                }
                 return Err(ChatError::Trust(DIFFERS_FROM_SYNCED.into()));
             }
             Err(_) => return Ok(()),
@@ -290,17 +297,6 @@ impl Engine {
             // Best effort: the list is written again at the next contact.
             let _ = sync.record(&*self.transport, &trust, now).await;
         }
-        Ok(())
-    }
-
-    /// Bind bare local usernames to their canonical federation domain. This is
-    /// required before profile publication because delivery capabilities are
-    /// deliberately recipient-address-specific.
-    pub fn set_local_server(&mut self, server: &str) -> Result<()> {
-        kutup_chat_proto::AccountAddress::federated("validation", server)
-            .map_err(|error| ChatError::Invalid(error.to_string()))?;
-        self.session.bind_local_server(server)?;
-        self.local_server = Some(server.to_string());
         Ok(())
     }
 
@@ -358,25 +354,14 @@ impl Engine {
         self.sealed_sender_enabled = enabled;
     }
 
+    /// This account's string form, `aci:<uuid>@<server>`: every store's key for it.
     fn canonical_self(&self) -> Result<String> {
-        let address: kutup_chat_proto::AccountAddress =
-            self.session
-                .user()
-                .parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
-                    ChatError::Invalid(error.to_string())
-                })?;
-        if address.server.is_some() {
-            return Ok(address.canonical());
-        }
-        let server = self.local_server.as_deref().ok_or_else(|| {
-            ChatError::Invalid(
-                "local federation domain is required for profile capabilities".into(),
-            )
-        })?;
-        kutup_chat_proto::AccountAddress::federated(&address.username, server)
-            .map(|address| address.canonical())
-            .map_err(|error| ChatError::Invalid(error.to_string()))
+        Ok(self.self_account()?.to_string())
+    }
+
+    /// This account, as its manifest names it.
+    fn self_account(&self) -> Result<AccountRef> {
+        crate::address::parse_account(self.session.user())
     }
 
     /// Register a brand-new device end-to-end: generate keys, `POST` the
@@ -579,7 +564,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<LocalProfile> {
         let local = self.session.local_profile().await?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let remote = Rc::clone(&self.transport).fetch_own_profile().await?;
         let selected = match (local, remote) {
             (Some(local), Some(remote))
@@ -638,7 +623,7 @@ impl Engine {
             .local_profile()
             .await?
             .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let updated = crate::profile::update_local_profile(
             &current,
             crate::profile::LocalProfileUpdate {
@@ -673,7 +658,7 @@ impl Engine {
             .local_profile()
             .await?
             .ok_or_else(|| ChatError::Invalid("encrypted profile is not initialized".into()))?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let rotated = crate::profile::rotate_local_profile(
             &current,
             self.session.device_id(),
@@ -696,7 +681,7 @@ impl Engine {
         sent_at: &str,
         rng: &mut R,
     ) -> Result<()> {
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         // A linked device may have published while this device was offline.
         // Rebase a still-pending local edit on the owner-only current row and
         // retry, while preserving rotation semantics. The exact rebased upload
@@ -898,7 +883,7 @@ impl Engine {
                 &send_id,
                 sent_at,
                 seq,
-                ContactControlBody::from(&contact),
+                ContactControlBody::try_from(&contact)?,
             );
             let user = self.session.user().to_string();
             self.send(&send_id, &user, &content, rng).await?;
@@ -944,7 +929,7 @@ impl Engine {
     ) -> Result<AccountManifestV1> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         let mls_identity = format!("{canonical_self}#{}", self.session.device_id());
         let mls = crate::MlsClient::new(Rc::clone(self.session.db()))
             .initialize(&mls_identity)
@@ -1012,7 +997,7 @@ impl Engine {
                 "server returned a different manifest after publication".into(),
             ));
         }
-        self.accept_current_manifest_evidence(&account, &published.manifest)
+        self.accept_current_manifest_evidence(&account.to_string(), &published.manifest)
             .await?;
         Ok(published.manifest)
     }
@@ -1039,7 +1024,7 @@ impl Engine {
             .await?
             .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
         current.verify().map_err(ChatError::Trust)?;
-        let canonical_self = self.canonical_self()?;
+        let canonical_self = self.self_account()?;
         if current.account != canonical_self {
             return Err(ChatError::Trust(
                 "stored account manifest belongs to another account".into(),
@@ -1086,7 +1071,7 @@ impl Engine {
                 "server returned a different manifest after device revocation".into(),
             ));
         }
-        self.accept_current_manifest_evidence(&canonical_self, &published.manifest)
+        self.accept_current_manifest_evidence(&canonical_self.to_string(), &published.manifest)
             .await?;
         Ok(published.manifest)
     }
@@ -1285,17 +1270,17 @@ impl Engine {
     /// account-manifest-verified current device manifest.
     pub async fn fetch_verified_anonymous_mls_key_packages(
         &mut self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         capability: &[u8; 16],
         now_seconds: i64,
     ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
-        if recipient.server.is_none() || now_seconds < 0 {
+        if now_seconds < 0 {
             return Err(ChatError::Invalid(
                 "anonymous MLS KeyPackage retrieval requires a canonical recipient and clock"
                     .into(),
             ));
         }
-        let account = recipient.canonical();
+        let account = recipient.to_string();
         let request = AnonymousMlsKeyPackageRequestV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             recipient: recipient.clone(),
@@ -1314,22 +1299,18 @@ impl Engine {
     /// application delivery never uses this path.
     pub async fn fetch_verified_identified_mls_key_packages(
         &mut self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         conversation_id: uuid::Uuid,
         incarnation: u64,
         now_seconds: i64,
     ) -> Result<Vec<crate::VerifiedMlsKeyPackage>> {
-        if recipient.server.is_none()
-            || conversation_id.is_nil()
-            || incarnation == 0
-            || now_seconds < 0
-        {
+        if conversation_id.is_nil() || incarnation == 0 || now_seconds < 0 {
             return Err(ChatError::Invalid(
                 "identified MLS KeyPackage retrieval requires canonical identifiers and clock"
                     .into(),
             ));
         }
-        let account = recipient.canonical();
+        let account = recipient.to_string();
         let request = IdentifiedMlsKeyPackageRequestV1 {
             protocol_version: MLS_PROTOCOL_VERSION,
             recipient: recipient.clone(),
@@ -1346,7 +1327,7 @@ impl Engine {
 
     async fn verify_mls_key_package_bundle(
         &mut self,
-        recipient: &AccountAddress,
+        recipient: &AccountRef,
         account: &str,
         response: MlsKeyPackageBundleV1,
         now_seconds: i64,
@@ -1550,11 +1531,7 @@ impl Engine {
                 }
             }
         }
-        if content
-            .message_id
-            .as_deref()
-            .is_some_and(|message_id| message_id != send_id)
-        {
+        if content.message_id != send_id {
             return Err(ChatError::Invalid(
                 "encrypted content messageId must match transport sendId".into(),
             ));
@@ -1943,9 +1920,9 @@ impl Engine {
                 };
             // The device a failed decryption can be repaired with: named on
             // an identified envelope, or proven by a sealed one's certificate.
-            let mut origin = envelope.sender.as_deref().and_then(|sender| {
+            let mut origin = envelope.sender.as_ref().and_then(|sender| {
                 self.session
-                    .resolve_delivered_sender(sender, envelope.sender_device_id)
+                    .resolve_delivered_sender(&sender.to_string(), envelope.sender_device_id)
                     .ok()
                     .map(|(sender, _)| (sender, envelope.sender_device_id))
             });
@@ -1972,22 +1949,25 @@ impl Engine {
                     Err(error) => Err(error),
                 }
             } else {
-                self.session.receive_envelope(&envelope, rng).await
+                match self.validate_inbound_identified_envelope(&envelope).await {
+                    Ok(()) => self.session.receive_envelope(&envelope, rng).await,
+                    Err(error) => Err(error),
+                }
             };
             match receive_result {
                 Ok(ReceiveOutcome::Message(message)) => {
                     // The sender's device list moved on since this device
                     // last verified it: fetch it again at the next send.
                     if let Some(version) = message.content.device_list_version() {
-                        let peer = message.from.user.as_str();
-                        if self.known_devices.contains_key(peer)
+                        let peer = message.from.name();
+                        if self.known_devices.contains_key(&peer)
                             && self
                                 .session
-                                .manifest_trust(peer)
+                                .manifest_trust(&peer)
                                 .await?
                                 .is_some_and(|pinned| pinned.highest_sequence < version)
                         {
-                            self.known_devices.remove(peer);
+                            self.known_devices.remove(&peer);
                         }
                     }
                     ack_ids.push(message.id.clone());
@@ -2656,7 +2636,6 @@ impl Engine {
     /// accepted and the authenticated profile key is present.
     pub async fn media_delivery_capability(&self, peer: &str) -> Result<Option<[u8; 16]>> {
         if !self.sealed_sender_enabled
-            || self.local_server.is_none()
             || !self
                 .session
                 .contact(peer)
@@ -2673,22 +2652,8 @@ impl Engine {
             .as_slice()
             .try_into()
             .map_err(|_| ChatError::Trust("peer profile key has the wrong length".into()))?;
-        let address: kutup_chat_proto::AccountAddress =
-            peer.parse()
-                .map_err(|error: kutup_chat_proto::AddressError| {
-                    ChatError::Invalid(error.to_string())
-                })?;
-        let canonical_peer = if address.server.is_some() {
-            address.canonical()
-        } else {
-            kutup_chat_proto::AccountAddress::federated(
-                &address.username,
-                self.local_server.as_deref().expect("checked above"),
-            )
-            .map_err(|error| ChatError::Invalid(error.to_string()))?
-            .canonical()
-        };
-        kutup_chat_proto::derive_delivery_capability(&profile_key, &canonical_peer)
+        let account = crate::address::parse_account(peer)?;
+        kutup_chat_proto::derive_delivery_capability(&profile_key, &account)
             .map(Some)
             .map_err(ChatError::Trust)
     }
@@ -2696,9 +2661,7 @@ impl Engine {
     async fn issue_verified_sender_certificate(
         &self,
     ) -> Result<libsignal_protocol::SenderCertificate> {
-        let domain = self.local_server.as_deref().ok_or_else(|| {
-            ChatError::Trust("sealed sender requires the local federation domain".into())
-        })?;
+        let domain = self.session.server();
         let now_seconds = unix_millis().div_euclid(1000);
         let history = Rc::clone(&self.transport)
             .fetch_sealed_sender_policy(domain)
@@ -2716,18 +2679,89 @@ impl Engine {
         )
     }
 
+    /// An identified envelope is taken only from a device of the sender's
+    /// verified account manifest, as a sealed one is: the device must be in
+    /// the manifest of the authority pinned for the sender account (fetched
+    /// and verified when it is not known yet; this account's own devices are
+    /// checked against its own verified manifest), and a session-starting
+    /// message must carry that device's identity key. Otherwise a server
+    /// could start a session in a pinned person's name, or a "new own
+    /// device", with a device of its own.
+    async fn validate_inbound_identified_envelope(
+        &mut self,
+        envelope: &kutup_chat_proto::DeliveredEnvelope,
+    ) -> Result<()> {
+        let sender = envelope
+            .sender
+            .as_ref()
+            .ok_or(ChatError::MissingSender)?
+            .to_string();
+        let device_id = envelope.sender_device_id;
+        // This account's own devices: only against the manifest this device
+        // verified under its own authority, never one a server offers first.
+        if sender == self.canonical_self()? && self.session.manifest_trust(&sender).await?.is_none()
+        {
+            if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment {
+                return Ok(());
+            }
+            return Err(ChatError::Trust(
+                "this account's own manifest is not verified on this device yet".into(),
+            ));
+        }
+        let mut identity = self
+            .session
+            .manifest_identity_key(&sender, device_id)
+            .await?;
+        if identity.is_none() {
+            match self.fetch_verified_bundles(&sender).await {
+                Ok(_) => {}
+                // A development server without manifests, as for sends.
+                Err(_)
+                    if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                        && self.session.manifest_trust(&sender).await?.is_none() =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+            identity = self
+                .session
+                .manifest_identity_key(&sender, device_id)
+                .await?;
+        }
+        let Some(identity) = identity else {
+            if self.manifest_policy == ManifestPolicy::AllowMissingForDevelopment
+                && self.session.manifest_trust(&sender).await?.is_none()
+            {
+                return Ok(());
+            }
+            return Err(ChatError::Trust(
+                "sender device is absent from the account-manifest-verified manifest".into(),
+            ));
+        };
+        if envelope.envelope_type == kutup_chat_proto::EnvelopeType::PreKey {
+            let message =
+                crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)?;
+            if let libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) = message {
+                if message.identity_key().public_key().serialize() != identity.serialize() {
+                    return Err(ChatError::Trust(
+                        "session-starting identity key differs from the signed account manifest"
+                            .into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn validate_inbound_sealed_envelope(
         &mut self,
         envelope: &kutup_chat_proto::DeliveredEnvelope,
         inspection: &crate::session::SealedEnvelopeInspection,
     ) -> Result<libsignal_protocol::PublicKey> {
-        let sender_address: kutup_chat_proto::AccountAddress = inspection
-            .sender
-            .parse()
-            .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-        let domain = sender_address.server.as_deref().ok_or_else(|| {
-            ChatError::Trust("sealed sender certificate address is not federated".into())
-        })?;
+        let sender_address = crate::address::parse_account(&inspection.sender)
+            .map_err(|error| ChatError::Trust(error.to_string()))?;
+        let domain = sender_address.server.as_str();
 
         let mut manifest_identity = self
             .session
@@ -2897,37 +2931,34 @@ impl Engine {
                 }
             }
         }
-        self.session
+        let (_, changed) = self
+            .session
             .quarantine_authority(peer, reason, pending_reset)
             .await?;
+        if changed {
+            self.events.push_back(ChatEvent::SafetyNumberChanged {
+                peer: peer.to_string(),
+            });
+        }
         Ok(())
     }
 }
 
 fn parse_mls_device_credential_identity(identity: &str) -> Result<(String, u32)> {
     let (account, device_id) = identity.rsplit_once('#').ok_or_else(|| {
-        ChatError::Trust("MLS credential identity must be account@server#device".into())
+        ChatError::Trust("MLS credential identity must be aci:<uuid>@<server>#<device>".into())
     })?;
-    let address: AccountAddress = account
-        .parse()
-        .map_err(|error: kutup_chat_proto::AddressError| ChatError::Trust(error.to_string()))?;
-    if address.server.is_none() {
-        return Err(ChatError::Trust(
-            "MLS credential identity requires a canonical federation domain".into(),
-        ));
-    }
+    let address = crate::address::parse_account(account)
+        .map_err(|error| ChatError::Trust(error.to_string()))?;
     let device_id: u32 = device_id
         .parse()
         .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;
-    if device_id == 0
-        || device_id > 127
-        || format!("{}#{device_id}", address.canonical()) != identity
-    {
+    if device_id == 0 || device_id > 127 || format!("{address}#{device_id}") != identity {
         return Err(ChatError::Trust(
             "MLS credential identity is not canonical".into(),
         ));
     }
-    Ok((address.canonical(), device_id))
+    Ok((address.to_string(), device_id))
 }
 
 fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
@@ -2981,8 +3012,16 @@ mod tests {
             pending_upload: None,
             broadcast_pending: true,
         };
-        let first = profile_key_send_id("bob@example.test", &profile).unwrap();
-        let second = profile_key_send_id("bob@example.test", &profile).unwrap();
+        let first = profile_key_send_id(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            &profile,
+        )
+        .unwrap();
+        let second = profile_key_send_id(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            &profile,
+        )
+        .unwrap();
         let parsed = uuid::Uuid::parse_str(&first).unwrap();
 
         assert_eq!(first, second);
@@ -2990,22 +3029,32 @@ mod tests {
         assert_eq!(parsed.get_version_num(), 5);
         assert_ne!(
             first,
-            profile_key_send_id("carol@example.test", &profile).unwrap()
+            profile_key_send_id(
+                "aci:00000000-0000-4000-8000-4c26d9074c27@example.test",
+                &profile
+            )
+            .unwrap()
         );
     }
 
     #[test]
     fn mls_device_credential_identity_is_exact_and_canonical() {
         assert_eq!(
-            parse_mls_device_credential_identity("alice@example.test#127").unwrap(),
-            ("alice@example.test".into(), 127)
+            parse_mls_device_credential_identity(
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#127"
+            )
+            .unwrap(),
+            (
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test".into(),
+                127
+            )
         );
         for invalid in [
             "alice#1",
-            "alice@example.test",
-            "alice@example.test#0",
-            "alice@example.test#128",
-            "alice@example.test#01",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#0",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#128",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#01",
             "Alice@example.test#1",
             "alice@EXAMPLE.test#1",
             "alice@example.test#1#2",

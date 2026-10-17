@@ -11,8 +11,13 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Mono } from '@kutup/ui/components/mono'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
+import { OneUseSecret, ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
+import { PasswordInput } from '@kutup/ui/components/password-input'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { DataStateSection } from './DataStateSection'
 import { useDisableTotp, useStartTotp, useVerifyTotp, type TotpEnrolment } from './api'
+import { ChangePasswordSection } from './ChangePasswordSection'
+import { SecurityEventsSection } from './SecurityEventsSection'
 
 function CodeField({
   label,
@@ -40,12 +45,32 @@ function CodeField({
   )
 }
 
+/** The account password, which a change to the second factor needs (a `totp` grant). */
+function PasswordField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const { t } = useTranslation()
+  return (
+    <Field label={t('settings.security.yourPassword')} required>
+      {(field) => (
+        <PasswordInput {...field} value={value} onChange={(e) => onChange(e.target.value)} autoComplete="current-password" />
+      )}
+    </Field>
+  )
+}
+
+/** What went wrong with a change to the second factor, in the person's language. */
+function totpFailure(error: unknown, t: ReturnType<typeof useTranslation>['t'], fallbackKey: string): string {
+  if (error instanceof WrongPasswordError) return t('settings.security.wrongPassword')
+  if (error instanceof ReauthLockedError) return t(error.reason === 'rateLimited' ? 'auth.errors.slowDown' : 'auth.errors.locked')
+  return apiErrorMessage(error, t(fallbackKey))
+}
+
 function Enrol() {
   const { t } = useTranslation()
   const start = useStartTotp()
   const verify = useVerifyTotp()
   const [enrolment, setEnrolment] = useState<TotpEnrolment | null>(null)
   const [code, setCode] = useState('')
+  const [password, setPassword] = useState('')
 
   if (!enrolment) {
     return (
@@ -65,13 +90,18 @@ function Enrol() {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    verify.mutate(code.trim(), {
-      onSuccess: () => {
-        toast.success(t('settings.security.enabled'))
-        setEnrolment(null)
-        setCode('')
+    verify.mutate(
+      { code: code.trim(), password: new OneUseSecret(password) },
+      {
+        onSuccess: () => {
+          toast.success(t('settings.security.enabled'))
+          setEnrolment(null)
+          setCode('')
+        },
       },
-    })
+    )
+    // Asked again for each try; the grant it buys is made at the last moment.
+    setPassword('')
   }
 
   return (
@@ -90,9 +120,12 @@ function Enrol() {
         <li>
           <CodeField label={t('settings.security.code')} value={code} onChange={setCode} />
         </li>
+        <li>
+          <PasswordField value={password} onChange={setPassword} />
+        </li>
       </ol>
       {verify.isError ? (
-        <Alert variant="error">{apiErrorMessage(verify.error, t('settings.security.verifyFailed'))}</Alert>
+        <Alert variant="error">{totpFailure(verify.error, t, 'settings.security.verifyFailed')}</Alert>
       ) : null}
       <div className="flex gap-2">
         <Button type="button" variant="outline" onClick={() => setEnrolment(null)}>
@@ -111,6 +144,7 @@ function Disable() {
   const disable = useDisableTotp()
   const [open, setOpen] = useState(false)
   const [code, setCode] = useState('')
+  const [password, setPassword] = useState('')
 
   if (!open) {
     return (
@@ -124,19 +158,24 @@ function Disable() {
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault()
-        disable.mutate(code.trim(), {
-          onSuccess: () => {
-            toast.success(t('settings.security.disabled'))
-            setOpen(false)
-            setCode('')
+        disable.mutate(
+          { code: code.trim(), password: new OneUseSecret(password) },
+          {
+            onSuccess: () => {
+              toast.success(t('settings.security.disabled'))
+              setOpen(false)
+              setCode('')
+            },
           },
-        })
+        )
+        setPassword('')
       }}
     >
       <Alert variant="warn">{t('settings.security.disableWarning')}</Alert>
       <CodeField label={t('settings.security.code')} value={code} onChange={setCode} />
+      <PasswordField value={password} onChange={setPassword} />
       {disable.isError ? (
-        <Alert variant="error">{apiErrorMessage(disable.error, t('settings.security.disableFailed'))}</Alert>
+        <Alert variant="error">{totpFailure(disable.error, t, 'settings.security.disableFailed')}</Alert>
       ) : null}
       <div className="flex gap-2">
         <Button type="button" variant="outline" onClick={() => setOpen(false)}>
@@ -175,6 +214,12 @@ export function SecurityPage() {
           </CardContent>
         </Card>
       </Section>
+
+      <ChangePasswordSection />
+
+      <SecurityEventsSection />
+
+      <DataStateSection />
 
       <Section title={t('settings.security.recovery')} description={t('settings.security.recoveryDescription')}>
         <Alert>{t('settings.security.recoveryNote')}</Alert>

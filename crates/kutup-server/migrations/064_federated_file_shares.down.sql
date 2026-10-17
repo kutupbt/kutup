@@ -1,2 +1,0 @@
-DROP TABLE federated_incoming_file_shares;
-DROP TABLE federated_outgoing_file_shares;

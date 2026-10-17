@@ -33,7 +33,7 @@ pub(crate) async fn federated_replicate_genesis(
             "/api/fed/chat/mls/control/genesis",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {
@@ -117,7 +117,7 @@ pub(crate) async fn federated_cast_ordering_vote(
             "/api/fed/chat/mls/control/votes",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     if let Err(error) = active_policy(&state).await {
@@ -177,7 +177,7 @@ pub(crate) async fn federated_commit_control_block(
             "/api/fed/chat/mls/control/blocks",
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     let policy = match active_policy(&state).await {

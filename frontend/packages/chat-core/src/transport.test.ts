@@ -6,6 +6,9 @@ import { ApiChatTransport } from './transport'
 
 afterEach(() => vi.restoreAllMocks())
 
+const ALICE = 'aci:00000000-0000-4000-8000-2bd806c97f0e@remote.example'
+const BOB = 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test'
+
 describe('ApiChatTransport', () => {
   it('lists, renames, and revokes authenticated Chat devices', async () => {
     const devices = [{
@@ -64,11 +67,23 @@ describe('ApiChatTransport', () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 2 } } as never)
     const transport = new ApiChatTransport()
 
-    await expect(transport.sendMessage('bob/name', { envelopes: [] })).resolves.toEqual({
+    await expect(transport.sendMessage(BOB, { envelopes: [] })).resolves.toEqual({
       kind: 'delivered',
       deduplicated: false,
     })
-    expect(post).toHaveBeenCalledWith('/chat/users/bob%2Fname/messages', { envelopes: [] })
+    expect(post).toHaveBeenCalledWith(
+      '/chat/accounts/00000000-0000-4000-8000-81b637d8fcd2/messages',
+      { envelopes: [] },
+      { params: { server: 'b.test' } },
+    )
+  })
+
+  it('routes by account only, never by an address', async () => {
+    const post = vi.spyOn(api, 'post')
+    const transport = new ApiChatTransport()
+    await expect(transport.sendMessage('bob@b.test', {})).rejects.toThrow('not an account reference')
+    await expect(transport.fetchBundles('bob')).rejects.toThrow('not an account reference')
+    expect(post).not.toHaveBeenCalled()
   })
 
   it('returns the typed mismatch body on 409', async () => {
@@ -81,7 +96,7 @@ describe('ApiChatTransport', () => {
     })
     const transport = new ApiChatTransport()
 
-    await expect(transport.sendMessage('bob', {})).resolves.toEqual({
+    await expect(transport.sendMessage(BOB, {})).resolves.toEqual({
       kind: 'mismatch',
       mismatch: { missingDevices: [2], staleDevices: [], extraDevices: [] },
     })
@@ -92,9 +107,9 @@ describe('ApiChatTransport', () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 1 } } as never)
     const transport = new ApiChatTransport()
 
-    await transport.fetchSyncBundles('alice/name', 7)
-    expect(get).toHaveBeenCalledWith('/chat/users/alice%2Fname/keys', {
-      params: { syncDeviceId: 7 },
+    await transport.fetchSyncBundles(ALICE, 7)
+    expect(get).toHaveBeenCalledWith('/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/keys', {
+      params: { syncDeviceId: 7, server: 'remote.example' },
     })
 
     await expect(transport.sendSyncMessage({ sendId: 'note-1' })).resolves.toEqual({
@@ -119,32 +134,33 @@ describe('ApiChatTransport', () => {
     })
     const transport = new ApiChatTransport()
 
-    await expect(transport.fetchManifest('bob')).resolves.toBeNull()
+    await expect(transport.fetchManifest(BOB)).resolves.toBeNull()
 
     get.mockRejectedValueOnce({ isAxiosError: true, response: { status: 503 } })
-    await expect(transport.fetchManifest('bob')).rejects.toMatchObject({
+    await expect(transport.fetchManifest(BOB)).rejects.toMatchObject({
       response: { status: 503 },
     })
   })
 
   it('fetches complete manifest history with lossless sequence bounds', async () => {
     const get = vi.spyOn(api, 'get').mockResolvedValue({
-      data: { account: 'alice@remote.example', manifests: [{ sequence: 4 }] },
+      data: { account: 'aci:00000000-0000-4000-8000-2bd806c97f0e@remote.example', manifests: [{ sequence: 4 }] },
     } as never)
     const transport = new ApiChatTransport()
 
     await expect(
       transport.fetchManifestHistory(
-        'alice@remote.example',
+        'aci:00000000-0000-4000-8000-2bd806c97f0e@remote.example',
         '1',
         '18446744073709551615',
         '18446744073709551615',
       ),
     ).resolves.toMatchObject({ manifests: [{ sequence: 4 }] })
     expect(get).toHaveBeenCalledWith(
-      '/chat/users/alice%40remote.example/manifest-history',
+      '/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/manifest-history',
       {
         params: {
+          server: 'remote.example',
           fromSequence: '1',
           toSequence: '18446744073709551615',
           pageFromSequence: '18446744073709551615',
@@ -160,12 +176,12 @@ describe('ApiChatTransport', () => {
     const put = vi.spyOn(api, 'put').mockResolvedValue({ data: { revision: 2 } } as never)
     const transport = new ApiChatTransport()
 
-    await expect(transport.fetchProfile('alice/name', 'version/value', 'secret-key'))
+    await expect(transport.fetchProfile(ALICE, 'version/value', 'secret-key'))
       .resolves.toEqual({ version: 'v1' })
     expect(get).toHaveBeenNthCalledWith(
       1,
-      '/chat/users/alice%2Fname/profile/version%2Fvalue',
-      { headers: { 'X-Kutup-Profile-Access-Key': 'secret-key' } },
+      '/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/profile/version%2Fvalue',
+      { params: { server: 'remote.example' }, headers: { 'X-Kutup-Profile-Access-Key': 'secret-key' } },
     )
 
     await expect(transport.fetchOwnProfile()).resolves.toBeNull()
@@ -191,11 +207,11 @@ describe('ApiChatTransport', () => {
     const transport = new ApiChatTransport()
 
     await expect(
-      transport.fetchAnonymousMlsKeyPackages({ recipient: { username: 'bob' } }),
+      transport.fetchAnonymousMlsKeyPackages({ recipient: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } }),
     ).resolves.toEqual({ devices: [] })
     expect(post).toHaveBeenCalledWith(
       expect.stringMatching(/\/chat\/mls\/anonymous\/key-packages$/),
-      { recipient: { username: 'bob' } },
+      { recipient: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       { withCredentials: false, headers: { Authorization: undefined } },
     )
 
@@ -204,6 +220,26 @@ describe('ApiChatTransport', () => {
       expect.stringMatching(/\/chat\/mls\/anonymous\/messages$/),
       { sendId: 'send-1' },
       { withCredentials: false, headers: { Authorization: undefined } },
+    )
+  })
+
+  it('sends sealed bundle fetches and messages to the anonymous account routes, unauthenticated', async () => {
+    const base = await resolveApiBase()
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: {} } as never)
+    const transport = new ApiChatTransport()
+    const anonymous = { withCredentials: false, headers: { Authorization: undefined } }
+
+    await transport.fetchSealedBundles(BOB, 'Y2Fw')
+    expect(post).toHaveBeenLastCalledWith(
+      `${base}/chat/anonymous/accounts/00000000-0000-4000-8000-81b637d8fcd2/keys`,
+      { capability: 'Y2Fw' },
+      { params: { server: 'b.test' }, ...anonymous },
+    )
+    await transport.sendSealedMessage(BOB, { sendId: 's-0' })
+    expect(post).toHaveBeenLastCalledWith(
+      `${base}/chat/anonymous/accounts/00000000-0000-4000-8000-81b637d8fcd2/messages`,
+      { sendId: 's-0' },
+      { params: { server: 'b.test' }, ...anonymous },
     )
   })
 
@@ -216,8 +252,8 @@ describe('ApiChatTransport', () => {
       .mockRejectedValueOnce(refusal('<html>Not Found</html>'))
     const transport = new ApiChatTransport()
 
-    await expect(transport.sendSealedMessage('bob', { sendId: 's-1' })).resolves.toEqual({ kind: 'refused' })
-    await expect(transport.sendSealedMessage('bob', { sendId: 's-2' })).rejects.toThrow('failed')
+    await expect(transport.sendSealedMessage(BOB, { sendId: 's-1' })).resolves.toEqual({ kind: 'refused' })
+    await expect(transport.sendSealedMessage(BOB, { sendId: 's-2' })).rejects.toThrow('failed')
     expect(post).toHaveBeenCalledTimes(2)
   })
 

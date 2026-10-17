@@ -15,7 +15,7 @@ const identityKeyId = '33'.repeat(32)
 const identityPublicKey = 'MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM='
 
 function group(): LocalMlsConversationRecord {
-  const authorization = { policyVersion: 1 as const, sequence: 1, applicationSenders: 1 as const }
+  const authorization = { policyVersion: 1 as const, sequence: 1, applicationSenders: 1 as const, groupInfoEditors: 2 as const }
   const cryptographic = {
     policyVersion: 1 as const,
     sequence: 1,
@@ -55,7 +55,7 @@ function group(): LocalMlsConversationRecord {
         createdAt: 1_700_000_000,
       },
       members: [{
-        address: { username: 'alice', server: 'alpha.example' },
+        account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
         isAdmin: true,
         ownerId,
       }],
@@ -65,12 +65,12 @@ function group(): LocalMlsConversationRecord {
     lastFinalizedHeight: 0,
     lastFinalizedEpoch: 0,
     currentRoster: [{
-      address: { username: 'alice', server: 'alpha.example' },
+      account: { server: 'alpha.example', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       isAdmin: true,
       ownerId,
     }],
-    memberJoinedEpochs: new Map([['alice@alpha.example', 0]]),
-    acceptedInvitationEpochs: new Map([['alice@alpha.example', 0]]),
+    memberJoinedEpochs: new Map([['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example', 0]]),
+    acceptedInvitationEpochs: new Map([['aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example', 0]]),
     currentAuthoritySet: {
       sequence: 1,
       authorities: [{
@@ -150,7 +150,7 @@ describe('MlsGroupSecurityDetails', () => {
     )
 
     expect(
-      screen.getByTestId('chat-group-owner-fingerprint-alice@alpha.example'),
+      screen.getByTestId('chat-group-owner-fingerprint-aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example'),
     ).toHaveTextContent(ownerId)
     expect(
       screen.getByTestId('chat-group-authority-pin-alpha.example'),
@@ -238,7 +238,7 @@ describe('MlsGroupSecurityDetails', () => {
     expect(screen.getByTestId('chat-group-authority-policy-loading'))
       .toHaveTextContent('Verifying authority policy histories…')
     expect(
-      screen.getByTestId('chat-group-owner-credential-Unmapped group credential'),
+      screen.getByTestId('chat-group-owner-credential-unmapped'),
     ).toHaveTextContent(ownerId)
     expect(screen.getByTestId('chat-group-owner-policy'))
       .toHaveTextContent('Sequence 1 · quorum 1/1')

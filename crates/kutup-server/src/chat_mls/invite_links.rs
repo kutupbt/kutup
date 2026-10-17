@@ -381,7 +381,7 @@ pub(crate) async fn call(
         .send(
             &call.host,
             FederationRequestSpec {
-                feature: FederationFeature::ChatV1,
+                feature: FederationFeature::ChatV2,
                 method: Method::POST,
                 path: FEDERATION_PATH.into(),
                 query: None,
@@ -443,7 +443,7 @@ pub(crate) async fn federated_call(
             FEDERATION_PATH,
             None,
             &body,
-            FederationFeature::ChatV1,
+            FederationFeature::ChatV2,
         )
         .await?;
     if let Err(error) = active_policy(&state).await {

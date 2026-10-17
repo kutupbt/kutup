@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use kutup_crypto::drive_object::DriveFileBlobContextV1;
 
 use crate::api::Client;
@@ -30,6 +30,7 @@ use crate::uploader::{self, now_unix, Progress, UploadRequest};
 use crate::vaultsync::{
     describe, is_vault, merge_and_save, recorded, save_version, VaultFile, VaultKeys,
 };
+use crate::version_upload;
 
 pub struct SyncOptions {
     /// Propagate deletions (both directions). Off = count + skip.
@@ -94,6 +95,14 @@ pub(crate) enum FileAction {
     },
     SkipDeletion,
     Forget,
+    /// A note, code file or place list Drive holds as Yjs, on Drive (and
+    /// maybe here): synced both ways as a collaboration peer
+    /// (docs/plans/cli-yjs-sync.md). Planned whenever both sides have it,
+    /// since only the log tells whether Drive's side changed.
+    /// `local_changed`: the file on disk differs from the last record.
+    SyncYjs {
+        local_changed: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +114,21 @@ pub(crate) enum DirAction {
     DeleteRemoteDir { collection_id: String },
     SkipDeletion,
     Forget,
+}
+
+/// Paths whose Drive side a run could not read: a folder whose listing
+/// failed, or a file whose versions could not be listed.
+#[derive(Default)]
+pub(crate) struct Unknown {
+    pub dirs: BTreeSet<String>,
+    pub files: BTreeSet<String>,
+}
+
+impl Unknown {
+    /// Whether `rel` is one of them (its own entry, or in such a folder).
+    pub fn covers(&self, rel: &str) -> bool {
+        self.files.contains(rel) || self.dirs.contains(split_rel(rel).0)
+    }
 }
 
 /// The three-way matrix. Pure: indexes in, ordered actions out.
@@ -124,7 +148,14 @@ pub(crate) fn plan_files(
         let b = base.get(rel);
         let l = local.get(rel);
         let r = remote.get(rel);
+        let yjs = crate::editor_kind::edits_as_yjs(split_rel(rel).1);
         let action = match (b, l, r) {
+            // The same note or list on both sides: its log decides.
+            (Some(b), Some(l), Some(r)) if yjs && b.file_id == r.file_id => FileAction::SyncYjs {
+                local_changed: b.local_size != l.size
+                    || b.local_mtime_secs != l.mtime_secs
+                    || b.local_mtime_nanos != l.mtime_nanos,
+            },
             (Some(b), Some(l), Some(r)) => {
                 let lc = b.local_size != l.size
                     || b.local_mtime_secs != l.mtime_secs
@@ -152,9 +183,12 @@ pub(crate) fn plan_files(
                     FileAction::SkipDeletion
                 }
             }
-            // Local side vanished.
+            // Local side vanished. (A note's or list's edits are in its log,
+            // not its versions: whether Drive's side changed is checked
+            // before deleting it.)
             (Some(b), None, Some(r)) => {
-                let rc = b.file_id != r.file_id || b.remote_version_id != r.latest_version_id;
+                let rc =
+                    b.file_id != r.file_id || (!yjs && b.remote_version_id != r.latest_version_id);
                 if rc {
                     FileAction::Pull // modify wins over delete
                 } else if delete {
@@ -170,6 +204,22 @@ pub(crate) fn plan_files(
             (None, Some(_), None) => FileAction::PushNew,
             (None, None, Some(_)) => FileAction::Pull,
             (None, None, None) => continue,
+        };
+        // Its content on Drive is the editor's Yjs state, not the file: it
+        // is read and edited as a peer, never pulled or replaced as bytes. A
+        // new file goes up as a file (what an editor opens it from).
+        let action = match action {
+            FileAction::Pull
+            | FileAction::PushUpdate { .. }
+            | FileAction::Conflict
+            | FileAction::AdoptCheck
+                if yjs =>
+            {
+                FileAction::SyncYjs {
+                    local_changed: true,
+                }
+            }
+            action => action,
         };
         out.push((rel.clone(), action));
     }
@@ -250,7 +300,8 @@ pub fn sync(
 ) -> Result<SyncResult> {
     let mut result = SyncResult::default();
     let master_key = sess.master_key_bytes().context("master key")?;
-    vaults.sign_in(sess)?;
+    let mut peer = crate::yjs_sync::Peer::new(client, store, sess);
+    vaults.refresh(sess)?;
     let root = PathBuf::from(local_dir);
     let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     let pair = sync_pair_id(collection_id, &canonical_root.to_string_lossy());
@@ -356,11 +407,17 @@ pub fn sync(
     // signal) is fetched only for paths the base tracks — new files don't
     // need it for planning.
     let mut remote_entries: BTreeMap<String, RemoteEntry> = BTreeMap::new();
+    // What Drive holds is unknown this run for these: they get no action at
+    // all (their base stays), never one planned as if the remote were gone.
+    let mut unknown = Unknown::default();
     for (rel_dir, dir) in &remote_dirs {
         let files = match client.list_files(&dir.collection_id) {
             Ok(f) => f,
             Err(e) => {
-                result.errors.push(format!("list files {rel_dir}: {e}"));
+                result
+                    .errors
+                    .push(format!("list files {rel_dir}: {e}; left for the next run"));
+                unknown.dirs.insert(rel_dir.clone());
                 continue;
             }
         };
@@ -382,7 +439,17 @@ pub fn sync(
                 continue;
             }
             let latest_version_id = if base_files.contains_key(&rel) {
-                latest_version_id(client, &f.id)
+                match latest_version_id(client, &f.id) {
+                    Ok(id) => id,
+                    // Not known this run: the file sits it out (see `unknown`).
+                    Err(e) => {
+                        result
+                            .errors
+                            .push(format!("{rel}: {e:#}; left for the next run"));
+                        unknown.files.insert(rel);
+                        continue;
+                    }
+                }
             } else {
                 String::new()
             };
@@ -520,7 +587,10 @@ pub fn sync(
         })
         .collect();
 
-    for (rel, action) in plan_files(&base_files, &local_files, &remote_sigs, opts.delete) {
+    for (rel, action) in plan_files(&base_files, &local_files, &remote_sigs, opts.delete)
+        .into_iter()
+        .filter(|(rel, _)| !unknown.covers(rel))
+    {
         let outcome = execute_file_action(
             client,
             store,
@@ -532,6 +602,7 @@ pub fn sync(
             &remote_entries,
             base_files.get(&rel),
             vaults,
+            &mut peer,
             opts,
             &mut result,
         );
@@ -590,11 +661,12 @@ fn execute_file_action(
     remote_entries: &BTreeMap<String, RemoteEntry>,
     base: Option<&BaseFile>,
     vaults: &mut VaultKeys,
+    peer: &mut crate::yjs_sync::Peer,
     opts: &SyncOptions,
     result: &mut SyncResult,
 ) -> Result<()> {
     if is_vault(rel) && !opts.dry_run {
-        let handled = execute_vault_action(
+        let handled = match execute_vault_action(
             client,
             store,
             pair,
@@ -606,7 +678,15 @@ fn execute_file_action(
             base,
             vaults,
             result,
-        )?;
+        ) {
+            // Another device is saving it: nothing merged, nothing recorded,
+            // so the next run pushes it again.
+            Err(e) if e.chain().any(|c| c.is::<crate::vaultsync::VaultBusy>()) => {
+                eprintln!("  ⏸ {rel}: {e:#}");
+                return Ok(());
+            }
+            handled => handled?,
+        };
         match handled {
             VaultHandled::Done => return Ok(()),
             VaultHandled::NotHandled => {}
@@ -624,6 +704,7 @@ fn execute_file_action(
                     remote_entries,
                     None,
                     vaults,
+                    peer,
                     opts,
                     result,
                 )
@@ -631,6 +712,28 @@ fn execute_file_action(
         }
     }
     match action {
+        FileAction::SyncYjs { local_changed } => {
+            if opts.dry_run {
+                eprintln!("  ~ {rel} (live document: synced both ways on a real run)");
+                return Ok(());
+            }
+            let entry = remote_entries.get(rel).context("remote entry vanished")?;
+            let dir = remote_dirs
+                .get(&entry.rel_dir)
+                .context("remote dir vanished")?;
+            let synced = crate::yjs_sync::sync_file(
+                client,
+                peer,
+                &yjs_target(store, pair, root, rel, entry, dir, &|| {
+                    free_conflict_name(client, root, rel, dir)
+                }),
+                *local_changed,
+            )?;
+            report_yjs(rel, &synced, result);
+            if let Some(stat) = &synced.stat {
+                record_yjs(store, pair, rel, stat, entry)?;
+            }
+        }
         FileAction::Pull => {
             eprintln!("  ↓ {rel}");
             result.downloaded += 1;
@@ -656,86 +759,110 @@ fn execute_file_action(
                 .get(parent_rel)
                 .context("remote parent folder missing")?;
             let abs = root.join(rel);
-            // Names are unique in a folder (docs/plans/drive-unique-names.md):
-            // a new file claims its name as it goes; an update goes up
-            // without one, and takes the name once the old file has gone.
-            let update = match action {
-                FileAction::PushUpdate { old_file_id } => Some(old_file_id),
-                _ => None,
-            };
-            let up = uploader::upload_streaming(
-                client,
-                store,
-                &abs,
-                UploadRequest {
-                    collection_id: &dir.collection_id,
-                    key_epoch: dir.key_epoch,
-                    collection_key: &dir.key,
-                    resume: true,
-                    progress: Progress::Quiet,
-                    naming: if update.is_some() {
-                        uploader::Naming::After(dir.hash_key)
-                    } else {
-                        uploader::Naming::Claim(dir.hash_key)
-                    },
-                    name: None,
-                },
-            )?;
-            // Upload-first, then retire the superseded id (soft → trash).
-            if let Some(old_file_id) = update {
-                match client.delete_file(old_file_id) {
-                    Ok(()) => {
-                        let claimed =
-                            crate::names::name_hash(&dir.hash_key, &up.name).and_then(|hash| {
-                                client.fill_name_hashes(
-                                    &dir.collection_id,
-                                    &[(up.file_id.clone(), hash)],
-                                    &[],
-                                )
-                            });
-                        match claimed {
-                            Ok(clashes) if clashes.is_empty() => {}
-                            Ok(_) => result
-                                .errors
-                                .push(format!("{rel}: its name was taken meanwhile")),
-                            Err(e) => result.errors.push(format!("{rel}: claim name: {e:#}")),
+            let stat = stat_local(&abs)?;
+            let sha256 = uploader::sha256_file(&abs)?;
+            // An edit goes up as a new version of the file Drive holds
+            // (docs/plans/drive-unique-names.md: names are unique in a
+            // folder, so the file keeps its name and id), made from the
+            // version the sync recorded. A new file claims its name as it
+            // goes. (Files Drive keeps as Yjs are planned as SyncYjs.)
+            let (file_id, remote_version_id) = match action {
+                FileAction::PushUpdate { old_file_id } => {
+                    let entry = remote_entries.get(rel).context("remote entry vanished")?;
+                    let recorded = base.map_or("", |b| b.remote_version_id.as_str());
+                    match push_version(client, store, &abs, &entry.file, dir, &sha256, recorded)? {
+                        Pushed::Stored(version) => (old_file_id.clone(), version),
+                        // Another upload of it is under way (another device,
+                        // or someone else): not a conflict; the next run
+                        // pushes it, as nothing is recorded now.
+                        Pushed::Busy => {
+                            result.uploaded -= 1;
+                            eprintln!(
+                                "  ⏸ {rel}: a new version is being uploaded elsewhere; \
+                                 left for the next sync run"
+                            );
+                            return Ok(());
+                        }
+                        // Drive's side moved on since planning: keep both,
+                        // as when both sides were edited.
+                        Pushed::Conflict => {
+                            result.uploaded -= 1;
+                            return execute_file_action(
+                                client,
+                                store,
+                                pair,
+                                root,
+                                rel,
+                                &FileAction::Conflict,
+                                remote_dirs,
+                                remote_entries,
+                                base,
+                                vaults,
+                                peer,
+                                opts,
+                                result,
+                            );
                         }
                     }
-                    Err(e) => result
-                        .errors
-                        .push(format!("{rel}: retire old version: {e}")),
                 }
-            }
-            let stat = stat_local(&abs)?;
+                _ => {
+                    let up = uploader::upload_streaming(
+                        client,
+                        store,
+                        &abs,
+                        UploadRequest {
+                            collection_id: &dir.collection_id,
+                            key_epoch: dir.key_epoch,
+                            collection_key: &dir.key,
+                            resume: true,
+                            progress: Progress::Quiet,
+                            hash_key: dir.hash_key,
+                            name: None,
+                            sha256: Some(sha256),
+                        },
+                    )?;
+                    (up.file_id, String::new())
+                }
+            };
             store.put_sync_file(
                 pair,
                 rel,
                 &SyncFileState {
-                    file_id: up.file_id,
+                    file_id: file_id.clone(),
                     collection_id: dir.collection_id.clone(),
                     local_size: stat.size,
                     local_mtime_secs: stat.mtime_secs,
                     local_mtime_nanos: stat.mtime_nanos,
-                    remote_version_id: String::new(),
+                    remote_version_id,
                     synced_at: now_unix(),
                 },
             )?;
+            // A new note or list: what Drive holds is the seed of what went
+            // up, the base its first edit here is made against.
+            if crate::editor_kind::edits_as_yjs(split_rel(rel).1) {
+                let uploaded = std::fs::read(&abs)?;
+                if <[u8; 32]>::from(<sha2::Sha256 as sha2::Digest>::digest(&uploaded)) == sha256 {
+                    crate::yjs_sync::record_upload(store, pair, rel, &file_id, &uploaded)?;
+                }
+            }
         }
         FileAction::Conflict => {
             result.conflicts += 1;
-            let copy = conflict_name(rel);
-            eprintln!("  ⚠ {rel} (remote copy → {copy})");
             if opts.dry_run {
+                eprintln!("  ⚠ {rel} (remote copy → {})", conflict_name(rel));
                 return Ok(());
             }
             let entry = remote_entries.get(rel).context("remote entry vanished")?;
             let dir = remote_dirs
                 .get(&entry.rel_dir)
                 .context("remote dir vanished")?;
-            pull_to(client, entry, &dir.keys, &root.join(&copy))?;
-            // Mark the base conflicted: remote side = current (stops the
-            // conflict from re-firing), local side = dirty sentinel (the
-            // canonical name pushes and wins remotely next pass).
+            let copy = free_conflict_name(client, root, rel, dir)?;
+            eprintln!("  ⚠ {rel} (remote copy → {copy})");
+            let downloaded = pull_to(client, entry, &dir.keys, &root.join(&copy))?;
+            // Mark the base conflicted: remote side = what was downloaded
+            // (stops the conflict from re-firing; a version landing since is
+            // a change again), local side = dirty sentinel (the canonical
+            // name pushes and wins remotely next pass).
             store.put_sync_file(
                 pair,
                 rel,
@@ -745,7 +872,7 @@ fn execute_file_action(
                     local_size: -1,
                     local_mtime_secs: 0,
                     local_mtime_nanos: 0,
-                    remote_version_id: latest_version_id(client, &entry.file.id),
+                    remote_version_id: downloaded_version(client, &entry.file.id, downloaded)?,
                     synced_at: now_unix(),
                 },
             )?;
@@ -767,7 +894,7 @@ fn execute_file_action(
                 let _ = std::fs::remove_file(&tmp);
                 record_base(store, pair, rel, &abs, entry, client, version)?;
             } else {
-                let copy = conflict_name(rel);
+                let copy = free_conflict_name(client, root, rel, dir)?;
                 eprintln!("  ⚠ {rel} (differs from remote; remote copy → {copy})");
                 result.conflicts += 1;
                 std::fs::rename(&tmp, root.join(&copy))?;
@@ -780,7 +907,7 @@ fn execute_file_action(
                         local_size: -1,
                         local_mtime_secs: 0,
                         local_mtime_nanos: 0,
-                        remote_version_id: latest_version_id(client, &entry.file.id),
+                        remote_version_id: downloaded_version(client, &entry.file.id, version)?,
                         synced_at: now_unix(),
                     },
                 )?;
@@ -794,6 +921,31 @@ fn execute_file_action(
             }
             std::fs::remove_file(root.join(rel))?;
             store.delete_sync_file(pair, rel)?;
+        }
+        FileAction::DeleteRemote { file_id }
+            if !opts.dry_run && crate::editor_kind::edits_as_yjs(split_rel(rel).1) =>
+        {
+            // Edited elsewhere since the last sync: the edit wins over the
+            // deletion, and the file comes back.
+            let entry = remote_entries.get(rel).context("remote entry vanished")?;
+            let dir = remote_dirs
+                .get(&entry.rel_dir)
+                .context("remote dir vanished")?;
+            let no_copy = || Err(anyhow!("no conflict copy for a pull"));
+            let target = yjs_target(store, pair, root, rel, entry, dir, &no_copy);
+            if crate::yjs_sync::unchanged_since_base(client, peer, &target)? {
+                eprintln!("  ✗ {rel} (remote → trash)");
+                result.deleted_remote += 1;
+                client.delete_file(file_id)?;
+                store.delete_sync_file(pair, rel)?;
+            } else {
+                eprintln!("  ↓ {rel} (edited on Drive since; kept)");
+                let synced = crate::yjs_sync::sync_file(client, peer, &target, false)?;
+                report_yjs(rel, &synced, result);
+                if let Some(stat) = &synced.stat {
+                    record_yjs(store, pair, rel, stat, entry)?;
+                }
+            }
         }
         FileAction::DeleteRemote { file_id } => {
             eprintln!("  ✗ {rel} (remote → trash)");
@@ -815,6 +967,83 @@ fn execute_file_action(
         }
     }
     Ok(())
+}
+
+/// A note or list of the sync, for [`crate::yjs_sync`].
+fn yjs_target<'a>(
+    store: &'a Store,
+    pair: &'a str,
+    root: &'a Path,
+    rel: &'a str,
+    entry: &'a RemoteEntry,
+    dir: &'a RemoteDir,
+    conflict_name: &'a dyn Fn() -> Result<String>,
+) -> crate::yjs_sync::Target<'a> {
+    crate::yjs_sync::Target {
+        store,
+        pair,
+        rel,
+        abs: root.join(rel),
+        file: &entry.file,
+        dir_keys: &dir.keys,
+        collection_id: &dir.collection_id,
+        folder_epoch: dir.key_epoch,
+        conflict_name,
+        root,
+    }
+}
+
+/// Says what a note's or list's sync did, and counts it.
+fn report_yjs(rel: &str, synced: &crate::yjs_sync::Synced, result: &mut SyncResult) {
+    if let Some(copy) = &synced.conflict_copy {
+        eprintln!(
+            "  ⚠ {rel} (differed from Drive; Drive's copy → {copy}, yours went up as an edit)"
+        );
+        result.conflicts += 1;
+    }
+    match (synced.sent, synced.written) {
+        (true, true) => {
+            eprintln!("  ⇅ {rel} (merged with edits made elsewhere)");
+            result.merged += 1;
+        }
+        (true, false) => {
+            eprintln!("  ↑ {rel}");
+            result.uploaded += 1;
+        }
+        (false, true) => {
+            eprintln!("  ↓ {rel}");
+            result.downloaded += 1;
+        }
+        (false, false) => {}
+    }
+    if synced.busy {
+        eprintln!("  ⏸ {rel}: changed while syncing; left for the next run");
+    }
+}
+
+/// Records a note or list as in sync with the file as it was compared or
+/// written (`stat`, taken there: a save after it is a change next run). Its
+/// Yjs base is recorded beside it by [`crate::yjs_sync`].
+fn record_yjs(
+    store: &Store,
+    pair: &str,
+    rel: &str,
+    stat: &LocalFile,
+    entry: &RemoteEntry,
+) -> Result<()> {
+    store.put_sync_file(
+        pair,
+        rel,
+        &SyncFileState {
+            file_id: entry.file.id.clone(),
+            collection_id: entry.file.collection_id.clone(),
+            local_size: stat.size,
+            local_mtime_secs: stat.mtime_secs,
+            local_mtime_nanos: stat.mtime_nanos,
+            remote_version_id: entry.latest_version_id.clone(),
+            synced_at: now_unix(),
+        },
+    )
 }
 
 /// What [`execute_vault_action`] did.
@@ -1022,6 +1251,95 @@ fn download_decrypt(
     }
 }
 
+/// Uploads the local file `abs` as a new version of `file` over tus,
+/// resumable at any size; its metadata (size, SHA-256) and content hash land
+/// with it.
+fn push_version(
+    client: &Client,
+    store: &Store,
+    abs: &Path,
+    file: &crate::api::File,
+    dir: &RemoteDir,
+    sha256: &[u8; 32],
+    recorded: &str,
+) -> Result<Pushed> {
+    // Made from the newest whole-file version at or before the one recorded:
+    // a collaborator's version saved since is a conflict, not overwritten.
+    let Some(based_on) = based_on_for(&client.list_versions(&file.id)?, recorded) else {
+        eprintln!("    {}: the recorded version is gone", abs.display());
+        return Ok(Pushed::Conflict);
+    };
+    let file_key = crate::file_crypto::open_key(file, &dir.keys).context("decrypt file key")?;
+    // New content goes under a key only the folder's current people hold.
+    let (file, file_key) = crate::cryptohelpers::rekey_file_if_behind(
+        client,
+        file.clone(),
+        file_key,
+        &dir.keys,
+        &dir.collection_id,
+        dir.key_epoch,
+    )?;
+    let landed = version_upload::upload_version(
+        client,
+        store,
+        version_upload::VersionRequest {
+            file: &file,
+            file_key: &file_key,
+            content: version_upload::Content::Path(abs),
+            sha256: *sha256,
+            hash_key: Some(&dir.hash_key),
+            based_on: Some(based_on),
+            progress: Progress::Quiet,
+            crashed_after_secs: crate::version_upload::FILE_CRASHED_AFTER_SECS,
+        },
+    )?;
+    if let version_upload::Landed::Conflict(why) = &landed {
+        eprintln!("    {}: {why:#}", abs.display());
+    }
+    Ok(pushed(landed))
+}
+
+/// What a version upload's end means for the push.
+fn pushed(landed: version_upload::Landed) -> Pushed {
+    match landed {
+        version_upload::Landed::Stored(version) => Pushed::Stored(version),
+        version_upload::Landed::Conflict(_) => Pushed::Conflict,
+        version_upload::Landed::Busy => Pushed::Busy,
+    }
+}
+
+/// The `basedOn` of a push: the newest whole-file version at or before
+/// `recorded` (the newest version of any kind when the base was recorded;
+/// `""`: none), or `original` when there is none. `None` when the recorded
+/// version is no longer listed: what it was made from cannot be told.
+fn based_on_for(versions: &[crate::api::versions::VersionRow], recorded: &str) -> Option<String> {
+    let from = if recorded.is_empty() {
+        versions.len()
+    } else {
+        versions.iter().position(|v| v.id == recorded)?
+    };
+    Some(
+        versions[from..]
+            .iter()
+            .find(|v| v.kind.is_empty() || v.kind == "file")
+            .map_or_else(
+                || crate::api::versions::ORIGINAL.to_string(),
+                |v| v.id.clone(),
+            ),
+    )
+}
+
+/// How pushing an edit as a version ended.
+#[derive(Debug, PartialEq)]
+enum Pushed {
+    /// The version's id.
+    Stored(String),
+    /// The file moved on (another version, a rename, a re-key).
+    Conflict,
+    /// Another upload of a version of it is under way.
+    Busy,
+}
+
 fn record_base(
     store: &Store,
     pair: &str,
@@ -1032,13 +1350,7 @@ fn record_base(
     downloaded: Option<String>,
 ) -> Result<()> {
     let stat = stat_local(local_path)?;
-    // A vault records the very version it got: its next save is made from
-    // it (`basedOn`). Other files record the newest version of any kind,
-    // which is what planning compares (a note's states are versions too).
-    let remote_version_id = match downloaded {
-        Some(version) if is_vault(rel) => recorded(&version),
-        _ => latest_version_id(client, &entry.file.id),
-    };
+    let remote_version_id = downloaded_version(client, &entry.file.id, downloaded)?;
     store.put_sync_file(
         pair,
         rel,
@@ -1054,27 +1366,49 @@ fn record_base(
     )
 }
 
-fn latest_version_id(client: &Client, file_id: &str) -> String {
-    client
-        .list_versions(file_id)
-        .ok()
-        .and_then(|v| v.first().map(|r| r.id.clone()))
-        .unwrap_or_default()
+/// The version a download got, as the base records it: the next push is made
+/// from it (`basedOn`), so a version landing after the download is a change,
+/// not a base. Only when the server did not say which, the newest one now.
+fn downloaded_version(
+    client: &Client,
+    file_id: &str,
+    downloaded: Option<String>,
+) -> Result<String> {
+    match downloaded {
+        Some(version) => Ok(recorded(&version)),
+        None => latest_version_id(client, file_id),
+    }
 }
 
-fn stat_local(path: &Path) -> Result<LocalFile> {
-    let m = std::fs::metadata(path)?;
+/// The file's newest version of any kind (`""`: none). A listing that fails
+/// is an error (the run stops for this file), never "no version": that would
+/// turn the next push into a conflict copy.
+fn latest_version_id(client: &Client, file_id: &str) -> Result<String> {
+    Ok(client
+        .list_versions(file_id)
+        .context("list versions")?
+        .first()
+        .map(|r| r.id.clone())
+        .unwrap_or_default())
+}
+
+pub(crate) fn stat_local(path: &Path) -> Result<LocalFile> {
+    Ok(local_file_of(&std::fs::metadata(path)?))
+}
+
+/// A file's size and modification time, as the sync records them.
+pub(crate) fn local_file_of(m: &std::fs::Metadata) -> LocalFile {
     let (mtime_secs, mtime_nanos) = m
         .modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| (d.as_secs() as i64, d.subsec_nanos()))
         .unwrap_or((0, 0));
-    Ok(LocalFile {
+    LocalFile {
         size: m.len() as i64,
         mtime_secs,
         mtime_nanos,
-    })
+    }
 }
 
 fn walk_local(
@@ -1172,6 +1506,22 @@ fn conflict_name(rel: &str) -> String {
     join_rel(dir, &renamed)
 }
 
+/// A conflict copy's path: [`conflict_name`], numbered on when that name is
+/// already taken here or in the Drive folder the copy goes up to next
+/// (asked with `available-hashes`, docs/plans/drive-unique-names.md).
+fn free_conflict_name(client: &Client, root: &Path, rel: &str, dir: &RemoteDir) -> Result<String> {
+    let copy = conflict_name(rel);
+    let (parent, leaf) = split_rel(&copy);
+    let (name, _) = crate::names::first_available(
+        client,
+        Some(&dir.collection_id),
+        &dir.hash_key,
+        crate::names::numbered_names(leaf),
+        |candidate| root.join(join_rel(parent, candidate)).exists(),
+    )?;
+    Ok(join_rel(parent, &name))
+}
+
 /// Bounded-memory byte comparison.
 fn files_equal(a: &Path, b: &Path) -> Result<bool> {
     use std::io::Read;
@@ -1213,6 +1563,176 @@ fn sanitize_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A path whose Drive side could not be read this run gets no action:
+    /// planned as if the remote were gone, it would be deleted locally,
+    /// pushed as new, or forgotten.
+    #[test]
+    fn paths_not_read_this_run_sit_it_out() {
+        let mut unknown = Unknown::default();
+        unknown.files.insert("docs/a.dat".into());
+        unknown.dirs.insert("photos".into());
+        assert!(unknown.covers("docs/a.dat"));
+        assert!(unknown.covers("photos/one.jpg"));
+        assert!(!unknown.covers("docs/b.dat"));
+        assert!(
+            !unknown.covers("photos/2024/one.jpg"),
+            "a subfolder is listed on its own"
+        );
+        assert!(!unknown.covers("photos"));
+    }
+
+    /// Until the CLI syncs Yjs-backed files as a Yjs peer, they are never
+    /// pulled (a stale copy) nor updated (a fork), and nothing is recorded;
+    /// a new one still goes up, and a vault or whiteboard is a whole file.
+    #[test]
+    fn yjs_files_sync_through_their_log_whole_files_as_versions() {
+        let base_for = |rel: &str| BaseFile {
+            file_id: format!("f-{rel}"),
+            local_size: 1,
+            local_mtime_secs: 1,
+            local_mtime_nanos: 0,
+            remote_version_id: "v1".into(),
+        };
+        let edited = LocalFile {
+            size: 2,
+            mtime_secs: 2,
+            mtime_nanos: 0,
+        };
+        let same = LocalFile {
+            size: 1,
+            mtime_secs: 1,
+            mtime_nanos: 0,
+        };
+        let remote_for = |rel: &str, version: &str| RemoteFileSig {
+            file_id: format!("f-{rel}"),
+            latest_version_id: version.into(),
+        };
+        let names = [
+            "notes/todo.md",
+            "trips/rome.kutupmap",
+            "vault.kdbx",
+            "board.excalidraw",
+            "data.dat",
+        ];
+        let mut base = BTreeMap::new();
+        let mut local = BTreeMap::new();
+        let mut remote = BTreeMap::new();
+        for name in names {
+            base.insert(name.to_string(), base_for(name));
+            local.insert(name.to_string(), edited.clone());
+            remote.insert(name.to_string(), remote_for(name, "v1"));
+        }
+        // Local edits: Yjs files edited as a peer, whole files pushed as
+        // versions.
+        let plan: BTreeMap<_, _> = plan_files(&base, &local, &remote, false)
+            .into_iter()
+            .collect();
+        let edit = FileAction::SyncYjs {
+            local_changed: true,
+        };
+        assert_eq!(plan["notes/todo.md"], edit);
+        assert_eq!(plan["trips/rome.kutupmap"], edit);
+        for name in ["vault.kdbx", "board.excalidraw", "data.dat"] {
+            assert!(
+                matches!(plan[name], FileAction::PushUpdate { .. }),
+                "{name}"
+            );
+        }
+        // Remote changes: no stale pull of a Yjs file; its log is read.
+        for name in names {
+            local.insert(name.to_string(), same.clone());
+            remote.insert(name.to_string(), remote_for(name, "v2"));
+        }
+        let plan: BTreeMap<_, _> = plan_files(&base, &local, &remote, false)
+            .into_iter()
+            .collect();
+        let read = FileAction::SyncYjs {
+            local_changed: false,
+        };
+        assert_eq!(plan["notes/todo.md"], read);
+        assert_eq!(plan["vault.kdbx"], FileAction::Pull);
+        // Nothing changed anywhere: a whole file is left alone, a note's log
+        // is still read (edits made elsewhere are only there).
+        for name in names {
+            remote.insert(name.to_string(), remote_for(name, "v1"));
+        }
+        let plan: BTreeMap<_, _> = plan_files(&base, &local, &remote, false)
+            .into_iter()
+            .collect();
+        assert_eq!(plan["notes/todo.md"], read);
+        assert!(!plan.contains_key("data.dat"));
+        // Deleted here after a version landed (the CLI's own snapshot
+        // makes one): a deletion, whose content check runs before it.
+        local.remove("notes/todo.md");
+        remote.insert("notes/todo.md".into(), remote_for("notes/todo.md", "v9"));
+        let plan: BTreeMap<_, _> = plan_files(&base, &local, &remote, true)
+            .into_iter()
+            .collect();
+        assert!(matches!(
+            plan["notes/todo.md"],
+            FileAction::DeleteRemote { .. }
+        ));
+        // Only on Drive: pulled through its log.
+        let plan = plan_files(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::from([("n.md".to_string(), remote_for("n.md", "v1"))]),
+            false,
+        );
+        assert_eq!(
+            plan,
+            vec![(
+                "n.md".to_string(),
+                FileAction::SyncYjs {
+                    local_changed: true
+                }
+            )]
+        );
+        // A new note still goes up as a new file.
+        let plan = plan_files(
+            &BTreeMap::new(),
+            &BTreeMap::from([("new.md".to_string(), same.clone())]),
+            &BTreeMap::new(),
+            false,
+        );
+        assert_eq!(plan, vec![("new.md".to_string(), FileAction::PushNew)]);
+    }
+
+    fn row(id: &str, kind: &str) -> crate::api::versions::VersionRow {
+        serde_json::from_value(serde_json::json!({ "id": id, "kind": kind, "keyGeneration": 1 }))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_push_is_based_on_the_whole_file_version_it_started_from() {
+        // Newest first.
+        let versions = [
+            row("y2", "yjs"),
+            row("f2", "file"),
+            row("y1", "yjs"),
+            row("f1", "file"),
+        ];
+        assert_eq!(based_on_for(&versions, "y2").as_deref(), Some("f2"));
+        assert_eq!(based_on_for(&versions, "y1").as_deref(), Some("f1"));
+        assert_eq!(based_on_for(&versions, "f1").as_deref(), Some("f1"));
+        assert_eq!(
+            based_on_for(&[row("y1", "yjs")], "y1").as_deref(),
+            Some("original")
+        );
+        assert_eq!(based_on_for(&[], "").as_deref(), Some("original"));
+        // Recorded before any version: made from the original upload, so a
+        // version saved since is a conflict.
+        assert_eq!(based_on_for(&versions, "").as_deref(), Some("original"));
+        assert_eq!(based_on_for(&versions, "gone"), None);
+    }
+
+    #[test]
+    fn a_based_on_refusal_is_the_conflict_copy_path() {
+        let landed = crate::version_upload::Landed::Conflict(anyhow::anyhow!("version_conflict"));
+        assert_eq!(pushed(landed), Pushed::Conflict);
+        assert_eq!(pushed(crate::version_upload::Landed::Busy), Pushed::Busy);
+    }
 
     fn base(entries: &[(&str, &str, i64, &str)]) -> BTreeMap<String, BaseFile> {
         entries

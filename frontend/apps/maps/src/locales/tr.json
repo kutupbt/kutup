@@ -5,7 +5,8 @@
   "boot": {
     "opening": "Haritalarınız açılıyor…",
     "failedTitle": "Haritalar açılamadı",
-    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
+    "failedDescription": "Kutup’a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   },
   "notFound": {
     "title": "Sayfa bulunamadı",
@@ -99,6 +100,7 @@
     "removePlace": "Kaldır",
     "removed": "{{name}} kaldırıldı",
     "addedBy": "{{name}} {{date}} tarihinde ekledi",
+    "addedOn": "{{date}} tarihinde eklendi",
     "tooMany": "Bu harita alabileceği kadar yer içeriyor.",
     "mapLabel": "{{title}} haritası",
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
@@ -120,7 +122,8 @@
     "importFailed": "Dosya içe aktarılamadı.",
     "placeCount_one": "{{count}} yer",
     "placeCount_other": "{{count}} yer",
-    "rightClickHint": "Ya da yerin olduğu noktaya haritada sağ tıklayın."
+    "rightClickHint": "Ya da yerin olduğu noktaya haritada sağ tıklayın.",
+    "tooManyDevices": "Kullanımda 20 cihazınız var. Listeleri burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın."
   },
   "place": {
     "addTitle": "Yer ekle",

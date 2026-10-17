@@ -62,7 +62,7 @@ async fn persist_owner_candidate(
         .owner_candidates
         .entry(BASE64.encode(mls_group_id))
         .or_default()
-        .insert(candidate.account.canonical(), candidate);
+        .insert(candidate.account.to_string(), candidate);
     let state = snapshot_provider(&provider, &metadata).unwrap();
     client
         .db
@@ -104,12 +104,16 @@ fn private_roster_actions_cannot_hide_membership_or_owner_changes() {
     let owner_id = "11".repeat(32);
     let previous = vec![
         MlsConversationMemberV1 {
-            address: "alice@alpha.example".parse().unwrap(),
+            account: "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                .parse()
+                .unwrap(),
             is_admin: true,
             owner_id: Some(owner_id.clone()),
         },
         MlsConversationMemberV1 {
-            address: "bobby@beta.example".parse().unwrap(),
+            account: "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+                .parse()
+                .unwrap(),
             is_admin: false,
             owner_id: None,
         },
@@ -120,7 +124,9 @@ fn private_roster_actions_cannot_hide_membership_or_owner_changes() {
         .unwrap();
 
     let mut replaced = promoted.clone();
-    replaced[1].address = "carol@beta.example".parse().unwrap();
+    replaced[1].account = "aci:00000000-0000-4000-8000-4c26d9074c27@beta.example"
+        .parse()
+        .unwrap();
     assert!(validate_private_roster_action(
         &previous,
         &replaced,
@@ -140,7 +146,9 @@ fn private_roster_actions_cannot_hide_membership_or_owner_changes() {
 
     let mut added = previous.clone();
     added.push(MlsConversationMemberV1 {
-        address: "carol@gamma.example".parse().unwrap(),
+        account: "aci:00000000-0000-4000-8000-f4c26d9074c2@gamma.example"
+            .parse()
+            .unwrap(),
         is_admin: false,
         owner_id: None,
     });
@@ -165,10 +173,15 @@ fn group_genesis_owner_and_exact_retry_survive_restart() {
         ));
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         let conversation_id = Uuid::from_u128(0x81);
         let group_id = b"group-genesis-id";
-        let creator: AccountAddress = "alice@example.test".parse().unwrap();
+        let creator: AccountRef = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test"
+            .parse()
+            .unwrap();
         let policies = vec![
             ordering_policy("beta.example", 12),
             ordering_policy("alpha.example", 11),
@@ -228,7 +241,10 @@ fn group_genesis_owner_and_exact_retry_survive_restart() {
         drop(db);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(reopened.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         let retry = client
             .prepare_group_genesis(conversation_id, group_id, creator, &policies, 1_700_000_000)
             .await
@@ -271,7 +287,10 @@ fn group_genesis_owner_and_exact_retry_survive_restart() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(reopened.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         assert_eq!(client.local_conversations().await.unwrap(), vec![active]);
         drop(client);
         drop(reopened);
@@ -290,8 +309,14 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         let second_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let first = MlsClient::new(first_db.clone());
         let second = MlsClient::new(second_db);
-        let first_public = first.initialize("alice@alpha.example#1").await.unwrap();
-        let second_public = second.initialize("alice@alpha.example#2").await.unwrap();
+        let first_public = first
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
+        let second_public = second
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#2")
+            .await
+            .unwrap();
         let now = crate::clock::unix_millis() / 1000;
         let second_package = second
             .generate_key_package(1, 2, now, now + 86_400)
@@ -300,7 +325,7 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         let verified_second = VerifiedMlsKeyPackage {
             wire: second_package,
             credential: VerifiedMlsCredential::new(
-                "alice@alpha.example#2".into(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#2".into(),
                 second_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -313,7 +338,9 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
             .prepare_group_genesis(
                 conversation_id,
                 group_id,
-                "alice@alpha.example".parse().unwrap(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 std::slice::from_ref(&policy),
                 now,
             )
@@ -327,7 +354,9 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         assert_eq!(
             first.group_devices(group_id).await.unwrap(),
             vec![MlsConversationDeviceV1 {
-                address: "alice@alpha.example".parse().unwrap(),
+                account: "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 device_id: 1,
             }]
         );
@@ -374,7 +403,10 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         drop(first_db);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let first = MlsClient::new(reopened.clone());
-        first.initialize("alice@alpha.example#1").await.unwrap();
+        first
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             first.pending_membership_changes().await.unwrap(),
             vec![prepared.control.clone()]
@@ -436,7 +468,7 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         };
         let expected_members = vec![
             VerifiedMlsCredential::new(
-                "alice@alpha.example#1".into(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1".into(),
                 first_public.credential_public_key,
             )
             .unwrap(),
@@ -505,7 +537,9 @@ fn linked_device_leaves_join_from_welcome_and_removal_survives_restart() {
         assert_eq!(
             first.group_devices(group_id).await.unwrap(),
             vec![MlsConversationDeviceV1 {
-                address: "alice@alpha.example".parse().unwrap(),
+                account: "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 device_id: 1,
             }]
         );
@@ -525,7 +559,10 @@ fn owner_recovery_survives_restart_and_archives_the_previous_incarnation() {
         ));
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         let conversation_id = Uuid::from_u128(0x831);
         let group_id = b"recovery-group-01";
         let new_group_id = b"recovery-group-02";
@@ -534,7 +571,9 @@ fn owner_recovery_survives_restart_and_archives_the_previous_incarnation() {
             .prepare_group_genesis(
                 conversation_id,
                 group_id,
-                "alice@example.test".parse().unwrap(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test"
+                    .parse()
+                    .unwrap(),
                 std::slice::from_ref(&policy),
                 1_700_002_000,
             )
@@ -584,7 +623,10 @@ fn owner_recovery_survives_restart_and_archives_the_previous_incarnation() {
         drop(db);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(reopened.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         assert_eq!(
             client.pending_recoveries().await.unwrap(),
             vec![recovery.control.clone()]
@@ -651,7 +693,10 @@ fn owner_recovery_survives_restart_and_archives_the_previous_incarnation() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(reopened.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         assert_eq!(client.local_conversations().await.unwrap().len(), 1);
         assert_eq!(
             client.local_conversations().await.unwrap()[0]
@@ -676,8 +721,14 @@ fn recipient_verifies_and_joins_owner_signed_recovery_welcome() {
         let bob_db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let alice = MlsClient::new(alice_db);
         let bob = MlsClient::new(bob_db);
-        let alice_public = alice.initialize("alice@alpha.example#1").await.unwrap();
-        let bob_public = bob.initialize("bobby@beta.example#1").await.unwrap();
+        let alice_public = alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
+        let bob_public = bob
+            .initialize("aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1")
+            .await
+            .unwrap();
         let now = crate::clock::unix_millis() / 1000;
         let conversation_id = Uuid::from_u128(0x841);
         let group_id = b"recovery-live-01";
@@ -690,7 +741,7 @@ fn recipient_verifies_and_joins_owner_signed_recovery_welcome() {
         let verified_bob = VerifiedMlsKeyPackage {
             wire: bob_package,
             credential: VerifiedMlsCredential::new(
-                "bobby@beta.example#1".into(),
+                "aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1".into(),
                 bob_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -700,7 +751,9 @@ fn recipient_verifies_and_joins_owner_signed_recovery_welcome() {
             .prepare_group_genesis(
                 conversation_id,
                 group_id,
-                "alice@alpha.example".parse().unwrap(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 std::slice::from_ref(&policy),
                 now,
             )
@@ -714,7 +767,9 @@ fn recipient_verifies_and_joins_owner_signed_recovery_welcome() {
         let next_roster = vec![
             active.current_roster[0].clone(),
             MlsConversationMemberV1 {
-                address: "bobby@beta.example".parse().unwrap(),
+                account: "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+                    .parse()
+                    .unwrap(),
                 is_admin: false,
                 owner_id: None,
             },
@@ -775,7 +830,7 @@ fn recipient_verifies_and_joins_owner_signed_recovery_welcome() {
         let welcome = BASE64.decode(welcome).unwrap();
         let expected = vec![
             VerifiedMlsCredential::new(
-                "alice@alpha.example#1".into(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1".into(),
                 alice_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -995,7 +1050,10 @@ fn authority_change_survives_restart_and_requires_both_exact_quorums() {
         ));
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        client.initialize("alice@alpha.example#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         let now = crate::clock::unix_millis() / 1000;
         let conversation_id = Uuid::from_u128(0x91);
         let proposal_id = Uuid::from_u128(0x92);
@@ -1008,7 +1066,9 @@ fn authority_change_survives_restart_and_requires_both_exact_quorums() {
             .prepare_group_genesis(
                 conversation_id,
                 group_id,
-                "alice@alpha.example".parse().unwrap(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 &policies,
                 now,
             )
@@ -1057,7 +1117,10 @@ fn authority_change_survives_restart_and_requires_both_exact_quorums() {
         drop(db);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(reopened.clone());
-        client.initialize("alice@alpha.example#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             client.pending_authority_changes().await.unwrap(),
             vec![prepared.control.clone()]
@@ -1129,9 +1192,18 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let alice = MlsClient::new(alice_db.clone());
         let bob = MlsClient::new(bob_db.clone());
         let charlie = MlsClient::new(charlie_db);
-        let alice_public = alice.initialize("alice@alpha.example#1").await.unwrap();
-        let bob_public = bob.initialize("bobby@beta.example#1").await.unwrap();
-        let charlie_public = charlie.initialize("carol@gamma.example#1").await.unwrap();
+        let alice_public = alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
+        let bob_public = bob
+            .initialize("aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1")
+            .await
+            .unwrap();
+        let charlie_public = charlie
+            .initialize("aci:00000000-0000-4000-8000-f4c26d9074c2@gamma.example#1")
+            .await
+            .unwrap();
         let now = crate::clock::unix_millis() / 1000;
         let bob_package = bob
             .generate_key_package(1, 1, now, now + 86_400)
@@ -1144,7 +1216,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let verified_bob = VerifiedMlsKeyPackage {
             wire: bob_package,
             credential: VerifiedMlsCredential::new(
-                "bobby@beta.example#1".into(),
+                "aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1".into(),
                 bob_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -1153,7 +1225,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let verified_charlie = VerifiedMlsKeyPackage {
             wire: charlie_package,
             credential: VerifiedMlsCredential::new(
-                "carol@gamma.example#1".into(),
+                "aci:00000000-0000-4000-8000-f4c26d9074c2@gamma.example#1".into(),
                 charlie_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -1167,7 +1239,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .prepare_group_genesis(
                 conversation_id,
                 group_id,
-                "alice@alpha.example".parse().unwrap(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+                    .parse()
+                    .unwrap(),
                 std::slice::from_ref(&policy),
                 now,
             )
@@ -1181,12 +1255,16 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let next_roster = vec![
             active.current_roster[0].clone(),
             MlsConversationMemberV1 {
-                address: "bobby@beta.example".parse().unwrap(),
+                account: "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+                    .parse()
+                    .unwrap(),
                 is_admin: false,
                 owner_id: None,
             },
             MlsConversationMemberV1 {
-                address: "carol@gamma.example".parse().unwrap(),
+                account: "aci:00000000-0000-4000-8000-f4c26d9074c2@gamma.example"
+                    .parse()
+                    .unwrap(),
                 is_admin: false,
                 owner_id: None,
             },
@@ -1238,7 +1316,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         drop(alice_db);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let alice = MlsClient::new(reopened.clone());
-        alice.initialize("alice@alpha.example#1").await.unwrap();
+        alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             alice.pending_membership_changes().await.unwrap(),
             vec![prepared.control.clone()]
@@ -1303,7 +1384,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let history_page = history.canonical_bytes().unwrap();
         let three_device_roster = vec![
             VerifiedMlsCredential::new(
-                "alice@alpha.example#1".into(),
+                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1".into(),
                 alice_public.credential_public_key.clone(),
             )
             .unwrap(),
@@ -1350,7 +1431,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let mut unauthorized_administrator_roster = next_roster.clone();
         unauthorized_administrator_roster
             .iter_mut()
-            .find(|member| member.address.canonical() == "bobby@beta.example")
+            .find(|member| {
+                member.account.to_string()
+                    == "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+            })
             .unwrap()
             .is_admin = true;
         assert!(bob
@@ -1382,7 +1466,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let alice = MlsClient::new(reopened.clone());
-        alice.initialize("alice@alpha.example#1").await.unwrap();
+        alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             alice.pending_membership_changes().await.unwrap(),
             durable_final
@@ -1430,7 +1517,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             protocol_version: MLS_PROTOCOL_VERSION,
             conversation_id,
             incarnation: 1,
-            account: "carol@gamma.example".parse().unwrap(),
+            account: "aci:00000000-0000-4000-8000-f4c26d9074c2@gamma.example"
+                .parse()
+                .unwrap(),
             owner_id: hex::encode(Sha256::digest(candidate_public_key)),
             public_key: BASE64.encode(candidate_public_key),
             created_at: now + 1,
@@ -1570,14 +1659,14 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             applied
                 .conversation
                 .accepted_invitation_epochs
-                .get("bobby@beta.example"),
+                .get("aci:00000000-0000-4000-8000-69ff8042237a@beta.example"),
             Some(&1)
         );
         assert_eq!(
             removed
                 .conversation
                 .accepted_invitation_epochs
-                .get("bobby@beta.example"),
+                .get("aci:00000000-0000-4000-8000-69ff8042237a@beta.example"),
             None
         );
         assert_same_protocol_state(&applied.conversation, &removed.conversation);
@@ -1592,7 +1681,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         invitation_acceptance::record_invitation_acceptance(
             &mut acceptance_metadata,
             group_id,
-            "bobby@beta.example",
+            "aci:00000000-0000-4000-8000-69ff8042237a@beta.example",
             acceptance.clone(),
             now + 3,
         )
@@ -1603,7 +1692,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
                 .get(&conversation_id.to_string())
                 .unwrap()
                 .accepted_invitation_epochs
-                .get("bobby@beta.example"),
+                .get("aci:00000000-0000-4000-8000-69ff8042237a@beta.example"),
             Some(&1)
         );
         let mut replayed_for_readd = acceptance;
@@ -1611,7 +1700,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         assert!(invitation_acceptance::record_invitation_acceptance(
             &mut acceptance_metadata,
             group_id,
-            "bobby@beta.example",
+            "aci:00000000-0000-4000-8000-69ff8042237a@beta.example",
             replayed_for_readd,
             now + 3,
         )
@@ -1624,7 +1713,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         );
         drop(bob);
         let bob = MlsClient::new(bob_db.clone());
-        bob.initialize("bobby@beta.example#1").await.unwrap();
+        bob.initialize("aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1")
+            .await
+            .unwrap();
         let replay = bob
             .apply_ordered_inbound_membership_commit(
                 &commit_envelope,
@@ -1651,7 +1742,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let mut administrator_roster = removed.conversation.current_roster.clone();
         administrator_roster
             .iter_mut()
-            .find(|member| member.address.canonical() == "bobby@beta.example")
+            .find(|member| {
+                member.account.to_string()
+                    == "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+            })
             .unwrap()
             .is_admin = true;
         let administrator = alice
@@ -1765,7 +1859,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == "bobby@beta.example" && member.is_admin));
+            .any(|member| member.account.to_string()
+                == "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+                && member.is_admin));
 
         let alice_package = alice
             .generate_key_package(1, 1, now + 4, now + 86_400)
@@ -1786,9 +1882,14 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .await
             .unwrap()
             .into_iter()
-            .find(|candidate| candidate.account.canonical() == "bobby@beta.example")
+            .find(|candidate| {
+                candidate.account.to_string()
+                    == "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+            })
             .unwrap();
-        let alice_address: AccountAddress = "alice@alpha.example".parse().unwrap();
+        let alice_address: AccountRef = "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"
+            .parse()
+            .unwrap();
         let candidate_capability = bob
             .derive_delivery_capability(group_id, conversation_id, 1, &alice_address)
             .await
@@ -1820,7 +1921,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .unwrap();
         bob.mark_application_recipient_delivered(
             &candidate_entry.send_id,
-            "alice@alpha.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             false,
         )
         .await
@@ -1833,7 +1934,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let mut owner_roster = promoted.conversation.current_roster.clone();
         owner_roster
             .iter_mut()
-            .find(|member| member.address.canonical() == "bobby@beta.example")
+            .find(|member| {
+                member.account.to_string()
+                    == "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+            })
             .unwrap()
             .owner_id = Some(candidate.owner_id.clone());
         let mut owners = promoted.conversation.current_owner_set.owners.clone();
@@ -1939,7 +2043,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
 
         drop(bob);
         let bob = MlsClient::new(bob_db.clone());
-        bob.initialize("bobby@beta.example#1").await.unwrap();
+        bob.initialize("aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             bob.group_owner_credential(group_id).await.unwrap().owner_id,
             candidate.owner_id
@@ -1965,7 +2071,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         let mut unilateral_roster = owners_finalized.conversation.current_roster.clone();
         unilateral_roster
             .iter_mut()
-            .find(|member| member.address.canonical() == "bobby@beta.example")
+            .find(|member| {
+                member.account.to_string()
+                    == "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+            })
             .unwrap()
             .owner_id = None;
         let alice_only_owner = owners_finalized
@@ -1997,7 +2106,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let alice = MlsClient::new(reopened.clone());
-        alice.initialize("alice@alpha.example#1").await.unwrap();
+        alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert!(!alice.owner_change_has_quorum(group_id).await.unwrap());
         let approval_request_entry = alice
             .create_owner_approval_request_message(group_id)
@@ -2006,9 +2118,11 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .unwrap();
         assert_eq!(
             approval_request_entry.expected_recipients,
-            vec!["bobby@beta.example"]
+            vec!["aci:00000000-0000-4000-8000-69ff8042237a@beta.example"]
         );
-        let bob_address: AccountAddress = "bobby@beta.example".parse().unwrap();
+        let bob_address: AccountRef = "aci:00000000-0000-4000-8000-69ff8042237a@beta.example"
+            .parse()
+            .unwrap();
         let approval_request_capability = alice
             .derive_delivery_capability(group_id, conversation_id, 1, &bob_address)
             .await
@@ -2039,7 +2153,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         alice
             .mark_application_recipient_delivered(
                 &approval_request_entry.send_id,
-                "bobby@beta.example",
+                "aci:00000000-0000-4000-8000-69ff8042237a@beta.example",
                 false,
             )
             .await
@@ -2051,7 +2165,9 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
 
         drop(bob);
         let bob = MlsClient::new(bob_db.clone());
-        bob.initialize("bobby@beta.example#1").await.unwrap();
+        bob.initialize("aci:00000000-0000-4000-8000-69ff8042237a@beta.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             bob.pending_owner_approval_requests().await.unwrap().len(),
             1
@@ -2063,7 +2179,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .unwrap();
         assert_eq!(
             approval_response_entry.expected_recipients,
-            vec!["alice@alpha.example"]
+            vec!["aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example"]
         );
         assert!(bob
             .pending_owner_approval_requests()
@@ -2100,7 +2216,7 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
             .unwrap();
         bob.mark_application_recipient_delivered(
             &approval_response_entry.send_id,
-            "alice@alpha.example",
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
             false,
         )
         .await
@@ -2205,7 +2321,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let alice = MlsClient::new(reopened.clone());
-        alice.initialize("alice@alpha.example#1").await.unwrap();
+        alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             alice.local_conversations().await.unwrap(),
             vec![removal_finalized.conversation.clone()]
@@ -2233,7 +2352,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let alice = MlsClient::new(reopened.clone());
-        alice.initialize("alice@alpha.example#1").await.unwrap();
+        alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             alice.pending_closes().await.unwrap(),
             vec![close.control.clone()]
@@ -2341,7 +2463,10 @@ fn atomic_membership_control_survives_restart_and_requires_exact_quorum_ack() {
         drop(reopened);
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let alice = MlsClient::new(reopened.clone());
-        alice.initialize("alice@alpha.example#1").await.unwrap();
+        alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example#1")
+            .await
+            .unwrap();
         assert_eq!(
             alice.local_conversations().await.unwrap()[0].status,
             LocalMlsConversationStatus::Closed
@@ -2361,8 +2486,13 @@ fn group_genesis_rejects_authority_downgrade_and_identity_collisions() {
         ));
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        client.initialize("alice@example.test#1").await.unwrap();
-        let creator: AccountAddress = "alice@example.test".parse().unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
+        let creator: AccountRef = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test"
+            .parse()
+            .unwrap();
         let mut rejected = ordering_policy("alpha.example", 21);
         rejected.accepts_group_ordering = false;
         assert!(client
@@ -2427,7 +2557,10 @@ fn state_group_keypackage_and_ciphertext_survive_restart() {
         ));
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(db.clone());
-        let public = client.initialize("alice@example.test#1").await.unwrap();
+        let public = client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         assert_eq!(public.credential_public_key.len(), 32);
         assert_eq!(public.anonymous_delivery_public_key.len(), 32);
         public.manifest_binding().validate().unwrap();
@@ -2475,7 +2608,10 @@ fn state_group_keypackage_and_ciphertext_survive_restart() {
 
         let reopened: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open(&path).unwrap());
         let client = MlsClient::new(reopened.clone());
-        let reopened_public = client.initialize("alice@example.test#1").await.unwrap();
+        let reopened_public = client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         assert_eq!(reopened_public, public);
         assert_eq!(client.create_group(group_id).await.unwrap().epoch, 0);
 
@@ -2542,9 +2678,14 @@ fn identity_change_and_send_id_reuse_fail_closed() {
     futures_executor::block_on(async {
         let db: Rc<dyn ChatDb> = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let client = MlsClient::new(db);
-        client.initialize("alice@example.test#1").await.unwrap();
+        client
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
         assert!(matches!(
-            client.initialize("mallory@example.test#1").await,
+            client
+                .initialize("aci:00000000-0000-4000-8000-c0a497761b17@example.test#1")
+                .await,
             Err(ChatError::Trust(_))
         ));
         let group_id = b"fed-group-id-001";
@@ -2579,9 +2720,18 @@ fn welcome_commit_and_application_lifecycle_is_manifest_bound() {
         let alice = MlsClient::new(alice_db.clone());
         let bob = MlsClient::new(bob_db);
         let charlie = MlsClient::new(charlie_db);
-        let alice_public = alice.initialize("alice@example.test#1").await.unwrap();
-        let bob_public = bob.initialize("bob@example.test#1").await.unwrap();
-        let charlie_public = charlie.initialize("charlie@example.test#1").await.unwrap();
+        let alice_public = alice
+            .initialize("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1")
+            .await
+            .unwrap();
+        let bob_public = bob
+            .initialize("aci:00000000-0000-4000-8000-81b637d8fcd2@example.test#1")
+            .await
+            .unwrap();
+        let charlie_public = charlie
+            .initialize("aci:00000000-0000-4000-8000-b9dd960c1753@example.test#1")
+            .await
+            .unwrap();
         let now = crate::clock::unix_millis() / 1000;
         let bob_package = bob
             .generate_key_package(1, 1, now, now + 86_400)
@@ -2592,17 +2742,17 @@ fn welcome_commit_and_application_lifecycle_is_manifest_bound() {
             .await
             .unwrap();
         let alice_credential = VerifiedMlsCredential::new(
-            "alice@example.test#1".into(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1".into(),
             alice_public.credential_public_key,
         )
         .unwrap();
         let bob_credential = VerifiedMlsCredential::new(
-            "bob@example.test#1".into(),
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test#1".into(),
             bob_public.credential_public_key,
         )
         .unwrap();
         let charlie_credential = VerifiedMlsCredential::new(
-            "charlie@example.test#1".into(),
+            "aci:00000000-0000-4000-8000-b9dd960c1753@example.test#1".into(),
             charlie_public.credential_public_key,
         )
         .unwrap();
@@ -2662,7 +2812,10 @@ fn welcome_commit_and_application_lifecycle_is_manifest_bound() {
             1
         );
         assert!(alice.pending_commit(group_id).await.unwrap().is_none());
-        let bob_address: kutup_chat_proto::AccountAddress = "bob@example.test".parse().unwrap();
+        let bob_address: kutup_chat_proto::AccountRef =
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test"
+                .parse()
+                .unwrap();
         let alice_epoch_one_capability = alice
             .derive_delivery_capability(group_id, Uuid::from_u128(77), 1, &bob_address)
             .await
@@ -2727,7 +2880,10 @@ fn welcome_commit_and_application_lifecycle_is_manifest_bound() {
         );
 
         let removal = alice
-            .prepare_remove_members(group_id, &["charlie@example.test#1".to_owned()])
+            .prepare_remove_members(
+                group_id,
+                &["aci:00000000-0000-4000-8000-b9dd960c1753@example.test#1".to_owned()],
+            )
             .await
             .unwrap();
         assert!(removal.welcome.is_none());
@@ -2770,7 +2926,7 @@ fn welcome_commit_and_application_lifecycle_is_manifest_bound() {
         assert_eq!(decrypted.epoch, 3);
 
         let forged = VerifiedMlsCredential::new(
-            "alice@example.test#1".into(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test#1".into(),
             bob_credential.credential_public_key.clone(),
         )
         .unwrap();

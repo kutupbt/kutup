@@ -35,13 +35,16 @@ impl Place {
     }
 }
 
-/// A name hash as sent: 64 lowercase hex digits, or none (an older client;
-/// the name is then not kept unique until a client fills it in).
-pub fn parse_name_hash(value: Option<&str>) -> AppResult<Option<String>> {
+/// A name hash as sent: 64 lowercase hex digits. Every write that names or
+/// places an item sends one (docs/plans/drive-unique-names.md), as Proton
+/// Drive requires its `Hash`: an editor who cannot reach the folder's key (a
+/// file shared by itself) sends a random one, as Proton does for a share root.
+pub fn require_name_hash(value: Option<&str>) -> AppResult<String> {
     match value {
-        None => Ok(None),
-        Some(hash) if is_hash(hash) => Ok(Some(hash.to_owned())),
+        Some(hash) if is_hash(hash) => Ok(hash.to_owned()),
         Some(_) => Err(AppError::bad_request("invalid name hash")),
+        None => Err(AppError::bad_request("nameHash is required")
+            .with_details(serde_json::json!({ "code": "nameNeeded" }))),
     }
 }
 
@@ -54,7 +57,7 @@ pub fn parse_content_hash(value: Option<&str>) -> AppResult<Option<String>> {
     }
 }
 
-fn is_hash(value: &str) -> bool {
+pub(crate) fn is_hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -149,10 +152,11 @@ mod tests {
     #[test]
     fn hashes_are_64_lowercase_hex_digits() {
         let good = "a".repeat(64);
-        assert_eq!(parse_name_hash(Some(&good)).unwrap(), Some(good.clone()));
-        assert_eq!(parse_name_hash(None).unwrap(), None);
-        assert!(parse_name_hash(Some(&"A".repeat(64))).is_err());
-        assert!(parse_name_hash(Some(&"a".repeat(63))).is_err());
+        assert_eq!(require_name_hash(Some(&good)).unwrap(), good.clone());
+        // Required on every write, as Proton's Hash.
+        assert!(require_name_hash(None).is_err());
+        assert!(require_name_hash(Some(&"A".repeat(64))).is_err());
+        assert!(require_name_hash(Some(&"a".repeat(63))).is_err());
         assert!(parse_content_hash(Some("zz")).is_err());
     }
 }

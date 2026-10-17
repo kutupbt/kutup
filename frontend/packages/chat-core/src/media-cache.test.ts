@@ -114,7 +114,7 @@ describe('Chat private ciphertext cache integration', () => {
   it('downloads verified ciphertext into Kutup without creating an OS save', async () => {
     const { ciphertext, descriptor } = await fixture()
     const backend = new MemoryBackend()
-    const cache = new PrivateCiphertextCacheV1('alice@a.test', {
+    const cache = new PrivateCiphertextCacheV1('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', {
       backend,
       maxBytes: 500_000,
       chunkBytes: 64 * 1024,
@@ -144,7 +144,7 @@ describe('Chat private ciphertext cache integration', () => {
     const { ciphertext, descriptor } = await fixture()
     descriptor.backupMediaId = 'ab'.repeat(32)
     const backend = new MemoryBackend()
-    const cache = new PrivateCiphertextCacheV1('alice@a.test', {
+    const cache = new PrivateCiphertextCacheV1('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', {
       backend,
       maxBytes: 500_000,
       chunkBytes: 64 * 1024,
@@ -167,7 +167,7 @@ describe('Chat private ciphertext cache integration', () => {
   it('removes all persisted chunks when the downloaded object is tampered', async () => {
     const { ciphertext, descriptor } = await fixture()
     const backend = new MemoryBackend()
-    const cache = new PrivateCiphertextCacheV1('alice@a.test', {
+    const cache = new PrivateCiphertextCacheV1('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', {
       backend,
       maxBytes: 500_000,
       chunkBytes: 64 * 1024,
@@ -203,7 +203,7 @@ describe('Chat private ciphertext cache integration', () => {
       mediaClass: 'photo',
     }
     const backend = new MemoryBackend()
-    const cache = new PrivateCiphertextCacheV1('alice@a.test', {
+    const cache = new PrivateCiphertextCacheV1('aci:00000000-0000-4000-8000-2bd806c97f0e@a.test', {
       backend,
       maxBytes: 500_000,
       chunkBytes: 64 * 1024,

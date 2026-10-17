@@ -44,7 +44,6 @@ pub fn spawn_all(
 ) {
     let (p1, s1) = (pool.clone(), storage.clone());
     tokio::spawn(async move {
-        migrate_legacy_versions(&p1, &s1).await;
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
         loop {
             tick.tick().await;
@@ -82,6 +81,17 @@ pub fn spawn_all(
         loop {
             tick.tick().await;
             uploads_sweep_once(&pool, &storage, chat.media_delivery_retention_days).await;
+            // Devices of people no share here names any more (their revoked
+            // keys keep a tombstone).
+            match crate::remote_devices::sweep(&pool).await {
+                Ok(0) => {}
+                Ok(rows) => tracing::info!(rows, "remote collaboration devices swept"),
+                Err(error) => tracing::warn!("remote device sweep failed: {error}"),
+            }
+            // Used and expired grants, and sign-ins never finished.
+            if let Err(error) = crate::grants::sweep(&pool).await {
+                tracing::warn!(%error, "grant sweep failed");
+            }
         }
     });
 }
@@ -247,24 +257,14 @@ pub async fn sweep_chat_mailboxes_before(
 /// objects for good and releases their bytes. Returns what was removed.
 pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> usize {
     let now = OffsetDateTime::now_utc();
-    type Row = (
-        Uuid,
-        Uuid,
-        OffsetDateTime,
-        bool,
-        String,
-        String,
-        Uuid,
-        i64,
-        i32,
-    );
+    type Row = (Uuid, Uuid, OffsetDateTime, bool, String, Uuid, i64, i32);
     let mut removed = 0;
     // Every file with thinnable versions, a page at a time (keyed on the
     // file id, so a file whose versions all stay never hides the rest).
     let mut after = Uuid::nil();
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
-        r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path, v.s3_version_id,
+            r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
                   v.author_user_id, v.size_bytes, u.version_retention_days
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
@@ -276,23 +276,23 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
              ORDER BY file_id
              LIMIT 500)
            ORDER BY v.file_id, v.created_at DESC"#,
-    )
-    .bind(after)
-    .fetch_all(pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!("version retention: query failed: {e}");
-            return removed;
-        }
-    };
+        )
+        .bind(after)
+        .fetch_all(pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("version retention: query failed: {e}");
+                return removed;
+            }
+        };
         let Some(last) = rows.last() else {
             break;
         };
         after = last.1;
         for file in rows.chunk_by(|a, b| a.1 == b.1) {
-            let retention = i64::from(file[0].8);
+            let retention = i64::from(file[0].7);
             let candidates: Vec<crate::version_retention::Candidate> = file
                 .iter()
                 .map(|r| crate::version_retention::Candidate {
@@ -303,7 +303,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                 .collect();
             let doomed = crate::version_retention::doomed(&candidates, now, retention);
             for row in file.iter().filter(|r| doomed.contains(&r.0)) {
-                let (id, _, _, _, path, s3_version, _, _, _) = row;
+                let (id, _, _, _, path, _, _, _) = row;
                 // Row and charge go together, and only if this pass removed the
                 // row (a purge of the file may have raced it). The object goes
                 // after: a failed delete leaves an orphan for the sweep, never a
@@ -316,12 +316,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                         continue;
                     }
                 }
-                let deleted = if s3_version.is_empty() {
-                    storage.delete(path).await
-                } else {
-                    storage.delete_object_version(path, s3_version).await
-                };
-                if let Err(e) = deleted {
+                if let Err(e) = storage.delete(path).await {
                     tracing::warn!("version retention: delete {path} failed: {e}");
                 }
                 removed += 1;
@@ -411,17 +406,11 @@ pub(crate) async fn remove_version(
     storage: &StorageService,
     version_id: Uuid,
     path: &str,
-    s3_version: &str,
 ) -> anyhow::Result<bool> {
     if !release_version(pool, version_id).await? {
         return Ok(false);
     }
-    let deleted = if s3_version.is_empty() {
-        storage.delete(path).await
-    } else {
-        storage.delete_object_version(path, s3_version).await
-    };
-    if let Err(e) = deleted {
+    if let Err(e) = storage.delete(path).await {
         // An orphan for the storage sweep, never a row without its bytes.
         tracing::warn!("version delete: delete {path} failed: {e}");
     }
@@ -450,63 +439,6 @@ async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool
     .await?;
     tx.commit().await?;
     Ok(true)
-}
-
-/// Moves versions stored before v2 — S3 object versions of one key per file
-/// (`files/{id}/snapshot`), exposed to the bucket lifecycle — onto keys of
-/// their own, like every new version. Idempotent; runs in batches until none
-/// are left.
-pub async fn migrate_legacy_versions(pool: &PgPool, storage: &StorageService) -> usize {
-    let mut moved = 0;
-    loop {
-        let rows: Vec<(Uuid, Uuid, String, String)> = match sqlx::query_as(
-            "SELECT id, file_id, storage_path, s3_version_id FROM file_versions
-             WHERE s3_version_id <> '' ORDER BY created_at LIMIT 100",
-        )
-        .fetch_all(pool)
-        .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!("legacy versions: query failed: {e}");
-                return moved;
-            }
-        };
-        if rows.is_empty() {
-            break;
-        }
-        let mut progressed = false;
-        for (id, file_id, path, s3_version) in rows {
-            let destination = crate::handlers::file_versions::version_storage_path(file_id, id);
-            if let Err(e) = storage
-                .copy_object_version(&path, &s3_version, &destination)
-                .await
-            {
-                tracing::warn!("legacy versions: copy {path}@{s3_version} failed: {e}");
-                continue;
-            }
-            let updated = sqlx::query(
-                "UPDATE file_versions SET storage_path = $2, s3_version_id = '' WHERE id = $1 AND s3_version_id = $3",
-            )
-            .bind(id)
-            .bind(&destination)
-            .bind(&s3_version)
-            .execute(pool)
-            .await;
-            if updated.is_ok() {
-                let _ = storage.delete_object_version(&path, &s3_version).await;
-                moved += 1;
-                progressed = true;
-            }
-        }
-        if !progressed {
-            break;
-        }
-    }
-    if moved > 0 {
-        tracing::info!("legacy versions: moved {moved} onto their own keys");
-    }
-    moved
 }
 
 /// Rewrites the account's one storage counter (crate::storage_pool) from
@@ -1004,16 +936,26 @@ pub async fn purge_file_root(
     guard: PurgeGuard,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
-    let row: Option<(String, i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
+    // An open upload of a new version is locked before the file, the order
+    // its last part takes them in (`tus::patch`: the upload row, then the
+    // file), so the two never deadlock.
+    let open_versions: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, storage_path, s3_upload_id FROM uploads
+         WHERE file_id = $1 AND kind = 'version' FOR UPDATE",
+    )
+    .bind(file_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let row: Option<(i64, Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
         // A pruned original was released already.
-        "SELECT storage_path, (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
+        "SELECT (CASE WHEN original_pruned THEN 0 ELSE encrypted_size_bytes END),
                 uploader_user_id, collection_id, trash_root_id
          FROM files WHERE id = $1 FOR UPDATE",
     )
     .bind(file_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((storage_path, file_size, uploader_id, collection_id, trash_root)) = row else {
+    let Some((file_size, uploader_id, collection_id, trash_root)) = row else {
         return Ok(());
     };
     let qualifies = match guard {
@@ -1065,6 +1007,14 @@ pub async fn purge_file_root(
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
+    // The open upload of a new version goes with it (its reservation and
+    // the file's one upload slot); its parts are aborted after commit.
+    for (upload_id, _, _) in &open_versions {
+        sqlx::query("DELETE FROM uploads WHERE id = $1")
+            .bind(upload_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("DELETE FROM files WHERE id = $1")
         .bind(file_id)
         .execute(&mut *tx)
@@ -1078,8 +1028,11 @@ pub async fn purge_file_root(
     .await?;
     tx.commit().await?;
 
-    // Best-effort S3 GC (post-commit): the legacy main blob + the whole files/{id}/ prefix.
-    let _ = storage.delete(&storage_path).await;
+    // Best-effort S3 GC (post-commit): everything the file has lives under
+    // files/{id}/ — the original, versions, assets and thumbnails.
+    for (_, path, upload) in &open_versions {
+        let _ = storage.abort_multipart(path, upload).await;
+    }
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
     Ok(())
 }
@@ -1200,24 +1153,14 @@ fn canonical_uuid(seg: &str) -> Option<Uuid> {
     }
 }
 
-/// The file a Drive object belongs to, for every key shape Drive writes:
-/// `{user}/{folder}/{file}` (an upload), `fed/{share}/{folder}/{file}` (a
-/// federated upload) and `files/{file}/…` (versions, assets, thumbnails).
-/// Anything else (Chat's keys, foreign objects) is not the sweep's business.
+/// The file a Drive object belongs to: Drive keeps everything of a file
+/// under `files/{file}/…` (its original, versions, assets, thumbnails).
+/// Anything else (Chat's keys, Mail's, foreign objects) is not the sweep's
+/// business.
 fn drive_file_of_key(key: &str) -> Option<Uuid> {
     let segs: Vec<&str> = key.split('/').collect();
     match segs.as_slice() {
         ["files", file, rest @ ..] if !rest.is_empty() && rest.iter().all(|s| !s.is_empty()) => {
-            canonical_uuid(file)
-        }
-        ["fed", share, folder, file] => {
-            canonical_uuid(share)?;
-            canonical_uuid(folder)?;
-            canonical_uuid(file)
-        }
-        [user, folder, file] => {
-            canonical_uuid(user)?;
-            canonical_uuid(folder)?;
             canonical_uuid(file)
         }
         _ => None,
@@ -1228,7 +1171,7 @@ fn drive_file_of_key(key: &str) -> Option<Uuid> {
 /// objects that no row references any more and that are older than `age_floor`: a
 /// crash between storing and committing, a purge whose object delete failed, a
 /// pruned original or retired version left behind. Every stored version of an
-/// orphan goes (the bucket is versioned).
+/// orphan goes (on a versioned bucket too).
 pub async fn run_orphan_sweep(
     pool: &PgPool,
     storage: &StorageService,
@@ -1327,20 +1270,21 @@ mod tests {
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
         let other = "11111111-2222-4333-8444-555555555555";
         let file = Some(uuid::Uuid::parse_str(uuid).unwrap());
-        // Derived objects under files/{id}/…
+        // Everything of a file is under files/{id}/…
+        assert_eq!(drive_file_of_key(&format!("files/{uuid}/original")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/snapshot")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/assets/x")), file);
         assert_eq!(
             drive_file_of_key(&format!("files/{uuid}/versions/{other}")),
             file
         );
-        // Uploads and federated uploads: the file is the last segment.
-        assert_eq!(drive_file_of_key(&format!("{other}/{other}/{uuid}")), file);
+        // Not Drive's: the retired upload shapes, no trailing part, Chat
+        // keys, uppercase hex, junk.
+        assert_eq!(drive_file_of_key(&format!("{other}/{other}/{uuid}")), None);
         assert_eq!(
             drive_file_of_key(&format!("fed/{other}/{other}/{uuid}")),
-            file
+            None
         );
-        // Not Drive's: no trailing part, Chat keys, uppercase hex, junk.
         assert_eq!(drive_file_of_key(&format!("files/{uuid}")), None);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/")), None);
         assert_eq!(

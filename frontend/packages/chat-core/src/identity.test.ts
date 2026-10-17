@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
-  canonicalAccountAddress,
+  addressString,
   contactUri,
   conversationKey,
+  directAccount,
   directConversation,
-  parseAccountAddress,
-  toCoreAccountAddress,
-  withHomeServer,
+  parseAccount,
+  parseAddress,
+  parseAddressInput,
 } from './identity'
 
-describe('canonical chat identity', () => {
-  it('parses local and federated account addresses', () => {
-    expect(parseAccountAddress('alice_42')).toEqual({ username: 'alice_42' })
-    expect(parseAccountAddress('alice_42@Chat.Example')).toEqual({
+const ALICE = { server: 'example.org', accountId: '00000000-0000-4000-8000-00000000a11c' }
+
+describe('chat identity', () => {
+  it('parses only full addresses', () => {
+    expect(parseAddress('alice_42')).toBeNull()
+    expect(parseAddress('alice_42@Chat.Example')).toEqual({
       username: 'alice_42',
       server: 'chat.example',
     })
@@ -28,30 +31,41 @@ describe('canonical chat identity', () => {
       'alice@[::1]',
       'alice@example_org',
     ]) {
-      expect(parseAccountAddress(value), value).toBeNull()
+      expect(parseAddress(value), value).toBeNull()
     }
   })
 
-  it('uses the canonical account as the direct conversation key', () => {
-    const address = parseAccountAddress('alice@example.org')!
-    expect(canonicalAccountAddress(address)).toBe('alice@example.org')
-    expect(conversationKey(directConversation(address))).toBe('direct:alice@example.org')
+  it('keys a direct chat by the account, never by an address', () => {
+    const conversation = directConversation(ALICE)
+    expect(conversationKey(conversation)).toBe(`direct:aci:${ALICE.accountId}@example.org`)
+    expect(directAccount(conversation)).toEqual(ALICE)
+    expect(directAccount({ kind: 'group', groupId: 'g' })).toBeNull()
   })
 
-  it('keeps the canonical federation identity at the core boundary', () => {
-    const local = { username: 'alice' }
-    const canonical = withHomeServer(local, 'chat.example')
-    expect(canonicalAccountAddress(canonical)).toBe('alice@chat.example')
-    expect(toCoreAccountAddress(canonical, 'chat.example')).toBe('alice@chat.example')
-    expect(toCoreAccountAddress({ username: 'bob', server: 'remote.example' }, 'chat.example')).toBe(
-      'bob@remote.example',
-    )
+  it('reads an account key and nothing else', () => {
+    expect(parseAccount(`aci:${ALICE.accountId}@example.org`)).toEqual(ALICE)
+    expect(parseAccount('alice@example.org')).toBeNull()
+    expect(parseAccount(`aci:${ALICE.accountId.toUpperCase()}@example.org`)).toBeNull()
   })
 
-  it('round-trips a canonical QR/contact URI without an alias layer', () => {
+  it('reads a typed bare username as an address on the home server', () => {
+    expect(parseAddressInput('alice', 'chat.example')).toEqual({ username: 'alice', server: 'chat.example' })
+    expect(parseAddressInput('bob@remote.example', 'chat.example')).toEqual({
+      username: 'bob',
+      server: 'remote.example',
+    })
+    expect(parseAddressInput('kutup://contact/bob%40remote.example', 'chat.example')).toEqual({
+      username: 'bob',
+      server: 'remote.example',
+    })
+    expect(parseAddressInput('Al', 'chat.example')).toBeNull()
+    expect(addressString({ username: 'bob', server: 'remote.example' })).toBe('bob@remote.example')
+  })
+
+  it('round-trips a contact link without an alias layer', () => {
     const address = { username: 'alice', server: 'chat.example' }
     const uri = contactUri(address)
     expect(uri).toBe('kutup://contact/alice%40chat.example')
-    expect(parseAccountAddress(uri)).toEqual(address)
+    expect(parseAddress(uri)).toEqual(address)
   })
 })

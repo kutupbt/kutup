@@ -12,4 +12,5 @@ right file here, not into `.github/workflows/ci.yml`.
 | `mail.txt` | Mail browser specs: Mail step |
 | `contacts.txt` | Mail browser specs: Contacts step |
 | `pass.txt` | Mail browser specs: Pass step |
+| `account.txt` | Mail browser specs: Account step |
 | `chat-backup.txt` | Clean-browser Chat backup recovery |

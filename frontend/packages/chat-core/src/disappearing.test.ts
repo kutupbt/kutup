@@ -14,8 +14,8 @@ function entry(
 ): ChatHistoryEntry {
   return {
     id,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    peer: 'bob@b.test',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
+    sender: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
     direction: 'incoming',
     senderDeviceId: 1,
     timestampMs,
@@ -25,6 +25,34 @@ function entry(
   }
 }
 
+describe('local timeline records', () => {
+  it('a safety number line is never a visible message (no unread, no preview)', () => {
+    const line = entry('safety', 1_000, {
+      version: 1,
+      kind: 'safetyNumberChanged',
+      sentAt: '2026-10-16T00:00:00Z',
+      seq: '0',
+      messageId: 'safety:inc-a:inc-b',
+      body: {},
+      safetyNumberChanged: true,
+    })
+    expect(isVisibleChatMessage(line, 2_000)).toBe(false)
+  })
+
+  it('a rename line is never a visible message', () => {
+    const line = entry('rename', 1_000, {
+      version: 1,
+      kind: 'peerRenamed',
+      sentAt: '2026-10-16T00:00:00Z',
+      seq: '0',
+      messageId: 'rename:aci:00000000-0000-4000-8000-81b637d8fcd2@b.test:1',
+      body: { previous: 'bob@b.test', current: 'bobby@b.test', sequence: 1 },
+      peerRenamed: { previous: 'bob@b.test', current: 'bobby@b.test', sequence: 1 },
+    })
+    expect(isVisibleChatMessage(line, 2_000)).toBe(false)
+  })
+})
+
 describe('disappearing Chat presentation', () => {
   it('reduces encrypted timer controls deterministically and preserves off', () => {
     const enabled = entry('timer-enabled', 1_000, {
@@ -32,6 +60,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'disappearingTimer',
       sentAt: '2026-08-10T00:00:00Z',
       seq: '8',
+      messageId: 'm-34',
       body: { durationSeconds: 3_600 },
       disappearingTimer: { durationSeconds: 3_600 },
     })
@@ -40,11 +69,12 @@ describe('disappearing Chat presentation', () => {
       kind: 'disappearingTimer',
       sentAt: '2026-08-10T00:00:01Z',
       seq: '9',
+      messageId: 'm-42',
       body: {},
       disappearingTimer: {},
     })
 
-    const timer = reduceDisappearingTimers([disabled, enabled]).get('direct:bob@b.test')
+    const timer = reduceDisappearingTimers([disabled, enabled]).get('direct:aci:00000000-0000-4000-8000-81b637d8fcd2@b.test')
     expect(timer?.message.id).toBe('timer-disabled')
     expect(timer?.durationSeconds).toBeUndefined()
   })
@@ -55,6 +85,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'text',
       sentAt: '2026-08-10T00:00:00Z',
       seq: '1',
+      messageId: 'm-57',
       body: { text: 'temporary' },
       text: 'temporary',
       expiresAfterSeconds: 30,
@@ -72,6 +103,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'text',
       sentAt: '2026-08-10T00:00:00Z',
       seq: '1',
+      messageId: 'm-74',
       body: { text: 'unread temporary' },
       text: 'unread temporary',
       expiresAfterSeconds: 30,
@@ -87,6 +119,7 @@ describe('disappearing Chat presentation', () => {
       kind: 'disappearingTimer',
       sentAt: 't',
       seq: '1',
+      messageId: 'm-89',
       body: {},
       disappearingTimer: {},
     })

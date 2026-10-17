@@ -1,38 +1,39 @@
 // A new direct chat is a message request until the other person accepts,
 // and a conversation timer can only be set once it is accepted (docs/
 // chat-protocol.md). So the default timer for new chats is owed: messages
-// carry it themselves meanwhile, and the timer is set on acceptance.
+// carry it themselves meanwhile, and the timer is set on acceptance. Kept
+// per account by its id, never by its name (docs/plans/account-identity.md).
 
-const PREFIX = 'kutup.chat.pending-default-timers.v1:'
+const PREFIX = 'kutup.chat.pending-default-timers.v2:'
 
-function read(account: string): Record<string, number> {
+function read(userId: string): Record<string, number> {
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(PREFIX + account) ?? '{}')
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(PREFIX + userId) ?? '{}')
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {}
   } catch {
     return {}
   }
 }
 
-function write(account: string, timers: Record<string, number>): void {
+function write(userId: string, timers: Record<string, number>): void {
   try {
-    if (Object.keys(timers).length === 0) window.localStorage.removeItem(PREFIX + account)
-    else window.localStorage.setItem(PREFIX + account, JSON.stringify(timers))
+    if (Object.keys(timers).length === 0) window.localStorage.removeItem(PREFIX + userId)
+    else window.localStorage.setItem(PREFIX + userId, JSON.stringify(timers))
   } catch {
     // Kept for this tab only: the messages still carry their expiry.
   }
 }
 
-export function pendingDefaultTimer(account: string, conversationKey: string): number | undefined {
-  return read(account)[conversationKey]
+export function pendingDefaultTimer(userId: string, conversationKey: string): number | undefined {
+  return read(userId)[conversationKey]
 }
 
-export function owePendingDefaultTimer(account: string, conversationKey: string, seconds: number): void {
-  write(account, { ...read(account), [conversationKey]: seconds })
+export function owePendingDefaultTimer(userId: string, conversationKey: string, seconds: number): void {
+  write(userId, { ...read(userId), [conversationKey]: seconds })
 }
 
-export function settlePendingDefaultTimer(account: string, conversationKey: string): void {
-  const timers = read(account)
+export function settlePendingDefaultTimer(userId: string, conversationKey: string): void {
+  const timers = read(userId)
   delete timers[conversationKey]
-  write(account, timers)
+  write(userId, timers)
 }

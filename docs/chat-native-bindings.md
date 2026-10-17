@@ -70,9 +70,19 @@ openNativeChatClient(
   username,
   serverName,
   accountMasterKey,
+  keyBinding,
   authenticatedHttpClient
 )
 ```
+
+`keyBinding` is the account's key binding (the session's `envelopeBinding`,
+a UUID v4): the account's own seals, such as its synced identity pin list,
+bind it, never the username or address.
+
+`username` and `serverName` form the client's account, `username@serverName`;
+the client runs as that canonical address (`user()` returns it) and every
+account it names is fully qualified. The native store has one schema version
+and refuses a database written with another one.
 
 The FFI crate has only a SQLCipher feature and fails if SQLCipher is absent or
 the key cannot unlock an existing database. Input vectors are zeroized in Rust

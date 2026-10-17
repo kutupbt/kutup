@@ -35,10 +35,10 @@ fn file_share(owner: &User, file_id: &str, key: &[u8; 32], generation: u32, to: 
         key,
         file_id,
         generation,
-        &account(owner),
+        &owner.person,
         &owner.identity.incarnation_id(),
         owner.identity.drive_signing_key(),
-        &account(to),
+        &to.person,
         &to.identity.incarnation_id(),
         &to.identity.drive_hpke_public_key(),
     )
@@ -141,10 +141,10 @@ fn file_share_contract() {
         .open(
             &file.id,
             1,
-            &account(&alice),
+            &alice.person,
             &alice.identity.incarnation_id(),
             &alice.identity.drive_signing_public_key(),
-            &account(&bob),
+            &bob.person,
             &bob.identity.incarnation_id(),
             bob.identity.drive_hpke_private_key(),
         )
@@ -406,10 +406,10 @@ fn stale_file_shares_wait_for_the_owner() {
         &folder2,
         &folder.id,
         2,
-        &account(&alice),
+        &alice.person,
         &alice.identity.incarnation_id(),
         alice.identity.drive_signing_key(),
-        &account(&editor),
+        &editor.person,
         &editor.identity.incarnation_id(),
         &editor.identity.drive_hpke_public_key(),
     )
@@ -603,10 +603,10 @@ fn editors_share_and_rename_when_allowed() {
         .open(
             &file.id,
             1,
-            &account(&carol),
+            &carol.person,
             &carol.identity.incarnation_id(),
             &carol.identity.drive_signing_public_key(),
-            &account(&dave),
+            &dave.person,
             &dave.identity.incarnation_id(),
             dave.identity.drive_hpke_private_key(),
         )

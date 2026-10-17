@@ -5,7 +5,8 @@
   "boot": {
     "opening": "Fotoğraflarınız açılıyor…",
     "failedTitle": "Galeri açılamadı",
-    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin."
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı kontrol edip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   },
   "notFound": {
     "title": "Sayfa bulunamadı",
@@ -279,7 +280,7 @@
   "share": {
     "title": "{{name}} albümünü paylaş",
     "description": "Paylaştığınız kişiler albümün fotoğraflarını görür. Fotoğraf ekleyebilir iznini verirseniz bu sunucudaki kişiler kendi fotoğraflarını koyar; bunlar onların depolama alanında kalır.",
-    "email": "E-posta veya başka bir sunucudaki biri için kullanıcı@sunucu",
+    "address": "Kutup adresi (kullanici@sunucu)",
     "canAdd": "Fotoğraf ekleyebilir",
     "submit": "Paylaş",
     "people": "Erişimi olan kişiler",

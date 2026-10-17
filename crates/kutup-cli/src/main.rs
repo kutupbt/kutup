@@ -3,12 +3,15 @@
 //! Commands are ported incrementally; only fully-wired commands are exposed
 //! (no stubs). See `docs/roadmap.md` / the rewrite branch for what remains.
 
+mod account_head;
 mod api;
+mod collab_device;
 mod collection_crypto;
 mod commands;
 mod config;
 mod context;
 mod cryptohelpers;
+mod editor_kind;
 mod errors;
 mod file_crypto;
 mod identity;
@@ -23,7 +26,9 @@ mod syncengine;
 mod transfer;
 mod uploader;
 mod vaultsync;
+mod version_upload;
 mod whiteboard;
+mod yjs_sync;
 
 use clap::{Parser, Subcommand};
 
@@ -52,9 +57,6 @@ enum Commands {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
-        /// Email for the new account.
-        #[arg(long)]
-        email: Option<String>,
         /// Username (3-32 chars: lowercase letters, numbers, _ and -).
         #[arg(long)]
         username: Option<String>,
@@ -64,19 +66,22 @@ enum Commands {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
-        /// Email (for non-interactive login; password via KUTUP_PASSWORD env).
-        #[arg(long)]
-        email: Option<String>,
+        /// Username or Kutup address (non-interactive: password via KUTUP_PASSWORD env).
+        #[arg(long = "username")]
+        username: Option<String>,
     },
     /// Reset your password with the 24-word recovery phrase, then log in.
     Recover {
         /// Server URL (e.g. https://kutup.example.com).
         #[arg(long)]
         server: Option<String>,
-        /// Email (non-interactive: KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD env).
-        #[arg(long)]
-        email: Option<String>,
+        /// Username or Kutup address (non-interactive: KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD env).
+        #[arg(long = "username")]
+        username: Option<String>,
     },
+    /// Change your password (non-interactive: KUTUP_PASSWORD + KUTUP_NEW_PASSWORD env).
+    /// Your other sign-ins end.
+    Password,
     /// Clear stored session.
     Logout,
     /// Show current user info.
@@ -215,6 +220,13 @@ enum Commands {
         #[command(subcommand)]
         command: commands::devices::DevicesCmd,
     },
+    /// Your account: this device's view of its history (its state, and going
+    /// on with the server's data after a rollback or a fork, exit code 6), and
+    /// your username (rename it, list the names you hold, drop one).
+    Account {
+        #[command(subcommand)]
+        command: commands::account::AccountCmd,
+    },
     /// Who the people you share with are: trusted identities, safety numbers.
     Identity {
         #[command(subcommand)]
@@ -247,22 +259,22 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
-        Commands::Register {
-            server,
-            email,
-            username,
-        } => commands::register::run(
+        Commands::Register { server, username } => {
+            commands::register::run(cli.json, server.as_deref(), username.as_deref())
+        }
+        Commands::Login { server, username } => commands::login::run(
+            &cli.profile,
             cli.json,
             server.as_deref(),
-            email.as_deref(),
             username.as_deref(),
         ),
-        Commands::Login { server, email } => {
-            commands::login::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
-        }
-        Commands::Recover { server, email } => {
-            commands::recover::run(&cli.profile, cli.json, server.as_deref(), email.as_deref())
-        }
+        Commands::Recover { server, username } => commands::recover::run(
+            &cli.profile,
+            cli.json,
+            server.as_deref(),
+            username.as_deref(),
+        ),
+        Commands::Password => commands::password::run(&cli.profile, cli.json),
         Commands::Logout => commands::logout::run(&cli.profile, cli.json),
         Commands::Whoami => commands::whoami::run(&cli.profile, cli.json),
         Commands::Ls { tree, folder_id } => {
@@ -334,6 +346,7 @@ fn main() {
         Commands::SshAdd(args) => commands::ssh::add(&cli.profile, cli.json, args),
         Commands::Trash { command } => commands::trash::run(&cli.profile, cli.json, command),
         Commands::Twofa { command } => commands::twofa::run(&cli.profile, cli.json, command),
+        Commands::Account { command } => commands::account::run(&cli.profile, cli.json, command),
         Commands::Devices { command } => commands::devices::run(&cli.profile, cli.json, command),
         Commands::Sessions { command } => commands::sessions::run(&cli.profile, cli.json, command),
         Commands::Identity { command } => commands::identity::run(&cli.profile, cli.json, command),
@@ -363,8 +376,12 @@ fn main() {
 
 /// Maps an error chain to a process exit code: 0 ok · 1 generic · 2 usage
 /// (matches clap's parse-error code) · 3 auth/session · 4 not found ·
-/// 5 network/server. Downcasting sees through `.context()` layers.
+/// 5 network/server · 6 the account's history was rolled back or forked
+/// (`kutup account reanchor`). Downcasting sees through `.context()` layers.
 fn exit_code_for(err: &anyhow::Error) -> i32 {
+    if err.downcast_ref::<errors::HeadBlocked>().is_some() {
+        return 6;
+    }
     if err.downcast_ref::<errors::UsageError>().is_some() {
         return 2;
     }
@@ -427,6 +444,10 @@ mod tests {
             let e = anyhow::Error::new(api::ApiError {
                 status,
                 message: "x".into(),
+                code: None,
+                upload_id: None,
+                idle_seconds: None,
+                yours: None,
                 name_taken: None,
                 version_conflict: None,
             })
@@ -434,6 +455,12 @@ mod tests {
             .context("outermost");
             assert_eq!(exit_code_for(&e), want, "status {status}");
         }
+    }
+
+    #[test]
+    fn exit_codes_mark_a_blocked_account_head() {
+        let e = anyhow::Error::new(errors::HeadBlocked("fork".into())).context("pinning");
+        assert_eq!(exit_code_for(&e), 6);
     }
 
     #[test]

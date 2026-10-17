@@ -67,8 +67,9 @@ Versions are no longer S3 object versions. Storage deletes remove every
 object version of a key (`ListObjectVersions`), so deletes are real on a
 versioned bucket too, and nothing depends on the bucket lifecycle; its rule
 becomes a short safety net for anything overwritten (1 day, no retained
-count). Rows from before v2 (with an `s3_version_id`) still download and are
-deleted by version id. (Fixes 2, 3.)
+count). The pre-v2 rows (S3 object versions of one key) and the boot job that
+moved them were removed with the clean-slate release, along with the
+`file_versions.s3_version_id` column. (Fixes 2, 3.)
 
 ### Named versions are pointers when nothing changed
 

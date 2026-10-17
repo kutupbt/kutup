@@ -26,10 +26,10 @@ are cut over. No mixed v1/v2 trust path or raw remote URL remains.
 ```mermaid
 flowchart TD
     P["password"]
-    APS["account-protection salt + parameters"]
-    APR["account-protection root<br/>Argon2id(password, salt, parameters)"]
-    KEK["key-encryption key<br/>HKDF purpose subkey"]
-    LK["server login key<br/>HKDF purpose subkey"]
+    OP["OPAQUE exchange (RFC 9807)<br/>Argon2id inside the suite"]
+    REC["server's OPAQUE record<br/>(useless offline)"]
+    EK["export key<br/>(client only)"]
+    KEK["key-encryption key<br/>HKDF(export key, key binding)"]
     RE["random recovery entropy<br/>(32 bytes)"]
     M["mnemonic<br/>(BIP39 encoding of recovery entropy)"]
     EMK["password master-key envelope<br/>(stored server-side)"]
@@ -42,11 +42,11 @@ flowchart TD
     FK["per-file key<br/>(random, per file)"]
     BLOB["typed Drive file blob<br/>context-bound XChaCha20 secretstream<br/>5 MB chunks → SeaweedFS"]
 
-    P --> APR
-    APS --> APR
-    APR --> KEK
-    APR --> LK
-    LK -->|sent to server; bcrypt verifier| AUTH["login authentication"]
+    P --> OP
+    REC --> OP
+    OP -->|proves the password| AUTH["sign-in"]
+    OP --> EK
+    EK --> KEK
     RE -->|encoded as| M
     KEK -->|encrypts| EMK
     RE -->|encrypts| ERK
@@ -84,11 +84,13 @@ remains a ciphertext relay.
 ## Registration Flow
 
 1. Client generates a random 32-byte **master key**.
-2. Client derives one account-protection root with the persisted suite,
-   Argon2id salt and parameters. Domain-separated HKDF expands that root into a
-   **key-encryption key** and a **login key**. Only the base64-encoded login key
-   is sent to the server, which bcrypts it into `login_key_hash`. The password,
-   root and key-encryption key never leave the client.
+2. Client registers the password with OPAQUE (RFC 9807,
+   [`plans/opaque.md`](plans/opaque.md)): `register/start` for the key binding
+   it drew, then its half of the protocol, which runs Argon2id inside the
+   suite. The server keeps the resulting record, useless for guessing the
+   password offline. The OPAQUE **export key**, which never leaves the client,
+   gives the **key-encryption key** (HKDF bound to the key binding). The
+   password, export key and key-encryption key never reach the server.
 3. Client derives the account authority, incarnation, Drive X25519 keypair and
    Drive Ed25519 share-signing key from the master key under independent fixed
    HKDF labels. Their public values are bound to the account at registration
@@ -104,13 +106,12 @@ remains a ciphertext relay.
    - the Drive private key under the master key with purpose
      `DriveHpkePrivateKey`.
    Each single envelope carries and authenticates its closed suite ID, typed
-   purpose, canonical lowercase login email, 24-byte nonce and exact ciphertext
+   purpose, the account's key binding (docs/plans/account-identity.md), 24-byte nonce and exact ciphertext
    length. Separate nonce columns and implicit account-wrap formats do not
    exist in V1.
 6. Client also derives a **recovery authorization proof** with HKDF-SHA256 from
    the recovery entropy, the fixed purpose
-   `kutup/account-recovery/auth-proof/v1`, and the canonical lowercase login
-   email.
+   `kutup/account-recovery/auth-proof/v1`, and the account's key binding.
    The server bcrypts only that proof into `recovery_key_verifier`. The proof is
    password-equivalent for recovery authorization, but cannot decrypt
    `recoveryKeyEnvelope`; the raw recovery entropy never leaves the client.
@@ -130,26 +131,35 @@ sequenceDiagram
     participant B as Browser
     participant S as Backend
 
-    B->>S: GET /auth/login/preflight?email=...
-    S-->>B: { accountProtectionSuite, salt, parameters }
-    Note over B: Argon2id(password, suite params) → root<br/>HKDF(root, purpose) → loginKey + KEK
-    B->>S: POST /auth/login { loginKey }
-    S-->>B: { accessToken, masterKeyEnvelope, ... }<br/>+ refresh_token cookie (httpOnly)
-    Note over B: Open masterKeyEnvelope<br/>with KEK + expected email/purpose<br/>→ master key (browser memory only)
+    B->>S: POST /auth/login/start { name, KE1 }
+    Note over S: one attempt counted (lockout, ceiling)<br/>OPAQUE KE2 from the record<br/>(a fake one for an unknown name)
+    S-->>B: { loginId, KE2 }
+    Note over B: OPAQUE: checks the server and the password<br/>→ KE3 + export key
+    B->>S: POST /auth/login/finish { loginId, KE3 }
+    S-->>B: { accessToken, masterKeyEnvelope, keyBinding, ... }<br/>+ refresh_token cookie (httpOnly)
+    Note over B: export key → KEK → open masterKeyEnvelope<br/>→ master key (browser memory only)
 ```
 
-1. Client fetches `GET /api/auth/login/preflight?email=...` to retrieve the
-   account-protection suite, salt and complete Argon2id parameters.
-2. Client recomputes one root via Argon2id in a Web Worker, then derives the
-   login key and key-encryption key with distinct fixed HKDF purposes.
-3. Client POSTs the base64 `loginKey` to `POST /api/auth/login`. Server bcrypt-compares it against the stored `login_key_hash`.
-4. On success the server returns an **access token** (short-lived JWT) in the JSON body and sets the **refresh token** as an HTTP-only `refresh_token` cookie scoped to `/api/auth/refresh`.
-5. The login response carries `masterKeyEnvelope` and
-   `drivePrivateKeyEnvelope`; the client opens them locally with the expected
-   account and purpose bindings. The server-facing login key cannot decrypt
-   either. The master key lives only in client memory.
-6. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
-7. For accounts created via `ADMIN_ACCOUNT` that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle and submits it to `POST /api/auth/complete-setup`.
+1. The client starts the exchange with `POST /api/auth/login/start`. The
+   server counts the attempt against the name (the lockout and ceiling)
+   before any OPAQUE work, and answers from the account's record. A name that
+   is no account gets a fake answer of the same shape, which can never be
+   finished.
+2. The client runs its half (Argon2id in a Web Worker). A wrong password fails
+   here, on the client. A right one gives KE3 and the export key.
+3. `POST /api/auth/login/finish` checks KE3. On success the server returns an
+   **access token** (short-lived JWT) in the JSON body and sets the **refresh
+   token** as an HTTP-only `refresh_token` cookie scoped to
+   `/api/auth/refresh`.
+4. The answer carries `masterKeyEnvelope` and `drivePrivateKeyEnvelope`. The
+   client opens them locally with the key-encryption key from the export key,
+   with the expected key binding and purposes. The server never holds anything
+   that opens either. The master key lives only in client memory.
+5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
+6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/auth/complete-setup`.
+7. Re-authentication (the Pass PIN, a new password, an admin reset) is the
+   same exchange with `purpose: "reauth"`, answered by a one-time grant
+   instead of a session.
 
 ---
 
@@ -202,10 +212,9 @@ plaintext (SHA-256, read while it encrypts) and records a content hash
 under the same key, so a client about to upload a file with a taken name
 and the same size can tell whether it is the same file: then nothing is
 sent ("Already in this folder"); otherwise the person chooses Replace (the
-file there goes to the trash), Keep both (`name (2)`) or Skip. Items made
-before this, or by a client that sends no hash, are filled in by the
-owner's client when it opens the folder, the later of two duplicates
-renamed `name (2)`.
+upload becomes a new version of the file there), Keep both (the first free
+`name (n)`, asked of the server ten at a time) or Skip. As in Proton Drive,
+every write carries its name hash; there is no item without one.
 
 ---
 
@@ -591,7 +600,7 @@ Each file has **one address**, whichever app it is opened from (`appFor` in `pac
 
 Drive's lists, search and New menu link a document straight to Office (`?from=drive`, so its back button returns to the folder); the Office home opens it in place. A file opened in the other app (an older `drive.<domain>/file/…` link, say) is replaced by its address in the right one, keeping `?from=`. The back button goes to the app named in `from` (only `drive` or `office` are honoured), or else to Office's home or the file's Drive folder. Only Office may frame the OnlyOffice sandbox (its `frame-ancestors`, and Office's `frame-src`; `frontend/docker/40-kutup-hosts.sh`).
 
-Public links follow the same rule. A link to one document is `office.<domain>/s/<token>#key=…`; a folder's link is `drive.<domain>/s/<token>#key=…`, whose documents open at `office.<domain>/s/<token>/<fileId>#key=…` (the key goes along in the fragment, never through a server) with a way back to the folder. Office shows the document as it is now and read-only, without an account (`packages/editors/src/public/`): OnlyOffice in its viewer with no session or live-editing socket, notes rendered with their pictures (`GET /api/share/:token/files/:fileId/assets/:assetId`), code read-only, whiteboards in Excalidraw's view mode, PDFs in the browser's viewer. A Drive link to one document, made before, is replaced by its Office address. Every public page (Drive, Office, Photos) says who shared it (`ownerAccount`) and that nobody checked what is in it: the pages are on the server's own address, so a link must not pass off what someone put in it (a sign-in form, a payment request) as the server's.
+Public links follow the same rule. A link to one document is `office.<domain>/s/<token>#key=…`; a folder's link is `drive.<domain>/s/<token>#key=…`, whose documents open at `office.<domain>/s/<token>/<fileId>#key=…` (the key goes along in the fragment, never through a server) with a way back to the folder. Office shows the document as it is now and read-only, without an account (`packages/editors/src/public/`): OnlyOffice in its viewer with no session or live-editing socket, notes rendered with their pictures (`GET /api/share/:token/files/:fileId/assets/:assetId`), code read-only, whiteboards in Excalidraw's view mode, PDFs in the browser's viewer. (A one-file link to a file renamed into a document type later still opens at Drive, listing the file with an "Open" action to Office.) Every public page (Drive, Office, Photos) says who shared it (`ownerAccount`) and that nobody checked what is in it: the pages are on the server's own address, so a link must not pass off what someone put in it (a sign-in form, a payment request) as the server's.
 
 Anyone who opens a public link can report it (`POST /api/share/:token/report`, no account, rate-limited per address, nothing about the reporter kept). The server cannot see what a link shows, so the reporter may include the whole link, key in the fragment, for an administrator to open; the server accepts only one of its own public pages for that token, and erases the link once the report is resolved. Administrators work through reports in the account app (Admin → Reports): dismiss one, take the link down, or disable the account that made it. A link that is taken down, or whose owner's account is disabled, answers `410` with `code: "link_removed"` on every request, and its pages say it was removed; enabling the account again restores its links that were not taken down. Each action is in the admin activity log.
 

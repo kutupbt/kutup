@@ -29,7 +29,7 @@ pub struct MailIdentity {
 async fn own_address(state: &AppState, user_id: Uuid) -> AppResult<(Uuid, String, String)> {
     sqlx::query_as(
         "SELECT a.id, a.address, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
-          WHERE a.user_id = $1 ORDER BY a.created_at LIMIT 1",
+          WHERE a.user_id = $1 AND a.state = 'active'",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)

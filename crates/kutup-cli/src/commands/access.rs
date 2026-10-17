@@ -6,7 +6,7 @@
 //! party keeps what it already had; nothing written from now on is readable
 //! to it.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::Collection;
 use crate::context::{require_session, Ctx};
 use crate::errors::NotFound;
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
@@ -35,7 +36,7 @@ struct Member {
 struct Link {
     id: String,
     token: String,
-    owner_link_key_envelope: Option<String>,
+    owner_link_key_envelope: String,
     expires_at: Option<String>,
     created_at: String,
 }
@@ -46,6 +47,7 @@ struct Federated {
     id: String,
     recipient_username: String,
     recipient_server: String,
+    recipient_account_id: String,
     recipient_incarnation_id: String,
     can_upload: bool,
 }
@@ -98,12 +100,7 @@ pub fn list(profile: &str, json: bool, collection_id: &str) -> Result<()> {
         );
     }
     for l in &access.public_links {
-        let note = if l.owner_link_key_envelope.is_some() {
-            ""
-        } else {
-            "  (made before links could be kept; removing anyone removes it)"
-        };
-        println!("  link       {}  created {}{note}", l.id, l.created_at);
+        println!("  link       {}  created {}", l.id, l.created_at);
     }
     Ok(())
 }
@@ -151,7 +148,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         })
         .map(|f| f.id.clone())
         .collect();
-    let mut removed_links: Vec<String> = access
+    let removed_links: Vec<String> = access
         .public_links
         .iter()
         .filter(|l| l.id == who)
@@ -160,23 +157,10 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     if removed_member.is_empty() && removed_federated.is_empty() && removed_links.is_empty() {
         return Err(NotFound(format!("{who} does not have access to this folder")).into());
     }
-    // Links the owner has no copy of cannot follow the key.
-    let legacy: Vec<String> = access
-        .public_links
-        .iter()
-        .filter(|l| l.owner_link_key_envelope.is_none() && !removed_links.contains(&l.id))
-        .map(|l| l.id.clone())
-        .collect();
-    let prompt = if legacy.is_empty() {
-        format!("Remove {who}? The folder moves to a new key they never get.")
-    } else {
-        format!(
-            "Remove {who}? The folder moves to a new key they never get; {} older public link(s) are removed too.",
-            legacy.len()
-        )
-    };
-    crate::commands::confirm(&prompt, yes)?;
-    removed_links.extend(legacy);
+    crate::commands::confirm(
+        &format!("Remove {who}? The folder moves to a new key they never get."),
+        yes,
+    )?;
 
     // The next epoch.
     let next = col.key_epoch + 1;
@@ -205,20 +189,16 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         &new_key,
         context(DriveEnvelopePurpose::CollectionName, col.name_revision + 1)?,
     )?;
-    let server = server_name(&ctx);
-    if server.is_empty() {
-        bail!("the server did not publish its name");
-    }
-    let sender_account = format!("{}@{server}", ctx.session.username);
-    let seal = |public_key: &str, account: &str, incarnation: &str| -> Result<String> {
+    let sender = ctx.session.person()?;
+    let seal = |public_key: &str, person: &AccountRef, incarnation: &str| -> Result<String> {
         NamedShareEnvelopeV1::seal(
             &new_key,
             &col.id,
             next,
-            &sender_account,
+            &sender,
             &identity.incarnation_id(),
             identity.drive_signing_key(),
-            account,
+            person,
             incarnation,
             &b64().decode(public_key).context("recipient key")?,
         )?
@@ -233,7 +213,11 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .map(|m| {
             Ok(serde_json::json!({
                 "userId": m.user_id,
-                "namedShareEnvelope": seal(&m.drive_public_key, &m.account, &m.account_incarnation_id)?,
+                "namedShareEnvelope": seal(
+                    &m.drive_public_key,
+                    &AccountRef::new(&sender.server, &m.user_id).context("member")?,
+                    &m.account_incarnation_id,
+                )?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -242,12 +226,8 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .iter()
         .filter(|l| !removed_links.contains(&l.id))
         .map(|l| {
-            let envelope = l
-                .owner_link_key_envelope
-                .as_deref()
-                .ok_or_else(|| anyhow!("link {} has no owner copy", l.id))?;
             let link_key = drive_envelope::open_b64(
-                envelope,
+                &l.owner_link_key_envelope,
                 master,
                 DriveEnvelopeContextV1::new(
                     DriveEnvelopePurpose::PublicLinkKey,
@@ -272,14 +252,20 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .iter()
         .filter(|f| !removed_federated.contains(&f.id))
         .map(|f| {
-            // Their Drive key through the signed lookup, for the same account incarnation.
-            let remote = ctx.client.get_fed_pubkey(&f.recipient_username, &f.recipient_server)?;
+            // Their Drive key through their server, by their account id, for
+            // the same account incarnation.
+            let person = AccountRef::new(&f.recipient_server, &f.recipient_account_id)
+                .context("federated recipient")?;
+            let remote = ctx.client.get_account(&person)?;
+            if remote.server != person.server || remote.account_id != person.account_id {
+                bail!("the lookup of {} answered for another account", remote.account);
+            }
             if remote.account_incarnation_id != f.recipient_incarnation_id {
                 bail!("{} has reset their account; remove them too", remote.account);
             }
             Ok(serde_json::json!({
                 "id": f.id,
-                "namedShareEnvelope": seal(&remote.drive_hpke_public_key, &remote.account, &remote.account_incarnation_id)?,
+                "namedShareEnvelope": seal(&remote.drive_hpke_public_key, &person, &remote.account_incarnation_id)?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -312,14 +298,4 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         println!("Removed {who}. The folder now uses key epoch {next}.");
     }
     Ok(())
-}
-
-/// This server's name, as named shares bind accounts (`name@server`).
-fn server_name(ctx: &Ctx) -> String {
-    ctx.client
-        .get("/auth/settings")
-        .ok()
-        .and_then(|resp| crate::api::decode_json::<serde_json::Value>(resp).ok())
-        .and_then(|v| v["chat"]["serverName"].as_str().map(str::to_string))
-        .unwrap_or_default()
 }

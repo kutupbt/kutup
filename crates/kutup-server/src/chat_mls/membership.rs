@@ -443,7 +443,7 @@ async fn load_staged_deliveries(
         .values()
         .flat_map(|delivery| delivery.local_members_after.iter().cloned())
         .collect::<Vec<_>>();
-    complete_roster.sort_by_key(|member| member.address.canonical());
+    complete_roster.sort_by_key(|member| member.account.to_string());
     if complete_roster.len() != transition.next_member_count as usize
         || roster_commitment(&complete_roster).map_err(AppError::bad_request)?
             != transition.next_roster_commitment
@@ -463,10 +463,9 @@ async fn apply_local_snapshot(
     invitation_origin: Option<&str>,
     action_type: MlsControlActionTypeV1,
 ) -> AppResult<()> {
-    let active: Vec<(Uuid, String, bool, Option<String>, String)> = sqlx::query_as(
-        "SELECT m.user_id, u.username, m.is_owner, m.owner_id, m.membership_status
+    let active: Vec<(Uuid, bool, Option<String>, String)> = sqlx::query_as(
+        "SELECT m.user_id, m.is_owner, m.owner_id, m.membership_status
          FROM chat_mls_local_members m
-         JOIN users u ON u.id = m.user_id
          WHERE conversation_id = $1 AND incarnation = $2
            AND removed_epoch IS NULL
          ORDER BY m.user_id
@@ -478,7 +477,7 @@ async fn apply_local_snapshot(
     .await?;
     let existing_owner_ids: BTreeSet<String> = active
         .iter()
-        .filter_map(|(_, _, is_owner, owner_id, _)| is_owner.then(|| owner_id.clone()).flatten())
+        .filter_map(|(_, is_owner, owner_id, _)| is_owner.then(|| owner_id.clone()).flatten())
         .collect();
     let next_owner_ids: BTreeSet<String> = delivery
         .local_members_after
@@ -495,8 +494,8 @@ async fn apply_local_snapshot(
     let mut next_users = BTreeMap::new();
     for member in &delivery.local_members_after {
         let user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1 AND is_active = true")
-                .bind(&member.address.username)
+            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active = true")
+                .bind(crate::account_ids::id_of(&member.account)?)
                 .fetch_optional(&mut **tx)
                 .await?;
         let user_id = user_id.ok_or_else(|| {
@@ -505,23 +504,10 @@ async fn apply_local_snapshot(
         next_users.insert(user_id, member);
     }
 
-    let active_ids: BTreeSet<Uuid> = active
-        .iter()
-        .map(|(user_id, _, _, _, _)| *user_id)
-        .collect();
-    let active_usernames: BTreeSet<&str> = active
-        .iter()
-        .map(|(_, username, _, _, _)| username.as_str())
-        .collect();
+    let active_ids: BTreeSet<Uuid> = active.iter().map(|(user_id, _, _, _)| *user_id).collect();
     let rejected_ids: BTreeSet<Uuid> = active
         .iter()
-        .filter_map(|(user_id, _, _, _, status)| (status == "rejected").then_some(*user_id))
-        .collect();
-    let rejected_usernames: BTreeSet<&str> = active
-        .iter()
-        .filter_map(|(_, username, _, _, status)| {
-            (status == "rejected").then_some(username.as_str())
-        })
+        .filter_map(|(user_id, _, _, status)| (status == "rejected").then_some(*user_id))
         .collect();
     let active_devices: Vec<(Uuid, i32)> = sqlx::query_as(
         "SELECT user_id, device_id
@@ -543,7 +529,7 @@ async fn apply_local_snapshot(
     for device in &delivery.local_devices_after {
         let (user_id, _) = next_users
             .iter()
-            .find(|(_, member)| member.address == device.address)
+            .find(|(_, member)| member.account == device.account)
             .ok_or_else(|| {
                 AppError::bad_request("MLS device snapshot names an account outside its roster")
             })?;
@@ -634,7 +620,7 @@ async fn apply_local_snapshot(
             } else {
                 MlsMembershipEnvelopeKindV1::Welcome
             };
-            required_envelopes.insert((member.address.canonical(), device_id, u16::from(kind)));
+            required_envelopes.insert((member.account.to_string(), device_id, u16::from(kind)));
         }
     }
     let supplied_after = delivery
@@ -643,11 +629,11 @@ async fn apply_local_snapshot(
         .filter(|envelope| {
             next_users
                 .values()
-                .any(|member| member.address == envelope.recipient)
+                .any(|member| member.account == envelope.recipient)
         })
         .map(|envelope| {
             (
-                envelope.recipient.canonical(),
+                envelope.recipient.to_string(),
                 envelope.device_id,
                 u16::from(envelope.kind),
             )
@@ -660,7 +646,7 @@ async fn apply_local_snapshot(
         .collect::<Vec<_>>();
     let submitter_address = local_submitter
         .and_then(|user_id| next_users.get(&user_id))
-        .map(|member| member.address.canonical());
+        .map(|member| member.account.to_string());
     let initiator_omission = missing.len() == 1
         && submitter_address.as_deref() == Some(missing[0].0.as_str())
         && missing[0].2 == u16::from(MlsMembershipEnvelopeKindV1::Commit);
@@ -703,7 +689,7 @@ async fn apply_local_snapshot(
         .await?;
     }
 
-    for (user_id, _, _, _, _) in &active {
+    for (user_id, _, _, _) in &active {
         if !next_users.contains_key(user_id) {
             sqlx::query(
                 "UPDATE chat_mls_local_members
@@ -761,7 +747,10 @@ async fn apply_local_snapshot(
     }
 
     for envelope in &delivery.envelopes {
-        if rejected_usernames.contains(envelope.recipient.username.as_str()) {
+        // Envelopes go to this server's accounts only (checked as the
+        // delivery validated).
+        let recipient = crate::account_ids::id_of(&envelope.recipient)?;
+        if rejected_ids.contains(&recipient) {
             return Err(AppError::bad_request(
                 "MLS membership envelope targets a rejected invitation",
             ));
@@ -769,9 +758,9 @@ async fn apply_local_snapshot(
         let remains_member = delivery
             .local_members_after
             .iter()
-            .any(|member| member.address == envelope.recipient);
+            .any(|member| member.account == envelope.recipient);
         if !remains_member
-            && (!active_usernames.contains(envelope.recipient.username.as_str())
+            && (!active_ids.contains(&recipient)
                 || envelope.kind != MlsMembershipEnvelopeKindV1::Commit)
         {
             return Err(AppError::bad_request(
@@ -779,8 +768,8 @@ async fn apply_local_snapshot(
             ));
         }
         let recipient_user_id: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
-                .bind(&envelope.recipient.username)
+            sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+                .bind(recipient)
                 .fetch_optional(&mut **tx)
                 .await?;
         let recipient_user_id = recipient_user_id.ok_or_else(|| {

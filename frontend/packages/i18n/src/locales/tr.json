@@ -47,8 +47,8 @@
   "fileShare": {
     "title": "“{{name}}” paylaş",
     "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",
-    "recipient": "E-posta veya Kutup adresi",
-    "recipientHint": "Kutup adresi (kullanici@sunucu) ya da bu sunucudaki biri için e-postası. Başka sunucudaki biri davet bağlantısı alır; izin verirseniz kendi sunucusu üzerinden düzenleyebilir de.",
+    "recipient": "Kutup adresi",
+    "recipientHint": "Kutup adresi (kullanici@sunucu). Başka sunucudaki biri davet bağlantısı alır; izin verirseniz kendi sunucusu üzerinden düzenleyebilir de.",
     "canEdit": "Düzenleyebilir",
     "canEditHint": "Düzenleyenler dosyayı değiştirip sürüm kaydedebilir; görüntüleyenler yalnızca açabilir. Yeniden adlandırma, taşıma ve silme yalnızca sizde.",
     "canView": "Görüntüleyebilir",
@@ -181,12 +181,27 @@
       "title": "“{{name}}” burada zaten var",
       "fileThere": "{{folder}} içinde bu adda bir dosya zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
       "folderThere": "{{folder}} içinde bu adda bir klasör zaten var. Adlar büyük-küçük harf ayrımı yapılmadan karşılaştırılır.",
-      "replaceHint": "Değiştir: oradaki dosya çöp kutusuna taşınır, oradan geri yükleyebilirsiniz.",
+      "replaceHint": "Değiştir: bu, oradaki dosyanın en yeni sürümü olur; eski sürümleri geçmişinde kalır.",
       "keepBothHint": "İkisini de tut: bu dosya “{{name}}” adıyla yüklenir.",
       "applyToAll": "Bu yüklemedeki diğer ad çakışmalarında da aynısını yap",
       "replace": "Değiştir",
       "keepBoth": "İkisini de tut",
       "skip": "Atla"
+    },
+    "replaceProblem": {
+      "changed": {
+        "title": "“{{name}}” bu arada değişti",
+        "description": "{{folder}} içindeki dosya bu dosya gönderilirken değişti, bu yüzden hiçbir şey değiştirilmedi."
+      },
+      "ownUpload": {
+        "title": "“{{name}}” için bitmemiş bir değiştirme var",
+        "description": "{{folder}} içindeki bu dosyanın önceki değiştirilmesi bir saatten uzun süre önce durdu. İptal edip yeniden başlatın, ikisini de tutun ya da atlayın."
+      },
+      "othersUpload": {
+        "title": "“{{name}}” şu anda değiştiriliyor",
+        "description": "{{folder}} içindeki bu dosyanın yeni bir sürümü şu anda, belki başka bir cihazdan yükleniyor. İkisini de tutun ya da atlayın."
+      },
+      "restart": "İptal et ve yeniden başlat"
     }
   },
   "contactSuggest": {
@@ -220,6 +235,7 @@
       "shared": "Paylaşılan posta kutusu"
     },
     "goesToAdministrators": "Bu rol adresinin henüz üyesi yok; e-postaları tüm yöneticilere gider.",
+    "needsNewSigner": "Bu posta kutusunun bir sahibi veya yöneticisi silindi ya da devre dışı bırakıldı ve imzalama anahtarını hâlâ tutuyor olabilir. İmzalamayı kalan sahiplere ve yöneticilere devretmek için kaydedin; o zamana kadar anahtarları değiştirilemez.",
     "toAdministrators": "Tüm yöneticilere gider",
     "displayName": "Ad",
     "postPolicy": "Kimler yazabilir",
@@ -256,7 +272,9 @@
     "openMailbox": "Aç",
     "sharedMailboxes": "Paylaşılan posta kutuları",
     "foldersOf": "{{name}} klasörleri",
-    "deleted": "Grup silindi."
+    "deleted": "Grup silindi.",
+    "identityInDoubt": "{{account}} için sunucunun verdiği anahtarlar bildiğiniz anahtarlar değil. Posta kutusunun anahtarları paylaşılmadı. Yalnızca {{account}} ile hesabının sıfırlandığını doğruladıysanız yine de paylaşın.",
+    "shareKeysAnyway": "Anahtarları yine de paylaş"
   },
   "nameDialog": {
     "label": "Ad",
@@ -303,8 +321,22 @@
       "body": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış. Bu ondan gelmiyor olabilir: içeriğine, bağlantılarına ya da isteklerine güvenmeyin.",
       "shareBody": "Sunucunun {{account}} için verdiği anahtarlar onun hesabınca imzalanmamış; sunucu paylaştığınızı okuyabilir."
     },
+    "someoneElse": {
+      "title": "{{account}} artık başka birinin",
+      "body": "{{account}} adresinde tanıdığınız kişi artık bu adresi kullanmıyor. Şimdi kullanan başka biri: ondan gelen bir şeye güvenmeden önce kim olduğunu doğrulayın.",
+      "bodyNow": "{{account}} adresinde tanıdığınız kişi artık {{now}}. {{account}} adresini şimdi kullanan başka biri: ondan gelen bir şeye güvenmeden önce kim olduğunu doğrulayın.",
+      "shareBody": "{{account}} adresinde tanıdığınız kişi artık bu adresi kullanmıyor; başka biriyle paylaşmış olursunuz. Önce kim olduğunu doğrulayın.",
+      "shareBodyNow": "{{account}} adresinde tanıdığınız kişi artık {{now}}; başka biriyle paylaşmış olursunuz. Bunun yerine {{now}} ile paylaşın ya da önce kim olduğunu doğrulayın."
+    },
+    "renamed": {
+      "banner": "{{name}} artık {{now}} (önceden {{account}}).",
+      "share": "{{account}} bu kişinin bıraktığı bir ad: artık {{now}}.",
+      "useNow": "{{now}} ile paylaş",
+      "formerly": "önceden {{formerly}}"
+    },
     "accept": "Yeni kimliğe güven",
     "acceptFailed": "Kaydedilemedi. Yeniden deneyin.",
+    "knownAs": "{{name}} olarak tanıdığınız hesap",
     "shareAnyway": "Yine de paylaş",
     "verified": "{{name}} doğrulandı",
     "verify": "{{name}} kişisini doğrula",
@@ -318,7 +350,8 @@
       "unverified": "Doğrulanmadı",
       "unproven": "Anahtarlar henüz onaylanmadı",
       "changed": "Kimlik değişti",
-      "invalid": "Kimlik onaylanamadı"
+      "invalid": "Kimlik onaylanamadı",
+      "someoneElse": "Başka biri"
     }
   },
   "safetyNumber": {
@@ -373,5 +406,41 @@
     "send": "Gönder",
     "sent": "Teşekkürler! Geri bildiriminiz yöneticilere gönderildi.",
     "failed": "Geri bildiriminiz gönderilemedi. Yeniden deneyin."
+  },
+  "restoreName": {
+    "title": "“{{name}}” orada zaten var",
+    "description": "Geri döneceği yerde bu adda bir öğe var. “{{name}}” adıyla geri yükleyin ya da çöp kutusunda bırakın.",
+    "restore": "“{{name}}” olarak geri yükle",
+    "leave": "Çöp kutusunda bırak"
+  },
+  "accountHead": {
+    "blockedTitle": "Bu uygulamadaki verilerinizle sunucudakiler uyuşmuyor",
+    "blockedBody": "Başka bir cihaza farklı bir geçmiş gösterilmiş olabilir ya da sunucunuz bir yedekten geri yüklendiği için son değişiklikler kaybolmuş olabilir. Siz karar verene kadar kişiler, etiketler, kayıtlı anahtarlar ve kasa parolalarındaki değişiklikler burada duraklatıldı.",
+    "continue": "Sunucudaki verilerle devam et",
+    "confirmTitle": "Sunucudaki verilerle devam edilsin mi?",
+    "confirmBody": "Bu uygulama bundan sonra sunucunun gösterdiğini izleyecek. Ardından kişilerinizi, etiketlerinizi ve kayıtlı anahtarlarınızı gözden geçirin: başka yerde yapılan değişiklikler eksik olabilir.",
+    "rollbackDetail": "Sunucu, bu uygulamanın daha önce gördüğünden eski bir durum gösteriyor.",
+    "forkDetail": "Sunucu, bu uygulamanın gördüğü değişiklikleri içermeyen bir geçmiş gösteriyor.",
+    "continueFailed": "Devam edilemedi. Bağlantınızı denetleyip yeniden deneyin.",
+    "tooOld": "Bu uygulama uzun süredir kullanılmamıştı; artık sunucudaki güncel verileri izliyor.",
+    "dismiss": "Kapat",
+    "dataState": "Veri durumu",
+    "dataStateDescription": "Kişiler, etiketler, kayıtlı anahtarlar ve kasa parolalarındaki her değişiklikte artan bir sayı. Sunucudan şüphelenirseniz cihazlarınız arasında karşılaştırın.",
+    "dataStateNone": "Henüz değişiklik yok.",
+    "dataStateLine": "#{{sequence}}",
+    "lastByThisApp": "En son burada değiştirildi",
+    "lastByAnother": "En son başka bir cihazda ya da uygulamada değiştirildi",
+    "since": "Burada görüldü: {{when}}",
+    "history": "Bu uygulamanın geçmişi",
+    "historyEmpty": "Gösterilecek bir şey yok.",
+    "startedFresh": "#{{sequence}} izlenmeye başlandı",
+    "startedFreshUnreadable": "Bu cihazın kaydı okunamadı; #{{sequence}} izlenmeye başlandı",
+    "reanchoredRollback": "Sunucudaki eski verilerle devam edildi (#{{from}} → #{{to}})",
+    "reanchoredFork": "Sunucudaki diğer geçmişle devam edildi (#{{from}} → #{{to}})",
+    "reanchoredTooOld": "Uzun bir aradan sonra güncellendi (#{{from}} → #{{to}})",
+    "forgotten": "Sunucu geçmişini yitirdikten sonra devam edildi (önceki #{{from}})"
+  },
+  "mailPlaces": {
+    "unnamedFolder": "Adsız klasör"
   }
 }

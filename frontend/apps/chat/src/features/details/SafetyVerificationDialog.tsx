@@ -2,6 +2,7 @@ import type { SafetyNumberV1 } from '@kutup/chat-core/types'
 import { SafetyVerificationDialog as SharedDialog } from '@kutup/ui/components/safety-verification'
 
 export interface SafetyVerificationDialogProps {
+  /** Who the number is with, as shown (a name or an address, never an account key). */
   peer: string
   safety: SafetyNumberV1
   onVerify: (scannedPayload: string) => Promise<SafetyNumberV1>

@@ -15,8 +15,8 @@ function entry(
 ): ChatHistoryEntry {
   return {
     id,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    peer: 'bob@b.test',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
+    sender: 'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
     direction: 'incoming',
     senderDeviceId: 1,
     timestampMs,
@@ -36,6 +36,7 @@ describe('private local Chat search', () => {
         kind: 'text',
         sentAt: 't',
         seq: '1',
+        messageId: 'm-38',
         body: { text: 'Secure local search' },
         text: 'Secure local search',
       }),
@@ -44,6 +45,7 @@ describe('private local Chat search', () => {
         kind: 'text',
         sentAt: 't',
         seq: '2',
+        messageId: 'm-46',
         body: { text: 'LOCAL and secure' },
         text: 'LOCAL and secure',
       }),
@@ -88,6 +90,7 @@ describe('private local Chat search', () => {
       kind: 'attachment',
       sentAt: 't',
       seq: '1',
+      messageId: 'm-90',
       body: {},
       attachment: {
         version: 1,
@@ -110,6 +113,7 @@ describe('private local Chat search', () => {
       kind: 'disappearingTimer',
       sentAt: 't',
       seq: '2',
+      messageId: 'm-112',
       body: {},
       disappearingTimer: {},
     })
@@ -124,6 +128,7 @@ describe('private local Chat search', () => {
       kind: 'text',
       sentAt: 't',
       seq: String(index),
+      messageId: 'm-126',
       body: { text: 'match' },
       text: 'match',
     }))
@@ -141,8 +146,8 @@ describe('private local Chat search', () => {
 
   it('matches Turkish and accented words alike, at the start of a word only', () => {
     const history = [
-      entry('city', 1, { version: 1, kind: 'text', sentAt: 't', seq: '1', body: {}, text: "İstanbul'da buluşalım" }),
-      entry('call', 2, { version: 1, kind: 'text', sentAt: 't', seq: '2', body: {}, text: 'Çağrı geldi, KİTAPLAR hazır' }),
+      entry('city', 1, { version: 1, kind: 'text', sentAt: 't', seq: '1', messageId: 'm-144', body: {}, text: "İstanbul'da buluşalım" }),
+      entry('call', 2, { version: 1, kind: 'text', sentAt: 't', seq: '2', messageId: 'm-145', body: {}, text: 'Çağrı geldi, KİTAPLAR hazır' }),
     ]
     const ids = (query: string) => searchChatHistory(history, query, noMutations).map(result => result.message.id)
     expect(ids('istanbul')).toEqual(['city'])

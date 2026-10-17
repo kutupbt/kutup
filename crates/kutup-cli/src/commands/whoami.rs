@@ -23,7 +23,7 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
         String::new()
     };
     println!("Username:  {}", me.username);
-    println!("Email:     {}", me.email);
+    println!("Address:   {}", me.address);
     println!(
         "Storage:   {} / {}{pct}",
         format_bytes(me.storage_used_bytes),

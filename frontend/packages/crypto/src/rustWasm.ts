@@ -12,6 +12,41 @@ const BASE = typeof __KUTUP_CRYPTO_WASM__ === 'string' && __KUTUP_CRYPTO_WASM__ 
 const MODULE_URL = `${BASE}/kutup_crypto_wasm.js`
 const WASM_URL = `${BASE}/kutup_crypto_wasm_bg.wasm`
 
+/** A shared mailbox's key as a member holds it, as WASM takes it. */
+export interface GroupKeyHolder {
+  account: { server: string; accountId: string }
+  hpkePrivateKey: string
+  share: string
+  groupId: string
+  fingerprint: string
+}
+
+/** A shared mailbox's signing key as an owner or manager holds it, as WASM takes it. */
+export interface GroupSignerHolderJs {
+  account: { server: string; accountId: string }
+  hpkePrivateKey: string
+  groupId: string
+  signer: string
+  signingShare: string
+}
+
+/** A verified shared-mailbox key-list chain. */
+export interface GroupKeyChainViewJs {
+  firstSigner: string
+  signer: string
+  signers: string[]
+  sequence: number
+  digests: string[]
+  newest: unknown
+}
+
+/** A member a group key is shared with: their account and checked account key. */
+export interface GroupKeyMember {
+  account: { server: string; accountId: string }
+  incarnationId: string
+  hpkePublicKey: string
+}
+
 export interface CryptoWasmModule {
   default(input?: unknown): Promise<unknown>
   sealLocalState(
@@ -26,15 +61,7 @@ export interface CryptoWasmModule {
     purpose: number,
     profile: string,
   ): string
-  deriveAccountProtectionKeys(
-    password: string,
-    saltBase64: string,
-    suite: number,
-    memoryKib: number,
-    iterations: number,
-    parallelism: number,
-  ): { keyEncryptionKey: string; loginKey: string }
-  deriveRecoveryAuthProof(recoveryEntropyBase64: string, loginEmail: string): string
+  deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
   deriveAccountIdentityKeys(masterKeyBase64: string): {
     authorityPublicKey: string
     authorityKeyId: string
@@ -43,129 +70,131 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
-  signDriveKeyBinding(masterKeyBase64: string, account: string): string
+  signDriveKeyBinding(masterKeyBase64: string, account: { server: string; accountId: string }): string
+  signDeviceRegistration(
+    masterKeyBase64: string,
+    server: string,
+    userId: string,
+    devicePublicBase64: string,
+    challengeBase64: string,
+    issuedAtMs: number,
+  ): string
+  signDeviceRevocation(
+    masterKeyBase64: string,
+    server: string,
+    devicePublicBase64: string,
+    revokedAtMs: number,
+  ): string
   deriveSafetyNumber(
-    localAccount: string,
+    local: { server: string; accountId: string },
     localAuthorityBase64: string,
-    peerAccount: string,
+    peer: { server: string; accountId: string },
     peerAuthorityBase64: string,
   ): { fingerprint: string; qrPayload: string }
   safetyQrMatches(
-    localAccount: string,
+    local: { server: string; accountId: string },
     localAuthorityBase64: string,
-    peerAccount: string,
+    peer: { server: string; accountId: string },
     peerAuthorityBase64: string,
     scanned: string,
   ): boolean
+  foldName(name: string): string
+  /** `aci:<uuid>@<server>` → `{ server, accountId }`; throws for anything else. */
+  parseAccountRef(value: string): { server: string; accountId: string }
+  /** `{ server, accountId }` → `aci:<uuid>@<server>`, both checked. */
+  accountRefString(server: string, accountId: string): string
+  foldAddress(address: string): string | undefined
+  signAccountRename(masterKeyBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
+  verifyAccountRenameChain(
+    authorityPublicBase64: string,
+    chainJson: string,
+    knownDigestsJson?: string | null,
+  ): { incarnationId: string; first: string; current: string; addresses: string[]; sequence: number; digests: string[] }
+  recordIdentityPin(
+    pinsJson: string,
+    account: { server: string; accountId: string },
+    address: string | undefined,
+    authorityPublicBase64: string,
+    update: string,
+    since: string,
+  ): unknown
+  lookupIdentityPin(
+    pinsJson: string,
+    account: { server: string; accountId: string },
+    address?: string,
+    publishedAuthorityBase64?: string,
+  ): unknown
+  identityPinsAt(pinsJson: string, address: string): unknown
+  lookupGroupPin(pinsJson: string, server: string, groupId: string, signers: string[], digests: string[]): unknown
+  recordGroupPin(pinsJson: string, server: string, groupId: string, signers: string[], digests: string[], update: string, since: string): unknown
+  applyAccountRenameToPins(pinsJson: string, account: { server: string; accountId: string }, chainJson: string, since: string): unknown
   verifyDriveKeyBinding(
-    account: string,
+    account: { server: string; accountId: string },
     authorityPublicKeyBase64: string,
     driveHpkePublicKeyBase64: string,
     driveSigningPublicKeyBase64: string,
     bindingBase64: string,
   ): boolean
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
-  sealIdentityPins(masterKeyBase64: string, owner: string, revision: number, pinsJson: string): string
-  openIdentityPins(masterKeyBase64: string, owner: string, revision: number, sealedBase64: string): string
-  signContactSummary(masterKeyBase64: string, account: string, summaryJson: string): { summary: string; signature: string }
+  sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pinsJson: string): string
+  openIdentityPins(masterKeyBase64: string, binding: string, sealedBase64: string): { value: string; revision: number }
+  signContactSummary(masterKeyBase64: string, binding: string, revision: number, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
     signatureBase64: string,
-    account: string,
+    binding: string,
+    revision: number,
     authorityPublicKeyBase64: string,
   ): import('./contactCard').ContactSummary
-  sealContactCard(masterKeyBase64: string, account: string, uid: string, vcard: string): string
-  openContactCard(masterKeyBase64: string, account: string, uid: string, sealedBase64: string): string
-  sealMailName(masterKeyBase64: string, account: string, kind: string, id: string, name: string): string
-  openMailName(masterKeyBase64: string, account: string, kind: string, id: string, sealedBase64: string): string
-  sealPassVaultSecret(
-    masterKeyBase64: string,
-    loginEmail: string,
-    fileId: string,
-    password: string | null | undefined,
-    keyFileBase64: string | null | undefined,
-  ): string
-  openPassVaultSecret(
-    envelopeBase64: string,
-    masterKeyBase64: string,
-    loginEmail: string,
-    fileId: string,
-  ): import('./passVault').PassVaultSecret
+  sealContactCard(masterKeyBase64: string, binding: string, uid: string, revision: number, vcard: string): string
+  openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
+  sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, revision: number, name: string): string
+  openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
+  inspectAccountEnvelope(envelopeBase64: string): number
+  RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
+  AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
+  OpaqueLogin: { start(password: string): OpaqueLoginHandle }
+  OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
   generateMailGroupKey(
     groupAddress: string,
+    groupId: string,
     createdAtSecs: number,
-    memberPublicKeys: string[],
+    members: GroupKeyMember[],
   ): { publicKey: string; fingerprint: string; sha256Fingerprint: string; shares: string[] }
   reshareMailGroupKey(
-    masterKeyBase64: string,
-    loginEmail: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
-    memberPublicKeys: string[],
+    key: GroupKeyHolder,
+    members: GroupKeyMember[],
   ): string[]
   openMailGroupMessage(
-    masterKeyBase64: string,
-    loginEmail: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     message: Uint8Array,
     senderPublicKeyBase64?: string,
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   encryptMailMessageUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpUnsigned(recipientPublicKeys: string[], plaintext: Uint8Array): string
-  signMailDetached(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
-  signMailCleartext(masterKeyBase64: string, loginEmail: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
+  signMailDetached(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, content: Uint8Array): string
+  signMailCleartext(masterKeyBase64: string, binding: string, address: string, envelopeBase64: string, fingerprintHex: string, text: string): string
   signMailCleartextAsGroup(
-    masterKeyBase64: string,
-    loginEmail: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     text: string,
   ): string
   signMailDetachedAsGroup(
-    masterKeyBase64: string,
-    loginEmail: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     content: Uint8Array,
   ): string
   encryptMailMessageAsGroup(
-    masterKeyBase64: string,
-    loginEmail: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     recipientPublicKeys: string[],
     plaintext: Uint8Array,
   ): { keyPackets: string[]; dataPacket: Uint8Array; free(): void }
   encryptMailPgpAsGroup(
-    masterKeyBase64: string,
-    loginEmail: string,
-    address: string,
-    envelopeBase64: string,
-    fingerprintHex: string,
-    shareBase64: string,
-    groupFingerprintHex: string,
+    key: GroupKeyHolder,
     recipientPublicKeys: string[],
     plaintext: Uint8Array,
   ): string
   exportMailAddressKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -173,14 +202,14 @@ export interface CryptoWasmModule {
   ): string
   importMailAddressKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     file: Uint8Array,
     passphrase: string,
   ): { publicKey: string; envelope: string; fingerprint: string; sha256Fingerprint: string }
   generateMailAddressKey(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     createdAtSecs: number,
   ): import('./mailKey').GeneratedMailAddressKey
@@ -189,6 +218,21 @@ export interface CryptoWasmModule {
     address: string,
   ): { fingerprint: string; sha256Fingerprint: string; createdAt: number }
   armorMailPublicKey(publicKeyBase64: string): string
+  verifyMailGroupKeyChain(
+    groupId: string,
+    firstSignerBase64: string,
+    lists: { data: string; signature: string }[],
+    handovers: string[],
+  ): GroupKeyChainViewJs
+  signMailGroupKeyList(holder: GroupSignerHolderJs, list: unknown): unknown
+  newMailGroupSigner(
+    groupId: string,
+    members: GroupKeyMember[],
+    list: unknown,
+    outgoing: GroupSignerHolderJs | undefined,
+    previousListHash: string | undefined,
+  ): { publicKey: string; shares: string[]; keyList: unknown; handover?: string }
+  reshareMailGroupSigner(holder: GroupSignerHolderJs, members: GroupKeyMember[]): string[]
   signMailKeyList(
     masterKeyBase64: string,
     list: import('./mailKey').MailKeyListInput,
@@ -202,7 +246,7 @@ export interface CryptoWasmModule {
   ): import('./mailKey').SignedMailKeyList
   openMailMessage(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -211,7 +255,7 @@ export interface CryptoWasmModule {
   ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   encryptMailMessage(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -223,7 +267,7 @@ export interface CryptoWasmModule {
   describeExternalMailKeyDetails(publicKey: Uint8Array, address: string): import('./mailKey').ExternalMailKeyDetails
   encryptMailPgp(
     masterKeyBase64: string,
-    loginEmail: string,
+    binding: string,
     address: string,
     envelopeBase64: string,
     fingerprintHex: string,
@@ -236,13 +280,13 @@ export interface CryptoWasmModule {
     plaintextBase64: string,
     keyBase64: string,
     purpose: number,
-    loginEmail: string,
+    binding: string,
   ): string
   openAccountEnvelope(
     envelopeBase64: string,
     keyBase64: string,
     expectedPurpose: number,
-    loginEmail: string,
+    binding: string,
   ): string
   createChatBackupSignerAuthorization(
     masterKeyBase64: string,
@@ -482,9 +526,9 @@ export interface CryptoWasmModule {
     recipientHpkePublicKeyBase64: string,
     collectionId: string,
     epoch: number,
-    senderAccount: string,
+    sender: { server: string; accountId: string },
     senderIncarnationId: string,
-    recipientAccount: string,
+    recipient: { server: string; accountId: string },
     recipientIncarnationId: string,
   ): string
   openNamedShareEnvelope(
@@ -493,9 +537,9 @@ export interface CryptoWasmModule {
     recipientHpkePrivateKeyBase64: string,
     expectedCollectionId: string,
     expectedEpoch: number,
-    expectedSenderAccount: string,
+    expectedSender: { server: string; accountId: string },
     expectedSenderIncarnationId: string,
-    expectedRecipientAccount: string,
+    expectedRecipient: { server: string; accountId: string },
     expectedRecipientIncarnationId: string,
   ): string
   sealFileShareEnvelope(
@@ -504,9 +548,9 @@ export interface CryptoWasmModule {
     recipientHpkePublicKeyBase64: string,
     fileId: string,
     generation: number,
-    senderAccount: string,
+    sender: { server: string; accountId: string },
     senderIncarnationId: string,
-    recipientAccount: string,
+    recipient: { server: string; accountId: string },
     recipientIncarnationId: string,
   ): string
   openFileShareEnvelope(
@@ -515,9 +559,9 @@ export interface CryptoWasmModule {
     recipientHpkePrivateKeyBase64: string,
     expectedFileId: string,
     expectedGeneration: number,
-    expectedSenderAccount: string,
+    expectedSender: { server: string; accountId: string },
     expectedSenderIncarnationId: string,
-    expectedRecipientAccount: string,
+    expectedRecipient: { server: string; accountId: string },
     expectedRecipientIncarnationId: string,
   ): string
   liveLocationSeal(
@@ -535,6 +579,7 @@ export interface CryptoWasmModule {
   driveNameHash(hashKeyBase64: string, name: string): string
   driveContentHash(hashKeyBase64: string, contentSha256Base64: string): string
   driveCanonicalName(name: string): string
+  yjsSeedClientId(fileId: string, content: Uint8Array): number
   photosLibraryKey(masterKeyBase64: string): string
   sealPhotosLibrary(
     libraryJson: string,
@@ -558,18 +603,18 @@ export interface CryptoWasmModule {
     profileKeyBase64: string,
     senderMasterKeyBase64: string,
     recipientHpkePublicKeyBase64: string,
-    senderAccount: string,
+    sender: { server: string; accountId: string },
     senderIncarnationId: string,
-    recipientAccount: string,
+    recipient: { server: string; accountId: string },
     recipientIncarnationId: string,
   ): string
   openProfileKeyEnvelope(
     envelopeBase64: string,
     senderSigningPublicKeyBase64: string,
     recipientHpkePrivateKeyBase64: string,
-    expectedSenderAccount: string,
+    expectedSender: { server: string; accountId: string },
     expectedSenderIncarnationId: string,
-    expectedRecipientAccount: string,
+    expectedRecipient: { server: string; accountId: string },
     expectedRecipientIncarnationId: string,
   ): string
 }
@@ -584,6 +629,67 @@ export interface LiveLocationUpdate {
 }
 
 let modulePromise: Promise<CryptoWasmModule> | null = null
+
+/** The account head's keys and verified head (Rust `kutup_crypto::account_head`); kept in WASM. */
+/** A verified account head (Rust `VerifiedHead`): each holder its own; free when done. */
+export interface VerifiedAccountHeadHandle {
+  anchor(): unknown
+  head(): unknown
+  copy(): VerifiedAccountHeadHandle
+  free(): void
+}
+
+export interface AccountHeadCheckedHandle {
+  status(): unknown
+  takeVerified(): VerifiedAccountHeadHandle | undefined
+  free(): void
+}
+
+export interface AccountHeadReanchoredHandle {
+  record(): unknown
+  takeVerified(): VerifiedAccountHeadHandle | undefined
+  free(): void
+}
+
+export interface AccountHeadKeysHandle {
+  writer(deviceId: string): string
+  scope(scope: string, indexJson: string): unknown
+  check(anchorJson: string | undefined, currentBase64: string, segmentJson: string | undefined): AccountHeadCheckedHandle
+  reanchor(anchorJson: string, currentBase64: string, segmentJson: string | undefined, confirmed: boolean, atMs: number): AccountHeadReanchoredHandle
+  checkIndex(verified: VerifiedAccountHeadHandle, scope: string, indexJson: string): unknown
+  next(verified: VerifiedAccountHeadHandle, writer: string, scopesJson: string): string
+  first(writer: string, scopesJson: string): string
+  committed(verified: VerifiedAccountHeadHandle, sealedBase64: string): VerifiedAccountHeadHandle
+  committedFirst(sealedBase64: string): VerifiedAccountHeadHandle
+  localStateName(): string
+  newLocalState(): unknown
+  openLocalState(sealedBase64: string): unknown
+  sealLocalState(stateJson: string): string
+  advanceLocalState(stateJson: string, verified: VerifiedAccountHeadHandle, atMs: number): unknown
+  reanchoredLocalState(stateJson: string, recordJson: string, verified: VerifiedAccountHeadHandle): unknown
+  forgottenLocalState(stateJson: string, atMs: number): unknown
+  free(): void
+}
+
+/** OPAQUE sign-in in progress (Rust `kutup_crypto::opaque`); the state stays in WASM. */
+export interface OpaqueLoginHandle {
+  readonly request: string
+  finish(responseBase64: string): string
+  openMasterKey(envelope: string, keyBinding: string): string
+  /** Wipes the state and the export key. */
+  close(): void
+  free(): void
+}
+
+/** OPAQUE registration in progress (Rust `kutup_crypto::opaque`); the state stays in WASM. */
+export interface OpaqueRegistrationHandle {
+  readonly request: string
+  finish(responseBase64: string): string
+  sealMasterKey(masterKeyBase64: string, keyBinding: string): string
+  /** Wipes the state and the export key. */
+  close(): void
+  free(): void
+}
 
 export async function getCryptoWasm(): Promise<CryptoWasmModule> {
   if (!modulePromise) {

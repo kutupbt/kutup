@@ -1,6 +1,7 @@
 //! `kutup pass` — Kutup Pass vault secrets (docs/plans/pass.md, "Vault
 //! secrets"): keep a vault's key in the account so Kutup Pass and
-//! `kutup sync` open the vault with the Kutup sign-in, list them, forget one.
+//! `kutup sync` open the vault with the Kutup sign-in, list them, forget one,
+//! and show a key Kutup Pass generated (for KeePassXC).
 
 use std::path::PathBuf;
 
@@ -11,7 +12,7 @@ use serde::Serialize;
 use crate::context::require_session;
 use crate::cryptohelpers::{decrypt_file_meta, locate_file, FoundFile};
 use crate::output::print_json;
-use crate::vaultsync::{fetch_current, keep_secret, VaultFile};
+use crate::vaultsync::{fetch_current, forget_secret, keep_secret, verified_secrets, VaultFile};
 
 #[derive(Subcommand)]
 pub enum PassCmd {
@@ -33,6 +34,15 @@ pub enum PassCmd {
     Forget {
         /// The vault's file id.
         file_id: String,
+        /// Forget a key Kutup Pass generated too (the account may be the only
+        /// place it is kept: save it first with `kutup pass show-key`).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show the key Kutup Pass generated for a vault, to open it in KeePassXC.
+    ShowKey {
+        /// The vault's file id.
+        file_id: String,
     },
 }
 
@@ -44,7 +54,8 @@ pub fn run(profile: &str, json: bool, cmd: &PassCmd) -> Result<()> {
             no_password,
         } => keep(profile, json, file_id, key_file.as_ref(), *no_password),
         PassCmd::Ls => ls(profile, json),
-        PassCmd::Forget { file_id } => forget(profile, json, file_id),
+        PassCmd::Forget { file_id, force } => forget(profile, json, file_id, *force),
+        PassCmd::ShowKey { file_id } => show_key(profile, json, file_id),
     }
 }
 
@@ -93,7 +104,8 @@ fn keep(
     keep_secret(
         &ctx.client,
         &master_key,
-        &ctx.session.email,
+        ctx.session.binding(),
+        &crate::config::data_dir(profile)?,
         file_id,
         &contents,
         password.as_deref().map(String::as_str),
@@ -108,6 +120,19 @@ fn keep(
     Ok(())
 }
 
+/// The account's vault secrets, held to the account head.
+fn secrets(
+    ctx: &crate::context::Ctx,
+    profile: &str,
+) -> Result<Vec<crate::api::pass::VaultSecretRow>> {
+    verified_secrets(
+        &ctx.client,
+        &ctx.session.master_key_bytes()?,
+        ctx.session.binding(),
+        &crate::config::data_dir(profile)?,
+    )
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KeptVault {
@@ -118,7 +143,7 @@ struct KeptVault {
 fn ls(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
     let mut vaults = Vec::new();
-    for row in ctx.client.list_vault_secrets()? {
+    for row in secrets(&ctx, profile)? {
         let name = locate(&ctx, &row.file_id)
             .map(|found| decrypt_file_meta(&found.file, &found.keys).0)
             .unwrap_or_else(|_| "[not found]".to_owned());
@@ -139,13 +164,78 @@ fn ls(profile: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn forget(profile: &str, json: bool, file_id: &str) -> Result<()> {
+fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    ctx.client.delete_vault_secret(file_id)?;
+    if !force {
+        // A generated key may be kept nowhere else: forgetting it would lose
+        // the vault. Not knowing counts as generated.
+        if let Some(row) = secrets(&ctx, profile)?
+            .into_iter()
+            .find(|row| row.file_id == file_id)
+        {
+            let generated = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)
+                .ok()
+                .zip(uuid::Uuid::parse_str(file_id).ok())
+                .and_then(|(envelope, id)| {
+                    kutup_pass::kept::open(
+                        &envelope,
+                        &ctx.session.master_key_bytes().ok()?,
+                        ctx.session.binding(),
+                        id.as_bytes(),
+                    )
+                    .ok()
+                })
+                .is_none_or(|kept| kept.generated_password.is_some());
+            if generated {
+                anyhow::bail!(
+                    "Kutup Pass made this vault's key, and your account may be the only place it is kept: \
+                     save it first (kutup pass show-key {file_id}), then forget it with --force"
+                );
+            }
+        }
+    }
+    forget_secret(
+        &ctx.client,
+        &ctx.session.master_key_bytes()?,
+        ctx.session.binding(),
+        &crate::config::data_dir(profile)?,
+        file_id,
+    )?;
     if json {
         print_json(&serde_json::json!({ "fileId": file_id, "forgotten": true }))?;
     } else {
         println!("Forgot the key of vault {file_id}.");
+    }
+    Ok(())
+}
+
+/// The password Kutup Pass generated for a vault (docs/plans/pass.md,
+/// "Vault keys"). A password the person chose is kept only as its hash, so
+/// there is nothing to show for it.
+fn show_key(profile: &str, json: bool, file_id: &str) -> Result<()> {
+    let ctx = require_session(profile)?;
+    let row = secrets(&ctx, profile)?
+        .into_iter()
+        .find(|row| row.file_id == file_id)
+        .ok_or_else(|| anyhow::anyhow!("your account keeps no key for vault {file_id}"))?;
+    let envelope = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)?;
+    let id = uuid::Uuid::parse_str(file_id).context("a vault's file id is a UUID")?;
+    let kept = kutup_pass::kept::open(
+        &envelope,
+        &ctx.session.master_key_bytes()?,
+        ctx.session.binding(),
+        id.as_bytes(),
+    )
+    .context("the kept key does not open")?;
+    let Some(password) = kept.generated_password else {
+        anyhow::bail!(
+            "Kutup Pass did not make this vault's key: it opens with the password chosen for it"
+        );
+    };
+    if json {
+        print_json(&serde_json::json!({ "fileId": file_id, "key": password.as_str() }))?;
+    } else {
+        println!("{}", password.as_str());
     }
     Ok(())
 }

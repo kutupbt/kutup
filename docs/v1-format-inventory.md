@@ -9,11 +9,11 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 
 | Purpose | Pre-V1 shape | V1 owner and format |
 |---|---|---|
-| Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** `AccountProtectionSuiteId` plus suite-bearing `AccountEnvelopeV1`, XChaCha and persisted Argon2id parameters |
-| Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountEnvelopeV1` with recovery purpose, canonical account context and XChaCha |
+| Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** `AccountProtectionSuiteId` plus suite-bearing `AccountEnvelopeV1` (suite 2, bound to the account's key binding), XChaCha and persisted Argon2id parameters |
+| Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountEnvelopeV1` (suite 2) with recovery purpose, the account's key binding as context, and XChaCha |
 | Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountEnvelopeV1` |
-| Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records, immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |
-| File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
+| Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |
+| File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata (padded to 256-byte buckets, with the content SHA-256) to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
 | File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one `DriveObjectSuiteId` file-blob format for originals and text/office/whiteboard snapshots, with 5 MiB secretstream framing bound to the file and its key generation, never the folder |
 | Profile key for a share partner | — (new) | **Implemented end to end:** `ProfileKeyEnvelopeV1` (`KUTPPK1`), the same HPKE suite and Drive keys as a named share, bound to both accounts and incarnations, not to a folder |
 | Single-file share | — (new) | **Implemented (local):** `FileShareEnvelopeV1` (`KUTPFS1`), the named-share layout bound to a file and its key generation instead of a folder and epoch (docs/plans/drive-file-sharing.md) |
@@ -26,19 +26,62 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | File key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 10 seals generation *g − 1*'s file key under generation *g*'s; `file_keyring::key_at` walks the chain, so a file's history travels with it between folders (docs/plans/drive-move.md) |
 | Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
 | Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
-| Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability |
+| Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability; the owner's own copy of the profile key is wrapped under a key from the master key and the key binding (`kutup-chat-profile-wrap-v2`) |
+| Identity pins | — (new) | **Implemented end to end:** `KUTIP2` suite 2, the account's synced pin list sealed under a master-key-derived key, bound to the account's key binding and the list's revision (the pinned accounts inside stay addresses). Vector: `identity-pins-v2.json` |
+| Contacts | — (new) | **Implemented end to end:** summaries signed by the account authority under `kutup/contact-summary/v2` and cards sealed as `KUTCC2` suite 2, both bound to the account's key binding (cards also to the contact UID). Vector: `contact-card-v2.json` |
+| Mail folder, label and filter names | — (new) | **Implemented end to end:** `KUTMN2` suite 2, sealed under a master-key-derived key, bound to the account's key binding, the kind and the id. Vector: `mail-names-v2.json` |
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
 | MLS group | MLS `0x0002`, P-256 control and delivery keys | MLS `0x0003`, X25519/ChaCha/Ed25519 throughout Kutup-owned bindings |
 | Account device directory | Chat-only `DeviceManifest` plus global transparency proofs | One account-signed `AccountManifestV1` with complete device set, previous hash, history and durable peer pin |
 | Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported (current contract: [`chat-backup.md`](chat-backup.md)) |
 | Broadcast post and grants | Absent | Typed broadcast policy, epoch, account/device grant, history grant and post structures |
 
-`AccountEnvelopeV1` is encoded as magic `KUTPAE1\0`, big-endian suite ID,
-purpose byte, zero reserved byte, big-endian context length, canonical lowercase
-login email, 24-byte nonce, big-endian ciphertext length, and XChaCha20-Poly1305
-ciphertext/tag. The bytes preceding the ciphertext are the complete AAD. The
-server rejects noncanonical base64, unknown suites/purposes, noncanonical
-context, wrong purpose/account binding, wrong plaintext size and trailing data.
+`AccountEnvelopeV1` is encoded as magic `KUTPAE1\0`, big-endian suite ID
+(2; suite 1 is retired and not read), purpose byte, zero reserved byte,
+big-endian context length, the context (the account's key binding, a UUID v4,
+never an email, username or address: docs/plans/account-identity.md), the
+object id's length byte and the object id where the purpose has one secret
+per object, an 8-byte big-endian revision for a mutable purpose, 24-byte
+nonce, big-endian ciphertext length, and XChaCha20-Poly1305 ciphertext/tag.
+The bytes preceding the ciphertext are the complete AAD, and the AEAD key is
+derived per envelope with HKDF-SHA256 over the purpose, the binding and the
+object. Each purpose has one policy (`AccountEnvelopePurpose::policy`),
+checked on seal, open and by the server: whether it names an object (and its
+length), how its plaintext's length shows (`Exact` for keys; `Fixed` or
+`Bucket` padding, `0x80` then zeros, applied once by the envelope and checked
+canonically on open) and whether it carries a revision:
+
+| Purpose | Object | Length | Revision |
+|---|---|---|---|
+| PasswordMasterKey, RecoveryMasterKey, DriveHpkePrivateKey, ChatBackupRoot | none | exactly 32 bytes | no |
+| MailAddressPrivateKey | none | padded to a multiple of 256 bytes | no |
+| PassVaultSecret | the vault's file id (16 bytes) | padded to one length (`pass_vault::MAX_PAYLOAD_LEN` + 1 = 3121 bytes) | yes |
+
+Every server write path checks an envelope with
+`account_envelope::validate_for(purpose, binding, object)` before storing it,
+and so rejects noncanonical base64, unknown or retired suites and purposes,
+noncanonical context, the wrong purpose, binding or object, a missing or
+extra object or revision, a length its policy never gives, and trailing data.
+`account-envelope-v2.json` holds one envelope per purpose and, for each, the
+envelopes that must be refused, read by the Rust and the WASM tests.
+
+Contact cards (`KUTCC2`), mail names (`KUTMN2`) and identity pin lists
+(`KUTIP2`) carry their revision in clear after the suite, covered by the AAD
+(docs/plans/sealed-revisions.md); cards and names are padded to a multiple of
+256 bytes.
+
+The account's own at-rest formats bind the key binding, never a name, and a
+format that bound a name was replaced by a new version with no reader for the
+old one (the private beta was reset): identity pins `KUTIP1` → `KUTIP2`,
+contact summaries `kutup/contact-summary/v1` → `/v2` and cards `KUTCC1` →
+`KUTCC2`, mail names `KUTMN1` → `KUTMN2`, and Chat's wrapped profile key
+`kutup-chat-profile-wrap-v1` → `-v2`. Each vector file lists the values that
+must be refused: another key binding, the address in place of the binding, a
+changed header, nonce or ciphertext, and the old address-bound value.
+Statements to other people keep naming the address, because the address is
+what they are about: the Drive key binding, named shares and profile key
+shares, MLS credentials, the mail key's own address and the peer-facing
+profile envelopes. Safety numbers (V2) name only the two authority keys.
 
 `DriveEnvelopeV1` is encoded as magic `KUTPDE1\0`, big-endian suite ID,
 purpose, zero reserved byte, epoch, revision, 16-byte object UUID, 16-byte

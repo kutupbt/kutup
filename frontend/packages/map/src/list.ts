@@ -1,4 +1,5 @@
 import * as Y from 'yjs'
+import { isAccountKey } from '@kutup/crypto/accountRef'
 
 // A place list (docs/plans/maps.md, step 4): a Drive file named `*.kutupmap`,
 // like a map in Google My Maps. Edited live, it is a Yjs document whose
@@ -23,7 +24,11 @@ export interface Place {
   note: string
   lat: number
   lon: number
-  /** `user@server` of whoever added it. */
+  /**
+   * Who added it: their account, `aci:<uuid>@<server>` (never an address,
+   * which can later belong to someone else; the name is looked up when the
+   * place is shown). Empty when not known.
+   */
   addedBy: string
   /** RFC 3339. */
   addedAt: string
@@ -40,24 +45,51 @@ export function listTitle(name: string): string {
 
 const clamp = (value: string, max: number) => [...value].slice(0, max).join('')
 
-/** A place as stored, or null when it is not one (bad coordinates, no name). */
-export function normalizePlace(value: unknown): Place | null {
+/**
+ * A place's time: RFC 3339 exactly as `kutup-collab` checks it (one rule on
+ * both sides; `Date.parse` accepts much more): `YYYY-MM-DDTHH:MM:SS[.fraction]`
+ * then `Z` or `±HH:MM`, a real calendar day, no leap second.
+ */
+export function validTime(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/.exec(value)
+  if (!m) return false
+  const [year, month, day, hour, minute, second] = m.slice(1, 7).map(Number)
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+  if (days === undefined || day < 1 || day > days || hour > 23 || minute > 59 || second > 59) return false
+  return m[9] === undefined || (Number(m[9]) <= 23 && Number(m[10]) <= 59)
+}
+
+/**
+ * A place as stored, or null when it is not one (no name, coordinates that
+ * are not numbers in range). A place without a usable id gets `idFor()`.
+ * The same rule as `normalize_place` in `kutup-collab`.
+ */
+export function normalizePlace(value: unknown, idFor: () => string = () => crypto.randomUUID()): Place | null {
   if (!value || typeof value !== 'object') return null
   const v = value as Record<string, unknown>
-  const lat = Number(v.lat)
-  const lon = Number(v.lon)
+  if (typeof v.lat !== 'number' || typeof v.lon !== 'number') return null
+  const { lat, lon } = v as { lat: number; lon: number }
   const name = typeof v.name === 'string' ? clamp(v.name.trim(), MAX_NAME) : ''
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180 || !name) return null
-  const id = typeof v.id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(v.id) ? v.id : crypto.randomUUID()
+  const id = typeof v.id === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(v.id) ? v.id : idFor()
   return {
     id,
     name,
     note: typeof v.note === 'string' ? clamp(v.note, MAX_NOTE) : '',
     lat,
     lon,
-    addedBy: typeof v.addedBy === 'string' ? clamp(v.addedBy, 320) : '',
-    addedAt: typeof v.addedAt === 'string' && !Number.isNaN(Date.parse(v.addedAt)) ? v.addedAt : new Date(0).toISOString(),
+    addedBy: typeof v.addedBy === 'string' && isAccountKey(v.addedBy) ? v.addedBy : '',
+    addedAt: typeof v.addedAt === 'string' && validTime(v.addedAt) ? v.addedAt : new Date(0).toISOString(),
   }
+}
+
+/**
+ * The id a place without one gets in a file's first content: the same on
+ * every peer seeding that file (`upload_place_id` in `kutup-collab`).
+ */
+export function uploadPlaceId(fileId: string, index: number): string {
+  return `${fileId.replaceAll('-', '')}-${index}`
 }
 
 /** Oldest first, then by name: the order a list is shown and exported in. */
@@ -75,8 +107,12 @@ export class NotAPlaceList extends Error {
   }
 }
 
-/** The places in a stored list. An empty file (or a 1-byte placeholder) is an empty list. */
-export function parseListJson(bytes: Uint8Array): Place[] {
+/**
+ * The places in a stored list. An empty file (or a one-character placeholder)
+ * is an empty list. A place without a usable id gets `idFor(index)` (its
+ * position among the entries); by default a random one (a place added here).
+ */
+export function parseListJson(bytes: Uint8Array, idFor: (index: number) => string = () => crypto.randomUUID()): Place[] {
   const text = new TextDecoder().decode(bytes).trim()
   if (text.length <= 1) return []
   let value: unknown
@@ -89,8 +125,8 @@ export function parseListJson(bytes: Uint8Array): Place[] {
   if (v?.format !== 'kutupmap' || v.version !== 1 || !Array.isArray(v.places)) throw new NotAPlaceList()
   const seen = new Set<string>()
   const places: Place[] = []
-  for (const raw of v.places.slice(0, MAX_PLACES)) {
-    const place = normalizePlace(raw)
+  for (const [index, raw] of v.places.slice(0, MAX_PLACES).entries()) {
+    const place = normalizePlace(raw, () => idFor(index))
     if (!place || seen.has(place.id)) continue
     seen.add(place.id)
     places.push(place)

@@ -1,13 +1,14 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { mlsGroupInvitationReadiness, type MlsGroupInvitationReadiness } from '@kutup/chat-core/group-readiness'
-import { canonicalAccountAddress, conversationKey, directAddress } from '@kutup/chat-core/identity'
+import { accountKey, conversationKey, directKey } from '@kutup/chat-core/identity'
 import type { ChatGroupCall, ChatHistoryEntry, ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
 import { useChat } from '../../app/chatStore'
 import { conversationTitle } from '../../lib/names'
 import { activeGroupCall } from '../calls/groupCallController'
 import { activeTimers, groupIdOf, threadView, type MessageView } from '../../state/views'
 import { useThreadPages } from '../../state/threadPages'
+import { accountName } from '../../state/accountNames'
 
 /** Why nothing can be written here (the composer's place shows it). */
 export type ReadOnlyReason =
@@ -29,7 +30,9 @@ export interface ConversationModel {
   trim: () => void
   conversation: ConversationId
   title: string
-  /** Direct conversations and notes: the peer's canonical address. */
+  /** Direct conversations and notes: the other account's key (never shown). */
+  peer: string | null
+  /** An address to show for that account (`accountName`), once known. */
   address: string | null
   note: boolean
   profile: PeerChatProfile | null
@@ -58,24 +61,24 @@ const noReadiness: MlsGroupInvitationReadiness = { pending: [], refused: [], blo
 /** Everything a conversation's screen needs, derived from the chat state. */
 export function useConversationModel(conversation: ConversationId, now: number): ConversationModel {
   const { t } = useTranslation()
-  const { snapshot, self, capabilities } = useChat()
-  const selfAddress = self!.address
+  const { snapshot, self, capabilities, namesRevision } = useChat()
+  const selfKey = self!.key
   const thread = useThreadPages(conversationKey(conversation))
   // The live window and the conversation's pages read in so far.
   const history = useMemo(() => mergeHistory(snapshot.history, thread.entries), [snapshot.history, thread.entries])
 
   return useMemo(() => {
     const key = conversationKey(conversation)
-    const address = directAddress(conversation)
-    const note = address === selfAddress
-    const profile = address ? (snapshot.profiles.find((p) => p.peer === address) ?? null) : null
-    const contact = address ? (snapshot.contacts.find((c) => c.peer === address) ?? null) : null
+    const peer = directKey(conversation)
+    const note = peer === selfKey
+    const profile = peer ? (snapshot.profiles.find((p) => p.peer === peer) ?? null) : null
+    const contact = peer ? (snapshot.contacts.find((c) => c.peer === peer) ?? null) : null
     const group =
       conversation.kind === 'group' ? (snapshot.groups.find((g) => groupIdOf(g) === conversation.groupId) ?? null) : null
     const historyOnly = conversation.kind === 'group' && !group
-    const me = group?.currentRoster.find((m) => canonicalAccountAddress(m.address) === selfAddress)
+    const me = group?.currentRoster.find((m) => accountKey(m.account) === selfKey)
     const isAdmin = me?.isAdmin === true
-    const readiness = group ? mlsGroupInvitationReadiness(group, snapshot.invitationFeedback, selfAddress) : noReadiness
+    const readiness = group ? mlsGroupInvitationReadiness(group, snapshot.invitationFeedback, selfKey) : noReadiness
 
     let readOnly: ReadOnlyReason | null = null
     if (contact?.state === 'pendingIncoming') readOnly = 'request'
@@ -90,8 +93,9 @@ export function useConversationModel(conversation: ConversationId, now: number):
     return {
       key,
       conversation,
-      title: conversationTitle(conversation, address, profile, selfAddress, t, group?.currentGroupInfo),
-      address,
+      title: conversationTitle(conversation, peer, profile, selfKey, t, group?.currentGroupInfo),
+      peer,
+      address: note ? self!.address : peer ? accountName(peer) : null,
       note,
       profile,
       contact,
@@ -99,7 +103,7 @@ export function useConversationModel(conversation: ConversationId, now: number):
       historyOnly,
       isAdmin,
       readiness,
-      views: threadView(history, key, selfAddress, now),
+      views: threadView(history, key, selfKey, now),
       timerSeconds: activeTimers(history).get(key),
       loadOlder: thread.loadOlder,
       complete: thread.complete,
@@ -128,7 +132,9 @@ export function useConversationModel(conversation: ConversationId, now: number):
         : null,
       canStartGroupCall: group !== null && !readOnly && capabilities?.groupCalls === true,
     }
-  }, [conversation, snapshot, history, thread.loadOlder, thread.complete, thread.trim, selfAddress, now, t, capabilities])
+    // `self` only for its shown address; a name that arrives later raises `namesRevision`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation, snapshot, history, thread.loadOlder, thread.complete, thread.trim, selfKey, now, t, capabilities, namesRevision])
 }
 
 /** Two histories as one, oldest first, each entry once (the first wins). */

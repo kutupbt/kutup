@@ -1,10 +1,11 @@
 import { UserPlus, X } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useContactLookup } from '@kutup/contacts-core/api'
 import { Button } from '@kutup/ui/components/button'
 import { Tooltip } from '@kutup/ui/components/tooltip'
+import { useContactFor } from './contactFor'
 import { useSaveContact } from './saveContactState'
+import { getSession } from '@kutup/session/store'
 
 /**
  * Above a one-to-one conversation with someone who is not in the address
@@ -13,13 +14,15 @@ import { useSaveContact } from './saveContactState'
  * or it is dismissed, which this device remembers, so it is not a toast
  * that is gone before it is read.
  */
-export function NotInContactsBanner({ address, name }: { address: string; name?: string }) {
+export function NotInContactsBanner({ peer, address, name }: { peer: string; address: string; name?: string }) {
   const { t } = useTranslation()
-  const contacts = useContactLookup()
+  const contact = useContactFor(peer, address)
   const save = useSaveContact()
   const [dismissed, setDismissed] = useState(readDismissed)
-  const key = address.toLowerCase()
-  if (!contacts.ready || contacts.find(key) || dismissed.has(key)) return null
+  // Dismissed for the account (its key), saved and looked up by its address.
+  const key = peer
+  // In the address book, or a card there for the address is someone else's.
+  if (!contact.ready || contact.card || contact.taken || dismissed.has(key)) return null
   return (
     <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-1.5 text-sm" data-testid="chat-not-in-contacts">
       <UserPlus className="size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -48,17 +51,33 @@ export function NotInContactsBanner({ address, name }: { address: string; name?:
 
 const DISMISSED = 'kutup.chat.notInContactsDismissed'
 
+/** Per account: two accounts in one browser keep their own lists. */
+function dismissedKey(): string | null {
+  const userId = getSession()?.userId
+  return userId ? `${DISMISSED}:${userId}` : null
+}
+
 function readDismissed(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(DISMISSED) ?? '[]') as string[])
+    // The unkeyed list from before was shared by every account here.
+    localStorage.removeItem(DISMISSED)
+  } catch {
+    // Storage blocked.
+  }
+  const key = dismissedKey()
+  if (!key) return new Set()
+  try {
+    return new Set(JSON.parse(localStorage.getItem(key) ?? '[]') as string[])
   } catch {
     return new Set()
   }
 }
 
-function writeDismissed(addresses: Set<string>) {
+function writeDismissed(accounts: Set<string>) {
+  const key = dismissedKey()
+  if (!key) return
   try {
-    localStorage.setItem(DISMISSED, JSON.stringify([...addresses].slice(-500)))
+    localStorage.setItem(key, JSON.stringify([...accounts].slice(-500)))
   } catch {
     // Private windows: dismissed for this page only.
   }

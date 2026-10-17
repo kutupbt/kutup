@@ -8,6 +8,7 @@ import {
   sealPublicLinkCollectionKeyV1,
   toBase64,
 } from '@kutup/crypto'
+import type { AccountRef } from '@kutup/crypto/accountRef'
 import { sealOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import { appUrl } from '@kutup/session/apps'
 import api from '@kutup/session/client'
@@ -16,9 +17,9 @@ import { cachedFolderIndex, foldersKey } from './folders'
 import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
-import { atTopLevel, inFolder, nameHashIn, type NamePlace } from './names'
+import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
-import { confirmRecipient } from './identityPins'
+import { confirmRecipient, lookupAddress } from './identityPins'
 
 /** Every Drive mutation refreshes folders (names, timestamps) and the files it touched. */
 export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) => Promise<R>) {
@@ -76,7 +77,8 @@ export function useRenameFolder() {
     )
     const parent = folder.parentId ? cachedFolderIndex(queryClient)?.byId.get(folder.parentId) : null
     const place = folderNamePlace(folder, parent, me.masterKey)
-    await api.put(`/collections/${folder.id}`, { ...next, nameHash: place ? await nameHashIn(place, name.trim()) : null })
+    if (!place) throw new Error('the parent folder is not loaded')
+    await api.put(`/collections/${folder.id}`, { ...next, nameHash: await nameHashIn(place, name.trim()) })
   })
 }
 
@@ -90,9 +92,12 @@ export function useRenameFile() {
       file.fileKey,
       fileMetadataOf(file, { name: name.trim() }),
     )
-    // A file shared by itself is renamed without its folder's key: its hash
-    // is cleared, and the owner's client fills it in.
-    await api.put(`/files/${file.id}`, { ...next, nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : null })
+    // A file shared by itself is renamed without its folder's key: a random
+    // hash, which no other name has (docs/plans/drive-unique-names.md).
+    await api.put(`/files/${file.id}`, {
+      ...next,
+      nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : randomNameHash(),
+    })
   })
 }
 
@@ -181,19 +186,7 @@ export interface ShareInput {
 
 export type ShareResult = { kind: 'local'; account: string } | { kind: 'federated'; account: string; inviteUrl: string }
 
-interface LocalRecipient {
-  userId: string
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
-interface RemoteRecipient {
-  account: string
-  driveHpkePublicKey: string
-  accountIncarnationId: string
-}
-
+/** Who an address leads to now (server-asserted): their account and keys. */
 /**
  * Share a folder by email (someone on this server) or `user@other-server`
  * (federation). The folder key is sealed to the recipient's Drive key and
@@ -210,52 +203,48 @@ export function useShareFolder() {
       canDelete: input.canDelete,
       uploadQuotaBytes: input.canUpload ? input.uploadQuotaBytes : null,
     }
-    const seal = (publicKey: string, account: string, incarnationId: string) =>
+    // Sealed to the account the address leads to, never to the address.
+    const seal = (publicKey: string, to: AccountRef, incarnationId: string) =>
       sealNamedShareEnvelope(folder.key!, me.masterKey, publicKey, {
         collectionId: folder.id,
         epoch: folder.keyEpoch,
-        senderAccount: me.account,
+        sender: me.accountRef,
         senderIncarnationId: me.incarnationId,
-        recipientAccount: account,
+        recipient: to,
         recipientIncarnationId: incarnationId,
       })
 
-    let local: LocalRecipient | null = null
-    if (recipient.includes('@')) {
-      try {
-        local = (await api.get<LocalRecipient>(`/users/by-email/${encodeURIComponent(recipient)}`)).data
-      } catch (error) {
-        const status = (error as { response?: { status?: number } }).response?.status
-        if (status !== 404) throw error
-      }
-    }
-    if (local) {
-      await confirmRecipient(me, local.account, { driveHpkePublicKey: local.driveHpkePublicKey, incarnationId: local.accountIncarnationId }, input.identityConfirmed)
-      const namedShareEnvelope = await seal(local.driveHpkePublicKey, local.account, local.accountIncarnationId)
-      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.userId, namedShareEnvelope, ...permissions })
+    // `user@server`, here or on another Kutup server: one lookup either way.
+    const at = recipient.lastIndexOf('@')
+    const server = recipient.slice(at + 1).toLowerCase()
+    if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
+    // A name its person left throws `RecipientRenamed`, with where they are now.
+    const found = await lookupAddress(me, recipient)
+    // An account lives on the server of its address.
+    if (!found || found.server !== server) throw new RecipientNotFound()
+    // Checked by the address as typed, and sealed to exactly this answer.
+    await confirmRecipient(me, recipient, found, input.identityConfirmed)
+    if (found.server === me.accountRef.server) {
+      const local = found
+      const namedShareEnvelope = await seal(
+        local.driveHpkePublicKey,
+        { server: local.server, accountId: local.accountId },
+        local.accountIncarnationId,
+      )
+      await api.post(`/collections/${folder.id}/share`, { recipientUserId: local.accountId, namedShareEnvelope, ...permissions })
       return { kind: 'local', account: local.account }
     }
 
-    // Not an account here: `user@server` on another Kutup server.
-    const at = recipient.lastIndexOf('@')
-    const username = recipient.slice(0, at)
-    const server = recipient.slice(at + 1).toLowerCase()
-    if (at < 1 || !server.includes('.')) throw new RecipientNotFound()
-    let remote: RemoteRecipient
-    try {
-      remote = (
-        await api.get<RemoteRecipient>(`/drive/federation/users/${encodeURIComponent(username)}`, { params: { server } })
-      ).data
-    } catch (error) {
-      const status = (error as { response?: { status?: number } }).response?.status
-      if (status === 404) throw new RecipientNotFound()
-      throw error
-    }
-    await confirmRecipient(me, remote.account, { driveHpkePublicKey: remote.driveHpkePublicKey, incarnationId: remote.accountIncarnationId }, input.identityConfirmed)
-    const namedShareEnvelope = await seal(remote.driveHpkePublicKey, remote.account, remote.accountIncarnationId)
+    // An account on another Kutup server.
+    const remote = found
+    const namedShareEnvelope = await seal(
+      remote.driveHpkePublicKey,
+      { server: remote.server, accountId: remote.accountId },
+      remote.accountIncarnationId,
+    )
     const { data } = await api.post<{ inviteUrl: string }>(`/collections/${folder.id}/federated-shares`, {
-      recipientUsername: username,
       recipientServer: server,
+      recipientAccountId: remote.accountId,
       namedShareEnvelope,
       ...(input.viewOnlyAcrossServers ? { canUpload: false, canDelete: false, uploadQuotaBytes: null } : permissions),
     })

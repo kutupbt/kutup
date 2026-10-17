@@ -31,6 +31,7 @@ import { ScheduledBanner } from './ScheduledBanner'
 import { nameFor } from './personName'
 import { useSaveContact } from './saveContactState'
 import { UnsubscribeBanner } from './Unsubscribe'
+import { getSession } from '@kutup/session/store'
 
 function who(mailbox: Mailbox | null | undefined): string {
   return mailbox ? mailbox.name || mailbox.address : ''
@@ -46,14 +47,14 @@ function headerBlock(raw: Uint8Array): string {
 
 type Lookup = ReturnType<typeof useContactLookup>
 
-function Recipients({ label, list, contacts, own }: { label: string; list: Mailbox[]; contacts: Lookup; own: string }) {
+function Recipients({ label, list, contacts, own }: { label: string; list: Mailbox[]; contacts: Lookup; own: (address: string) => boolean }) {
   if (list.length === 0) return null
   return (
     <p className="flex min-w-0 flex-wrap items-baseline gap-x-1 text-xs text-muted-foreground">
       <span className="font-medium">{label}</span>
       {list.map((m, i) => (
         <span key={`${m.address}-${i}`} className="min-w-0 max-w-full">
-          <Person mailbox={m} contact={contacts.find(m.address)} role="recipient" own={m.address.toLowerCase() === own} className="inline" />
+          <Person mailbox={m} contact={contacts.find(m.address)} role="recipient" own={own(m.address)} className="inline" />
           {i < list.length - 1 ? ',' : ''}
         </span>
       ))}
@@ -111,17 +112,33 @@ function NotInContacts({ people, contacts }: { people: Mailbox[]; contacts: Look
 
 const DISMISSED = 'kutup.mail.notInContactsDismissed'
 
+/** Per account: two accounts in one browser keep their own lists. */
+function dismissedKey(): string | null {
+  const userId = getSession()?.userId
+  return userId ? `${DISMISSED}:${userId}` : null
+}
+
 function readDismissed(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(DISMISSED) ?? '[]') as string[])
+    // The unkeyed list from before was shared by every account here.
+    localStorage.removeItem(DISMISSED)
+  } catch {
+    // Storage blocked.
+  }
+  const key = dismissedKey()
+  if (!key) return new Set()
+  try {
+    return new Set(JSON.parse(localStorage.getItem(key) ?? '[]') as string[])
   } catch {
     return new Set()
   }
 }
 
 function writeDismissed(addresses: Set<string>) {
+  const key = dismissedKey()
+  if (!key) return
   try {
-    localStorage.setItem(DISMISSED, JSON.stringify([...addresses].slice(-500)))
+    localStorage.setItem(key, JSON.stringify([...addresses].slice(-500)))
   } catch {
     // Private windows: dismissed for this page only.
   }
@@ -185,7 +202,8 @@ export function MessageView({
 }) {
   const { t, i18n } = useTranslation()
   const contacts = useContactLookup()
-  const own = account.address.toLowerCase()
+  // Any of the account's addresses, the earlier ones too, in any spelling.
+  const own = account.isOwnAddress
   const pinned = usePinnedKeys()
   const { group } = useMailboxScope()
   const scope = useGroupScope(account)
@@ -251,7 +269,7 @@ export function MessageView({
         <div className="min-w-0 flex-1">
           <p className="flex min-w-0 items-baseline gap-2 text-sm">
             {from ? (
-              <Person mailbox={from} contact={contacts.find(from.address)} role="sender" own={from.address.toLowerCase() === own} className="font-semibold" />
+              <Person mailbox={from} contact={contacts.find(from.address)} role="sender" own={own(from.address)} className="font-semibold" />
             ) : (
               <span className="font-semibold">{t('read.unknownSender')}</span>
             )}
@@ -343,7 +361,7 @@ export function MessageView({
             {draft ? null : (
               <NotInContacts
                 people={(message.direction === 'inbound' ? (from ? [from] : []) : [...(parsed?.to ?? message.to), ...(parsed?.cc ?? message.cc)]).filter(
-                  (m) => m.address.toLowerCase() !== own,
+                  (m) => !own(m.address),
                 )}
                 contacts={contacts}
               />

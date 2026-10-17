@@ -3,6 +3,8 @@ import { AlertTriangle, Loader2, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Mono } from '@kutup/ui/components/mono'
 import { cn } from '@kutup/ui/lib/cn'
+import { accountKey } from '@kutup/chat-core/identity'
+import { accountName } from '../../state/accountNames'
 import type {
   LocalMlsConversationRecord,
   MlsAuthorityPolicyInspection,
@@ -48,20 +50,19 @@ export function MlsGroupSecurityDetails({
             const member = group.currentRoster.find(
               (candidate) => candidate.ownerId === owner.ownerId,
             )
-            const account = member
-              ? `${member.address.username}@${member.address.server}`
-              : t('chat.groupSecurity.unmappedOwner')
+            const key = member ? accountKey(member.account) : null
+            const account = key ? (accountName(key) ?? t('chat.someone')) : t('chat.groupSecurity.unmappedOwner')
             return (
               <div
                 key={owner.ownerId}
                 className="min-w-0 rounded-lg bg-muted/30 p-3"
-                data-testid={`chat-group-owner-credential-${account}`}
+                data-testid={`chat-group-owner-credential-${key ?? 'unmapped'}`}
               >
                 <p className="break-all text-xs font-medium">{account}</p>
                 <ExactValue
                   label={t('chat.groupSecurity.ownerFingerprint')}
                   value={owner.ownerId}
-                  testId={`chat-group-owner-fingerprint-${account}`}
+                  testId={`chat-group-owner-fingerprint-${key ?? 'unmapped'}`}
                 />
                 <ExactValue label={t('chat.groupSecurity.ownerPublicKey')} value={owner.publicKey} />
               </div>

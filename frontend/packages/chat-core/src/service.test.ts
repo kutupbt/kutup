@@ -206,7 +206,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -221,14 +221,14 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await expect(service.send(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       'quoted reply',
       replyTo,
     )).resolves.toEqual(summary)
 
     expect(client.sendText).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       'quoted reply',
       replyTo,
@@ -250,7 +250,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -265,7 +265,7 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await service.send(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       'temporary',
       undefined,
       30,
@@ -273,7 +273,7 @@ describe('ChatService MLS workflow coordination', () => {
 
     expect(client.sendText).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       'temporary',
       undefined,
@@ -298,7 +298,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -313,7 +313,7 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await expect(service.sendReaction(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       targetMessageId,
       '👍',
       false,
@@ -321,7 +321,7 @@ describe('ChatService MLS workflow coordination', () => {
 
     expect(client.sendReaction).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       targetMessageId,
       '👍',
@@ -346,7 +346,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -361,7 +361,7 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await expect(service.mutateMessage(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       targetMessageId,
       'edit',
       'corrected',
@@ -369,7 +369,7 @@ describe('ChatService MLS workflow coordination', () => {
 
     expect(client.sendMessageMutation).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       targetMessageId,
       'edit',
@@ -397,7 +397,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -412,14 +412,14 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await expect(service.sendReceipt(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       messageIds,
       'delivered',
     )).resolves.toEqual(summary)
 
     expect(client.sendReceipt).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       messageIds,
       'delivered',
@@ -434,7 +434,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -447,13 +447,13 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await expect(service.sendTyping(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       true,
     )).resolves.toBeUndefined()
 
     expect(client.sendTyping).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       true,
     )
@@ -474,7 +474,7 @@ describe('ChatService MLS workflow coordination', () => {
     const service = Object.create(ChatService.prototype) as ChatService
     Object.assign(service, {
       client,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
@@ -489,13 +489,13 @@ describe('ChatService MLS workflow coordination', () => {
     })
 
     await expect(service.sendDisappearingTimer(
-      { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
+      { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
       86_400,
     )).resolves.toEqual(summary)
 
     expect(client.sendDisappearingTimer).toHaveBeenCalledWith(
       sendId,
-      'bob@b.test',
+      'aci:00000000-0000-4000-8000-81b637d8fcd2@b.test',
       expect.any(String),
       86_400,
     )
@@ -509,7 +509,7 @@ describe('ChatService MLS workflow coordination', () => {
     const startedAtMs = 1_786_315_200_000
     const conversation = {
       kind: 'direct' as const,
-      address: { username: 'bob', server: 'b.test' },
+      account: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' },
     }
     vi.stubGlobal('crypto', { randomUUID: () => sendId })
     const summary = {
@@ -583,7 +583,7 @@ describe('ChatService MLS workflow coordination', () => {
     Object.assign(service, {
       client,
       attachmentLedger,
-      username: 'alice',
+      account: { server: 'a.test', accountId: '00000000-0000-4000-8000-2bd806c97f0e' },
       capabilities: { serverName: 'a.test' },
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),

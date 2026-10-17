@@ -10,6 +10,9 @@ export interface CollectionRow {
   nameRevision: number
   epochStatement: string
   epochStatementHash: string
+  /** A shared folder's owner's server; with `ownerUserId`, the owner. */
+  ownerServer?: string
+  /** Shown only: the owner's address now. */
   ownerAccount?: string
   ownerIncarnationId?: string
   ownerDriveSigningPublicKey?: string
@@ -67,7 +70,6 @@ export interface FileRow {
 
 export interface UserRow {
   id: string
-  email: string
   username: string
   storageQuotaBytes: number
   storageUsedBytes: number
@@ -143,8 +145,47 @@ export interface AdminStats {
   storageBackendUsedBytes: number
 }
 
+/** Who may register (docs/plans/registration-codes.md). */
+export type RegistrationMode = 'on' | 'code' | 'off'
+
+/** A referral code as an administrator sees it: its hint, never the code. */
+export interface RegistrationCode {
+  id: string
+  /** The code's last four characters. */
+  hint: string
+  note: string
+  createdBy: string | null
+  createdAt: string
+  expiresAt: string | null
+  /** `null`: unlimited. */
+  maxUses: number | null
+  uses: number
+  revokedAt: string | null
+  state: 'active' | 'expired' | 'usedUp' | 'revoked'
+}
+
+/** A code just made: the only time its text comes back. */
+export interface CreatedRegistrationCode extends RegistrationCode {
+  code: string
+}
+
+export interface RegistrationCodeUse {
+  userId: string
+  username: string
+  usedAt: string
+}
+
+/** The code an account signed up with. */
+export interface SignedUpWith {
+  codeId: string
+  hint: string
+  note: string
+  createdBy: string | null
+  usedAt: string
+}
+
 export interface AdminSettings {
-  registrationEnabled: boolean
+  registrationMode: RegistrationMode
   /** The storage quota new accounts get; existing accounts keep theirs. */
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number
@@ -250,19 +291,18 @@ export interface AdminFederationPolicy {
 }
 
 /**
- * One admin audit-log row — `GET /admin/activity`. `adminEmail`/`targetEmail`
+ * One admin audit-log row — `GET /admin/activity`. `adminUsername`/`targetUsername`
  * are the LIVE identities and go `null` once the referenced account is
- * deleted; `payload` keeps the at-action-time snapshot (e.g. `payload.email`).
+ * deleted; `payload` keeps the at-action-time snapshot (`payload.username`).
  */
 export interface AdminActivityEntry {
   id: number
   /** User, settings, and `federation.*` mutation action identifiers. */
   action: string
   adminUserId: string
-  adminEmail: string | null
   adminUsername: string | null
   targetUserId: string | null
-  targetEmail: string | null
+  targetUsername: string | null
   payload: Record<string, unknown>
   occurredAt: string
 }
@@ -273,18 +313,7 @@ export interface AdminActivityResponse {
   nextBefore: number | null
 }
 
-export interface MeResponse {
-  userId: string
-  email: string
-  username: string
-  storageQuotaBytes: number
-  storageUsedBytes: number
-  isAdmin: boolean
-  totpEnabled: boolean
-  publicKey: string
-}
-
-export interface UserByEmailResponse {
+export interface UserByAddressResponse {
   userId: string
   account: string
   driveHpkePublicKey: string

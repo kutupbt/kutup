@@ -69,7 +69,10 @@ export async function openDirectChat(page: Page, address: string): Promise<void>
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('combobox').fill(address)
   await dialog.getByRole('combobox').press('Enter')
-  await page.waitForURL((url) => decodeURIComponent(url.href).includes(address), { timeout: 45_000 })
+  // The address is looked up first; the dialog closes once it led to an
+  // account, whose conversation (`/c/direct:aci:…`) then opens.
+  await expect(dialog).toBeHidden({ timeout: 45_000 })
+  await page.waitForURL((url) => decodeURIComponent(url.pathname).includes('/c/direct:aci:'), { timeout: 45_000 })
   if (page.url() !== from) {
     // The address changes before the view does: until the header names the
     // new conversation, the composer on screen is still the previous one's.

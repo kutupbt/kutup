@@ -16,6 +16,7 @@
 //! - [`kdf`] — one-root Argon2id account protection and recovery proof.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
 //! - [`account_envelope`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
+//! - [`key_binding`] — the account's permanent random key binding, which its own seals bind.
 //! - [`chat_attachment_ledger`] — account-private attachment-index envelopes.
 //! - [`chat_media`] — immutable typed Chat-media secretstream objects.
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
@@ -35,6 +36,9 @@
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
 pub mod account_envelope;
+pub mod account_head;
+pub mod account_ref;
+pub mod account_rename;
 pub mod asset;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
@@ -43,6 +47,7 @@ pub mod chat_media;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
+pub mod device_registration;
 pub mod drive_envelope;
 pub mod drive_key_binding;
 pub mod drive_names;
@@ -54,8 +59,11 @@ pub mod file_metadata;
 pub mod identity;
 pub mod identity_pins;
 pub mod kdf;
+pub mod key_binding;
 pub mod live_location;
 pub mod local_state;
+#[cfg(feature = "mail")]
+pub mod mail_group;
 #[cfg(feature = "mail")]
 pub mod mail_key;
 pub mod mail_names;
@@ -63,11 +71,17 @@ pub mod mail_search;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod named_share;
+pub mod names;
+pub mod opaque;
+pub mod opaque_login_state;
+pub mod padding;
 pub mod pass_vault;
 pub mod photos_library;
 pub mod profile_key_share;
+pub mod revision_guard;
 pub mod safety_number;
 pub mod stream;
 pub mod thumbnail;
+pub mod yjs_seed;
 
 pub use error::{CryptoError, Result};

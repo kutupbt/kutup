@@ -7,13 +7,12 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::account_heads::{self, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
@@ -28,8 +27,9 @@ pub const MAX_DEPTH: i32 = 3;
 pub struct MailFolder {
     pub id: String,
     pub parent_id: Option<String>,
-    /// Sealed in the browser; base64.
-    pub name: String,
+    /// Sealed in the browser; base64. `null` for a folder kept through an
+    /// account reset, whose name went with the old keys: it needs a name.
+    pub name: Option<String>,
     pub color: String,
     pub position: i32,
     pub expanded: bool,
@@ -54,11 +54,7 @@ pub struct MailPlaces {
 }
 
 fn check_sealed(name: &str) -> AppResult<()> {
-    let bytes = STANDARD
-        .decode(name)
-        .map_err(|_| AppError::bad_request("name is not base64"))?;
-    kutup_crypto::mail_names::inspect_name(&bytes)
-        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))
+    crate::revisions::mail_name(name).map(drop)
 }
 
 fn check_color(color: &str) -> AppResult<()> {
@@ -79,7 +75,7 @@ fn parse_id(id: &str) -> AppResult<Uuid> {
 }
 
 /// id, parent, sealed name, colour, position, expanded, notify.
-type FolderRow = (Uuid, Option<Uuid>, String, String, i32, bool, bool);
+type FolderRow = (Uuid, Option<Uuid>, Option<String>, String, i32, bool, bool);
 
 /// `GET /api/mail/places` — the account's folders and labels.
 #[utoipa::path(
@@ -196,6 +192,9 @@ pub struct CreateMailFolder {
     pub parent_id: Option<String>,
     pub name: String,
     pub color: String,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `POST /api/mail/folders` — a new folder, at the top or inside another.
@@ -221,12 +220,9 @@ pub async fn create_folder(
     let parent = request.parent_id.as_deref().map(parse_id).transpose()?;
     check_sealed(&request.name)?;
     check_color(&request.color)?;
+    let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
-    // One writer per account at a time, so the count and the tree hold.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_folders WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
@@ -266,6 +262,7 @@ pub async fn create_folder(
     if inserted == 0 {
         return Err(AppError::conflict("that id is taken"));
     }
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -282,6 +279,8 @@ where
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateMailFolder {
     pub name: Option<String>,
+    /// With a new `name`: the revision of the name the rename started from.
+    pub base_name_revision: Option<i64>,
     pub color: Option<String>,
     /// Another folder to move into, or `null` for the top.
     #[serde(default, deserialize_with = "double_option")]
@@ -290,6 +289,11 @@ pub struct UpdateMailFolder {
     pub position: Option<i32>,
     pub expanded: Option<bool>,
     pub notify: Option<bool>,
+    /// With a new `name`: the next sealed account head (base64), once the
+    /// account keeps one. Nothing else here is rollback-protected (the
+    /// parent, colour, position and folding are not sealed).
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `PATCH /api/mail/folders/{id}` — rename (a new sealed name), recolour,
@@ -315,18 +319,35 @@ pub async fn update_folder(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
-    if let Some(name) = &request.name {
-        check_sealed(name)?;
-    }
     if let Some(color) = &request.color {
         check_color(color)?;
     }
+    let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let (_, below) = depth_of(&mut tx, user_id, id).await?;
+    if let Some(name) = &request.name {
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT name_sealed FROM mail_folders WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        match stored {
+            Some(stored) => {
+                crate::revisions::check_rename(&stored, name, request.base_name_revision)?
+            }
+            // A folder that needs a name (kept through an account reset):
+            // named from revision 0.
+            None => {
+                if request.base_name_revision != Some(0) {
+                    return Err(crate::revisions::conflict("this folder has no name yet", 0));
+                }
+                crate::revisions::check_follows(crate::revisions::mail_name(name)?, 0)?;
+            }
+        }
+    }
     let parent = match &request.parent_id {
         None => None,
         Some(None) => Some(None),
@@ -365,8 +386,25 @@ pub async fn update_folder(
     .bind(request.notify)
     .execute(&mut *tx)
     .await?;
+    if request.name.is_some() {
+        account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// What a folder delete says about itself: every folder it removes (this one
+/// and those inside it, as the client worked them out from its index), and
+/// the next head, which must leave out exactly those.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteMailFolder {
+    #[serde(default)]
+    pub removes: Option<Vec<String>>,
+    /// The next sealed account head (base64), once the account keeps one;
+    /// it needs `removes`.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -387,22 +425,57 @@ pub struct DeletedMailFolder {
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Folder id")),
+    request_body(content = DeleteMailFolder, description = "What it removes, and the next head"),
     responses(
         (status = 200, description = "Removed", body = DeletedMailFolder),
         (status = 404, description = "No such folder"),
+        (status = 409, description = "head_conflict: the folders it removes are not those named"),
     )
 )]
 pub async fn delete_folder(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    body: Option<Json<DeleteMailFolder>>,
 ) -> AppResult<Json<DeletedMailFolder>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such folder"))?;
+    let request = body.map(|Json(body)| body).unwrap_or_default();
+    let head = NextHead::parse(request.head.as_deref())?;
+    let named = request
+        .removes
+        .as_ref()
+        .map(|ids| {
+            ids.iter()
+                .map(|id| parse_id(id))
+                .collect::<AppResult<Vec<_>>>()
+        })
+        .transpose()?;
+    if head.is_some() && named.is_none() {
+        return Err(AppError::bad_request(
+            "a head with a folder delete needs removes",
+        ));
+    }
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let folders = subtree(&mut tx, user_id, id).await?;
     if folders.is_empty() {
         return Err(AppError::not_found("no such folder"));
+    }
+    // The head was made for exactly the folders named: a folder added
+    // inside since would go unrecorded.
+    if let Some(named) = &named {
+        let mut named = named.clone();
+        let mut actual = folders.clone();
+        named.sort();
+        named.dedup();
+        actual.sort();
+        if named != actual {
+            return Err(
+                AppError::conflict("the folders this removes changed: read them again")
+                    .with_details(serde_json::json!({ "code": "head_conflict" })),
+            );
+        }
     }
     let moved = sqlx::query(
         "UPDATE mail_messages SET folder = 'archive', custom_folder = NULL
@@ -431,6 +504,7 @@ pub async fn delete_folder(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(DeletedMailFolder {
         folders: if removed == 0 {
@@ -449,6 +523,9 @@ pub struct CreateMailLabel {
     pub id: String,
     pub name: String,
     pub color: String,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `POST /api/mail/labels` — a new label.
@@ -473,11 +550,9 @@ pub async fn create_label(
     let id = parse_id(&request.id)?;
     check_sealed(&request.name)?;
     check_color(&request.color)?;
+    let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mail_labels WHERE user_id = $1")
         .bind(user_id)
         .fetch_one(&mut *tx)
@@ -500,6 +575,7 @@ pub async fn create_label(
     if inserted == 0 {
         return Err(AppError::conflict("that id is taken"));
     }
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::CREATED)
 }
@@ -508,8 +584,14 @@ pub async fn create_label(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateMailLabel {
     pub name: Option<String>,
+    /// With a new `name`: the revision of the name the rename started from.
+    pub base_name_revision: Option<i64>,
     pub color: Option<String>,
     pub position: Option<i32>,
+    /// With a new `name`: the next sealed account head (base64), once the
+    /// account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `PATCH /api/mail/labels/{id}` — rename, recolour, reorder.
@@ -530,28 +612,52 @@ pub async fn update_label(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
-    if let Some(name) = &request.name {
-        check_sealed(name)?;
-    }
     if let Some(color) = &request.color {
         check_color(color)?;
     }
+    let head = NextHead::parse_for(request.head.as_deref(), request.name.is_some())?;
+    let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2")
+            .bind(user_id)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let stored = stored.ok_or_else(|| AppError::not_found("no such label"))?;
+    if let Some(name) = &request.name {
+        crate::revisions::check_rename(&stored, name, request.base_name_revision)?;
+    }
+    // Written only over the name the rename started from.
     let updated = sqlx::query(
         "UPDATE mail_labels SET name_sealed = COALESCE($3, name_sealed),
              color = COALESCE($4, color), position = COALESCE($5, position)
-          WHERE user_id = $1 AND id = $2",
+          WHERE user_id = $1 AND id = $2 AND ($3::text IS NULL OR name_sealed = $6)",
     )
     .bind(user_id)
     .bind(id)
     .bind(request.name.as_deref())
     .bind(request.color.as_deref())
     .bind(request.position)
-    .execute(&state.pool)
+    .bind(&stored)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     if updated == 0 {
-        return Err(AppError::not_found("no such label"));
+        drop(tx);
+        let now: Option<String> = sqlx::query_scalar(
+            "SELECT name_sealed FROM mail_labels WHERE user_id = $1 AND id = $2",
+        )
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+        return Err(crate::revisions::rename_lost(now, "no such label"));
     }
+    if request.name.is_some() {
+        account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -563,16 +669,20 @@ pub async fn update_label(
     tag = "mail",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Label id")),
+    request_body(content = crate::account_heads::HeadOnly, description = "The next head, once the account keeps one"),
     responses((status = 204, description = "Removed"), (status = 404, description = "No such label"))
 )]
 pub async fn delete_label(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such label"))?;
+    let head = NextHead::parse(body.and_then(|Json(body)| body.head).as_deref())?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let removed = sqlx::query("DELETE FROM mail_labels WHERE user_id = $1 AND id = $2")
         .bind(user_id)
         .bind(id)
@@ -599,6 +709,7 @@ pub async fn delete_label(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -606,6 +717,8 @@ pub async fn delete_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
 
     #[test]
     fn colours_and_names_are_checked() {
@@ -614,13 +727,14 @@ mod tests {
             assert!(check_color(bad).is_err(), "{bad}");
         }
         assert!(check_sealed("not base64!").is_err());
-        assert!(check_sealed(&STANDARD.encode(b"KUTMN1\0\0short")).is_err());
+        assert!(check_sealed(&STANDARD.encode(b"KUTMN2\0\0short")).is_err());
         let key = kutup_crypto::mail_names::derive_names_key(&[1; 32]).unwrap();
         let sealed = kutup_crypto::mail_names::seal_name(
             &key,
-            "alice@kutup.dev",
+            "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
             kutup_crypto::mail_names::MailNameKind::Folder,
             &[2; 16],
+            1,
             "Faturalar",
         )
         .unwrap();

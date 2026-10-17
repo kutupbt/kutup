@@ -23,7 +23,7 @@ export async function readChosenFile(file: File, fallbackName: (n: number) => st
   return readPlaceFile(await file.text(), fallbackName)
 }
 
-/** Imported points as places added now by `addedBy`. */
+/** Imported points as places added now by `addedBy` (an account's string form). */
 export function asPlaces(imported: ImportedList, addedBy: string): Place[] {
   const now = Date.now()
   // A millisecond apart, so the list keeps the file's order.

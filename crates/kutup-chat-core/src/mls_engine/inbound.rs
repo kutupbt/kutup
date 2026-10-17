@@ -260,7 +260,7 @@ impl MlsClient {
         let sender_member = conversation
             .current_roster
             .iter()
-            .find(|member| member.address.canonical() == sender_address)
+            .find(|member| member.account.to_string() == sender_address)
             .ok_or_else(|| {
                 ChatError::Trust("MLS Commit sender is absent from the roster".into())
             })?;
@@ -470,7 +470,7 @@ impl MlsClient {
         let remaining = conversation
             .current_roster
             .iter()
-            .map(|member| member.address.canonical())
+            .map(|member| member.account.to_string())
             .collect::<BTreeSet<_>>();
         conversation
             .departing_members
@@ -499,7 +499,7 @@ impl MlsClient {
             .ok()
             .is_some_and(|owner| {
                 conversation.current_roster.iter().any(|member| {
-                    member.address.canonical() == local_address
+                    member.account.to_string() == local_address
                         && member.owner_id.as_deref() == Some(owner.owner_id.as_str())
                 })
             });

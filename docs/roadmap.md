@@ -92,11 +92,52 @@ Authenticode, or Gatekeeper and SmartScreen will warn non-technical users.
 | Native Android upload key, Play App Signing/Console, and release metadata | external + each native app's repository (Android) |
 | Documentation: `docs/release-signing.md` covering how to rotate keys | new doc |
 
+### Dependency supply-chain checks
+
+Crypto dependencies are pinned exactly (`=x.y.z`, docs/cryptographic-dependencies.md)
+and locked in `Cargo.lock`, but nothing checks advisories, licences or duplicate
+versions automatically. Add `cargo deny` (advisories, bans, licences, sources) to
+the static gate, and consider `cargo vet` audits for the crypto crates
+(`opaque-ke`, `voprf`, `hpke-rs`, `pgp`, `dryoc`, `ed25519-dalek`). Raised in the
+OPAQUE review (2026-10-13).
+
+Also from that review: the crypto WASM module carries `OpaqueServer` (the
+server half of OPAQUE) for the vector tests. A second build with a test
+feature would keep it out of the production bundle.
+
 ---
+
+### Account-level device linking (QR)
+
+A new browser or CLI profile signing in with only the password trusts the
+first account head it reads (docs/plans/rollback-protection.md). Linking it
+from an existing device by QR, as Chat links its devices, would carry the
+current head across and anchor it from the start. Until then a device that
+has Chat's link uses it.
 
 ## Important (should-have, can ship after v1)
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
+
+### Key transparency (after the wipe)
+
+Copy libsignal keytrans: a per-server append-only, verifiable log of
+address-hash → account id and account id → authority/key binding, plus rename
+chains. Clients verify inclusion and consistency on lookup and monitor their
+own entries, so a server showing different users different mappings is
+detectable. Federation: each server runs its own log; peers verify a peer's
+log for remote lookups. Needs no format change: it logs the already-signed
+account ids, key bindings and `AccountRenameV1` chains
+(docs/plans/account-ids.md).
+
+### Security log: sign-ins and 2FA events (Proton parity)
+
+`account_security_events` (`GET /api/user/security-events`) records what
+changes an account's sign-in: password changes, recoveries, setup rotations
+and admin resets. Proton's security log also lists sign-ins (successful and
+failed) and two-step changes. Next kinds: `signIn`, `totpOn`, `totpOff`,
+`deviceRevoked`. IP addresses only behind an opt-in "advanced logs" setting,
+as Proton keeps them, if at all.
 
 ### SMTP integration
 
@@ -182,6 +223,18 @@ platform lifecycle, secure storage, complete Direct/MLS/media/backup parity,
 packaging, signing, store metadata, and real-device acceptance remain gated in
 their own plans. See [`mobile-build.md`](mobile-build.md) and
 [`chat-native-bindings.md`](chat-native-bindings.md).
+
+**The account head in native clients** (docs/plans/rollback-protection.md):
+`kutup-client-ffi`'s HTTP transport stores Chat's identity pin list without
+the account head today. On an account that keeps one, the server refuses the
+write (409), and Chat's pin sync, which is best effort, keeps to its own
+pins. Before a native app ships, its transport writes and reads pins through
+Rust `account_head`, the way the web Chat transport goes through the web head
+client:
+- a `LocalHeadStateV1` kept in its SQLite store, one device per app;
+- the verified index checked on reads;
+- the chain started on the index basis;
+- a blocked state shown in the app.
 
 ### Responsive web · mobile selection mode
 
@@ -443,6 +496,14 @@ traffic is enabled.
 
 ---
 
+### Renames · small follow-ups (low)
+
+- `mail::group_keys::wkd_keys` folds each group's address per row: add a folded
+  index (or a generated `folded` column) on `mail_groups.address`.
+- WKD serves an address's keys under the user ID they were made with (the stored
+  spelling); a variant spelling's WKD lookup gets that user ID, which OpenPGP
+  clients may not match to the address they asked for.
+
 ## New apps (after v1)
 
 Two more apps join Drive and Chat, each built the same way (product owner,
@@ -648,6 +709,23 @@ later.
   Kutup server only. With maps off, nothing is requested.
 - **Open questions:** in docs/plans/maps.md.
 
+### Settings model
+
+The rule (per account: what leaves the device or protects the account; per
+device: ergonomics; the account sets the security floor) is in
+[`settings-model.md`](settings-model.md). Not following it yet:
+
+- Chat privacy options (read receipts, typing indicators, link previews,
+  always relay calls, default disappearing timer) move into the account,
+  sealed; notification content stays a stricter-only device override.
+  Owner: third session.
+- Pass auto-lock delay and unlock mode move into `pass_settings` as the floor.
+  Owner: third session.
+- Showing the account when joining a meeting link moves into the account, off
+  by default. Owner: third session.
+- The account lists which devices keep a Mail search index. Owner: second
+  session.
+
 ### Pass (KeePass vaults in Drive)
 
 A password manager at `pass.<domain>` whose vaults are standard KeePass
@@ -690,17 +768,29 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ### Chat app (web) follow-ups
 
-Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
-(required before deployment).
-
+- **Live tests for sealed federation edge cases (owner: second session).**
+  The backlog case is covered (the backup gate runs
+  `live_sealed_backlog_does_not_starve_other_destinations`: 150 rows for one
+  server, a parked head). Still wanted, on the two-server harness: a sealed
+  send to a peer without `chat.v2` that then gains it, and a refused send
+  followed by the next sequence.
 - **Groups are to be rebuilt.** Group chats (MLS with a federated ordering
   service) proved fragile on the first live server when devices changed, and
   the plan is to rebuild them on an architecture that heals by itself in a
   federation of browsers (see the research report "Self healing encrypted
-  group chat"). Until then a server can run without them (`CHAT_GROUPS=false`:
-  direct chats only, no group calls), and direct chats get the self-healing
-  first: pushed device-list changes, healing on send, undecryptable messages
-  as placeholders that fill in, automatic session repair.
+  group chat"). The beta launches with groups off (`CHAT_GROUPS` defaults to
+  false: direct chats only, no group calls; meeting links stay), and direct
+  chats get the self-healing first: pushed device-list changes, healing on
+  send, undecryptable messages as placeholders that fill in, automatic
+  session repair.
+- **Pairwise groups replace MLS (after the wipe).** Groups come back on the
+  pairwise, self-healing design (each member's devices reached one to one,
+  as Signal's groups before MLS), keyed by account ids from the start. MLS
+  is frozen until then: it gets only what other formats need to build, no
+  new work, and its routes stay refused while `CHAT_GROUPS` is off. When the
+  pairwise design ships, the MLS code, tables and routes are removed, among
+  them `chat_mls_pending_requests` (still keyed by a sender address, and kept
+  only because `chat_mls_mailbox.request_id` references it).
 - **Networks that block WebSockets: what is left.** Calls get out over TLS
   on port 443 (`turn.` and `sfu-turn.`), Chat reads its mailbox every few
   seconds when its socket cannot open, and a document opens read-only with
@@ -713,7 +803,7 @@ Signal feature parity for Chat is tracked in docs/plans/chat-signal-parity.md
   Proton's model: IndexedDB holding encrypted records under a key wrapped by
   the account master key; no SQLite in the browser. Native keeps SQLCipher.
   - Done (Phase 1): the chat store encrypted at rest (record keys hashed,
-    values sealed, existing stores converted on first open); the backup
+    values sealed; a database without the wrapped key starts empty); the backup
     mirror's records, drafts and read positions sealed too. Left as they
     are, on purpose: the hand-off list a meeting page leaves for the
     signed-in app (the page has no account key; the app moves each stay into
@@ -886,6 +976,13 @@ request, with neither the waiting nor the resuming. Making it resumable
 needs tus (or a chunked equivalent) on the federated upload route, so each
 part is acknowledged by the folder's server and an upload can go on from
 its offset there.
+
+### Drive · resumable new versions (Replace above 2 GiB)
+
+Done (October 2026): a version goes over tus (`POST /api/uploads` with
+`versionOf`, docs/api.md), resumable and of any size, as Proton Drive's
+revisions; its metadata and content hash land with it. Still by multipart
+(2 GiB): versions into folders on other servers.
 
 ### Drive · resuming a whole folder upload
 
@@ -1090,6 +1187,15 @@ download re-inlines; Go-CLI parity reached). What remains around the CLI:
   - `trashRetentionDays` in `GET /api/auth/settings` — lets `kutup trash ls`
     show an accurate EXPIRES column on any server config (currently omitted
     rather than hardcoding 30).
+- **Web: seeding after a lost claim.** An editor that loses `claim-seed`
+  waits for the winner's seed; if the winner never sends it, the document
+  opens empty. The seed is the same Yjs item wherever it is made, so the
+  editor could send it whenever the log is empty and no version exists, as
+  the CLI does (docs/plans/cli-yjs-sync.md, *As built*).
+- **Place lists: shared JSON vector.** The CLI writes `.kutupmap` files in the
+  web's layout (`encodeListJson`), but no checked-in vector pins the bytes
+  between the two. Places added in the same millisecond are ordered by
+  locale on the web and by code point in Rust.
 - **Sync engine: whiteboard assets.** `kutup sync` pushes/pulls `.excalidraw`
   files as opaque bytes; the extract/hydrate steps only run in
   `upload`/`download`. Wire `crate::whiteboard` into the engine's

@@ -69,12 +69,42 @@ fn local_address(recipient: &str, server_name: &str) -> Option<String> {
         return None;
     }
     let local = local.split_once('+').map_or(local, |(base, _)| base);
-    kutup_crypto::mail_key::canonical_address(&format!(
-        "{}@{}",
-        local.to_ascii_lowercase(),
-        server_name.to_ascii_lowercase()
-    ))
-    .ok()
+    typed_address(&format!("{local}@{server_name}"))
+}
+
+/// The form a sender's address is kept and compared in (block, spam and
+/// allow lists, image senders, auto-reply records): one of this server's
+/// addresses folded, as its names are (any spelling is the one account's,
+/// docs/plans/username-renames.md); any other lowercased, as Proton keeps
+/// outside senders.
+pub(crate) fn sender_key(server_name: &str, address: &str) -> String {
+    let lower = address.trim().to_lowercase();
+    match lower.rsplit_once('@') {
+        Some((_, domain)) if domain.eq_ignore_ascii_case(server_name) => {
+            kutup_crypto::names::fold_address(&lower).unwrap_or(lower)
+        }
+        _ => lower,
+    }
+}
+
+/// An address as a person types one of this server's: lowercased, its local
+/// part any spelling of a name (`.`, `_` and `-` anywhere, which lookups
+/// fold away: one account or group per folded name), or `None`.
+pub(crate) fn typed_address(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    let (local, domain) = value.split_once('@')?;
+    let valid = !local.is_empty()
+        && local.len() <= 64
+        && local
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+        && !kutup_crypto::names::fold(local).is_empty()
+        && !domain.is_empty()
+        && !domain.contains('@')
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".-".contains(&b));
+    valid.then_some(value)
 }
 
 /// Role addresses (RFC 2142) no account may take. All but `mailer-daemon@`
@@ -108,16 +138,24 @@ fn try_later() -> Reply {
     Reply::new(451, "4.3.0", "temporary failure, try again later")
 }
 
-/// Whether `recipient` can receive mail now: a Kutup address on this server
-/// with a primary key, on an active account with room in its pool.
+/// Whether `recipient` can receive mail now: a Kutup address on this server,
+/// in any spelling (`.`, `_`, `-` and case fold away), that receives (the
+/// account's current address, or an old one in its receiving window), with a
+/// primary key, on an active account with room in its pool. A closed or freed
+/// address is unknown (`5.1.1`); one whose keys are not stored yet is a
+/// temporary failure (`4.3.0`), so the sender retries.
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
-    let row: Option<(Uuid, Uuid, Vec<u8>, i64, i64)> = sqlx::query_as(
+    // address id, account, its primary key (none yet), quota, used.
+    type Row = (Uuid, Uuid, Option<Vec<u8>>, i64, i64);
+    let row: Option<Row> = sqlx::query_as(
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
-           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.address = $1",
+           LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND (a.state = 'active'
+                 OR (a.state = 'receiving' AND a.receive_until > now()))",
     )
     .bind(&address)
     .fetch_optional(&state.pool)
@@ -127,6 +165,10 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
         try_later()
     })?;
     let (address_id, user_id, public_key, quota, used) = row.ok_or_else(unknown)?;
+    // An address whose keys are not stored yet (a new account, or a rename,
+    // moments before its client uploads them): try again later, never a
+    // permanent refusal.
+    let public_key = public_key.ok_or_else(try_later)?;
     let reserved = crate::storage_pool::reserved(&state.pool, user_id, Default::default())
         .await
         .map_err(|_| try_later())?;
@@ -663,11 +705,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn this_servers_senders_compare_folded_others_exactly() {
+        // Any spelling of one of this server's names is the one sender.
+        assert_eq!(
+            sender_key("kutup.dev", "Ada.L@Kutup.dev"),
+            sender_key("kutup.dev", "ada_l@kutup.dev")
+        );
+        assert_eq!(sender_key("kutup.dev", "ada-l@kutup.dev"), "adal@kutup.dev");
+        // Another server's addresses are only lowercased.
+        assert_eq!(
+            sender_key("kutup.dev", "J.Doe@Example.org"),
+            "j.doe@example.org"
+        );
+        assert_ne!(
+            sender_key("kutup.dev", "j.doe@example.org"),
+            sender_key("kutup.dev", "jdoe@example.org")
+        );
+    }
+
+    #[test]
     fn local_addresses() {
         assert_eq!(
             local_address("Alice+news@Kutup.Dev", "kutup.dev").as_deref(),
             Some("alice@kutup.dev")
         );
+        // Any spelling of a name: lookups fold it.
+        assert_eq!(
+            local_address("Ada.L@kutup.dev", "kutup.dev").as_deref(),
+            Some("ada.l@kutup.dev")
+        );
+        assert_eq!(local_address("...@kutup.dev", "kutup.dev"), None);
         assert_eq!(local_address("alice@kutup.dev.evil", "kutup.dev"), None);
         assert_eq!(local_address("alice@other.org", "kutup.dev"), None);
         assert_eq!(local_address("no-at-sign", "kutup.dev"), None);

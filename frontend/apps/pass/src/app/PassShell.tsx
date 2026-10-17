@@ -17,6 +17,8 @@ import { useVaultFiles, vaultTitle } from '../drive/vaults'
 import { CreateVaultDialog } from '../features/CreateVaultDialog'
 import { lockAndForget, startAutoLock } from '../sync/autoLock'
 import { lockAll, openVaultIds, useVaultSession } from '../sync/openVaults'
+import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 function VaultLink({ fileId, name }: { fileId: string; name: string }) {
   const { t } = useTranslation()
@@ -41,6 +43,8 @@ function VaultLink({ fileId, name }: { fileId: string; name: string }) {
 export function PassShell() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // The account's state here: a rolled-back or forked history, or a long absence.
+  const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const { vaults } = useVaultFiles()
   const [creating, setCreating] = useState(false)
@@ -49,6 +53,7 @@ export function PassShell() {
   const anyOpen = openVaultIds().length > 0
   return (
     <AppShell
+      banner={<HeadStateBanner {...accountHeadState} />}
       appName={t('apps.pass')}
       switcher={
         <AppSwitcher
@@ -104,8 +109,8 @@ export function PassShell() {
       }
       headerEnd={
         <UserMenu
-          name={session.username ?? session.email}
-          email={session.email}
+          name={session.username ?? session.address}
+          address={session.address}
           settingsHref={appUrl('account', '/settings/profile')}
           onSignOut={() => {
             // Locked, and what this device kept for offline use forgotten.

@@ -28,12 +28,12 @@ describe('SealedStorage', () => {
     expect(window.localStorage.getItem(storage.key('drafts'))).toBeNull()
   })
 
-  it('takes over a plaintext value once and removes it', () => {
-    window.localStorage.setItem('kutup:chat:read:u1', JSON.stringify({ 'direct:bob': 5 }))
+  it('never takes over a plaintext value', () => {
     const storage = new SealedStorage(wasm, key, 'scope-a')
-    expect(storage.read('read-marks', 'kutup:chat:read:u1')).toEqual({ 'direct:bob': 5 })
-    expect(window.localStorage.getItem('kutup:chat:read:u1')).toBeNull()
-    expect(storage.read('read-marks')).toEqual({ 'direct:bob': 5 })
+    // Plaintext where the sealed value belongs, or under an older key: absent.
+    window.localStorage.setItem(storage.key('read-marks'), JSON.stringify({ 'direct:bob': 5 }))
+    window.localStorage.setItem('kutup:chat:read:u1', JSON.stringify({ 'direct:bob': 5 }))
+    expect(storage.read('read-marks')).toBeUndefined()
   })
 
   it('reads a value it cannot open as absent', () => {

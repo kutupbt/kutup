@@ -113,9 +113,8 @@ export function MailSendingPage() {
               <TableRow key={sender.userId}>
                 <TableCell>
                   <Link to={`/admin/users/${sender.userId}`} className="font-medium hover:underline">
-                    {sender.username || sender.email}
+                    {sender.username}
                   </Link>
-                  <span className="block text-xs text-muted-foreground">{sender.email}</span>
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{sender.sentDay}</TableCell>
                 <TableCell className="text-right tabular-nums">{sender.sentWeek}</TableCell>

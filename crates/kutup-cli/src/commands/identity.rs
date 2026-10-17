@@ -53,7 +53,8 @@ pub fn run(profile: &str, json: bool, cmd: &IdentityCmd) -> Result<()> {
                     .iter()
                     .map(|p| {
                         serde_json::json!({
-                            "account": p.account,
+                            "account": p.address(),
+                            "accountRef": p.account,
                             "state": if p.state == PinState::Verified { "verified" } else { "trusted" },
                             "since": p.since,
                             "replaced": p.replaced.len(),
@@ -73,7 +74,10 @@ pub fn run(profile: &str, json: bool, cmd: &IdentityCmd) -> Result<()> {
                 } else {
                     "trusted"
                 };
-                println!("{:<40} {state:<9} since {}", p.account, p.since);
+                // A person by the newest address met; one met with none yet
+                // shows as "(no address)", never by its account id.
+                let address = p.address().unwrap_or("(no address)");
+                println!("{address:<40} {state:<9} since {}", p.since);
             }
             Ok(())
         }

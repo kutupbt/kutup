@@ -27,13 +27,16 @@ impl MlsClient {
                 let address =
                     address
                         .parse()
-                        .map_err(|error: kutup_chat_proto::AddressError| {
+                        .map_err(|error: kutup_crypto::error::CryptoError| {
                             ChatError::Trust(error.to_string())
                         })?;
-                Ok(MlsConversationDeviceV1 { address, device_id })
+                Ok(MlsConversationDeviceV1 {
+                    account: address,
+                    device_id,
+                })
             })
             .collect::<Result<Vec<_>>>()?;
-        devices.sort_by_key(|device| (device.address.canonical(), device.device_id));
+        devices.sort_by_key(|device| (device.account.to_string(), device.device_id));
         Ok(devices)
     }
 
@@ -152,7 +155,7 @@ impl MlsClient {
         if !conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == local_address)
+            .any(|member| member.account.to_string() == local_address)
         {
             return Err(ChatError::Trust(
                 "MLS device synchronization requires a current account member".into(),
@@ -162,7 +165,7 @@ impl MlsClient {
         if !conversation
             .current_roster
             .iter()
-            .any(|member| member.address.canonical() == target_address)
+            .any(|member| member.account.to_string() == target_address)
         {
             return Err(ChatError::Trust(
                 "MLS device synchronization targets an account outside the roster".into(),

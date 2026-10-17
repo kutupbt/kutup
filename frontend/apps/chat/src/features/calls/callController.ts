@@ -1,8 +1,7 @@
 import { toast } from 'sonner'
-import { canonicalAccountAddress, parseAccountAddress } from '@kutup/chat-core/identity'
+import { accountKey, parseAccount, type AccountRef } from '@kutup/chat-core/identity'
 import type { ChatService } from '@kutup/chat-core/service'
 import type {
-  AccountAddress,
   ChatCallEvent,
   ChatCallLog,
   ChatCallMedia,
@@ -27,7 +26,7 @@ export type CallPhase = 'incoming' | 'outgoing' | 'connecting' | 'active' | 'end
 
 export interface CallState {
   callId: string
-  /** Canonical address of the other person. */
+  /** The other person's account key. */
   peer: string
   media: ChatCallMedia
   incoming: boolean
@@ -65,7 +64,7 @@ export class CallController {
   private state: CallState | null = null
   private readonly listeners = new Set<Listener>()
   private pc: RTCPeerConnection | null = null
-  private peerAddress: AccountAddress | null = null
+  private peerAddress: AccountRef | null = null
   private callerDeviceId = 0
   private calleeDeviceId: number | undefined
   private remoteOffer: string | null = null
@@ -122,7 +121,7 @@ export class CallController {
 
   // --- Placing and answering ----------------------------------------------
 
-  async start(peer: AccountAddress, media: ChatCallMedia): Promise<void> {
+  async start(peer: AccountRef, media: ChatCallMedia): Promise<void> {
     if (this.state && this.state.phase !== 'ended') throw new Error('already in a call')
     this.reset()
     const callId = crypto.randomUUID()
@@ -132,7 +131,7 @@ export class CallController {
     await this.holdInCall()
     this.set({
       callId,
-      peer: canonicalAccountAddress(peer),
+      peer: accountKey(peer),
       media,
       incoming: false,
       phase: 'outgoing',
@@ -372,7 +371,7 @@ export class CallController {
       if (!stale) await this.reply(event, { type: 'busy' })
       return
     }
-    const peer = parseAccountAddress(event.peer)
+    const peer = parseAccount(event.peer)
     if (!peer) return
     if (stale) {
       await this.record(peer, event.call.callId, true, media, 'missed', sentAt || Date.now())
@@ -400,7 +399,7 @@ export class CallController {
   }
 
   private reply(event: ChatCallEvent, signal: ChatCallSignalKind): Promise<void> {
-    const peer = parseAccountAddress(event.peer)
+    const peer = parseAccount(event.peer)
     if (!peer) return Promise.resolve()
     return this.service
       .sendCallSignal(peer, {
@@ -522,7 +521,7 @@ export class CallController {
   }
 
   private async record(
-    peer: AccountAddress,
+    peer: AccountRef,
     callId: string,
     incoming: boolean,
     media: ChatCallMedia,

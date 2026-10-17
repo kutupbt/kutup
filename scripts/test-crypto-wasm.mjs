@@ -30,9 +30,13 @@ assert.deepEqual(keys, {
 
 const entropy = Buffer.from(Uint8Array.from({ length: 32 }, (_, index) => index)).toString('base64')
 assert.equal(
-  crypto.deriveRecoveryAuthProof(entropy, ' Alice@Example.COM '),
-  'WCApZxc1kEKYdt6Ygph4RpjnSq23mfVOuZRu/YdM6sQ=',
+  crypto.deriveRecoveryAuthProof(entropy, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
+  '9+S40O1nRFJnEpXLF5JpDBgQMjCVs4EHBQMwgxfmzLA=',
 )
+// Only a key binding: an address, another case or padding is refused.
+for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90']) {
+  assert.throws(() => crypto.deriveRecoveryAuthProof(entropy, binding), /key binding/)
+}
 assert.throws(
   () => crypto.deriveAccountProtectionKeys('password', 'MDEyMzQ1Njc4OWFiY2RlZg==', 1, 32_768, 3, 1),
   /parameters/,
@@ -56,24 +60,55 @@ assert.deepEqual(
 
 const envelopePlaintext = Buffer.alloc(32, 0x42).toString('base64')
 const envelopeKey = Buffer.alloc(32, 0x24).toString('base64')
-const accountEnvelope = crypto.sealAccountEnvelope(
-  envelopePlaintext,
-  envelopeKey,
-  1,
-  ' Alice@Example.COM ',
-)
-assert.equal(
-  crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, 'alice@example.com'),
-  envelopePlaintext,
-)
+const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+assert.equal(crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'), envelopePlaintext)
 assert.throws(
-  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, 'alice@example.com'),
+  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
   /authentication failed/,
 )
 assert.throws(
-  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, 'mallory@example.com'),
+  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91'),
   /authentication failed/,
 )
+// Exactly a key binding: an address, another case or padding is refused on
+// seal and open.
+for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90 ']) {
+  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, binding), /binding/)
+  assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
+}
+
+// The revision guard's store (Rust revision_guard): entries named by an HMAC,
+// revisions sealed to their entry, both under the account's keys.
+const guardKeys = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'))
+const guardEntry = guardKeys.entryId('contact', 'ayse@example.com')
+assert.match(guardEntry, /^[0-9a-f]{64}$/)
+assert.equal(guardKeys.openSeen(guardEntry, guardKeys.sealSeen(guardEntry, 1791633600000)), 1791633600000)
+assert.throws(() => guardKeys.openSeen(guardKeys.entryId('contact', 'bob@example.com'), guardKeys.sealSeen(guardEntry, 5)))
+assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('base64')).entryId('contact', 'ayse@example.com'), guardEntry)
+
+// The shared envelope vectors: every purpose's envelope is well formed, and
+// every refused one is refused here as in Rust (malformed ones by inspect;
+// the rest, for the purposes the generic API opens, by open).
+const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-envelope-v2.json`, 'utf8'))
+const genericPurposes = new Set([1, 2, 3, 4])
+for (const p of envelopeVectors.purposes) {
+  assert.equal(crypto.inspectAccountEnvelope(p.envelope), p.purpose)
+  if (genericPurposes.has(p.purpose)) {
+    assert.equal(crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
+  } else {
+    // Mail keys and Pass vault secrets open only through their typed APIs
+    // (which the Rust vector test and test-pass-wasm.mjs open): the generic
+    // path refuses even a well-formed one.
+    assert.throws(() => crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding))
+  }
+  for (const refused of p.refused) {
+    if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountEnvelope(refused.envelope), refused.why)
+    if (refused.step === 'open') assert.equal(crypto.inspectAccountEnvelope(refused.envelope), p.purpose, refused.why)
+    if (genericPurposes.has(p.purpose)) {
+      assert.throws(() => crypto.openAccountEnvelope(refused.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), refused.why)
+    }
+  }
+}
 
 const driveEnvelope = crypto.sealDriveEnvelope(
   Buffer.from('projects').toString('base64'),
@@ -108,6 +143,26 @@ assert.throws(
   ),
   /authentication failed/,
 )
+
+// Names and metadata are padded to 256-byte buckets (Rust owns the policy).
+{
+  const v = vectors.driveEnvelope
+  const args = [v.rootKey, v.purpose, v.epoch, BigInt(v.revision), v.objectId, v.parentId]
+  assert.equal(crypto.openDriveEnvelope(v.envelope, ...args), v.plaintext)
+  for (const bad of v.invalidPadding) assert.throws(() => crypto.openDriveEnvelope(bad, ...args))
+  for (const bad of v.invalidSealedLength) assert.throws(() => crypto.openDriveEnvelope(bad, ...args))
+  for (const limit of v.limits) {
+    const plain = Buffer.alloc(limit.len, 0x61).toString('base64')
+    const limitArgs = [v.rootKey, limit.purpose, v.epoch, BigInt(v.revision), v.objectId, v.parentId]
+    if (limit.sealedLen === undefined) {
+      assert.throws(() => crypto.sealDriveEnvelope(plain, ...limitArgs))
+    } else {
+      const sealed = crypto.sealDriveEnvelope(plain, ...limitArgs)
+      assert.equal(Buffer.from(sealed, 'base64').length, limit.sealedLen)
+      assert.equal(crypto.openDriveEnvelope(sealed, ...limitArgs), plain)
+    }
+  }
+}
 
 // A link to one file: purpose 11, epoch = the file key's generation.
 {
@@ -194,6 +249,10 @@ assert.throws(
   /authentication failed/,
 )
 
+// People by their accounts (docs/plans/account-ids.md): server and id.
+const ALICE = { server: 'a.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+const BOB = { server: 'b.test', accountId: '8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b' }
+const BOB_HERE = { server: 'a.test', accountId: BOB.accountId }
 const senderIdentity = crypto.deriveAccountIdentityKeys(
   Buffer.alloc(32, 1).toString('base64'),
 )
@@ -206,9 +265,9 @@ const namedShareEnvelope = crypto.sealNamedShareEnvelope(
   recipientIdentity.driveHpkePublicKey,
   '11111111-1111-4111-8111-111111111111',
   3,
-  'alice@a.test',
+  ALICE,
   senderIdentity.incarnationId,
-  'bob@b.test',
+  BOB,
   recipientIdentity.incarnationId,
 )
 assert.equal(
@@ -218,9 +277,9 @@ assert.equal(
     recipientIdentity.driveHpkePrivateKey,
     '11111111-1111-4111-8111-111111111111',
     3,
-    'alice@a.test',
+    ALICE,
     senderIdentity.incarnationId,
-    'bob@b.test',
+    BOB,
     recipientIdentity.incarnationId,
   ),
   collectionKey,
@@ -232,9 +291,9 @@ assert.throws(
     recipientIdentity.driveHpkePrivateKey,
     '11111111-1111-4111-8111-111111111111',
     4,
-    'alice@a.test',
+    ALICE,
     senderIdentity.incarnationId,
-    'bob@b.test',
+    BOB,
     recipientIdentity.incarnationId,
   ),
   /authentication failed/,
@@ -322,8 +381,8 @@ const backupSegment = {
     version: 1,
     recordId: '55555555-5555-4555-8555-555555555555',
     mutationSequence: 1,
-    conversation: { kind: 'direct', address: { username: 'bob', server: 'b.test' } },
-    sender: 'alice@a.test',
+    conversation: { kind: 'direct', account: { server: 'b.test', accountId: '00000000-0000-4000-8000-000000000002' } },
+    sender: { server: 'a.test', accountId: '00000000-0000-4000-8000-000000000001' },
     senderDeviceId: 1,
     outgoing: true,
     content: {
@@ -527,17 +586,17 @@ assert.equal(
   const fileId = '22222222-2222-4222-8222-222222222222'
   const sealed = crypto.sealFileShareEnvelope(
     Buffer.alloc(32, 0x66).toString('base64'), Buffer.alloc(32, 1).toString('base64'), reader.driveHpkePublicKey,
-    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+    fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   const open = (file, generation) => crypto.openFileShareEnvelope(
     sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
-    file, generation, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+    file, generation, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   )
   assert.equal(open(fileId, 2), Buffer.alloc(32, 0x66).toString('base64'))
   assert.throws(() => open(fileId, 3))
   assert.throws(() => crypto.openNamedShareEnvelope(
     sealed, owner.driveSigningPublicKey, reader.driveHpkePrivateKey,
-    fileId, 2, 'alice@a.test', owner.incarnationId, 'bob@a.test', reader.incarnationId,
+    fileId, 2, ALICE, owner.incarnationId, BOB_HERE, reader.incarnationId,
   ))
 }
 
@@ -627,7 +686,6 @@ const otherIdentity = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x07).to
 assert.throws(() => crypto.verifyMailKeyList(firstList.data, firstList.signature, otherIdentity.authorityPublicKey))
 // The same list signed again from the browser is byte-identical.
 const resigned = crypto.signMailKeyList(mailVectors.masterKey, {
-  account: verifiedFirst.account,
   address: verifiedFirst.address,
   sequence: 1,
   issuedAt: verifiedFirst.issuedAt,
@@ -636,12 +694,12 @@ const resigned = crypto.signMailKeyList(mailVectors.masterKey, {
 assert.equal(resigned.data, firstList.data)
 assert.equal(resigned.signature, firstList.signature)
 // A fresh key: sealed in WASM, never returned in clear.
-const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.loginEmail, 'carol@kutup.dev', 1_790_000_000)
+const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
-assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
-assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.loginEmail), /typed export/)
+assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.
@@ -655,7 +713,7 @@ const b64bytes = (value) => new Uint8Array(Buffer.from(value, 'base64'))
 const joinPackets = (key, data) => new Uint8Array([...b64bytes(key), ...data])
 const aliceEnvelope = mailVectors.envelope
 const openAs = (message, sender) =>
-  crypto.openMailMessage(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, message, sender)
+  crypto.openMailMessage(mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, message, sender)
 const splitData = b64bytes(splitVectors.dataPacket)
 const alicesCopy = openAs(joinPackets(splitVectors.keyPackets[0], splitData), mailVectors.publicKey)
 assert.deepEqual(Buffer.from(alicesCopy.data), Buffer.from(splitVectors.plaintext, 'base64'))
@@ -667,10 +725,10 @@ assert.deepEqual(Buffer.from(arrived.data), Buffer.from(arrivalVectors.plaintext
 assert.equal(arrived.signed, false)
 assert.equal(arrived.verified, false)
 assert.throws(() =>
-  crypto.openMailMessage(mailVectors.masterKey, mailVectors.loginEmail, 'bob@kutup.dev', aliceEnvelope, mailVectors.fingerprint, b64bytes(arrivalVectors.ciphertext)),
+  crypto.openMailMessage(mailVectors.masterKey, mailVectors.binding, 'bob@kutup.dev', aliceEnvelope, mailVectors.fingerprint, b64bytes(arrivalVectors.ciphertext)),
 )
 const sealedMail = crypto.encryptMailMessage(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [mailVectors.publicKey, splitVectors.bobPublicKey], new TextEncoder().encode('hello bob'),
 )
 assert.equal(sealedMail.keyPackets.length, 2)
@@ -694,36 +752,77 @@ assert.equal(details.algorithm, 'ECC (Curve25519)')
 assert.equal(crypto.describeExternalMailKeyDetails(bobKey, 'eve@kutup.dev').state, 'otherAddress')
 // An address key leaves only locked with a passphrase, and comes back the same.
 const exportedKey = crypto.exportMailAddressKey(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'export passphrase',
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'export passphrase',
 )
 assert.match(exportedKey, /^-----BEGIN PGP PRIVATE KEY BLOCK-----/)
 assert.throws(() => crypto.exportMailAddressKey(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
 ))
 assert.throws(
-  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
+  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
   (error) => error === 'wrong passphrase',
 )
 const reimported = crypto.importMailAddressKey(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
 )
 assert.equal(reimported.fingerprint, mailVectors.fingerprint)
-// A shared mailbox's key: Alice gets a share, opens group mail with it,
-// shares it with Bob's key, and signs as the group.
-const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', 1_790_000_000, [mailVectors.publicKey])
+// A shared mailbox's key: Alice gets a share sealed to her account key,
+// opens group mail with it, shares it with Bob's account key, and signs as
+// the group. A share opens only for its member, group and group key.
+const groupId = '5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b'
+const aliceAccount = { server: 'kutup.dev', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+const bobAccount = { server: 'kutup.dev', accountId: '8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b' }
+const aliceIdentity = crypto.deriveAccountIdentityKeys(mailVectors.masterKey)
+const bobIdentity = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x22).toString('base64'))
+const memberOf = (account, identity) => ({ account, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveHpkePublicKey })
+const groupKey = crypto.generateMailGroupKey('hr@kutup.dev', groupId, 1_790_000_000, [memberOf(aliceAccount, aliceIdentity)])
 assert.equal(groupKey.shares.length, 1)
-const aliceArgs = [mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint]
-const toGroup = crypto.encryptMailMessageAsGroup(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [groupKey.publicKey], new TextEncoder().encode('hr mail'))
+const heldBy = (account, identity, share) => ({ account, hpkePrivateKey: identity.driveHpkePrivateKey, share, groupId, fingerprint: groupKey.fingerprint })
+const aliceHolds = heldBy(aliceAccount, aliceIdentity, groupKey.shares[0])
+const toGroup = crypto.encryptMailMessageAsGroup(aliceHolds, [groupKey.publicKey], new TextEncoder().encode('hr mail'))
 const groupMessage = new Uint8Array([...b64bytes(toGroup.keyPackets[0]), ...toGroup.dataPacket])
-const openedGroup = crypto.openMailGroupMessage(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, groupMessage, groupKey.publicKey)
+const openedGroup = crypto.openMailGroupMessage(aliceHolds, groupMessage, groupKey.publicKey)
 assert.equal(new TextDecoder().decode(openedGroup.data), 'hr mail')
 assert.ok(openedGroup.signed && openedGroup.verified)
-const bobShares = crypto.reshareMailGroupKey(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [splitVectors.bobPublicKey])
+const bobShares = crypto.reshareMailGroupKey(aliceHolds, [memberOf(bobAccount, bobIdentity)])
 assert.equal(bobShares.length, 1)
-assert.throws(() => crypto.openMailGroupMessage(...aliceArgs, bobShares[0], groupKey.fingerprint, groupMessage))
-assert.match(crypto.encryptMailPgpAsGroup(...aliceArgs, groupKey.shares[0], groupKey.fingerprint, [groupKey.publicKey], new TextEncoder().encode('x')), /^-----BEGIN PGP MESSAGE-----/)
+const bobHolds = heldBy(bobAccount, bobIdentity, bobShares[0])
+assert.equal(new TextDecoder().decode(crypto.openMailGroupMessage(bobHolds, groupMessage).data), 'hr mail')
+// Bob's share is not Alice's, nor for another group.
+assert.throws(() => crypto.openMailGroupMessage({ ...bobHolds, account: aliceAccount }, groupMessage))
+assert.throws(() => crypto.openMailGroupMessage({ ...bobHolds, groupId: '00000000-0000-4000-8000-000000000000' }, groupMessage))
+assert.throws(() => crypto.openMailGroupMessage({ ...aliceHolds, share: bobShares[0] }, groupMessage))
+assert.match(crypto.encryptMailPgpAsGroup(aliceHolds, [groupKey.publicKey], new TextEncoder().encode('x')), /^-----BEGIN PGP MESSAGE-----/)
+
+// The shared mailbox's key lists: signed by its signing key, never the
+// server's. The checked-in chains verify or are refused as in Rust; a new
+// signer's seed stays in WASM and reaches owners and managers as shares.
+const chainVectors = JSON.parse(
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-group-chain-v1.json`, 'utf8'),
+)
+const verifyChain = (chain) => crypto.verifyMailGroupKeyChain(chainVectors.groupId, chain.firstSigner, chain.lists, chain.handovers)
+const validChain = verifyChain(chainVectors.valid)
+assert.equal(validChain.sequence, 3)
+assert.deepEqual(validChain.digests, chainVectors.validDigests)
+for (const refused of ['serverForged', 'oldSignerFork', 'missingHandover']) assert.throws(() => verifyChain(chainVectors[refused]), undefined, refused)
+assert.equal(verifyChain(chainVectors.adminRestart).sequence, 1)
+const groupFirstList = { address: 'hr@kutup.dev', sequence: 1, issuedAt: '2026-10-16T12:00:00Z', keys: [{ fingerprint: groupKey.fingerprint, sha256Fingerprint: groupKey.sha256Fingerprint, primary: true, flags: 3 }] }
+const firstSigner = crypto.newMailGroupSigner(groupId, [memberOf(aliceAccount, aliceIdentity)], groupFirstList, undefined, undefined)
+assert.equal(firstSigner.handover, undefined)
+const aliceSigns = { account: aliceAccount, hpkePrivateKey: aliceIdentity.driveHpkePrivateKey, groupId, signer: firstSigner.publicKey, signingShare: firstSigner.shares[0] }
+const groupSecondList = crypto.signMailGroupKeyList(aliceSigns, { ...groupFirstList, sequence: 2, previousHash: firstSigner.keyList.hash })
+const grown = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList], [])
+assert.equal(grown.sequence, 2)
+// Alice hands the lists over to a new signer Bob holds; Bob's share of the
+// first signer opens for him.
+const handedOver = crypto.newMailGroupSigner(groupId, [memberOf(bobAccount, bobIdentity)], { ...groupFirstList, sequence: 3, previousHash: groupSecondList.hash }, aliceSigns, groupSecondList.hash)
+const third = crypto.verifyMailGroupKeyChain(groupId, firstSigner.publicKey, [firstSigner.keyList, groupSecondList, handedOver.keyList], [handedOver.handover])
+assert.deepEqual(third.signers, [firstSigner.publicKey, handedOver.publicKey])
+const bobSignerShare = crypto.reshareMailGroupSigner(aliceSigns, [memberOf(bobAccount, bobIdentity)])[0]
+crypto.signMailGroupKeyList({ ...aliceSigns, account: bobAccount, hpkePrivateKey: bobIdentity.driveHpkePrivateKey, signingShare: bobSignerShare }, groupFirstList)
+assert.throws(() => crypto.signMailGroupKeyList({ ...aliceSigns, signingShare: bobSignerShare }, groupFirstList))
 const armoredPgp = crypto.encryptMailPgp(
-  mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
   [splitVectors.bobPublicKey, mailVectors.publicKey], new TextEncoder().encode('pgp to bob'),
 )
 assert.match(armoredPgp, /^-----BEGIN PGP MESSAGE-----/)
@@ -740,89 +839,315 @@ const unsignedSplit = crypto.encryptMailMessageUnsigned([mailVectors.publicKey],
 assert.equal(unsignedSplit.keyPackets.length, 1)
 unsignedSplit.free()
 const signedPart = new TextEncoder().encode('Content-Type: text/plain\r\n\r\nsigned only\r\n')
-const detached = crypto.signMailDetached(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, signedPart)
+const detached = crypto.signMailDetached(mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, signedPart)
 assert.match(detached, /^-----BEGIN PGP SIGNATURE-----/)
 assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), signedPart, mailVectors.publicKey), true)
 assert.equal(crypto.verifyMailDetachedSignature(new TextEncoder().encode(detached), new TextEncoder().encode('changed'), mailVectors.publicKey), false)
 // Inline PGP, signed only: a cleartext signature that verifies.
-const cleartext = crypto.signMailCleartext(mailVectors.masterKey, mailVectors.loginEmail, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'İmzalı metin.\n')
+const cleartext = crypto.signMailCleartext(mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'İmzalı metin.\n')
 assert.match(cleartext, /^-----BEGIN PGP SIGNED MESSAGE-----/)
 const checkedCleartext = crypto.verifyMailCleartext(cleartext, mailVectors.publicKey)
 assert.equal(checkedCleartext.verified, true)
 assert.equal(checkedCleartext.text.trim(), 'İmzalı metin.')
 assert.equal(crypto.verifyMailCleartext(cleartext.replace('metin', 'yazı'), mailVectors.publicKey).verified, false)
 
-// Contacts (docs/plans/contacts.md).
+// Contacts (docs/plans/contacts.md): bound to the account's key binding.
 const contactVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v1.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v2.json`, 'utf8'),
 )
 const contactIdentity = crypto.deriveAccountIdentityKeys(contactVectors.masterKey)
 // Signing a reordered summary gives the canonical bytes and the vector signature.
 const reordered = JSON.parse(contactVectors.summary)
 const shuffled = JSON.stringify({ pinnedKeys: reordered.pinnedKeys, groups: reordered.groups, emails: reordered.emails, name: reordered.name, uid: reordered.uid })
-const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.account, shuffled)
+const signedContact = crypto.signContactSummary(contactVectors.masterKey, contactVectors.binding, contactVectors.revision, shuffled)
 assert.equal(signedContact.summary, contactVectors.summary)
 assert.equal(signedContact.signature, contactVectors.signature)
 assert.equal(
-  crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, contactVectors.account, contactIdentity.authorityPublicKey).name,
+  crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, contactVectors.binding, contactVectors.revision, contactIdentity.authorityPublicKey).name,
   'Ayşe Yılmaz',
 )
-assert.throws(() => crypto.verifyContactSummary(contactVectors.summary.replace('ayse@example.com', 'evil@example.com'), contactVectors.signature, contactVectors.account, contactIdentity.authorityPublicKey))
-assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, contactVectors.signature, 'bob@kutup.dev', contactIdentity.authorityPublicKey))
-assert.equal(
-  crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, contactVectors.sealed),
-  contactVectors.vcard,
+assert.throws(() => crypto.verifyContactSummary(contactVectors.summary.replace('ayse@example.com', 'evil@example.com'), contactVectors.signature, contactVectors.binding, contactVectors.revision, contactIdentity.authorityPublicKey))
+for (const refused of contactVectors.refusedSignatures) {
+  assert.throws(() => crypto.verifyContactSummary(contactVectors.summary, refused.signature, refused.binding, contactVectors.revision, contactIdentity.authorityPublicKey), undefined, refused.case)
+}
+assert.throws(() => crypto.signContactSummary(contactVectors.masterKey, 'alice@kutup.dev', contactVectors.revision, shuffled))
+assert.deepEqual(
+  crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, contactVectors.sealed),
+  { value: contactVectors.vcard, revision: contactVectors.revision },
 )
-const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, contactVectors.vcard)
-assert.equal(crypto.openContactCard(contactVectors.masterKey, contactVectors.account, contactVectors.uid, resealedCard), contactVectors.vcard)
-assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.account, 'another-uid', resealedCard))
+for (const refused of contactVectors.refusedCards) {
+  assert.throws(() => crypto.openContactCard(contactVectors.masterKey, refused.binding, refused.uid, refused.sealed), undefined, refused.case)
+}
+const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, contactVectors.revision + 1, contactVectors.vcard)
+assert.deepEqual(crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, resealedCard), { value: contactVectors.vcard, revision: contactVectors.revision + 1 })
+assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, 0, contactVectors.vcard))
+assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, 'another-uid', resealedCard))
+assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, 'alice@kutup.dev', contactVectors.uid, 1, contactVectors.vcard))
 
-// Sealed mail names (docs/plans/mail-filters.md).
-const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v1.json`, 'utf8'))
-assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, nameVectors.kind, nameVectors.id, nameVectors.sealed), nameVectors.name)
-const resealedName = crypto.sealMailName(nameVectors.masterKey, nameVectors.account, 'label', nameVectors.id, nameVectors.name)
-assert.equal(crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', nameVectors.id, resealedName), nameVectors.name)
-assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'folder', nameVectors.id, resealedName))
-assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.account, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
+// Sealed mail names (docs/plans/mail-filters.md): bound to the key binding.
+const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v2.json`, 'utf8'))
+assert.deepEqual(crypto.openMailName(nameVectors.masterKey, nameVectors.binding, nameVectors.kind, nameVectors.id, nameVectors.sealed), { value: nameVectors.name, revision: nameVectors.revision })
+for (const refused of nameVectors.refused) {
+  assert.throws(() => crypto.openMailName(nameVectors.masterKey, refused.binding, refused.kind, refused.id, refused.sealed), undefined, refused.case)
+}
+const resealedName = crypto.sealMailName(nameVectors.masterKey, nameVectors.binding, 'label', nameVectors.id, 5, nameVectors.name)
+assert.deepEqual(crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'label', nameVectors.id, resealedName), { value: nameVectors.name, revision: 5 })
+assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'folder', nameVectors.id, resealedName))
+assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
+assert.throws(() => crypto.sealMailName(nameVectors.masterKey, 'alice@kutup.dev', 'label', nameVectors.id, 5, nameVectors.name))
 
-// Drive identity (docs/plans/drive-identity-pins.md).
+// Drive identity (docs/plans/drive-identity-pins.md): the Drive key binding
+// names the account, its server and id (a statement to others); the pin
+// list, keyed by account id, binds the key binding.
 const identityVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v1.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v3.json`, 'utf8'),
 )
 const iv = identityVectors
-assert.equal(crypto.signDriveKeyBinding(iv.masterKey, iv.account), iv.driveKeyBinding)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), true)
-// Another address, a swapped recipient key or signer, another authority: refused.
-assert.equal(crypto.verifyDriveKeyBinding('bob@kutup.dev', iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(iv.account, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
-assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, iv.revision, iv.sealed), iv.pins)
-assert.throws(() => crypto.openIdentityPins(iv.masterKey, iv.account, iv.revision + 1, iv.sealed))
-assert.throws(() => crypto.openIdentityPins(iv.masterKey, 'bob@kutup.dev', iv.revision, iv.sealed))
-const resealedPins = crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins)
-assert.equal(crypto.openIdentityPins(iv.masterKey, iv.account, 8, resealedPins), iv.pins)
-assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 0, iv.pins))
+const ivAccount = crypto.parseAccountRef(iv.account)
+assert.equal(crypto.signDriveKeyBinding(iv.masterKey, ivAccount), iv.driveKeyBinding)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), true)
+// Another account, a swapped recipient key or signer, another authority: refused.
+assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
+// An address in place of an account is refused outright.
+assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, 'alice@kutup.dev'))
+assert.deepEqual(crypto.openIdentityPins(iv.masterKey, iv.binding, iv.sealed), { value: iv.pins, revision: iv.revision })
+for (const refused of iv.refused) {
+  assert.throws(() => crypto.openIdentityPins(iv.masterKey, refused.binding, refused.sealed), undefined, refused.case)
+}
+const resealedPins = crypto.sealIdentityPins(iv.masterKey, iv.binding, 8, iv.pins)
+assert.deepEqual(crypto.openIdentityPins(iv.masterKey, iv.binding, resealedPins), { value: iv.pins, revision: 8 })
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 0, iv.pins))
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
-// Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
-const pv = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/pass-vault-secret-v1.json`, 'utf8'))
-assert.deepEqual(crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.loginEmail, pv.fileId), { password: pv.password, keyFile: pv.keyFile })
-const resealedVault = crypto.sealPassVaultSecret(pv.masterKey, pv.loginEmail, pv.fileId, pv.password, null)
-assert.deepEqual(crypto.openPassVaultSecret(resealedVault, pv.masterKey, pv.loginEmail, pv.fileId), { password: pv.password, keyFile: null })
-assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, pv.loginEmail, '00000000-0000-4000-8000-000000000000'))
-assert.throws(() => crypto.openPassVaultSecret(pv.sealed, pv.masterKey, 'bob@kutup.dev', pv.fileId))
-assert.throws(() => crypto.sealPassVaultSecret(pv.masterKey, pv.loginEmail, pv.fileId, null, null))
-// The generic account-envelope path cannot open one.
-assert.throws(() => crypto.openAccountEnvelope(pv.sealed, pv.masterKey, 6, pv.loginEmail))
+// What every app does with the list: the same rules as Rust (record, lookup,
+// identityPinsAt, apply_rename), and the lists refused.
+{
+  const r = iv.rules
+  const chain = JSON.stringify(r.chain)
+  const since = '2026-10-13T12:00:00Z'
+  const { pins, ...applied } = crypto.applyAccountRenameToPins(r.before, r.dave, chain, since)
+  assert.equal(pins, r.after)
+  assert.deepEqual(applied, r.applied)
+  const again = crypto.applyAccountRenameToPins(r.after, r.dave, chain, since)
+  assert.equal(again.changed, false)
+  assert.equal(again.pins, r.after)
+  assert.throws(() => crypto.applyAccountRenameToPins(r.after, r.dave, JSON.stringify(r.rollback), since))
+  for (const lookup of r.lookups) {
+    assert.deepEqual(
+      crypto.lookupIdentityPin(r.after, lookup.account, lookup.address ?? undefined, lookup.published ?? undefined),
+      lookup.result,
+      lookup.case,
+    )
+  }
+  const at = crypto.identityPinsAt(r.after, 'david@kutup.dev')
+  assert.equal(at.length, 2)
+  for (const record of r.records) {
+    const out = crypto.recordIdentityPin(record.before, record.account, record.address ?? undefined, record.authority, record.update, record.since)
+    assert.equal(out.pins, record.after, record.case)
+    assert.deepEqual(out.result, record.result, record.case)
+    assert.equal(out.changed, record.after !== record.before, record.case)
+  }
+  // Fields from a later version are kept through an update.
+  const kept0 = JSON.parse(r.preserved).pins[0]
+  const kept = crypto.recordIdentityPin(r.preserved, kept0.account, undefined, kept0.authorityPublicKey, 'verified', since)
+  assert.equal(kept.changed, true)
+  const keptList = JSON.parse(kept.pins)
+  assert.equal(keptList.pins[0].colour, 'blue')
+  assert.equal(keptList.pins[0].renames.signedBy, 'x')
+  assert.equal(keptList.pins[0].addresses[0].via, 'chain')
+  assert.deepEqual(keptList.laterList, { a: [1, 2] })
+  for (const refused of r.refusedLists) {
+    assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 9, refused.pins), undefined, refused.case)
+    assert.throws(() => crypto.recordIdentityPin(refused.pins, r.dave, undefined, iv.authorityPublicKey, 'firstSeen', since), undefined, refused.case)
+  }
+  // Shared mailboxes: the same rules as Rust (lookup_group, record_group).
+  for (const g of r.groups) {
+    assert.deepEqual(crypto.lookupGroupPin(g.before, g.server, g.groupId, g.signers, g.digests), g.found, g.case)
+    const out = crypto.recordGroupPin(g.before, g.server, g.groupId, g.signers, g.digests, g.update, g.since)
+    assert.equal(out.pins, g.after, g.case)
+    assert.equal(out.changed, g.after !== g.before, g.case)
+  }
+  assert.throws(() => crypto.lookupGroupPin(r.after, 'kutup.dev', r.groups[0].groupId, [], r.groups[0].digests))
+  // An account reference, never an address, keys a pin.
+  assert.throws(() => crypto.lookupIdentityPin(r.after, 'dave@kutup.dev', undefined, undefined))
+}
 
-// The safety number every app shows (kutup-crypto safety_number, V1 vector).
-const one = Buffer.alloc(32, 1).toString('base64')
-const two = Buffer.alloc(32, 2).toString('base64')
-const safety = crypto.deriveSafetyNumber('alice@kutup.dev', one, 'bob@example.org', two)
-assert.equal(safety.fingerprint, '43287 64308 39064 62898 28602 34220 14368 04694 33524 24006 58545 00869 00480 18981 08556 55505')
-assert.deepEqual(crypto.deriveSafetyNumber('bob@example.org', two, 'alice@kutup.dev', one), safety)
-assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', one, safety.qrPayload), true)
-assert.equal(crypto.safetyQrMatches('bob@example.org', two, 'alice@kutup.dev', two, safety.qrPayload), false)
+// Kutup Pass vault secrets (docs/plans/pass.md, "Vault secrets").
+
+// The safety number every app shows (kutup-crypto safety_number, V3): Signal's
+// fingerprint over each account and its authority, so a rename keeps it and a
+// reset, or another account, changes it.
+{
+  for (const [name, folded] of vectors.nameFold.names) {
+    assert.equal(crypto.foldName(name), folded, name)
+  }
+  for (const valid of vectors.accountRef.valid) {
+    assert.deepEqual(crypto.parseAccountRef(valid.string), { server: valid.server, accountId: valid.accountId })
+    assert.equal(crypto.accountRefString(valid.server, valid.accountId), valid.string)
+  }
+  for (const bad of vectors.accountRef.invalid) {
+    assert.throws(() => crypto.parseAccountRef(bad), bad)
+  }
+  const v = vectors.safetyNumber
+  const local = crypto.parseAccountRef(v.localAccount)
+  const peer = crypto.parseAccountRef(v.peerAccount)
+  const mine = crypto.deriveSafetyNumber(local, v.localAuthority, peer, v.peerAuthority)
+  const theirs = crypto.deriveSafetyNumber(peer, v.peerAuthority, local, v.localAuthority)
+  assert.equal(mine.fingerprint, v.fingerprint)
+  assert.equal(theirs.fingerprint, v.fingerprint)
+  assert.equal(mine.qrPayload, v.localQrPayload)
+  assert.equal(theirs.qrPayload, v.peerQrPayload)
+  assert.equal(crypto.safetyQrMatches(local, v.localAuthority, peer, v.peerAuthority, v.peerQrPayload), true)
+  assert.equal(crypto.safetyQrMatches(local, v.localAuthority, peer, v.peerAuthority, v.localQrPayload), false)
+  assert.equal(crypto.deriveSafetyNumber(local, v.localAuthority, peer, v.resetAuthority).fingerprint, v.resetFingerprint)
+  const other = crypto.parseAccountRef(v.otherAccount)
+  assert.equal(crypto.deriveSafetyNumber(local, v.localAuthority, other, v.peerAuthority).fingerprint, v.otherAccountFingerprint)
+  assert.throws(() => crypto.deriveSafetyNumber('alice@kutup.dev', v.localAuthority, peer, v.peerAuthority))
+}
+
+// Account renames (kutup-crypto account_rename): a chain signed by the
+// authority; rollbacks, broken and foreign chains are refused.
+{
+  const v = vectors.accountRename
+  for (const statement of v.chain) {
+    assert.deepEqual(
+      JSON.parse(crypto.signAccountRename(v.masterKey, statement.sequence, statement.previous, statement.current, statement.issuedAtMs)),
+      statement,
+    )
+  }
+  const view = crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain))
+  assert.equal(view.first, v.first)
+  assert.equal(view.current, v.current)
+  assert.deepEqual(view.addresses, ['alice@kutup.dev', 'alicia@kutup.dev', 'ali@kutup.dev'])
+  const shorter = crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain.slice(0, 1)))
+  crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain), JSON.stringify(shorter.digests))
+  assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(v.chain.slice(0, 1)), JSON.stringify(view.digests)))
+  for (const bad of v.invalidChains) {
+    assert.throws(() => crypto.verifyAccountRenameChain(v.authorityPublicKey, JSON.stringify(bad.chain)), bad.why)
+  }
+  assert.throws(() => crypto.verifyAccountRenameChain(v.otherAuthorityPublicKey, JSON.stringify(v.chain)))
+}
+
+// OPAQUE sign-in (kutup-crypto opaque, suite 1): the browser's client against
+// the vectors' sealed setup and stored record gives the vectors' export key,
+// which opens the master key envelope; what must fail, fails.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/opaque-v1.json`, 'utf8'))
+  const server = crypto.OpaqueServer.open(v.sealedSetup, v.setupKey, v.setupKeyId)
+  assert.throws(() => crypto.OpaqueServer.open(v.sealedSetup, v.setupKey, v.setupKeyId + 1))
+  const signIn = (record, password, keyBinding = v.keyBinding) => {
+    const login = crypto.OpaqueLogin.start(password)
+    const started = server.loginStart(record, login.request, keyBinding)
+    const finalization = login.finish(started.response)
+    crypto.OpaqueServer.loginFinish(started.state, finalization)
+    return login
+  }
+  const login = signIn(v.storedRecord, v.password)
+  assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, '9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0'))
+  assert.equal(login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), v.masterKey)
+  // Opened once: the export key is gone.
+  assert.throws(() => login.openMasterKey(v.masterKeyEnvelope, v.keyBinding), /not finished/)
+  assert.throws(() => login.finish('AAAA'), /already finished/)
+  assert.throws(() => signIn(v.storedRecord, 'wrong'), /authentication failed/)
+  assert.throws(() => signIn(undefined, v.password, 'nobody'), /authentication failed/)
+  // The password change: the new record, the new password, the new envelope only.
+  const changed = signIn(v.newStoredRecord, v.newPassword)
+  assert.equal(changed.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding), v.masterKey)
+  // The old export key does not open the new envelope.
+  const old = signIn(v.storedRecord, v.password)
+  assert.throws(() => old.openMasterKey(v.newMasterKeyEnvelope, v.keyBinding))
+  old.close()
+  assert.throws(() => old.openMasterKey(v.masterKeyEnvelope, v.keyBinding), /not finished/)
+  assert.throws(() => signIn(v.newStoredRecord, v.password), /authentication failed/)
+  // A registration made in the browser signs in, and its envelope opens.
+  const registration = crypto.OpaqueRegistration.start('browser password')
+  const record = crypto.OpaqueServer.record(registration.finish(server.registrationResponse(registration.request, v.keyBinding)))
+  const envelope = registration.sealMasterKey(v.masterKey, v.keyBinding)
+  assert.throws(() => registration.sealMasterKey(v.masterKey, v.keyBinding), /not finished/)
+  assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
+}
+
+// The account head (kutup-crypto account_head, docs/plans/rollback-protection.md):
+// the browser computes the same scope digests and heads, tells the same
+// outcomes apart, and checks indexes only against a head it verified.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-head-v1.json`, 'utf8'))
+  const head = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId)
+  assert.equal(head.writer(v.device), v.writer)
+  for (const [i, index] of v.indexes.entries()) {
+    assert.deepEqual(head.scope('contacts', JSON.stringify(index)), JSON.parse(v.heads[i]).scopes[0])
+  }
+  const named = (name) => ({ forked: v.forked, far: v.far, near: v.near })[name] ?? v.sealed[Number(name)]
+  for (const check of v.checks) {
+    const result = head.check(
+      check.anchor === null || check.anchor === undefined ? undefined : JSON.stringify(v.anchors[check.anchor]),
+      named(check.current),
+      check.segment ? JSON.stringify(check.segment.map(named)) : undefined,
+    )
+    assert.deepEqual(result.status(), check.status, check.case)
+    // Only a trusted head comes with a verified one.
+    const verified = result.takeVerified()
+    assert.equal(verified !== undefined, ['fresh', 'current', 'extends'].includes(check.status.kind), check.case)
+    verified?.free()
+    result.free()
+  }
+  // A verified head checks its index and refuses the others.
+  const checked = head.check(undefined, v.sealed[2], undefined)
+  const verified = checked.takeVerified()
+  assert.equal(checked.takeVerified(), undefined, 'taken once')
+  assert.deepEqual(verified.anchor(), v.anchors[2])
+  assert.equal(head.checkIndex(verified, 'contacts', JSON.stringify(v.indexes[2])), 'matches')
+  assert.equal(head.checkIndex(verified, 'mailNames', '[]'), 'uncovered')
+  for (const refused of v.refusedIndexes) {
+    assert.throws(() => head.checkIndex(verified, 'contacts', JSON.stringify(refused.index)), undefined, refused.case)
+  }
+  // A check elsewhere does not touch it: a head a write holds stays its own.
+  const elsewhere = head.check(JSON.stringify(v.anchors[2]), v.sealed[0], undefined)
+  assert.equal(elsewhere.status().kind, 'rollback')
+  assert.equal(elsewhere.takeVerified(), undefined)
+  assert.equal(head.checkIndex(verified, 'contacts', JSON.stringify(v.indexes[2])), 'matches')
+  assert.throws(() => head.check(undefined, 'AAAA', undefined))
+  // A head written here follows it, and is committed; a copy is independent.
+  const copy = verified.copy()
+  const next = head.next(verified, v.writer, JSON.stringify([head.scope('contacts', JSON.stringify(v.indexes[2]))]))
+  const committed = head.committed(copy, next)
+  assert.equal(committed.anchor().sequence, 4)
+  assert.equal(verified.anchor().sequence, 3)
+  assert.throws(() => head.committed(committed, next), undefined, 'a head follows only its own base')
+  // A rollback re-anchors only when the person confirms; the record matches Rust's.
+  assert.throws(() => head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, false, v.reanchored.atMs))
+  const reanchored = head.reanchor(JSON.stringify(v.anchors[2]), v.sealed[0], undefined, true, v.reanchored.atMs)
+  assert.deepEqual(reanchored.record(), v.reanchored)
+  const moved = reanchored.takeVerified()
+  assert.deepEqual(moved.anchor(), v.reanchored.to)
+
+  // What a device keeps: named per account and incarnation, sealed, opened
+  // only for its incarnation, advanced only to a verified head.
+  assert.equal(head.localStateName(), v.localName)
+  assert.deepEqual(head.openLocalState(v.localSealed), v.localState)
+  const other = new crypto.AccountHeadKeys(v.masterKey, v.binding, '6'.repeat(64))
+  assert.notEqual(other.localStateName(), v.localName)
+  assert.throws(() => other.openLocalState(v.localSealed))
+  assert.throws(() => other.sealLocalState(JSON.stringify(v.localState)), /another incarnation/)
+  other.free()
+  const fresh = head.newLocalState()
+  assert.equal(fresh.anchor, null)
+  assert.match(fresh.deviceId, /^[0-9a-f]{32}$/)
+  const advanced = head.advanceLocalState(JSON.stringify(fresh), verified, 5)
+  assert.equal(advanced.changed, true)
+  assert.deepEqual(advanced.state.anchor, v.anchors[2])
+  assert.equal(advanced.state.log[0].kind, 'startedFresh')
+  assert.deepEqual(head.openLocalState(head.sealLocalState(JSON.stringify(advanced.state))), advanced.state)
+  // A re-anchoring record is taken only with the head that re-anchoring gave.
+  assert.throws(() => head.reanchoredLocalState(JSON.stringify(advanced.state), JSON.stringify(v.reanchored), verified), /not this re-anchoring/)
+  const again = head.reanchoredLocalState(JSON.stringify(advanced.state), JSON.stringify(v.reanchored), moved)
+  assert.deepEqual(again.anchor, v.reanchored.to)
+  for (const handle of [checked, elsewhere, verified, copy, committed, reanchored, moved]) handle.free()
+  head.free()
+}
 
 console.log('crypto WASM canonical vectors passed')

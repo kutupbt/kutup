@@ -26,7 +26,7 @@ use crate::middleware::AdminUser;
 use crate::AppState;
 
 /// Best-effort audit-log write. The payload snapshots human-readable identities
-/// (emails, usernames) at action time so the trail stays meaningful after the
+/// (usernames) at action time so the trail stays meaningful after the
 /// referenced users are deleted.
 pub(crate) async fn audit(
     pool: &PgPool,
@@ -61,11 +61,17 @@ fn valid_admin_username(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
-/// Whether `email` is the protected break-glass admin (case-insensitive) — mirrors
-/// `isBreakGlass`. The break-glass admin can never be demoted, disabled, or deleted.
-fn is_break_glass(state: &AppState, email: &str) -> bool {
-    let bg = &state.config.break_glass_admin_email;
-    !bg.is_empty() && bg.eq_ignore_ascii_case(email)
+/// Whether account `id` is the protected break-glass admin: the one
+/// `bootstrap_admin` made, recorded by its id. It can never be demoted,
+/// disabled, wiped or deleted.
+async fn is_break_glass(state: &AppState, id: Uuid) -> AppResult<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT is_break_glass FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?
+            .unwrap_or(false),
+    )
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -73,7 +79,6 @@ fn is_break_glass(state: &AppState, email: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 struct UserRow {
     id: Uuid,
-    email: String,
     username: String,
     storage_quota_bytes: i64,
     storage_used_bytes: i64,
@@ -102,7 +107,6 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     type Row = (
         Uuid,
         String,
-        String,
         i64,
         i64,
         bool,
@@ -110,10 +114,11 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
         bool,
         bool,
         OffsetDateTime,
+        bool,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT id, email, COALESCE(username, ''), storage_quota_bytes, storage_used_bytes,
-                  is_admin, is_active, totp_enabled, is_first_login, created_at
+        r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
+                  is_admin, is_active, totp_enabled, is_first_login, created_at, is_break_glass
            FROM users ORDER BY created_at DESC"#,
     )
     .fetch_all(&state.pool)
@@ -123,11 +128,20 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = rows
         .into_iter()
         .map(
-            |(id, email, username, quota, used, is_admin, is_active, totp, first, created)| {
-                let is_protected = is_break_glass(&state, &email);
+            |(
+                id,
+                username,
+                quota,
+                used,
+                is_admin,
+                is_active,
+                totp,
+                first,
+                created,
+                is_protected,
+            )| {
                 UserRow {
                     id,
-                    email,
                     username,
                     storage_quota_bytes: quota,
                     storage_used_bytes: used,
@@ -144,17 +158,65 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     Ok(Json(users).into_response())
 }
 
+/// A temporary password as the administrator's client registered it
+/// (docs/plans/opaque.md, "Admin temporary passwords"): an OPAQUE record
+/// under a key binding that client drew. The server never sees the password;
+/// at first sign-in the person registers their own under a key binding of
+/// their own.
+#[derive(Debug, Default, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TempRegistration {
+    key_binding: String,
+    #[serde(flatten)]
+    record: crate::handlers::opaque::RecordUpload,
+}
+
+impl TempRegistration {
+    /// The key binding, record and setup id to store.
+    fn checked(&self, state: &AppState) -> AppResult<(String, Vec<u8>, i16)> {
+        if !crate::handlers::auth::is_key_binding(&self.key_binding) {
+            return Err(AppError::bad_request("keyBinding is a lowercase UUID v4"));
+        }
+        let (record, key_id) = self.record.checked(state)?;
+        Ok((self.key_binding.clone(), record, key_id))
+    }
+}
+
+/// Uses an admin-reset grant for `target`, issued to this admin's session
+/// (`reset-grant`), or refuses.
+async fn take_reset_grant(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    token: &str,
+    admin: &AdminUser,
+    target: Uuid,
+) -> AppResult<()> {
+    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    match crate::grants::take(&mut **tx, token, &[crate::grants::Purpose::AdminReset]).await? {
+        Some((_, grant))
+            if grant.user_id == admin_id
+                && grant.target_user_id == Some(target)
+                && grant.session_id == Some(admin.session_id) =>
+        {
+            Ok(())
+        }
+        _ => Err(crate::grants::invalid()),
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateUserRequest {
-    email: String,
     username: String,
-    temp_password: String,
+    /// The temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    setup: TempRegistration,
     storage_quota_bytes: i64,
 }
 
-/// `POST /api/admin/users` — mirrors `CreateUser`. Creates a first-login account with a
-/// temp password; the user establishes their E2EE key material on first login.
+/// `POST /api/admin/users` — creates a first-login account under a temporary
+/// password the administrator's browser derived (the server never sees it);
+/// the user establishes their E2EE key material on first sign-in. It signs in
+/// with its username; no email is asked (a recovery email is the user's own).
 #[utoipa::path(
     post,
     path = "/api/admin/users",
@@ -168,9 +230,7 @@ pub async fn create_user(
     admin: AdminUser,
     Json(mut req): Json<CreateUserRequest>,
 ) -> AppResult<Response> {
-    if req.email.is_empty() || req.temp_password.is_empty() {
-        return Err(AppError::bad_request("email and tempPassword required"));
-    }
+    let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     if req.username.is_empty() {
         return Err(AppError::bad_request("username required"));
     }
@@ -178,20 +238,6 @@ pub async fn create_user(
         return Err(AppError::bad_request(
             "invalid username: must be 3-32 chars, lowercase letters, numbers, _ and -",
         ));
-    }
-    if crate::mail::RESERVED_LOCAL_PARTS.contains(&req.username.as_str()) {
-        return Err(AppError::bad_request(
-            "this username is reserved for the server",
-        ));
-    }
-    if crate::mail::groups::is_group_name(
-        &state.pool,
-        &req.username,
-        &state.config.chat_server_name,
-    )
-    .await?
-    {
-        return Err(AppError::conflict("this username is taken"));
     }
     if req.storage_quota_bytes == 0 {
         // The account's one storage pool, for every app (crate::storage_pool).
@@ -201,39 +247,61 @@ pub async fn create_user(
         return Err(AppError::bad_request("storage quota must be positive"));
     }
 
-    let hash =
-        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
-
+    let mut tx = state.pool.begin().await?;
+    // One account per folded name (docs/plans/username-renames.md). The
+    // break-glass account itself is made by `bootstrap_admin`, not here.
+    if let Err(unavailable) = crate::account_names::available(
+        &mut tx,
+        &state.config.chat_server_name,
+        &state.config.break_glass_admin_username,
+        &req.username,
+        None,
+    )
+    .await?
+    {
+        return Err(unavailable.error());
+    }
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
-               email, username, login_key_hash,
+               username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
                master_key_envelope, recovery_key_envelope,
                drive_private_key_envelope,
                public_key, account_authority_public_key, account_authority_key_id,
                account_incarnation_id, drive_signing_public_key,
-               account_protection_suite, account_protection_salt,
-               argon_memory_kib, argon_iterations, argon_parallelism,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,'','','','','','','','',0,'',0,0,0,false,true,$4)
+           ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',false,true,$6)
            RETURNING id"#,
     )
-    .bind(&req.email)
     .bind(&req.username)
-    .bind(&hash)
+    .bind(&key_binding)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
     .bind(req.storage_quota_bytes)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await;
     let new_id = match res {
         Ok(id) => id,
         Err(e) => return Err(map_insert_conflict(e)),
     };
+    crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
+    if !crate::handlers::mail_keys::create_own_address(
+        &mut tx,
+        &state.config.chat_server_name,
+        new_id,
+        &req.username,
+    )
+    .await?
+    {
+        return Err(AppError::conflict("username already taken"));
+    }
+    tx.commit().await?;
     audit(
         &state.pool,
         &admin.user_id,
         "user.create",
         Some(new_id),
         json!({
-            "email": req.email,
             "username": req.username,
             "storageQuotaBytes": req.storage_quota_bytes,
         }),
@@ -273,20 +341,20 @@ pub async fn update_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Load the target's current state for the break-glass + last-admin guards.
-    let (target_email, target_is_admin, target_is_active): (String, bool, bool) =
-        sqlx::query_as("SELECT email, is_admin, is_active FROM users WHERE id = $1")
-            .bind(target)
-            .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten()
-            .ok_or_else(|| AppError::not_found("not found"))?;
+    let (target_username, target_is_admin, target_is_active): (String, bool, bool) =
+        sqlx::query_as(
+            "SELECT COALESCE(username, ''), is_admin, is_active FROM users WHERE id = $1",
+        )
+        .bind(target)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("not found"))?;
 
     let wants_demote = req.is_admin == Some(false);
     let wants_disable = req.is_active == Some(false);
 
     // Break-glass admin is immutable: never demote or disable it.
-    if is_break_glass(&state, &target_email) && (wants_demote || wants_disable) {
+    if is_break_glass(&state, target).await? && (wants_demote || wants_disable) {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -297,8 +365,7 @@ pub async fn update_user(
         )
         .bind(target)
         .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+        .await?;
         if other_usable == 0 {
             return Err(AppError::bad_request("cannot remove the last admin"));
         }
@@ -316,12 +383,20 @@ pub async fn update_user(
             .map_err(|_| AppError::internal("internal error"))?;
     }
     if let Some(a) = req.is_active {
+        let mut tx = state.pool.begin().await?;
+        if !a {
+            // The shared mailboxes it signs for need a new signer: it may
+            // still hold the seed (docs/plans/mail-groups.md).
+            crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
+        }
         sqlx::query("UPDATE users SET is_active = $1 WHERE id = $2")
             .bind(a)
             .bind(target)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await
-            .map_err(|_| AppError::internal("internal error"))?; // A disabled account keeps no live sign-in anywhere.
+            .map_err(|_| AppError::internal("internal error"))?;
+        tx.commit().await?;
+        // A disabled account keeps no live sign-in anywhere.
         if !a {
             crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
             // Their public links are down with them (link_reports::ensure_link_up):
@@ -361,7 +436,7 @@ pub async fn update_user(
         &admin.user_id,
         "user.update",
         Some(target),
-        json!({"email": target_email, "changes": changes}),
+        json!({"username": target_username, "changes": changes}),
     )
     .await;
     Ok(Json(json!({"message": "updated"})).into_response())
@@ -384,15 +459,13 @@ pub async fn delete_user(
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     // Break-glass admin can never be deleted.
-    let (target_email, target_username): (String, Option<String>) =
-        sqlx::query_as("SELECT email, username FROM users WHERE id = $1")
+    let target_username: Option<String> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
-            .await
-            .ok()
-            .flatten()
+            .await?
             .ok_or_else(|| AppError::not_found("not found"))?;
-    if is_break_glass(&state, &target_email) {
+    if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
 
@@ -405,10 +478,32 @@ pub async fn delete_user(
     purge_mail(&state, target).await?;
     hand_over_contributions(&state.pool, target).await?;
 
+    // Its names stay held, receiving nothing, until the hold ends: nobody
+    // takes a deleted person's name, nor their mail, before then
+    // (docs/plans/username-renames.md).
+    let (hold_days, _) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE account_names SET state = 'held', receive_until = now(),
+                free_at = now() + make_interval(days => $2::int)
+          WHERE user_id = $1",
+    )
+    .bind(target)
+    .bind(hold_days as i32)
+    .execute(&mut *tx)
+    .await?;
+    // Its account id is never given to anyone again (docs/plans/account-ids.md).
+    crate::account_ids::retire(&mut tx, target).await?;
+    // The shared mailboxes it signed for need a new signer: its signing
+    // shares go with it, but it may still hold the seed.
+    crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
     let res = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(target)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await;
+    if res.as_ref().is_ok_and(|r| r.rows_affected() > 0) {
+        tx.commit().await?;
+    }
     match res {
         Ok(r) if r.rows_affected() > 0 => {
             audit(
@@ -417,7 +512,6 @@ pub async fn delete_user(
                 "user.delete",
                 Some(target),
                 json!({
-                    "email": target_email,
                     "username": target_username.unwrap_or_default(),
                 }),
             )
@@ -608,14 +702,15 @@ pub async fn force_disable_2fa(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let email: Option<String> = sqlx::query_scalar(
-        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1 RETURNING email",
+    let username: Option<String> = sqlx::query_scalar(
+        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1
+         RETURNING COALESCE(username, '')",
     )
     .bind(target)
     .fetch_optional(&state.pool)
     .await
     .map_err(|_| AppError::internal("internal error"))?;
-    let Some(email) = email else {
+    let Some(username) = username else {
         return Err(AppError::not_found("not found"));
     };
     audit(
@@ -623,7 +718,7 @@ pub async fn force_disable_2fa(
         &admin.user_id,
         "user.2fa_disable",
         Some(target),
-        json!({"email": email}),
+        json!({"username": username}),
     )
     .await;
     Ok(Json(json!({"message": "2fa disabled"})).into_response())
@@ -704,17 +799,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
     responses((status = 200, description = "Site settings", body = crate::models::AdminSettingsResponse))
 )]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT key, value FROM site_settings WHERE key IN ('registration_enabled')",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|_| AppError::internal("internal error"))?;
-    let registration_enabled = rows
-        .iter()
-        .find(|(key, _)| key == "registration_enabled")
-        .map(|(_, value)| value != "false")
-        .unwrap_or(true);
+    let registration_mode = crate::registration::mode(&state).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -728,11 +813,15 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     )
     .await?;
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
+    let (name_hold_days, old_address_receive_days) =
+        crate::site_settings::name_holds(&state.pool, &state.config).await?;
     Ok(Json(json!({
-        "registrationEnabled": registration_enabled,
+        "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
+        "nameHoldDays": name_hold_days,
+        "oldAddressReceiveDays": old_address_receive_days,
     }))
     .into_response())
 }
@@ -740,10 +829,12 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
-    registration_enabled: Option<bool>,
+    registration_mode: Option<crate::registration::RegistrationMode>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
+    name_hold_days: Option<i64>,
+    old_address_receive_days: Option<i64>,
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -760,10 +851,12 @@ pub async fn update_settings(
     admin: AdminUser,
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
-    if req.registration_enabled.is_none()
+    if req.registration_mode.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
+        && req.name_hold_days.is_none()
+        && req.old_address_receive_days.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -786,16 +879,19 @@ pub async fn update_settings(
             .map_err(AppError::bad_request)?;
     }
 
-    let mut transaction = state.pool.begin().await?;
-    if let Some(enabled) = req.registration_enabled {
-        sqlx::query(
-            "INSERT INTO site_settings (key, value) VALUES ('registration_enabled', $1) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    // The two holds are checked together, each against the other's new or
+    // current value.
+    if req.name_hold_days.is_some() || req.old_address_receive_days.is_some() {
+        let (hold, receive) = crate::site_settings::name_holds(&state.pool, &state.config).await?;
+        crate::site_settings::validate_name_holds(
+            req.name_hold_days.unwrap_or(hold),
+            req.old_address_receive_days.unwrap_or(receive),
         )
-        .bind(if enabled { "true" } else { "false" })
-        .execute(&mut *transaction)
-        .await
-        .map_err(|_| AppError::internal("internal error"))?;
+        .map_err(AppError::bad_request)?;
+    }
+    let mut transaction = state.pool.begin().await?;
+    if let Some(mode) = req.registration_mode {
+        crate::registration::set_mode(&mut transaction, mode).await?;
     }
     for (key, value) in [
         (
@@ -809,6 +905,11 @@ pub async fn update_settings(
         (
             crate::site_settings::CHAT_MEDIA_DELIVERY_RETENTION_DAYS,
             req.chat_media_delivery_retention_days,
+        ),
+        (crate::site_settings::NAME_HOLD_DAYS, req.name_hold_days),
+        (
+            crate::site_settings::OLD_ADDRESS_RECEIVE_DAYS,
+            req.old_address_receive_days,
         ),
     ] {
         let Some(value) = value else { continue };
@@ -829,10 +930,12 @@ pub async fn update_settings(
         "settings.update",
         None,
         json!({
-            "registrationEnabled": req.registration_enabled,
+            "registrationMode": req.registration_mode,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
+            "nameHoldDays": req.name_hold_days,
+            "oldAddressReceiveDays": req.old_address_receive_days,
         }),
     )
     .await;
@@ -1237,7 +1340,7 @@ pub async fn get_federation_control_plane(
                 continue;
             }
             match feature.feature.as_str() {
-                "chat" => capabilities.push("chat.v1".to_owned()),
+                "chat" => capabilities.push("chat.v2".to_owned()),
                 "drive" => capabilities.push("drive.v1".to_owned()),
                 _ => {}
             }
@@ -1637,7 +1740,7 @@ async fn retry_peer_resolution(state: &AppState, domain: &str) -> Result<(), Str
     federation.evict_peer_cache(domain).await;
     let mut errors = Vec::new();
     for feature in [
-        kutup_federation_proto::FederationFeature::ChatV1,
+        kutup_federation_proto::FederationFeature::ChatV2,
         kutup_federation_proto::FederationFeature::DriveV1,
     ] {
         match federation
@@ -1728,10 +1831,15 @@ async fn wake_federation_outbox(pool: &PgPool, domain: Option<&str>) -> AppResul
     Ok(())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RotateTempPasswordRequest {
-    temp_password: String,
+    /// An admin-reset grant for this account (`reset-grant`).
+    grant: String,
+    /// The new temporary password, registered by the administrator's client.
+    #[serde(flatten)]
+    setup: TempRegistration,
 }
 
 /// `POST /api/admin/users/{id}/rotate-temp-password` — replaces the temp password of an
@@ -1758,17 +1866,15 @@ pub async fn rotate_temp_password(
     Path(id): Path<String>,
     Json(req): Json<RotateTempPasswordRequest>,
 ) -> AppResult<Response> {
-    if req.temp_password.is_empty() {
-        return Err(AppError::bad_request("tempPassword required"));
-    }
+    let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
 
     let row: Option<(String, bool)> =
-        sqlx::query_as("SELECT email, is_first_login FROM users WHERE id = $1")
+        sqlx::query_as("SELECT COALESCE(username, ''), is_first_login FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
-    let Some((email, is_first_login)) = row else {
+    let Some((username, is_first_login)) = row else {
         return Err(AppError::not_found("not found"));
     };
     if !is_first_login {
@@ -1778,31 +1884,123 @@ pub async fn rotate_temp_password(
         ));
     }
 
-    let hash =
-        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
-    sqlx::query(
-        "UPDATE users SET login_key_hash = $1, updated_at = NOW() WHERE id = $2 AND is_first_login",
+    let mut tx = state.pool.begin().await?;
+    take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
+    let rotated = sqlx::query(
+        "UPDATE users SET key_binding = $2, opaque_record = $3, opaque_suite = $4,
+                opaque_server_key_id = $5, updated_at = NOW()
+          WHERE id = $1 AND is_first_login",
     )
-    .bind(&hash)
     .bind(target)
-    .execute(&state.pool)
+    .bind(&key_binding)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(map_insert_conflict)?;
+    // Set up in between: nothing changes (the grant stays unused with the
+    // rolled-back transaction).
+    if rotated.rows_affected() != 1 {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "user has completed setup; only the user can reset their password (recovery phrase), or wipe the account",
+        ));
+    }
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::AdminReset,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
     .await?;
+    tx.commit().await?;
 
     audit(
         &state.pool,
         &admin.user_id,
         "user.rotate_temp_password",
         Some(target),
-        json!({"email": email}),
+        json!({"username": username}),
     )
     .await;
     Ok(Json(json!({"message": "temp password rotated"})).into_response())
 }
 
-#[derive(Debug, Default, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResetGrantRequest {
+    /// The admin's own grant from a reauth with `for: "adminReset"`.
+    grant: String,
+}
+
+/// `POST /api/admin/users/{id}/reset-grant` — the admin's fresh password
+/// proof (a reauth grant for `adminReset`), exchanged for one bound to this
+/// account: what its temporary password's registration and the reset itself
+/// take. Single use, five minutes, this admin session only.
+#[utoipa::path(
+    post,
+    path = "/api/admin/users/{id}/reset-grant",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Target user id")),
+    request_body = ResetGrantRequest,
+    responses(
+        (status = 200, description = "A grant for this account", body = crate::handlers::opaque::GrantResponse),
+        (status = 403, description = "grantInvalid")
+    )
+)]
+pub async fn reset_grant(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+    Json(req): Json<ResetGrantRequest>,
+) -> AppResult<Response> {
+    let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    let admin_id = Uuid::parse_str(&admin.user_id).map_err(|_| AppError::forbidden("forbidden"))?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(AppError::not_found("not found"));
+    }
+    let mut tx = state.pool.begin().await?;
+    match crate::grants::take(&mut *tx, &req.grant, &[crate::grants::Purpose::AdminReset]).await? {
+        // The admin's own, untargeted, from this session.
+        Some((_, grant))
+            if grant.user_id == admin_id
+                && grant.target_user_id.is_none()
+                && grant.session_id == Some(admin.session_id) => {}
+        _ => return Err(crate::grants::invalid()),
+    }
+    let grant = crate::grants::issue(
+        &mut *tx,
+        crate::grants::Purpose::AdminReset,
+        admin_id,
+        Some(admin.session_id),
+        Some(target),
+        crate::grants::GRANT_MINUTES,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(crate::handlers::opaque::GrantResponse::new(grant)).into_response())
+}
+
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WipeUserRequest {
-    temp_password: String,
+    /// An admin-reset grant for this account (`reset-grant`).
+    grant: String,
+    /// The temporary password it starts again with, registered by the
+    /// administrator's client.
+    #[serde(flatten)]
+    setup: TempRegistration,
 }
 
 /// `POST /api/admin/users/{id}/wipe` — the destructive "reset" for a user who lost both
@@ -1826,22 +2024,33 @@ pub async fn wipe_user(
     Path(id): Path<String>,
     Json(req): Json<WipeUserRequest>,
 ) -> AppResult<Response> {
-    if req.temp_password.is_empty() {
-        return Err(AppError::bad_request("tempPassword required"));
-    }
+    let (key_binding, opaque_record, opaque_server_key_id) = req.setup.checked(&state)?;
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
+    // The admin's fresh proof, for this account, used before anything is
+    // destroyed.
+    let mut tx = state.pool.begin().await?;
+    take_reset_grant(&mut tx, &req.grant, &admin, target).await?;
+    tx.commit().await?;
 
-    let row: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT email, username FROM users WHERE id = $1")
+    let row: Option<Option<String>> =
+        sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
             .bind(target)
             .fetch_optional(&state.pool)
             .await?;
-    let Some((email, username)) = row else {
+    let Some(username) = row else {
         return Err(AppError::not_found("not found"));
     };
-    if is_break_glass(&state, &email) {
+    if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
+
+    // 0. Nobody signed in to it watches the purges below, nor acts on a grant
+    //    meanwhile: its sign-ins and grants end first (and again, with the
+    //    reset, for any sign-in made in between).
+    let mut tx = state.pool.begin().await?;
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    tx.commit().await?;
 
     // The replacement recovery setup must never inherit ciphertext encrypted
     // under the lost account master key.
@@ -1851,12 +2060,9 @@ pub async fn wipe_user(
     // 1. Purge every owned folder and file, trashed ones too.
     purge_owned_drive(&state, target).await?;
 
-    // 2. Everything keyed to the lost key material: collab signing devices, incoming
-    //    federated shares (their wrapped keys are unreachable), local shares received.
-    sqlx::query("DELETE FROM user_devices WHERE user_id = $1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
+    // 2. Everything keyed to the lost key material: incoming federated shares
+    //    (their wrapped keys are unreachable), local shares received. (Collab
+    //    devices go with the keys, below.)
     sqlx::query("DELETE FROM federated_incoming_shares WHERE user_id = $1")
         .bind(target)
         .execute(&state.pool)
@@ -1891,36 +2097,80 @@ pub async fn wipe_user(
         .execute(&state.pool)
         .await?;
 
-    // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password.
-    let hash =
-        bcrypt::hash(&req.temp_password, 10).map_err(|_| AppError::internal("internal error"))?;
+    // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password,
+    //    and with them the old incarnation's collab devices, in one step. Revoked
+    //    devices stay, as tombstones: their keys never register again. Their
+    //    revocations are not told to other servers any more (those take only the
+    //    current incarnation's), nor need be: a server elsewhere stops taking the
+    //    old incarnation's devices once the share is issued to the new one. Every
+    //    grant and sign-in it ends ends with it, and the owner sees it happened
+    //    (the event outlives the incarnation).
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM user_devices WHERE user_id = $1 AND revoked_at_ms IS NULL")
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
+    // The account head chain starts again with the new incarnation, and no
+    // listed value sealed under the old keys stays to be listed in it
+    // (docs/plans/rollback-protection.md, "Account reset"): contacts, labels,
+    // filters and Pass secrets go; custom folders keep their mail and lose
+    // their names, until their owner names them again. The identity pins
+    // were sealed under the old master key too: nothing can open them now.
+    for statement in [
+        "DELETE FROM account_heads WHERE user_id = $1",
+        "DELETE FROM identity_pins WHERE user_id = $1",
+        "DELETE FROM contacts WHERE user_id = $1",
+        "DELETE FROM mail_labels WHERE user_id = $1",
+        "DELETE FROM mail_filters WHERE user_id = $1",
+        "DELETE FROM pass_vault_secrets WHERE user_id = $1",
+        "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
+        // Old names held by the old incarnation stop receiving now: no one
+        // holds the keys their mail would be sealed to. They are freed on
+        // their own dates; the current name waits for the new incarnation,
+        // which complete-setup records (docs/plans/username-renames.md).
+        "UPDATE mail_addresses SET state = 'closed', receive_until = now()
+          WHERE user_id = $1 AND state = 'receiving'",
+        "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+        "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
+    ] {
+        sqlx::query(statement)
+            .bind(target)
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',
                drive_private_key_envelope = '',
                public_key = '', account_authority_public_key = '',
                account_authority_key_id = '', account_incarnation_id = '',
-               drive_signing_public_key = '', account_protection_suite = 0,
-               account_protection_salt = '', argon_memory_kib = 0,
-               argon_iterations = 0, argon_parallelism = 0,
+               drive_signing_public_key = '',
                recovery_key_verifier = '', drive_key_binding = NULL,
-               login_key_hash = $1, totp_secret = NULL, totp_enabled = false,
+               key_binding = $1, opaque_record = $3, opaque_suite = $4,
+               opaque_server_key_id = $5,
+               totp_secret = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
     )
-    .bind(&hash)
+    .bind(&key_binding)
     .bind(target)
-    .execute(&state.pool)
+    .bind(&opaque_record)
+    .bind(kutup_crypto::opaque::SUITE as i16)
+    .bind(opaque_server_key_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(map_insert_conflict)?;
+    crate::grants::end_all(&mut tx, target).await?;
+    crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::AccountReset,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
     .await?;
-
-    // Its pins were sealed under the old master key: nothing can open them now.
-    sqlx::query("DELETE FROM identity_pins WHERE user_id = $1")
-        .bind(target)
-        .execute(&state.pool)
-        .await?;
-
-    // The wiped keys are gone; so is every session that held them.
-    crate::sessions::revoke_all_for_user(&state.pool, target, None).await?;
+    tx.commit().await?;
 
     // 4. Recompute quota: uploads into OTHER people's folders survive (they're the
     //    folder-owner's data view) and still count against this user.
@@ -1941,7 +2191,7 @@ pub async fn wipe_user(
         &admin.user_id,
         "user.wipe",
         Some(target),
-        json!({"email": email, "username": username.unwrap_or_default()}),
+        json!({"username": username.unwrap_or_default()}),
     )
     .await;
     Ok(Json(json!({"message": "account wiped"})).into_response())
@@ -1966,13 +2216,12 @@ struct ActivityEntry {
     id: i64,
     action: String,
     admin_user_id: Uuid,
-    /// The acting admin's live identity — `null` once that account is deleted.
-    admin_email: Option<String>,
+    /// The acting admin's live username — `null` once that account is deleted.
     admin_username: Option<String>,
     target_user_id: Option<Uuid>,
-    /// The target's live email — `null` once deleted; the payload keeps the
-    /// at-action-time snapshot.
-    target_email: Option<String>,
+    /// The target's live username — `null` once deleted; the payload keeps
+    /// the at-action-time snapshot.
+    target_username: Option<String>,
     payload: serde_json::Value,
     #[serde(with = "time::serde::rfc3339")]
     occurred_at: OffsetDateTime,
@@ -2042,7 +2291,7 @@ pub async fn activity_export(
     let limit = q.limit.unwrap_or(1000).clamp(1, 5000);
     let entries = load_activity_entries(&state.pool, &q, limit).await?;
     let mut csv = String::from(
-        "id,occurred_at,action,admin_user_id,admin_email,admin_username,target_user_id,target_email,payload\n",
+        "id,occurred_at,action,admin_user_id,admin_username,target_user_id,target_username,payload\n",
     );
     for entry in entries {
         let values = [
@@ -2053,13 +2302,12 @@ pub async fn activity_export(
                 .map_err(|_| AppError::internal("could not format audit timestamp"))?,
             entry.action,
             entry.admin_user_id.to_string(),
-            entry.admin_email.unwrap_or_default(),
             entry.admin_username.unwrap_or_default(),
             entry
                 .target_user_id
                 .map(|id| id.to_string())
                 .unwrap_or_default(),
-            entry.target_email.unwrap_or_default(),
+            entry.target_username.unwrap_or_default(),
             serde_json::to_string(&entry.payload)
                 .map_err(|_| AppError::internal("could not serialize audit payload"))?,
         ];
@@ -2106,15 +2354,14 @@ async fn load_activity_entries(
         String,
         Uuid,
         Option<String>,
-        Option<String>,
         Option<Uuid>,
         Option<String>,
         serde_json::Value,
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        r#"SELECT l.id, l.action, l.admin_user_id, a.email, a.username,
-                  l.target_user_id, t.email, l.payload, l.occurred_at
+        r#"SELECT l.id, l.action, l.admin_user_id, a.username,
+                  l.target_user_id, t.username, l.payload, l.occurred_at
            FROM admin_audit_log l
            LEFT JOIN users a ON a.id = l.admin_user_id
            LEFT JOIN users t ON t.id = l.target_user_id
@@ -2144,15 +2391,14 @@ async fn load_activity_entries(
     Ok(rows
         .into_iter()
         .map(
-            |(id, action, admin_id, a_email, a_username, target_id, t_email, payload, at)| {
+            |(id, action, admin_id, a_username, target_id, t_username, payload, at)| {
                 ActivityEntry {
                     id,
                     action,
                     admin_user_id: admin_id,
-                    admin_email: a_email,
                     admin_username: a_username,
                     target_user_id: target_id,
-                    target_email: t_email,
+                    target_username: t_username,
                     payload,
                     occurred_at: at,
                 }
@@ -2181,7 +2427,7 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
             if db.constraint().unwrap_or("").contains("username") {
                 return AppError::conflict("username already taken");
             }
-            return AppError::conflict("email already registered");
+            return AppError::conflict("already registered");
         }
     }
     AppError::internal("internal error")

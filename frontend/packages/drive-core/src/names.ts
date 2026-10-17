@@ -1,5 +1,4 @@
 import { isAxiosError } from 'axios'
-import { renameFileRecordV1, renameOwnedCollectionV1 } from '@kutup/crypto'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import {
   contentHash as contentHashOf,
@@ -9,10 +8,8 @@ import {
 } from '@kutup/crypto/driveNames'
 import { UploadNameTaken } from '@kutup/files/upload/streamUpload'
 import api from '@kutup/session/client'
-import { loadFolderFiles } from './files'
 import { folderKeyAt, type KeyringFolder } from './keyring'
-import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
-import { rekeyFile } from './rekey'
+import { folderLocation, type DriveFile, type Folder } from './model'
 
 /**
  * Names unique in a folder (docs/plans/drive-unique-names.md). Every write
@@ -52,6 +49,17 @@ export const atTopLevel = (masterKey: Uint8Array): NamePlace => ({ kind: 'top', 
 /** The hash `name` is kept unique by in `place`. */
 export async function nameHashIn(place: NamePlace, name: string): Promise<string> {
   return nameHashOf(await hashKey(place), name)
+}
+
+/**
+ * A hash for a name nobody can compute: a file renamed by someone without
+ * its folder's key (a file shared by itself). The name stays unique only
+ * by chance until the owner renames or moves it — the owner may see two
+ * items with the same name meanwhile, as Proton's keyless renames do.
+ */
+export function randomNameHash(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** The hash a file's content is recognised by in `folder`, from its SHA-256 (base64). */
@@ -117,6 +125,59 @@ export function freeName(name: string, taken: ReadonlySet<string>): string {
   }
 }
 
+/**
+ * `name`, then `name (2)`, `name (3)`, … (a file's extension stays at the
+ * end; a name already ending in a number in brackets counts on from it):
+ * the names `findAvailableName` tries, `count` of them from the `skip`th.
+ */
+export function numberedNames(name: string, skip: number, count: number): string[] {
+  const dot = name.lastIndexOf('.')
+  const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+  const numbered = /^(.*) \((\d+)\)$/.exec(stem)
+  const base = numbered ? numbered[1] : stem
+  const first = numbered ? Number(numbered[2]) : 1
+  const names: string[] = []
+  for (let i = skip; i < skip + count; i++) {
+    const n = first + i
+    names.push(n === first ? name : `${base} (${n})${extension}`)
+  }
+  return names
+}
+
+/** The most hashes one `available-hashes` call takes (Proton's batch). */
+export const AVAILABLE_BATCH = 10
+/** How many batches `findAvailableName` tries before giving up. */
+const MAX_BATCHES = 100
+
+/** Which of `hashes` (at most 10) are free in `place`, as the server says. */
+export async function availableHashes(place: NamePlace, hashes: string[]): Promise<Set<string>> {
+  const path = place.kind === 'top' ? '/drive/top-level-available-hashes' : `/collections/${place.folder.id}/available-hashes`
+  const { data } = await api.post<{ available: string[] }>(path, { hashes })
+  return new Set(data.available)
+}
+
+/**
+ * The first of `name`, `name (2)`, … free in `place`, with its hash: the
+ * server is asked ten at a time (Proton's `findAvailableName`), so names
+ * this device has not listed count too. With `skipName`, `name` itself is
+ * known to be taken and is not asked about.
+ */
+export async function findAvailableName(
+  place: NamePlace,
+  name: string,
+  opts: { skipName?: boolean } = {},
+): Promise<{ name: string; hash: string }> {
+  for (let batch = 0; batch < MAX_BATCHES; batch++) {
+    const skip = batch * AVAILABLE_BATCH + (opts.skipName ? 1 : 0)
+    const names = numberedNames(name, skip, AVAILABLE_BATCH)
+    const hashes = await Promise.all(names.map((n) => nameHashIn(place, n)))
+    const free = await availableHashes(place, hashes)
+    const at = hashes.findIndex((h) => free.has(h))
+    if (at >= 0) return { name: names[at], hash: hashes[at] }
+  }
+  throw new Error('no free name found')
+}
+
 /** `name` without the ` (n)` `freeName` adds before its extension. */
 export function unnumberedName(name: string): string {
   const dot = name.lastIndexOf('.')
@@ -143,8 +204,8 @@ export type UploadPlan =
   | { kind: 'free' }
   /** A file with the name and the same content is there: nothing to send. */
   | { kind: 'same'; holder: DriveFile }
-  /** Something else holds the name: the person chooses. */
-  | { kind: 'taken'; holder: { kind: 'file'; file: DriveFile } | { kind: 'folder'; folder: Folder } }
+  /** Something else holds the name: the person chooses. `sha256`: the local file's, when it was read to compare. */
+  | { kind: 'taken'; holder: { kind: 'file'; file: DriveFile } | { kind: 'folder'; folder: Folder }; sha256?: string }
 
 /**
  * Whether `file` can go into `folder` under its name. A file with that name
@@ -162,6 +223,7 @@ export async function planUpload(folder: Folder, file: File, listing: FolderList
   if (holder.contentHash && holder.size === file.size && folder.key) {
     const digest = await hashBlob(file, signal)
     if ((await contentHashIn(folder, digest)) === holder.contentHash) return { kind: 'same', holder }
+    return { kind: 'taken', holder: { kind: 'file', file: holder }, sha256: digest }
   }
   return { kind: 'taken', holder: { kind: 'file', file: holder } }
 }
@@ -184,9 +246,9 @@ export async function recordContentHash(folder: Folder, fileId: string, contentS
 /**
  * Upload `file` into `folder` under its name, sent with the name's hash;
  * if the server finds the name taken, under the next free name
- * (`name (2)`…) instead. For uploads that never replace anything (a photo
- * whose camera reused a name, a new document), so nothing is asked. Its
- * content hash is recorded once it is stored.
+ * (`name (2)`…, from `findAvailableName`) instead. For uploads that never
+ * replace anything (a photo whose camera reused a name, a new document),
+ * so nothing is asked. Its content hash is recorded once it is stored.
  */
 export async function uploadUnderFreeName<T extends { fileId: string; contentSha256: string | null }>(
   folder: Folder,
@@ -194,99 +256,17 @@ export async function uploadUnderFreeName<T extends { fileId: string; contentSha
   upload: (file: File, nameHash: string) => Promise<T>,
 ): Promise<T> {
   let attempt = file
-  const tried = new Set<string>()
-  for (;;) {
+  let hash = await nameHashIn(inFolder(folder), file.name)
+  for (let tries = 0; ; tries++) {
     try {
-      const uploaded = await upload(attempt, await nameHashIn(inFolder(folder), attempt.name))
+      const uploaded = await upload(attempt, hash)
       await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)
       return uploaded
     } catch (error) {
-      if (!asNameTaken(error) || tried.size >= 5) throw error
-      tried.add(canonicalName(attempt.name))
-      const taken = namesIn(await loadFolderFiles(folder), [])
-      for (const name of tried) taken.add(name)
-      attempt = new File([file], freeName(file.name, taken), { type: file.type, lastModified: file.lastModified })
+      if (!asNameTaken(error) || tries >= 3) throw error
+      const free = await findAvailableName(inFolder(folder), file.name, { skipName: true })
+      hash = free.hash
+      attempt = new File([file], free.name, { type: file.type, lastModified: file.lastModified })
     }
   }
-}
-
-/** The most items the server fills in at once. */
-const FILL_BATCH = 500
-
-interface Pending {
-  kind: 'file' | 'folder'
-  id: string
-  name: string
-  createdAt: string
-}
-
-/**
- * Items made before names were kept unique (or by a client that sent no
- * hash) get their hashes, oldest first; one whose name an earlier item
- * holds is renamed `name (2)` and takes that name's hash. Only the folder's
- * owner does this — they can rename everything in it. Quietly gives up on
- * anything it cannot do: the next visit tries again.
- *
- * `place` is the folder the items are in, or the top level for the owner's
- * top-level folders (then `files` is empty).
- */
-export async function fillInNames(
-  place: NamePlace,
-  files: DriveFile[],
-  subfolders: Folder[],
-  ownerUserId: string,
-  folderForFiles: Folder | null,
-): Promise<boolean> {
-  const pending: Pending[] = [
-    ...files.filter((f) => !f.nameHash && f.name).map((f) => ({ kind: 'file' as const, id: f.id, name: f.name!, createdAt: f.createdAt })),
-    ...subfolders
-      .filter((f) => !f.nameHash && f.name && f.source === 'owned')
-      .map((f) => ({ kind: 'folder' as const, id: f.id, name: f.name!, createdAt: f.createdAt })),
-  ].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  if (pending.length === 0) return false
-  const path = place.kind === 'top' ? '/drive/top-level-name-hashes' : `/collections/${place.folder.id}/name-hashes`
-  const clashing: Pending[] = []
-  for (let at = 0; at < pending.length; at += FILL_BATCH) {
-    const batch = pending.slice(at, at + FILL_BATCH)
-    const withHashes = await Promise.all(batch.map(async (item) => ({ item, nameHash: await nameHashIn(place, item.name) })))
-    const { data } = await api.post<{ clashes: { id: string }[] }>(path, {
-      files: withHashes.filter((x) => x.item.kind === 'file').map((x) => ({ id: x.item.id, nameHash: x.nameHash })),
-      folders: withHashes.filter((x) => x.item.kind === 'folder').map((x) => ({ id: x.item.id, nameHash: x.nameHash })),
-    })
-    const clashed = new Set(data.clashes.map((c) => c.id))
-    clashing.push(...batch.filter((item) => clashed.has(item.id)))
-  }
-  if (clashing.length === 0) return true
-  const taken = namesIn(files, subfolders)
-  for (const item of clashing) {
-    const name = freeName(item.name, taken)
-    taken.add(canonicalName(name))
-    const nameHash = await nameHashIn(place, name)
-    try {
-      if (item.kind === 'file') {
-        const listed = files.find((f) => f.id === item.id)
-        if (!listed || !folderForFiles) continue
-        const file = await rekeyFile(folderForFiles, listed)
-        if (!file.fileKey) continue
-        const next = await renameFileRecordV1(
-          { id: file.id, keyGeneration: file.keyGeneration, metadataRevision: file.metadataRevision },
-          file.fileKey,
-          fileMetadataOf(file, { name }),
-        )
-        await api.put(`/files/${file.id}`, { ...next, nameHash })
-      } else {
-        const folder = subfolders.find((f) => f.id === item.id)
-        if (!folder?.key) continue
-        const next = await renameOwnedCollectionV1(
-          { id: folder.id, ownerUserId, keyEpoch: folder.keyEpoch, nameRevision: folder.nameRevision },
-          folder.key,
-          name,
-        )
-        await api.put(`/collections/${folder.id}`, { ...next, nameHash })
-      }
-    } catch (error) {
-      console.warn('names: could not rename a duplicate', error)
-    }
-  }
-  return true
 }

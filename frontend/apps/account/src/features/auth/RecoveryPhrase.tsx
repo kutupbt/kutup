@@ -16,18 +16,19 @@ import { normalizeMnemonic } from './flows'
  */
 export function ShowRecoveryPhrase({
   mnemonic,
-  email,
+  account,
   onContinue,
 }: {
   mnemonic: string
-  email: string
+  /** The account the phrase belongs to (its username), named in the saved file. */
+  account: string
   onContinue: () => void
 }) {
   const { t } = useTranslation()
   const words = mnemonic.trim().split(/\s+/)
 
   function download() {
-    const text = `${t('recoveryPhrase.fileHeader', { email })}\n\n${words
+    const text = `${t('recoveryPhrase.fileHeader', { account })}\n\n${words
       .map((word, i) => `${i + 1}. ${word}`)
       .join('\n')}\n`
     const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))

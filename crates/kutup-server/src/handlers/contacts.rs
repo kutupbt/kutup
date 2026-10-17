@@ -17,10 +17,11 @@ use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::account_heads::{self, HeadOnly, NextHead};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
-use crate::AppState;
+use crate::{revisions, AppState};
 
 /// Contacts one import may carry, all or nothing.
 const MAX_IMPORT: usize = 500;
@@ -88,6 +89,9 @@ struct Checked {
     summary_text: String,
     signature: Vec<u8>,
     card: Vec<u8>,
+    /// The card's revision (its header's), which the summary's signature
+    /// binds too.
+    revision: i64,
 }
 
 impl Checked {
@@ -96,42 +100,45 @@ impl Checked {
     }
 }
 
-/// The caller's account (`username@server`) and authority key.
-async fn account_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
-    let (username, authority): (Option<String>, String) =
-        sqlx::query_as("SELECT username, account_authority_public_key FROM users WHERE id = $1")
+/// The caller's key binding (which contact summaries bind) and authority key.
+async fn binding_of(state: &AppState, user_id: Uuid) -> AppResult<(String, [u8; 32])> {
+    let (binding, authority): (Option<String>, String) =
+        sqlx::query_as("SELECT key_binding, account_authority_public_key FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
-    let username = username
-        .ok_or_else(|| AppError::bad_request("choose a username before adding contacts"))?;
+    let binding = binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))?;
     let authority = STANDARD
         .decode(&authority)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| AppError::internal("account authority key is invalid"))?;
-    Ok((
-        format!("{username}@{}", state.config.chat_server_name),
-        authority,
-    ))
+    Ok((binding, authority))
 }
 
-fn check(input: &ContactInput, account: &str, authority: &[u8; 32]) -> AppResult<Checked> {
+fn check(input: &ContactInput, binding: &str, authority: &[u8; 32]) -> AppResult<Checked> {
     let signature = STANDARD
         .decode(&input.signature)
         .map_err(|_| AppError::bad_request("signature must be base64"))?;
     let card = STANDARD
         .decode(&input.card)
         .map_err(|_| AppError::bad_request("card must be base64"))?;
-    let summary =
-        contact_card::verify_summary(input.summary.as_bytes(), &signature, account, authority)
-            .map_err(|error| AppError::bad_request(format!("summary: {error}")))?;
-    contact_card::inspect_card(&card).map_err(|error| AppError::bad_request(error.to_string()))?;
+    let revision = contact_card::inspect_card(&card)
+        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    let summary = contact_card::verify_summary(
+        input.summary.as_bytes(),
+        &signature,
+        binding,
+        revision,
+        authority,
+    )
+    .map_err(|error| AppError::bad_request(format!("summary: {error}")))?;
     Ok(Checked {
         summary,
         summary_text: input.summary.clone(),
         signature,
         card,
+        revision: revisions::stored(revision)?,
     })
 }
 
@@ -206,8 +213,8 @@ async fn insert(
     checked: &Checked,
 ) -> AppResult<Uuid> {
     let id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO contacts (user_id, uid, name, summary, signature, card)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        "INSERT INTO contacts (user_id, uid, name, summary, signature, card, revision)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (user_id, uid) DO NOTHING
          RETURNING id",
     )
@@ -217,6 +224,7 @@ async fn insert(
     .bind(&checked.summary_text)
     .bind(&checked.signature)
     .bind(&checked.card)
+    .bind(checked.revision)
     .fetch_optional(&mut **tx)
     .await?;
     let id = id.ok_or_else(|| AppError::conflict("a contact with this UID already exists"))?;
@@ -299,43 +307,71 @@ pub async fn list(
     path = "/api/contacts",
     tag = "contacts",
     security(("BearerAuth" = [])),
-    request_body = ContactInput,
+    request_body = ContactCreate,
     responses(
         (status = 201, description = "Added", body = ContactRow),
         (status = 400, description = "Not a valid, account-signed contact"),
-        (status = 409, description = "A contact with this UID exists"),
+        (status = 409, description = "A contact with this UID exists, or head_conflict / head_required"),
         (status = 413, description = "Storage full"),
     )
 )]
 pub async fn create(
     State(state): State<AppState>,
     user: AuthUser,
-    Json(input): Json<ContactInput>,
+    Json(input): Json<ContactCreate>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let (account, authority) = account_of(&state, user_id).await?;
-    let checked = check(&input, &account, &authority)?;
+    let head = NextHead::parse(input.head.as_deref())?;
+    let (binding, authority) = binding_of(&state, user_id).await?;
+    let checked = check(
+        &ContactInput {
+            summary: input.summary,
+            signature: input.signature,
+            card: input.card,
+        },
+        &binding,
+        &authority,
+    )?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     charge(&mut tx, user_id, checked.charge()).await?;
     room_for(&mut tx, user_id, 1).await?;
     let id = insert(&mut tx, user_id, &checked).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(fetch(&state, user_id, id).await?)).into_response())
 }
 
-/// A contact replacing the stored one at `revision`.
+/// A contact to add, with the account's next head.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContactCreate {
+    pub summary: String,
+    pub signature: String,
+    pub card: String,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
+}
+
+/// A contact replacing the stored one at `baseRevision`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContactUpdate {
     pub summary: String,
     pub signature: String,
+    /// The new card; its header's revision must be above `baseRevision`.
     pub card: String,
     /// The revision the edit started from.
-    pub revision: i64,
+    pub base_revision: i64,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `PUT /api/contacts/{id}` — replaces a contact (same UID) if nobody changed
-/// it since `revision`.
+/// it since `baseRevision`; `409` with `code: "revision_conflict"` and the
+/// current revision otherwise.
 #[utoipa::path(
     put,
     path = "/api/contacts/{id}",
@@ -356,17 +392,19 @@ pub async fn update(
 ) -> AppResult<Json<ContactRow>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let (account, authority) = account_of(&state, user_id).await?;
+    let head = NextHead::parse(input.head.as_deref())?;
+    let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = check(
         &ContactInput {
             summary: input.summary,
             signature: input.signature,
             card: input.card,
         },
-        &account,
+        &binding,
         &authority,
     )?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let current: Option<(String, i64, i64)> = sqlx::query_as(
         "SELECT uid, revision, (octet_length(summary) + octet_length(card))::bigint FROM contacts
           WHERE id = $1 AND user_id = $2 FOR UPDATE",
@@ -381,13 +419,17 @@ pub async fn update(
     if uid != checked.summary.uid {
         return Err(AppError::bad_request("a contact keeps its UID"));
     }
-    if revision != input.revision {
-        return Err(AppError::conflict("this contact was changed elsewhere"));
+    revisions::check_follows(checked.revision as u64, input.base_revision)?;
+    if revision != input.base_revision {
+        return Err(revisions::conflict(
+            "this contact was changed elsewhere",
+            revision,
+        ));
     }
     charge(&mut tx, user_id, checked.charge() - old_charge).await?;
     sqlx::query(
         "UPDATE contacts SET name = $2, summary = $3, signature = $4, card = $5,
-                revision = revision + 1, updated_at = now()
+                revision = $6, updated_at = now()
           WHERE id = $1",
     )
     .bind(id)
@@ -395,15 +437,25 @@ pub async fn update(
     .bind(&checked.summary_text)
     .bind(&checked.signature)
     .bind(&checked.card)
+    .bind(checked.revision)
     .execute(&mut *tx)
     .await?;
     write_index(&mut tx, user_id, id, &checked.summary).await?;
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(fetch(&state, user_id, id).await?))
 }
 
-async fn delete_ids(state: &AppState, user_id: Uuid, ids: &[Uuid]) -> AppResult<u64> {
+async fn delete_ids(
+    state: &AppState,
+    user_id: Uuid,
+    session: Uuid,
+    ids: &[Uuid],
+    head: Option<&str>,
+) -> AppResult<u64> {
+    let head = NextHead::parse(head)?;
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, session).await?;
     let freed: Option<i64> = sqlx::query_scalar(
         "WITH gone AS (DELETE FROM contacts WHERE user_id = $1 AND id = ANY($2)
                        RETURNING (octet_length(summary) + octet_length(card))::bigint AS bytes)
@@ -417,6 +469,7 @@ async fn delete_ids(state: &AppState, user_id: Uuid, ids: &[Uuid]) -> AppResult<
     if freed > 0 {
         charge(&mut tx, user_id, -freed).await?;
     }
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(freed as u64)
 }
@@ -428,16 +481,26 @@ async fn delete_ids(state: &AppState, user_id: Uuid, ids: &[Uuid]) -> AppResult<
     tag = "contacts",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "Contact id")),
+    request_body(content = HeadOnly, description = "The next head, once the account keeps one"),
     responses((status = 204, description = "Deleted"))
 )]
 pub async fn delete(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    body: Option<Json<HeadOnly>>,
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    delete_ids(&state, user_id, &[id]).await?;
+    let head = body.and_then(|Json(body)| body.head);
+    delete_ids(
+        &state,
+        user_id,
+        user.session.session_id,
+        &[id],
+        head.as_deref(),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -445,6 +508,9 @@ pub async fn delete(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeleteContacts {
     pub ids: Vec<String>,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// `POST /api/contacts/delete` — deletes several contacts.
@@ -470,7 +536,14 @@ pub async fn delete_many(
         .iter()
         .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("contact id is invalid")))
         .collect::<AppResult<Vec<_>>>()?;
-    delete_ids(&state, user_id, &ids).await?;
+    delete_ids(
+        &state,
+        user_id,
+        user.session.session_id,
+        &ids,
+        input.head.as_deref(),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -478,6 +551,9 @@ pub async fn delete_many(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportContacts {
     pub contacts: Vec<ContactInput>,
+    /// One next head for the whole batch, once the account keeps one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -507,19 +583,22 @@ pub async fn import(
     if input.contacts.is_empty() || input.contacts.len() > MAX_IMPORT {
         return Err(AppError::bad_request("import 1 to 500 contacts at once"));
     }
-    let (account, authority) = account_of(&state, user_id).await?;
+    let head = NextHead::parse(input.head.as_deref())?;
+    let (binding, authority) = binding_of(&state, user_id).await?;
     let checked = input
         .contacts
         .iter()
-        .map(|contact| check(contact, &account, &authority))
+        .map(|contact| check(contact, &binding, &authority))
         .collect::<AppResult<Vec<_>>>()?;
     let total: i64 = checked.iter().map(Checked::charge).sum();
     let mut tx = state.pool.begin().await?;
+    let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     charge(&mut tx, user_id, total).await?;
     room_for(&mut tx, user_id, checked.len()).await?;
     for contact in &checked {
         insert(&mut tx, user_id, contact).await?;
     }
+    account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(ImportResult {
         imported: checked.len(),

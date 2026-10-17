@@ -9,7 +9,8 @@
   "boot": {
     "opening": "Depo'nuz açılıyor…",
     "failedTitle": "Depo açılamadı",
-    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin."
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden giriş tamamlanamadı. Bağlantınızı kontrol edip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları siz oturum açtıktan sonra sunucuda değişti. Yeniden oturum açın."
   },
   "nav": {
     "myFiles": "Dosyalarım",
@@ -158,8 +159,8 @@
     "share": {
       "title": "“{{name}}” paylaş",
       "description": "Paylaştığınız kişiler bu klasörün anahtarının kendilerine mühürlenmiş bir kopyasını alır. Alt klasörler ayrıca paylaşılır.",
-      "recipient": "E-posta ya da Kutup adresi",
-      "recipientHint": "Bu sunucudaki ya da başka sunucudaki biri için Kutup adresi (kullanici@sunucu) ya da bu sunucudaki birinin e-postası.",
+      "recipient": "Kutup adresi",
+      "recipientHint": "Kutup adresi (kullanici@sunucu), bu sunucuda ya da başka bir sunucuda.",
       "canUpload": "Dosya ekleyebilir ve düzenleyebilir",
       "canUploadHint": "Bu olmadan yalnızca görüntüleyebilirler. Ekledikleri kendi depolama alanlarından düşer.",
       "quota": "Yükleme sınırı (GiB)",
@@ -231,8 +232,6 @@
       "link": "Herkese açık bağlantı",
       "linkCreated": "Oluşturulma: {{created}}",
       "linkExpires": "Oluşturulma: {{created}} · bitiş: {{expires}}",
-      "legacyLinks_one": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak onu da kaldırır; ardından yeni bir bağlantı oluşturun.",
-      "legacyLinks_other": "{{count}} bağlantı, bağlantılar yeniden kopyalanabilir olmadan önce oluşturuldu. Birini çıkarmak bunları da kaldırır; ardından yeni bağlantılar oluşturun.",
       "copy": "Bağlantıyı kopyala",
       "copied": "Bağlantı kopyalandı",
       "remove": "Çıkar",

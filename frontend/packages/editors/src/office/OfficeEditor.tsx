@@ -23,17 +23,16 @@ import { useTranslation } from 'react-i18next'
 import { collabSocketUrl } from '@kutup/collab/socketUrl'
 import { appUrl, getAppDirectory } from '@kutup/session/apps'
 import { LoadingPanel } from '@kutup/ui/components/states'
-import { updateSession, useSession } from '@kutup/session/store'
+import { useSession } from '@kutup/session/store'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PositionMsg } from '@kutup/collab/transport'
 import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
-import {
-  generateDeviceKeypair, loadKeypair, saveKeypair, encodePubKeyB64,
-} from '@kutup/collab/devices'
+import { currentDevice, deviceRefused, renewRequested, TooManyDevicesError } from '@kutup/collab/currentDevice'
 import { randomSenderSeqPrefix } from '@kutup/collab/identity'
-import { registerDevice } from '@kutup/collab/api'
+import { listDevices } from '@kutup/collab/api'
 import { useResolvedTheme } from '../useResolvedTheme'
+import { DeviceLimitNotice } from '../DeviceLimitNotice'
 
 export interface OfficeEditorHandle {
   /** Asks inner.html for the document as a file: OOXML through x2t, or
@@ -65,7 +64,7 @@ interface Props {
   resetBase?: boolean
   /** The room's session base is another version (or a restore replaced it):
    *  the document must reopen from `base` (latest when omitted). */
-  onOutdated?: (base?: SessionBase) => void
+  onOutdated?: (base?: SessionBase, reset?: boolean) => void
   /** False: the document as it is, with no session and no live editing (a
    *  public link's page). Opens read-only. */
   live?: boolean
@@ -147,18 +146,6 @@ interface InitPayload {
   theme: 'dark' | 'light'
 }
 
-// Module-level cache: dedupes concurrent registerDevice() calls within the
-// same browser session — same pattern as TextCollabEditor.
-const _devicePromiseCache = new Map<string, Promise<number>>()
-function ensureRegistered(pubKeyB64: string, label: string): Promise<number> {
-  let p = _devicePromiseCache.get(pubKeyB64)
-  if (!p) {
-    p = registerDevice(pubKeyB64, label).then(r => r.deviceId)
-    _devicePromiseCache.set(pubKeyB64, p)
-  }
-  return p
-}
-
 function OfficeEditorBase(
   {
     fileId,
@@ -184,6 +171,8 @@ function OfficeEditorBase(
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [bridgeReady, setBridgeReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** The account has 20 devices in use: no live editing until one is removed. */
+  const [deviceLimit, setDeviceLimit] = useState(false)
   const { t } = useTranslation()
   const docType = detectType(filename)
   // Read when the editor starts; later changes go over as 'oo-theme'.
@@ -220,7 +209,7 @@ function OfficeEditorBase(
   // Live editing is for the signed-in; without it, nobody needs to be.
   const session = useSession()
   if (live && !session) throw new Error('live editing needs a session')
-  const storedDeviceId = session?.currentDeviceId ?? null
+  const storedDeviceId = session?.device?.id ?? null
   const username = session?.username ?? null
   const color = session?.color ?? null
   const userId = session?.userId ?? null
@@ -340,10 +329,10 @@ function OfficeEditorBase(
           // Send 'oo-self' before 'init' so the bridge's maybeStart() —
           // which gates on selfDeviceId/selfUserId — has both sides of the
           // identity ready when 'init' lands. The WS effect also posts
-          // 'oo-self', but on refresh storedDeviceId is hydrated from
-          // sessionStorage and the WS effect sends it BEFORE inner.html's
-          // listener is attached (the await in ensureRegistered that gave
-          // it a head start on first login is skipped). Sending here on
+          // 'oo-self', but on refresh storedDeviceId is restored with the
+          // session's keys and the WS effect sends it BEFORE inner.html's
+          // listener is attached (the await in currentDevice that gave it
+          // a head start on first sign-in is skipped). Sending here on
           // 'ready' guarantees the iframe is listening.
           if (!live) {
             send({ type: 'oo-self', ...VIEWER })
@@ -446,21 +435,20 @@ function OfficeEditorBase(
     let alive = true
 
     void (async () => {
-      // 1. Device keypair + registered deviceId.
-      let kp = loadKeypair()
-      if (!kp) {
-        kp = await generateDeviceKeypair()
-        saveKeypair(kp)
+      // 1. This sign-in's collaboration device.
+      let current
+      try {
+        current = await currentDevice()
+      } catch (error) {
+        if (error instanceof TooManyDevicesError) {
+          if (alive) setDeviceLimit(true)
+          return
+        }
+        throw error
       }
-      keypairRef.current = kp
-
-      let did = storedDeviceId
-      if (!did) {
-        const pubB64 = encodePubKeyB64(kp.publicKey)
-        did = await ensureRegistered(pubB64, 'kutup-office:' + navigator.userAgent.slice(0, 60))
-        if (!alive) return
-        updateSession({ currentDeviceId: did })
-      }
+      if (!alive) return
+      keypairRef.current = current.keypair
+      const did = current.deviceId
       deviceIdRef.current = did
 
       // 2. Open the relay WebSocket.
@@ -503,7 +491,7 @@ function OfficeEditorBase(
           // Joined a live session that started elsewhere, or a restore
           // replaced it: reopen from the room's base.
           if (message.reset || !message.yours) {
-            onOutdatedRef.current?.(message.reset ? undefined : { versionId: message.versionId, seq: message.seq })
+            onOutdatedRef.current?.(message.reset ? undefined : { versionId: message.versionId, seq: message.seq }, message.reset)
           }
         },
         onPosition: (message: PositionMsg) => {
@@ -569,6 +557,21 @@ function OfficeEditorBase(
           }
         },
         onError: (e: unknown) => console.warn('office: ws error', e),
+        // The server stopped taking this device (removed under Account →
+        // Devices). OnlyOffice knows this tab by its device, so the editor
+        // stops here; reopening registers a new one.
+        onRefused: async () => {
+          const trusted = await listDevices()
+            .then((rows) => rows.some((row) => row.deviceId === did && row.trusted))
+            .catch(() => null)
+          if (trusted !== false) return
+          await deviceRefused()
+          transportRef.current?.close()
+          if (alive) setError(t('editor.devices.removed'))
+        },
+        onRenewDevice: (deviceIds) => {
+          void renewRequested(deviceIds).catch(() => undefined)
+        },
       })
       if (!alive) {
         transport.close()
@@ -604,6 +607,13 @@ function OfficeEditorBase(
     return (
       <div className="flex h-full w-full items-center justify-center p-6 text-sm text-destructive">
         {error}
+      </div>
+    )
+  }
+  if (deviceLimit) {
+    return (
+      <div className="h-full w-full">
+        <DeviceLimitNotice />
       </div>
     )
   }

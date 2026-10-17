@@ -5,23 +5,18 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{AccountAddress, DirectChatSuiteId};
+use crate::{AccountRef, DirectChatSuiteId};
 
 pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = b"kutup/sealed-delivery-capability/v1";
 
+/// The capability to deliver sealed mail to `recipient`, from their profile
+/// key: salted with their account (server and permanent id), never a name
+/// (docs/plans/account-ids.md).
 pub fn derive_delivery_capability(
     profile_key: &[u8; 32],
-    canonical_recipient: &str,
+    recipient: &AccountRef,
 ) -> Result<[u8; 16], String> {
-    let address: AccountAddress = canonical_recipient
-        .parse()
-        .map_err(|error: crate::AddressError| error.to_string())?;
-    if address.server.is_none() || address.canonical() != canonical_recipient {
-        return Err(
-            "sealed delivery capability requires a canonical federated recipient address".into(),
-        );
-    }
-    let hkdf = Hkdf::<Sha256>::new(Some(canonical_recipient.as_bytes()), profile_key);
+    let hkdf = Hkdf::<Sha256>::new(Some(&recipient.bytes()), profile_key);
     let mut output = [0u8; 16];
     hkdf.expand(DELIVERY_CAPABILITY_CONTEXT, &mut output)
         .map_err(|_| "sealed delivery capability derivation failed".to_string())?;
@@ -141,8 +136,9 @@ impl SealedMessageSubmissionV1 {
 pub struct FederatedSealedTransactionV1 {
     pub version: u16,
     pub origin: String,
-    /// Local username at the destination, never a sender identity.
-    pub recipient: String,
+    /// The recipient's account on the destination, never a sender identity.
+    #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
+    pub recipient: AccountRef,
     pub sequence: u64,
     pub send_id: String,
     pub capability: String,
@@ -162,16 +158,14 @@ impl FederatedSealedTransactionV1 {
         }
         kutup_federation_proto::validate_server_name(expected_destination)
             .map_err(|error| error.to_string())?;
-        let recipient =
-            AccountAddress::local(&self.recipient).map_err(|error| error.to_string())?;
         SealedMessageSubmissionV1 {
             send_id: self.send_id.clone(),
             capability: self.capability.clone(),
             envelopes: self.envelopes.clone(),
         }
         .validate()?;
-        if recipient.server.is_some() {
-            return Err("sealed federation recipient must be local".into());
+        if self.recipient.server != expected_destination {
+            return Err("sealed federation recipient must belong to the destination".into());
         }
         Ok(())
     }
@@ -214,9 +208,23 @@ mod tests {
 
     #[test]
     fn capability_vector_is_domain_and_recipient_bound() {
-        let first = derive_delivery_capability(&[7; 32], "alice@example.com").unwrap();
-        assert_eq!(hex::encode(first), "49970b0f7ca86853933be7f8fd741f7f");
-        let second = derive_delivery_capability(&[7; 32], "bob@example.com").unwrap();
+        let alice: AccountRef = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.com"
+            .parse()
+            .unwrap();
+        let first = derive_delivery_capability(&[7; 32], &alice).unwrap();
+        assert_eq!(hex::encode(first), "0017a2dbfb9b23d85fc735e3ea889233");
+        // Another account on the same server, or the same id on another server.
+        let bob: AccountRef = "aci:5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b@example.com"
+            .parse()
+            .unwrap();
+        let second = derive_delivery_capability(&[7; 32], &bob).unwrap();
+        let elsewhere: AccountRef = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.org"
+            .parse()
+            .unwrap();
+        assert_ne!(
+            first,
+            derive_delivery_capability(&[7; 32], &elsewhere).unwrap()
+        );
         assert_ne!(first, second);
         assert!(constant_time_capability_hash_eq(
             &capability_hash(&first),

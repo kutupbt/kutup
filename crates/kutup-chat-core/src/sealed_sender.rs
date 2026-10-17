@@ -148,13 +148,9 @@ impl SealedSenderPolicyPin {
                     .into(),
             ));
         }
-        let sender_domain = expected_sender
-            .split_once('@')
-            .map(|(_, domain)| domain)
-            .ok_or_else(|| {
-                ChatError::Trust("sender certificate address is not canonical".into())
-            })?;
-        if sender_domain != self.policy.canonical_domain {
+        let sender = crate::address::parse_account(expected_sender)
+            .map_err(|_| ChatError::Trust("sender certificate account is not canonical".into()))?;
+        if sender.server != self.policy.canonical_domain {
             return Err(ChatError::Trust(
                 "sender certificate domain does not match its service policy".into(),
             ));

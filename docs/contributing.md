@@ -53,6 +53,7 @@ root Cargo workspace. It shares the E2EE primitives with the CLI via `crates/kut
 # Export env vars (or use a tool like direnv)
 export DATABASE_URL="postgres://kutup:<POSTGRES_PASSWORD>@localhost:5432/kutup?sslmode=disable"
 export JWT_SECRET="<your-jwt-secret-32+chars>"
+export OPAQUE_SETUP_KEYS="1:$(openssl rand -base64 32)"   # keep it: it signs everyone in
 export S3_ENDPOINT="http://localhost:8333"
 export S3_ACCESS_KEY="kutup"
 export S3_SECRET_KEY="<your-s3-secret>"
@@ -98,11 +99,44 @@ JSON values need single quotes when the file is sourced by a shell.
 
 ### Database migrations
 
-Migrations live in `crates/kutup-server/migrations/` (`<N>_<name>.up.sql` / `.down.sql` —
-sqlx's reversible format) and are **embedded into the binary at compile time** via
-`sqlx::migrate!()`, then applied automatically on startup.
+Migrations live in `crates/kutup-server/migrations/` (sqlx's reversible
+`.up.sql` / `.down.sql` pairs) and are **embedded into the binary at compile
+time** via `sqlx::migrate!()`, then applied automatically on startup.
 
-To add a migration, create the pair by hand (or with the sqlx CLI):
+The chain starts at `20261013000000_baseline`: every migration up to the
+clean-slate release, squashed into one schema. `scripts/check-migration-baseline.sh
+<old-ref>` proves a squash equal to the chain it replaces (both applied to an
+empty Postgres 16, compared by schema and rows), and `--generate` writes it.
+Plans under `docs/plans/` name migrations as they were written before the
+squash; what they describe is now part of the baseline.
+
+The rules:
+
+- **Name a new migration by its UTC time**, `YYYYMMDDHHMMSS_<name>`
+  (`sqlx migrate add -r <name>` does), never by a number: two pull requests
+  cannot take the same name, and landing order needs no coordination. A new
+  migration must be newer than every migration on master.
+- **Never edit, rename or delete a migration that has been applied
+  anywhere** (sqlx checks each applied file's checksum, and refuses a
+  database whose applied versions are missing). A change is a new migration.
+- A migration that must not meet existing data (a breaking reset) refuses
+  it: a `DO` block that `RAISE`s when the data is there, as the baseline does
+  for a database from before it.
+- `-- no-transaction` migrations run their statements outside sqlx's
+  transaction only as one statement: keep `CREATE INDEX CONCURRENTLY` alone
+  in its file.
+- A development database from before the baseline cannot be upgraded: drop
+  it and start empty.
+
+`scripts/check-migrations.sh [base]` enforces the first two rules against a
+base revision (default `origin/master`, which CI uses for every branch, since
+what has shipped on master is what is applied anywhere; on master itself, the
+commit before): every migration on the base is byte-for-byte
+unchanged, and every new one is a timestamped `.up.sql`/`.down.sql` pair newer
+than the base's newest. A squash, where every base migration is replaced by one
+newer `_baseline` pair, is the one exception it recognizes; new migrations
+after the squash are ordinary new pairs and must be newer than the baseline.
+`scripts/gate.sh static` runs it.
 
 ```sh
 cargo install sqlx-cli --no-default-features --features postgres   # one-time
@@ -217,18 +251,6 @@ The script prints both URLs and the development-only admin credentials. Override
 `KUTUP_FEDERATION_PROJECT`, `KUTUP_FED_A_PORT`, and `KUTUP_FED_B_PORT` to run an
 additional isolated topology.
 
-The intentionally breaking Chat and Drive cutovers have separate up/down
-isolation fixtures. Point `KUTUP_TEST_DB` at a disposable PostgreSQL database;
-each test creates and removes its own randomized schema while proving local
-product rows survive:
-
-```sh
-KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
-  --test federation_phase_c_migration_live -- --nocapture
-KUTUP_TEST_DB=postgres://... cargo test -p kutup-server \
-  --test federation_phase_d_migration_live -- --nocapture
-```
-
 ---
 
 ## Frontend Development
@@ -342,7 +364,7 @@ kutup/
 
 ### Orphan-blob sweep
 
-Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. It recognises every key shape Drive writes — `{user}/{folder}/{file}` (uploads), `fed/{share}/{folder}/{file}` (federated uploads) and `files/{file}/…` (versions, assets, thumbnails) — and never touches anything else (Chat's keys included).
+Periodic admin task that walks the bucket for Drive objects no row references any more and deletes every stored version of each: a crash between storing and committing (an upload, a completed tus multipart, a version), a purge or retention pass whose object delete failed, a pruned original or retired version left behind. Drive keeps everything of a file under `files/{file}/…` — `original` (the upload, a peer's too), `versions/…`, `assets/…`, `thumbnails/…` — and the sweep looks only at that shape, never at anything else (Chat's and Mail's keys included).
 
 Subcommand on the existing `kutup-server` binary — same Docker image, same env vars, same DB pool.
 
@@ -389,8 +411,32 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 - Axum handlers organized by domain (`crates/kutup-server/src/handlers/` — auth, collections, files, shares, federation, admin, …). Each file opens with a `//!` doc comment.
 - Use `sqlx` runtime queries (`sqlx::query`/`query_as`) — no compile-time-checked macros (no live DB at build), no ORM.
 - All cryptographic operations are the client's responsibility; the backend must never attempt to decrypt anything. Shared primitives live in `crates/kutup-crypto`.
-- SSRF validation (`crates/kutup-server/src/ssrf.rs`) must be applied to all user-supplied URLs before making outbound requests (federation).
+- **Outbound requests to an address a user or a peer named go through one
+  fetcher and one address list.** `crates/kutup-server/src/public_fetch.rs`
+  is the only way to fetch such a URL (https on 443, or http on 80 where a
+  caller opts in; every resolved address public; the connection pinned to
+  the checked address; no environment proxy; redirects checked again; size
+  and time limits; GET or a POST with a body). `ssrf::is_public` is the one
+  address list, used by it and by the federation transport (which alone may
+  reach private peers, on a test stack with `FEDERATION_TEST_ALLOW_PRIVATE`).
+  Never build a `reqwest::Client` for a user-supplied URL elsewhere. Clients
+  for addresses the operator configured (LiveKit, map providers, the storage
+  probe) and Web Push (an allow-list of push-service hosts, https only) are
+  not user-supplied URLs.
 - Gate every change with `cargo clippy --all-targets -- -D warnings` + `cargo fmt` + `cargo test`.
+
+- **A failed query is an error, never an answer.** Permission checks
+  (`can_access_collection`, `can_access_file`, `can_write_file`) return
+  `Result<bool, sqlx::Error>`; request handlers propagate the error (a 500),
+  never read it as "no", "not found" or zero. Code that cannot fail a request
+  (a background loop, a WebSocket recheck) logs and retries, and acts only on
+  a definite answer: a recheck closes a socket on a definite "no" (a session
+  that ended, access gone) and retries on an error; a check guarding a write
+  never lets it through on an error (it refuses, or closes the socket).
+- **A GET changes nothing a person owns.** A GET may fill caches of derived
+  data (a ciphertext digest, map tiles, a peer's policy) or record timing,
+  but never creates, changes or deletes user data; that belongs to a write
+  request, registration, or the jobs loop.
 
 ### Frontend (TypeScript)
 

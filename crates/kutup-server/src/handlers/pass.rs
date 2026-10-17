@@ -22,9 +22,9 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::{can_access_file, trusted_uuid, try_can_access_file};
+use crate::handlers::{can_access_file, trusted_uuid};
 use crate::middleware::AuthUser;
-use crate::AppState;
+use crate::{revisions, AppState};
 
 /// The largest envelope kept: a password and a key file at their limits,
 /// with the envelope's header.
@@ -37,6 +37,8 @@ pub struct VaultSecretRow {
     file_id: String,
     /// Base64 of the account envelope (purpose `PassVaultSecret`).
     envelope: String,
+    /// The revision in the envelope's header: the base of the next keep.
+    revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }
@@ -44,8 +46,24 @@ pub struct VaultSecretRow {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PutVaultSecretRequest {
-    /// Base64 of the account envelope (purpose `PassVaultSecret`).
+    /// Base64 of the account envelope (purpose `PassVaultSecret`); its
+    /// header's revision must be above `baseRevision`.
     envelope: String,
+    /// The revision of the secret this change started from; 0 for none.
+    base_revision: i64,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    head: Option<String>,
+}
+
+/// Secrets to forget at once (vaults that are gone), under one head.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForgetVaultSecretsRequest {
+    file_ids: Vec<String>,
+    /// The next sealed account head (base64), once the account keeps one.
+    #[serde(default)]
+    head: Option<String>,
 }
 
 /// `GET /api/pass/vault-secrets` — the caller's vault secrets, for vaults
@@ -78,15 +96,22 @@ pub async fn list_vault_secrets(
             continue;
         }
         // Out of reach now (unshared, perhaps only for a moment): hidden,
-        // never deleted on a read. A failed check fails the request. The
-        // record goes only with the vault itself (purged: ON DELETE CASCADE)
-        // or when its owner forgets it.
-        if !try_can_access_file(&state.pool, user_id, file_id).await? {
+        // never deleted on a read; a failed check fails the request. A record
+        // goes only with the vault (purged: ON DELETE CASCADE) or when its
+        // owner forgets it (the same fix as #171).
+        if !can_access_file(&state.pool, user_id, file_id).await? {
             continue;
         }
+        let revision = account_envelope::inspect(&envelope)
+            .ok()
+            .and_then(|header| header.revision)
+            .map(revisions::stored)
+            .transpose()?
+            .unwrap_or(0);
         out.push(VaultSecretRow {
             file_id: file_id.to_string(),
             envelope: STANDARD.encode(envelope),
+            revision,
             updated_at,
         });
     }
@@ -94,7 +119,8 @@ pub async fn list_vault_secrets(
 }
 
 /// `PUT /api/pass/vault-secrets/{fileId}` — keep (or replace) the caller's
-/// secret for a vault they can open.
+/// secret for a vault they can open, on top of the revision the change
+/// started from (docs/plans/sealed-revisions.md).
 #[utoipa::path(
     put,
     path = "/api/pass/vault-secrets/{fileId}",
@@ -104,8 +130,9 @@ pub async fn list_vault_secrets(
     request_body = PutVaultSecretRequest,
     responses(
         (status = 204, description = "Stored"),
-        (status = 400, description = "Not this account's vault secret"),
-        (status = 404, description = "No such vault, or no access to it")
+        (status = 400, description = "Not this account's vault secret, or not newer than its base"),
+        (status = 404, description = "No such vault, or no access to it"),
+        (status = 409, description = "Another device kept a key first (code revision_conflict)")
     )
 )]
 pub async fn put_vault_secret(
@@ -116,46 +143,126 @@ pub async fn put_vault_secret(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    let envelope = STANDARD
-        .decode(&req.envelope)
-        .ok()
-        .filter(|bytes| STANDARD.encode(bytes) == req.envelope)
-        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    if envelope.len() > MAX_ENVELOPE_BYTES {
-        return Err(AppError::bad_request("envelope is too large"));
-    }
-    let header = account_envelope::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
-    let login_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-    if header.purpose != AccountEnvelopePurpose::PassVaultSecret
-        || Some(header.canonical_login_email)
-            != account_envelope::canonical_login_email(&login_email).ok()
-    {
-        return Err(AppError::bad_request(
-            "envelope is not this account's vault secret",
-        ));
-    }
     let live: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM files WHERE id = $1 AND deleted_at IS NULL")
             .bind(file_id)
             .fetch_optional(&state.pool)
             .await?;
-    if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await {
+    if live.is_none() || !can_access_file(&state.pool, user_id, file_id).await? {
         return Err(AppError::not_found("not found"));
     }
-    sqlx::query(
-        "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, file_id) DO UPDATE SET envelope = $3, updated_at = NOW()",
-    )
-    .bind(user_id)
-    .bind(file_id)
-    .bind(&envelope)
-    .execute(&state.pool)
-    .await?;
+    let head = crate::account_heads::NextHead::parse(req.head.as_deref())?;
+    // What the account's keys are bound to (docs/plans/account-identity.md).
+    let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
+    let binding: String =
+        sqlx::query_scalar("SELECT COALESCE(key_binding, '') FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let (envelope, revision) = checked_envelope(&req.envelope, &binding, file_id)?;
+    revisions::check_follows(revision, req.base_revision)?;
+    // Stored only on top of the secret the change started from: a first
+    // keep inserts or nothing (two first keeps at once: the second gets the
+    // 409); a later one replaces exactly the row it read, locked.
+    let stored = if req.base_revision == 0 {
+        sqlx::query(
+            "INSERT INTO pass_vault_secrets (user_id, file_id, envelope) VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, file_id) DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(file_id)
+        .bind(&envelope)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1
+    } else {
+        let current: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT envelope FROM pass_vault_secrets
+              WHERE user_id = $1 AND file_id = $2 FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(file_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match current {
+            Some(current) if revision_of(&current)? == req.base_revision => {
+                sqlx::query(
+                    "UPDATE pass_vault_secrets SET envelope = $3, updated_at = NOW()
+                      WHERE user_id = $1 AND file_id = $2",
+                )
+                .bind(user_id)
+                .bind(file_id)
+                .bind(&envelope)
+                .execute(&mut *tx)
+                .await?;
+                true
+            }
+            _ => false,
+        }
+    };
+    if !stored {
+        drop(tx);
+        let current: Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT envelope FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2",
+        )
+        .bind(user_id)
+        .bind(file_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        let current = match current {
+            Some(current) => revision_of(&current)?,
+            None => 0,
+        };
+        return Err(revisions::conflict(
+            "another device kept a key for this vault first",
+            current,
+        ));
+    }
+    crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The revision of a stored vault secret (0 for one without, which a stored
+/// one never is).
+pub(crate) fn revision_of(envelope: &[u8]) -> AppResult<i64> {
+    account_envelope::inspect(envelope)
+        .ok()
+        .and_then(|header| header.revision)
+        .map(revisions::stored)
+        .transpose()
+        .map(|revision| revision.unwrap_or(0))
+}
+
+/// The envelope in `b64` and its revision, if it is canonical base64 of at
+/// most [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and
+/// sealed for vault `file_id`.
+fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<(Vec<u8>, u64)> {
+    let envelope = STANDARD
+        .decode(b64)
+        .ok()
+        .filter(|bytes| STANDARD.encode(bytes) == b64)
+        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
+    if envelope.len() > MAX_ENVELOPE_BYTES {
+        return Err(AppError::bad_request("envelope is too large"));
+    }
+    account_envelope::inspect(&envelope)
+        .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
+    // The one check every stored account envelope passes: its purpose, this
+    // account's key binding, this vault.
+    let header = account_envelope::validate_for(
+        &envelope,
+        AccountEnvelopePurpose::PassVaultSecret,
+        binding,
+        file_id.as_bytes(),
+    )
+    .map_err(|_| AppError::bad_request("envelope is not this account's vault secret"))?;
+    let revision = header
+        .revision
+        .ok_or_else(|| AppError::bad_request("envelope has no revision"))?;
+    Ok((envelope, revision))
 }
 
 /// `DELETE /api/pass/vault-secrets/{fileId}` — forget the caller's secret
@@ -166,20 +273,84 @@ pub async fn put_vault_secret(
     tag = "pass",
     security(("BearerAuth" = [])),
     params(("fileId" = String, Path, description = "The vault's file id")),
+    request_body(content = crate::account_heads::HeadOnly, description = "The next head, once the account keeps one"),
     responses((status = 204, description = "Forgotten (or there was none)"))
 )]
 pub async fn delete_vault_secret(
     State(state): State<AppState>,
     user: AuthUser,
     Path(file_id): Path<String>,
+    body: Option<Json<crate::account_heads::HeadOnly>>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("not found"))?;
-    sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = $2")
+    let head = body.and_then(|Json(body)| body.head);
+    forget(
+        &state,
+        user_id,
+        user.session.session_id,
+        &[file_id],
+        head.as_deref(),
+    )
+    .await
+}
+
+/// The most secrets one forget takes.
+const MAX_FORGET: usize = 1000;
+
+/// `POST /api/pass/vault-secrets/forget` — forget several secrets at once
+/// (the vaults are gone: purged, or out of reach for good), under one head.
+/// A secret stays listed in the account's `passSecrets` index, whatever
+/// becomes of its vault, until its owner forgets it.
+#[utoipa::path(
+    post,
+    path = "/api/pass/vault-secrets/forget",
+    tag = "pass",
+    security(("BearerAuth" = [])),
+    request_body = ForgetVaultSecretsRequest,
+    responses((status = 204, description = "Forgotten (those there were)"))
+)]
+pub async fn forget_vault_secrets(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<ForgetVaultSecretsRequest>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    if req.file_ids.is_empty() || req.file_ids.len() > MAX_FORGET {
+        return Err(AppError::bad_request("forget 1 to 1000 secrets at once"));
+    }
+    let ids = req
+        .file_ids
+        .iter()
+        .map(|id| Uuid::parse_str(id).map_err(|_| AppError::bad_request("fileIds holds a bad id")))
+        .collect::<AppResult<Vec<_>>>()?;
+    forget(
+        &state,
+        user_id,
+        user.session.session_id,
+        &ids,
+        req.head.as_deref(),
+    )
+    .await
+}
+
+async fn forget(
+    state: &AppState,
+    user_id: Uuid,
+    session: Uuid,
+    file_ids: &[Uuid],
+    head: Option<&str>,
+) -> AppResult<Response> {
+    let head = crate::account_heads::NextHead::parse(head)?;
+    let mut tx = state.pool.begin().await?;
+    let locked = crate::account_heads::lock(&mut tx, user_id, session).await?;
+    sqlx::query("DELETE FROM pass_vault_secrets WHERE user_id = $1 AND file_id = ANY($2)")
         .bind(user_id)
-        .bind(file_id)
-        .execute(&state.pool)
+        .bind(file_ids)
+        .execute(&mut *tx)
         .await?;
+    crate::account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -211,20 +382,23 @@ pub struct PinStatus {
     set: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetPinRequest {
-    /// The account password's login key, as for `/api/user/reauth`.
-    login_key: String,
+    /// A `pass` grant from a reauth of this session (the account password,
+    /// docs/plans/opaque.md).
+    grant: String,
     /// Six digits.
     pin: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+// No Debug: it carries a one-time grant (or tokens).
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RemovePinRequest {
-    /// The account password's login key, as for `/api/user/reauth`.
-    login_key: String,
+    /// A `pass` grant from a reauth of this session.
+    grant: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -239,7 +413,10 @@ pub struct VerifyPinRequest {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PinRefusal {
+    /// The same word as `code`, kept for readers of the text.
     error: &'static str,
+    /// `wrongPin`, `signedOut` or `noPin` (docs/api.md, "Errors").
+    code: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     attempts_left: Option<i16>,
 }
@@ -249,6 +426,7 @@ fn refusal(status: StatusCode, error: &'static str, attempts_left: Option<i16>) 
         status,
         Json(PinRefusal {
             error,
+            code: error,
             attempts_left,
         }),
     )
@@ -283,8 +461,7 @@ pub async fn pin_status(State(state): State<AppState>, user: AuthUser) -> AppRes
     responses(
         (status = 204, description = "Set"),
         (status = 400, description = "Not six digits"),
-        (status = 401, description = "Wrong account password"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+        (status = 403, description = "grantInvalid: no fresh pass grant of this session")
     )
 )]
 pub async fn set_pin(
@@ -296,11 +473,12 @@ pub async fn set_pin(
     if !valid_pin(&req.pin) {
         return Err(AppError::bad_request("the PIN must be six digits"));
     }
-    crate::handlers::auth::verify_account_login_key(&state, &user, &req.login_key).await?;
     let user_id = trusted_uuid(&user.user_id)?;
     let hash = bcrypt::hash(&req.pin, bcrypt::DEFAULT_COST)
         .map_err(|e| AppError::internal(format!("hash PIN: {e}")))?;
     let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
+        .await?;
     sqlx::query(
         "INSERT INTO pass_pins (user_id, pin_hash) VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE SET pin_hash = $2, updated_at = NOW()",
@@ -327,8 +505,7 @@ pub async fn set_pin(
     request_body = RemovePinRequest,
     responses(
         (status = 204, description = "Removed (or there was none)"),
-        (status = 401, description = "Wrong account password"),
-        (status = 429, description = "Too many failed attempts (the sign-in lockout)")
+        (status = 403, description = "grantInvalid: no fresh pass grant of this session")
     )
 )]
 pub async fn remove_pin(
@@ -337,12 +514,15 @@ pub async fn remove_pin(
     body: Result<Json<RemovePinRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
-    crate::handlers::auth::verify_account_login_key(&state, &user, &req.login_key).await?;
     let user_id = trusted_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Pass, &user)
+        .await?;
     sqlx::query("DELETE FROM pass_pins WHERE user_id = $1")
         .bind(user_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -401,7 +581,9 @@ pub async fn verify_pin(
         crate::sessions::sign_out(&state.pool, user.session.session_id).await?;
         return Ok(refusal(StatusCode::FORBIDDEN, "signedOut", Some(0)));
     };
-    if valid_pin(&req.pin) && bcrypt::verify(&req.pin, &hash).unwrap_or(false) {
+    // Checked at full cost even when the PIN is malformed.
+    let right = crate::auth_check::verify_hash(&req.pin, &hash) && valid_pin(&req.pin);
+    if right {
         sqlx::query("DELETE FROM pass_pin_failures WHERE sign_in_id = $1")
             .bind(sign_in)
             .execute(&state.pool)
@@ -419,4 +601,52 @@ pub async fn verify_pin(
         "wrongPin",
         Some(PIN_ATTEMPTS - failures),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kutup_crypto::pass_vault::{seal_vault_secret, VaultSecret};
+
+    const ID: &str = "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90";
+
+    fn sealed(binding: &str) -> String {
+        let secret = VaultSecret::chosen(Some("kasa"), None);
+        STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], 5, &secret).unwrap())
+    }
+
+    const VAULT: Uuid = Uuid::from_bytes([1u8; 16]);
+
+    #[test]
+    fn a_vault_secret_must_name_the_binding_it_is_checked_against() {
+        assert_eq!(checked_envelope(&sealed(ID), ID, VAULT).unwrap().1, 5);
+        assert!(
+            checked_envelope(&sealed("1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91"), ID, VAULT).is_err()
+        );
+        assert!(
+            checked_envelope(&sealed(ID), "1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91", VAULT).is_err()
+        );
+        // An address is no binding.
+        assert!(checked_envelope(&sealed(ID), "ayse@example.org", VAULT).is_err());
+        // Sealed for another vault.
+        assert!(checked_envelope(&sealed(ID), ID, Uuid::from_bytes([2u8; 16])).is_err());
+        let other_purpose = STANDARD.encode(
+            account_envelope::seal(
+                &[1u8; 32],
+                &[7u8; 32],
+                AccountEnvelopePurpose::ChatBackupRoot,
+                ID,
+            )
+            .unwrap(),
+        );
+        assert!(checked_envelope(&other_purpose, ID, VAULT).is_err());
+        let padded = format!("{}\n", sealed(ID));
+        assert!(checked_envelope(&padded, ID, VAULT).is_err());
+        assert!(checked_envelope(
+            &STANDARD.encode(vec![0u8; MAX_ENVELOPE_BYTES + 1]),
+            ID,
+            VAULT
+        )
+        .is_err());
+    }
 }
