@@ -1,10 +1,10 @@
 import { Inbox, Settings2, Users } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link } from 'react-router-dom'
 import { useMailAccount } from '@kutup/mail-core/api'
-import { useMyGroups } from '@kutup/mail-core/groups'
+import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { GroupDialog } from '@kutup/mail-core/ui/GroupDialog'
+import { appUrl } from '@kutup/session/apps'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -14,11 +14,12 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 
 /**
- * The groups you belong to (docs/plans/mail-groups.md): distribution lists,
- * whose mail lands in your own inbox, and shared mailboxes, which open beside
- * it. Owners and managers run their members and settings here.
+ * The Mail groups you belong to (docs/plans/mail-groups.md), as Proton's
+ * Group membership: distribution lists, whose mail lands in your own inbox,
+ * and shared mailboxes, which open in Mail. Owners and managers run their
+ * members and settings here; members see who is in it.
  */
-export function GroupsPage() {
+export function GroupMembershipPage() {
   const { t } = useTranslation()
   const session = useRequiredSession()
   const account = useMailAccount()
@@ -27,13 +28,13 @@ export function GroupsPage() {
 
   return (
     <PageBody>
-      <PageHeader title={t('mailGroups.title')} description={t('mailGroups.pageDescription')} />
+      <PageHeader title={t('groupMembership.title')} description={t('groupMembership.description')} />
       {groups.isPending ? (
         <LoadingPanel label={t('common.loading')} />
       ) : groups.isError ? (
         <Alert variant="error">{apiErrorMessage(groups.error, t('common.tryAgain'))}</Alert>
       ) : groups.data.length === 0 ? (
-        <EmptyState title={t('mailGroups.emptyTitle')} description={t('mailGroups.emptyDescription')} />
+        <EmptyState title={t('groupMembership.emptyTitle')} description={t('groupMembership.emptyDescription')} />
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border">
           {groups.data.map((group) => (
@@ -48,15 +49,15 @@ export function GroupsPage() {
               {group.myRole ? <Badge variant="neutral">{t(`mailGroups.role.${group.myRole}`)}</Badge> : null}
               {group.kind === 'shared' ? (
                 <Button variant="outline" size="sm" asChild>
-                  <Link to={`/g/${group.id}/inbox`}>
+                  <a href={appUrl('mail', `/g/${group.id}/inbox`)}>
                     <Inbox />
                     {t('mailGroups.openMailbox')}
-                  </Link>
+                  </a>
                 </Button>
               ) : null}
               <Button variant="ghost" size="sm" onClick={() => setOpen(group.id)}>
                 <Settings2 />
-                {group.myRole === 'owner' || group.myRole === 'manager' ? t('mailGroups.manage') : t('mailGroups.viewMembers')}
+                {manages(group) ? t('mailGroups.manage') : t('mailGroups.viewMembers')}
               </Button>
             </li>
           ))}
@@ -72,4 +73,8 @@ export function GroupsPage() {
       ) : null}
     </PageBody>
   )
+}
+
+function manages(group: MailGroup): boolean {
+  return group.myRole === 'owner' || group.myRole === 'manager'
 }

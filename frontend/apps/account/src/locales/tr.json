@@ -32,7 +32,8 @@
     "mailSending": "Posta gönderimi",
     "mailGroups": "Posta grupları",
     "feedback": "Geri bildirim",
-    "referralCodes": "Davet kodları"
+    "referralCodes": "Davet kodları",
+    "groupMembership": "Grup üyeliği"
   },
   "auth": {
     "fields": {
@@ -1078,5 +1079,11 @@
       "usesTitle": "…{{hint}} ile açılan hesaplar",
       "noNote": "Not yok"
     }
+  },
+  "groupMembership": {
+    "title": "Grup üyeliği",
+    "description": "Üyesi olduğunuz Posta grupları. Dağıtım listelerinin e-postaları kendi gelen kutunuza gelir; paylaşılan posta kutusu Posta'da açılır ve üyeleri birlikte okur, birlikte yanıtlar.",
+    "emptyTitle": "Hiçbir grupta değilsiniz",
+    "emptyDescription": "Bir yönetici sizi dağıtım listelerine ve paylaşılan posta kutularına ekler."
   }
 }

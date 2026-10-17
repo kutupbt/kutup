@@ -32,7 +32,8 @@
     "mailSending": "Mail sending",
     "mailGroups": "Mail groups",
     "feedback": "Feedback",
-    "referralCodes": "Referral codes"
+    "referralCodes": "Referral codes",
+    "groupMembership": "Group membership"
   },
   "auth": {
     "fields": {
@@ -1078,5 +1079,11 @@
       "usesTitle": "Accounts made with …{{hint}}",
       "noNote": "No note"
     }
+  },
+  "groupMembership": {
+    "title": "Group membership",
+    "description": "The Mail groups you belong to. A distribution list's mail arrives in your own inbox; a shared mailbox opens in Mail, where its members read and answer it together.",
+    "emptyTitle": "You are not in any groups",
+    "emptyDescription": "An administrator adds you to distribution lists and shared mailboxes."
   }
 }

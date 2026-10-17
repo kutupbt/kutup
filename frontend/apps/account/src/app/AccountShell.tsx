@@ -8,6 +8,7 @@ import { signOut } from '@kutup/session/signOut'
 import { useRequiredSession } from '@kutup/session/store'
 import { useAccountUiPreferences } from '@kutup/session/uiPreferences'
 import { useEnsureMailKeys } from '../features/keys/mailKeys'
+import { GroupMembershipNavLink } from '../features/settings/GroupMembershipNavLink'
 import { AppShell, SidebarNavLink } from '@kutup/ui/components/app-shell'
 import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { UserMenu } from '@kutup/ui/components/user-menu'
@@ -63,6 +64,7 @@ export function AccountShell() {
           <SidebarNavLink to="/settings/security" icon={<ShieldCheck />} label={t('nav.security')} />
           <SidebarNavLink to="/settings/keys" icon={<KeyRound />} label={t('nav.keys')} />
           <SidebarNavLink to="/settings/devices" icon={<MonitorSmartphone />} label={t('nav.devicesSessions')} />
+          <GroupMembershipNavLink />
           <SidebarNavLink to="/settings/maps" icon={<Map />} label={t('nav.maps')} />
           {session.isAdmin ? (
             <>

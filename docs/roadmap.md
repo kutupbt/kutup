@@ -567,7 +567,10 @@ arrival, and direct sending. Phases, each with its own plan before code:
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;
   the role addresses become system groups. G2 moderation, G3 assigning and
-  tags.
+  tags. Members see their groups under Group membership in Account
+  settings (as Proton's); leaving a group from there is not built (only
+  owners and managers change members today, and a shared mailbox needs its
+  key rotated when someone leaves).
 - **Aliases ("hide my email"), next after groups G1**, modelled on Proton's
   (SimpleLogin, now Proton Pass aliases; `WebClients/packages/pass`, alias
   types and settings), with Apple's Hide My Email and Firefox Relay as the
