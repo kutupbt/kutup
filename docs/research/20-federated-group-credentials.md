@@ -257,7 +257,7 @@ targeted check (2026-10-17), not a complete survey.
 | --- | --- | --- |
 | The home server | the number of members; one pseudonym per member per group (unlinkable across groups); roles and join revisions; the timing of changes and reads (sizes are padded to buckets); the relay server each request came through; in calls, only member servers' TURN addresses (relay forced) | a remote member's account, unless correlated through timing |
 | The home server, for its own accounts | the same, plus, if its operator correlates its relay with its gateway (same operator), **which of its own accounts are members**, always including the creator | nothing more: this is the design's hard limit |
-| A member's own server | that its user talks to home H (relayed blobs), with timing and sizes; that its user receives sealed mail under one more capability; which of its users share one multi-recipient send from one origin (so that they share *some* group) | the group id, the other members, the user's role |
+| A member's own server | that its user talks to home H (relayed blobs), with timing; that its user receives sealed mail under one more capability; by statistical inference, **that two of its users share a group** (messages delivered to both at the same moments, both relaying to the same home together), stronger for small, busy groups | the group id, the other members, the user's role |
 | The sender's server | that someone (anonymous route) sent to some destinations | who sent, or to which group |
 
 **Compared with Signal's server**, which sees one ciphertext per member, roles,

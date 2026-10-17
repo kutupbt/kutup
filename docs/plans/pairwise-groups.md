@@ -465,8 +465,23 @@ run by the same operator, often the same process.
   - the relay keeps no log per request and passes blobs on a separate path;
   - the client delays and batches local requests.
 - Neither fully removes it, and no design studied does
-  ([research 20](../research/20-federated-group-credentials.md), §4). This is a
-  user-facing limit of the requirement.
+  ([research 20](../research/20-federated-group-credentials.md), §4).
+- **Accepted by the user (2026-10-17)**, stated honestly in the user-facing
+  documentation (§9).
+
+**What a member's own server can infer (also stated to users).** A member's own
+server, even when it isn't the home, can **infer that two of its users share a
+group**:
+- group messages reach both at the same moments, often in one multi-recipient
+  send;
+- both relay requests to the same home at the same times.
+
+This is a statistical inference, and it is stronger for small, busy groups. The
+server doesn't learn the group's id, its other members or anyone's role. The
+mitigations reduce it but don't remove it:
+- timing jitter (below);
+- padded sizes;
+- relaying through one path with no per-request log.
 
 **Changes.** A change is `Actions {revision = current + 1, ...}`: add (a pending
 slot), claim, remove, leave, modify-role, modify profile key,
@@ -633,9 +648,10 @@ them on pseudonyms (§3).
     is left, they never happen. Members can start a new group with the same
     people.
   - So the dead administrator's pseudonym stays for ever. No server can tell its
-    account ended. Whether clients should offer anything more (for example, a
-    member-signed handover after the dead administrator's manifest is gone for a
-    set time) is **a policy question for the user**.
+    account ended.
+  - **Decided by the user (2026-10-17): Signal's behaviour, nothing more.** A
+    group whose last administrator vanished can't make administrator-only
+    changes. The leave and self-demotion rule (choose a successor first) stays.
   - Clients show a member whose account has ended (their manifest is gone) as
     such.
 - **Add.** Who may add depends on `AccessControl.members`. Signal's "pending"
@@ -927,6 +943,14 @@ exists. Once pairwise groups pass their gates, one change removes MLS:
   - These docs are updated: `chat-protocol.md` §2 and §8, `chat-calls.md`
     "Group calls", the threat model, `self-hosting.md`, `api.md` and the
     roadmap.
+  - **The user-facing privacy text** (the Chat help and the threat model) states
+    the limits plainly:
+    - hidden membership fully holds for members on other servers;
+    - for members on the group's own server, it holds only against an operator
+      who doesn't correlate its relay with its gateway;
+    - a member's own server can statistically infer that two of its users share
+      a group, more easily in small, busy groups;
+    - the mitigations we have.
 - **Broadcasts.** The broadcast threat model
   ([`broadcast-security-threat-model.md`](../broadcast-security-threat-model.md))
   assumes an MLS control group for channel owners. Broadcasts aren't built. Its
@@ -1016,6 +1040,12 @@ figures are from its review.
 4. **Rollout.** All at once: groups stay off in production until all five
    slices are done.
 5. **Size.** At most 256 members.
+6. **The limits of hidden membership** are accepted as stated in §3: members on
+   the group's own server, and what a member's own server can infer. They are
+   told to users plainly.
+7. **A vanished last administrator.** Signal's behaviour: the group can't make
+   administrator-only changes. The choose-a-successor rule for leaving and
+   self-demotion stays.
 
 Still open for the reviewers:
 - **Key replacement when a device leaves a member's manifest.** Signal doesn't
