@@ -147,6 +147,24 @@ pub(crate) async fn submit_anonymous_message(
         .server_name();
     if submission.recipient.server != server_name {
         let destination = submission.recipient.server.as_str();
+        let recipient_id = crate::account_ids::id_of(&submission.recipient)?;
+        // A send id reused with other ciphertext is a local fact: answer it
+        // before the remote policy fetch, so the conflict never depends on
+        // whether the destination is reachable right now. The locked read
+        // below decides it again for concurrent first sends.
+        if let Some((_, stored)) = stored_federated_transaction(
+            &state.pool,
+            destination,
+            recipient_id,
+            submission.send_id,
+            false,
+        )
+        .await?
+        {
+            if stored.submission != submission {
+                return Err(reused_send_id());
+            }
+        }
         authenticated_remote_policy(&state, destination).await?;
         let mut tx = state.pool.begin().await?;
         sqlx::query(
@@ -164,27 +182,17 @@ pub(crate) async fn submit_anonymous_message(
         .bind(destination)
         .fetch_one(&mut *tx)
         .await?;
-        let recipient_id = crate::account_ids::id_of(&submission.recipient)?;
-        let existing: Option<(i64, Value)> = sqlx::query_as(
-            "SELECT sequence, transaction
-             FROM chat_mls_federation_outbox
-             WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3
-             FOR UPDATE",
+        let existing = stored_federated_transaction(
+            &mut *tx,
+            destination,
+            recipient_id,
+            submission.send_id,
+            true,
         )
-        .bind(destination)
-        .bind(recipient_id)
-        .bind(submission.send_id)
-        .fetch_optional(&mut *tx)
         .await?;
-        let (sequence, transaction) = if let Some((sequence, value)) = existing {
-            let transaction: FederatedAnonymousMlsTransactionV1 = serde_json::from_value(value)
-                .map_err(|error| {
-                    AppError::internal(format!("stored MLS transaction is invalid: {error}"))
-                })?;
+        let (sequence, transaction) = if let Some((sequence, transaction)) = existing {
             if transaction.submission != submission {
-                return Err(AppError::conflict(
-                    "anonymous MLS send id was reused with different ciphertext",
-                ));
+                return Err(reused_send_id());
             }
             (sequence, transaction)
         } else {
@@ -324,4 +332,43 @@ pub(crate) async fn submit_anonymous_message(
         submission.envelopes.len() as u64,
     );
     Ok(Json(response).into_response())
+}
+
+fn reused_send_id() -> AppError {
+    AppError::conflict("anonymous MLS send id was reused with different ciphertext")
+}
+
+/// The outbox transaction already stored for this send id, if any; `lock`
+/// takes the row for the rest of the caller's transaction.
+async fn stored_federated_transaction<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    destination: &str,
+    recipient_id: Uuid,
+    send_id: Uuid,
+    lock: bool,
+) -> AppResult<Option<(i64, FederatedAnonymousMlsTransactionV1)>> {
+    let query = if lock {
+        "SELECT sequence, transaction
+         FROM chat_mls_federation_outbox
+         WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3
+         FOR UPDATE"
+    } else {
+        "SELECT sequence, transaction
+         FROM chat_mls_federation_outbox
+         WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3"
+    };
+    let row: Option<(i64, Value)> = sqlx::query_as(query)
+        .bind(destination)
+        .bind(recipient_id)
+        .bind(send_id)
+        .fetch_optional(executor)
+        .await?;
+    row.map(|(sequence, value)| {
+        serde_json::from_value(value)
+            .map(|transaction| (sequence, transaction))
+            .map_err(|error| {
+                AppError::internal(format!("stored MLS transaction is invalid: {error}"))
+            })
+    })
+    .transpose()
 }
