@@ -89,16 +89,44 @@ afterward `docs/crypto-agility.md` requires versioned readers, authenticated
 migrations, peer capability windows and no silent downgrade. No second wipe of
 kutup.dev is planned: what is left must land without one.
 
+State against the normative checklist,
+[`docs/draft/v1/security-review-follow-ups.md`](draft/v1/security-review-follow-ups.md).
+Done:
+
+- account protection: OPAQUE sign-in with an Argon2id KSF, the export-key KEK
+  bound to the account's key binding, a derived recovery proof (the server
+  receives only the proof) and suite-2 account envelopes;
+- typed, context-bound XChaCha envelopes for Drive, collaboration and
+  profile keys;
+- signed X25519-HPKE named shares: HPKE Base mode plus an Ed25519 sender
+  signature, not HPKE Auth mode;
+- owner-authenticated collection epochs;
+- durable, synced TOFU/QR pins (v2, by account id), a wipe being a new
+  incarnation. Pins warn rather than block where the checklist said
+  quarantine: Chat quarantines; Drive and Mail warn and stop sealing;
+- Chat installation review, labels and revocation, the always-on Chat
+  backup and its history-loss warning.
+
+Left before the tag:
+
 - **Pairwise groups (Signal-style), replacing MLS.** Each member's devices
   are reached one to one, as Signal's groups before MLS, keyed by account ids
   (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
-  routes and `chat_mls_*` tables are removed.
-- The rest of the normative checklist,
-  [`docs/draft/v1/security-review-follow-ups.md`](draft/v1/security-review-follow-ups.md),
-  each item confirmed against it before the tag: the Argon2id root with
-  HKDF-separated keys and a derived recovery proof; typed context-bound
-  XChaCha Drive/profile/collaboration envelopes; X25519-HPKE named shares and
-  owner-authenticated collection epochs.
+  routes and `chat_mls_*` tables are removed. The checklist's group-limit
+  split and authority-quorum UI are obsolete with them.
+- **An independent security review** of the V1 formats and protocols, with a
+  review bundle prepared for it.
+- **The remaining libsodium primitives.** Formats are sealed in WASM, but the
+  browser still uses libsodium for secretstream chunks (`streamEncryptor.ts`),
+  collaboration Ed25519 device keys and frame signatures (`sign.ts`,
+  `devices.ts`, `cryptoFrame.ts`), random bytes, and SHA-256 in Chat's
+  `backup.ts` and `media.ts`. Each gets a written 10× justification in
+  [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
+  moves to WASM. The Android Worker benchmark is still open; with OPAQUE's
+  KSF it may be moot.
+- **Remove the leftover Argon2id KEK/login root** in `kutup-crypto`'s
+  `kdf.rs` and its WASM export: OPAQUE replaced it and the frontend no longer
+  calls it (small).
 
 The format inventory and threat model are
 [`docs/v1-format-inventory.md`](v1-format-inventory.md) and
@@ -146,6 +174,18 @@ has Chat's link uses it.
 ## Important (should-have, can ship after v1)
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
+
+### Admin · Chat device limit as a setting
+
+`CHAT_MAX_ACTIVE_DEVICES` is an environment setting only. Wanted: a durable
+administrator setting with its UI in Administration and an audit event when
+it changes, within the same 1–10 bounds.
+
+### Operations · runbook and alerting
+
+An operator runbook (backups and restore, key and setup-key rotation, a
+wipe, an incident) and alerting on the failures that need a person, from the
+checklist's operator items.
 
 ### Key transparency (after the wipe)
 
