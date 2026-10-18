@@ -9,8 +9,8 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::group::{
-    check_change, check_genesis, AccessRequired, GroupChangeError, GroupChangeV1, GroupLimits,
-    GroupStateV1,
+    check_change, check_genesis, AccessRequired, GroupActionV1, GroupChangeError, GroupChangeV1,
+    GroupLimits, GroupStateV1,
 };
 use kutup_chat_proto::group_route::{
     GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1, GroupLogQueryV1,
@@ -80,7 +80,30 @@ fn ok(now: i64, body: Vec<u8>) -> GroupResponseV1 {
     GroupResponseV1::new(GroupResponseStatusV1::Ok, now, &body)
 }
 
+/// [`answer_checked`], under the relay's failure budget: a relay whose
+/// requests keep failing (unknown groups, strangers, refused changes) is
+/// throttled before any work, and only failures spend that budget.
 async fn answer(
+    state: &AppState,
+    federation: &FederationStack,
+    relay: &str,
+    request: &GroupRequestV1,
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    if !limits::may_fail(relay) {
+        return Ok(status(GroupResponseStatusV1::RateLimited, now));
+    }
+    let answer = answer_checked(state, federation, relay, request, now).await?;
+    if matches!(
+        answer.status,
+        GroupResponseStatusV1::NotFound | GroupResponseStatusV1::Refused
+    ) {
+        limits::failed(relay);
+    }
+    Ok(answer)
+}
+
+async fn answer_checked(
     state: &AppState,
     federation: &FederationStack,
     relay: &str,
@@ -123,7 +146,7 @@ async fn answer(
     match request.operation {
         GroupOperationV1::Create => {
             create(
-                state, federation, request, &group_id, &pseudonym, &limits, now,
+                state, federation, relay, request, &group_id, &pseudonym, &limits, now,
             )
             .await
         }
@@ -160,9 +183,6 @@ async fn link_join_info(
     group_id: &[u8; 32],
     now: i64,
 ) -> AppResult<GroupResponseV1> {
-    if !limits::link(group_id) {
-        return Ok(status(GroupResponseStatusV1::RateLimited, now));
-    }
     let Some((group, head)) = load_state(&state.pool, group_id, false).await? else {
         return Ok(status(GroupResponseStatusV1::NotFound, now));
     };
@@ -177,6 +197,10 @@ async fn link_join_info(
     };
     if !(link_on && proven) {
         return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
+    // Charged only for a proven link, so strangers can't spend the group's.
+    if !limits::link(group_id) {
+        return Ok(status(GroupResponseStatusV1::RateLimited, now));
     }
     if !remember_nonce(state, request, now).await? {
         return Ok(status(GroupResponseStatusV1::Replayed, now));
@@ -300,9 +324,11 @@ fn refused(error: &GroupChangeError, now: i64) -> GroupResponseV1 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create(
     state: &AppState,
     federation: &FederationStack,
+    relay: &str,
     request: &GroupRequestV1,
     group_id: &[u8; 32],
     pseudonym: &str,
@@ -324,6 +350,10 @@ async fn create(
         Ok(genesis) => genesis,
         Err(error) => return Ok(refused(&error, now)),
     };
+    // New groups are limited per relaying server, and in all.
+    if !limits::create(relay) {
+        return Ok(status(GroupResponseStatusV1::RateLimited, now));
+    }
     let notary = notarise(federation, group_id, &change, &genesis, now)?;
     let state_bytes = genesis.canonical_bytes().map_err(AppError::internal)?;
     let change_bytes = change.canonical_bytes().map_err(AppError::internal)?;
@@ -332,6 +362,12 @@ async fn create(
     let change_hash = hash32(change.hash())?;
     let state_hash = hash32(genesis.hash())?;
     let mut tx = state.pool.begin().await?;
+    let hosted: i64 = sqlx::query_scalar("SELECT count(*) FROM chat_groups")
+        .fetch_one(&mut *tx)
+        .await?;
+    if hosted >= state.config.chat_group_max_groups {
+        return Ok(GroupResponseV1::refused("serverFull", now));
+    }
     let created = sqlx::query(
         "INSERT INTO chat_groups (group_id, revision, head, state, state_hash)
          VALUES ($1, 0, $2, $3, $4) ON CONFLICT (group_id) DO NOTHING",
@@ -506,6 +542,108 @@ async fn get_logs(
     Ok(ok(now, page.canonical_bytes().map_err(AppError::internal)?))
 }
 
+/// Whether `change`'s actor may act on the group: a member, or a newcomer
+/// whose own action holds (a claim signed by its slot's key, the link's
+/// password with the link on, or its own open request).
+fn admitted(state: &GroupStateV1, group_id: &[u8; 32], change: &GroupChangeV1) -> bool {
+    let actor = change.actor.as_str();
+    if !change.is_newcomers_change() {
+        return state.member(actor).is_some();
+    }
+    match change.actions.as_slice() {
+        [GroupActionV1::Claim {
+            slot_id,
+            claim_signature,
+            ..
+        }] => claim_holds(state, group_id, actor, slot_id, claim_signature),
+        [GroupActionV1::JoinFromLink { password, .. }]
+        | [GroupActionV1::RequestToJoin { password, .. }] => link_password_holds(state, password),
+        [GroupActionV1::CancelRequest] => state.requesting.iter().any(|r| r.pseudonym == actor),
+        _ => false,
+    }
+}
+
+fn decode_exact<const N: usize>(value: &str) -> Option<[u8; N]> {
+    STANDARD.decode(value).ok()?.try_into().ok()
+}
+
+fn claim_holds(
+    state: &GroupStateV1,
+    group_id: &[u8; 32],
+    actor: &str,
+    slot_id: &str,
+    signature: &str,
+) -> bool {
+    let Some(slot) = state.slots.iter().find(|slot| slot.slot_id == slot_id) else {
+        return false;
+    };
+    let (Some(claim_key), Some(slot_bytes), Some(actor_key), Some(signature)) = (
+        decode_exact::<32>(&slot.claim_key),
+        decode_exact::<16>(slot_id),
+        decode_exact::<32>(actor),
+        decode_exact::<64>(signature),
+    ) else {
+        return false;
+    };
+    kutup_crypto::chat_group::verify_claim_signature(
+        &claim_key,
+        group_id,
+        &slot_bytes,
+        slot.created_at_revision,
+        &actor_key,
+        &signature,
+    )
+    .is_ok()
+}
+
+/// The link's password, compared in constant time, with the link on.
+fn link_password_holds(state: &GroupStateV1, offered: &str) -> bool {
+    if state.access.add_from_invite_link == AccessRequired::Unsatisfiable {
+        return false;
+    }
+    let (Some(current), Some(offered)) = (
+        state
+            .invite_link_password
+            .as_deref()
+            .and_then(|p| STANDARD.decode(p).ok()),
+        STANDARD.decode(offered).ok(),
+    ) else {
+        return false;
+    };
+    current.len() == offered.len()
+        && std::hint::black_box(
+            current
+                .iter()
+                .zip(&offered)
+                .fold(0u8, |difference, (a, b)| difference | (a ^ b)),
+        ) == 0
+}
+
+/// Drops the changes no current member can need: every member reads the log
+/// only from the revision it joined at, so revisions before the earliest of
+/// those are kept as the state alone. The latest change always stays (the
+/// state's own notary rides on it).
+async fn prune_log(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: &[u8; 32],
+    next: &GroupStateV1,
+) -> AppResult<()> {
+    let earliest = next
+        .members
+        .iter()
+        .map(|member| member.joined_at_revision)
+        .min()
+        .unwrap_or(next.revision)
+        .min(next.revision);
+    let earliest = i64::try_from(earliest).map_err(|_| AppError::internal("revision"))?;
+    sqlx::query("DELETE FROM chat_group_changes WHERE group_id = $1 AND revision < $2")
+        .bind(&group_id[..])
+        .bind(earliest)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 async fn submit(
     state: &AppState,
     federation: &FederationStack,
@@ -523,17 +661,26 @@ async fn submit(
     if change.actor != pseudonym {
         return Ok(GroupResponseV1::refused("wrongActor", now));
     }
-    if !limits::change(pseudonym, group_id) {
-        return Ok(status(GroupResponseStatusV1::RateLimited, now));
-    }
     let mut tx = state.pool.begin().await?;
     let Some((current, head)) = load_state(&mut *tx, group_id, true).await? else {
         return Ok(status(GroupResponseStatusV1::NotFound, now));
     };
+    // Whoever isn't admitted to the group (a stranger, a removed member, a
+    // newcomer without a valid claim, link password or request) gets the
+    // answer an unknown group gets, before anything else: no conflict, code
+    // or "ended" tells them the group exists.
+    if !admitted(&current, group_id, &change) {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
     let next = match check_change(&current, &head, &change, limits) {
         Ok(next) => next,
         Err(error) => return Ok(refused(&error, now)),
     };
+    // Charged only for a valid change, so nobody can spend a group's budget
+    // with changes that would be refused.
+    if !limits::change(pseudonym, group_id) {
+        return Ok(status(GroupResponseStatusV1::RateLimited, now));
+    }
     let notary = notarise(federation, group_id, &change, &next, now)?;
     let state_bytes = next.canonical_bytes().map_err(AppError::internal)?;
     let change_bytes = change.canonical_bytes().map_err(AppError::internal)?;
@@ -564,6 +711,7 @@ async fn submit(
         &notary_bytes,
     )
     .await?;
+    prune_log(&mut tx, group_id, &next).await?;
     tx.commit().await?;
     // The change with its notary: a member applies it to the state it has;
     // a newcomer whose request awaits approval learns nothing more.

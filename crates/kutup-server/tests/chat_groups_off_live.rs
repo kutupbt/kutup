@@ -64,6 +64,18 @@ fn groups_are_off_unless_switched_on() {
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups relay");
+    // The federated side too: groups off answers before any signature check.
+    let r = c
+        .post(format!("{base}/api/fed/chat/groups/gateway"))
+        .body(vec![0u8; 64])
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups gateway");
+    let r = c
+        .get(format!("{base}/api/fed/chat/groups/gateway-key"))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "the gateway key");
     // A well-formed group-call token request: refused for there being no
     // groups, not for its shape.
     let r = bearer(

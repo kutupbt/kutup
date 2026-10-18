@@ -113,7 +113,10 @@ configured: a group's home answers only through the anonymous route, under
 a weekly HPKE key derived from the federation identity. A home stores each
 group's state and change log with members as per-group pseudonyms, never an
 account; `CHAT_GROUP_MAX_MEMBERS` (1 to 256, default 256) caps a group's
-members and open invitations.
+members and open invitations, and `CHAT_GROUP_MAX_GROUPS` (default 100000)
+the groups it hosts (new groups are also limited per relaying server). A
+group's change log keeps only the changes a current member may still read:
+those from the earliest revision any member joined at, plus the latest.
 
 Keep `CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, and the public host in
 `SERVER_URL` aligned before creating accounts; changing an established account

@@ -433,7 +433,8 @@ fn the_home_refuses_what_its_checks_refuse() {
     let conflict = submit(&c, &alice, &home, &group, &stale, &alice_key);
     assert_eq!(conflict.status, GroupResponseStatusV1::Conflict);
 
-    // A stranger's change is refused with its check's code.
+    // A stranger's change gets the answer an unknown group gets: no code or
+    // conflict tells a stranger the group exists.
     let stranger = GroupKeyPair::generate();
     let mut foreign = author(
         &group,
@@ -445,8 +446,30 @@ fn the_home_refuses_what_its_checks_refuse() {
     let refused = submit(&c, &alice, &home, &group, &foreign, &stranger);
     assert_eq!(
         refused.status,
-        GroupResponseStatusV1::Refused,
+        GroupResponseStatusV1::NotFound,
         "{refused:?}"
+    );
+    // Even at a stale revision, where a member would get a conflict.
+    let mut stale_foreign = foreign.clone();
+    stale_foreign.revision += 5;
+    stale_foreign.signature = b64(&stranger.sign_change(&stale_foreign.signed_bytes().unwrap()));
+    assert_eq!(
+        submit(&c, &alice, &home, &group, &stale_foreign, &stranger).status,
+        GroupResponseStatusV1::NotFound
+    );
+    // A member's change that its checks refuse still says why.
+    let mut not_allowed = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyAnnouncementsOnly { on: true }],
+    );
+    not_allowed.resulting_state_hash = Some(b64(&[1; 32]));
+    not_allowed.signature = b64(&alice_key.sign_change(&not_allowed.signed_bytes().unwrap()));
+    let mismatch = submit(&c, &alice, &home, &group, &not_allowed, &alice_key);
+    assert_eq!(
+        mismatch.status,
+        GroupResponseStatusV1::Refused,
+        "{mismatch:?}"
     );
 
     // A request signed by someone other than the change's actor is refused.
@@ -558,4 +581,222 @@ fn create_again(
         creator,
     );
     exchange(c, user, home, &request).status
+}
+
+#[test]
+fn removed_members_and_strangers_learn_nothing() {
+    let Some(base) = live() else { return };
+    let c = Client::new();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let bob_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    join(&c, &alice, &bob, &home, &mut group, &alice_key, &bob_key);
+
+    // Alice removes Bob.
+    let remove = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::RemoveMember {
+            pseudonym: b64(&bob_key.public_key()),
+        }],
+    );
+    let removed = accepted(&submit(&c, &alice, &home, &group, &remove, &alice_key));
+    apply(&mut group, &home, &removed);
+
+    // Bob reads nothing, and his changes meet an unknown group.
+    let query = serde_json::to_vec(&GroupLogQueryV1 {
+        from_revision: 0,
+        limit: 10,
+    })
+    .unwrap();
+    for (operation, body) in [
+        (GroupOperationV1::GetState, Vec::new()),
+        (GroupOperationV1::GetLogs, query),
+    ] {
+        let answer = exchange(
+            &c,
+            &bob,
+            &home,
+            &signed(&home, &group.id, operation, &body, &bob_key),
+        );
+        assert_eq!(
+            answer.status,
+            GroupResponseStatusV1::NotFound,
+            "{operation:?}"
+        );
+    }
+    let leave = GroupChangeV1 {
+        actor: b64(&bob_key.public_key()),
+        ..author(&group, &alice_key, vec![GroupActionV1::Leave])
+    };
+    let mut leave = leave;
+    leave.signature = b64(&bob_key.sign_change(&leave.signed_bytes().unwrap()));
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &leave, &bob_key).status,
+        GroupResponseStatusV1::NotFound
+    );
+
+    // A request with a bad signature is an unknown group's too.
+    let mut forged = signed(
+        &home,
+        &group.id,
+        GroupOperationV1::GetState,
+        b"",
+        &alice_key,
+    );
+    if let kutup_chat_proto::group_route::GroupRequestAuthV1::Pseudonym { signature, .. } =
+        &mut forged.auth
+    {
+        *signature = b64(&[7u8; 64]);
+    }
+    assert_eq!(
+        exchange(&c, &alice, &home, &forged).status,
+        GroupResponseStatusV1::NotFound
+    );
+
+    // A newcomer's join with a wrong link password, or with the link off,
+    // learns nothing either.
+    let wrong = GroupKeyPair::generate();
+    let join = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: encode_group_id(&group.id),
+        revision: group.state.revision + 1,
+        previous_hash: b64(&group.head),
+        actor: b64(&wrong.public_key()),
+        actions: vec![GroupActionV1::RequestToJoin {
+            password: b64(&[3u8; 16]),
+            entry: entry(&group.master, &wrong.public_key()),
+        }],
+        resulting_state_hash: None,
+        signature: String::new(),
+    };
+    let mut join = join;
+    join.signature = b64(&wrong.sign_change(&join.signed_bytes().unwrap()));
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &join, &wrong).status,
+        GroupResponseStatusV1::NotFound
+    );
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+#[test]
+fn link_join_info_needs_the_link_on_and_its_password() {
+    let Some(base) = live() else { return };
+    let c = Client::new();
+    let alice = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = random::<16>();
+    let group_id = group.id;
+    let join_info = |password: &[u8]| {
+        let request = GroupRequestV1::with_link_password(
+            &home.name,
+            &group_id,
+            GroupOperationV1::GetJoinInfo,
+            now(),
+            &random::<16>(),
+            password,
+        )
+        .unwrap();
+        exchange(&c, &alice, &home, &request)
+    };
+    // No link yet.
+    assert_eq!(join_info(&password).status, GroupResponseStatusV1::NotFound);
+
+    // Alice turns the link on (anyone may join) with a password.
+    let mut access = group.state.access;
+    access.add_from_invite_link = kutup_chat_proto::group::AccessRequired::Any;
+    let link = author(
+        &group,
+        &alice_key,
+        vec![
+            GroupActionV1::ModifyInviteLink {
+                password: Some(b64(&password)),
+            },
+            GroupActionV1::ModifyAccess { access },
+        ],
+    );
+    let linked = accepted(&submit(&c, &alice, &home, &group, &link, &alice_key));
+    apply(&mut group, &home, &linked);
+
+    let answer = join_info(&password);
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    let info = GroupJoinInfoV1::from_canonical_bytes(&answer.body().unwrap()).unwrap();
+    assert_eq!(info.revision, group.state.revision);
+    assert_eq!(info.requires_approval, Some(false));
+    assert_eq!(
+        join_info(&random::<16>()).status,
+        GroupResponseStatusV1::NotFound
+    );
+    purge_accounts(&c, &base, &[&alice]);
+}
+
+#[test]
+fn the_relay_needs_a_signed_in_account() {
+    let Some(base) = live() else { return };
+    let c = Client::new();
+    let name = server_name(&c, &base);
+    let r = c
+        .post(format!("{base}/api/chat/groups/relay/{name}"))
+        .body(vec![0u8; 64])
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = c
+        .get(format!(
+            "{base}/api/chat/groups/gateway-key?server={name}&fromSequence=0"
+        ))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Adds `member` (signed in as `user`) through a slot `adder` makes.
+fn join(
+    c: &Client,
+    adder_user: &User,
+    user: &User,
+    home: &Home,
+    group: &mut Group,
+    adder: &GroupKeyPair,
+    member: &GroupKeyPair,
+) {
+    let claim_key = GroupKeyPair::generate();
+    let slot_id = random::<16>();
+    let add = author(
+        group,
+        adder,
+        vec![GroupActionV1::AddSlot {
+            slot_id: b64(&slot_id),
+            role: GroupRole::Member,
+            claim_key: b64(&claim_key.public_key()),
+            entry: entry(&group.master, b"slot"),
+        }],
+    );
+    let added = accepted(&submit(c, adder_user, home, group, &add, adder));
+    apply(group, home, &added);
+    let slot_revision = group
+        .state
+        .slots
+        .iter()
+        .find(|slot| slot.slot_id == b64(&slot_id))
+        .unwrap()
+        .created_at_revision;
+    let claim_signature =
+        claim_key.sign_claim(&group.id, &slot_id, slot_revision, &member.public_key());
+    let claim = author(
+        group,
+        member,
+        vec![GroupActionV1::Claim {
+            slot_id: b64(&slot_id),
+            claim_signature: b64(&claim_signature),
+            entry: entry(&group.master, &member.public_key()),
+        }],
+    );
+    let claimed = accepted(&submit(c, user, home, group, &claim, member));
+    apply(group, home, &claimed);
 }

@@ -3216,7 +3216,12 @@ nonce, and answers with one `notFound` for an unknown group, a non-member and
 a bad signature; the operations and answers are `GroupRequestV1` /
 `GroupResponseV1` in `kutup_chat_proto::group_route`. The home limits per
 relaying server (6000/min), per pseudonym (240/min), changes per pseudonym
-(30/min) and per group (60/min), and link requests per group (30/min).
+(30/min) and per group (60/min), link requests per group (30/min), and new
+groups per relaying server (600/hour). Group budgets are charged only for
+valid changes and proven link requests; failed requests spend a separate
+budget per relaying server (600/min). A stranger, a removed member, or a
+newcomer whose claim, link password or request doesn't hold gets the same
+`notFound` as an unknown group, never a conflict or a refusal code.
 
 ### POST /api/chat/call-links
 

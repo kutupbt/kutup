@@ -6,8 +6,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
 use crate::ratelimit::{
-    CHAT_GROUP_CHANGES_GROUP, CHAT_GROUP_CHANGES_PSEUDONYM, CHAT_GROUP_GATEWAY_RELAY,
-    CHAT_GROUP_LINK, CHAT_GROUP_PSEUDONYM, CHAT_GROUP_RELAY,
+    CHAT_GROUP_CHANGES_GROUP, CHAT_GROUP_CHANGES_PSEUDONYM, CHAT_GROUP_CREATES_RELAY,
+    CHAT_GROUP_FAILURES_RELAY, CHAT_GROUP_GATEWAY_RELAY, CHAT_GROUP_LINK, CHAT_GROUP_PSEUDONYM,
+    CHAT_GROUP_RELAY,
 };
 
 /// A signed-in account relaying a request.
@@ -25,14 +26,33 @@ pub(crate) fn pseudonym(pseudonym: &str) -> bool {
     CHAT_GROUP_PSEUDONYM.allow(pseudonym)
 }
 
-/// A change by `pseudonym` to the group `group_id`: both limits must allow it.
+/// A change by `pseudonym` to the group `group_id` that passed its checks:
+/// both limits must allow it. Charged only for valid changes, so nobody can
+/// spend a group's budget with changes that would be refused.
 pub(crate) fn change(pseudonym: &str, group_id: &[u8; 32]) -> bool {
     CHAT_GROUP_CHANGES_PSEUDONYM.allow(pseudonym)
         && CHAT_GROUP_CHANGES_GROUP.allow(&STANDARD.encode(group_id))
 }
 
-/// A link request (join info) for the group `group_id`: link holders can't
-/// flood one group.
+/// A link request (join info) for the group `group_id` whose password proof
+/// passed: link holders can't flood one group, and strangers can't spend
+/// its budget.
 pub(crate) fn link(group_id: &[u8; 32]) -> bool {
     CHAT_GROUP_LINK.allow(&STANDARD.encode(group_id))
+}
+
+/// Whether the relay server `relay` may still fail: checked before a request
+/// is worked on, charged by [`failed`] when it fails.
+pub(crate) fn may_fail(relay: &str) -> bool {
+    CHAT_GROUP_FAILURES_RELAY.has_room(relay)
+}
+
+/// A request through `relay` failed.
+pub(crate) fn failed(relay: &str) {
+    CHAT_GROUP_FAILURES_RELAY.allow(relay);
+}
+
+/// A new group through `relay`.
+pub(crate) fn create(relay: &str) -> bool {
+    CHAT_GROUP_CREATES_RELAY.allow(relay)
 }
