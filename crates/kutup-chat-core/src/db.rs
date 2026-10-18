@@ -232,6 +232,11 @@ pub struct GroupOutboxLeg {
     /// nothing more is tried).
     #[serde(default)]
     pub failed: bool,
+    /// How often the server answered that another payload is queued under
+    /// this send id: a second time fails the leg (its own payload would
+    /// conflict for ever).
+    #[serde(default)]
+    pub conflicts: u32,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox

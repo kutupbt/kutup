@@ -46,6 +46,9 @@ use crate::group_engine::GroupSync;
 /// changed.
 const MAX_LEG_ATTEMPTS: u32 = 5;
 
+/// How many `conflict` answers a leg takes before it fails.
+const MAX_LEG_CONFLICTS: u32 = 2;
+
 /// A send catches up with the home first when the last catch-up is older.
 pub(crate) const SEND_CATCH_UP_AFTER_MS: i64 = 5 * 60 * 1000;
 
@@ -449,6 +452,7 @@ impl Engine {
                     .map_err(|e| ChatError::Content(e.to_string()))?,
                 delivered: false,
                 failed: false,
+                conflicts: 0,
             });
         }
         let created_at = unix_millis();
@@ -609,11 +613,20 @@ impl Engine {
                             .map_err(|e| ChatError::Content(e.to_string()))?;
                         again.push(index);
                     }
-                    // Over a limit, behind another send with the same id
-                    // still queued, offline or a server error: the leg stays
+                    // Another payload is queued under this send id: once,
+                    // the leg waits for it to be answered; a second time it
+                    // fails, as it would conflict for ever.
+                    Some(SealedBatchOutcomeV1::Conflict) => {
+                        let leg = &mut entry.legs[index];
+                        leg.conflicts = leg.conflicts.saturating_add(1);
+                        if leg.conflicts >= MAX_LEG_CONFLICTS {
+                            leg.delivered = true;
+                            leg.failed = true;
+                        }
+                    }
+                    // Over a limit, offline or a server error: the leg stays
                     // for a later flush (the same send id is safe to repeat).
-                    Some(SealedBatchOutcomeV1::RateLimited | SealedBatchOutcomeV1::Conflict)
-                    | None => {}
+                    Some(SealedBatchOutcomeV1::RateLimited) | None => {}
                 }
             }
             retry = again;

@@ -2523,3 +2523,36 @@ fn group_followup_an_evicted_envelope_is_acknowledged_and_reported() {
     assert_eq!(report.suppressed, acks);
     assert!(!report.held.contains(&acks[0]));
 }
+
+#[test]
+fn group_batches_a_leg_that_keeps_conflicting_fails_on_the_second() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    world.batch_answers.borrow_mut().extend([
+        (bob.account.clone(), Outcome::Conflict),
+        (bob.account.clone(), Outcome::Conflict),
+    ]);
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(&send_id, ISSUED_AT, seq, "conflicted");
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    // Once: it waits.
+    assert_eq!((summary.pending, summary.failed), (1, 0));
+    // Twice: it fails, and isn't tried again.
+    let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!((flushed[0].pending, flushed[0].failed), (0, 1));
+    assert!(block_on(alice.engine.flush_group_outbox(&mut rng()))
+        .unwrap()
+        .is_empty());
+}

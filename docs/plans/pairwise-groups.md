@@ -1075,8 +1075,10 @@ own fallback path (§1).
     a refused direct send does; `refused` (for good, or over 1 MiB) ends it
     as failed, which the send's summary reports; `deviceMismatch` amends the
     leg (a device without the key gets the message pairwise) and sends it
-    again, up to five rounds; `rateLimited`, `conflict` and a batch that
-    didn't go leave the leg for a later flush under the same send id.
+    again, up to five rounds; `rateLimited` and a batch that didn't go
+    leave the leg for a later flush under the same send id; `conflict` (another
+    payload queued under that id) does so once, and fails the leg the second
+    time.
   - This is the multi-recipient route's outer shape without libsignal's
     format, so slice 2 replaces the body, not the plumbing.
   - Raising the per-IP default instead would weaken the outer wall for direct
