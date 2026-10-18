@@ -108,7 +108,12 @@ migrations); run it against a new image and your `.env` before switching over.
 chats, calls and meeting links, but no group chats or group calls; the
 server reports none and refuses the group routes. Groups return with the
 pairwise group design that replaces them (docs/roadmap.md). `CHAT_GROUPS=true`
-switches the current groups on, for testing only.
+switches the current groups on, for testing only. Groups need federation
+configured: a group's home answers only through the anonymous route, under
+a weekly HPKE key derived from the federation identity. A home stores each
+group's state and change log with members as per-group pseudonyms, never an
+account; `CHAT_GROUP_MAX_MEMBERS` (1 to 256, default 256) caps a group's
+members and open invitations.
 
 Keep `CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, and the public host in
 `SERVER_URL` aligned before creating accounts; changing an established account

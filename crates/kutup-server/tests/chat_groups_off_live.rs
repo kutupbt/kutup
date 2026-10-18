@@ -45,9 +45,25 @@ fn groups_are_off_unless_switched_on() {
         &format!("/api/chat/mls/domains/{}/policy", server_domain(&c, &base)),
         // A peer's policy is not fetched either.
         "/api/chat/mls/domains/peer.invalid/policy",
+        // Nor the pairwise groups' anonymous route.
+        &format!(
+            "/api/chat/groups/gateway-key?server={}&fromSequence=0",
+            server_domain(&c, &base)
+        ),
     ] {
         assert_eq!(get(path), StatusCode::NOT_FOUND, "{path}");
     }
+    let r = bearer(
+        c.post(format!(
+            "{base}/api/chat/groups/relay/{}",
+            server_domain(&c, &base)
+        )),
+        &user.token,
+    )
+    .body(vec![0u8; 64])
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND, "the groups relay");
     // A well-formed group-call token request: refused for there being no
     // groups, not for its shape.
     let r = bearer(
