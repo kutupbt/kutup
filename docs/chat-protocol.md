@@ -720,6 +720,75 @@ requests/minute, 120 sealed sends/minute and 10,000/day/capability, 600
 federated sends/minute/origin, 32 envelopes and 1 MiB/request. Unknown recipient
 and invalid capability return the same response shape.
 
+**Sealed batches.** `POST /api/chat/anonymous/messages/batch?server=` carries
+1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
+recipient's `accountId` and its single-route submission), at most 4 MiB, in one
+request: a group message reaches every member device without one request per
+member. The address's anonymous limit counts recipients, as single sends
+would; each recipient's capability is checked and counted on its own, and
+each gets its own result in order:
+
+- `delivered`;
+- `deviceMismatch`, with the single route's mismatch body;
+- `unavailable`, for a wrong capability or an unknown account alike;
+- `pending`, only for a send that was queued for the recipient's server;
+- `refused`, refused for good by that server, or too large for one federated
+  transaction (1 MiB encoded), and then never queued;
+- `peerUnsupported`;
+- `rateLimited`, over the address's, the capability's or the recipient's
+  limit; nothing was stored or queued, so it is resent later;
+- `conflict`, other content under this `sendId` still queued; nothing was
+  queued, so it is resent once that one is answered.
+
+A recipient over a limit doesn't stop the others. A server error fails the
+whole request, which is safe to repeat because `sendId`s dedupe.
+
+For another server, the origin queues each send exactly as a single sealed
+send (same outbox, sequence and `sendId` dedup), then flushes the
+destination's queue. One flush per destination runs at a time: in each
+backend a set of the destinations being flushed, and across backends sharing
+the database a session advisory lock held on a small pool of its own, so no
+flush holds a main-pool connection or a transaction across its network calls.
+Nobody waits for that lock: a client whose send meets a flush under way is
+answered from its outbox row, which keeps the destination's final answer, so
+it reads its real answer if another flush (the retry worker's) settled it, and
+`pending` only while it is still queued. A flush runs in its own task, so a
+client that goes away doesn't cut it short. A flush sends nothing while the queue's head is backing off
+or waits for the peer to support `chat.v2`. Otherwise it sends the run of
+consecutive pending sends from the head, sized before it is loaded, in signed
+`POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
+64 transactions and 4 MiB). The destination checks the batch's shape first
+(one origin, consecutive sequences) and refuses a malformed batch before
+applying any of it. Otherwise it applies the transactions one by one as
+single transactions and stops after the first answer that doesn't use up its
+sequence, answering each it tried.
+
+**Version 2.** Every sealed transaction and batch carries
+`version` 2 (`SEALED_FEDERATION_VERSION`), the version in which every answer
+uses up its sequence. A server refuses another version's transactions for
+good, by sequence, with `code: sealedVersionUnsupported`, and both sides log
+it: a peer that reads sequences differently is refused, never waited on.
+Federating servers upgrade together (`docs/self-hosting.md`, Updating).
+
+**Every answer uses up its sequence.** The destination records each final
+answer to an origin's sequence (a delivery, the uniform 404, a device
+mismatch, a refusal naming the sequence) in the same transaction, under the
+origin's lock, as what it answers. Every one of them is charged to the
+origin's sealed rate, a mismatch, a refusal and the 404 included, so none is
+a free probe. A replay of that sequence then gets the
+same answer, and the next sequence follows. Only an unknown result (a timeout,
+a passing error, a rate limit, a gap) is tried again under the same sequence.
+
+A send answered with a device mismatch is corrected by its client and goes
+again under a new sequence with the same `sendId`; the recipient's mailbox
+deduplicates deliveries by `sendId`. So a send whose client never corrects it
+can't hold the origin's later sends to that server.
+
+The origin moves an outbox row only on an answer to the sequence the row
+still has, so a late answer to an old sequence changes nothing. A peer that
+answers a single send but not a batch (a server from before batches) gets
+singles for an hour. The retry worker flushes due queues the same way.
+
 ## 8. Private MLS groups
 
 The complete group protocol is specified in [`chat-mls.md`](chat-mls.md). V1
