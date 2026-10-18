@@ -202,6 +202,34 @@ pub(crate) enum OutboxLeg {
     Sync,
 }
 
+/// A group message's delivery and send log (docs/plans/pairwise-groups.md
+/// §1–§2): one sender-key ciphertext, sealed per device, with a leg per
+/// recipient account. Its one history row is the `SentMessage` of the same
+/// `send_id`. Once every leg is delivered the ciphertexts go and the entry
+/// stays as the send log: which devices the message went to, so a resend goes
+/// only to them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupOutboxEntry {
+    pub send_id: String,
+    pub group_id: String,
+    /// `serde_json` of the `ChatContent`, with its group context.
+    pub content: Vec<u8>,
+    pub created_at: i64,
+    pub legs: Vec<GroupOutboxLeg>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupOutboxLeg {
+    /// The recipient account (`aci:<uuid>@<server>`).
+    pub account: String,
+    /// `serde_json` of the per-device `Vec<SealedOutgoingEnvelopeV1>`; empty
+    /// once delivered.
+    pub envelopes: Vec<u8>,
+    /// The devices the leg covered: the message's original recipients.
+    pub devices: Vec<u32>,
+    pub delivered: bool,
+}
+
 /// Durable local history for an outbound logical message. The pending outbox
 /// may be deleted after confirmation; this record remains for UI/history and
 /// tracks whether the exact ciphertext is still awaiting delivery.
@@ -546,6 +574,8 @@ pub struct Pending {
     pub(crate) contacts: HashMap<String, ContactRecord>,
     /// Group id → this device's record of the group (docs/plans/pairwise-groups.md).
     pub(crate) groups: HashMap<String, crate::group::GroupRecordV1>,
+    /// Send id → a group message's pending delivery; `None` removes it.
+    pub(crate) group_outbox: HashMap<String, Option<GroupOutboxEntry>>,
     /// The local account's profile singleton.
     pub(crate) local_profile: Option<LocalProfile>,
     /// Peer account → harvested/decrypted profile state.
@@ -611,6 +641,7 @@ impl Pending {
             && self.manifest_history.is_empty()
             && self.contacts.is_empty()
             && self.groups.is_empty()
+            && self.group_outbox.is_empty()
             && self.local_profile.is_none()
             && self.peer_profiles.is_empty()
             && self.delete_messages_for_peers.is_empty()
@@ -740,6 +771,8 @@ pub trait ChatDb {
     async fn load_group(&self, group_id: &str) -> Result<Option<crate::group::GroupRecordV1>>;
     /// Every group this device has a record of, by id.
     async fn list_groups(&self) -> Result<Vec<crate::group::GroupRecordV1>>;
+    /// Group messages being delivered, and the send log of delivered ones.
+    async fn list_group_outbox(&self) -> Result<Vec<GroupOutboxEntry>>;
 
     /// The local account's encrypted-profile source state.
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>>;

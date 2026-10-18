@@ -29,6 +29,10 @@ mod group;
 mod group_client;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+mod group_heal;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+mod group_send;
 mod invite_link;
 mod keys;
 mod manifest;

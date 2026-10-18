@@ -126,6 +126,12 @@ pub enum EngineState {
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
     StateChanged(EngineState),
+    /// This account was invited to a group: an invited record waits for its
+    /// choice (docs/plans/pairwise-groups.md §4).
+    GroupInvited {
+        group_id: String,
+        from: String,
+    },
     MessageReceived(Box<ReceivedMessage>),
     MessageSynced(Box<SentMessage>),
     MessageSent(SendSummary),
@@ -150,7 +156,7 @@ pub enum ChatEvent {
 const DEFAULT_MAILBOX_RETENTION_DAYS: u32 = 30;
 /// How long a fetched and verified device list is used without fetching it
 /// again (each fetch takes one of the account's one-time prekeys).
-const KNOWN_DEVICES_TTL_MS: i64 = 60 * 60 * 1000;
+pub(crate) const KNOWN_DEVICES_TTL_MS: i64 = 60 * 60 * 1000;
 /// How often the records waiting for a message are looked at.
 const WAITING_CHECK_INTERVAL_MS: i64 = 10 * 60 * 1000;
 /// A record this young was just asked for when it was made.
@@ -170,10 +176,14 @@ pub struct Engine {
     sealed_sender_enabled: bool,
     /// The devices of each account as last fetched and verified this run
     /// (`bundles_for_send`). Never used to establish a session.
-    known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
+    pub(crate) known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
     /// When each entry of `known_devices` was fetched: a list older than
     /// `KNOWN_DEVICES_TTL_MS` is fetched and verified again.
-    known_devices_at: BTreeMap<String, i64>,
+    pub(crate) known_devices_at: BTreeMap<String, i64>,
+    /// Each group's verified member accounts, and when they were checked
+    /// (docs/plans/pairwise-groups.md §3): refreshed after
+    /// `KNOWN_DEVICES_TTL_MS`, and dropped when the group's state changes.
+    pub(crate) group_members_seen: BTreeMap<String, (i64, Vec<String>)>,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
@@ -227,6 +237,7 @@ impl Engine {
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
             known_devices_at: BTreeMap::new(),
+            group_members_seen: BTreeMap::new(),
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
             asked_again: BTreeMap::new(),
@@ -1836,8 +1847,16 @@ impl Engine {
         }
         self.waiting_checked_at = now;
         let mut ask: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut ask_group: BTreeMap<(String, String, u32), Vec<String>> = BTreeMap::new();
         let mut give_up: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for (peer, send_id, received_at) in self.session.waiting_records().await? {
+        for record in self.session.waiting_records().await? {
+            let crate::session::WaitingRecord {
+                peer,
+                device_id,
+                send_id,
+                received_at,
+                group_id,
+            } = record;
             let age = now - received_at;
             if age >= WAITING_GIVE_UP_MS {
                 give_up.entry(peer).or_default().push(send_id);
@@ -1855,7 +1874,25 @@ impl Engine {
                 continue;
             }
             self.asked_again.insert(key, now);
-            ask.entry(peer).or_default().push(send_id);
+            match group_id {
+                // A group message is asked for from the device that sent it,
+                // through the group (docs/plans/pairwise-groups.md §2).
+                Some(group_id) => ask_group
+                    .entry((group_id, peer, device_id))
+                    .or_default()
+                    .push(send_id),
+                None => ask.entry(peer).or_default().push(send_id),
+            }
+        }
+        for ((group_id, peer, device_id), send_ids) in ask_group {
+            if let Ok(from) = crate::address::ChatAddress::from_sender(&peer, device_id) {
+                for batch in send_ids.chunks(kutup_chat_proto::MAX_SESSION_CONTROL_SEND_IDS) {
+                    // Best effort: asked again at the next interval.
+                    let _ = self
+                        .request_group_resend(&group_id, &from, batch.to_vec(), rng)
+                        .await;
+                }
+            }
         }
         for (peer, send_ids) in give_up {
             self.session.give_up_waiting(&peer, &send_ids).await?;
@@ -1926,6 +1963,8 @@ impl Engine {
                     .ok()
                     .map(|(sender, _)| (sender, envelope.sender_device_id))
             });
+            // The group a sender-key message named, for its repair.
+            let mut group_origin: Option<[u8; 32]> = None;
             let receive_result = if envelope.sealed_sender {
                 origin = None;
                 let inspection = self.session.inspect_sealed_envelope(&envelope).await;
@@ -1938,10 +1977,23 @@ impl Engine {
                             Ok(root) => {
                                 origin =
                                     Some((inspection.sender.clone(), inspection.sender_device_id));
-                                let local = self.canonical_self()?;
-                                self.session
-                                    .receive_sealed_envelope(&envelope, &inspection, &local, &root)
-                                    .await
+                                group_origin = inspection.group_id;
+                                if inspection.group_id.is_some() {
+                                    // A sender-key message: a group's, under its
+                                    // sender's key (docs/plans/pairwise-groups.md §1).
+                                    self.receive_group_envelope(&envelope, &inspection, &root)
+                                        .await
+                                } else {
+                                    let local = self.canonical_self()?;
+                                    self.session
+                                        .receive_sealed_envelope(
+                                            &envelope,
+                                            &inspection,
+                                            &local,
+                                            &root,
+                                        )
+                                        .await
+                                }
                             }
                             Err(error) => Err(error),
                         }
@@ -1997,6 +2049,50 @@ impl Engine {
                     ack_ids.push(id.clone());
                     report.suppressed.push(id);
                 }
+                Ok(ReceiveOutcome::GroupContent {
+                    id,
+                    from,
+                    cursor,
+                    content,
+                }) => {
+                    ack_ids.push(id.clone());
+                    use crate::group_engine::GroupContentOutcome;
+                    match self
+                        .handle_group_content(&id, &from, cursor, &content, rng)
+                        .await
+                    {
+                        Ok(GroupContentOutcome::Message(content)) => {
+                            let message = ReceivedMessage {
+                                from,
+                                content: *content,
+                                cursor,
+                                id,
+                            };
+                            self.events
+                                .push_back(ChatEvent::MessageReceived(Box::new(message.clone())));
+                            report.messages.push(message);
+                        }
+                        Ok(GroupContentOutcome::Invited { group_id, from }) => {
+                            self.events
+                                .push_back(ChatEvent::GroupInvited { group_id, from });
+                            report.suppressed.push(id);
+                        }
+                        Ok(GroupContentOutcome::SenderKey | GroupContentOutcome::Ignored) => {
+                            report.suppressed.push(id);
+                        }
+                        // Taken but not usable now (a manifest that can't be
+                        // fetched, say): the sender's next message, or a
+                        // refresh, brings it again.
+                        Err(error) => {
+                            self.events.push_back(ChatEvent::InboundNeedsAttention {
+                                id: id.clone(),
+                                kind: error.inbound_failure_kind(),
+                                error: error.to_string(),
+                            });
+                            report.suppressed.push(id);
+                        }
+                    }
+                }
                 Ok(ReceiveOutcome::ResendRequested { id, peer, send_ids }) => {
                     ack_ids.push(id.clone());
                     report.suppressed.push(id);
@@ -2012,6 +2108,23 @@ impl Engine {
                         InboundFailureKind::MissingKeyMaterial
                             | InboundFailureKind::MalformedCiphertext
                     );
+                    // A group message under a sender key this device doesn't
+                    // hold: the group's own repair (no session reset).
+                    if let (true, Some(group_id), Some((sender, device_id))) =
+                        (unreadable, group_origin, origin.clone())
+                    {
+                        if let Some(notice) = self
+                            .repair_group_message(&envelope, &sender, device_id, &group_id, rng)
+                            .await?
+                        {
+                            self.events
+                                .push_back(ChatEvent::MessageReceived(Box::new(notice.clone())));
+                            report.messages.push(notice);
+                            ack_ids.push(inbound.id.clone());
+                            report.repaired.push(inbound.id);
+                            continue;
+                        }
+                    }
                     if let (true, Some((sender, device_id))) = (unreadable, origin) {
                         // A broken session rarely breaks for one message. Set
                         // it aside once, then let what was already on its way
@@ -2486,7 +2599,7 @@ impl Engine {
     }
 
     /// [`Self::bundles_for_send`] for sealed delivery.
-    async fn sealed_bundles_for_send(
+    pub(crate) async fn sealed_bundles_for_send(
         &mut self,
         peer_user: &str,
         capability: &[u8; 16],
@@ -2562,7 +2675,7 @@ impl Engine {
         Ok(bundles)
     }
 
-    async fn fetch_verified_sealed_bundles(
+    pub(crate) async fn fetch_verified_sealed_bundles(
         &mut self,
         peer_user: &str,
         capability: &[u8; 16],
@@ -2662,7 +2775,7 @@ impl Engine {
             .map_err(ChatError::Trust)
     }
 
-    async fn issue_verified_sender_certificate(
+    pub(crate) async fn issue_verified_sender_certificate(
         &self,
     ) -> Result<libsignal_protocol::SenderCertificate> {
         let domain = self.session.server();

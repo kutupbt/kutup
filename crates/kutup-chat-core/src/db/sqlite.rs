@@ -209,6 +209,11 @@ CREATE TABLE IF NOT EXISTS contacts (
     sync_pending     INTEGER NOT NULL DEFAULT 0,
     sync_send_id     TEXT
 );
+CREATE TABLE IF NOT EXISTS group_outbox (
+    send_id    TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    entry      BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS chat_groups (
     group_id TEXT PRIMARY KEY,
     record   BLOB NOT NULL
@@ -696,6 +701,18 @@ impl ChatDb for SqliteChatDb {
         rows.map(|row| decode_group(&db(row)?)).collect()
     }
 
+    async fn list_group_outbox(&self) -> Result<Vec<crate::db::GroupOutboxEntry>> {
+        let conn = self.conn.borrow();
+        let mut stmt =
+            db(conn.prepare("SELECT entry FROM group_outbox ORDER BY created_at, send_id"))?;
+        let rows = db(stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)))?;
+        rows.map(|row| {
+            serde_json::from_slice(&db(row)?)
+                .map_err(|_| ChatError::Db("a group outbox entry doesn't read".into()))
+        })
+        .collect()
+    }
+
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>> {
         let conn = self.conn.borrow();
         let encoded: Option<Vec<u8>> = db(conn
@@ -1164,6 +1181,22 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        for (send_id, entry) in &pending.group_outbox {
+            match entry {
+                Some(entry) => {
+                    let encoded = serde_json::to_vec(entry)
+                        .map_err(|error| ChatError::Db(format!("encode group outbox: {error}")))?;
+                    db(tx.execute(
+                        "INSERT INTO group_outbox (send_id, created_at, entry) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(send_id) DO UPDATE SET entry = excluded.entry",
+                        rusqlite::params![send_id, entry.created_at, encoded],
+                    ))?;
+                }
+                None => {
+                    db(tx.execute("DELETE FROM group_outbox WHERE send_id = ?1", [send_id]))?;
+                }
+            }
+        }
         for (group_id, record) in &pending.groups {
             // Never back to an older verified state, or to another one at the
             // same revision (docs/plans/pairwise-groups.md §3), checked inside
@@ -1598,6 +1631,7 @@ mod tests {
             notary_sequence: None,
             gateway: Default::default(),
             not_found_since_ms: None,
+            sender_book: None,
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();

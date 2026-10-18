@@ -85,6 +85,60 @@ pub struct GroupRecordV1 {
     /// Since when the home has answered as if this account weren't in the
     /// group (milliseconds), reset by any answer that isn't that.
     pub not_found_since_ms: Option<i64>,
+    /// This device's sender key for the group and the devices that hold it.
+    pub sender_book: Option<SenderBook>,
+}
+
+/// Which member devices hold this device's current sender key for a group
+/// (Signal-Desktop's `senderKeyInfo`, `model-types.d.ts:60-70`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SenderBook {
+    /// The distribution id (a UUID); a new one starts a new key.
+    pub distribution_id: String,
+    pub created_at_ms: i64,
+    pub devices: Vec<BookDevice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BookDevice {
+    pub account: String,
+    pub device_id: u32,
+    pub registration_id: u32,
+}
+
+/// A sender key older than this is replaced (Signal's
+/// `desktop.senderKeyMaxAge`, at most 90 days).
+pub const SENDER_KEY_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+
+impl SenderBook {
+    pub fn new(now_ms: i64) -> Self {
+        Self {
+            distribution_id: uuid::Uuid::new_v4().to_string(),
+            created_at_ms: now_ms,
+            devices: Vec::new(),
+        }
+    }
+
+    /// Whether this key must be replaced before the next send: too old, or a
+    /// device that holds it is no longer a current member device (a removed
+    /// member, a device that left its account's manifest, or one whose
+    /// registration changed). The last is ours: Signal only drops the device
+    /// (docs/plans/pairwise-groups.md §1).
+    pub fn must_rotate(&self, now_ms: i64, current: &[BookDevice]) -> bool {
+        now_ms.saturating_sub(self.created_at_ms) >= SENDER_KEY_MAX_AGE_MS
+            || self.devices.iter().any(|held| !current.contains(held))
+    }
+
+    /// The current devices that don't hold the key yet.
+    pub fn missing(&self, current: &[BookDevice]) -> Vec<BookDevice> {
+        current
+            .iter()
+            .filter(|device| !self.devices.contains(device))
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,6 +380,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         notary_sequence: None,
         gateway: Default::default(),
         not_found_since_ms: None,
+        sender_book: None,
     };
     Ok((record, change))
 }
@@ -450,6 +505,7 @@ pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupE
         notary_sequence: None,
         gateway: Default::default(),
         not_found_since_ms: None,
+        sender_book: None,
     })
 }
 

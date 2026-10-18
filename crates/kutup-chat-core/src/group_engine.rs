@@ -38,6 +38,19 @@ pub struct GroupSummary {
     pub member_count: usize,
 }
 
+/// What group content that came pairwise did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupContentOutcome {
+    /// A member's sender key was taken.
+    SenderKey,
+    /// An invitation: an invited record now waits for this account's choice.
+    Invited { group_id: String, from: String },
+    /// A group message was kept.
+    Message(Box<kutup_chat_proto::ChatContent>),
+    /// Not from a member, or not for a group this account is in: dropped.
+    Ignored,
+}
+
 /// A group just made: its id, and whether its title was set too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatedGroup {
@@ -111,15 +124,141 @@ fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
 }
 
 impl Engine {
-    async fn save_group(&self, record: &GroupRecordV1) -> Result<()> {
+    pub(crate) async fn save_group(&mut self, record: &GroupRecordV1) -> Result<()> {
         let mut pending = Pending::default();
         pending
             .groups
             .insert(record.group_id.clone(), record.clone());
-        self.session.db().apply(&pending).await
+        self.session.db().apply(&pending).await?;
+        // The state may have changed: who is a member is checked again.
+        self.group_members_seen.remove(&record.group_id);
+        Ok(())
     }
 
-    async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
+    /// The group's verified member accounts (their bindings checked against
+    /// their manifests), kept for an hour.
+    pub(crate) async fn verified_member_accounts(&mut self, group_id: &str) -> Result<Vec<String>> {
+        let now = crate::clock::unix_millis();
+        if let Some((at, accounts)) = self.group_members_seen.get(group_id) {
+            if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
+                return Ok(accounts.clone());
+            }
+        }
+        let accounts: Vec<String> = self
+            .group_members(group_id)
+            .await?
+            .into_iter()
+            .filter_map(|member| member.verified.map(|verified| verified.account.to_string()))
+            .collect();
+        self.group_members_seen
+            .insert(group_id.to_string(), (now, accounts.clone()));
+        Ok(accounts)
+    }
+
+    /// Whether `account` is a verified member of a group this account is in.
+    async fn is_group_member(&mut self, group_id: &str, account: &str) -> Result<bool> {
+        let Some(record) = self.session.db().load_group(group_id).await? else {
+            return Ok(false);
+        };
+        if record.status != GroupStatus::Member {
+            return Ok(false);
+        }
+        Ok(self
+            .verified_member_accounts(group_id)
+            .await?
+            .iter()
+            .any(|member| member == account))
+    }
+
+    /// A sender-key message: only from a verified member of a group this
+    /// account is in, then opened and kept in one commit.
+    pub(crate) async fn receive_group_envelope(
+        &mut self,
+        envelope: &kutup_chat_proto::DeliveredEnvelope,
+        inspection: &crate::session::SealedEnvelopeInspection,
+        validating_root: &PublicKey,
+    ) -> Result<crate::session::ReceiveOutcome> {
+        let group_id = inspection
+            .group_id
+            .map(|id| kutup_chat_proto::group::encode_group_id(&id))
+            .ok_or_else(|| ChatError::Trust("not a group message".into()))?;
+        if !self.is_group_member(&group_id, &inspection.sender).await? {
+            return Err(ChatError::Trust(
+                "a group message from someone who isn't a verified member".into(),
+            ));
+        }
+        self.session
+            .receive_sealed_group_envelope(envelope, inspection, validating_root)
+            .await
+    }
+
+    /// Group content that came pairwise. A sender key or a message is taken
+    /// only from a verified member; an invitation starts an invited record
+    /// that waits for this account's choice.
+    pub(crate) async fn handle_group_content<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        id: &str,
+        from: &crate::address::ChatAddress,
+        cursor: u64,
+        content: &kutup_chat_proto::ChatContent,
+        rng: &mut R,
+    ) -> Result<GroupContentOutcome> {
+        let sender = from.name();
+        if let Some(control) = content.as_session_control() {
+            let Some(group) = control.group.as_ref() else {
+                return Ok(GroupContentOutcome::Ignored);
+            };
+            if !self.is_group_member(&group.group_id, &sender).await? {
+                return Ok(GroupContentOutcome::Ignored);
+            }
+            if control.action == kutup_chat_proto::SessionControlAction::Refresh {
+                self.answer_group_refresh(from, &control, rng).await?;
+            } else {
+                self.session
+                    .settle_waiting(&sender, control.action, &control.send_ids)
+                    .await?;
+            }
+            return Ok(GroupContentOutcome::Ignored);
+        }
+        if let Some(body) = content.as_sender_key_distribution() {
+            if !self.is_group_member(&body.group_id, &sender).await? {
+                return Ok(GroupContentOutcome::Ignored);
+            }
+            let message = decode_b64(&body.message)?;
+            self.session
+                .process_sender_key_distribution(from, &message)
+                .await?;
+            return Ok(GroupContentOutcome::SenderKey);
+        }
+        if let Some(invite) = content.as_group_invite() {
+            let group_id = invite.group_id.clone();
+            if self.session.db().load_group(&group_id).await?.is_some() {
+                return Ok(GroupContentOutcome::Ignored);
+            }
+            let record = group::record_from_invite(invite).map_err(group_error)?;
+            self.save_group(&record).await?;
+            return Ok(GroupContentOutcome::Invited {
+                group_id,
+                from: sender,
+            });
+        }
+        let message = match content.as_resend() {
+            Some(resend) => *resend.content,
+            None => content.clone(),
+        };
+        if let Some(context) = message.group_context() {
+            if !self.is_group_member(&context.group_id, &sender).await? {
+                return Ok(GroupContentOutcome::Ignored);
+            }
+            self.session
+                .store_group_message(id, from, cursor, &message)
+                .await?;
+            return Ok(GroupContentOutcome::Message(Box::new(message)));
+        }
+        Ok(GroupContentOutcome::Ignored)
+    }
+
+    pub(crate) async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
         self.session
             .db()
             .load_group(group_id)

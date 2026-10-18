@@ -1292,13 +1292,13 @@ impl SenderKeyDistributionBody {
     }
 }
 
-/// With a group `refresh`: the group and the sender's distribution the
-/// writer couldn't read (docs/plans/pairwise-groups.md §2).
+/// With a group `refresh`: the group whose messages the writer couldn't
+/// read (docs/plans/pairwise-groups.md §2). The answer carries the sender's
+/// current key, so no distribution needs naming.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionControlGroupV1 {
     pub group_id: String,
-    pub distribution_id: String,
 }
 
 /// The most message ids one session control may name.
