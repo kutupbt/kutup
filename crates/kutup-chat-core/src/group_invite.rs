@@ -17,8 +17,12 @@ use crate::group_engine::{accepted_body, group_error, GroupSync};
 
 impl Engine {
     /// Invites `accounts` to the group: one change with a slot each, then
-    /// each invitee's invitation, sent to them alone. Returns how many
-    /// invitations went out (a failed one can be sent again).
+    /// each invitee's invitation, sealed to their devices alone. The
+    /// invitation carries the slot's claim key, so nothing of it is kept: no
+    /// history, no outbox, no copy for this account's other devices (they
+    /// learn of the slot from the log). Only contacts can be invited (their
+    /// profile key is what the sealed delivery needs), as in Signal. A slot
+    /// whose invitation didn't go out is revoked; returns how many went out.
     pub async fn invite_to_group<R: Rng + CryptoRng>(
         &mut self,
         group_id: &str,
@@ -37,34 +41,65 @@ impl Engine {
             let account_ref: AccountRef = account
                 .parse()
                 .map_err(|_| ChatError::Invalid("not an account".into()))?;
+            let capability = self
+                .media_delivery_capability(account)
+                .await?
+                .ok_or_else(|| {
+                    ChatError::Invalid("only contacts can be invited to a group".into())
+                })?;
             let (action, invitation, _) =
                 group::invite(&record, &account_ref, GroupRole::Member).map_err(group_error)?;
             actions.push(action);
-            invitations.push((account.clone(), invitation));
+            invitations.push((account.clone(), capability, invitation));
         }
         if actions.is_empty() {
             return Ok(0);
         }
         self.submit_group_change(&mut record, actions).await?;
         let mut sent = 0;
-        for (account, invitation) in invitations {
-            let send_id = uuid::Uuid::new_v4().to_string();
+        let mut revoke = Vec::new();
+        for (account, capability, invitation) in invitations {
             let content = ChatContent::group_invite_with_id(
-                send_id.clone(),
+                uuid::Uuid::new_v4().to_string(),
                 rfc3339(unix_millis()),
                 0,
                 &invitation,
             );
-            if self.send(&send_id, &account, &content, rng).await.is_ok() {
-                sent += 1;
+            match self
+                .send_sealed_pairwise(&account, &capability, None, &content, rng)
+                .await
+            {
+                Ok(true) => sent += 1,
+                Ok(false) | Err(_) => revoke.push(GroupActionV1::RevokeSlot {
+                    slot_id: invitation.slot_id.clone(),
+                }),
             }
         }
+        if !revoke.is_empty() {
+            // Best effort: an unclaimed slot is harmless, and an administrator
+            // can revoke it later.
+            let _ = self.submit_group_change(&mut record, revoke).await;
+        }
+        self.announce_group_change(group_id, rng).await;
         Ok(sent)
     }
 
     /// Accepts an invitation: the join info the slot's claim key may read,
-    /// the claim, then the state as a member.
-    pub async fn accept_group_invite(&mut self, group_id: &str) -> Result<GroupSync> {
+    /// the claim, then the state as a member, and a change notice so the
+    /// members know at once.
+    pub async fn accept_group_invite<R: Rng + CryptoRng>(
+        &mut self,
+        group_id: &str,
+        rng: &mut R,
+    ) -> Result<GroupSync> {
+        let sync = self.claim_group_invite(group_id).await?;
+        if matches!(sync, GroupSync::Current { .. }) {
+            self.announce_group_change(group_id, rng).await;
+        }
+        Ok(sync)
+    }
+
+    async fn claim_group_invite(&mut self, group_id: &str) -> Result<GroupSync> {
         let mut record = self.load_group_record(group_id).await?;
         if !matches!(record.status, GroupStatus::Invited { .. }) {
             return Err(ChatError::Invalid("no invitation to this group".into()));
@@ -120,10 +155,12 @@ impl Engine {
 
     /// Leaves the group (Signal's last-administrator rule applies: the home
     /// refuses the last administrator's leave while others remain).
-    pub async fn leave_group(&mut self, group_id: &str) -> Result<()> {
-        let mut record = self.load_group_record(group_id).await?;
-        self.submit_group_change(&mut record, vec![GroupActionV1::Leave])
-            .await?;
-        Ok(())
+    pub async fn leave_group<R: Rng + CryptoRng>(
+        &mut self,
+        group_id: &str,
+        rng: &mut R,
+    ) -> Result<()> {
+        self.change_group(group_id, vec![GroupActionV1::Leave], rng)
+            .await
     }
 }

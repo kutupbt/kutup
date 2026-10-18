@@ -122,6 +122,11 @@ pub mod kind {
     /// the group's key and the slot's one-time claim key. Never sent to other
     /// members. [IMPL]
     pub const GROUP_INVITE: &str = "groupInvite";
+    /// Tells a group's members that it changed: no body, only the group
+    /// context at the new revision, which makes them catch up from the home
+    /// (Signal's group update message). Sent under the sender key with an
+    /// implicit content hint; never history. [IMPL]
+    pub const GROUP_CHANGE: &str = "groupChange";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -556,6 +561,21 @@ impl ChatContent {
             sent_at,
             seq,
             serde_json::to_value(invite).unwrap_or_default(),
+        )
+    }
+
+    /// A group changed: carries nothing but its group context.
+    pub fn group_change_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::GROUP_CHANGE,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::json!({}),
         )
     }
 
@@ -1172,6 +1192,7 @@ impl ChatContent {
                     | kind::RESEND
                     | kind::SENDER_KEY_DISTRIBUTION
                     | kind::GROUP_INVITE
+                    | kind::GROUP_CHANGE
             )
     }
 }

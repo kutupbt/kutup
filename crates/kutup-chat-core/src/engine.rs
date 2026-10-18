@@ -45,7 +45,7 @@ const DRAIN_LIMIT: u32 = 500;
 /// A session with one device is set aside for unreadable messages at most
 /// this often, as in Signal: a device that keeps sending under a session it
 /// cannot leave must not drive an endless reset loop.
-const SESSION_RESET_INTERVAL_MS: i64 = 60 * 60 * 1000;
+pub(crate) const SESSION_RESET_INTERVAL_MS: i64 = 60 * 60 * 1000;
 
 /// The once-an-hour repair limits as stored (`Engine::save_repair_limits`).
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -55,6 +55,16 @@ struct RepairLimits {
 }
 /// Keep used EC prekey private material for late concurrent prekey messages.
 const USED_PREKEY_GRACE_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+
+/// An invitation to a group that arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupInviteNotice {
+    pub group_id: String,
+    /// The inviter's account.
+    pub from: String,
+    /// From someone who isn't a contact: a message request.
+    pub request: bool,
+}
 
 /// The outcome of one pass over the durable outbox.
 #[derive(Default)]
@@ -92,8 +102,8 @@ pub struct ReceiveReport {
     pub undecodable: Vec<String>,
     /// Envelopes retained for repair/retry.
     pub errors: Vec<InboundFailure>,
-    /// Invitations to groups that arrived: `(group id, inviter account)`.
-    pub group_invites: Vec<(String, String)>,
+    /// Invitations to groups that arrived.
+    pub group_invites: Vec<GroupInviteNotice>,
     /// Authenticated replays that were safely moved directly to pending-ack.
     pub duplicates: Vec<String>,
     /// Mailbox ids that could not be decrypted and were given up on, with
@@ -133,6 +143,14 @@ pub enum ChatEvent {
     GroupInvited {
         group_id: String,
         from: String,
+        /// From someone who isn't a contact: a message request.
+        request: bool,
+    },
+    /// A member's message named another history of the group than the one
+    /// this device verified, still so after catching up: the home may be
+    /// showing members different states (docs/plans/pairwise-groups.md §3).
+    GroupForkSuspected {
+        group_id: String,
     },
     MessageReceived(Box<ReceivedMessage>),
     MessageSynced(Box<SentMessage>),
@@ -173,7 +191,7 @@ pub struct Engine {
     pub(crate) session: Session,
     pub(crate) transport: Rc<dyn ChatTransport>,
     state: EngineState,
-    events: VecDeque<ChatEvent>,
+    pub(crate) events: VecDeque<ChatEvent>,
     manifest_policy: ManifestPolicy,
     sealed_sender_enabled: bool,
     /// The devices of each account as last fetched and verified this run
@@ -190,8 +208,9 @@ pub struct Engine {
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
     /// When a message was last sent again at a peer's request, by
-    /// `(account, send id)`.
-    resent: BTreeMap<(String, String), i64>,
+    /// `(account, send id)`; a group's, by `(account.device, group:id:send id)`
+    /// and its sender key by `(account.device, groupKey:id:distribution id)`.
+    pub(crate) resent: BTreeMap<(String, String), i64>,
     /// When this device last asked again for a message it waits for, by
     /// `(account, send id)` (`ask_again_for_waiting`).
     asked_again: BTreeMap<(String, String), i64>,
@@ -1967,6 +1986,7 @@ impl Engine {
             });
             // The group a sender-key message named, for its repair.
             let mut group_origin: Option<[u8; 32]> = None;
+            let mut group_implicit = false;
             let receive_result = if envelope.sealed_sender {
                 origin = None;
                 let inspection = self.session.inspect_sealed_envelope(&envelope).await;
@@ -1980,6 +2000,7 @@ impl Engine {
                                 origin =
                                     Some((inspection.sender.clone(), inspection.sender_device_id));
                                 group_origin = inspection.group_id;
+                                group_implicit = inspection.implicit;
                                 if inspection.group_id.is_some() {
                                     // A sender-key message: a group's, under its
                                     // sender's key (docs/plans/pairwise-groups.md §1).
@@ -2074,10 +2095,21 @@ impl Engine {
                                 .push_back(ChatEvent::MessageReceived(Box::new(message.clone())));
                             report.messages.push(message);
                         }
-                        Ok(GroupContentOutcome::Invited { group_id, from }) => {
-                            report.group_invites.push((group_id.clone(), from.clone()));
-                            self.events
-                                .push_back(ChatEvent::GroupInvited { group_id, from });
+                        Ok(GroupContentOutcome::Invited {
+                            group_id,
+                            from,
+                            request,
+                        }) => {
+                            report.group_invites.push(GroupInviteNotice {
+                                group_id: group_id.clone(),
+                                from: from.clone(),
+                                request,
+                            });
+                            self.events.push_back(ChatEvent::GroupInvited {
+                                group_id,
+                                from,
+                                request,
+                            });
                             report.suppressed.push(id);
                         }
                         Ok(GroupContentOutcome::SenderKey | GroupContentOutcome::Ignored) => {
@@ -2105,6 +2137,9 @@ impl Engine {
                     ack_ids.push(id.clone());
                     report.undecodable.push(id);
                 }
+                // Settled inside the group read, which reads the envelope
+                // again after catching up; left for the next pass otherwise.
+                Ok(ReceiveOutcome::GroupCatchUp) => {}
                 Err(error) => {
                     let unreadable = matches!(
                         error.inbound_failure_kind(),
@@ -2116,17 +2151,34 @@ impl Engine {
                     if let (true, Some(group_id), Some((sender, device_id))) =
                         (unreadable, group_origin, origin.clone())
                     {
-                        if let Some(notice) = self
-                            .repair_group_message(&envelope, &sender, device_id, &group_id, rng)
+                        use crate::group_heal::GroupRepair;
+                        match self
+                            .repair_group_message(
+                                &envelope,
+                                &sender,
+                                device_id,
+                                &group_id,
+                                group_implicit,
+                                rng,
+                            )
                             .await?
                         {
-                            self.events
-                                .push_back(ChatEvent::MessageReceived(Box::new(notice.clone())));
-                            report.messages.push(notice);
-                            ack_ids.push(inbound.id.clone());
-                            report.repaired.push(inbound.id);
-                            continue;
+                            GroupRepair::Placeholder(notice) => {
+                                self.events.push_back(ChatEvent::MessageReceived(Box::new(
+                                    (*notice).clone(),
+                                )));
+                                report.messages.push(*notice);
+                                ack_ids.push(inbound.id.clone());
+                                report.repaired.push(inbound.id);
+                            }
+                            // Asked for again without a placeholder (a change
+                            // notice), or not a member's: nothing to show.
+                            GroupRepair::Asked | GroupRepair::Dropped => {
+                                ack_ids.push(inbound.id.clone());
+                                report.suppressed.push(inbound.id);
+                            }
                         }
+                        continue;
                     }
                     if let (true, Some((sender, device_id))) = (unreadable, origin) {
                         // A broken session rarely breaks for one message. Set
@@ -2232,7 +2284,7 @@ impl Engine {
     /// or another tab does not start them over. Read before each check and
     /// each write: these events are rare, and another tab's engine may have
     /// recorded one since.
-    async fn load_repair_limits(&mut self) -> Result<()> {
+    pub(crate) async fn load_repair_limits(&mut self) -> Result<()> {
         if let Some(bytes) = self.session.repair_limits().await? {
             let stored: RepairLimits = serde_json::from_slice(&bytes)
                 .map_err(|error| ChatError::Db(format!("decode repair limits: {error}")))?;
@@ -2250,13 +2302,13 @@ impl Engine {
 
     /// Write the repair limits back (merged with what another tab may have
     /// written), keeping only the last hour's.
-    async fn save_repair_limits(&mut self) -> Result<()> {
+    pub(crate) async fn save_repair_limits(&mut self) -> Result<()> {
         self.load_repair_limits().await?;
         self.write_repair_limits().await
     }
 
     /// Write the repair limits as held, keeping only the last hour's.
-    async fn write_repair_limits(&mut self) -> Result<()> {
+    pub(crate) async fn write_repair_limits(&mut self) -> Result<()> {
         let now = unix_millis();
         let live = |at: &i64| now.saturating_sub(*at) < SESSION_RESET_INTERVAL_MS;
         self.session_resets.retain(|_, at| live(at));

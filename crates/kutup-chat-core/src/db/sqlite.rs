@@ -1632,6 +1632,8 @@ mod tests {
             gateway: Default::default(),
             not_found_since_ms: None,
             sender_book: None,
+            synced_at_ms: None,
+            fork_at_revision: None,
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();

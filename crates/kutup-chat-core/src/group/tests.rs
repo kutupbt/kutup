@@ -9,6 +9,9 @@ use kutup_federation_proto::FederationIdentityDocumentV1;
 
 use super::*;
 
+/// Who the tests' invitations come from.
+const INVITER: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@home.example";
+
 /// The group's home, as far as these tests need one: it runs the shared
 /// check and notarises what it accepts.
 struct Home {
@@ -157,7 +160,7 @@ fn invited(
     apply_at(home, alice, &add);
 
     let sign = bob.sign();
-    let mut record = record_from_invite(invitation).unwrap();
+    let mut record = record_from_invite(invitation, INVITER, None).unwrap();
     record.gateway.identity_history = home.history();
     assert!(matches!(record.status, GroupStatus::Invited { .. }));
     let claim_change = claim(
@@ -283,7 +286,7 @@ fn a_joiner_takes_no_snapshot_older_than_its_claim_or_without_it() {
     apply_at(&mut home, &mut alice_record, &add);
     let before_claim = home.states.last().unwrap().clone();
 
-    let mut record = record_from_invite(invitation).unwrap();
+    let mut record = record_from_invite(invitation, INVITER, None).unwrap();
     record.gateway.identity_history = home.history();
     let claim_change = claim(
         &mut record,
@@ -351,7 +354,7 @@ fn an_invitation_whose_key_isnt_its_groups_is_refused() {
     let alice_record = created(&mut home, &alice);
     let (_, mut invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
     invitation.master_key = encode(&[9u8; 32]);
-    assert!(record_from_invite(invitation).is_err());
+    assert!(record_from_invite(invitation, INVITER, None).is_err());
 }
 
 #[test]

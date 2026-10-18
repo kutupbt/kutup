@@ -29,6 +29,8 @@ mod group;
 mod group_client;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
+#[cfg(test)]
+mod group_harness_tests;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_heal;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
@@ -76,7 +78,7 @@ pub use db::{
     Pending, PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
-    ChatEvent, Engine, EngineState, InboundFailure, OutboxFailure, OutboxFlush,
+    ChatEvent, Engine, EngineState, GroupInviteNotice, InboundFailure, OutboxFailure, OutboxFlush,
     PreKeyMaintenanceReport, ReceiveReport,
 };
 pub use error::{ChatError, Result};

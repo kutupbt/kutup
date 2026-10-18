@@ -14,6 +14,12 @@
 //!   the key; the next send gives it the key.
 //! - Delivery is sealed only, with each member's capability from its profile
 //!   key in the group; the capability is derived again, never stored.
+//! - A send whose last catch-up with the home is a few minutes old catches up
+//!   first, so a member another administrator removed meanwhile neither gets
+//!   it nor keeps the key (docs/plans/pairwise-groups.md §3).
+//! - Every change this device makes is followed by a change notice to the
+//!   group (Signal's group update message): its context makes the other
+//!   members catch up at once.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -32,11 +38,15 @@ use crate::db::{GroupOutboxEntry, GroupOutboxLeg, Pending, SentMessage};
 use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::group::{self, BookDevice, GroupRecordV1, GroupStatus, SenderBook};
+use crate::group_engine::GroupSync;
 use crate::transport::SendOutcome;
 
 /// How many times one leg is retried after the server says the device set
 /// changed.
 const MAX_LEG_ATTEMPTS: u32 = 5;
+
+/// A send catches up with the home first when the last catch-up is older.
+pub(crate) const SEND_CATCH_UP_AFTER_MS: i64 = 5 * 60 * 1000;
 
 /// What a group send reached.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +94,33 @@ impl Engine {
         let members = self.group_members(group_id).await?;
         let me = self.session.account_ref().to_string();
         let mut recipients = Vec::new();
+        // This account's other devices hear of its own changes (a leave
+        // included) even when it is no longer a member.
+        if !members.iter().any(|member| {
+            member
+                .verified
+                .as_ref()
+                .is_some_and(|verified| verified.account.to_string() == me)
+        }) {
+            let profile_key = self.own_profile_key().await?;
+            let capability = kutup_chat_proto::derive_delivery_capability(
+                &profile_key,
+                self.session.account_ref(),
+            )
+            .map_err(ChatError::Trust)?;
+            let own = self.session.device_id();
+            let bundles = self
+                .sealed_bundles_for_send(&me, &capability)
+                .await?
+                .into_iter()
+                .filter(|bundle| bundle.device_id != own)
+                .collect();
+            recipients.push(Recipient {
+                account: me.clone(),
+                capability,
+                bundles,
+            });
+        }
         for member in members {
             let Some(verified) = member.verified else {
                 continue;
@@ -118,6 +155,13 @@ impl Engine {
         group_id: &str,
     ) -> Result<BTreeMap<String, [u8; 16]>> {
         let mut capabilities = BTreeMap::new();
+        let profile_key = self.own_profile_key().await?;
+        let me = self.session.account_ref().clone();
+        capabilities.insert(
+            me.to_string(),
+            kutup_chat_proto::derive_delivery_capability(&profile_key, &me)
+                .map_err(ChatError::Trust)?,
+        );
         for member in self.group_members(group_id).await? {
             if let Some(verified) = member.verified {
                 let capability = kutup_chat_proto::derive_delivery_capability(
@@ -234,7 +278,9 @@ impl Engine {
     }
 
     /// Sends `content` to the group `group_id` under the logical id
-    /// `send_id`: durable first, then delivered leg by leg.
+    /// `send_id`: durable first, then delivered leg by leg. Sending again
+    /// under the same id delivers what is left of the first, never a second
+    /// message.
     pub async fn send_group_message<R: Rng + CryptoRng>(
         &mut self,
         group_id: &str,
@@ -242,25 +288,121 @@ impl Engine {
         content: ChatContent,
         rng: &mut R,
     ) -> Result<GroupSendSummary> {
+        if content.message_id != send_id {
+            return Err(ChatError::Invalid(
+                "encrypted content messageId must match transport sendId".into(),
+            ));
+        }
+        if let Some(entry) = self
+            .session
+            .db()
+            .list_group_outbox()
+            .await?
+            .into_iter()
+            .find(|entry| entry.send_id == send_id)
+        {
+            if entry.group_id != group_id {
+                return Err(ChatError::Invalid(format!(
+                    "sendId {send_id} is already bound to another conversation"
+                )));
+            }
+            return self.deliver_group_entry(send_id, rng).await;
+        }
+        if let Some(sent) = self.session.sent_message(send_id).await? {
+            let here = kutup_chat_proto::ConversationId::Group {
+                group_id: group_id.to_string(),
+            };
+            if crate::timeline::conversation_of(&sent.peer, &sent.content)? != here {
+                return Err(ChatError::Invalid(format!(
+                    "sendId {send_id} is already bound to another conversation"
+                )));
+            }
+            // Delivered already (its send log since cleared).
+            return Ok(GroupSendSummary {
+                send_id: send_id.to_string(),
+                delivered: 0,
+                pending: 0,
+            });
+        }
         let mut record = self.load_group_record(group_id).await?;
+        let stale = record.synced_at_ms.is_none_or(|at| {
+            crate::clock::unix_millis().saturating_sub(at) >= SEND_CATCH_UP_AFTER_MS
+        });
+        if record.status == GroupStatus::Member && stale {
+            // Unreachable: sent on the state held.
+            if let Ok(GroupSync::Gone) = self.sync_group(group_id).await {
+                return Err(ChatError::Invalid(
+                    "this account isn't a member of the group".into(),
+                ));
+            }
+            record = self.load_group_record(group_id).await?;
+        }
         if record.status != GroupStatus::Member {
             return Err(ChatError::Invalid(
                 "this account isn't a member of the group".into(),
             ));
         }
-        let content = content.with_group_context(&Self::group_context(&record)?);
+        self.send_group_content(&mut record, send_id, content, rng)
+            .await
+    }
+
+    /// Tells the group that it changed, after a change this device made: a
+    /// hidden notice at the new revision, sent even after this account left.
+    /// Best effort: the change itself is made, and members also learn of it
+    /// from the next message's context.
+    pub(crate) async fn announce_group_change<R: Rng + CryptoRng>(
+        &mut self,
+        group_id: &str,
+        rng: &mut R,
+    ) {
+        let Ok(mut record) = self.load_group_record(group_id).await else {
+            return;
+        };
+        let send_id = uuid::Uuid::new_v4().to_string();
+        let Ok(seq) = self.session.next_sent_seq().await else {
+            return;
+        };
+        let content = ChatContent::group_change_with_id(
+            send_id.clone(),
+            crate::clock::rfc3339(unix_millis()),
+            seq,
+        );
+        let _ = self
+            .send_group_content(&mut record, &send_id, content, rng)
+            .await;
+    }
+
+    /// Encrypts `content` once under this device's sender key, seals it per
+    /// recipient device, and keeps it (history, send log) before delivery. A
+    /// change notice is never history; a delete takes the message it deletes
+    /// out of the send log at once.
+    async fn send_group_content<R: Rng + CryptoRng>(
+        &mut self,
+        record: &mut GroupRecordV1,
+        send_id: &str,
+        content: ChatContent,
+        rng: &mut R,
+    ) -> Result<GroupSendSummary> {
+        let group_id = record.group_id.clone();
+        let notice = content.kind == kutup_chat_proto::content::kind::GROUP_CHANGE;
+        let content = content.with_group_context(&Self::group_context(record)?);
         let plaintext =
             serde_json::to_vec(&content).map_err(|e| ChatError::Content(e.to_string()))?;
-        let recipients = self.group_recipients(group_id).await?;
+        let recipients = self.group_recipients(&group_id).await?;
         let certificate = self.issue_verified_sender_certificate().await?;
         let distribution_id = self
-            .distribute_sender_key(&mut record, &recipients, &certificate, rng)
+            .distribute_sender_key(record, &recipients, &certificate, rng)
             .await?;
         let message = self
             .session
             .group_encrypt(distribution_id, &plaintext, rng)
             .await?;
-        let group_bytes = decode_group_id(group_id).map_err(ChatError::Invalid)?;
+        let group_bytes = decode_group_id(&group_id).map_err(ChatError::Invalid)?;
+        let hint = if notice {
+            libsignal_protocol::ContentHint::Implicit
+        } else {
+            libsignal_protocol::ContentHint::Resendable
+        };
         let mut legs = Vec::with_capacity(recipients.len());
         for recipient in &recipients {
             if recipient.bundles.is_empty() {
@@ -274,6 +416,7 @@ impl Engine {
                     &certificate,
                     &group_bytes,
                     &message,
+                    hint,
                     rng,
                 )
                 .await?;
@@ -290,25 +433,35 @@ impl Engine {
         }
         let created_at = unix_millis();
         let mut pending = Pending::default();
-        pending.sent_messages.insert(
-            send_id.to_string(),
-            SentMessage {
-                send_id: send_id.to_string(),
-                peer: self.session.user().to_string(),
-                sender_device_id: self.session.device_id(),
-                content: plaintext.clone(),
-                created_at,
-                delivered_at: None,
-                delivered: legs.is_empty(),
-                deduplicated: false,
-            },
-        );
+        if !notice {
+            pending.sent_messages.insert(
+                send_id.to_string(),
+                SentMessage {
+                    send_id: send_id.to_string(),
+                    peer: self.session.user().to_string(),
+                    sender_device_id: self.session.device_id(),
+                    content: plaintext.clone(),
+                    created_at,
+                    delivered_at: None,
+                    delivered: legs.is_empty(),
+                    deduplicated: false,
+                },
+            );
+        }
+        // Deleted for everyone: nothing of it is sent again.
+        if let Some(mutation) = content.as_message_mutation() {
+            if mutation.operation == kutup_chat_proto::content::MessageMutationOperation::Delete {
+                pending
+                    .group_outbox
+                    .insert(mutation.target_message_id.clone(), None);
+            }
+        }
         if !legs.is_empty() {
             pending.group_outbox.insert(
                 send_id.to_string(),
                 Some(GroupOutboxEntry {
                     send_id: send_id.to_string(),
-                    group_id: group_id.to_string(),
+                    group_id: group_id.clone(),
                     content: plaintext,
                     created_at,
                     legs,
