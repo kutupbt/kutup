@@ -2356,3 +2356,170 @@ fn group_batches_a_limited_leg_waits_and_a_refused_one_fails() {
         .group_texts(&group_id)
         .contains(&"limited".to_string()));
 }
+
+// ----- the #242 review follow-ups -----
+
+#[test]
+fn group_followup_a_member_who_joins_after_a_catch_up_is_taken() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // Bob is at the home's latest, a while ago.
+    assert!(matches!(bob.sync(&group_id), GroupSync::Current { .. }));
+    bob.engine.advance_clock_for_testing(3_000);
+    // Then Carol joins and writes: her key and message come after that
+    // catch-up, so they make Bob catch up again, and are taken.
+    befriend(&mut alice, &mut carol);
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[carol.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    carol.receive();
+    block_on(carol.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    carol.send_text(&group_id, "hello after your catch-up");
+    let report = bob.receive();
+    assert!(
+        report.held.is_empty() && report.errors.is_empty(),
+        "{report:?}"
+    );
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"hello after your catch-up".to_string()));
+}
+
+#[test]
+fn group_followup_a_long_log_is_read_in_parts() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    // More changes than one catch-up reads (test-sized pages).
+    for n in 0..20 {
+        block_on(
+            alice
+                .engine
+                .set_group_title(&group_id, &format!("Team {n}"), &mut rng()),
+        )
+        .unwrap();
+    }
+    world.retain_mailbox(&bob.account, bob.device(), |_| false);
+    let first = bob.sync(&group_id);
+    assert!(matches!(first, GroupSync::Partial { .. }), "{first:?}");
+    let mut last = first;
+    for _ in 0..4 {
+        last = bob.sync(&group_id);
+        if matches!(last, GroupSync::Current { .. }) {
+            break;
+        }
+    }
+    let GroupSync::Current { revision, .. } = last else {
+        panic!("caught up at last: {last:?}")
+    };
+    assert_eq!(revision, world.group_state(&group_id).revision);
+}
+
+#[test]
+fn group_followup_a_pool_full_of_members_takes_no_stranger() {
+    use crate::group_gate::{HeldEnvelopes, HoldDecision, MAX_HELD_PER_GROUP, MAX_HELD_PER_SENDER};
+    let envelope = |id: &str| DeliveredEnvelope {
+        id: id.into(),
+        cursor: 1,
+        sender: None,
+        sealed_sender: true,
+        sender_device_id: 0,
+        envelope_type: kutup_chat_proto::EnvelopeType::Message,
+        suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+        content: "AA==".into(),
+        server_timestamp: ISSUED_AT.into(),
+        send_id: None,
+    };
+    let mut held = HeldEnvelopes::default();
+    for n in 0..MAX_HELD_PER_GROUP {
+        let sender = format!("member-{}", n / MAX_HELD_PER_SENDER);
+        let id = format!("{sender}-{n}");
+        assert!(matches!(
+            held.keep("g", &sender, true, &id, &envelope(&id), 0, 0),
+            HoldDecision::Keep
+        ));
+    }
+    assert!(matches!(
+        held.keep("g", "stranger", false, "s", &envelope("s"), 0, 0),
+        HoldDecision::Drop
+    ));
+}
+
+#[test]
+fn group_followup_an_evicted_envelope_is_acknowledged_and_reported() {
+    use crate::group_gate::{HeldEnvelopes, MAX_HELD_PER_GROUP, MAX_HELD_PER_STRANGER};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let envelope = |id: &str| DeliveredEnvelope {
+        id: id.into(),
+        cursor: 1,
+        sender: None,
+        sealed_sender: true,
+        sender_device_id: 0,
+        envelope_type: kutup_chat_proto::EnvelopeType::Message,
+        suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+        content: "AA==".into(),
+        server_timestamp: ISSUED_AT.into(),
+        send_id: None,
+    };
+    let inbound = |id: &str, received_at: i64| crate::db::InboundEnvelope {
+        id: id.into(),
+        cursor: 1,
+        envelope: serde_json::to_vec(&envelope(id)).unwrap(),
+        state: crate::db::InboundState::PendingDecrypt,
+        attempts: 0,
+        failure_kind: None,
+        last_error: None,
+        received_at,
+    };
+    let now = alice.engine.now_ms();
+    let mut held = HeldEnvelopes::default();
+    let mut report = ReceiveReport::default();
+    let mut acks = Vec::new();
+    // Strangers fill Alice's room for the group.
+    for n in 0..MAX_HELD_PER_GROUP {
+        let sender = format!(
+            "aci:00000000-0000-4000-8000-{:012x}@{SERVER}",
+            n / MAX_HELD_PER_STRANGER
+        );
+        let id = format!("stranger-{n}");
+        block_on(alice.engine.hold_group_envelope(
+            &mut held,
+            &group_id,
+            &sender,
+            &inbound(&id, now),
+            &envelope(&id),
+            &mut report,
+            &mut acks,
+        ))
+        .unwrap();
+    }
+    assert_eq!(report.held.len(), MAX_HELD_PER_GROUP);
+    // Bob, a member, needs room: a stranger's newest gives it up.
+    block_on(alice.engine.hold_group_envelope(
+        &mut held,
+        &group_id,
+        &bob.account,
+        &inbound("bobs", now),
+        &envelope("bobs"),
+        &mut report,
+        &mut acks,
+    ))
+    .unwrap();
+    assert!(report.held.contains(&"bobs".to_string()));
+    assert_eq!(report.held.len(), MAX_HELD_PER_GROUP);
+    assert_eq!(acks.len(), 1);
+    assert!(acks[0].starts_with("stranger"));
+    assert_eq!(report.suppressed, acks);
+    assert!(!report.held.contains(&acks[0]));
+}

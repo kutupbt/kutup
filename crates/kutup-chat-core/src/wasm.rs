@@ -1160,8 +1160,10 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
-    /// Catches a group up with its home: `{kind: "current", revision}`,
-    /// `{kind: "unreachable", reason}` or `{kind: "gone"}`.
+    /// Catches a group up with its home: `{kind: "current", revision,
+    /// keyConfirmed}`, `{kind: "partial", revision}` (more of the log still
+    /// to read), `{kind: "unreachable", reason}`, `{kind: "maybeRemoved",
+    /// sinceMs}` or `{kind: "gone"}`.
     #[wasm_bindgen(js_name = syncGroup)]
     pub async fn sync_group(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
         let outcome = self

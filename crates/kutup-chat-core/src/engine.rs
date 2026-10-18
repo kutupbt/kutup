@@ -243,7 +243,7 @@ impl Engine {
     /// them, or a week old, is acknowledged and dropped, and one given up
     /// for it as well.
     #[allow(clippy::too_many_arguments)]
-    async fn hold_group_envelope(
+    pub(crate) async fn hold_group_envelope(
         &mut self,
         held: &mut crate::group_gate::HeldEnvelopes,
         group_id: &str,
@@ -1901,7 +1901,10 @@ impl Engine {
             if page.envelopes.is_empty() {
                 break;
             }
-            self.session.journal_envelopes(&page.envelopes).await?;
+            let received_at = self.now_ms();
+            self.session
+                .journal_envelopes(&page.envelopes, received_at)
+                .await?;
             after = self.session.last_cursor().await?;
             let ids: Vec<String> = page.envelopes.iter().map(|item| item.id.clone()).collect();
             self.process_inbound(Some(&ids), &mut report, rng).await?;

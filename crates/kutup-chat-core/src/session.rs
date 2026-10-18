@@ -582,9 +582,12 @@ impl Session {
     /// Journal a fetched page before attempting any decrypt. The cursor may move
     /// past failed ciphertext only because the complete raw envelope is now a
     /// durable local source of truth for repair and retry.
+    /// `received_at` is the engine's clock (its test offset included), so
+    /// how long an envelope waited is measured on one clock.
     pub(crate) async fn journal_envelopes(
         &mut self,
         envelopes: &[DeliveredEnvelope],
+        received_at: i64,
     ) -> Result<()> {
         let prior = self.store.db().list_inbound().await?;
         let existing: std::collections::HashSet<String> =
@@ -617,7 +620,7 @@ impl Session {
                     attempts: 0,
                     failure_kind: None,
                     last_error: None,
-                    received_at: now_millis(),
+                    received_at,
                 });
             }
             self.store.stage_cursor(envelope.cursor);
