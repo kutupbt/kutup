@@ -59,6 +59,8 @@ pub struct GroupRecordV1 {
     /// The identity sequence of the last notary taken: a later notary by an
     /// older identity is refused (sequences only move forward).
     pub notary_sequence: Option<u64>,
+    /// The home's newest gateway key config and its identity history.
+    pub gateway: crate::group_client::GatewayCache,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,6 +255,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         state: None,
         head: None,
         notary_sequence: None,
+        gateway: Default::default(),
     };
     Ok((record, change))
 }
@@ -414,6 +417,7 @@ pub fn claim(
         state: None,
         head: None,
         notary_sequence: None,
+        gateway: Default::default(),
     };
     Ok((record, change))
 }

@@ -61,6 +61,34 @@ pub struct IdentityPinsWrite {
     pub revision: u64,
 }
 
+/// A group home's gateway key config and its identity history from the
+/// pinned sequence on (`GET /api/chat/groups/gateway-key`), fetched through
+/// this account's own server. Trusted only after the client follows the pin
+/// through the history and verifies the config.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupGatewayAnswer {
+    pub config: kutup_chat_proto::group_route::GroupGatewayKeyConfigV1,
+    pub identity_history: Vec<kutup_federation_proto::FederationIdentityDocumentV1>,
+}
+
+/// What this account's own server answered a relayed group request with
+/// (`POST /api/chat/groups/relay/{homeServer}`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupRelayOutcome {
+    /// The home's oblivious answer, still sealed.
+    Answered(Vec<u8>),
+    /// The home couldn't open the request (a wrong or old key): fetch the
+    /// config again.
+    Unopenable,
+    /// This account's relay limit.
+    RateLimited,
+    /// The home can't be reached.
+    Unreachable,
+    /// Groups are off on this account's server.
+    GroupsOff,
+}
+
 /// The chat server, as the engine sees it. Implementations translate these to the
 /// REST endpoints of `docs/chat-protocol.md` §4 and map non-2xx to
 /// [`ChatError::Transport`](crate::ChatError::Transport) — except the 409 send
@@ -270,4 +298,22 @@ pub trait ChatTransport {
 
     /// `POST /api/chat/messages/ack` — delete processed envelopes.
     async fn ack(&self, device_id: u32, ids: &[String]) -> Result<()>;
+
+    /// `GET /api/chat/groups/gateway-key?server={home}&fromSequence={from}`.
+    async fn fetch_group_gateway(
+        &self,
+        _home: &str,
+        _from_sequence: u64,
+    ) -> Result<GroupGatewayAnswer> {
+        Err(crate::error::ChatError::Transport(
+            "this transport doesn't reach group homes".into(),
+        ))
+    }
+
+    /// `POST /api/chat/groups/relay/{home}` with the sealed request.
+    async fn relay_group_request(&self, _home: &str, _sealed: &[u8]) -> Result<GroupRelayOutcome> {
+        Err(crate::error::ChatError::Transport(
+            "this transport doesn't reach group homes".into(),
+        ))
+    }
 }

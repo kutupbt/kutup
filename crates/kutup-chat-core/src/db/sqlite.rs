@@ -1579,6 +1579,7 @@ mod tests {
             state: None,
             head: None,
             notary_sequence: None,
+            gateway: Default::default(),
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();
