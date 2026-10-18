@@ -1,48 +1,107 @@
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount } from '../fixtures/apps'
-import { acceptGroup, composer, createGroup, message, openChat, send } from '../fixtures/chat'
+import {
+  acceptGroup,
+  befriend,
+  closeDetails,
+  composer,
+  createGroup,
+  message,
+  openChat,
+  openDetails,
+  openGroup,
+  send,
+} from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*LocalGroupPassword'
 
-// A server with no federation settings still has group chats: it makes its
-// own identity and ordering key (crates/kutup-server/src/server_keys.rs) and
-// orders groups whose members all live on it.
-test('two people on one server with no federation settings share a group', async ({ browser }) => {
+// Groups on one server (docs/plans/pairwise-groups.md): the group lives on
+// its creator's server, its members are pseudonyms there, and messages go
+// under each member's sender key. The basic UI of slice 1: create with
+// contacts, join from the invitation, text both ways, rename, remove, leave.
+test('three people on one server share a group, rename it, remove a member and leave', async ({ browser }) => {
   test.slow()
   const tag = Date.now().toString(36)
   const alice = newAccount('grpalice', PASSWORD)
   const bob = newAccount('grpbob', PASSWORD)
+  const carol = newAccount('grpcarol', PASSWORD)
   const contextA = await browser.newContext()
   const contextB = await browser.newContext()
+  const contextC = await browser.newContext()
   await registerAccount(contextA, alice)
   await registerAccount(contextB, bob)
+  await registerAccount(contextC, carol)
   const pageA = await openChat(contextA)
   const pageB = await openChat(contextB)
+  const pageC = await openChat(contextC)
 
-  await pageA.getByRole('button', { name: 'New chat' }).first().click()
-  await expect(pageA.getByRole('dialog').getByTestId('chat-create-group')).toBeVisible()
-  await pageA.keyboard.press('Escape')
+  // Only contacts can be invited.
+  await befriend(pageA, pageB, bob.username, alice.username)
+  await befriend(pageA, pageC, carol.username, alice.username)
 
-  const conversationId = await createGroup(pageA, bob.username, `Local ${tag}`)
-  await expect(pageA.getByTestId(`chat-group-${conversationId}`)).toContainText(`Local ${tag}`, { timeout: 90_000 })
-  await acceptGroup(pageB, conversationId)
-  await expect(pageB.getByTestId(`chat-group-${conversationId}`)).toContainText(`Local ${tag}`)
-  await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
-  await expect(composer(pageA)).toBeVisible()
+  const groupId = await createGroup(pageA, [bob.username, carol.username], `Local ${tag}`)
+  await expect(pageA.getByTestId(`chat-group-${groupId}`)).toContainText(`Local ${tag}`, { timeout: 90_000 })
+  // The invitation names who sent it, and joining opens the group.
+  await openGroup(pageB, groupId)
+  await expect(pageB.getByTestId('chat-group-invitation')).toContainText(`invited you to “Local ${tag}”`)
+  await acceptGroup(pageB, groupId)
+  await acceptGroup(pageC, groupId)
+  await expect(pageB.getByTestId(`chat-group-${groupId}`)).toContainText(`Local ${tag}`)
 
+  // Text both ways; nothing else is offered yet.
   const fromAlice = `local-group-from-alice-${tag}`
+  await openGroup(pageA, groupId)
   await send(pageA, fromAlice)
   await expect(message(pageB, fromAlice)).toBeVisible({ timeout: 45_000 })
+  await expect(message(pageC, fromAlice)).toBeVisible({ timeout: 45_000 })
   const fromBob = `local-group-from-bob-${tag}`
   await send(pageB, fromBob)
   await expect(message(pageA, fromBob)).toBeVisible({ timeout: 45_000 })
+  await expect(message(pageC, fromBob)).toBeVisible({ timeout: 45_000 })
+  await expect(pageA.getByRole('button', { name: 'Attach files' })).toHaveCount(0)
 
-  // The group and its history survive a reload on both sides.
+  // Alice renames it; the others see the new name.
+  await openDetails(pageA)
+  await expect(pageA.getByTestId('chat-group-members')).toContainText('3 members', { timeout: 45_000 })
+  await pageA.getByTestId('chat-group-rename').click()
+  await pageA.getByTestId('chat-group-title-input').fill(`Renamed ${tag}`)
+  await pageA.getByTestId('chat-group-title-save').click()
+  await expect(pageB.getByTestId(`chat-group-${groupId}`)).toContainText(`Renamed ${tag}`, { timeout: 90_000 })
+
+  // Alice removes Carol: Carol's next message reaches nobody, and her group
+  // says she may have been removed.
+  await pageA
+    .getByTestId('chat-group-members')
+    .getByRole('button', { name: new RegExp(`^Remove ${carol.username}`) })
+    .click()
+  await expect(pageA.getByTestId('chat-group-members')).toContainText('2 members', { timeout: 45_000 })
+  await closeDetails(pageA)
+  const afterRemoval = `local-group-after-removal-${tag}`
+  await send(pageA, afterRemoval)
+  await expect(message(pageB, afterRemoval)).toBeVisible({ timeout: 45_000 })
+  await pageC.reload()
+  await openGroup(pageC, groupId)
+  await expect(message(pageC, afterRemoval)).toHaveCount(0)
+  await expect(pageC.getByTestId('chat-group-status')).toContainText('You may have been removed', { timeout: 90_000 })
+
+  // The group and its history survive a reload.
   await pageA.reload()
   await pageB.reload()
+  await openGroup(pageA, groupId)
+  await openGroup(pageB, groupId)
   await expect(message(pageA, fromBob)).toBeVisible({ timeout: 90_000 })
   await expect(message(pageB, fromAlice)).toBeVisible({ timeout: 90_000 })
 
+  // Bob leaves; the group says so on his side, and keeps going on Alice's.
+  await openDetails(pageB)
+  await pageB.getByTestId('chat-group-leave').click()
+  await pageB.getByTestId('chat-group-leave-confirm').click()
+  await closeDetails(pageB)
+  await expect(composer(pageB)).toHaveCount(0, { timeout: 45_000 })
+  await expect(pageB.getByText("You're no longer a member of this group.")).toBeVisible()
+  await expect(composer(pageA)).toBeVisible()
+
   await contextA.close()
   await contextB.close()
+  await contextC.close()
 })

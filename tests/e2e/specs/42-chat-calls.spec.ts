@@ -110,6 +110,9 @@ test('a one-to-one video call has people, chat and screen sharing', async ({ bro
 })
 
 test('a group call shows a shared screen to the others', async ({ browser }) => {
+  // Group calls were MLS groups'; they come to pairwise groups in slice 3
+  // (docs/plans/pairwise-groups.md §6, §10).
+  test.skip(true, 'group calls come to pairwise groups in slice 3')
   test.slow()
   const tag = Date.now()
   const alice = newAccount('gcallalice', PASSWORD)

@@ -183,15 +183,16 @@ if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
       npm exec -- playwright test \
         specs/25-tus-upload.spec.ts \
         specs/32-chat-two-server-security.spec.ts \
-        specs/34-chat-backup-two-server-recovery.spec.ts --project=chromium
+        specs/34-chat-backup-two-server-recovery.spec.ts \
+        specs/161-chat-groups-two-server.spec.ts --project=chromium
   )
 
-  # The destination necessarily sees its local recipient, but anonymous MLS
-  # handling must never log the remote sender or application plaintext.
+  # The member's server necessarily sees its local recipient, but anonymous
+  # group handling must never log the remote sender or application plaintext.
   if compose logs --no-color backend-b \
-      | grep -Eq 'mlsalice[0-9]+|mls-from-alice'; then
-    echo "destination MLS logs contain sender identity or plaintext" >&2
+      | grep -Eq 'fedgrpalice[0-9a-z]+|fed-group-from-alice|mlsalice[0-9]+|mls-from-alice'; then
+    echo "destination group logs contain sender identity or plaintext" >&2
     exit 1
   fi
-  echo "MLS DESTINATION LOG METADATA PRIVACY VERIFIED"
+  echo "GROUP DESTINATION LOG METADATA PRIVACY VERIFIED"
 fi

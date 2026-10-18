@@ -242,31 +242,47 @@ export async function openGroup(page: Page, conversationId: string): Promise<voi
 }
 
 /**
- * Creates an MLS group with one first member and returns its conversation
- * id, from the genesis response.
+ * Makes two accounts contacts of each other, as a group invitation needs
+ * (only contacts can be invited): `pageA` writes to `addressOfB`, B accepts
+ * the request from `nameOfA` and answers.
  */
-export async function createGroup(page: Page, member: string, name = 'Test group'): Promise<string> {
-  const genesis = page.waitForResponse((response) => {
-    const path = new URL(response.url()).pathname
-    return response.request().method() === 'POST' && path === '/api/chat/mls/conversations'
-  })
-  await page.getByRole('button', { name: 'New chat' }).first().click()
-  await page.getByRole('dialog').getByTestId('chat-create-group').click()
-  await page.getByTestId('chat-group-name').fill(name)
-  await page.getByTestId('chat-group-initial-member').fill(member)
-  await page.getByTestId('chat-group-create-submit').click()
-  const response = await genesis
-  expect(response.ok()).toBe(true)
-  return ((await response.json()) as { conversationId: string }).conversationId
+export async function befriend(pageA: Page, pageB: Page, addressOfB: string, nameOfA: string): Promise<void> {
+  const hello = `hello-${Date.now().toString(36)}`
+  await openDirectChat(pageA, addressOfB)
+  await send(pageA, hello)
+  await openConversationWith(pageB, nameOfA)
+  await expect(message(pageB, hello)).toBeVisible({ timeout: 60_000 })
+  await acceptRequest(pageB)
+  const answer = `hi-${Date.now().toString(36)}`
+  await send(pageB, answer)
+  await expect(message(pageA, answer)).toBeVisible({ timeout: 60_000 })
 }
 
-/** Accepts a group invitation and opens the group. */
-export async function acceptGroup(page: Page, conversationId: string): Promise<void> {
+/**
+ * Creates a group named `name` with `members` (contacts, by the name the
+ * list shows them under) invited, and returns its id from the address the
+ * new group opens at.
+ */
+export async function createGroup(page: Page, members: string | string[], name = 'Test group'): Promise<string> {
+  await page.getByRole('button', { name: 'New chat' }).first().click()
+  await page.getByRole('dialog').getByTestId('chat-create-group').click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByTestId('chat-group-name').fill(name)
+  for (const member of Array.isArray(members) ? members : [members]) {
+    const shown = member.split('@')[0]
+    await dialog.getByRole('checkbox', { name: new RegExp(escapeRegExp(shown)) }).click()
+  }
+  await dialog.getByTestId('chat-group-create-submit').click()
+  await page.waitForURL((url) => decodeURIComponent(url.pathname).includes('/c/group:'), { timeout: 90_000 })
+  return decodeURIComponent(new URL(page.url()).pathname).split('/c/group:')[1]
+}
+
+/** Joins a group from its invitation and opens it. */
+export async function acceptGroup(page: Page, groupId: string): Promise<void> {
   await openChats(page)
-  await expect(page.getByTestId('chat-group-invitations')).toBeVisible({ timeout: 90_000 })
-  await page.getByTestId('chat-group-accept').first().click()
-  await expect(page.getByTestId(`chat-group-${conversationId}`)).toBeVisible({ timeout: 90_000 })
-  await page.getByTestId(`chat-group-${conversationId}`).click()
+  await page.getByTestId(`chat-group-${groupId}`).click({ timeout: 90_000 })
+  await page.getByRole('button', { name: 'Join group' }).click({ timeout: 60_000 })
+  await expect(composer(page)).toBeVisible({ timeout: 90_000 })
 }
 
 /** The backup cursor the server has acknowledged, read from Settings. */

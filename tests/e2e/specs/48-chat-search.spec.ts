@@ -79,10 +79,14 @@ test('search finds messages through the encrypted index: Turkish folding, word s
   await expectNothing(pageA, `eski ${tag}`)
   await expectNothing(pageA, `silinecek ${tag}`)
 
-  // Group messages are indexed too, on both sides.
+  // Group messages are indexed too, on both sides. Bob answers first: a
+  // group invites contacts, and his answer makes him Alice's.
+  await openConversationWith(pageB, alice.username)
+  const answer = `tamam ${tag}`
+  await send(pageB, answer)
+  await expect(message(pageA, answer)).toBeVisible({ timeout: 45_000 })
   const groupId = await createGroup(pageA, bob.username, `Arama ${tag}`)
   await acceptGroup(pageB, groupId)
-  await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
   await expect(composer(pageA)).toBeVisible()
   const groupText = `Grup toplantısı Çarşamba ${tag}`
   await send(pageA, groupText)
