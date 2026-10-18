@@ -58,7 +58,7 @@ const HOSTLESS_GRACE_SECONDS: i64 = 20;
 const ADMIN_TOKEN_TTL_SECONDS: i64 = 60;
 
 static SFU_API: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
+    crate::tls::client_builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()

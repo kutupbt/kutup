@@ -279,6 +279,12 @@ renewing or replacing them, reload Nginx:
 docker compose exec nginx nginx -s reload
 ```
 
+The server's own outbound HTTPS (federation with other Kutup servers, Web
+Push, outside mail keys, maps and the rest) runs on rustls with aws-lc-rs and
+offers the post-quantum hybrid key exchange X25519MLKEM768 first, falling back
+to X25519 or the NIST curves for peers without it. Nothing needs configuring.
+The bundled Nginx still accepts TLS 1.2 as well as 1.3 (`docs/roadmap.md`).
+
 ### Automatic certificates
 
 `docker-compose.acme.yml` adds a small companion that gets a Let's Encrypt

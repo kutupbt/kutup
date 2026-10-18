@@ -270,7 +270,7 @@ impl MapService {
             PathBuf::from(cache_dir)
         };
         tokio::fs::create_dir_all(&cache_dir).await?;
-        let client = reqwest::Client::builder()
+        let client = crate::tls::client_builder()
             // OpenStreetMap's tile usage policy asks for an identifying agent.
             .user_agent(format!(
                 "Kutup/{} (+{server_url})",

@@ -15,7 +15,10 @@ use serde_json::{json, Value};
 
 fn live() -> Option<(Client, String)> {
     let base = std::env::var("KUTUP_LIVE_SERVER").ok()?;
-    Some((Client::new(), base.trim_end_matches('/').to_string()))
+    Some((
+        crate::common::client(),
+        base.trim_end_matches('/').to_string(),
+    ))
 }
 
 fn name() -> String {

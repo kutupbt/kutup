@@ -30,7 +30,7 @@ pub async fn one_click(state: &AppState, url: &str) -> Result<(), Unusable> {
                 .map(|q| format!("?{q}"))
                 .unwrap_or_default()
         );
-        let response = reqwest::Client::builder()
+        let response = crate::tls::client_builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(TOTAL_TIMEOUT)
             .user_agent(USER_AGENT)
