@@ -1,0 +1,14 @@
+# reqwest is built without a TLS provider of its own (rustls on aws-lc-rs,
+# X25519MLKEM768 first): a client built directly panics with "No provider set"
+# wherever the process default isn't installed yet. Build clients through the
+# helpers, which install it first.
+disallowed-methods = [
+    { path = "reqwest::Client::new", reason = "use tls::client_builder() (server, CLI) or common::client() (tests)" },
+    { path = "reqwest::Client::builder", reason = "use tls::client_builder() (server, CLI) or common::client_builder() (tests)" },
+    { path = "reqwest::ClientBuilder::new", reason = "use tls::client_builder() (server, CLI) or common::client_builder() (tests)" },
+    { path = "reqwest::blocking::Client::new", reason = "use common::client() (tests) or tls::client_builder() (CLI)" },
+    { path = "reqwest::blocking::Client::builder", reason = "use common::client_builder() (tests) or tls::client_builder() (CLI)" },
+    { path = "reqwest::blocking::ClientBuilder::new", reason = "use common::client_builder() (tests) or tls::client_builder() (CLI)" },
+    { path = "reqwest::get", reason = "build a client with tls::client_builder() first" },
+    { path = "reqwest::blocking::get", reason = "build a client with common::client() first" },
+]
