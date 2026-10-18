@@ -36,9 +36,9 @@ mod group_harness_tests;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_heal;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
-mod group_list;
-#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_invite;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+mod group_list;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_send;
 mod invite_link;

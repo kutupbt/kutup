@@ -216,7 +216,10 @@ impl Engine {
     /// Reads the list and follows it: takes up the groups this device
     /// doesn't know, leaves here the ones another device left, and raises
     /// each group's lowest acceptable state. Returns the groups taken up.
-    pub async fn sync_group_list<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<Vec<String>> {
+    pub async fn sync_group_list<R: Rng + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<Vec<String>> {
         if self.group_list.is_none() {
             return Ok(Vec::new());
         }
@@ -256,7 +259,8 @@ impl Engine {
                 None => {}
                 Some(mut record) => {
                     let mut changed = false;
-                    if entry.status == GroupListStatus::Gone && record.status == GroupStatus::Member {
+                    if entry.status == GroupListStatus::Gone && record.status == GroupStatus::Member
+                    {
                         record.status = GroupStatus::Gone;
                         changed = true;
                     }

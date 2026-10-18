@@ -666,15 +666,48 @@ impl Engine {
     ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>)> {
         let record = self.load_group_record(group_id).await?;
         let accounts = group::member_accounts(&record).map_err(group_error)?;
+        let (members, unconfirmed, cached) = self.check_members(&record, &accounts, &[]).await?;
+        // A binding that fails against kept keys may be a new device's: those
+        // accounts' manifests are fetched afresh, once.
+        let verified: Vec<AccountRef> = members
+            .iter()
+            .filter_map(|member| member.verified.as_ref().map(|v| v.account.clone()))
+            .collect();
+        let stale: Vec<AccountRef> = accounts
+            .iter()
+            .filter(|account| cached.contains(*account) && !verified.contains(*account))
+            .cloned()
+            .collect();
+        if stale.is_empty() {
+            return Ok((members, unconfirmed));
+        }
+        let (members, unconfirmed, _) = self.check_members(&record, &accounts, &stale).await?;
+        Ok((members, unconfirmed))
+    }
+
+    /// The members with their bindings checked against their accounts'
+    /// manifest keys (kept ones, except for `fresh` accounts), the accounts
+    /// whose manifest couldn't be fetched, and those checked against kept
+    /// keys.
+    async fn check_members(
+        &mut self,
+        record: &GroupRecordV1,
+        accounts: &[AccountRef],
+        fresh: &[AccountRef],
+    ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>, Vec<AccountRef>)> {
         let now = crate::clock::unix_millis();
         let mut keys: BTreeMap<AccountRef, Vec<(u32, PublicKey)>> = BTreeMap::new();
         let mut unconfirmed = Vec::new();
-        for account in accounts {
+        let mut cached = Vec::new();
+        for account in accounts.iter().cloned() {
             let account_text = account.to_string();
-            if let Some((at, devices)) = self.manifest_keys_seen.get(&account_text) {
-                if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
-                    keys.insert(account, devices.clone());
-                    continue;
+            if !fresh.contains(&account) {
+                if let Some((at, devices)) = self.manifest_keys_seen.get(&account_text) {
+                    if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
+                        keys.insert(account.clone(), devices.clone());
+                        cached.push(account);
+                        continue;
+                    }
                 }
             }
             let manifest = match Rc::clone(&self.transport)
@@ -721,8 +754,8 @@ impl Engine {
                     .any(|(id, key)| *id == device_id && key.verify_signature(bytes, signature))
             })
         };
-        let members = group::members(&record, &verify).map_err(group_error)?;
-        Ok((members, unconfirmed))
+        let members = group::members(record, &verify).map_err(group_error)?;
+        Ok((members, unconfirmed, cached))
     }
 
     /// Every group this device knows, with its title.

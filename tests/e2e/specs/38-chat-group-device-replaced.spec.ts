@@ -1,13 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { acceptGroup, composer, createGroup, message, openChat, openChats, openGroup, openSettings, revokeOtherDevices, send } from '../fixtures/chat'
+import { acceptGroup, befriend, composer, createGroup, message, openChat, openChats, openGroup, openSettings, revokeOtherDevices, send } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*GroupDevicePassword'
 
 // A member whose only Chat device is replaced (a new browser, the old one
 // revoked; "Repair this browser" ends in the same state) is still a member of
-// their groups: the group drops the dead device, admits the new one, and
-// messages flow both ways again.
+// their groups (docs/plans/pairwise-groups.md §5): the new device learns them
+// from the account's group list, signs the member's entry again, the others
+// catch up from its change notice, and messages flow both ways again.
 test('a group member keeps the group after replacing their only device', async ({ browser }) => {
   test.slow()
   const tag = Date.now().toString(36)
@@ -20,9 +21,9 @@ test('a group member keeps the group after replacing their only device', async (
   const pageA = await openChat(contextA)
   const pageB = await openChat(contextB)
 
+  await befriend(pageA, pageB, bob.username, alice.username)
   const conversationId = await createGroup(pageA, bob.username, `Devices ${tag}`)
   await acceptGroup(pageB, conversationId)
-  await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
   const before = `before-${tag}`
   await send(pageA, before)
   await expect(message(pageB, before)).toBeVisible({ timeout: 45_000 })
@@ -39,8 +40,8 @@ test('a group member keeps the group after replacing their only device', async (
 
   // The group is still his, and it works in both directions.
   await openGroup(pageB2, conversationId)
-  // Alice's Chat notices on its next device check (every two minutes).
-  await expect(composer(pageB2)).toBeVisible({ timeout: 240_000 })
+  // The new device knows the group from the account's list.
+  await expect(composer(pageB2)).toBeVisible({ timeout: 120_000 })
   const toNewDevice = `to-new-device-${tag}`
   await send(pageA, toNewDevice)
   await expect(message(pageB2, toNewDevice)).toBeVisible({ timeout: 90_000 })
@@ -56,7 +57,7 @@ test('a group member keeps the group after replacing their only device', async (
 // open: the browser's device state is discarded and a fresh device
 // registered. The old device is revoked without being asked for, Chat keeps
 // opening while a group message it cannot read is waiting, and the group
-// takes the new device in.
+// takes the new device in once it signs the member's entry again.
 test('a group member keeps the group after repairing their browser', async ({ browser }) => {
   test.slow()
   const tag = Date.now().toString(36)
@@ -69,9 +70,9 @@ test('a group member keeps the group after repairing their browser', async ({ br
   const pageA = await openChat(contextA)
   const pageB = await openChat(contextB)
 
+  await befriend(pageA, pageB, bob.username, alice.username)
   const conversationId = await createGroup(pageA, bob.username, `Repair ${tag}`)
   await acceptGroup(pageB, conversationId)
-  await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
   const before = `before-${tag}`
   await send(pageA, before)
   await expect(message(pageB, before)).toBeVisible({ timeout: 45_000 })
@@ -102,8 +103,7 @@ test('a group member keeps the group after repairing their browser', async ({ br
   await pageB.reload()
   await openGroup(pageB, conversationId)
 
-  // Alice's Chat notices on its next device check (every two minutes).
-  await expect(composer(pageB)).toBeVisible({ timeout: 240_000 })
+  await expect(composer(pageB)).toBeVisible({ timeout: 120_000 })
   const toNewDevice = `to-new-device-${tag}`
   await send(pageA, toNewDevice)
   await expect(message(pageB, toNewDevice)).toBeVisible({ timeout: 90_000 })

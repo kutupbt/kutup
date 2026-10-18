@@ -337,6 +337,28 @@ extern "C" {
         home: &str,
         sealed: &[u8],
     ) -> std::result::Result<JsValue, JsValue>;
+
+    /// The account's group list, as the verified account head lists it:
+    /// `[{id, revision, envelope}]`.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupList)]
+    async fn js_fetch_group_list(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
+
+    /// One entry with the next account head (`{id, baseRevision, revision,
+    /// envelope}`): `false` when another device wrote first.
+    #[wasm_bindgen(method, catch, js_name = storeGroupEntry)]
+    async fn js_store_group_entry(
+        this: &JsChatTransport,
+        write: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupEntryWrite<'a> {
+    id: &'a str,
+    base_revision: u64,
+    revision: u64,
+    envelope: &'a str,
 }
 
 struct BrowserTransport {
@@ -404,6 +426,36 @@ impl ChatTransport for BrowserTransport {
             BrowserRelayOutcome::Unreachable => Outcome::Unreachable,
             BrowserRelayOutcome::GroupsOff => Outcome::GroupsOff,
         })
+    }
+
+    async fn fetch_group_list(&self) -> Result<Vec<crate::GroupListItem>> {
+        from_transport(
+            self.js
+                .js_fetch_group_list()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn store_group_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<bool> {
+        let write = GroupEntryWrite {
+            id,
+            base_revision,
+            revision,
+            envelope,
+        };
+        from_transport(
+            self.js
+                .js_store_group_entry(to_transport(&write)?)
+                .await
+                .map_err(transport_error)?,
+        )
     }
 
     async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32> {

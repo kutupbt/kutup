@@ -1495,6 +1495,10 @@ export interface ChatTransportPort {
   ackMessages(deviceId: number, ids: string[]): Promise<void>
   /** `GET /api/chat/groups/gateway-key`: `{config, identityHistory}`. */
   fetchGroupGateway(home: string, fromSequence: string): Promise<unknown>
+  /** The account's group list, as the verified account head lists it. */
+  fetchGroupList(): Promise<Array<{ id: string; revision: number; envelope: string }>>
+  /** One group-list entry with the next account head: false when another device wrote first. */
+  storeGroupEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<boolean>
   /** `POST /api/chat/groups/relay/{home}` with a sealed group request. */
   relayGroupRequest(
     home: string,

@@ -124,6 +124,8 @@ pub(crate) struct World {
     cursor: Cell<u64>,
     /// Every sealed submission that was stored: `(recipient, submission)`.
     pub(crate) sealed_sent: RefCell<Vec<(String, SealedMessageSubmissionV1)>>,
+    /// Each account's group list: entry id → (revision, envelope).
+    pub(crate) group_lists: RefCell<BTreeMap<String, BTreeMap<String, (u64, String)>>>,
     /// Accounts whose manifest can't be fetched now.
     pub(crate) manifests_down: RefCell<HashSet<String>>,
     /// The home can't be reached now.
@@ -209,6 +211,7 @@ impl World {
             cursor: Cell::new(0),
             sealed_sent: RefCell::new(Vec::new()),
             manifests_down: RefCell::new(HashSet::new()),
+            group_lists: RefCell::new(BTreeMap::new()),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
         })
@@ -261,6 +264,13 @@ impl World {
         let authority_seed = account
             .strip_suffix(&format!("@{SERVER}"))
             .and_then(|id| u8::from_str_radix(&id[id.len() - 2..], 16).ok())
+            .unwrap();
+        // The account's master key and key binding, as the app hands them over.
+        engine
+            .enable_group_list(
+                &[authority_seed.wrapping_add(50); 32],
+                &format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}"),
+            )
             .unwrap();
         Person {
             engine,
@@ -738,6 +748,14 @@ impl ChatTransport for Client {
             .last()
             .is_none_or(|prior| prior.sequence < manifest.sequence)
         {
+            // A device the account no longer lists is revoked: the server
+            // stops serving it, as the real one does.
+            let listed: HashSet<u32> = manifest
+                .devices
+                .iter()
+                .map(|device| device.device_id)
+                .collect();
+            hosted.devices.retain(|id, _| listed.contains(id));
             hosted.manifests.push(manifest.clone());
         }
         Ok(AccountManifestPublicationV1 {
@@ -832,6 +850,42 @@ impl ChatTransport for Client {
             return Err(ChatError::Transport("sealed delivery unavailable".into()));
         }
         self.world.bundles(account, None)
+    }
+
+    async fn fetch_group_list(&self) -> Result<Vec<crate::GroupListItem>> {
+        Ok(self
+            .world
+            .group_lists
+            .borrow()
+            .get(&self.account)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, (revision, envelope))| crate::GroupListItem {
+                        id: id.clone(),
+                        revision: *revision,
+                        envelope: envelope.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn store_group_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<bool> {
+        let mut lists = self.world.group_lists.borrow_mut();
+        let entries = lists.entry(self.account.clone()).or_default();
+        let listed = entries.get(id).map_or(0, |(revision, _)| *revision);
+        if listed != base_revision || revision <= listed {
+            return Ok(false);
+        }
+        entries.insert(id.to_string(), (revision, envelope.to_string()));
+        Ok(true)
     }
 
     async fn send_sealed(
@@ -2265,4 +2319,127 @@ fn group_ui_an_invitation_names_the_group_before_joining() {
         .find(|group| group.group_id == group_id)
         .unwrap();
     assert_eq!(invited.title.as_deref(), Some("Team"));
+}
+
+// ----- new devices keep their groups (pairwise-groups.md §5) -----
+
+#[test]
+fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // Bob's entry is in his list.
+    assert_eq!(
+        world
+            .group_lists
+            .borrow()
+            .get(&bob.account)
+            .map(BTreeMap::len),
+        Some(1)
+    );
+
+    // Bob's only device is gone; a new one is set up and the old one revoked.
+    let mut bob2 = world.link_device(&bob);
+    let authority = AccountAuthority::derive(&[0xb2; 32]).unwrap();
+    block_on(
+        bob2.engine
+            .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
+    )
+    .unwrap();
+    drop(bob);
+
+    // It learns the group from the list, takes its state and signs its own
+    // entry again.
+    let taken = block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(taken, vec![group_id.clone()]);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    let entry =
+        crate::group::own_entry(&block_on(bob2.engine.load_group_record(&group_id)).unwrap())
+            .unwrap()
+            .expect("a member");
+    assert_eq!(entry.device_id, bob2.device());
+
+    // Alice sees him verified again, and they write to each other.
+    alice.receive();
+    let members = block_on(alice.engine.group_members(&group_id)).unwrap();
+    assert!(
+        members.iter().all(|member| member.verified.is_some()),
+        "{members:?}"
+    );
+    alice.send_text(&group_id, "after the new device");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert!(bob2
+        .group_texts(&group_id)
+        .contains(&"after the new device".to_string()));
+    bob2.send_text(&group_id, "from the new device");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert!(alice
+        .group_texts(&group_id)
+        .contains(&"from the new device".to_string()));
+}
+
+#[test]
+fn group_list_a_group_left_on_one_device_is_left_on_the_other() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    let mut bob2 = world.link_device(&bob);
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob2.status(&group_id), GroupStatus::Gone);
+}
+
+#[test]
+fn group_list_entries_are_per_account_and_sealed() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let lists = world.group_lists.borrow();
+    let ids = |account: &str| lists[account].keys().cloned().collect::<Vec<_>>();
+    // The same group under unrelated ids, and no group id in the clear.
+    assert_ne!(ids(&alice.account), ids(&bob.account));
+    for entries in lists.values() {
+        for (id, (_, envelope)) in entries {
+            assert_ne!(*id, group_id);
+            assert!(!envelope.contains(&group_id));
+        }
+    }
+}
+
+#[test]
+fn group_list_a_rotated_profile_key_reaches_the_group() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // Bob's profile key changes (as blocking someone rotates it): his entry
+    // in the group gets the new one, so the group still reaches him.
+    let wrapping_key = bob.wrapping_key;
+    block_on(
+        bob.engine
+            .rotate_profile_key(&wrapping_key, ISSUED_AT, &mut rng()),
+    )
+    .unwrap();
+    let entry =
+        crate::group::own_entry(&block_on(bob.engine.load_group_record(&group_id)).unwrap())
+            .unwrap()
+            .unwrap();
+    let profile = block_on(bob.engine.local_profile()).unwrap().unwrap();
+    assert_eq!(entry.profile_key, STANDARD.encode(&profile.key));
+    deliver_all(&mut [&mut alice, &mut bob]);
+    alice.send_text(&group_id, "after the rotation");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"after the rotation".to_string()));
 }
