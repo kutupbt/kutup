@@ -3420,7 +3420,13 @@ mod sealed_live_tests {
             .expect("the closing step");
         let closing = &migration[start..start + migration[start..].find(';').unwrap()];
         assert!(closing.contains("closing_sequence"));
-        sqlx::query(closing).execute(&pool).await.unwrap();
+        // Run on this test's destination only: unscoped, it would reopen the
+        // rejected rows of tests running beside it.
+        sqlx::query(&format!("{closing} AND destination = $1"))
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert_eq!(
             outbox_row(&pool, id).await,
             (
