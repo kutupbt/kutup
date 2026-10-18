@@ -41,17 +41,38 @@ pub type SignBinding<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>, String> + 'a;
 /// the account's verified manifest (the session's).
 pub type VerifyBinding<'a> = dyn Fn(&AccountRef, u32, &[u8], &[u8]) -> bool + 'a;
 
+/// A secret kept as text (base64): stored as it is, never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SecretText(pub String);
+
+impl std::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<secret>")
+    }
+}
+
+impl Drop for SecretText {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
 /// What this device keeps per group.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupRecordV1 {
     pub version: u16,
     pub group_id: String,
-    pub master_key: String,
+    pub master_key: SecretText,
     pub home: GroupHomePinV1,
     /// This account's pseudonym in the group (its seed).
-    pub pseudonym_seed: String,
+    pub pseudonym_seed: SecretText,
     pub status: GroupStatus,
+    /// The lowest revision a whole state served to this device may have: the
+    /// revision of its own claim, or the last one this account verified (from
+    /// its group list), so an older snapshot can't be passed off as current.
+    pub min_revision: u64,
     /// The last verified state's canonical bytes, and the hash of the change
     /// that produced it; absent until the first verified state.
     pub state: Option<String>,
@@ -66,11 +87,13 @@ pub struct GroupRecordV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
 pub enum GroupStatus {
-    /// Invited: the claim waits to be accepted by the home.
+    /// Invited: the claim waits to be accepted by the home. The claim key
+    /// lives only here, and goes when the status changes, in the same write.
     #[serde(rename_all = "camelCase")]
     Invited {
         slot_id: String,
         slot_revision: u64,
+        claim_key_seed: SecretText,
     },
     /// Asked to join through the link; waits for an administrator.
     Requesting,
@@ -115,13 +138,13 @@ fn record_error(error: impl ToString) -> GroupError {
 
 impl GroupRecordV1 {
     pub fn master(&self) -> Result<GroupMasterKey, GroupError> {
-        let bytes = decode_exact::<32>("masterKey", &self.master_key).map_err(record_error)?;
+        let bytes = decode_exact::<32>("masterKey", &self.master_key.0).map_err(record_error)?;
         GroupMasterKey::from_bytes(&bytes).map_err(record_error)
     }
 
     pub fn pseudonym(&self) -> Result<GroupKeyPair, GroupError> {
         let seed = Zeroizing::new(
-            decode_exact::<32>("pseudonymSeed", &self.pseudonym_seed).map_err(record_error)?,
+            decode_exact::<32>("pseudonymSeed", &self.pseudonym_seed.0).map_err(record_error)?,
         );
         Ok(GroupKeyPair::from_seed(&seed))
     }
@@ -164,6 +187,42 @@ impl GroupRecordV1 {
             GroupStatus::Gone
         };
         Ok(())
+    }
+
+    /// The home's identity history this device holds, followed from the pin:
+    /// the only history a notary is checked against.
+    fn followed_history(&self) -> Result<&[FederationIdentityDocumentV1], GroupError> {
+        let history = &self.gateway.identity_history;
+        let current = self.home.follow(history).map_err(|_| GroupError::Notary)?;
+        if current.server != self.home.server {
+            return Err(GroupError::Notary);
+        }
+        Ok(history)
+    }
+
+    /// Whether `self` may replace `stored` in the store: never an older
+    /// verified state, and never another state at the same revision (a fork).
+    pub fn may_replace(&self, stored: &GroupRecordV1) -> Result<(), GroupError> {
+        if self.group_id != stored.group_id {
+            return Err(record_error("another group's record"));
+        }
+        let mine = self.verified()?.map(|(state, head)| (state.revision, head));
+        let theirs = stored
+            .verified()?
+            .map(|(state, head)| (state.revision, head));
+        match (mine, theirs) {
+            (_, None) => Ok(()),
+            (None, Some(_)) => Err(record_error("a verified group state can't be dropped")),
+            (Some((new, new_head)), Some((old, old_head))) => {
+                if new > old || (new == old && new_head == old_head) {
+                    Ok(())
+                } else if new == old {
+                    Err(record_error("another state at the same revision (a fork)"))
+                } else {
+                    Err(record_error("an older group state than the one stored"))
+                }
+            }
+        }
     }
 
     fn is_my_slot(&self, slot_id: &str) -> bool {
@@ -248,10 +307,11 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
     let record = GroupRecordV1 {
         version: GROUP_FORMAT_VERSION,
         group_id: change.group_id.clone(),
-        master_key: encode(master.as_bytes()),
+        master_key: SecretText(encode(master.as_bytes())),
         home: new.home,
-        pseudonym_seed: encode(pseudonym.seed()),
+        pseudonym_seed: SecretText(encode(pseudonym.seed())),
         status: GroupStatus::Member,
+        min_revision: 0,
         state: None,
         head: None,
         notary_sequence: None,
@@ -330,7 +390,7 @@ pub fn invite(
     let invite = GroupInviteV1 {
         version: GROUP_FORMAT_VERSION,
         group_id: record.group_id.clone(),
-        master_key: record.master_key.clone(),
+        master_key: record.master_key.0.clone(),
         home: record.home.clone(),
         slot_id: encode(&slot_id),
         // The slot is added by the next revision.
@@ -348,17 +408,10 @@ pub struct ClaimBasis {
     pub head: [u8; HASH_LEN],
 }
 
-/// Claims an invitation: this device's new record (not yet a member) and the
-/// claim to send with `SubmitChange`, signed by a new pseudonym and by the
-/// slot's claim key.
-pub fn claim(
-    invite: &GroupInviteV1,
-    basis: &ClaimBasis,
-    me: &AccountRef,
-    device_id: u32,
-    profile_key: &[u8; 32],
-    sign_binding: &SignBinding<'_>,
-) -> Result<(GroupRecordV1, GroupChangeV1), GroupError> {
+/// The record an invitation starts: the group's key and home, a fresh
+/// pseudonym, and the slot's claim key, kept in the `Invited` status until
+/// the claim is accepted. The invitation is consumed.
+pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupError> {
     invite.validate().map_err(record_error)?;
     let master = GroupMasterKey::from_bytes(
         &decode_exact::<32>("masterKey", &invite.master_key).map_err(record_error)?,
@@ -368,11 +421,64 @@ pub fn claim(
     if master.group_id() != group_id {
         return Err(record_error("the invitation's key is not its group's"));
     }
-    let slot_id = decode_exact::<SLOT_ID_LEN>("slotId", &invite.slot_id).map_err(record_error)?;
-    let claim_key = GroupKeyPair::from_seed(&Zeroizing::new(
-        decode_exact::<32>("claimKeySeed", &invite.claim_key_seed).map_err(record_error)?,
-    ));
     let pseudonym = GroupKeyPair::generate();
+    Ok(GroupRecordV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: invite.group_id.clone(),
+        master_key: SecretText(invite.master_key.clone()),
+        home: invite.home.clone(),
+        pseudonym_seed: SecretText(encode(pseudonym.seed())),
+        status: GroupStatus::Invited {
+            slot_id: invite.slot_id.clone(),
+            slot_revision: invite.slot_revision,
+            claim_key_seed: SecretText(invite.claim_key_seed.clone()),
+        },
+        // Raised to the claim's revision when the claim is made.
+        min_revision: invite.slot_revision,
+        state: None,
+        head: None,
+        notary_sequence: None,
+        gateway: Default::default(),
+    })
+}
+
+/// The claim key of an invited record: what signs the join-info request a
+/// claimant needs before its claim.
+pub fn claim_key_seed(record: &GroupRecordV1) -> Result<[u8; 32], GroupError> {
+    match &record.status {
+        GroupStatus::Invited { claim_key_seed, .. } => {
+            decode_exact::<32>("claimKeySeed", &claim_key_seed.0).map_err(record_error)
+        }
+        _ => Err(record_error("no invitation to claim")),
+    }
+}
+
+/// The claim of an invited record, signed by its pseudonym and by the slot's
+/// claim key, built from the join info's revision and head: what is sent
+/// with `SubmitChange`. A whole state taken later must be at least this
+/// revision.
+pub fn claim(
+    record: &mut GroupRecordV1,
+    basis: &ClaimBasis,
+    me: &AccountRef,
+    device_id: u32,
+    profile_key: &[u8; 32],
+    sign_binding: &SignBinding<'_>,
+) -> Result<GroupChangeV1, GroupError> {
+    let GroupStatus::Invited {
+        slot_id: slot_text,
+        slot_revision,
+        ..
+    } = &record.status
+    else {
+        return Err(record_error("no invitation to claim"));
+    };
+    let (slot_text, slot_revision) = (slot_text.clone(), *slot_revision);
+    let claim_key = GroupKeyPair::from_seed(&Zeroizing::new(claim_key_seed(record)?));
+    let master = record.master()?;
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let slot_id = decode_exact::<SLOT_ID_LEN>("slotId", &slot_text).map_err(record_error)?;
+    let pseudonym = record.pseudonym()?;
     let entry = seal_member_entry(
         &master.state_key(),
         &group_id,
@@ -382,20 +488,16 @@ pub fn claim(
         profile_key,
         sign_binding,
     )?;
-    let claim_signature = claim_key.sign_claim(
-        &group_id,
-        &slot_id,
-        invite.slot_revision,
-        &pseudonym.public_key(),
-    );
+    let claim_signature =
+        claim_key.sign_claim(&group_id, &slot_id, slot_revision, &pseudonym.public_key());
     let mut change = GroupChangeV1 {
         version: GROUP_FORMAT_VERSION,
-        group_id: invite.group_id.clone(),
+        group_id: record.group_id.clone(),
         revision: basis.revision + 1,
         previous_hash: encode(&basis.head),
         actor: encode(&pseudonym.public_key()),
         actions: vec![GroupActionV1::Claim {
-            slot_id: invite.slot_id.clone(),
+            slot_id: slot_text,
             claim_signature: encode(&claim_signature),
             entry,
         }],
@@ -404,45 +506,50 @@ pub fn claim(
     };
     change.signature =
         encode(&pseudonym.sign_change(&change.signed_bytes().map_err(record_error)?));
-    let record = GroupRecordV1 {
-        version: GROUP_FORMAT_VERSION,
-        group_id: invite.group_id.clone(),
-        master_key: invite.master_key.clone(),
-        home: invite.home.clone(),
-        pseudonym_seed: encode(pseudonym.seed()),
-        status: GroupStatus::Invited {
-            slot_id: invite.slot_id.clone(),
-            slot_revision: invite.slot_revision,
-        },
-        state: None,
-        head: None,
-        notary_sequence: None,
-        gateway: Default::default(),
-    };
-    Ok((record, change))
+    record.min_revision = record.min_revision.max(change.revision);
+    Ok(change)
 }
 
 /// Applies a change the home notarised: the same check it ran, then its
-/// signature over the change and the resulting state. `history` is the
-/// home's identity history followed from the record's pin
-/// (`GroupHomePinV1::follow`); a notary by a document it lacks means the
-/// history must be fetched again.
+/// signature over the change and the resulting state, by an identity in the
+/// history this record followed from its pin. A notary by a document that
+/// history lacks means it must be fetched again.
 pub fn accept_change(
     record: &mut GroupRecordV1,
     change: &GroupChangeV1,
     notary: &GroupNotaryV1,
-    history: &[FederationIdentityDocumentV1],
 ) -> Result<GroupStateV1, GroupError> {
     if change.group_id != record.group_id {
         return Err(GroupError::Change(GroupChangeError::WrongGroup));
     }
     let next = match record.verified()? {
-        None if change.revision == 0 => check_genesis(change, &record.home, &GroupLimits::MAX)?,
+        None if change.revision == 0 => {
+            let first = check_genesis(change, &record.home, &GroupLimits::MAX)?;
+            // The creator's entry must open under this group's key: a genesis
+            // of another group can't stand in for it.
+            let creator = first
+                .members
+                .first()
+                .ok_or_else(|| record_error("a genesis without its creator"))?;
+            let key = record.master()?.state_key();
+            let subject =
+                decode_exact::<32>("pseudonym", &creator.pseudonym).map_err(record_error)?;
+            let plain = key
+                .open(
+                    SealedField::MemberEntry,
+                    &subject,
+                    &base64_decode(&creator.entry)?,
+                )
+                .map_err(|_| record_error("the creator's entry doesn't open"))?;
+            GroupMemberEntryV1::from_canonical_bytes(&plain).map_err(record_error)?;
+            first
+        }
         Some((state, head)) => check_change(&state, &head, change, &GroupLimits::MAX)?,
         None => return Err(record_error("a change before any verified state")),
     };
     let change_hash = change.hash().map_err(record_error)?;
     let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let history = record.followed_history()?;
     // For a newcomer's change, this is where the notary's state hash is
     // compared with the state this device computed.
     notary
@@ -462,14 +569,15 @@ pub fn accept_change(
 
 /// Takes a whole state the home served to a device that has none yet (a
 /// newcomer just accepted, or a new device of a member), with the change that
-/// produced it and its notary: the state must hash to what the notary names,
-/// and that change must be the head.
+/// produced it and its notary. The state must hash to what the notary names,
+/// that change must be its head, it must be at least the record's
+/// `min_revision` (the claim, or the last revision this account verified),
+/// and this account must be a member of it.
 pub fn accept_state(
     record: &mut GroupRecordV1,
     state: &GroupStateV1,
     latest_change: &GroupChangeV1,
     notary: &GroupNotaryV1,
-    history: &[FederationIdentityDocumentV1],
 ) -> Result<(), GroupError> {
     state.validate().map_err(record_error)?;
     if state.group_id != record.group_id
@@ -485,8 +593,15 @@ pub fn accept_state(
     if record.verified()?.is_some() {
         return Err(record_error("a member catches up through the log"));
     }
+    if state.revision < record.min_revision {
+        return Err(GroupError::Change(GroupChangeError::WrongRevision));
+    }
+    if state.member(&record.pseudonym_text()?).is_none() {
+        return Err(GroupError::Change(GroupChangeError::NotMember));
+    }
     let change_hash = latest_change.hash().map_err(record_error)?;
     let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let history = record.followed_history()?;
     notary
         .verify(
             history,
@@ -500,6 +615,39 @@ pub fn accept_state(
     record.set_verified(state, change_hash)?;
     record.notary_sequence = Some(notary.identity_sequence);
     Ok(())
+}
+
+/// How a group context in a message compares with this device's state
+/// (docs/plans/pairwise-groups.md §3, "Forks and withholding").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextCheck {
+    /// The same revision and chain head.
+    Current,
+    /// The sender is further on: catch up from the home.
+    Behind,
+    /// The sender hasn't caught up yet: nothing to do.
+    SenderBehind,
+    /// The same revision with another head: the home shows members different
+    /// histories. Fetch again; if it persists, warn.
+    Fork,
+}
+
+/// Compares a message's group context `{revision, chainHash}` with the last
+/// verified state.
+pub fn compare_context(
+    record: &GroupRecordV1,
+    revision: u64,
+    chain_hash: &[u8; HASH_LEN],
+) -> Result<ContextCheck, GroupError> {
+    let Some((state, head)) = record.verified()? else {
+        return Ok(ContextCheck::Behind);
+    };
+    Ok(match revision.cmp(&state.revision) {
+        std::cmp::Ordering::Greater => ContextCheck::Behind,
+        std::cmp::Ordering::Less => ContextCheck::SenderBehind,
+        std::cmp::Ordering::Equal if &head == chain_hash => ContextCheck::Current,
+        std::cmp::Ordering::Equal => ContextCheck::Fork,
+    })
 }
 
 /// The members of the last verified state, each entry opened and its binding
@@ -560,6 +708,31 @@ fn open_member(
         profile_key: decode_exact::<32>("profileKey", &entry.profile_key).ok()?,
         account: entry.account,
     })
+}
+
+/// The accounts the last verified state's entries name, unverified: whose
+/// manifests to fetch before [`members`] checks the bindings.
+pub fn member_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(Vec::new());
+    };
+    let key = record.master()?.state_key();
+    let mut accounts = std::collections::BTreeSet::new();
+    for member in &state.members {
+        let Ok(pseudonym) = decode_exact::<32>("pseudonym", &member.pseudonym) else {
+            continue;
+        };
+        let Ok(sealed) = base64_decode(&member.entry) else {
+            continue;
+        };
+        let Ok(plain) = key.open(SealedField::MemberEntry, &pseudonym, &sealed) else {
+            continue;
+        };
+        if let Ok(entry) = GroupMemberEntryV1::from_canonical_bytes(&plain) {
+            accounts.insert(entry.account);
+        }
+    }
+    Ok(accounts.into_iter().collect())
 }
 
 /// A group-wide sealed attribute of the last verified state, opened.

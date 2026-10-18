@@ -17,12 +17,18 @@ struct Home {
     config: GroupGatewayKeyConfigV1,
     state: Option<GroupStateV1>,
     head: [u8; 32],
+    /// Every state the home held, by revision, to serve stale ones.
+    states: Vec<(GroupStateV1, GroupChangeV1, GroupNotaryV1)>,
 }
 
 impl Home {
     fn new() -> Self {
-        let key = SigningKey::from_bytes(&[1u8; 32]);
-        let identity = FederationIdentityDocumentV1::genesis("home.example", 10, &key).unwrap();
+        Self::with_key(1, "home.example")
+    }
+
+    fn with_key(byte: u8, server: &str) -> Self {
+        let key = SigningKey::from_bytes(&[byte; 32]);
+        let identity = FederationIdentityDocumentV1::genesis(server, 10, &key).unwrap();
         let config =
             GroupGatewayKeyConfigV1::sign(&identity, &key, 1, &[9u8; 32], 100, 200).unwrap();
         Self {
@@ -31,11 +37,16 @@ impl Home {
             config,
             state: None,
             head: [0u8; 32],
+            states: Vec::new(),
         }
     }
 
     fn pin(&self) -> GroupHomePinV1 {
         GroupHomePinV1::of(&self.identity).unwrap()
+    }
+
+    fn history(&self) -> Vec<FederationIdentityDocumentV1> {
+        vec![self.identity.clone()]
     }
 
     fn accept(&mut self, change: &GroupChangeV1) -> Result<GroupNotaryV1, GroupChangeError> {
@@ -55,6 +66,8 @@ impl Home {
             &next.hash().unwrap(),
         )
         .unwrap();
+        self.states
+            .push((next.clone(), change.clone(), notary.clone()));
         self.state = Some(next);
         self.head = change_hash;
         Ok(notary)
@@ -121,15 +134,15 @@ fn created(home: &mut Home, alice: &Person) -> GroupRecordV1 {
         sign_binding: &sign,
     })
     .unwrap();
+    record.gateway.identity_history = home.history();
     let notary = home.accept(&genesis).unwrap();
-    accept_change(
-        &mut record,
-        &genesis,
-        &notary,
-        std::slice::from_ref(&home.identity),
-    )
-    .unwrap();
+    accept_change(&mut record, &genesis, &notary).unwrap();
     record
+}
+
+fn apply_at(home: &mut Home, record: &mut GroupRecordV1, change: &GroupChangeV1) {
+    let notary = home.accept(change).unwrap();
+    accept_change(record, change, &notary).unwrap();
 }
 
 /// Alice invites Bob; Bob claims from the join info, then takes the state.
@@ -141,12 +154,14 @@ fn invited(
 ) -> GroupRecordV1 {
     let (action, invitation, _) = invite(alice, &bob.account, role).unwrap();
     let add = author_change(alice, vec![action]).unwrap();
-    let notary = home.accept(&add).unwrap();
-    accept_change(alice, &add, &notary, std::slice::from_ref(&home.identity)).unwrap();
+    apply_at(home, alice, &add);
 
     let sign = bob.sign();
-    let (mut record, claim_change) = claim(
-        &invitation,
+    let mut record = record_from_invite(invitation).unwrap();
+    record.gateway.identity_history = home.history();
+    assert!(matches!(record.status, GroupStatus::Invited { .. }));
+    let claim_change = claim(
+        &mut record,
         &home.join_basis(),
         &bob.account,
         1,
@@ -154,26 +169,12 @@ fn invited(
         &sign,
     )
     .unwrap();
-    assert!(matches!(record.status, GroupStatus::Invited { .. }));
     let notary = home.accept(&claim_change).unwrap();
     // Alice applies the claim with the notary (her own check, the home's state).
-    accept_change(
-        alice,
-        &claim_change,
-        &notary,
-        std::slice::from_ref(&home.identity),
-    )
-    .unwrap();
+    accept_change(alice, &claim_change, &notary).unwrap();
     // Bob, now a member, takes the whole state once.
     let state = home.state.clone().unwrap();
-    accept_state(
-        &mut record,
-        &state,
-        &claim_change,
-        &notary,
-        std::slice::from_ref(&home.identity),
-    )
-    .unwrap();
+    accept_state(&mut record, &state, &claim_change, &notary).unwrap();
     assert_eq!(record.status, GroupStatus::Member);
     record
 }
@@ -195,9 +196,11 @@ fn a_group_is_created_and_an_invitee_joins_with_verified_members() {
             .collect();
         assert!(accounts.contains(&alice.account) && accounts.contains(&bob.account));
     }
-    // Both devices hold the same verified state.
     assert_eq!(alice_record.state, bob_record.state);
     assert_eq!(alice_record.head, bob_record.head);
+    // The claim key went with the status, in the same record.
+    assert!(claim_key_seed(&bob_record).is_err());
+    assert_eq!(member_accounts(&alice_record).unwrap().len(), 2);
 }
 
 #[test]
@@ -206,7 +209,6 @@ fn a_binding_that_doesnt_verify_makes_the_member_unverified() {
     let (alice, bob) = (Person::new(1), Person::new(2));
     let mut alice_record = created(&mut home, &alice);
     let _ = invited(&mut home, &mut alice_record, &bob, GroupRole::Member);
-    // A verifier that knows only Alice's manifest: Bob stays, unverified.
     let members = members(&alice_record, &verifier(&[&alice])).unwrap();
     let bob_view = members
         .iter()
@@ -215,57 +217,37 @@ fn a_binding_that_doesnt_verify_makes_the_member_unverified() {
     assert!(bob_view.verified.is_none());
 }
 
-#[test]
-fn a_change_without_the_homes_notary_is_not_applied() {
-    let mut home = Home::new();
-    let alice = Person::new(1);
-    let mut record = created(&mut home, &alice);
-    let title = seal_attribute(&record, GroupAttribute::Title, b"Kutup").unwrap();
-    let change = author_change(
-        &record,
+fn titled(record: &GroupRecordV1) -> GroupChangeV1 {
+    let title = seal_attribute(record, GroupAttribute::Title, b"Kutup").unwrap();
+    author_change(
+        record,
         vec![GroupActionV1::ModifyAttribute {
             attribute: GroupAttribute::Title,
             value: Some(title),
         }],
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn a_change_without_the_homes_notary_is_not_applied() {
+    let mut home = Home::new();
+    let alice = Person::new(1);
+    let mut record = created(&mut home, &alice);
+    let change = titled(&record);
     // A notary by another identity (a relay's, say) is refused.
-    let other_key = SigningKey::from_bytes(&[2u8; 32]);
-    let other = FederationIdentityDocumentV1::genesis("relay.example", 3, &other_key).unwrap();
-    let group = decode_group_id(&record.group_id).unwrap();
-    let other_config =
-        GroupGatewayKeyConfigV1::sign(&other, &other_key, 1, &[9u8; 32], 100, 200).unwrap();
-    let forged = GroupNotaryV1::sign(
-        &other,
-        &other_key,
-        &other_config,
-        &group,
-        1,
-        &change.hash().unwrap(),
-        &[0u8; 32],
-    )
-    .unwrap();
+    let mut other = Home::with_key(2, "relay.example");
+    other.state = home.state.clone();
+    other.head = home.head;
+    let forged = other.accept(&change).unwrap();
     let before = record.clone();
     assert_eq!(
-        accept_change(
-            &mut record,
-            &change,
-            &forged,
-            std::slice::from_ref(&home.identity)
-        )
-        .unwrap_err(),
+        accept_change(&mut record, &change, &forged).unwrap_err(),
         GroupError::Notary
     );
     assert_eq!(record, before, "nothing applied");
 
-    let notary = home.accept(&change).unwrap();
-    accept_change(
-        &mut record,
-        &change,
-        &notary,
-        std::slice::from_ref(&home.identity),
-    )
-    .unwrap();
+    apply_at(&mut home, &mut record, &change);
     assert_eq!(
         attribute(&record, GroupAttribute::Title).unwrap().unwrap(),
         b"Kutup"
@@ -273,54 +255,158 @@ fn a_change_without_the_homes_notary_is_not_applied() {
 }
 
 #[test]
-fn a_member_never_takes_a_whole_state_over_the_log() {
+fn a_forged_identity_history_is_refused() {
     let mut home = Home::new();
     let alice = Person::new(1);
     let mut record = created(&mut home, &alice);
-    let state = home.state.clone().unwrap();
-    // The genesis is the head; a whole state is refused once one is verified.
-    let genesis_change = {
-        let (_, change) = create_group(NewGroup {
-            home: home.pin(),
-            me: &alice.account,
-            device_id: 1,
-            profile_key: &alice.profile_key,
-            sign_binding: &alice.sign(),
-        })
-        .unwrap();
-        change
-    };
-    let notary = GroupNotaryV1 {
-        identity_sequence: 10,
-        key_config_hash: encode(&[0u8; 32]),
-        signature: encode(&[0u8; 64]),
-    };
-    assert!(accept_state(
-        &mut record,
-        &state,
-        &genesis_change,
-        &notary,
-        std::slice::from_ref(&home.identity)
-    )
-    .is_err());
+    let change = titled(&record);
+    // A relay replaces the history with its own document for the same server
+    // and notarises with it: it doesn't follow from the group's pin.
+    let mut forger = Home::with_key(3, "home.example");
+    forger.state = home.state.clone();
+    forger.head = home.head;
+    let forged = forger.accept(&change).unwrap();
+    record.gateway.identity_history = forger.history();
+    assert_eq!(
+        accept_change(&mut record, &change, &forged).unwrap_err(),
+        GroupError::Notary
+    );
 }
 
 #[test]
-fn an_invitation_for_another_group_is_refused() {
+fn a_joiner_takes_no_snapshot_older_than_its_claim_or_without_it() {
     let mut home = Home::new();
     let (alice, bob) = (Person::new(1), Person::new(2));
-    let alice_record = created(&mut home, &alice);
-    let (_, mut invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
-    // Another group's master key under this group's id.
-    invitation.master_key = encode(&[9u8; 32]);
-    let sign = bob.sign();
-    assert!(claim(
-        &invitation,
+    let mut alice_record = created(&mut home, &alice);
+    let (action, invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
+    let add = author_change(&alice_record, vec![action]).unwrap();
+    apply_at(&mut home, &mut alice_record, &add);
+    let before_claim = home.states.last().unwrap().clone();
+
+    let mut record = record_from_invite(invitation).unwrap();
+    record.gateway.identity_history = home.history();
+    let claim_change = claim(
+        &mut record,
         &home.join_basis(),
         &bob.account,
         1,
         &bob.profile_key,
-        &sign
+        &bob.sign(),
     )
-    .is_err());
+    .unwrap();
+    home.accept(&claim_change).unwrap();
+    // The state from before the claim: older than the claim, and Bob isn't in it.
+    let (state, change, notary) = before_claim;
+    assert!(accept_state(&mut record.clone(), &state, &change, &notary).is_err());
+    // A notarised state that Bob isn't a member of, even if new enough.
+    let mut stranger = record.clone();
+    stranger.pseudonym_seed = SecretText(encode(&[42u8; 32]));
+    let (state, change, notary) = home.states.last().unwrap().clone();
+    assert_eq!(
+        accept_state(&mut stranger, &state, &change, &notary).unwrap_err(),
+        GroupError::Change(GroupChangeError::NotMember)
+    );
+    accept_state(&mut record, &state, &change, &notary).unwrap();
+}
+
+#[test]
+fn a_member_never_takes_a_whole_state_over_the_log() {
+    let mut home = Home::new();
+    let alice = Person::new(1);
+    let mut record = created(&mut home, &alice);
+    let (state, change, notary) = home.states.last().unwrap().clone();
+    assert!(accept_state(&mut record, &state, &change, &notary).is_err());
+}
+
+#[test]
+fn a_genesis_of_another_group_cant_start_this_one() {
+    let mut home = Home::new();
+    let alice = Person::new(1);
+    let sign = alice.sign();
+    let (_, theirs) = create_group(NewGroup {
+        home: home.pin(),
+        me: &alice.account,
+        device_id: 1,
+        profile_key: &alice.profile_key,
+        sign_binding: &sign,
+    })
+    .unwrap();
+    let (mut mine, _) = create_group(NewGroup {
+        home: home.pin(),
+        me: &alice.account,
+        device_id: 1,
+        profile_key: &alice.profile_key,
+        sign_binding: &sign,
+    })
+    .unwrap();
+    mine.gateway.identity_history = home.history();
+    let notary = home.accept(&theirs).unwrap();
+    assert!(accept_change(&mut mine, &theirs, &notary).is_err());
+}
+
+#[test]
+fn an_invitation_whose_key_isnt_its_groups_is_refused() {
+    let mut home = Home::new();
+    let (alice, bob) = (Person::new(1), Person::new(2));
+    let alice_record = created(&mut home, &alice);
+    let (_, mut invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
+    invitation.master_key = encode(&[9u8; 32]);
+    assert!(record_from_invite(invitation).is_err());
+}
+
+#[test]
+fn a_stored_record_is_never_replaced_by_an_older_or_forked_state() {
+    let mut home = Home::new();
+    let alice = Person::new(1);
+    let mut record = created(&mut home, &alice);
+    let at_zero = record.clone();
+    let change = titled(&record);
+    apply_at(&mut home, &mut record, &change);
+    assert!(record.may_replace(&at_zero).is_ok());
+    assert!(at_zero.may_replace(&record).is_err(), "older");
+    // Another state at the same revision.
+    let mut fork = record.clone();
+    fork.head = Some(encode(&[7u8; 32]));
+    assert!(fork.may_replace(&record).is_err(), "fork");
+    assert!(record.may_replace(&record).is_ok(), "the same");
+}
+
+#[test]
+fn a_message_context_is_compared_with_the_verified_state() {
+    let mut home = Home::new();
+    let alice = Person::new(1);
+    let record = created(&mut home, &alice);
+    let head: [u8; 32] = decode_exact::<32>("head", record.head.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        compare_context(&record, 0, &head).unwrap(),
+        ContextCheck::Current
+    );
+    assert_eq!(
+        compare_context(&record, 1, &[0u8; 32]).unwrap(),
+        ContextCheck::Behind
+    );
+    assert_eq!(
+        compare_context(&record, 0, &[1u8; 32]).unwrap(),
+        ContextCheck::Fork
+    );
+    let mut later = record.clone();
+    apply_at(&mut home, &mut later, &titled(&record));
+    assert_eq!(
+        compare_context(&later, 0, &head).unwrap(),
+        ContextCheck::SenderBehind
+    );
+}
+
+#[test]
+fn secrets_never_print() {
+    let mut home = Home::new();
+    let (alice, bob) = (Person::new(1), Person::new(2));
+    let record = created(&mut home, &alice);
+    let printed = format!("{record:?}");
+    assert!(!printed.contains(&record.master_key.0));
+    assert!(!printed.contains(&record.pseudonym_seed.0));
+    let (_, invitation, _) = invite(&record, &bob.account, GroupRole::Member).unwrap();
+    let printed = format!("{invitation:?}");
+    assert!(!printed.contains(&invitation.claim_key_seed));
+    assert!(!printed.contains(&invitation.master_key));
 }

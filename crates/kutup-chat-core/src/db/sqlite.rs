@@ -1165,6 +1165,21 @@ impl ChatDb for SqliteChatDb {
             ))?;
         }
         for (group_id, record) in &pending.groups {
+            // Never back to an older verified state, or to another one at the
+            // same revision (docs/plans/pairwise-groups.md §3), checked inside
+            // the write transaction.
+            let existing: Option<Vec<u8>> = db(tx
+                .query_row(
+                    "SELECT record FROM chat_groups WHERE group_id = ?1",
+                    [group_id],
+                    |row| row.get(0),
+                )
+                .optional())?;
+            if let Some(existing) = existing {
+                record
+                    .may_replace(&decode_group(&existing)?)
+                    .map_err(|error| ChatError::Trust(error.to_string()))?;
+            }
             let encoded = serde_json::to_vec(record)
                 .map_err(|error| ChatError::Db(format!("encode group record: {error}")))?;
             db(tx.execute(
@@ -1568,14 +1583,15 @@ mod tests {
         let record = |status| GroupRecordV1 {
             version: 1,
             group_id: "g".repeat(43),
-            master_key: "AAAA".into(),
+            master_key: crate::group::SecretText("AAAA".into()),
             home: kutup_chat_proto::group_route::GroupHomePinV1 {
                 server: "home.example".into(),
                 identity_sequence: 1,
                 identity_document_hash: "9".repeat(64),
             },
-            pseudonym_seed: "BBBB".into(),
+            pseudonym_seed: crate::group::SecretText("BBBB".into()),
             status,
+            min_revision: 0,
             state: None,
             head: None,
             notary_sequence: None,

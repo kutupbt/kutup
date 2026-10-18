@@ -38,7 +38,7 @@ pub struct GroupSlotEntryV1 {
 /// What an invitee gets in their own copy of the adder's group update, never
 /// in the copy the other members get: the group, and the slot's one-time
 /// claim key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupInviteV1 {
     pub version: u16,
@@ -48,6 +48,19 @@ pub struct GroupInviteV1 {
     pub slot_id: String,
     pub slot_revision: u64,
     pub claim_key_seed: String,
+}
+
+/// Never prints the master key or the claim key.
+impl std::fmt::Debug for GroupInviteV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupInviteV1")
+            .field("version", &self.version)
+            .field("group_id", &self.group_id)
+            .field("home", &self.home)
+            .field("slot_id", &self.slot_id)
+            .field("slot_revision", &self.slot_revision)
+            .finish_non_exhaustive()
+    }
 }
 
 macro_rules! canonical_json {

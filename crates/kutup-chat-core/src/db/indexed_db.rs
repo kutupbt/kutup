@@ -699,6 +699,16 @@ impl ChatDb for IndexedDbChatDb {
                 }
             }
         }
+        // A group record never goes back to an older verified state, or to
+        // another one at the same revision (docs/plans/pairwise-groups.md §3);
+        // checked under the same single writer.
+        for (group_id, record) in &pending.groups {
+            if let Some(existing) = self.load_group(group_id).await? {
+                record
+                    .may_replace(&existing)
+                    .map_err(|error| ChatError::Trust(error.to_string()))?;
+            }
+        }
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
         // instead of lossy Numbers.

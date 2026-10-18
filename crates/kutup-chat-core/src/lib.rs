@@ -24,6 +24,8 @@ mod error;
 mod group;
 #[cfg_attr(not(test), allow(dead_code))]
 mod group_client;
+#[cfg_attr(not(test), allow(dead_code))]
+mod group_engine;
 mod invite_link;
 mod keys;
 mod manifest;

@@ -347,6 +347,24 @@ impl Session {
         &self.address.account.server
     }
 
+    /// This account, as groups name it.
+    pub(crate) fn account_ref(&self) -> &kutup_crypto::account_ref::AccountRef {
+        &self.address.account
+    }
+
+    /// Signs `bytes` with this device's identity key (XEdDSA), as a group
+    /// binding is signed (docs/plans/pairwise-groups.md §3).
+    pub(crate) fn sign_with_identity(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        let mut rng = rand::rng();
+        crate::error::crypto(
+            self.store
+                .local_identity_key_pair()
+                .private_key()
+                .calculate_signature(bytes, &mut rng),
+        )
+        .map(|signature| signature.to_vec())
+    }
+
     pub(crate) fn local_identity_public_key(&self) -> PublicKey {
         *self
             .store
