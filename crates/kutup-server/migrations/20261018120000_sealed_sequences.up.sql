@@ -19,3 +19,9 @@ UPDATE chat_sealed_federation_outbox
 -- A settled send keeps its destination's answer, so a client whose send
 -- another flush settled (the retry worker's) still learns what it was.
 ALTER TABLE chat_sealed_federation_outbox ADD COLUMN answer jsonb;
+
+-- Queued sends from before version 2 go out at version 2: the server stamps
+-- each send with its own version anyway; this keeps the stored rows true.
+UPDATE chat_sealed_federation_outbox
+   SET transaction = jsonb_set(transaction, '{version}', '2')
+ WHERE state <> 'delivered';

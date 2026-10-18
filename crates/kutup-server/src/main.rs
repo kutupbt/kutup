@@ -427,7 +427,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
         opaque,
-        sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(&pool)),
+        sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(
+            &pool,
+            config.sealed_flush_lock_connections,
+        )),
         pool,
         config: Arc::new(config),
         storage,
