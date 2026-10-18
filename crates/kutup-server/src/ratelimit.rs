@@ -51,6 +51,12 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120),
     ("RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN", 600),
     ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
+    ("RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN", 240),
+    ("RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN", 6000),
+    ("RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN", 240),
+    ("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN", 30),
+    ("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN", 60),
+    ("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN", 30),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
     ("LOGIN_ACCOUNT_CEILING", 20),
@@ -249,6 +255,57 @@ pub static FEEDBACK: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_ADMIN_PER_MIN", 120) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// The groups relay: 240 requests / minute / signed-in account
+/// (`RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN`). The relay can't see what it
+/// passes on, so this is the wall it keeps for its own users.
+pub static CHAT_GROUP_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN", 240) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// The groups gateway: 6000 requests / minute / relay server
+/// (`RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN`): all of a peer's users
+/// together.
+pub static CHAT_GROUP_GATEWAY_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN", 6000) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// The groups gateway: 240 requests / minute / member pseudonym
+/// (`RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN`).
+pub static CHAT_GROUP_PSEUDONYM: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN", 240) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Group changes: 30 / minute / pseudonym
+/// (`RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN`).
+pub static CHAT_GROUP_CHANGES_PSEUDONYM: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN", 30) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Group changes: 60 / minute / group
+/// (`RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN`), so many members can't
+/// flood one log.
+pub static CHAT_GROUP_CHANGES_GROUP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Link requests (join info): 30 / minute / group
+/// (`RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN`), so a link holder can't flood one.
+pub static CHAT_GROUP_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN", 30) as usize,
         Duration::from_secs(60),
     )
 });
@@ -659,6 +716,12 @@ pub fn spawn_cleanup() {
             COLLAB_FRAME_POSTS.cleanup();
             DEVICE_CHALLENGES.cleanup();
             COLLAB_DEVICE_ANNOUNCES.cleanup();
+            CHAT_GROUP_RELAY.cleanup();
+            CHAT_GROUP_GATEWAY_RELAY.cleanup();
+            CHAT_GROUP_PSEUDONYM.cleanup();
+            CHAT_GROUP_CHANGES_PSEUDONYM.cleanup();
+            CHAT_GROUP_CHANGES_GROUP.cleanup();
+            CHAT_GROUP_LINK.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();

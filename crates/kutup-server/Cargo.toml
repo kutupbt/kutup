@@ -45,6 +45,7 @@ bcrypt.workspace = true
 totp-rs.workspace = true
 url.workspace = true
 sha2.workspace = true
+hkdf.workspace = true
 hex.workspace = true
 base64.workspace = true
 ed25519-dalek.workspace = true

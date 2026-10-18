@@ -14,6 +14,7 @@ mod auth_check;
 mod calls;
 mod change_feed;
 mod chat_federation;
+mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
 mod chat_mls;
@@ -1427,6 +1428,15 @@ fn build_router(state: AppState) -> Router {
             post(chat_mls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
+            "/api/chat/groups/gateway-key",
+            get(chat_groups::routes::gateway_key),
+        )
+        .route(
+            "/api/chat/groups/relay/:server",
+            post(chat_groups::routes::relay)
+                .route_layer(DefaultBodyLimit::max(chat_groups::routes::MAX_SEALED)),
+        )
+        .route(
             "/api/chat/call-links",
             post(chat_mls::call_links::create)
                 .get(chat_mls::call_links::list)
@@ -1722,6 +1732,17 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/mls/anonymous/messages",
             post(chat_mls::federated_submit_anonymous_message)
                 .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/groups/gateway",
+            post(chat_groups::routes::fed_gateway)
+                .route_layer(DefaultBodyLimit::max(chat_groups::routes::MAX_SEALED))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/groups/gateway-key",
+            get(chat_groups::routes::fed_gateway_key)
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
