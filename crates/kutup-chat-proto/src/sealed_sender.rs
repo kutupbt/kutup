@@ -130,6 +130,14 @@ impl SealedMessageSubmissionV1 {
     }
 }
 
+/// The sealed federation wire's version, in every transaction and batch.
+/// 2: every final answer uses up its sequence, a device mismatch included,
+/// and a corrected resend goes under a new one (docs/chat-protocol.md §7).
+/// Servers on another version refuse each other's sealed sends outright, as
+/// final refusals named by sequence, so nothing waits on a peer that reads
+/// sequences differently: federating servers upgrade together.
+pub const SEALED_FEDERATION_VERSION: u16 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -151,7 +159,10 @@ impl FederatedSealedTransactionV1 {
         expected_origin: &str,
         expected_destination: &str,
     ) -> Result<(), String> {
-        if self.version != 1 || self.sequence == 0 || self.origin != expected_origin {
+        if self.version != SEALED_FEDERATION_VERSION
+            || self.sequence == 0
+            || self.origin != expected_origin
+        {
             return Err(
                 "sealed federation transaction version, origin, or sequence is invalid".into(),
             );
@@ -284,7 +295,7 @@ impl FederatedSealedBatchV1 {
     /// The batch's shape: its count, one origin, and consecutive sequences.
     /// Each transaction's own checks are the single route's, item by item.
     pub fn validate_shape(&self, expected_origin: &str) -> Result<(), String> {
-        if self.version != 1 || self.origin != expected_origin {
+        if self.version != SEALED_FEDERATION_VERSION || self.origin != expected_origin {
             return Err("sealed federation batch version or origin is invalid".into());
         }
         if self.transactions.is_empty() || self.transactions.len() > MAX_SEALED_BATCH_ITEMS {
@@ -463,7 +474,7 @@ mod tests {
     fn transaction(sequence: u64) -> FederatedSealedTransactionV1 {
         let submission = submission(1);
         FederatedSealedTransactionV1 {
-            version: 1,
+            version: SEALED_FEDERATION_VERSION,
             origin: "origin.example".into(),
             recipient: "aci:5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b@dest.example"
                 .parse()
@@ -478,7 +489,7 @@ mod tests {
     #[test]
     fn a_federated_batch_is_one_origins_consecutive_run() {
         let batch = |transactions| FederatedSealedBatchV1 {
-            version: 1,
+            version: SEALED_FEDERATION_VERSION,
             origin: "origin.example".into(),
             transactions,
         };

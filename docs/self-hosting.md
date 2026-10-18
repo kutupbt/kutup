@@ -714,6 +714,13 @@ docker compose up -d --build --wait
 
 Database migrations run automatically on backend startup.
 
+Servers that federate Chat with each other update together when a federation
+wire version changes. Sealed Chat federation moved to version 2 on 2026-10-18
+(a device mismatch now closes its sequence): a server on version 2 and one on
+version 1 refuse each other's sealed sends for good, the client sees them as
+refused, and both logs say "sealed federation peer runs another version".
+Sealed sends between the two resume once both run the same version.
+
 ---
 
 ## Running Behind an Existing Reverse Proxy

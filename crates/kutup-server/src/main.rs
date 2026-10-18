@@ -136,6 +136,9 @@ pub struct AppState {
     pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
     /// The OPAQUE setups (docs/plans/opaque.md §5), opened at startup.
     pub(crate) opaque: Arc<opaque_setup::OpaqueServer>,
+    /// One sealed-federation flush per destination at a time
+    /// (docs/chat-protocol.md §7).
+    pub(crate) sealed_flush: Arc<chat_federation::SealedFlushLocks>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -424,6 +427,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
         opaque,
+        sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(&pool)),
         pool,
         config: Arc::new(config),
         storage,

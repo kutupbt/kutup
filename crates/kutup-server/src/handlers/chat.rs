@@ -2072,14 +2072,7 @@ pub async fn send_sealed_batch(
         queued.push((recipient.account_id, send_id, outcome));
     }
     let mut flush = if queued.iter().any(|(_, _, outcome)| outcome.is_ok()) {
-        Some(
-            crate::chat_federation::flush_sealed_destination(
-                &state,
-                &server,
-                crate::chat_federation::DestinationLock::Wait,
-            )
-            .await?,
-        )
+        Some(crate::chat_federation::flush_sealed_destination(&state, &server).await?)
     } else {
         None
     };

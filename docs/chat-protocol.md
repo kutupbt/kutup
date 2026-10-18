@@ -745,11 +745,15 @@ whole request, which is safe to repeat because `sendId`s dedupe.
 
 For another server, the origin queues each send exactly as a single sealed
 send (same outbox, sequence and `sendId` dedup), then flushes the
-destination's queue. One flush per destination runs at a time across every
-backend sharing the database (a Postgres advisory lock). A client waits a few
-seconds for a flush under way. A send that another flush settled meanwhile
-(the retry worker's) is answered from its outbox row, which keeps the
-destination's answer; only a send still queued reads as `pending`. A flush sends nothing while the queue's head is backing off
+destination's queue. One flush per destination runs at a time: in each
+backend a set of the destinations being flushed, and across backends sharing
+the database a session advisory lock held on a small pool of its own, so no
+flush holds a main-pool connection or a transaction across its network calls.
+Nobody waits for that lock: a client whose send meets a flush under way is
+answered from its outbox row, which keeps the destination's final answer, so
+it reads its real answer if another flush (the retry worker's) settled it, and
+`pending` only while it is still queued. A flush runs in its own task, so a
+client that goes away doesn't cut it short. A flush sends nothing while the queue's head is backing off
 or waits for the peer to support `chat.v2`. Otherwise it sends the run of
 consecutive pending sends from the head, sized before it is loaded, in signed
 `POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
@@ -759,10 +763,19 @@ applying any of it. Otherwise it applies the transactions one by one as
 single transactions and stops after the first answer that doesn't use up its
 sequence, answering each it tried.
 
+**Version 2.** Every sealed transaction and batch carries
+`version` 2 (`SEALED_FEDERATION_VERSION`), the version in which every answer
+uses up its sequence. A server refuses another version's transactions for
+good, by sequence, with `code: sealedVersionUnsupported`, and both sides log
+it: a peer that reads sequences differently is refused, never waited on.
+Federating servers upgrade together (`docs/self-hosting.md`, Updating).
+
 **Every answer uses up its sequence.** The destination records each final
 answer to an origin's sequence (a delivery, the uniform 404, a device
 mismatch, a refusal naming the sequence) in the same transaction, under the
-origin's lock, as what it answers. A replay of that sequence then gets the
+origin's lock, as what it answers. Every one of them is charged to the
+origin's sealed rate, a mismatch, a refusal and the 404 included, so none is
+a free probe. A replay of that sequence then gets the
 same answer, and the next sequence follows. Only an unknown result (a timeout,
 a passing error, a rate limit, a gap) is tried again under the same sequence.
 

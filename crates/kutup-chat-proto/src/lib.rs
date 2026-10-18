@@ -151,7 +151,7 @@ pub use sealed_sender::{
     SealedBatchRecipientV1, SealedBatchResponseV1, SealedBatchResultV1, SealedBatchSubmissionV1,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
     SenderCertificateResponseV1, DELIVERY_CAPABILITY_CONTEXT, MAX_SEALED_BATCH_BYTES,
-    MAX_SEALED_BATCH_ITEMS,
+    MAX_SEALED_BATCH_ITEMS, SEALED_FEDERATION_VERSION,
 };
 pub use security_policy::{
     SealedSenderRootV1, SealedSenderServerCertificateV1, SealedSenderServicePolicyV1,

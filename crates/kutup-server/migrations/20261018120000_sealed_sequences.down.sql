@@ -1,3 +1,7 @@
+-- Lossy, as a down migration of this change must be: the old schema keeps
+-- one answer per sendId, so where a sendId has several (a mismatch, then its
+-- corrected resend) only one survives, and the outbox's stored answers go.
+-- Origins that resend after a downgrade meet the old head-of-line rules.
 ALTER TABLE chat_sealed_federation_outbox DROP COLUMN answer;
 -- A recorded mismatch and its delivered resend share a sendId: keep the
 -- delivery, which is what the old constraint stood for.

@@ -438,7 +438,7 @@ pub async fn enqueue_sealed_send(
     match enqueue_sealed_row(state, recipient, request).await? {
         Queued::Settled(outcome) => Ok(outcome),
         Queued::Row(id) => {
-            flush_sealed_destination(state, &recipient.server, DestinationLock::Wait)
+            flush_sealed_destination(state, &recipient.server)
                 .await?
                 .outcome(&state.pool, id)
                 .await
@@ -484,42 +484,57 @@ pub(crate) enum Queued {
     Row(Uuid),
 }
 
-/// Queues a sealed send for a remote recipient without trying it: a repeat
-/// of a delivered send is settled, a rejected one is queued again with its
-/// corrected envelopes under a new sequence, a new one takes the
-/// destination's next sequence. An error means nothing was queued.
+/// Queues a sealed send for a remote recipient without trying it. An error
+/// means nothing was queued.
 pub(crate) async fn enqueue_sealed_row(
     state: &AppState,
     recipient: &AccountRef,
     request: SealedMessageSubmissionV1,
 ) -> AppResult<Queued> {
-    request.validate().map_err(AppError::bad_request)?;
     let federation = configured_stack(state)?;
+    enqueue_sealed_row_in(&state.pool, federation.server_name(), recipient, request).await
+}
+
+/// [`enqueue_sealed_row`] at the origin `server_name`: a repeat of a settled
+/// send is answered from its row (a delivery, or the same answer again for
+/// the same content), a rejected one with corrected content is queued again
+/// under a new sequence, a new one takes the destination's next sequence.
+async fn enqueue_sealed_row_in(
+    pool: &sqlx::PgPool,
+    server_name: &str,
+    recipient: &AccountRef,
+    request: SealedMessageSubmissionV1,
+) -> AppResult<Queued> {
+    request.validate().map_err(AppError::bad_request)?;
     let destination = recipient.server.as_str();
     let recipient_id = Uuid::parse_str(&recipient.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
-    if destination == federation.server_name() {
+    if destination == server_name {
         return Err(AppError::bad_request(
             "local sealed recipients use local mailbox delivery",
         ));
     }
     let send_id = Uuid::parse_str(&request.send_id)
         .map_err(|_| AppError::bad_request("sealed sendId is invalid"))?;
-    let mut tx = state.pool.begin().await?;
-    if let Some((id, state_name, stored_transaction)) = sqlx::query_as::<_, (Uuid, String, Value)>(
-        "SELECT id, state, transaction FROM chat_sealed_federation_outbox
-         WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3 FOR UPDATE",
-    )
-    .bind(destination)
-    .bind(recipient_id)
-    .bind(send_id)
-    .fetch_optional(&mut *tx)
-    .await?
+    let mut tx = pool.begin().await?;
+    if let Some((id, state_name, stored_transaction, class, answer)) =
+        sqlx::query_as::<_, (Uuid, String, Value, Option<String>, Option<Value>)>(
+            "SELECT id, state, transaction, last_error_class, answer
+             FROM chat_sealed_federation_outbox
+             WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3 FOR UPDATE",
+        )
+        .bind(destination)
+        .bind(recipient_id)
+        .bind(send_id)
+        .fetch_optional(&mut *tx)
+        .await?
     {
         let mut transaction: FederatedSealedTransactionV1 =
             serde_json::from_value(stored_transaction).map_err(|error| {
                 AppError::internal(format!("stored sealed transaction is invalid: {error}"))
             })?;
+        let same = transaction.capability == request.capability
+            && transaction.envelopes == request.envelopes;
         match state_name.as_str() {
             "delivered" => {
                 tx.rollback().await?;
@@ -530,35 +545,28 @@ pub(crate) async fn enqueue_sealed_row(
                     },
                 )));
             }
-            "pending"
-                if transaction.capability != request.capability
-                    || transaction.envelopes != request.envelopes =>
-            {
+            "pending" if !same => {
                 return Err(AppError::conflict(
                     "sealed send payload changed while federation delivery is pending",
                 ));
             }
+            // The same content again: the same answer, not another send.
+            "rejected" if same => {
+                if let Some(outcome) =
+                    settled_outcome(&state_name, class.as_deref(), answer.unwrap_or(Value::Null))
+                {
+                    tx.rollback().await?;
+                    return Ok(Queued::Settled(outcome));
+                }
+                requeue_sealed(&mut tx, id, destination, &mut transaction).await?;
+            }
             // Its answer used up its sequence at the destination (a device
-            // mismatch, a refusal or the uniform 404): the resend goes under
-            // a new one, never the old.
+            // mismatch, a refusal or the uniform 404): the corrected resend
+            // goes under a new one, never the old.
             "rejected" => {
-                let sequence = next_sealed_sequence(&mut tx, destination).await?;
-                transaction.sequence = u64::try_from(sequence)
-                    .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?;
                 transaction.capability = request.capability;
                 transaction.envelopes = request.envelopes;
-                sqlx::query(
-                    "UPDATE chat_sealed_federation_outbox
-                     SET sequence = $3, transaction = $2, state = 'pending', attempts = 0,
-                         next_attempt_at = now(), last_error_class = NULL, answer = NULL,
-                         updated_at = now()
-                     WHERE id = $1",
-                )
-                .bind(id)
-                .bind(sealed_transaction_value(&transaction)?)
-                .bind(sequence)
-                .execute(&mut *tx)
-                .await?;
+                requeue_sealed(&mut tx, id, destination, &mut transaction).await?;
             }
             "pending" => {}
             _ => return Err(AppError::internal("invalid sealed federation outbox state")),
@@ -569,8 +577,8 @@ pub(crate) async fn enqueue_sealed_row(
 
     let sequence = next_sealed_sequence(&mut tx, destination).await?;
     let transaction = FederatedSealedTransactionV1 {
-        version: 1,
-        origin: federation.server_name().to_string(),
+        version: kutup_chat_proto::SEALED_FEDERATION_VERSION,
+        origin: server_name.to_string(),
         recipient: recipient.clone(),
         sequence: u64::try_from(sequence)
             .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?,
@@ -597,51 +605,144 @@ pub(crate) async fn enqueue_sealed_row(
     Ok(Queued::Row(id))
 }
 
-/// How a flush takes its destination's lock.
-#[derive(Clone, Copy)]
-pub(crate) enum DestinationLock {
-    /// A client waits for its send: a few seconds for a flush under way.
-    Wait,
-    /// The retry worker: only if no flush is under way.
-    Try,
+/// Puts a rejected row back in the queue under the destination's next
+/// sequence.
+async fn requeue_sealed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+    destination: &str,
+    transaction: &mut FederatedSealedTransactionV1,
+) -> AppResult<()> {
+    let sequence = next_sealed_sequence(tx, destination).await?;
+    transaction.sequence = u64::try_from(sequence)
+        .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?;
+    sqlx::query(
+        "UPDATE chat_sealed_federation_outbox
+         SET sequence = $3, transaction = $2, state = 'pending', attempts = 0,
+             next_attempt_at = now(), last_error_class = NULL, answer = NULL,
+             updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(sealed_transaction_value(transaction)?)
+    .bind(sequence)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
-/// Holds `destination`'s flush lock, for every backend sharing the database,
-/// until the returned transaction ends: one flush per destination at a time,
-/// so no two send the same sequence. `None` if another flush holds it.
-async fn lock_sealed_destination(
-    state: &AppState,
-    destination: &str,
-    how: DestinationLock,
-) -> AppResult<Option<sqlx::Transaction<'static, sqlx::Postgres>>> {
-    let mut lock = state.pool.begin().await?;
-    let locked = match how {
-        DestinationLock::Try => {
-            sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 771944))")
-                .bind(destination)
-                .fetch_one(&mut *lock)
-                .await?
+/// A settled row's answer, as the outcome it was: `None` for a row still
+/// queued, or one settled before answers were kept.
+fn settled_outcome(
+    state_name: &str,
+    class: Option<&str>,
+    answer: Value,
+) -> Option<FederatedSealedOutcome> {
+    match (state_name, class) {
+        ("delivered", _) => serde_json::from_value(answer)
+            .ok()
+            .map(FederatedSealedOutcome::Delivered),
+        ("rejected", Some("device_mismatch")) => match serde_json::from_value(answer) {
+            Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => {
+                Some(FederatedSealedOutcome::Mismatch(mismatch))
+            }
+            _ => None,
+        },
+        ("rejected", Some("unavailable")) => Some(FederatedSealedOutcome::Unavailable),
+        ("rejected", Some("refused")) => Some(FederatedSealedOutcome::Refused),
+        _ => None,
+    }
+}
+
+/// One flush per destination at a time. In this process a set of the
+/// destinations being flushed; across every backend sharing the database a
+/// session advisory lock, held on a connection of its own small pool so a
+/// flush never holds one of the main pool's, nor a transaction, across its
+/// network calls.
+pub(crate) struct SealedFlushLocks {
+    flushing: std::sync::Mutex<std::collections::HashSet<String>>,
+    pool: sqlx::PgPool,
+}
+
+/// Connections for held flush locks: a flush beyond these waits for the
+/// next round.
+const FLUSH_LOCK_CONNECTIONS: u32 = 4;
+
+impl SealedFlushLocks {
+    pub(crate) fn new(pool: &sqlx::PgPool) -> Self {
+        Self {
+            flushing: std::sync::Mutex::new(std::collections::HashSet::new()),
+            pool: sqlx::postgres::PgPoolOptions::new()
+                .max_connections(FLUSH_LOCK_CONNECTIONS)
+                .min_connections(0)
+                .acquire_timeout(Duration::from_secs(1))
+                .connect_lazy_with((*pool.connect_options()).clone()),
         }
-        DestinationLock::Wait => {
-            sqlx::query("SET LOCAL lock_timeout = '5s'")
-                .execute(&mut *lock)
-                .await?;
-            match sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 771944))")
+    }
+
+    /// `destination`'s flush lock, or `None` at once if a flush of it is
+    /// under way here or on another backend. Nobody waits for it.
+    async fn try_lock(&self, destination: &str) -> AppResult<Option<FlushLock<'_>>> {
+        if !self.flushing.lock().unwrap().insert(destination.to_owned()) {
+            return Ok(None);
+        }
+        let mut lock = FlushLock {
+            locks: self,
+            destination: destination.to_owned(),
+            connection: None,
+        };
+        let mut connection = match self.pool.acquire().await {
+            Ok(connection) => connection,
+            Err(sqlx::Error::PoolTimedOut) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let locked: bool =
+            sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 771944))")
                 .bind(destination)
-                .execute(&mut *lock)
-                .await
-            {
-                Ok(_) => true,
-                // lock_not_available: the flush under way takes this send or
-                // leaves it to the next.
-                Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("55P03") => {
-                    false
-                }
-                Err(error) => return Err(error.into()),
+                .fetch_one(&mut *connection)
+                .await?;
+        if !locked {
+            return Ok(None);
+        }
+        lock.connection = Some(connection);
+        Ok(Some(lock))
+    }
+}
+
+/// A held flush lock. Released by [`FlushLock::release`]; one dropped while
+/// held (a cancelled or failed flush) closes its connection, which ends the
+/// advisory lock with the session, so a pooled connection never keeps it.
+struct FlushLock<'a> {
+    locks: &'a SealedFlushLocks,
+    destination: String,
+    connection: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+}
+
+impl FlushLock<'_> {
+    async fn release(mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            let unlocked = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 771944))")
+                .bind(&self.destination)
+                .execute(&mut *connection)
+                .await;
+            if unlocked.is_err() {
+                connection.close_on_drop();
             }
         }
-    };
-    Ok(locked.then_some(lock))
+    }
+}
+
+impl Drop for FlushLock<'_> {
+    fn drop(&mut self) {
+        if let Some(mut connection) = self.connection.take() {
+            connection.close_on_drop();
+        }
+        self.locks
+            .flushing
+            .lock()
+            .unwrap()
+            .remove(&self.destination);
+    }
 }
 
 /// What one flush of a destination did with its queued sends.
@@ -677,32 +778,21 @@ impl SealedFlush {
         .bind(id)
         .fetch_optional(pool)
         .await?;
-        let waiting = |class: Option<&str>| {
-            if self.parked || class == Some("peer_unsupported") {
-                FederatedSealedOutcome::PeerUnsupported
-            } else {
-                FederatedSealedOutcome::Pending
-            }
-        };
         let Some((state_name, class, answer)) = row else {
-            return Ok(waiting(None));
+            return Ok(self.waiting(None));
         };
-        let answer = answer.unwrap_or(Value::Null);
-        Ok(match (state_name.as_str(), class.as_deref()) {
-            ("delivered", _) => match serde_json::from_value(answer) {
-                Ok(delivered) => FederatedSealedOutcome::Delivered(delivered),
-                Err(_) => waiting(None),
-            },
-            ("rejected", Some("device_mismatch")) => match serde_json::from_value(answer) {
-                Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => {
-                    FederatedSealedOutcome::Mismatch(mismatch)
-                }
-                _ => waiting(None),
-            },
-            ("rejected", Some("unavailable")) => FederatedSealedOutcome::Unavailable,
-            ("rejected", Some("refused")) => FederatedSealedOutcome::Refused,
-            (_, class) => waiting(class),
-        })
+        Ok(
+            settled_outcome(&state_name, class.as_deref(), answer.unwrap_or(Value::Null))
+                .unwrap_or_else(|| self.waiting(class.as_deref())),
+        )
+    }
+
+    fn waiting(&self, class: Option<&str>) -> FederatedSealedOutcome {
+        if self.parked || class == Some("peer_unsupported") {
+            FederatedSealedOutcome::PeerUnsupported
+        } else {
+            FederatedSealedOutcome::Pending
+        }
     }
 
     fn record(&mut self, id: Uuid, outcome: AppResult<FederatedSealedOutcome>) -> bool {
@@ -719,14 +809,22 @@ impl SealedFlush {
 /// run of pending rows from its head, if the head is due (not backing off,
 /// not parked for an upgrade), in federated batches (at most
 /// [`MAX_SEALED_BATCH_ITEMS`] and [`MAX_SEALED_BATCH_BYTES`] each). Nothing
-/// is sent without the lock or a due head; sends it doesn't reach wait.
+/// is sent without the lock or a due head; sends it doesn't reach wait, and
+/// with the lock taken elsewhere this flush sends nothing. The flush runs in
+/// its own task, so a client that goes away doesn't cut it short.
 pub(crate) async fn flush_sealed_destination(
     state: &AppState,
     destination: &str,
-    how: DestinationLock,
 ) -> AppResult<SealedFlush> {
+    let (state, destination) = (state.clone(), destination.to_owned());
+    tokio::spawn(async move { flush_locked(&state, &destination).await })
+        .await
+        .map_err(|error| AppError::internal(format!("sealed flush task: {error}")))?
+}
+
+async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFlush> {
     let mut flush = SealedFlush::new();
-    let Some(lock) = lock_sealed_destination(state, destination, how).await? else {
+    let Some(lock) = state.sealed_flush.try_lock(destination).await? else {
         return Ok(flush);
     };
     for _ in 0..MAX_SEALED_FLUSH_ROUNDS {
@@ -780,7 +878,7 @@ pub(crate) async fn flush_sealed_destination(
             break;
         }
     }
-    lock.rollback().await?;
+    lock.release().await;
     Ok(flush)
 }
 
@@ -802,7 +900,7 @@ async fn send_sealed_run(
         transactions.push(stored_sealed_transaction(row)?);
     }
     let batch = FederatedSealedBatchV1 {
-        version: 1,
+        version: kutup_chat_proto::SEALED_FEDERATION_VERSION,
         origin: federation.server_name().to_string(),
         transactions,
     };
@@ -1038,6 +1136,13 @@ async fn apply_sealed_answer(
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
             if refused_sequence(body) == Some(row.sequence) =>
         {
+            let refusal = serde_json::from_slice::<Value>(body).unwrap_or(Value::Null);
+            tracing::warn!(
+                destination = %row.destination,
+                code = refusal.get("code").and_then(serde_json::Value::as_str).unwrap_or(""),
+                error = refusal.get("error").and_then(serde_json::Value::as_str).unwrap_or(""),
+                "the recipient's server refused a sealed send for good"
+            );
             ("rejected", Some("refused"), FederatedSealedOutcome::Refused)
         }
         _ => {
@@ -1580,7 +1685,7 @@ async fn due_sealed_destinations(pool: &sqlx::PgPool) -> AppResult<Vec<String>> 
 
 async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
     for destination in due_sealed_destinations(&state.pool).await? {
-        match flush_sealed_destination(state, &destination, DestinationLock::Try).await {
+        match flush_sealed_destination(state, &destination).await {
             Ok(flush) => {
                 for (id, outcome) in flush.outcomes {
                     if let Err(error) = outcome {
@@ -1983,10 +2088,25 @@ async fn apply_sealed_one(
     // A transaction that does not hold up is refused once its sequence is
     // next in line, and the refusal takes that sequence (below): the origin
     // treats it as final, so its later sends must not wait on it.
-    let invalid = transaction
-        .validate(origin, server_name)
-        .err()
-        .map(|error| error.to_string());
+    let invalid = if transaction.version != kutup_chat_proto::SEALED_FEDERATION_VERSION {
+        // A peer on another sealed version reads sequences differently:
+        // refused outright, never waited on (docs/self-hosting.md, Updating).
+        tracing::warn!(
+            %origin,
+            version = transaction.version,
+            expected = kutup_chat_proto::SEALED_FEDERATION_VERSION,
+            "sealed federation peer runs another version; federating servers upgrade together"
+        );
+        Some((
+            "sealed federation version is not this server's".to_owned(),
+            Some("sealedVersionUnsupported"),
+        ))
+    } else {
+        transaction
+            .validate(origin, server_name)
+            .err()
+            .map(|error| (error.to_string(), None))
+    };
     let sequence = match i64::try_from(transaction.sequence) {
         Ok(sequence) => sequence,
         Err(_) => {
@@ -2039,9 +2159,9 @@ async fn apply_sealed_one(
             Vec::new(),
         ));
     }
-    if let Some(error) = invalid {
+    if let Some((error, code)) = invalid {
         return Ok((
-            refuse_sealed(tx, origin, transaction, sequence, error).await?,
+            refuse_sealed(tx, origin, transaction, sequence, error, code).await?,
             Vec::new(),
         ));
     }
@@ -2074,6 +2194,10 @@ async fn apply_sealed_one(
         // resend comes under a new sequence.
         Ok(crate::handlers::chat::SealedStoreOutcome::Mismatch(mismatch)) => {
             store.rollback().await?;
+            if let Err(limited) = charge_sealed_origin(&mut tx, origin).await {
+                tx.rollback().await?;
+                return Ok((SealedAnswer::from_error(limited), Vec::new()));
+            }
             SealedAnswer::json(
                 StatusCode::CONFLICT,
                 &FederationDeliveryError::DeviceListMismatch { mismatch },
@@ -2081,6 +2205,10 @@ async fn apply_sealed_one(
         }
         Err(error) if error.status == StatusCode::NOT_FOUND => {
             store.rollback().await?;
+            if let Err(limited) = charge_sealed_origin(&mut tx, origin).await {
+                tx.rollback().await?;
+                return Ok((SealedAnswer::from_error(limited), Vec::new()));
+            }
             SealedAnswer {
                 status: StatusCode::NOT_FOUND,
                 body: serde_json::json!({ "error": "sealed delivery unavailable" }),
@@ -2094,7 +2222,7 @@ async fn apply_sealed_one(
         {
             store.rollback().await?;
             return Ok((
-                refuse_sealed(tx, origin, transaction, sequence, error.message).await?,
+                refuse_sealed(tx, origin, transaction, sequence, error.message, None).await?,
                 Vec::new(),
             ));
         }
@@ -2601,17 +2729,13 @@ fn signed_json<T: serde::Serialize>(
 /// later sends meet no gap. Otherwise the 400 names nothing and the origin
 /// keeps the send pending. Counted in the origin's rate first, so refusals
 /// cannot be written faster than deliveries.
-async fn refuse_sealed(
-    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+/// Counts one transaction against its origin's sealed rate, as a delivery
+/// does: an answer that stores nothing (a refusal, a mismatch, the uniform
+/// 404) is charged too, so none of them is a free probe.
+async fn charge_sealed_origin(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     origin: &str,
-    transaction: &FederatedSealedTransactionV1,
-    sequence: i64,
-    error: String,
-) -> AppResult<SealedAnswer> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 771943))")
-        .bind(origin)
-        .execute(&mut *tx)
-        .await?;
+) -> AppResult<()> {
     let origin_digest: [u8; 32] = sha2::Sha256::digest(
         [
             b"kutup/sealed-origin-rate/v1\0".as_slice(),
@@ -2620,15 +2744,23 @@ async fn refuse_sealed(
         .concat(),
     )
     .into();
-    if let Err(limited) = crate::handlers::chat::consume_anonymous_rate(
-        &mut tx,
-        "federation_origin",
-        &origin_digest,
-        600,
-        60,
-    )
-    .await
-    {
+    crate::handlers::chat::consume_anonymous_rate(tx, "federation_origin", &origin_digest, 600, 60)
+        .await
+}
+
+async fn refuse_sealed(
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    origin: &str,
+    transaction: &FederatedSealedTransactionV1,
+    sequence: i64,
+    error: String,
+    code: Option<&str>,
+) -> AppResult<SealedAnswer> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 771943))")
+        .bind(origin)
+        .execute(&mut *tx)
+        .await?;
+    if let Err(limited) = charge_sealed_origin(&mut tx, origin).await {
         tx.rollback().await?;
         return Ok(SealedAnswer::from_error(limited));
     }
@@ -2642,7 +2774,11 @@ async fn refuse_sealed(
     // A refusal is final even for a sendId that doesn't parse: it is
     // recorded under the nil id, which no delivery uses.
     let send_id = Uuid::parse_str(&transaction.send_id).unwrap_or(Uuid::nil());
-    let final_value = serde_json::json!({ "error": error, "refused": { "sequence": sequence } });
+    let mut final_value =
+        serde_json::json!({ "error": error, "refused": { "sequence": sequence } });
+    if let Some(code) = code {
+        final_value["code"] = Value::from(code);
+    }
     let recorded = sequence == last_sequence + 1
         && sqlx::query(
             "INSERT INTO chat_sealed_federation_inbound
@@ -3026,7 +3162,7 @@ mod sealed_live_tests {
         registration_id: u32,
     ) -> FederatedSealedTransactionV1 {
         serde_json::from_value(json!({
-            "version": 1,
+            "version": kutup_chat_proto::SEALED_FEDERATION_VERSION,
             "origin": origin,
             "recipient": {"server": DESTINATION, "accountId": recipient.to_string()},
             "sequence": sequence,
@@ -3047,7 +3183,7 @@ mod sealed_live_tests {
         transactions: Vec<FederatedSealedTransactionV1>,
     ) -> FederatedSealedBatchV1 {
         FederatedSealedBatchV1 {
-            version: 1,
+            version: kutup_chat_proto::SEALED_FEDERATION_VERSION,
             origin: origin.to_owned(),
             transactions,
         }
@@ -3087,6 +3223,225 @@ mod sealed_live_tests {
 
     fn origin() -> String {
         format!("o{}.test", &Uuid::new_v4().simple().to_string()[..12])
+    }
+
+    /// A peer on the old sealed version is refused for good, by sequence,
+    /// with a code that says why: nothing waits on it.
+    #[tokio::test]
+    async fn live_another_sealed_version_is_refused_for_good() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let origin = origin();
+        let capability = [0x64; 16];
+        let bob = recipient(&pool, capability).await;
+        let mut old = transaction(&origin, bob, 1, Uuid::new_v4(), capability, 77);
+        old.version = 1;
+        let (answer, stored_now) = apply_sealed_one(&pool, DESTINATION, &origin, &old)
+            .await
+            .unwrap();
+        assert_eq!(answer.status, StatusCode::BAD_REQUEST);
+        assert_eq!(answer.body["code"], "sealedVersionUnsupported");
+        assert_eq!(answer.body["refused"]["sequence"], 1);
+        assert!(answer.uses_up(1));
+        assert!(stored_now.is_empty());
+        assert_eq!(recorded(&pool, &origin).await, [(1, 400)]);
+        assert_eq!(stored(&pool, bob).await, 0);
+        clean(&pool, &origin, &[bob]).await;
+    }
+
+    /// One flush per destination: a second try in this process, or while
+    /// another backend holds the database lock, gets nothing at once; a lock
+    /// dropped without its release (a cancelled flush) doesn't stay held.
+    #[tokio::test]
+    async fn live_one_flush_per_destination_at_a_time() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let locks = SealedFlushLocks::new(&pool);
+        let destination = origin();
+        let first = locks.try_lock(&destination).await.unwrap().expect("free");
+        assert!(locks.try_lock(&destination).await.unwrap().is_none());
+        assert!(locks.try_lock("other.test").await.unwrap().is_some());
+        first.release().await;
+        // Held by another backend.
+        let other = SealedFlushLocks::new(&pool);
+        let elsewhere = other.try_lock(&destination).await.unwrap().expect("free");
+        assert!(locks.try_lock(&destination).await.unwrap().is_none());
+        // Dropped without its release: its connection closes, and with it
+        // the lock.
+        drop(elsewhere);
+        let mut again = None;
+        for _ in 0..50 {
+            again = locks.try_lock(&destination).await.unwrap();
+            if again.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        again.expect("a dropped lock is not kept").release().await;
+    }
+
+    fn submission(send_id: Uuid, registration_id: u32) -> SealedMessageSubmissionV1 {
+        serde_json::from_value(json!({
+            "sendId": send_id.to_string(),
+            "capability": STANDARD.encode([2u8; 16]),
+            "envelopes": [{
+                "deviceId": 1,
+                "registrationId": registration_id,
+                "suite": 1,
+                "content": STANDARD.encode([0x5au8; 96]),
+            }],
+        }))
+        .unwrap()
+    }
+
+    async fn outbox_row(pool: &sqlx::PgPool, id: Uuid) -> (String, i64, Option<String>) {
+        sqlx::query_as(
+            "SELECT state, sequence, last_error_class FROM chat_sealed_federation_outbox
+             WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn loaded(pool: &sqlx::PgPool, id: Uuid) -> SealedFederationOutboxRow {
+        sqlx::query_as(
+            "SELECT id, destination, sequence, recipient_account_id, transaction, attempts
+             FROM chat_sealed_federation_outbox WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    const MISMATCH: &[u8] =
+        br#"{"code":"deviceListMismatch","missingDevices":[],"staleDevices":[1],"extraDevices":[]}"#;
+
+    /// At the origin: a rejected send resent with the same content gets the
+    /// same answer and isn't sent again; resent corrected, it is queued
+    /// again under a new sequence with its answer cleared.
+    #[tokio::test]
+    async fn live_a_rejected_send_is_requeued_only_when_corrected() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let destination = origin();
+        let recipient = AccountRef::new(&destination, &Uuid::new_v4().to_string()).unwrap();
+        let send_id = Uuid::new_v4();
+        let Queued::Row(id) =
+            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 78))
+                .await
+                .unwrap()
+        else {
+            panic!("queued");
+        };
+        let (_, first_sequence, _) = outbox_row(&pool, id).await;
+        let row = loaded(&pool, id).await;
+        assert!(matches!(
+            apply_sealed_answer(&pool, &row, StatusCode::CONFLICT, MISMATCH)
+                .await
+                .unwrap(),
+            FederatedSealedOutcome::Mismatch(_)
+        ));
+        // The same content: the stored mismatch, nothing queued.
+        let same = enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 78))
+            .await
+            .unwrap();
+        assert!(matches!(
+            same,
+            Queued::Settled(FederatedSealedOutcome::Mismatch(_))
+        ));
+        assert_eq!(outbox_row(&pool, id).await.0, "rejected");
+        // Corrected: the same row, pending under a later sequence.
+        let Queued::Row(again) =
+            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 77))
+                .await
+                .unwrap()
+        else {
+            panic!("requeued");
+        };
+        assert_eq!(again, id);
+        let (state_name, sequence, class) = outbox_row(&pool, id).await;
+        assert_eq!(state_name, "pending");
+        assert!(sequence > first_sequence);
+        assert_eq!(class, None);
+        let stored: FederatedSealedTransactionV1 =
+            serde_json::from_value(loaded(&pool, id).await.transaction).unwrap();
+        assert_eq!(stored.sequence, sequence as u64);
+        assert_eq!(stored.envelopes[0].registration_id, 77);
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// The migration's step for sends rejected on a mismatch before this
+    /// version: each goes once more under its old sequence (closing it at
+    /// the destination); meanwhile a corrected resend is told to wait
+    /// (`conflict`), and an identical one stays queued.
+    #[tokio::test]
+    async fn live_the_migration_closes_old_mismatched_sequences() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let destination = origin();
+        let recipient = AccountRef::new(&destination, &Uuid::new_v4().to_string()).unwrap();
+        let send_id = Uuid::new_v4();
+        let Queued::Row(id) =
+            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 78))
+                .await
+                .unwrap()
+        else {
+            panic!("queued");
+        };
+        // As the old version left it: rejected, no answer kept.
+        sqlx::query(
+            "UPDATE chat_sealed_federation_outbox
+             SET state = 'rejected', last_error_class = 'device_mismatch' WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (_, sequence, _) = outbox_row(&pool, id).await;
+        let migration = include_str!("../migrations/20261018120000_sealed_sequences.up.sql");
+        let closing = migration
+            .split(';')
+            .find(|statement| statement.contains("closing_sequence"))
+            .expect("the closing step");
+        sqlx::query(closing).execute(&pool).await.unwrap();
+        assert_eq!(
+            outbox_row(&pool, id).await,
+            (
+                "pending".to_owned(),
+                sequence,
+                Some("closing_sequence".to_owned())
+            )
+        );
+        let corrected =
+            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 77)).await;
+        assert_eq!(corrected.err().unwrap().status, StatusCode::CONFLICT);
+        assert!(matches!(
+            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 78))
+                .await
+                .unwrap(),
+            Queued::Row(same) if same == id
+        ));
+        assert_eq!(outbox_row(&pool, id).await.1, sequence);
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// A sealed single is named by its row and its bytes: a retry of the
