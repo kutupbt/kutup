@@ -1,8 +1,8 @@
 # Post-quantum shares: X-Wing instead of X25519
 
-Status: note for review (2026-10-18). This follows the user's decision from the
-post-quantum audit. Next steps: the main session reviews it, then the user,
-then the build starts.
+Status: note, revised after the main session's review (2026-10-18). It follows
+the user's decision from the post-quantum audit. Next: the user's answers
+(the suite upgrade), then the build.
 - Clean-slate rule: no shims and no dual formats.
 - Production has been live since the 2026-10-17 wipe with almost no data. The
   counts in "Existing data" decide what happens to any old envelope.
@@ -70,8 +70,9 @@ Instead:
   `AccountIdentitySuiteId::XWingEd25519V2` with a 1216-byte `hpkePublicKey`, and
   the server still requires it to equal `users.public_key`. Clients pin it in
   `manifest_trust.drive_hpke_public_key` (chat-core SQLite and IndexedDB).
-  - Rule: within one incarnation the key never changes. A suite change is a
-    clean slate, so no account carries both keys.
+  - Rule: within one incarnation the key changes only through the one-way
+    suite upgrade below (a higher suite, consecutive manifests, the same
+    authority). An account never holds both keys at once.
 - **Identity pins** hold only the authority key, which signs the binding.
   Nothing changes in the pins: a pinned contact's new X-Wing key verifies
   through the binding exactly as the X25519 one did.
@@ -98,29 +99,62 @@ Instead:
 - **Migration.** One migration raises those CHECKs. What it does with existing
   rows depends on the counts below; it contains no conversion code.
 
-## Existing data (read-only counts on kutup.dev, before deciding)
+## Existing data and the upgrade
 
-Old envelopes can't be opened by the new code, and the old public keys can't
-be sealed to. These columns hold them:
+Read-only counts on kutup.dev (2026-10-18):
+- every share table is empty: `collection_shares`, `federated_outgoing_shares`,
+  `federated_incoming_shares`, `file_shares`, `federated_outgoing_file_shares`,
+  `drive_profile_keys`, `mail_group_key_shares` and `mail_group_signing_shares`
+  all have 0 rows;
+- 3 users have an X25519 Drive key, with its binding and wrapped private key;
+- there are 2 manifests and 3 history entries.
 
-| table.column | holds |
-|---|---|
-| `users.public_key`, `users.drive_key_binding`, `users.drive_private_key_envelope` | the X25519 key, its binding, the wrapped private key |
-| `chat_device_manifests.manifest`, `chat_device_manifest_history.manifest` | `drive.hpkePublicKey` (jsonb) |
-| `collection_shares.named_share_envelope` | named shares |
-| `federated_outgoing_shares.named_share_envelope`, `federated_incoming_shares.named_share_envelope` | named shares across servers |
-| `file_shares.share_envelope`, `federated_outgoing_file_shares.share_envelope` | file shares |
-| `drive_profile_keys.envelope` | profile-key shares |
-| `mail_group_key_shares.share`, `mail_group_signing_shares.share` | shared-mailbox shares |
+So no envelope has to move. The 3 accounts' keys do, and that must not need a
+wipe. It can't be done by editing the key in place. Chat-core refuses a
+changed Drive key within one incarnation (`manifest.rs:290-297`), and the
+server only writes the Drive key at first-login setup (`auth.rs:1527-1545`)
+or in an admin wipe.
 
-**If any of these hold rows**, every affected account needs new keys, which
-only its own client can make (they come from the master key). The choices
-are:
-- (a) another wipe;
-- (b) the client re-derives and re-publishes at its next sign-in, and every
-  share to it is made again by its owner.
+The fix is a **one-way identity suite upgrade**: durable, and the only path
+from suite 1 to suite 2. It isn't a shim, because no X25519 reader is kept.
+Everything is derived again from the master key.
 
-Choose once the counts are in. No fallback reader is built either way.
+1. **Client, at its next sign-in.** A client that finds its account on suite
+   1 derives the X-Wing seed and public key. It then signs a suite-2 binding
+   with the **unchanged** authority key.
+2. **Server: `POST /api/account/identity-suite`.** The body carries the new
+   public key, the suite-2 binding and the new wrapped private key (the
+   seed). The server checks that:
+   - the binding verifies under the account's current authority key;
+   - the suite **strictly increases**;
+   - the key is 1216 bytes.
+
+   It then replaces `public_key`, `drive_key_binding` and
+   `drive_private_key_envelope` in one transaction under the account lock. A
+   lower or equal suite is refused, so it can never go back.
+3. **Manifest.** The client publishes its next manifest (sequence + 1) with
+   `XWingEd25519V2`. The server requires it to match the new `public_key` as
+   it does today.
+4. **Chat-core's pin rule.** A Drive key change within one incarnation is
+   accepted only when all of these hold:
+   - the suite rises;
+   - the two manifests link consecutively;
+   - the authority key is the same.
+
+   Anything else is still refused as it is now.
+5. **Until an account has upgraded**, lookups of it say `keysPendingUpgrade`,
+   and sharing to it is refused with that code. Nothing is sealed to an
+   X25519 key again.
+6. **Afterwards.** Once every account has upgraded (verified by count, as for
+   these 3), a migration enforces 1216-byte keys. The suite-1 paths then go,
+   the upgrade endpoint included.
+
+**Binding replay.** A binding has no epoch today
+(`drive_key_binding.rs:24-43`), so after a suite change the server could serve
+an older, still validly signed binding. The suite-2 binding therefore carries
+a monotonic `epoch` (u32, starting at 1) beside the suite. Clients remember
+the highest `(suite, epoch)` they have seen per contact, in their pins and
+manifest trust, and refuse a lower one as a rollback.
 
 ## Federation
 
@@ -154,6 +188,35 @@ Choose once the counts are in. No fallback reader is built either way.
 - **Before the TypeScript work.** The third session gets the list of call sites
   with the PR.
 
+## Details from review
+
+- **No `derive_key_pair`.** hpke-rs's `derive_key_pair` hashes its input with
+  SHAKE first (`kem.rs:153`), so it is never used. Everywhere (Rust, WASM, CLI)
+  the key comes from HKDF → the 32-byte seed → `x_wing::DecapsulationKey::from`,
+  as `oblivious.rs` does.
+- **The backend's own warning.** hpke-rs-rust-crypto calls its post-quantum
+  KEMs "broken and pre-releases" (`lib.rs:203-204`). So beside the draft's
+  KEM vectors we keep:
+  - HPKE-level known-answer tests;
+  - a cross-check against `hpke-rs-libcrux` as a dev-dependency only, if
+    cargo deny allows it there. If deny doesn't allow it, the libcrux-made
+    vectors are checked in, as `oblivious-v1.json` already is.
+- **Mail group shares.** Their HPKE info (the domain) moves to `/v2`
+  (`kutup/mail-group-key-share/v2\0`, `kutup/mail-group-signing-share/v2\0`),
+  and the version byte becomes 2.
+- **Named shares get a database cap** like the others: `CHECK
+  (length(named_share_envelope) <= 4096)` on `collection_shares`,
+  `federated_outgoing_shares` and `federated_incoming_shares`, which have none
+  today (baseline lines 2053, 2250 and 2318).
+- **Mail group key shares.** `mail_group_key_shares` is measured again if group
+  keys gain a v6 key ([`mail-pq-openpgp.md`](mail-pq-openpgp.md)).
+- **Remaining 32-byte assumptions** to change:
+  - `drive_key_binding`'s buffer capacity (32 × 4);
+  - `profile_key_share.rs:24` and `:151` (`SUITE_V1`);
+  - WASM `public_key_32` (`lib.rs:2943` and the others);
+  - `drive_federation.rs:291`;
+  - chat-proto's "raw X25519" doc comment.
+
 ## Tests
 
 - **Vectors.** `crypto.json`, `identity-pins-v3.json`, the mail group share
@@ -167,10 +230,14 @@ Choose once the counts are in. No fallback reader is built either way.
 
 ## Order of the build
 
-1. **kutup-crypto:** the shared helper, the envelopes, identity derivation and
-   the binding. Then chat-proto (the manifest).
-2. **Server:** lengths, limits, the migration, and federation checks with their
-   clear errors.
-3. **WASM exports and the CLI.**
+1. **kutup-crypto:** the shared helper, the envelopes, identity derivation, and
+   the binding with its epoch. Then chat-proto (the manifest suite) and
+   chat-core's pin rule for a rising suite.
+2. **Server:** the suite-upgrade endpoint, `keysPendingUpgrade`, lengths,
+   limits, the migration, and federation checks with their clear errors.
+3. **WASM exports and the CLI**, the CLI upgrading its account at sign-in as
+   the web client does.
 4. **The web client** (third session).
-5. **Gates.**
+5. **Gates**, an upgrade from a suite-1 account included.
+6. **Afterwards:** once every account is on suite 2 (counted), a migration
+   enforces 1216-byte keys, and the suite-1 paths go.
