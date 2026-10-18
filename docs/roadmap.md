@@ -824,6 +824,19 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 - **K3** ✅: divergence is prevented by serialized conditional saves; the
   website works at phone width. **K3b** ✅: `kutup ssh-agent` and
   `kutup ssh-add` (`scripts/verify-pass-ssh.sh`).
+- **SSH keys shown as SSH keys on the website.** Today an entry with a
+  key shows only its raw attachments (`id_ed25519`, `KeeAgent.settings`).
+  Show it as Proton Pass and Bitwarden show their SSH key items:
+  - the key type, the fingerprint and the comment;
+  - the public key, with a copy button;
+  - the private key hidden, with reveal and copy;
+  - whether `kutup ssh-agent` offers it (the KeeAgent settings), as a
+    switch;
+  - no `KeeAgent.settings` file in the attachment list.
+
+  Also: generate a new Ed25519 key, and import a key file. It is still
+  stored the KeeAgent way (`kutup-pass/src/ssh.rs`), so KeePassXC keeps
+  working.
 - **SSH agent next:** Windows (named pipe), a native macOS approval
   prompt checked on a Mac (the osascript dialog is built but not yet run on
   macOS). `kutup ssh-agent install` (systemd / launchd), desktop approval
