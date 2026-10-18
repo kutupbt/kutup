@@ -439,5 +439,17 @@
   },
   "mailPlaces": {
     "unnamedFolder": "Adsız klasör"
+  },
+  "webAssembly": {
+    "title": "Bu tarayıcı Kutup'u çalıştıramıyor",
+    "why": "Kutup her şeyi cihazınızda şifreler ve bu kod WebAssembly olarak çalışır. Bu tarayıcıda WebAssembly kapalı, bu yüzden Kutup oturum açamıyor ve hiçbir şeyi açamıyor.",
+    "lockdownTitle": "Kilitleme Modu açık bir iPhone, iPad veya Mac'te",
+    "lockdownBody": "Kilitleme Modu web siteleri için WebAssembly'yi kapatır. Kilitleme Modu'nu açık tutup yalnızca bu site için kapatabilirsiniz:",
+    "lockdownStep1": "Safari'de bu sayfadayken adres çubuğundaki Sayfa Menüsü düğmesine dokunun.",
+    "lockdownStep2": "Web Sitesi Ayarları'na dokunun, ardından bu site için Kilitleme Modu'nu kapatın.",
+    "lockdownStep3": "Sayfayı yeniden yükleyin.",
+    "lockdownSettings": "Hariç tuttuğunuz siteleri Ayarlar → Gizlilik ve Güvenlik → Kilitleme Modu → Web'de Gezinmeyi Yapılandır bölümünde görebilirsiniz.",
+    "otherBrowsers": "Başka bir tarayıcıda WebAssembly'yi yeniden açın (bazı sıkılaştırılmış ayarlar ve şirket politikaları kapatır) ya da güncel bir Safari, Chrome, Firefox veya Edge kullanın.",
+    "reload": "Yeniden yükle"
   }
 }
