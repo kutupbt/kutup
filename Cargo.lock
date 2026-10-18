@@ -3331,6 +3331,7 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hex",
+ "hkdf",
  "hmac 0.12.1",
  "jsonwebtoken",
  "kutup-chat-proto",

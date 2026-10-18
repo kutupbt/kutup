@@ -50,6 +50,17 @@ pub fn spawn_all(
             version_retention_tick(&p1, &s1).await;
         }
     });
+    // Group request nonces past their window (docs/plans/pairwise-groups.md §3).
+    let nonces = pool.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        loop {
+            tick.tick().await;
+            if let Err(error) = crate::chat_groups::gateway::sweep_nonces(&nonces).await {
+                tracing::warn!(error = %error.message, "group nonce sweep failed");
+            }
+        }
+    });
     let p2 = pool.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(QUOTA_RECONCILE_INTERVAL);

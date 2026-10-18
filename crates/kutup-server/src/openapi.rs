@@ -297,6 +297,10 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::drive_federation::get_user,
         crate::handlers::accounts::by_id,
         crate::handlers::accounts::fed_by_id,
+        crate::chat_groups::routes::gateway_key,
+        crate::chat_groups::routes::relay,
+        crate::chat_groups::routes::fed_gateway,
+        crate::chat_groups::routes::fed_gateway_key,
         crate::remote_renames::publish,
         crate::remote_renames::announce,
         crate::drive_federation::get_invite,
@@ -854,6 +858,8 @@ mod tests {
             "/.well-known/kutup/federation/identity/{sequence}.json",
             "/api/fed/chat/accounts/{accountId}/keys",
             "/api/fed/chat/messages",
+            "/api/chat/groups/relay/{server}",
+            "/api/fed/chat/groups/gateway",
         ] {
             assert!(paths.contains_key(path), "spec is missing path {path}");
         }

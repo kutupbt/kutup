@@ -3189,6 +3189,40 @@ mints it; another host is asked over signed federation
 `429` over 30 per minute per account (300 per origin server), `502` when
 the host cannot be reached.
 
+### GET /api/chat/groups/gateway-key?server={home}&fromSequence={n}
+
+Pairwise groups' anonymous route ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §3;
+groups are off unless `CHAT_GROUPS=true`, `404` otherwise). Signed-in:
+`{ "config": GroupGatewayKeyConfigV1, "identityHistory": [identity documents] }`,
+the home's HPKE key config, signed by its federation identity, and its
+identity documents from sequence `n` (the one the group pins) on, at most 64.
+This server fetches a peer's config over signed federation
+(`GET /api/fed/chat/groups/gateway-key`) and gives the history it has
+verified; the client trusts neither until it follows the history from its
+pin and verifies the config. The key changes weekly; the previous one is
+accepted for 24 hours. `502` when the home is unreachable.
+
+### POST /api/chat/groups/relay/{home}
+
+Signed-in. The body is a request sealed to the home's gateway key
+(RFC 9458 encapsulation, `message/ohttp-req`, at most 256 KiB + 55 bytes);
+the answer is the sealed response (`application/octet-stream`, `no-store`).
+This server passes it on unread: to its own gateway when it is the home,
+otherwise over signed federation to `POST /api/fed/chat/groups/gateway`, and
+only to federation peers. `400` (empty) when the home could not open it,
+`429` over 240 per minute per account, `502` when the home is unreachable.
+Inside, the home checks the request's home, clock (5 minutes), signature and
+nonce, and answers with one `notFound` for an unknown group, a non-member and
+a bad signature; the operations and answers are `GroupRequestV1` /
+`GroupResponseV1` in `kutup_chat_proto::group_route`. The home limits per
+relaying server (6000/min), per pseudonym (240/min), changes per pseudonym
+(30/min) and per group (60/min), link requests per group (30/min), and new
+groups per relaying server (600/hour). Group budgets are charged only for
+valid changes and proven link requests; failed requests spend a separate
+budget per relaying server (600/min). A stranger, a removed member, or a
+newcomer whose claim, link password or request doesn't hold gets the same
+`notFound` as an unknown group, never a conflict or a refusal code.
+
 ### POST /api/chat/call-links
 
 `{ "roomId", "nonce", "accessTokenHash", "info", "hostTokenHash", "waitingRoom"? }` → `201` with

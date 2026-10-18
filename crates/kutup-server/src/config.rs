@@ -127,6 +127,13 @@ pub struct Config {
     /// apps show direct chats only; groups made earlier stay stored,
     /// unreachable.
     pub chat_groups: bool,
+    /// The most members (and open invitations) a group hosted here may have
+    /// (`CHAT_GROUP_MAX_MEMBERS`, 1 to 256, default 256;
+    /// docs/plans/pairwise-groups.md §7).
+    pub chat_group_max_members: usize,
+    /// The most groups this server hosts (`CHAT_GROUP_MAX_GROUPS`, default
+    /// 100000): with the per-server creation limit, a peer can't fill it.
+    pub chat_group_max_groups: i64,
     /// Fetch pages for Chat link previews on behalf of this server's users
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
     /// its users preview, never their messages.
@@ -347,6 +354,14 @@ impl Config {
         if federation_test_allow_private && app_env != "test" {
             env.error("FEDERATION_TEST_ALLOW_PRIVATE may only be enabled with APP_ENV=test");
         }
+        let chat_group_max_members = get_env_i64("CHAT_GROUP_MAX_MEMBERS", 256);
+        if !(1..=256).contains(&chat_group_max_members) {
+            env.error("CHAT_GROUP_MAX_MEMBERS must be between 1 and 256");
+        }
+        let chat_group_max_groups = get_env_i64("CHAT_GROUP_MAX_GROUPS", 100_000);
+        if chat_group_max_groups < 1 {
+            env.error("CHAT_GROUP_MAX_GROUPS must be at least 1");
+        }
         let chat_max_active_devices = get_env_i64("CHAT_MAX_ACTIVE_DEVICES", 10);
         if !(1..=10).contains(&chat_max_active_devices) {
             env.error("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
@@ -483,6 +498,8 @@ impl Config {
             rate_limits_relaxed,
             registration_mode,
             chat_groups: get_env_bool("CHAT_GROUPS", false),
+            chat_group_max_members: chat_group_max_members.clamp(1, 256) as usize,
+            chat_group_max_groups: chat_group_max_groups.max(1),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),
             chat_web_push_hosts: get_env(

@@ -51,6 +51,14 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_ACCOUNT_PEER_FETCHES_PER_MIN", 120),
     ("RATE_LIMIT_RENAME_ANNOUNCES_PER_MIN", 600),
     ("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN", 60),
+    ("RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN", 240),
+    ("RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN", 6000),
+    ("RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN", 240),
+    ("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN", 30),
+    ("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN", 60),
+    ("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN", 30),
+    ("RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN", 600),
+    ("RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR", 600),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
     ("LOGIN_LOCKOUT_MINUTES", 15),
     ("LOGIN_ACCOUNT_CEILING", 20),
@@ -124,6 +132,20 @@ impl RateLimiter {
         }
         times.push(now);
         true
+    }
+
+    /// Whether `key` is under its limit now, without recording an attempt
+    /// (a budget charged only when something fails).
+    pub fn has_room(&self, key: &str) -> bool {
+        let now = Instant::now();
+        let mut map = self.requests.lock().unwrap();
+        match map.get_mut(key) {
+            Some(times) => {
+                times.retain(|t| now.duration_since(*t) < self.window);
+                times.len() < self.limit
+            }
+            None => true,
+        }
     }
 
     /// Gives back the newest event of `key` (an attempt that turned out
@@ -250,6 +272,76 @@ pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_ADMIN_PER_MIN", 120) as usize,
         Duration::from_secs(60),
+    )
+});
+/// The groups relay: 240 requests / minute / signed-in account
+/// (`RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN`). The relay can't see what it
+/// passes on, so this is the wall it keeps for its own users.
+pub static CHAT_GROUP_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_RELAY_PER_MIN", 240) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// The groups gateway: 6000 requests / minute / relay server
+/// (`RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN`): all of a peer's users
+/// together.
+pub static CHAT_GROUP_GATEWAY_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_GATEWAY_RELAY_PER_MIN", 6000) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// The groups gateway: 240 requests / minute / member pseudonym
+/// (`RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN`).
+pub static CHAT_GROUP_PSEUDONYM: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_PSEUDONYM_PER_MIN", 240) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Group changes: 30 / minute / pseudonym
+/// (`RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN`).
+pub static CHAT_GROUP_CHANGES_PSEUDONYM: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN", 30) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Group changes: 60 / minute / group
+/// (`RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN`), so many members can't
+/// flood one log.
+pub static CHAT_GROUP_CHANGES_GROUP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Link requests (join info): 30 / minute / group
+/// (`RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN`), so a link holder can't flood one.
+pub static CHAT_GROUP_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN", 30) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Failed group requests: 600 / minute / relay server
+/// (`RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN`): charged only when a
+/// request fails (unknown group, stranger, refused change), so junk from one
+/// server is throttled without spending any group's budget.
+pub static CHAT_GROUP_FAILURES_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN", 600) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// New groups: 600 / hour / relay server
+/// (`RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR`); `CHAT_GROUP_MAX_GROUPS`
+/// caps the total.
+pub static CHAT_GROUP_CREATES_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR", 600) as usize,
+        Duration::from_secs(3600),
     )
 });
 /// Chat prekey-bundle fetch: 30 / minute / authenticated account
@@ -659,6 +751,14 @@ pub fn spawn_cleanup() {
             COLLAB_FRAME_POSTS.cleanup();
             DEVICE_CHALLENGES.cleanup();
             COLLAB_DEVICE_ANNOUNCES.cleanup();
+            CHAT_GROUP_RELAY.cleanup();
+            CHAT_GROUP_GATEWAY_RELAY.cleanup();
+            CHAT_GROUP_PSEUDONYM.cleanup();
+            CHAT_GROUP_CHANGES_PSEUDONYM.cleanup();
+            CHAT_GROUP_CHANGES_GROUP.cleanup();
+            CHAT_GROUP_LINK.cleanup();
+            CHAT_GROUP_FAILURES_RELAY.cleanup();
+            CHAT_GROUP_CREATES_RELAY.cleanup();
             cleanup_totp_tracker();
             // Per-feature limiters kept beside their handlers.
             crate::handlers::chat_link_preview::LINK_PREVIEWS.cleanup();
