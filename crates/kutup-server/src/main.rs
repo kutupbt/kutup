@@ -61,6 +61,7 @@ mod storage_check;
 mod storage_pool;
 mod storage_probe;
 mod telemetry;
+mod tls;
 mod totp;
 mod ui_preferences;
 mod version_retention;
@@ -162,6 +163,7 @@ fn known_command(rest: &[String]) -> bool {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tls::install_crypto_provider();
     let _telemetry = telemetry::init()?;
 
     let args: Vec<String> = std::env::args().collect();

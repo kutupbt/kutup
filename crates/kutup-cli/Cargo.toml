@@ -17,6 +17,7 @@ kutup-collab = { path = "../kutup-collab" }
 ed25519-dalek.workspace = true
 clap.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

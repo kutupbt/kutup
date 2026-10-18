@@ -1195,6 +1195,14 @@ One failure of that day is not explained by the fix: in
 `34-chat-backup-two-server-recovery`, a group attachment did not appear in a
 restored clean browser within 45 seconds, once in three runs.
 
+### Security · TLS 1.2 still accepted by the bundled Nginx
+
+`nginx/nginx.conf` allows `TLSv1.2 TLSv1.3` on the web and TURN listeners.
+Kept for now (decided 2026-10-18, post-quantum audit) for older clients; the
+server's outbound TLS is rustls with aws-lc-rs and prefers X25519MLKEM768.
+Revisit together with the inbound key-exchange groups (Nginx's OpenSSL decides
+whether browsers get X25519MLKEM768 from it).
+
 ### Security · dependency advisories left open
 
 `deny.toml` ignores these, each with its reason; remove an entry as soon as
