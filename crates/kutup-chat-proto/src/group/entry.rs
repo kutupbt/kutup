@@ -118,6 +118,63 @@ impl Drop for GroupInviteV1 {
     }
 }
 
+/// One group in the account's group list (docs/plans/pairwise-groups.md
+/// §5), sealed under the account's list key: what another of this account's
+/// devices needs to take the group up (its key, its home, this account's
+/// pseudonym) and the newest state it may take.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupListEntryV1 {
+    pub version: u16,
+    pub group_id: String,
+    pub master_key: String,
+    pub home: GroupHomePinV1,
+    /// This account's pseudonym in the group (its seed).
+    pub pseudonym_seed: String,
+    /// `member`, or `gone` (left or removed: its history stays).
+    pub status: GroupListStatus,
+    /// The last revision this account verified, and its chain head: no
+    /// device of the account takes an older state.
+    pub verified_revision: u64,
+    pub chain_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupListStatus {
+    Member,
+    Gone,
+}
+
+impl GroupListEntryV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        require_version(self.version)?;
+        decode_group_id(&self.group_id)?;
+        decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
+        decode_exact::<32>("pseudonymSeed", &self.pseudonym_seed)?;
+        decode_exact::<32>("chainHash", &self.chain_hash)?;
+        Ok(())
+    }
+}
+
+/// Never prints the master key or the pseudonym seed.
+impl std::fmt::Debug for GroupListEntryV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupListEntryV1")
+            .field("group_id", &self.group_id)
+            .field("status", &self.status)
+            .field("verified_revision", &self.verified_revision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for GroupListEntryV1 {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.master_key);
+        zeroize::Zeroize::zeroize(&mut self.pseudonym_seed);
+    }
+}
+
 macro_rules! canonical_json {
     ($type:ty, $name:literal) => {
         impl $type {
@@ -141,6 +198,7 @@ macro_rules! canonical_json {
 canonical_json!(GroupMemberEntryV1, "group member entry");
 canonical_json!(GroupSlotEntryV1, "group slot entry");
 canonical_json!(GroupInviteV1, "group invite");
+canonical_json!(GroupListEntryV1, "group list entry");
 
 fn require_version(version: u16) -> Result<(), String> {
     if version != GROUP_FORMAT_VERSION {

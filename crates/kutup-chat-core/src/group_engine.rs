@@ -303,6 +303,7 @@ impl Engine {
                 Err(_) => false,
             };
         }
+        let _ = self.publish_group_entry(&record.group_id).await;
         Ok(CreatedGroup {
             group_id: record.group_id,
             title_set,
@@ -354,6 +355,64 @@ impl Engine {
         self.submit_group_change(&mut record, actions).await?;
         self.announce_group_change(group_id, rng).await;
         Ok(())
+    }
+
+    /// Re-signs this account's own entry in `group_id` when it went stale:
+    /// its binding's device is no longer in the account's verified manifest
+    /// (the device was replaced), or it gives an older profile key (rotated,
+    /// say after blocking someone). Without this, the others would take this
+    /// account as unverified, or deliver to it with a capability it no
+    /// longer takes. True when an entry was sent.
+    pub async fn refresh_own_group_entry<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        rng: &mut R,
+    ) -> Result<bool> {
+        let mut record = self.load_group_record(group_id).await?;
+        if record.status != GroupStatus::Member {
+            return Ok(false);
+        }
+        let Some(entry) = group::own_entry(&record).map_err(group_error)? else {
+            return Ok(false);
+        };
+        let me = self.session.account_ref().clone();
+        let profile_key = self.own_profile_key().await?;
+        let device_listed = self
+            .session
+            .manifest_identity_key(&me.to_string(), entry.device_id)
+            .await?
+            .is_some();
+        let key_current = entry.profile_key == kutup_chat_proto::group::encode(&profile_key);
+        if device_listed && key_current {
+            return Ok(false);
+        }
+        let device_id = self.session.device_id();
+        let action = {
+            let session = &self.session;
+            let sign = |bytes: &[u8]| session.sign_with_identity(bytes).map_err(|e| e.to_string());
+            group::renewed_own_entry(&record, &me, device_id, &profile_key, &sign)
+                .map_err(group_error)?
+        };
+        self.submit_group_change(&mut record, vec![action]).await?;
+        self.announce_group_change(group_id, rng).await;
+        Ok(true)
+    }
+
+    /// Catches a group up and keeps this account's entry current: what
+    /// opening a group does (its view), unlike the catch-ups incoming
+    /// content makes.
+    pub async fn maintain_group<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        rng: &mut R,
+    ) -> Result<GroupSync> {
+        let sync = self.sync_group(group_id).await?;
+        if matches!(sync, GroupSync::Current { .. }) {
+            // Best effort: tried again the next time the group opens.
+            let _ = self.refresh_own_group_entry(group_id, rng).await;
+        }
+        self.list_after(group_id, &sync).await;
+        Ok(sync)
     }
 
     /// Removes a member (an administrator's right). The removed member's

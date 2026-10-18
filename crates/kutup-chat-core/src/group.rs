@@ -861,6 +861,53 @@ fn open_member(
     })
 }
 
+/// This account's own entry in the last verified state, opened: the device
+/// that signed its binding and the profile key it gives the group. `None`
+/// when this account isn't a member of that state.
+pub fn own_entry(record: &GroupRecordV1) -> Result<Option<GroupMemberEntryV1>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(None);
+    };
+    let me = record.pseudonym_text()?;
+    let Some(member) = state.member(&me) else {
+        return Ok(None);
+    };
+    let pseudonym = decode_exact::<32>("pseudonym", &member.pseudonym).map_err(record_error)?;
+    let sealed = base64_decode(&member.entry)?;
+    let plain = record
+        .master()?
+        .state_key()
+        .open(SealedField::MemberEntry, &pseudonym, &sealed)
+        .map_err(record_error)?;
+    GroupMemberEntryV1::from_canonical_bytes(&plain)
+        .map(Some)
+        .map_err(record_error)
+}
+
+/// A new own entry for `record`, bound by this device and carrying
+/// `profile_key`: what `ModifyOwnEntry` sends when the binding's device left
+/// the account, or the profile key changed.
+pub fn renewed_own_entry(
+    record: &GroupRecordV1,
+    me: &AccountRef,
+    device_id: u32,
+    profile_key: &[u8; 32],
+    sign_binding: &SignBinding<'_>,
+) -> Result<GroupActionV1, GroupError> {
+    let pseudonym = record.pseudonym()?;
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let entry = seal_member_entry(
+        &record.master()?.state_key(),
+        &group_id,
+        &pseudonym.public_key(),
+        me,
+        device_id,
+        profile_key,
+        sign_binding,
+    )?;
+    Ok(GroupActionV1::ModifyOwnEntry { entry })
+}
+
 /// The accounts the last verified state's entries name, unverified: whose
 /// manifests to fetch before [`members`] checks the bindings.
 pub fn member_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupError> {

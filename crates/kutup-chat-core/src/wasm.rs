@@ -1054,6 +1054,9 @@ impl WasmChatClient {
         engine
             .enable_identity_pins(&master_key, &binding)
             .map_err(chat_error)?;
+        engine
+            .enable_group_list(&master_key, &binding)
+            .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
             .sync_own_manifest(&authority, now_rfc3339())
@@ -1142,9 +1145,10 @@ impl WasmChatClient {
     /// `{kind: "unreachable", reason}` or `{kind: "gone"}`.
     #[wasm_bindgen(js_name = syncGroup)]
     pub async fn sync_group(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
         let outcome = self
             .engine
-            .sync_group(&group_id)
+            .maintain_group(&group_id, &mut rng)
             .await
             .map_err(chat_error)?;
         to_output(&GroupSyncView::from(outcome))
@@ -3503,6 +3507,9 @@ impl WasmChatClient {
             .await;
         // Group messages still on their way: best effort, retried each pass.
         let _ = self.engine.flush_group_outbox(&mut rng).await;
+        // The account's group list, every so often: groups another device
+        // joined or left (best effort).
+        let _ = self.engine.sync_group_list_if_due(&mut rng).await;
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after

@@ -236,6 +236,9 @@ pub struct Engine {
     /// The account's synced identity pins, once the application hands over
     /// the key (`enable_identity_pins`); without it Chat keeps to its own.
     identity_pins: Option<crate::identity_sync::IdentityPinsSync>,
+    /// The account's group list, once the application hands over the key
+    /// (`enable_group_list`).
+    pub(crate) group_list: Option<crate::group_list::GroupListSync>,
 }
 
 impl Engine {
@@ -334,6 +337,7 @@ impl Engine {
             clock_offset_ms: 0,
             mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
             identity_pins: None,
+            group_list: None,
         }
     }
 
@@ -768,6 +772,14 @@ impl Engine {
         )?;
         self.session.save_local_profile(rotated).await?;
         self.flush_profile(wrapping_key, sent_at, rng).await?;
+        // The groups' members deliver with the profile key in this account's
+        // entry: each group gets the new one (best effort; each group's next
+        // opening tries again).
+        for group in self.session.db().list_groups().await? {
+            if group.status == crate::group::GroupStatus::Member {
+                let _ = self.refresh_own_group_entry(&group.group_id, rng).await;
+            }
+        }
         self.session
             .local_profile()
             .await?
