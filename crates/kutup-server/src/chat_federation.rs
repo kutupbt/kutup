@@ -930,8 +930,11 @@ async fn attempt_sealed_single(
                     path: "/api/fed/chat/sealed/messages".into(),
                     query: None,
                     content_type: JSON_CONTENT_TYPE.into(),
+                    // A retry of the same bytes keeps its request id; a resend
+                    // under a new sequence (the same row, other bytes) gets
+                    // its own, or the destination's replay check refuses it.
+                    request_id: delivery_request_id(row.id, &body),
                     body,
-                    request_id: row.id.to_string(),
                     extra_headers: Vec::new(),
                     response_limit: MAX_DIRECTORY_RESPONSE_BYTES,
                 },
