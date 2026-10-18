@@ -19,6 +19,13 @@ mod clock;
 mod db;
 mod engine;
 mod error;
+// Wired into the engine and WASM in the next part of slice 1.
+#[cfg_attr(not(test), allow(dead_code))]
+mod group;
+#[cfg_attr(not(test), allow(dead_code))]
+mod group_client;
+#[cfg_attr(not(test), allow(dead_code))]
+mod group_engine;
 mod invite_link;
 mod keys;
 mod manifest;

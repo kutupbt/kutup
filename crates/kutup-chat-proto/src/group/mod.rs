@@ -19,6 +19,7 @@
 //! `group_route`).
 
 pub mod check;
+pub mod entry;
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +30,7 @@ use kutup_crypto::chat_group::{
 };
 use serde::{Deserialize, Serialize};
 
+pub use entry::{GroupInviteV1, GroupMemberEntryV1, GroupSlotEntryV1};
 pub use check::{
     check_change, check_genesis, resulting_genesis_state, resulting_state, GroupChangeError,
     GroupLimits,

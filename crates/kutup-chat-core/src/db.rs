@@ -544,6 +544,8 @@ pub struct Pending {
     pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecordV1>,
     /// Peer account → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
+    /// Group id → this device's record of the group (docs/plans/pairwise-groups.md).
+    pub(crate) groups: HashMap<String, crate::group::GroupRecordV1>,
     /// The local account's profile singleton.
     pub(crate) local_profile: Option<LocalProfile>,
     /// Peer account → harvested/decrypted profile state.
@@ -608,6 +610,7 @@ impl Pending {
             && self.manifest_trust.is_empty()
             && self.manifest_history.is_empty()
             && self.contacts.is_empty()
+            && self.groups.is_empty()
             && self.local_profile.is_none()
             && self.peer_profiles.is_empty()
             && self.delete_messages_for_peers.is_empty()
@@ -732,6 +735,11 @@ pub trait ChatDb {
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;
     /// Every known contact/request state, ordered by canonical peer.
     async fn list_contacts(&self) -> Result<Vec<ContactRecord>>;
+
+    /// This device's record of a group, by id.
+    async fn load_group(&self, group_id: &str) -> Result<Option<crate::group::GroupRecordV1>>;
+    /// Every group this device has a record of, by id.
+    async fn list_groups(&self) -> Result<Vec<crate::group::GroupRecordV1>>;
 
     /// The local account's encrypted-profile source state.
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>>;
