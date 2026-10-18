@@ -141,6 +141,11 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 # new inheriting nothing.
 run_phase account-ids
 
+# Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
+# home's signed X-Wing key config, sealed requests relayed and answered.
+KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+  cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
+
 # Destination Chat-media state may contain the authenticated origin domain and
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.

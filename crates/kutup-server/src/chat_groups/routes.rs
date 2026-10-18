@@ -34,9 +34,8 @@ const JSON: &str = "application/json";
 /// The most identity documents one key-config answer carries.
 const MAX_HISTORY: i64 = 64;
 /// A sealed request or answer: the largest padded size plus RFC 9458's
-/// header, encapsulated key and tag (or response nonce and tag).
-pub(crate) const MAX_SEALED: usize =
-    kutup_crypto::oblivious::SIZES[kutup_crypto::oblivious::SIZES.len() - 1] + 7 + 32 + 16;
+/// header, X-Wing encapsulated key and tag (an answer is smaller).
+pub(crate) const MAX_SEALED: usize = kutup_crypto::oblivious::MAX_SEALED;
 
 /// The groups route exists only where groups are on and federation is set up.
 fn enabled(state: &AppState) -> AppResult<&FederationStack> {

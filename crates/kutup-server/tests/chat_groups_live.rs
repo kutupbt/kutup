@@ -65,7 +65,7 @@ struct Home {
     pin: GroupHomePinV1,
     config: GroupGatewayKeyConfigV1,
     key_id: u8,
-    public_key: [u8; 32],
+    public_key: [u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN],
 }
 
 fn home(c: &Client, base: &str, user: &User) -> Home {

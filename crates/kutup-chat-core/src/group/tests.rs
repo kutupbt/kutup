@@ -29,8 +29,15 @@ impl Home {
     fn with_key(byte: u8, server: &str) -> Self {
         let key = SigningKey::from_bytes(&[byte; 32]);
         let identity = FederationIdentityDocumentV1::genesis(server, 10, &key).unwrap();
-        let config =
-            GroupGatewayKeyConfigV1::sign(&identity, &key, 1, &[9u8; 32], 100, 200).unwrap();
+        let config = GroupGatewayKeyConfigV1::sign(
+            &identity,
+            &key,
+            1,
+            &[9u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN],
+            100,
+            200,
+        )
+        .unwrap();
         Self {
             identity,
             key,
