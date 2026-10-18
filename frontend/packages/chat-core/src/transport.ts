@@ -541,10 +541,13 @@ export class ApiChatTransport implements ChatTransportPort {
    * learns only which home it goes to. The answer stays sealed.
    */
   async relayGroupRequest(home: string, sealed: Uint8Array): Promise<GroupRelayOutcome> {
+    // Exactly these bytes: `sealed` may be a view into the WASM memory, and
+    // a typed array's whole buffer is what the HTTP client would send.
+    const body = sealed.slice().buffer
     try {
       const response = await api.post<ArrayBuffer>(
         `/chat/groups/relay/${encodeURIComponent(home)}`,
-        sealed,
+        body,
         {
           headers: { 'Content-Type': 'message/ohttp-req' },
           responseType: 'arraybuffer',

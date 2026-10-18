@@ -2242,3 +2242,27 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
     block_on(alice.engine.session.purge_expired_history(later)).unwrap();
     assert!(!in_log(&alice));
 }
+
+#[test]
+fn group_ui_an_invitation_names_the_group_before_joining() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    let listed = block_on(bob.engine.list_groups()).unwrap();
+    let invited = listed
+        .iter()
+        .find(|group| group.group_id == group_id)
+        .unwrap();
+    assert_eq!(invited.title.as_deref(), Some("Team"));
+}

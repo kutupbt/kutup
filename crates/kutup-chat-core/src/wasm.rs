@@ -4243,7 +4243,13 @@ impl From<crate::ReceivedMessage> for ReceivedMessageView {
     fn from(message: crate::ReceivedMessage) -> Self {
         Self {
             id: message.id,
-            conversation: message.from.conversation(),
+            conversation: message
+                .content
+                .group_context()
+                .map(|context| ConversationId::Group {
+                    group_id: context.group_id.clone(),
+                })
+                .unwrap_or_else(|| message.from.conversation()),
             peer: message.from.name(),
             sender_device_id: message.from.device_id,
             cursor: message.cursor.to_string(),
@@ -4490,7 +4496,8 @@ impl HistoryEntry {
             iso_time(message.received_at),
         );
         let id = content.message_id.clone();
-        let conversation = direct_conversation(&message.peer)?;
+        // A group's message sits in the same store, under its group.
+        let conversation = crate::timeline::conversation_of(&message.peer, &message.content)?;
         Ok(Self {
             id,
             conversation,
@@ -4511,7 +4518,7 @@ impl HistoryEntry {
             &message.send_id,
             iso_time(message.created_at),
         );
-        let conversation = direct_conversation(&message.peer)?;
+        let conversation = crate::timeline::conversation_of(&message.peer, &message.content)?;
         Ok(Self {
             id: message.send_id,
             conversation,
@@ -4573,12 +4580,6 @@ impl HistoryEntry {
             content: content.into(),
         })
     }
-}
-
-fn direct_conversation(peer: &str) -> Result<ConversationId> {
-    let account = crate::address::parse_account(peer)
-        .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
-    Ok(ConversationId::direct(account))
 }
 
 /// Content that does not decode is no control: it shows as unsupported.

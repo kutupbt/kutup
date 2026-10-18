@@ -675,7 +675,11 @@ impl Engine {
                 let title = group::attribute(&record, GroupAttribute::Title)
                     .ok()
                     .flatten()
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .or_else(|| match &record.status {
+                        GroupStatus::Invited { title, .. } => title.clone(),
+                        _ => None,
+                    });
                 let verified = record.verified().ok().flatten();
                 GroupSummary {
                     group_id: record.group_id.clone(),

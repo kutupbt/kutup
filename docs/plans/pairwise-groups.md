@@ -733,7 +733,9 @@ them on pseudonyms (§3).
        for the adder's other devices, which learn of the slot from the log.
        Only contacts can be invited (their profile key gives the sealed
        capability), as Signal adds only people whose profile key it holds. A
-       slot whose invitation couldn't be delivered is revoked at once.
+       slot whose invitation couldn't be delivered is revoked at once. The
+       invitation also carries the group's name, so it can be shown before the
+       invitee joins and reads the state.
      Its encrypted group context carries the master key, the group's server and
      the home's pinned identity, as Signal's `GroupContextV2` carries the master
      key.
