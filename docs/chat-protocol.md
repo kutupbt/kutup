@@ -720,6 +720,24 @@ requests/minute, 120 sealed sends/minute and 10,000/day/capability, 600
 federated sends/minute/origin, 32 envelopes and 1 MiB/request. Unknown recipient
 and invalid capability return the same response shape.
 
+**Sealed batches.** `POST /api/chat/anonymous/messages/batch?server=` carries
+1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
+recipient's `accountId` and its single-route submission), at most 4 MiB, as one
+anonymous attempt: a group message reaches every member device without one
+request per member. Each recipient's capability is checked and counted on its
+own, and each gets its own result in order (`delivered`, `deviceMismatch` with
+the single route's mismatch body, `unavailable` for a wrong capability or an
+unknown account alike, `pending`, `refused`, `peerUnsupported`). For another
+server, the origin queues each send exactly as a single sealed send (same
+outbox, sequence and `sendId` dedup) and delivers the destination's run of
+consecutive pending sends in one signed `POST /api/fed/chat/sealed/batch`
+(`FederatedSealedBatchV1`, at most 64 transactions and 4 MiB); the destination
+applies them one by one as single transactions and stops after the first
+answer that doesn't use up its sequence (a delivery, the uniform 404 and a
+refusal naming the sequence do; a device mismatch doesn't), answering each
+it tried. A peer that can't take a batch gets
+the same sends one by one, and the retry worker delivers queues in batches.
+
 ## 8. Private MLS groups
 
 The complete group protocol is specified in [`chat-mls.md`](chat-mls.md). V1

@@ -1405,6 +1405,14 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
+            "/api/chat/anonymous/messages/batch",
+            post(chat::send_sealed_batch)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_chat_proto::MAX_SEALED_BATCH_BYTES + 64 * 1024,
+                ))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
             "/api/chat/anonymous/accounts/:account_id/messages",
             post(chat::send_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
@@ -1708,6 +1716,14 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/sealed/accounts/:account_id/keys",
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/sealed/batch",
+            post(chat_federation::deliver_sealed_batch)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_chat_proto::MAX_SEALED_BATCH_BYTES,
+                ))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

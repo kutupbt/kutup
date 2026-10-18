@@ -15,10 +15,11 @@ use base64::Engine as _;
 use kutup_chat_proto::{
     capability_hash, AccountManifestHistoryPageV1, AccountManifestV1, AccountRef,
     AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, DeliveredEnvelope,
-    DeviceListMismatch, FederatedChatTransaction, FederatedSealedTransactionV1,
+    DeviceListMismatch, FederatedChatTransaction, FederatedSealedBatchItemV1,
+    FederatedSealedBatchResponseV1, FederatedSealedBatchV1, FederatedSealedTransactionV1,
     FederationDeliveryError, FederationDeliveryRejection, FederationDeliveryResponse,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SendMessagesRequest,
-    UserPreKeyBundlesResponse,
+    UserPreKeyBundlesResponse, MAX_SEALED_BATCH_BYTES, MAX_SEALED_BATCH_ITEMS,
 };
 use rand::Rng as _;
 use reqwest::Method;
@@ -376,6 +377,26 @@ pub async fn enqueue_sealed_send(
     recipient: &AccountRef,
     request: SealedMessageSubmissionV1,
 ) -> AppResult<FederatedSealedOutcome> {
+    match enqueue_sealed_row(state, recipient, request).await? {
+        Queued::Settled(outcome) => Ok(outcome),
+        Queued::Row(id) => attempt_sealed_outbox(state, id).await,
+    }
+}
+
+/// A sealed send put in its destination's outbox, or already settled there.
+pub(crate) enum Queued {
+    Settled(FederatedSealedOutcome),
+    Row(Uuid),
+}
+
+/// Queues a sealed send for a remote recipient without trying it: a repeat
+/// of a delivered send is settled, a refused one is queued again with its
+/// corrected envelopes, a new one takes the destination's next sequence.
+pub(crate) async fn enqueue_sealed_row(
+    state: &AppState,
+    recipient: &AccountRef,
+    request: SealedMessageSubmissionV1,
+) -> AppResult<Queued> {
     request.validate().map_err(AppError::bad_request)?;
     let federation = configured_stack(state)?;
     let destination = recipient.server.as_str();
@@ -406,12 +427,12 @@ pub async fn enqueue_sealed_send(
         match state_name.as_str() {
             "delivered" => {
                 tx.rollback().await?;
-                return Ok(FederatedSealedOutcome::Delivered(
+                return Ok(Queued::Settled(FederatedSealedOutcome::Delivered(
                     SealedDeliveryResponseV1 {
                         stored: request.envelopes.len(),
                         deduplicated: true,
                     },
-                ));
+                )));
             }
             "pending"
                 if transaction.capability != request.capability
@@ -441,7 +462,7 @@ pub async fn enqueue_sealed_send(
             _ => return Err(AppError::internal("invalid sealed federation outbox state")),
         }
         tx.commit().await?;
-        return attempt_sealed_outbox(state, id).await;
+        return Ok(Queued::Row(id));
     }
 
     let sequence: i64 = sqlx::query_scalar(
@@ -481,7 +502,7 @@ pub async fn enqueue_sealed_send(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    attempt_sealed_outbox(state, id).await
+    Ok(Queued::Row(id))
 }
 
 async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSealedOutcome> {
@@ -572,10 +593,22 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
             return Ok(FederatedSealedOutcome::Pending);
         }
     };
-    match response.status {
+    apply_sealed_answer(state, &row, response.status, &response.body).await
+}
+
+/// Records the destination's answer to the outbox row it answers, and says
+/// what became of that send. One answer, single or in a batch, moves a row
+/// the same way.
+async fn apply_sealed_answer(
+    state: &AppState,
+    row: &SealedFederationOutboxRow,
+    status: StatusCode,
+    body: &[u8],
+) -> AppResult<FederatedSealedOutcome> {
+    match status {
         StatusCode::OK => {
-            let delivered: SealedDeliveryResponseV1 = serde_json::from_slice(&response.body)
-                .map_err(|_| {
+            let delivered: SealedDeliveryResponseV1 =
+                serde_json::from_slice(body).map_err(|_| {
                     AppError::new(StatusCode::BAD_GATEWAY, "invalid sealed delivery response")
                 })?;
             sqlx::query(
@@ -589,10 +622,9 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
             Ok(FederatedSealedOutcome::Delivered(delivered))
         }
         StatusCode::CONFLICT => {
-            let error: FederationDeliveryError =
-                serde_json::from_slice(&response.body).map_err(|_| {
-                    AppError::new(StatusCode::BAD_GATEWAY, "invalid sealed conflict response")
-                })?;
+            let error: FederationDeliveryError = serde_json::from_slice(body).map_err(|_| {
+                AppError::new(StatusCode::BAD_GATEWAY, "invalid sealed conflict response")
+            })?;
             match error {
                 FederationDeliveryError::DeviceListMismatch { mismatch } => {
                     sqlx::query(
@@ -607,7 +639,7 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
                     Ok(FederatedSealedOutcome::Mismatch(mismatch))
                 }
                 FederationDeliveryError::SequenceGap { .. } => {
-                    mark_sealed_retry(state, &row, "sequence_gap").await?;
+                    mark_sealed_retry(state, row, "sequence_gap").await?;
                     Ok(FederatedSealedOutcome::Pending)
                 }
             }
@@ -627,7 +659,7 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
         // help, and waiting on it would hold every later sealed send to that
         // server. The client learns it was refused.
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
-            if refused_sequence(&response.body) == Some(row.sequence) =>
+            if refused_sequence(body) == Some(row.sequence) =>
         {
             sqlx::query(
                 "UPDATE chat_sealed_federation_outbox
@@ -644,10 +676,150 @@ async fn attempt_sealed_outbox(state: &AppState, id: Uuid) -> AppResult<Federate
             .with_details(serde_json::json!({ "code": "peerRefused" })))
         }
         _ => {
-            mark_sealed_retry(state, &row, "remote_error").await?;
+            mark_sealed_retry(state, row, "remote_error").await?;
             Ok(FederatedSealedOutcome::Pending)
         }
     }
+}
+
+/// Delivers a destination's queued sealed sends together: the run of
+/// consecutive pending rows from its head, in one federated batch (at most
+/// [`MAX_SEALED_BATCH_ITEMS`] and [`MAX_SEALED_BATCH_BYTES`]). Each answer
+/// moves its row as a single send's would; rows the destination didn't reach
+/// (after an answer that left its sequence open) stay pending. A destination that can't take a batch gets the
+/// same rows one by one.
+pub(crate) async fn attempt_sealed_batch(
+    state: &AppState,
+    destination: &str,
+) -> AppResult<Vec<(Uuid, AppResult<FederatedSealedOutcome>)>> {
+    let federation = configured_stack(state)?;
+    let rows: Vec<SealedFederationOutboxRow> = sqlx::query_as(
+        "SELECT id, destination, sequence, recipient_account_id, transaction, state, attempts
+         FROM chat_sealed_federation_outbox
+         WHERE destination = $1 AND state = 'pending'
+         ORDER BY sequence LIMIT $2",
+    )
+    .bind(destination)
+    .bind(MAX_SEALED_BATCH_ITEMS as i64)
+    .fetch_all(&state.pool)
+    .await?;
+    // The run from the head: a gap means an earlier send waits on its client.
+    let mut run: Vec<SealedFederationOutboxRow> = Vec::new();
+    let mut transactions = Vec::new();
+    let mut size = 0usize;
+    for row in rows {
+        if run
+            .last()
+            .is_some_and(|last| last.sequence + 1 != row.sequence)
+        {
+            break;
+        }
+        let transaction: FederatedSealedTransactionV1 =
+            serde_json::from_value(row.transaction.clone()).map_err(|error| {
+                AppError::internal(format!("stored sealed transaction is invalid: {error}"))
+            })?;
+        if transaction.recipient
+            != crate::account_ids::stored(&row.destination, row.recipient_account_id)?
+        {
+            return Err(AppError::internal(
+                "sealed outbox recipient does not match its transaction",
+            ));
+        }
+        let weight = serde_json::to_vec(&transaction)
+            .map_err(|error| AppError::internal(format!("encode sealed transaction: {error}")))?
+            .len();
+        if !run.is_empty() && size + weight > MAX_SEALED_BATCH_BYTES - 1024 {
+            break;
+        }
+        size += weight;
+        transactions.push(transaction);
+        run.push(row);
+    }
+    match run.len() {
+        0 => return Ok(Vec::new()),
+        1 => {
+            let id = run[0].id;
+            return Ok(vec![(id, attempt_sealed_outbox(state, id).await)]);
+        }
+        _ => {}
+    }
+    let batch = FederatedSealedBatchV1 {
+        version: 1,
+        origin: federation.server_name().to_string(),
+        transactions,
+    };
+    let body = serde_json::to_vec(&batch)
+        .map_err(|error| AppError::internal(format!("encode sealed batch: {error}")))?;
+    let sent = federation
+        .send(
+            destination,
+            FederationRequestSpec {
+                feature: FederationFeature::ChatV2,
+                method: Method::POST,
+                path: "/api/fed/chat/sealed/batch".into(),
+                query: None,
+                content_type: JSON_CONTENT_TYPE.into(),
+                body,
+                request_id: Uuid::new_v4().to_string(),
+                extra_headers: Vec::new(),
+                response_limit: MAX_DIRECTORY_RESPONSE_BYTES,
+            },
+        )
+        .await;
+    let mut outcomes = Vec::with_capacity(run.len());
+    let response = match sent {
+        Ok(response) if response.status == StatusCode::OK => response,
+        Err(error) if crate::federation::lacks_capability(&error) => {
+            park_sealed_for_upgrade(state, &run[0]).await?;
+            for row in &run {
+                outcomes.push((row.id, Ok(FederatedSealedOutcome::PeerUnsupported)));
+            }
+            return Ok(outcomes);
+        }
+        // Not taken as a batch (an older peer, or the transport failed):
+        // the same rows one by one, each with its own retry bookkeeping.
+        _ => {
+            let mut delivering = true;
+            for row in &run {
+                let outcome = if delivering {
+                    attempt_sealed_outbox(state, row.id).await
+                } else {
+                    Ok(FederatedSealedOutcome::Pending)
+                };
+                delivering = matches!(outcome, Ok(FederatedSealedOutcome::Delivered(_)));
+                outcomes.push((row.id, outcome));
+            }
+            return Ok(outcomes);
+        }
+    };
+    let answers: FederatedSealedBatchResponseV1 = match serde_json::from_slice(&response.body) {
+        Ok(answers) => answers,
+        Err(_) => {
+            mark_sealed_retry(state, &run[0], "remote_error").await?;
+            for row in &run {
+                outcomes.push((row.id, Ok(FederatedSealedOutcome::Pending)));
+            }
+            return Ok(outcomes);
+        }
+    };
+    let mut answers = answers.results.into_iter();
+    for row in &run {
+        let outcome = match answers.next() {
+            Some(answer) if i64::try_from(answer.sequence).ok() == Some(row.sequence) => {
+                let status = StatusCode::from_u16(answer.status)
+                    .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid sealed answer"))?;
+                let body = serde_json::to_vec(&answer.response).map_err(|error| {
+                    AppError::internal(format!("encode sealed answer: {error}"))
+                })?;
+                apply_sealed_answer(state, row, status, &body).await
+            }
+            // Not reached (after an answer that left its sequence open), or
+            // out of step.
+            _ => Ok(FederatedSealedOutcome::Pending),
+        };
+        outcomes.push((row.id, outcome));
+    }
+    Ok(outcomes)
 }
 
 /// The sequence a signed sealed refusal names as final, if it names one.
@@ -1159,9 +1331,9 @@ pub fn spawn_retry_worker(state: AppState) {
 /// waiting head (parked for an upgrade, or backing off) would only return
 /// early, and a long queue for one server must not fill the page and starve
 /// the others.
-async fn due_sealed_heads(pool: &sqlx::PgPool) -> AppResult<Vec<Uuid>> {
+async fn due_sealed_destinations(pool: &sqlx::PgPool) -> AppResult<Vec<String>> {
     Ok(sqlx::query_scalar(
-        "SELECT id FROM (
+        "SELECT destination FROM (
                  SELECT DISTINCT ON (destination) id, destination, next_attempt_at
                  FROM chat_sealed_federation_outbox
                  WHERE state = 'pending'
@@ -1176,10 +1348,18 @@ async fn due_sealed_heads(pool: &sqlx::PgPool) -> AppResult<Vec<Uuid>> {
 }
 
 async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
-    let ids = due_sealed_heads(&state.pool).await?;
-    for id in ids {
-        if let Err(error) = attempt_sealed_outbox(state, id).await {
-            tracing::warn!(%id, error = %error.message, "queued sealed federation send failed");
+    for destination in due_sealed_destinations(&state.pool).await? {
+        match attempt_sealed_batch(state, &destination).await {
+            Ok(outcomes) => {
+                for (id, outcome) in outcomes {
+                    if let Err(error) = outcome {
+                        tracing::warn!(%id, error = %error.message, "queued sealed federation send failed");
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%destination, error = %error.message, "queued sealed federation batch failed");
+            }
         }
     }
     Ok(())
@@ -1341,21 +1521,173 @@ pub async fn deliver_sealed_messages(
             AppError::unauthorized("sealed federation origin or destination mismatch"),
         );
     }
+    match deliver_sealed_one(&state, federation, authenticated.origin(), &transaction).await {
+        Ok(answer) => signed_json(federation, &authenticated, answer.status, &answer.body),
+        Err(error) => signed_app_error(federation, &authenticated, error),
+    }
+}
+
+/// `POST /api/fed/chat/sealed/batch`: several of one origin's sealed
+/// transactions, in sequence order, applied one by one exactly as the single
+/// route applies them. It stops after the first answer that doesn't use up
+/// its sequence (the rest would only meet a gap) and answers each one it
+/// tried.
+#[utoipa::path(
+    post,
+    path = "/api/fed/chat/sealed/batch",
+    tag = "chat federation",
+    request_body = kutup_chat_proto::FederatedSealedBatchV1,
+    responses(
+        (status = 200, description = "Each tried transaction's answer, in order", body = kutup_chat_proto::FederatedSealedBatchResponseV1),
+        (status = 400, description = "Malformed batch"),
+        (status = 401, description = "Invalid federation request signature or destination"),
+        (status = 413, description = "Batch too large"),
+    )
+)]
+pub async fn deliver_sealed_batch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> AppResult<Response> {
+    if body.len() > MAX_SEALED_BATCH_BYTES {
+        return Err(AppError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "sealed batch exceeds its size limit",
+        ));
+    }
+    let federation = state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
+    let authenticated = federation
+        .authenticate_inbound(
+            &headers,
+            "POST",
+            "/api/fed/chat/sealed/batch",
+            None,
+            &body,
+            FederationFeature::ChatV2,
+        )
+        .await?;
+    let batch: FederatedSealedBatchV1 = match serde_json::from_slice(&body) {
+        Ok(batch) => batch,
+        Err(_) => {
+            return signed_app_error(
+                federation,
+                &authenticated,
+                AppError::bad_request("invalid sealed federation batch"),
+            )
+        }
+    };
+    if authenticated.destination() != federation.server_name() {
+        return signed_app_error(
+            federation,
+            &authenticated,
+            AppError::unauthorized("sealed federation destination mismatch"),
+        );
+    }
+    if let Err(error) = batch.validate_shape(authenticated.origin()) {
+        return signed_app_error(federation, &authenticated, AppError::bad_request(error));
+    }
+    let mut results = Vec::with_capacity(batch.transactions.len());
+    for transaction in &batch.transactions {
+        let answer =
+            match deliver_sealed_one(&state, federation, authenticated.origin(), transaction).await
+            {
+                Ok(answer) => answer,
+                Err(error) => SealedAnswer::from_error(error),
+            };
+        let used_up = answer.uses_up(transaction.sequence);
+        results.push(FederatedSealedBatchItemV1 {
+            sequence: transaction.sequence,
+            status: answer.status.as_u16(),
+            response: answer.body,
+        });
+        // Past an answer that didn't use up its sequence, the next would only
+        // meet a gap.
+        if !used_up {
+            break;
+        }
+    }
+    signed_json(
+        federation,
+        &authenticated,
+        StatusCode::OK,
+        &FederatedSealedBatchResponseV1 { results },
+    )
+}
+
+/// A sealed transaction's answer at this destination: the status and body
+/// the single route signs, and the batch route lists per transaction.
+pub(crate) struct SealedAnswer {
+    status: StatusCode,
+    body: Value,
+}
+
+impl SealedAnswer {
+    fn json<T: serde::Serialize>(status: StatusCode, value: &T) -> AppResult<Self> {
+        Ok(Self {
+            status,
+            body: serde_json::to_value(value)
+                .map_err(|error| AppError::internal(format!("encode sealed answer: {error}")))?,
+        })
+    }
+
+    /// Whether this answer took its sequence for good: a delivery, the
+    /// uniform 404, or a refusal that names the sequence. A device mismatch,
+    /// a gap or a passing error leaves the sequence to be tried again.
+    fn uses_up(&self, sequence: u64) -> bool {
+        match self.status {
+            StatusCode::OK | StatusCode::NOT_FOUND => true,
+            StatusCode::BAD_REQUEST => {
+                self.body
+                    .get("refused")
+                    .and_then(|refused| refused.get("sequence"))
+                    .and_then(Value::as_u64)
+                    == Some(sequence)
+            }
+            _ => false,
+        }
+    }
+
+    /// An error as the single route answers it (`signed_app_error`).
+    fn from_error(error: AppError) -> Self {
+        let message = if error.status.is_server_error() {
+            tracing::error!(status = %error.status, error = %error.message, "sealed delivery failed");
+            "internal server error".to_owned()
+        } else {
+            error.message
+        };
+        let mut body = error.details.unwrap_or_default();
+        body.insert("error".into(), Value::String(message));
+        Self {
+            status: error.status,
+            body: Value::Object(body),
+        }
+    }
+}
+
+/// Applies one sealed transaction from `origin`, in its origin's sequence
+/// order: the single route's whole check, store and record.
+async fn deliver_sealed_one(
+    state: &AppState,
+    federation: &FederationStack,
+    origin: &str,
+    transaction: &FederatedSealedTransactionV1,
+) -> AppResult<SealedAnswer> {
     // A transaction that does not hold up is refused once its sequence is
     // next in line, and the refusal takes that sequence (below): the origin
     // treats it as final, so its later sends must not wait on it.
     let invalid = transaction
-        .validate(authenticated.origin(), federation.server_name())
+        .validate(origin, federation.server_name())
         .err()
         .map(|error| error.to_string());
     let sequence = match i64::try_from(transaction.sequence) {
         Ok(sequence) => sequence,
         Err(_) => {
-            return signed_app_error(
-                federation,
-                &authenticated,
-                AppError::bad_request("sealed federation sequence is too large"),
-            )
+            return Err(AppError::bad_request(
+                "sealed federation sequence is too large",
+            ))
         }
     };
     let mut tx = state.pool.begin().await?;
@@ -1375,7 +1707,10 @@ pub async fn deliver_sealed_messages(
         tx.rollback().await?;
         let status = StatusCode::from_u16(status as u16)
             .map_err(|_| AppError::internal("stored sealed response status is invalid"))?;
-        return signed_json(federation, &authenticated, status, &response);
+        return Ok(SealedAnswer {
+            status,
+            body: response,
+        });
     }
     let last_sequence: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(sequence), 0) FROM chat_sealed_federation_inbound
@@ -1386,9 +1721,7 @@ pub async fn deliver_sealed_messages(
     .await?;
     if sequence != last_sequence + 1 {
         tx.rollback().await?;
-        return signed_json(
-            federation,
-            &authenticated,
+        return SealedAnswer::json(
             StatusCode::CONFLICT,
             &FederationDeliveryError::SequenceGap {
                 expected_sequence: (last_sequence + 1) as u64,
@@ -1396,15 +1729,7 @@ pub async fn deliver_sealed_messages(
         );
     }
     if let Some(error) = invalid {
-        return refuse_sealed(
-            tx,
-            federation,
-            &authenticated,
-            &transaction,
-            sequence,
-            error,
-        )
-        .await;
+        return refuse_sealed(tx, transaction, sequence, error).await;
     }
     let request = SealedMessageSubmissionV1 {
         send_id: transaction.send_id.clone(),
@@ -1441,7 +1766,10 @@ pub async fn deliver_sealed_messages(
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
-            return signed_json(federation, &authenticated, StatusCode::NOT_FOUND, &value);
+            return Ok(SealedAnswer {
+                status: StatusCode::NOT_FOUND,
+                body: value,
+            });
         }
         Err(error)
             if matches!(
@@ -1451,27 +1779,17 @@ pub async fn deliver_sealed_messages(
         {
             tx.rollback().await?;
             let tx = state.pool.begin().await?;
-            return refuse_sealed(
-                tx,
-                federation,
-                &authenticated,
-                &transaction,
-                sequence,
-                error.message,
-            )
-            .await;
+            return refuse_sealed(tx, transaction, sequence, error.message).await;
         }
         Err(error) => {
             tx.rollback().await?;
-            return signed_app_error(federation, &authenticated, error);
+            return Err(error);
         }
     };
     match outcome {
         crate::handlers::chat::SealedStoreOutcome::Mismatch(mismatch) => {
             tx.rollback().await?;
-            signed_json(
-                federation,
-                &authenticated,
+            SealedAnswer::json(
                 StatusCode::CONFLICT,
                 &FederationDeliveryError::DeviceListMismatch { mismatch },
             )
@@ -1496,8 +1814,11 @@ pub async fn deliver_sealed_messages(
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
-            crate::handlers::chat::push_sealed(&state, stored).await;
-            signed_json(federation, &authenticated, StatusCode::OK, &response)
+            crate::handlers::chat::push_sealed(state, stored).await;
+            Ok(SealedAnswer {
+                status: StatusCode::OK,
+                body: value,
+            })
         }
     }
 }
@@ -1995,12 +2316,10 @@ fn signed_json<T: serde::Serialize>(
 /// cannot be written faster than deliveries.
 async fn refuse_sealed(
     mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
-    federation: &FederationStack,
-    authenticated: &AuthenticatedFederationRequest,
     transaction: &FederatedSealedTransactionV1,
     sequence: i64,
     error: String,
-) -> AppResult<Response> {
+) -> AppResult<SealedAnswer> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 771943))")
         .bind(&transaction.origin)
         .execute(&mut *tx)
@@ -2023,7 +2342,7 @@ async fn refuse_sealed(
     .await
     {
         tx.rollback().await?;
-        return signed_app_error(federation, authenticated, limited);
+        return Ok(SealedAnswer::from_error(limited));
     }
     let last_sequence: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(sequence), 0) FROM chat_sealed_federation_inbound
@@ -2055,21 +2374,14 @@ async fn refuse_sealed(
         _ => false,
     };
     tx.commit().await?;
-    if recorded {
-        signed_json(
-            federation,
-            authenticated,
-            StatusCode::BAD_REQUEST,
-            &final_value,
-        )
-    } else {
-        signed_json(
-            federation,
-            authenticated,
-            StatusCode::BAD_REQUEST,
-            &serde_json::json!({ "error": error }),
-        )
-    }
+    Ok(SealedAnswer {
+        status: StatusCode::BAD_REQUEST,
+        body: if recorded {
+            final_value
+        } else {
+            serde_json::json!({ "error": error })
+        },
+    })
 }
 
 fn signed_app_error(
@@ -2208,15 +2520,14 @@ mod tests {
         for sequence in 2..=150 {
             insert(slow.clone(), sequence).await;
         }
-        let other_head = insert(other.clone(), 1).await;
+        insert(other.clone(), 1).await;
 
-        let due = super::due_sealed_heads(&pool).await.unwrap();
-        assert!(due.contains(&slow_head) && due.contains(&other_head));
+        let due = super::due_sealed_destinations(&pool).await.unwrap();
         let ours = due
             .iter()
-            .filter(|id| **id == slow_head || **id == other_head)
+            .filter(|destination| **destination == slow || **destination == other)
             .count();
-        assert_eq!(ours, 2, "only each destination's head");
+        assert_eq!(ours, 2, "each destination once, however long its queue");
 
         // The slow server's head waits an hour for its upgrade: nothing of
         // it is due, and the other server still is.
@@ -2229,25 +2540,38 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let due = super::due_sealed_heads(&pool).await.unwrap();
-        assert!(due.contains(&other_head));
-        let slow_rows: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM chat_sealed_federation_outbox WHERE destination = $1",
-        )
-        .bind(&slow)
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        assert!(
-            !due.iter().any(|id| slow_rows.contains(id)),
-            "a parked head holds its queue"
-        );
+        let due = super::due_sealed_destinations(&pool).await.unwrap();
+        assert!(due.contains(&other));
+        assert!(!due.contains(&slow), "a parked head holds its queue");
 
         sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = ANY($1)")
             .bind(vec![slow, other])
             .execute(&pool)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn a_batch_goes_on_only_past_answers_that_use_up_their_sequence() {
+        use axum::http::StatusCode;
+        use serde_json::{json, Value};
+        let answer = |status: StatusCode, body: Value| super::SealedAnswer { status, body };
+        // A delivery, the uniform 404 and a refusal naming the sequence take it.
+        assert!(answer(StatusCode::OK, json!({"stored": 1})).uses_up(7));
+        assert!(answer(StatusCode::NOT_FOUND, json!({"error": "x"})).uses_up(7));
+        assert!(answer(StatusCode::BAD_REQUEST, json!({"refused": {"sequence": 7}})).uses_up(7));
+        // A refusal of another sequence, or naming none, leaves it open.
+        assert!(!answer(StatusCode::BAD_REQUEST, json!({"refused": {"sequence": 8}})).uses_up(7));
+        assert!(!answer(StatusCode::BAD_REQUEST, json!({"error": "x"})).uses_up(7));
+        // So do a device mismatch, a gap, a limit and a server error.
+        for status in [
+            StatusCode::CONFLICT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::UNAUTHORIZED,
+        ] {
+            assert!(!answer(status, json!({})).uses_up(7), "{status}");
+        }
     }
 
     #[test]

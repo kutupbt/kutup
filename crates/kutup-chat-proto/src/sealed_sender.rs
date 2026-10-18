@@ -171,6 +171,157 @@ impl FederatedSealedTransactionV1 {
     }
 }
 
+/// The most recipients one sealed batch carries, and the most transactions
+/// one federated batch does.
+pub const MAX_SEALED_BATCH_ITEMS: usize = 64;
+/// The most one batch weighs, encoded: requests and federated batches alike.
+pub const MAX_SEALED_BATCH_BYTES: usize = 4 * 1024 * 1024;
+
+/// One recipient of a sealed batch: an account on the batch's destination
+/// server, with its own capability and per-device envelopes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedBatchRecipientV1 {
+    pub account_id: String,
+    pub submission: SealedMessageSubmissionV1,
+}
+
+/// Several sealed sends to accounts of one server, in one anonymous request
+/// (docs/plans/pairwise-groups.md §1): a group message goes to each member
+/// device without one request per member. It carries no sender; each
+/// recipient's capability is checked and counted on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedBatchSubmissionV1 {
+    pub recipients: Vec<SealedBatchRecipientV1>,
+}
+
+impl SealedBatchSubmissionV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.recipients.is_empty() || self.recipients.len() > MAX_SEALED_BATCH_ITEMS {
+            return Err(format!(
+                "a sealed batch carries 1-{MAX_SEALED_BATCH_ITEMS} recipients"
+            ));
+        }
+        let mut sends = std::collections::BTreeSet::new();
+        for recipient in &self.recipients {
+            if uuid_shape(&recipient.account_id).is_none() {
+                return Err("a batch recipient's accountId must be a lowercase UUID".into());
+            }
+            recipient.submission.validate()?;
+            if !sends.insert((&recipient.account_id, &recipient.submission.send_id)) {
+                return Err("a sealed batch repeats a recipient's send".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What became of one recipient of a sealed batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "outcome", deny_unknown_fields)]
+pub enum SealedBatchOutcomeV1 {
+    /// Stored for the recipient's devices (or already, for a repeat).
+    #[serde(rename_all = "camelCase")]
+    Delivered { stored: usize, deduplicated: bool },
+    /// The device list changed: resend to exactly these devices.
+    #[serde(rename_all = "camelCase")]
+    DeviceMismatch { mismatch: crate::DeviceListMismatch },
+    /// The same answer as a wrong capability: not delivered, not retried.
+    Unavailable,
+    /// Queued for the recipient's server; it goes when that server answers.
+    Pending,
+    /// The recipient's server refused this message for good.
+    Refused,
+    /// The recipient's server doesn't take sealed mail yet.
+    PeerUnsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+// No deny_unknown_fields: serde can't combine it with the flattened outcome,
+// whose own variants still refuse unknown fields.
+#[serde(rename_all = "camelCase")]
+pub struct SealedBatchResultV1 {
+    pub account_id: String,
+    pub send_id: String,
+    #[serde(flatten)]
+    pub outcome: SealedBatchOutcomeV1,
+}
+
+/// The answer to a sealed batch: one result per recipient, in its order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedBatchResponseV1 {
+    pub results: Vec<SealedBatchResultV1>,
+}
+
+/// Several of one origin's sealed transactions for one destination, in
+/// sequence order, in one federated request. The destination applies them
+/// one by one exactly as single transactions, and stops after the first
+/// answer that doesn't use up its sequence: the later ones would only meet a
+/// gap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedSealedBatchV1 {
+    pub version: u16,
+    pub origin: String,
+    pub transactions: Vec<FederatedSealedTransactionV1>,
+}
+
+impl FederatedSealedBatchV1 {
+    /// The batch's shape: its count, one origin, and consecutive sequences.
+    /// Each transaction's own checks are the single route's, item by item.
+    pub fn validate_shape(&self, expected_origin: &str) -> Result<(), String> {
+        if self.version != 1 || self.origin != expected_origin {
+            return Err("sealed federation batch version or origin is invalid".into());
+        }
+        if self.transactions.is_empty() || self.transactions.len() > MAX_SEALED_BATCH_ITEMS {
+            return Err(format!(
+                "a sealed federation batch carries 1-{MAX_SEALED_BATCH_ITEMS} transactions"
+            ));
+        }
+        let mut previous: Option<u64> = None;
+        for transaction in &self.transactions {
+            if transaction.origin != self.origin {
+                return Err("a sealed federation batch mixes origins".into());
+            }
+            if let Some(previous) = previous {
+                if previous.checked_add(1) != Some(transaction.sequence) {
+                    return Err("a sealed federation batch's sequences must be consecutive".into());
+                }
+            }
+            previous = Some(transaction.sequence);
+        }
+        Ok(())
+    }
+}
+
+/// One transaction's answer in a federated batch: the status and body the
+/// single route would have given it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedSealedBatchItemV1 {
+    pub sequence: u64,
+    pub status: u16,
+    pub response: serde_json::Value,
+}
+
+/// The destination's answers, in order, up to and including the first that
+/// left its sequence open; the rest weren't tried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedSealedBatchResponseV1 {
+    pub results: Vec<FederatedSealedBatchItemV1>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -256,5 +407,120 @@ mod tests {
             r#"{"capability":"SZcLD3yoaFOTO+f4/XQffw==","transparencyTreeSize":"0"}"#
         )
         .is_err());
+    }
+
+    fn submission(send: u8) -> SealedMessageSubmissionV1 {
+        SealedMessageSubmissionV1 {
+            send_id: format!("0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c{send:02x}"),
+            capability: base64::engine::general_purpose::STANDARD.encode([3u8; 16]),
+            envelopes: vec![SealedOutgoingEnvelopeV1 {
+                device_id: 1,
+                registration_id: 7,
+                suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                content: base64::engine::general_purpose::STANDARD.encode([9u8; 64]),
+            }],
+        }
+    }
+
+    fn recipient(account: u8, send: u8) -> SealedBatchRecipientV1 {
+        SealedBatchRecipientV1 {
+            account_id: format!("5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a{account:02x}"),
+            submission: submission(send),
+        }
+    }
+
+    #[test]
+    fn a_sealed_batch_carries_one_to_64_distinct_sends() {
+        let batch = |recipients| SealedBatchSubmissionV1 { recipients };
+        assert!(batch(vec![recipient(1, 1), recipient(2, 1)])
+            .validate()
+            .is_ok());
+        assert!(batch(Vec::new()).validate().is_err());
+        assert!(batch((0..65).map(|i| recipient(i, i)).collect())
+            .validate()
+            .is_err());
+        assert!(batch((0..64).map(|i| recipient(i, i)).collect())
+            .validate()
+            .is_ok());
+        // The same send to the same account twice is a mistake.
+        assert!(batch(vec![recipient(1, 1), recipient(1, 1)])
+            .validate()
+            .is_err());
+        let mut upper = recipient(1, 1);
+        upper.account_id = upper.account_id.to_uppercase();
+        assert!(batch(vec![upper]).validate().is_err());
+        let mut empty = recipient(1, 1);
+        empty.submission.envelopes.clear();
+        assert!(batch(vec![empty]).validate().is_err());
+    }
+
+    fn transaction(sequence: u64) -> FederatedSealedTransactionV1 {
+        let submission = submission(1);
+        FederatedSealedTransactionV1 {
+            version: 1,
+            origin: "origin.example".into(),
+            recipient: "aci:5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b@dest.example"
+                .parse()
+                .unwrap(),
+            sequence,
+            send_id: submission.send_id,
+            capability: submission.capability,
+            envelopes: submission.envelopes,
+        }
+    }
+
+    #[test]
+    fn a_federated_batch_is_one_origins_consecutive_run() {
+        let batch = |transactions| FederatedSealedBatchV1 {
+            version: 1,
+            origin: "origin.example".into(),
+            transactions,
+        };
+        assert!(batch(vec![transaction(4), transaction(5), transaction(6)])
+            .validate_shape("origin.example")
+            .is_ok());
+        assert!(batch(vec![transaction(4), transaction(6)])
+            .validate_shape("origin.example")
+            .is_err());
+        assert!(batch(vec![transaction(5), transaction(4)])
+            .validate_shape("origin.example")
+            .is_err());
+        assert!(batch(vec![transaction(4)])
+            .validate_shape("other.example")
+            .is_err());
+        let mut mixed = transaction(5);
+        mixed.origin = "other.example".into();
+        assert!(batch(vec![transaction(4), mixed])
+            .validate_shape("origin.example")
+            .is_err());
+        assert!(batch(Vec::new()).validate_shape("origin.example").is_err());
+        assert!(batch(vec![transaction(u64::MAX), transaction(0)])
+            .validate_shape("origin.example")
+            .is_err());
+    }
+
+    #[test]
+    fn batch_results_name_their_outcome() {
+        let result = SealedBatchResultV1 {
+            account_id: "5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b".into(),
+            send_id: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c01".into(),
+            outcome: SealedBatchOutcomeV1::Delivered {
+                stored: 2,
+                deduplicated: false,
+            },
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["outcome"], "delivered");
+        assert_eq!(json["stored"], 2);
+        assert_eq!(
+            serde_json::from_value::<SealedBatchResultV1>(json).unwrap(),
+            result
+        );
+        let pending = serde_json::to_value(SealedBatchResultV1 {
+            outcome: SealedBatchOutcomeV1::Pending,
+            ..result
+        })
+        .unwrap();
+        assert_eq!(pending["outcome"], "pending");
     }
 }
