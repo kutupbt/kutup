@@ -128,6 +128,21 @@ impl Engine {
         .await
     }
 
+    /// This account's profile key, which its group entries carry.
+    async fn own_profile_key(&self) -> Result<[u8; 32]> {
+        let profile = self
+            .session
+            .db()
+            .load_local_profile()
+            .await?
+            .ok_or_else(|| ChatError::Invalid("this account has no profile yet".into()))?;
+        profile
+            .key
+            .as_slice()
+            .try_into()
+            .map_err(|_| ChatError::Invalid("the profile key is not 32 bytes".into()))
+    }
+
     /// This account's server's identity, pinned by a new group: followed from
     /// the first document the server serves.
     async fn own_home_pin(&mut self) -> Result<(GroupHomePinV1, group_client::GatewayCache)> {
@@ -162,7 +177,9 @@ impl Engine {
 
     /// A new group on this account's server, with this account as its first
     /// administrator and `title` as its name.
-    pub async fn create_group(&mut self, title: &str, profile_key: &[u8; 32]) -> Result<String> {
+    pub async fn create_group(&mut self, title: &str) -> Result<String> {
+        let profile_key = self.own_profile_key().await?;
+        let profile_key = &profile_key;
         let (pin, cache) = self.own_home_pin().await?;
         let me = self.session.account_ref().clone();
         let device_id = self.session.device_id();

@@ -19,12 +19,15 @@ mod clock;
 mod db;
 mod engine;
 mod error;
-// Wired into the engine and WASM in the next part of slice 1.
-#[cfg_attr(not(test), allow(dead_code))]
+// Exported through the WASM client only (the native FFI comes with the
+// native apps): unused in a native build until then. Invitations, claims and
+// message contexts are wired by the group messages part of slice 1
+// (docs/plans/pairwise-groups.md §10), which also drops this allowance.
+#[allow(dead_code)]
 mod group;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_client;
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
 mod invite_link;
 mod keys;

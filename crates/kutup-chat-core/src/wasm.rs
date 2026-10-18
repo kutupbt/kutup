@@ -319,6 +319,24 @@ extern "C" {
         device_id: u32,
         ids: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `GET /api/chat/groups/gateway-key`: `{config, identityHistory}`.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupGateway)]
+    async fn js_fetch_group_gateway(
+        this: &JsChatTransport,
+        home: &str,
+        from_sequence: &str,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `POST /api/chat/groups/relay/{home}` with the sealed request:
+    /// `{kind: "answered", body}` (base64) or `{kind: "unopenable" |
+    /// "rateLimited" | "unreachable" | "groupsOff"}`.
+    #[wasm_bindgen(method, catch, js_name = relayGroupRequest)]
+    async fn js_relay_group_request(
+        this: &JsChatTransport,
+        home: &str,
+        sealed: &[u8],
+    ) -> std::result::Result<JsValue, JsValue>;
 }
 
 struct BrowserTransport {
@@ -338,8 +356,56 @@ enum BrowserSendOutcome {
     Refused,
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum BrowserRelayOutcome {
+    Answered { body: String },
+    Unopenable,
+    RateLimited,
+    Unreachable,
+    GroupsOff,
+}
+
 #[async_trait(?Send)]
 impl ChatTransport for BrowserTransport {
+    async fn fetch_group_gateway(
+        &self,
+        home: &str,
+        from_sequence: u64,
+    ) -> Result<crate::transport::GroupGatewayAnswer> {
+        from_transport(
+            self.js
+                .js_fetch_group_gateway(home, &from_sequence.to_string())
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn relay_group_request(
+        &self,
+        home: &str,
+        sealed: &[u8],
+    ) -> Result<crate::transport::GroupRelayOutcome> {
+        use crate::transport::GroupRelayOutcome as Outcome;
+        let outcome: BrowserRelayOutcome = from_transport(
+            self.js
+                .js_relay_group_request(home, sealed)
+                .await
+                .map_err(transport_error)?,
+        )?;
+        Ok(match outcome {
+            BrowserRelayOutcome::Answered { body } => Outcome::Answered(
+                base64::engine::general_purpose::STANDARD
+                    .decode(body)
+                    .map_err(|_| ChatError::Transport("relayed answer is not base64".into()))?,
+            ),
+            BrowserRelayOutcome::Unopenable => Outcome::Unopenable,
+            BrowserRelayOutcome::RateLimited => Outcome::RateLimited,
+            BrowserRelayOutcome::Unreachable => Outcome::Unreachable,
+            BrowserRelayOutcome::GroupsOff => Outcome::GroupsOff,
+        })
+    }
+
     async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32> {
         let response: RegisterChatDeviceResponse = from_transport(
             self.js
@@ -801,6 +867,83 @@ struct SearchView {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupSyncView {
+    Current { revision: u64 },
+    Unreachable { reason: &'static str },
+    Gone,
+}
+
+impl From<crate::group_engine::GroupSync> for GroupSyncView {
+    fn from(sync: crate::group_engine::GroupSync) -> Self {
+        use crate::group_client::RouteFailure;
+        use crate::group_engine::GroupSync;
+        match sync {
+            GroupSync::Current { revision } => Self::Current { revision },
+            GroupSync::Unreachable(failure) => Self::Unreachable {
+                reason: match failure {
+                    RouteFailure::RateLimited => "rateLimited",
+                    RouteFailure::Unreachable => "unreachable",
+                    RouteFailure::GroupsOff => "groupsOff",
+                },
+            },
+            GroupSync::Gone => Self::Gone,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupMemberWasmView {
+    pseudonym: String,
+    administrator: bool,
+    joined_at_revision: u64,
+    /// The account's string form when the binding verified; absent for an
+    /// unverified member.
+    account: Option<String>,
+}
+
+impl From<crate::group::GroupMemberView> for GroupMemberWasmView {
+    fn from(member: crate::group::GroupMemberView) -> Self {
+        Self {
+            pseudonym: member.pseudonym,
+            administrator: member.role == kutup_chat_proto::group::GroupRole::Administrator,
+            joined_at_revision: member.joined_at_revision,
+            account: member.verified.map(|verified| verified.account.to_string()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupSummaryView {
+    group_id: String,
+    title: Option<String>,
+    /// `invited`, `requesting`, `member` or `gone`.
+    status: &'static str,
+    revision: Option<u64>,
+    member_count: usize,
+}
+
+impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
+    fn from(summary: crate::group_engine::GroupSummary) -> Self {
+        use crate::group::GroupStatus;
+        Self {
+            group_id: summary.group_id,
+            title: summary.title,
+            status: match summary.status {
+                GroupStatus::Invited { .. } => "invited",
+                GroupStatus::Requesting => "requesting",
+                GroupStatus::Member => "member",
+                GroupStatus::Gone => "gone",
+            },
+            revision: summary.revision,
+            member_count: summary.member_count,
+        }
+    }
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConversationPageView {
     /// Newest first.
@@ -878,6 +1021,67 @@ impl WasmChatClient {
     #[wasm_bindgen(getter, js_name = deviceId)]
     pub fn device_id(&self) -> u32 {
         self.engine.session().device_id()
+    }
+
+    /// A new group on this account's server, this account its first
+    /// administrator: its id.
+    #[wasm_bindgen(js_name = createGroup)]
+    pub async fn create_group(&mut self, title: String) -> std::result::Result<String, JsValue> {
+        self.engine.create_group(&title).await.map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = setGroupTitle)]
+    pub async fn set_group_title(
+        &mut self,
+        group_id: String,
+        title: String,
+    ) -> std::result::Result<(), JsValue> {
+        self.engine
+            .set_group_title(&group_id, &title)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Catches a group up with its home: `{kind: "current", revision}`,
+    /// `{kind: "unreachable", reason}` or `{kind: "gone"}`.
+    #[wasm_bindgen(js_name = syncGroup)]
+    pub async fn sync_group(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
+        let outcome = self
+            .engine
+            .sync_group(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupSyncView::from(outcome))
+    }
+
+    /// The group's members: their accounts when verified, never a key.
+    #[wasm_bindgen(js_name = groupMembers)]
+    pub async fn group_members(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let members = self
+            .engine
+            .group_members(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(
+            &members
+                .into_iter()
+                .map(GroupMemberWasmView::from)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[wasm_bindgen(js_name = listGroups)]
+    pub async fn list_groups(&self) -> std::result::Result<JsValue, JsValue> {
+        let groups = self.engine.list_groups().await.map_err(chat_error)?;
+        to_output(
+            &groups
+                .into_iter()
+                .map(GroupSummaryView::from)
+                .collect::<Vec<_>>(),
+        )
     }
 
     #[wasm_bindgen(js_name = syncManifest)]
