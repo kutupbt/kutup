@@ -148,7 +148,7 @@ impl AccountAuthority {
             sequence,
             previous_hash,
             drive: AccountManifestDriveKeysV1 {
-                suite: AccountIdentitySuiteId::X25519Ed25519V1,
+                suite: AccountIdentitySuiteId::XWingEd25519V2,
                 hpke_public_key: STANDARD.encode(self.identity.drive_hpke_public_key()),
                 share_signing_public_key: STANDARD.encode(self.identity.drive_signing_public_key()),
             },
@@ -287,8 +287,19 @@ fn verify_manifest_trust(
                         .into(),
                 ));
             }
+            // The Drive key changes only by the one-way suite upgrade: in the
+            // next manifest, linked to this one, from a suite-1 key to X-Wing,
+            // the authority (checked above) and signing key unchanged.
+            let linked = manifest.sequence == prior.highest_sequence.saturating_add(1)
+                && manifest.previous_hash.as_deref() == Some(prior.manifest_hash.as_str());
+            let drive_key_ok = prior.drive_hpke_public_key == manifest.drive.hpke_public_key
+                || (linked
+                    && legacy_suite1_for_upgrade::drive_key_rises(
+                        &prior.drive_hpke_public_key,
+                        manifest,
+                    ));
             if prior.account != manifest.account.to_string()
-                || prior.drive_hpke_public_key != manifest.drive.hpke_public_key
+                || !drive_key_ok
                 || prior.drive_share_signing_public_key != manifest.drive.share_signing_public_key
             {
                 return Err(ChatError::Trust(
@@ -362,10 +373,9 @@ pub(crate) fn verify_manifest_history(
             trust.incarnation_id.clone(),
             trust.authority_key_id.clone(),
             trust.self_authority_key.clone(),
-            trust.drive_hpke_public_key.clone(),
-            trust.drive_share_signing_public_key.clone(),
         )
     });
+    let mut rolling: Option<ManifestTrust> = None;
     let mut records = Vec::new();
     for (page_index, page) in pages.iter().enumerate() {
         page.validate().map_err(ChatError::Trust)?;
@@ -385,24 +395,30 @@ pub(crate) fn verify_manifest_history(
                     "account manifest history chain is incomplete or inconsistent".into(),
                 ));
             }
-            verify_manifest_trust(expected_peer, manifest, prior)?;
-            let manifest_identity = (
-                manifest.account.to_string(),
-                manifest.incarnation_id.clone(),
-                manifest.authority_key_id.clone(),
-                manifest.self_authority_key.clone(),
-                manifest.drive.hpke_public_key.clone(),
-                manifest.drive.share_signing_public_key.clone(),
-            );
-            if let Some(identity) = &identity {
-                if identity != &manifest_identity {
+            // Each manifest against the one before it: the identity holds
+            // through the history, but for the one-way suite upgrade, which
+            // only a linked successor may make.
+            let checked =
+                verify_manifest_trust(expected_peer, manifest, rolling.as_ref().or(prior))?;
+            if let Some((account, incarnation, authority, self_authority)) = &identity {
+                if account != &manifest.account.to_string()
+                    || incarnation != &manifest.incarnation_id
+                    || authority != &manifest.authority_key_id
+                    || self_authority != &manifest.self_authority_key
+                {
                     return Err(ChatError::Trust(
                         "account manifest history changes identity".into(),
                     ));
                 }
             } else {
-                identity = Some(manifest_identity);
+                identity = Some((
+                    manifest.account.to_string(),
+                    manifest.incarnation_id.clone(),
+                    manifest.authority_key_id.clone(),
+                    manifest.self_authority_key.clone(),
+                ));
             }
+            rolling = Some(checked);
             predecessor = Some(manifest.manifest_hash().map_err(ChatError::Trust)?);
             records.push(AccountManifestHistoryRecordV1 {
                 peer: expected_peer.to_string(),
@@ -422,9 +438,31 @@ pub(crate) fn verify_manifest_history(
             "account manifest history does not terminate at the pending manifest".into(),
         ));
     }
-    let mut trust = verify_manifest_trust(expected_peer, pending, prior)?;
+    // The pending manifest is the history's last, checked against its
+    // predecessor above.
+    let mut trust = rolling.ok_or_else(|| {
+        ChatError::Trust("account manifest gap recovery returned no manifests".into())
+    })?;
     trust.continuity_gap = false;
     Ok((trust, records))
+}
+
+/// Identity suite 1 (X25519 Drive keys), only for seeing an account rise to
+/// suite 2 (docs/plans/pq-shares.md). The enforcing change, once every
+/// account has upgraded, deletes this module and its two callers' use of it.
+mod legacy_suite1_for_upgrade {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use kutup_chat_proto::{
+        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV1,
+    };
+
+    /// Whether `next` raises a suite-1 Drive key (`prior_key`, as pinned) to
+    /// an X-Wing one. Never the other way.
+    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV1) -> bool {
+        STANDARD.decode(prior_key).map(|key| key.len()) == Ok(HPKE_PUBLIC_KEY_LEN)
+            && next.drive.suite == AccountIdentitySuiteId::XWingEd25519V2
+    }
 }
 
 fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRef) -> Result<()> {
@@ -441,6 +479,52 @@ fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one-way suite upgrade (docs/plans/pq-shares.md): a pinned suite-1
+    /// Drive key rises to X-Wing only in the linked next manifest, under the
+    /// same authority and signing key; never back, never across a gap.
+    #[test]
+    fn a_drive_key_changes_only_by_rising_to_x_wing_in_the_next_manifest() {
+        use kutup_chat_proto::{AccountManifestDeviceV1, DirectChatSuiteId};
+        let peer = "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example";
+        let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
+        let sign = |sequence: u64, previous: Option<String>| {
+            authority
+                .sign_manifest(
+                    peer.parse().unwrap(),
+                    sequence,
+                    previous,
+                    vec![AccountManifestDeviceV1 {
+                        device_id: 1,
+                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        identity_key: STANDARD.encode([5u8; 33]),
+                        registration_id: 7,
+                        mls: None,
+                    }],
+                    "2026-10-18T00:00:00Z",
+                )
+                .unwrap()
+        };
+        // Pinned at sequence 4 with a suite-1 (32-byte X25519) Drive key.
+        let first = sign(4, Some("22".repeat(32)));
+        let mut pinned = verify_manifest_trust(peer, &first, None).unwrap();
+        pinned.drive_hpke_public_key = STANDARD.encode([7u8; 32]);
+        // The linked next manifest carries the X-Wing key: accepted.
+        let next = sign(5, Some(pinned.manifest_hash.clone()));
+        let risen = verify_manifest_trust(peer, &next, Some(&pinned)).unwrap();
+        assert_eq!(risen.drive_hpke_public_key, next.drive.hpke_public_key);
+        // Across a gap: refused.
+        let later = sign(6, Some("33".repeat(32)));
+        assert!(verify_manifest_trust(peer, &later, Some(&pinned)).is_err());
+        // From an X-Wing pin, another key: refused (no second change, never
+        // back to suite 1).
+        let mut xwing_pin = risen.clone();
+        xwing_pin.drive_hpke_public_key = STANDARD.encode([9u8; 1216]);
+        let after = sign(6, Some(risen.manifest_hash.clone()));
+        assert!(verify_manifest_trust(peer, &after, Some(&xwing_pin)).is_err());
+        // The same key at the next sequence stays fine.
+        assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
+    }
 
     fn trust(peer: &str, authority: &AccountAuthority) -> ManifestTrust {
         ManifestTrust {
