@@ -125,6 +125,20 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     ciborium::from_reader(bytes).map_err(|error| ChatError::Db(format!("timeline decode: {error}")))
 }
 
+/// Where a direct-store message belongs: the group its content names
+/// (docs/plans/pairwise-groups.md §8), or the direct conversation with `peer`.
+pub(crate) fn conversation_of(peer: &str, content: &[u8]) -> Result<ConversationId> {
+    if let Some(context) = serde_json::from_slice::<kutup_chat_proto::ChatContent>(content)
+        .ok()
+        .and_then(|content| content.group_context())
+    {
+        return Ok(ConversationId::Group {
+            group_id: context.group_id.clone(),
+        });
+    }
+    direct(peer)
+}
+
 pub(crate) fn direct(peer: &str) -> Result<ConversationId> {
     let account = crate::address::parse_account(peer)
         .map_err(|error| ChatError::Content(format!("invalid direct conversation: {error}")))?;
@@ -300,7 +314,7 @@ fn place(
 
 pub(crate) fn place_inbox(message: &InboxMessage) -> Result<Vec<Indexed>> {
     Ok(place(
-        direct(&message.peer)?,
+        conversation_of(&message.peer, &message.content)?,
         Source::Inbox,
         message.id.clone(),
         message.received_at,
@@ -312,7 +326,7 @@ pub(crate) fn place_inbox(message: &InboxMessage) -> Result<Vec<Indexed>> {
 
 pub(crate) fn place_sent(message: &SentMessage) -> Result<Vec<Indexed>> {
     Ok(place(
-        direct(&message.peer)?,
+        conversation_of(&message.peer, &message.content)?,
         Source::Sent,
         message.send_id.clone(),
         message.created_at,

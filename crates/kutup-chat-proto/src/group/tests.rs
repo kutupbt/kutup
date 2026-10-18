@@ -865,3 +865,62 @@ fn a_genesis_must_name_the_expected_home() {
         GroupChangeError::WrongGroup
     );
 }
+
+#[test]
+fn a_group_context_rides_inside_content_and_never_prints_its_key() {
+    let context = GroupContextV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: encode_group_id(&[5u8; 32]),
+        master_key: encode(&[6u8; 32]),
+        home: home_pin(),
+        revision: 3,
+        chain_hash: encode(&[7u8; 32]),
+    };
+    let content = crate::ChatContent::text_with_id(
+        "00000000-0000-4000-8000-000000000001",
+        "2026-10-18T10:00:00.000Z",
+        1,
+        "hi",
+    )
+    .with_group_context(&context);
+    let back: crate::ChatContent =
+        serde_json::from_slice(&serde_json::to_vec(&content).unwrap()).unwrap();
+    assert_eq!(back.group_context().unwrap(), context);
+    assert!(!format!("{context:?}").contains(&context.master_key));
+    // A plain message has none.
+    let plain = crate::ChatContent::text_with_id(
+        "00000000-0000-4000-8000-000000000002",
+        "2026-10-18T10:00:00.000Z",
+        2,
+        "hi",
+    );
+    assert!(plain.group_context().is_none());
+}
+
+#[test]
+fn distribution_and_invite_kinds_read_back_only_when_valid() {
+    use crate::content::SenderKeyDistributionBody;
+    let body = SenderKeyDistributionBody {
+        group_id: encode_group_id(&[5u8; 32]),
+        distribution_id: "00000000-0000-4000-8000-000000000009".into(),
+        message: encode(&[1u8; 80]),
+    };
+    let content = crate::ChatContent::sender_key_distribution_with_id(
+        "00000000-0000-4000-8000-000000000003",
+        "2026-10-18T10:00:00.000Z",
+        1,
+        &body,
+    );
+    assert_eq!(content.as_sender_key_distribution().unwrap(), body);
+    let bad = SenderKeyDistributionBody {
+        distribution_id: "not-a-uuid".into(),
+        ..body
+    };
+    let content = crate::ChatContent::sender_key_distribution_with_id(
+        "00000000-0000-4000-8000-000000000004",
+        "2026-10-18T10:00:00.000Z",
+        2,
+        &bad,
+    );
+    assert!(content.as_sender_key_distribution().is_none());
+}

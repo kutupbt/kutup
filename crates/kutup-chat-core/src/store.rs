@@ -192,6 +192,14 @@ impl ChatStore {
             .insert(send_id.to_string(), None);
     }
 
+    /// Stage a group send log entry's removal.
+    pub(crate) fn delete_group_outbox(&self, send_id: &str) {
+        self.pending
+            .borrow_mut()
+            .group_outbox
+            .insert(send_id.to_string(), None);
+    }
+
     pub(crate) fn delete_mls_outbox(&self, send_id: &str) {
         self.pending
             .borrow_mut()

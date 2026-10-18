@@ -34,7 +34,7 @@ pub use check::{
     check_change, check_genesis, resulting_genesis_state, resulting_state, GroupChangeError,
     GroupLimits,
 };
-pub use entry::{GroupInviteV1, GroupMemberEntryV1, GroupSlotEntryV1};
+pub use entry::{GroupContextV1, GroupInviteV1, GroupMemberEntryV1, GroupSlotEntryV1};
 
 pub const GROUP_FORMAT_VERSION: u16 = 1;
 

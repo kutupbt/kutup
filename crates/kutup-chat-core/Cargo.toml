@@ -87,7 +87,8 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 # major so the desugared future types line up.
 async-trait = "0.1"
 # `SenderKeyStore` keys on `uuid::Uuid`; same major as libsignal's re-export.
-uuid = "1"
+# v4: a group's sender-key distribution id (docs/plans/pairwise-groups.md §1).
+uuid = { version = "1", features = ["v4"] }
 # Native ChatDb: bundled SQLite so no system libsqlite is required. Optional so
 # a wasm build (which can't link it) drops it via `--no-default-features`.
 rusqlite = { version = "0.32", optional = true }

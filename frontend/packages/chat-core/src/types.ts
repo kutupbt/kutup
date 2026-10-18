@@ -336,6 +336,8 @@ export interface InboundFailure {
 
 export interface ReceiveReport {
   messages: ReceivedChatMessage[]
+  /** Group envelopes left queued until their sender can be confirmed. */
+  held?: string[]
   synced: string[]
   contactSynced: string[]
   profileKeyUpdated: string[]
@@ -1428,6 +1430,19 @@ export interface ChatTransportPort {
   >
   drainMailbox(deviceId: number, after: string | null, limit: number): Promise<unknown>
   ackMessages(deviceId: number, ids: string[]): Promise<void>
+  /** `GET /api/chat/groups/gateway-key`: `{config, identityHistory}`. */
+  fetchGroupGateway(home: string, fromSequence: string): Promise<unknown>
+  /** `POST /api/chat/groups/relay/{home}` with a sealed group request. */
+  relayGroupRequest(
+    home: string,
+    sealed: Uint8Array,
+  ): Promise<
+    | { kind: 'answered'; body: string }
+    | { kind: 'unopenable' }
+    | { kind: 'rateLimited' }
+    | { kind: 'unreachable' }
+    | { kind: 'groupsOff' }
+  >
 }
 
 export interface WasmChatClientHandle {

@@ -259,14 +259,20 @@ message has the same purpose:
 - placeholders are asked for again every 10 minutes, and given up after a week
   (`WAITING_GIVE_UP_MS`, `engine.rs:161`).
 
-The sender answers from its own stored history, as for direct chats. There is
-no separate send log, so anything still in the sender's history can be sent
-again to its original recipients.
+The sender answers from its send log: each group message's outbox entry,
+kept after delivery with the devices each leg went to (its ciphertexts
+cleared).
 - Desktop keeps a send log of 14 days at most (`background.preload.ts:1166-1181`),
   and in practice about a day (`Server.node.ts:1681-1696`).
-- We keep ours: it already exists for direct chats and reaches further back.
-- A disappearing message that has expired on the sender's side is gone, and the
-  answer is `lost`.
+- Ours keeps a delivered message a day, as Desktop does in practice
+  (`GROUP_SEND_LOG_MS`); an undelivered one is tried for a week and then fails
+  (`GROUP_UNDELIVERED_MS`). A message that disappeared, or that its sender
+  edited or deleted (for everyone or for themselves), leaves the log, and so does a
+  group's whole log when this account leaves it; the answer is then
+  `unavailable`.
+- A key and each named message, sent or not, are answered at most once an
+  hour per requesting device and group, across reloads and tabs (the direct
+  resend limits).
 
 **A new device of mine.**
 - It learns my groups, each group's master key and my capability from the
@@ -291,6 +297,46 @@ know:
 as Signal's `GroupContextV2 {masterKey, revision, groupChange}` carries the
 revision (`SignalService.proto:947-951`).
 - A member that is behind fetches the change log from the group's server (§3).
+- **As built (slice 1).** Group content is read, then decided about before
+  anything of it is kept (`group_gate.rs`; one commit or none), whether it
+  came under the sender key or pairwise (a sender key, a refresh, a resend, a
+  fallback; each carries the group context, an invitation aside):
+  - a context ahead of this device's verified state, or another head at the
+    same revision, makes the device catch up and read the content again;
+  - a sender who is a member at that state is taken;
+  - a stranger is refused once this device reached the home's latest after
+    their envelope arrived (as Signal drops what still doesn't fit after its
+    group fetch; one catch-up settles every envelope that came before it),
+    when their own context isn't ahead (a removed member, at once and without
+    a catch-up), or when readable content of theirs carries no context;
+  - what can't be decided now is **held**: a member whose manifest can't be
+    fetched, or a stranger while no catch-up worked (an unreachable home). The
+    envelope stays queued and is read again on later passes (the browser runs
+    another pass 5 seconds after one that held something, doubling to 15
+    minutes), given up after a week. At most 8 wait per stranger, 32 per
+    member and 256 per group; a full group gives up the newest envelope of
+    its biggest holder, strangers before members, so strangers can't use up
+    members' room;
+  - catch-ups are bounded per group: a context at most 64 revisions past this
+    device's state and not asked for yet goes after a 2-second gap, anything
+    else waits a back-off from 10 seconds, doubling on failure up to
+    15 minutes; a catch-up that reaches the latest while the context is still
+    ahead (a forged one) counts as a failure, and one that stops at its page
+    limit isn't the latest yet;
+  - members are looked up again when the state's head moves, a verified
+    manifest's keys are kept for an hour, and a member whose manifest can't
+    be fetched is looked up again after the same back-off;
+  - another head, or a context still ahead after a catch-up that reached the
+    home's latest, flags the group (`forkSuspected`, shown as "the group's
+    server may be showing members different versions"); only the member who
+    showed it clears it, by matching again;
+  - nothing from a blocked account is taken, as in Signal.
+  - Every change a member makes (title, invite, claim, leave, remove, role) is
+    followed by a `groupChange` notice under the sender key: no body, only the
+    context at the new revision, sent with Signal's implicit content hint, so
+    it is never history and an unreadable one leaves no placeholder. The other
+    members catch up when it arrives. A send whose last catch-up is more than
+    five minutes old catches up first.
 - A change of at most 2 KiB rides inside the message itself
   (`SendMessage.preload.ts:111, 407-414`).
 - **A revision this device can't fetch** (the group's server unreachable, or a
@@ -682,6 +728,12 @@ them on pseudonyms (§3).
      - Pending slots count toward the member limit (members plus pending ≤
        `CHAT_GROUP_MAX_MEMBERS`), as Signal counts pending members.
   2. The adder sends the group-update message pairwise to the invitee's devices.
+     - **As built (slice 1):** a hidden `groupInvite` content, sealed to the
+       invitee's devices only, and never kept: no history, no outbox, no copy
+       for the adder's other devices, which learn of the slot from the log.
+       Only contacts can be invited (their profile key gives the sealed
+       capability), as Signal adds only people whose profile key it holds. A
+       slot whose invitation couldn't be delivered is revoked at once.
      Its encrypted group context carries the master key, the group's server and
      the home's pinned identity, as Signal's `GroupContextV2` carries the master
      key.
@@ -704,6 +756,9 @@ them on pseudonyms (§3).
      member's `joinedAtRevision` is the claim's.
   5. An invitee who isn't a contact sees the group as a message request (accept,
      block or leave) before anything is sent from their side, as in Signal.
+     An invitation from a blocked account is dropped. A group this account
+     left or declined takes a new invitation (a new slot) made after the state
+     it holds.
      Claiming publishes and sends their group capability (§1). That reveals only
      that a device got the invitation.
   - An unclaimed slot can be revoked by an administrator or by its adder, as
@@ -908,7 +963,9 @@ them on pseudonyms (§3).
   - `senderKeyDistribution`;
   - `groupDelivery` (a member's capability, §1);
   - `groupCallKey` (ephemeral).
-- **`groupUpdate` is reused** for the group-update message after a change.
+- **`groupChange`** is the group-update message after a change: a hidden
+  kind with only the group context (§2). It isn't `groupUpdate`, which stays
+  MLS's same-account control until slice 5 removes MLS.
 - **What groups have, as direct chats do:**
   - text, attachments, replies, quotes and link previews;
   - edits, deletes for everyone (by the sender only, as Signal began; admin

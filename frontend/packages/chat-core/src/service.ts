@@ -119,6 +119,16 @@ const POLL_HIDDEN_MS = 30_000
 /** Failed socket attempts before polling starts: a restart or a hand-over needs none. */
 const POLL_AFTER_ATTEMPTS = 2
 
+/**
+ * A pass that left group envelopes waiting (their sender not confirmable
+ * yet) is followed by another, even with the socket open and nothing new
+ * arriving: first after this, then twice as long each time up to the
+ * engine's own longest back-off, and never sooner than the hidden-tab poll
+ * in a hidden tab. A pass that leaves nothing waiting starts it over.
+ */
+const HELD_RETRY_FIRST_MS = 5_000
+const HELD_RETRY_MAX_MS = 15 * 60_000
+
 /** The protocol's limit on messages per delete-for-me control. */
 const DELETE_FOR_ME_BATCH = 64
 
@@ -200,6 +210,8 @@ export class ChatService {
   private pongDeadline: ReturnType<typeof setTimeout> | null = null
   private connection: ChatConnectionStatus = 'connecting'
   private pollTimer: ReturnType<typeof setTimeout> | null = null
+  private heldRetry: ReturnType<typeof setTimeout> | null = null
+  private heldRetryDelay = HELD_RETRY_FIRST_MS
   /** A polling loop runs (its timer may be between ticks, or a read in flight). */
   private polling = false
   private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
@@ -1385,6 +1397,18 @@ export class ChatService {
           console.warn('chat: a queued message could not be sent yet', failure.error)
         }
         this.setWaitingPeers(waiting)
+        if ((report.held?.length ?? 0) === 0) {
+          this.heldRetryDelay = HELD_RETRY_FIRST_MS
+        } else if (this.heldRetry === null && !this.disposed) {
+          const delay = document.visibilityState === 'visible'
+            ? this.heldRetryDelay
+            : Math.max(this.heldRetryDelay, POLL_HIDDEN_MS)
+          this.heldRetryDelay = Math.min(this.heldRetryDelay * 2, HELD_RETRY_MAX_MS)
+          this.heldRetry = setTimeout(() => {
+            this.heldRetry = null
+            if (!this.disposed) this.reconcileInBackground()
+          }, delay)
+        }
         for (const message of report.messages ?? []) {
           if (message.conversation.kind !== 'direct' || !message.content.call) continue
           this.emitCall({
@@ -1777,6 +1801,7 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
+    if (this.heldRetry) clearTimeout(this.heldRetry)
     this.stopPolling()
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)

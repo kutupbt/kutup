@@ -85,6 +85,74 @@ pub struct GroupRecordV1 {
     /// Since when the home has answered as if this account weren't in the
     /// group (milliseconds), reset by any answer that isn't that.
     pub not_found_since_ms: Option<i64>,
+    /// This device's sender key for the group and the devices that hold it.
+    pub sender_book: Option<SenderBook>,
+    /// When this device last caught up with the home (milliseconds): a send
+    /// catches up first when it is older than a few minutes, and a stranger's
+    /// message makes it catch up at most this often.
+    #[serde(default)]
+    pub synced_at_ms: Option<i64>,
+    /// A revision at which a member's message named another chain head than
+    /// the one this device verified, still so after catching up: the home
+    /// may be showing members different histories. Cleared when a member's
+    /// context matches again.
+    #[serde(default)]
+    pub fork_at_revision: Option<u64>,
+    /// The member whose context showed it: only they clear it.
+    #[serde(default)]
+    pub fork_sender: Option<String>,
+}
+
+/// Which member devices hold this device's current sender key for a group
+/// (Signal-Desktop's `senderKeyInfo`, `model-types.d.ts:60-70`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SenderBook {
+    /// The distribution id (a UUID); a new one starts a new key.
+    pub distribution_id: String,
+    pub created_at_ms: i64,
+    pub devices: Vec<BookDevice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BookDevice {
+    pub account: String,
+    pub device_id: u32,
+    pub registration_id: u32,
+}
+
+/// A sender key older than this is replaced (Signal's
+/// `desktop.senderKeyMaxAge`, at most 90 days).
+pub const SENDER_KEY_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+
+impl SenderBook {
+    pub fn new(now_ms: i64) -> Self {
+        Self {
+            distribution_id: uuid::Uuid::new_v4().to_string(),
+            created_at_ms: now_ms,
+            devices: Vec::new(),
+        }
+    }
+
+    /// Whether this key must be replaced before the next send: too old, or a
+    /// device that holds it is no longer a current member device (a removed
+    /// member, a device that left its account's manifest, or one whose
+    /// registration changed). The last is ours: Signal only drops the device
+    /// (docs/plans/pairwise-groups.md §1).
+    pub fn must_rotate(&self, now_ms: i64, current: &[BookDevice]) -> bool {
+        now_ms.saturating_sub(self.created_at_ms) >= SENDER_KEY_MAX_AGE_MS
+            || self.devices.iter().any(|held| !current.contains(held))
+    }
+
+    /// The current devices that don't hold the key yet.
+    pub fn missing(&self, current: &[BookDevice]) -> Vec<BookDevice> {
+        current
+            .iter()
+            .filter(|device| !self.devices.contains(device))
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +165,9 @@ pub enum GroupStatus {
         slot_id: String,
         slot_revision: u64,
         claim_key_seed: SecretText,
+        /// Who sent the invitation (their account): a stranger's is a
+        /// message request.
+        inviter: String,
     },
     /// Asked to join through the link; waits for an administrator.
     Requesting,
@@ -219,8 +290,15 @@ impl GroupRecordV1 {
             (Some((new, new_head)), Some((old, old_head))) => {
                 // The same state can't take the status back to an invitation
                 // (which would bring back its claim key).
-                let regressed = matches!(self.status, GroupStatus::Invited { .. })
-                    && !matches!(stored.status, GroupStatus::Invited { .. });
+                // A new invitation, made after the state held, may follow a
+                // declined or ended membership.
+                let regressed = match &self.status {
+                    GroupStatus::Invited { slot_revision, .. } => {
+                        !matches!(stored.status, GroupStatus::Invited { .. })
+                            && *slot_revision <= old
+                    }
+                    _ => false,
+                };
                 if new == old && new_head == old_head && regressed {
                     Err(record_error("a stale write can't bring back an invitation"))
                 } else if new > old || (new == old && new_head == old_head) {
@@ -326,6 +404,10 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         notary_sequence: None,
         gateway: Default::default(),
         not_found_since_ms: None,
+        sender_book: None,
+        synced_at_ms: None,
+        fork_at_revision: None,
+        fork_sender: None,
     };
     Ok((record, change))
 }
@@ -418,10 +500,19 @@ pub struct ClaimBasis {
     pub head: [u8; HASH_LEN],
 }
 
-/// The record an invitation starts: the group's key and home, a fresh
-/// pseudonym, and the slot's claim key, kept in the `Invited` status until
-/// the claim is accepted. The invitation is consumed.
-pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupError> {
+/// The record an invitation from `inviter` starts: the group's key and home,
+/// a fresh pseudonym, and the slot's claim key, kept in the `Invited` status
+/// until the claim is accepted. The invitation is consumed.
+///
+/// `previous` is the record of a membership that ended (declined, left or
+/// removed), or of an older invitation (its slot perhaps revoked): its
+/// verified state is kept, so no older one is taken later, and only an
+/// invitation made after it starts the new one.
+pub fn record_from_invite(
+    invite: GroupInviteV1,
+    inviter: &str,
+    previous: Option<&GroupRecordV1>,
+) -> Result<GroupRecordV1, GroupError> {
     invite.validate().map_err(record_error)?;
     let master = GroupMasterKey::from_bytes(
         &decode_exact::<32>("masterKey", &invite.master_key).map_err(record_error)?,
@@ -432,7 +523,7 @@ pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupE
         return Err(record_error("the invitation's key is not its group's"));
     }
     let pseudonym = GroupKeyPair::generate();
-    Ok(GroupRecordV1 {
+    let mut record = GroupRecordV1 {
         version: GROUP_FORMAT_VERSION,
         group_id: invite.group_id.clone(),
         master_key: SecretText(invite.master_key.clone()),
@@ -442,6 +533,7 @@ pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupE
             slot_id: invite.slot_id.clone(),
             slot_revision: invite.slot_revision,
             claim_key_seed: SecretText(invite.claim_key_seed.clone()),
+            inviter: inviter.to_string(),
         },
         // Raised to the claim's revision when the claim is made.
         min_revision: invite.slot_revision,
@@ -450,7 +542,37 @@ pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupE
         notary_sequence: None,
         gateway: Default::default(),
         not_found_since_ms: None,
-    })
+        sender_book: None,
+        synced_at_ms: None,
+        fork_at_revision: None,
+        fork_sender: None,
+    };
+    if let Some(previous) = previous {
+        let replaceable = match &previous.status {
+            GroupStatus::Gone => true,
+            GroupStatus::Invited { slot_revision, .. } => invite.slot_revision > *slot_revision,
+            GroupStatus::Member | GroupStatus::Requesting => false,
+        };
+        if previous.group_id != record.group_id || !replaceable {
+            return Err(record_error(
+                "only an ended membership or an older invitation takes a new one",
+            ));
+        }
+        if previous.home != record.home {
+            return Err(record_error("the invitation names another home"));
+        }
+        if let Some((state, _)) = previous.verified()? {
+            if invite.slot_revision <= state.revision {
+                return Err(record_error("an invitation older than the state held"));
+            }
+        }
+        record.state = previous.state.clone();
+        record.head = previous.head.clone();
+        record.notary_sequence = previous.notary_sequence;
+        record.gateway = previous.gateway.clone();
+        record.min_revision = record.min_revision.max(previous.min_revision);
+    }
+    Ok(record)
 }
 
 /// The claim key of an invited record: what signs the join-info request a
