@@ -16,11 +16,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// The domain the server under test names its accounts with
-/// (`CHAT_SERVER_NAME`, advertised as `chat.serverName` in the public
-/// settings). Read from the server, not assumed: the gates run servers named
-/// `kutup.localhost`, `kutup.test`, `backup.test`, `a.test` and `b.test`, and
-/// a Drive key binding or a named share made for another domain is refused.
 /// A client builder on the server's TLS provider: reqwest is built without
 /// one of its own (rustls with aws-lc-rs, X25519MLKEM768 first; the
 /// server's `tls` module), so it is installed as the process default first.
@@ -34,6 +29,11 @@ pub fn client() -> Client {
     client_builder().build().expect("an HTTP client")
 }
 
+/// The domain the server under test names its accounts with
+/// (`CHAT_SERVER_NAME`, advertised as `chat.serverName` in the public
+/// settings). Read from the server, not assumed: the gates run servers named
+/// `kutup.localhost`, `kutup.test`, `backup.test`, `a.test` and `b.test`, and
+/// a Drive key binding or a named share made for another domain is refused.
 pub fn server_domain(c: &Client, base: &str) -> String {
     static DOMAINS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     let domains = DOMAINS.get_or_init(Default::default);
