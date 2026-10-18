@@ -1,10 +1,23 @@
 # Mail: post-quantum OpenPGP, following Proton
 
-Status: note, revised after the main session's review (2026-10-18), from the
-user's post-quantum audit. Next: the user's answers (PQ by default against
-Proton's opt-in, the ML-DSA primary, end-to-end forwarding), then the build. Rule
-([`mail-address-keys.md`](mail-address-keys.md)): copy Proton's answer where it
-has one; where its code doesn't show one, say so and propose ours.
+Status: the user's decisions are in (2026-10-18, below). Next: the spike
+(dependencies, deny, wasm32, interop), then the build after the shares work in
+[`pq-shares.md`](pq-shares.md). Rule ([`mail-address-keys.md`](mail-address-keys.md)):
+copy Proton's answer where it has one; where its code doesn't show one, say so
+and propose ours.
+
+## Decisions (user, 2026-10-18)
+
+- **Post-quantum by default** for every address, a deviation from Proton's
+  opt-in because Kutup writes every client. New addresses get their v6 key at
+  creation, existing ones at their next sign-in.
+- **The v6 key is Proton's shape:** an ML-DSA-65+Ed25519 primary with an
+  ML-KEM-768+X25519 subkey. This holds subject to RustSec and the interop
+  spike.
+- **The identity suite upgrade** in `pq-shares.md` is accepted.
+- **End-to-end forwarding** is added as Proton has it, and an address with
+  forwarding on is not post-quantum while it lasts (section "End-to-end
+  forwarding"). It comes after the PQ mail work.
 
 ## What Proton does (read from its code)
 
@@ -52,7 +65,7 @@ The backend isn't public.
 
 ## Ours
 
-Kutup writes every client, so PQ isn't opt-in here. Every address gets
+Kutup writes every client, so PQ isn't opt-in here (decided). Every address gets
 both keys from the start, with the same shapes as Proton:
 - **The v4 key, unchanged.** Ed25519 (EdDSALegacy) primary and Curve25519 ECDH
   subkey. It's what outside senders and outside verifiers use.
@@ -103,6 +116,85 @@ Who uses which key:
 
   The server encrypts arrivals to v6 once an address's list has a v6
   primary, and to v4 until then. The 4 stored messages stay as they are.
+
+## End-to-end forwarding
+
+Decided 2026-10-18. It comes after the PQ mail work and is on the Mail parity
+list.
+
+**What Proton does** (its code read):
+- **The scheme** is draft-wussler-openpgp-forwarding (proxy re-encryption).
+  - The forwarder's client makes a **forwardee key**: one Curve25519 ECDH
+    subkey per forwarder encryption subkey. Each subkey's KDF parameters are
+    version `0xFF` and carry the forwarder subkey's 20-byte fingerprint, so
+    the forwardee derives the same key-encryption key.
+  - It also makes a **proxy factor** per subkey, k = d_forwardee⁻¹ ·
+    d_forwarder mod n.
+  - The forwardee subkey is flagged 0x40 (forwarded communication) and 0x10
+    (split key).
+  - Sources: pmcrypto `lib/key/forwarding.ts:100-164`; go-crypto's Proton
+    branch `v2/forwarding.go:18-167`.
+- **What the server gets:** the proxy instances `{PgpVersion,
+  ForwarderKeyFingerprint, ForwardeeKeyFingerprint, ProxyParam}` and the
+  forwardee key, locked with a passphrase that is encrypted to the forwardee
+  (the activation token). WebClients: `api/forwardings.ts:73-127`,
+  `keys/forward/forward.ts`.
+- **What the server does.** For each arriving v3 ECDH PKESK addressed to the
+  forwarder's key, it replaces the ephemeral point eB with k·eB (with a
+  small-subgroup check), keeps the wrapped key, and rewrites the key ID to
+  the forwardee's (`packet/encrypted_key.go:644-676`). It never sees the
+  plaintext or a session key.
+- **Only v4 Curve25519 keys work.** Nothing exists for v6, X25519
+  (algorithm 25), ML-KEM or the composite KEMs in any of Proton's code, and
+  no PQ-safe scheme exists.
+  - When forwarding is set up, Proton removes the v6 key's primary status, so
+    arrivals go to v4 (`unsetV6PrimaryAddressKey`,
+    `addressKeyActions.ts:57-91`).
+  - Deleting the last outgoing forwarding makes v6 primary again
+    (`outgoingForwardingActions.ts:150-159`).
+- **Proton's wording** (`ForwardModal.tsx:82-129`, `c('email_forwarding_2023:
+  Info')`):
+  - before: "For compatibility, post-quantum encryption will be disabled for
+    {address}."
+  - after: "For compatibility, post-quantum encryption has been disabled for
+    {address}."
+  - The confirmation on deleting a forwarding says nothing about PQ coming
+    back. The address shows no label beyond a "Forwarding" badge on the key.
+
+**Ours:**
+- **The library has it.** rPGP 0.21.0 implements the draft behind the feature
+  `draft-wussler-openpgp-forwarding`:
+  - the `Replaced` KDF;
+  - decryption, once `enable_draft_forwarding()` opts in;
+  - the 0x40 flag;
+  - `generate_proxy_parameter`;
+  - the server's `forwarding_transform`, with its small-subgroup and identity
+    checks;
+  - the draft's vectors as tests.
+
+  Nothing goes upstream. Our code in `kutup-crypto` is the setup Proton keeps
+  in pmcrypto: build the forwardee key per forwarder subkey, copy the
+  forwarder's KDF hash and cipher, set the flags, reuse the original
+  replacement fingerprint for chained forwarding, and keep forwardee subkeys
+  out of exported keys and the key list.
+- **Arrival keys follow the forwarding state, per address.** While an address
+  has an end-to-end forwarding on, its v4 key is the arrival key and the v6
+  key isn't primary for arrivals; the list is re-signed accordingly. Turning
+  the last forwarding off makes v6 primary again, and arrivals go back to v6.
+  Kutup↔Kutup senders follow the list, so they also use v4 for that address
+  while forwarding is on.
+- **The person is told plainly**, which is a requirement (en and tr):
+  - When turning forwarding on, a confirmation dialog says, in Proton's style:
+    "Mail to this address will use classic encryption while forwarding is on.
+    It won't be protected against future quantum computers. Turning
+    forwarding off switches back."
+  - While it is on, the address in settings shows a visible label:
+    "Classic encryption (forwarding on)".
+  - When it is turned off, a short note: "Post-quantum encryption is back on
+    for this address."
+- **Interop.** Proton's own forwarding uses this same v4 scheme, so a Kutup
+  forwardee key works the same way. The spike checks rPGP's forwarded
+  messages against go-crypto's Proton branch.
 
 ## The library
 

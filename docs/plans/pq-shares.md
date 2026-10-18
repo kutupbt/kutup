@@ -1,8 +1,7 @@
 # Post-quantum shares: X-Wing instead of X25519
 
-Status: note, revised after the main session's review (2026-10-18). It follows
-the user's decision from the post-quantum audit. Next: the user's answers
-(the suite upgrade), then the build.
+Status: accepted (user, 2026-10-18), with the one-way identity suite upgrade
+below. Next: the build, in the order at the end.
 - Clean-slate rule: no shims and no dual formats.
 - Production has been live since the 2026-10-17 wipe with almost no data. The
   counts in "Existing data" decide what happens to any old envelope.
