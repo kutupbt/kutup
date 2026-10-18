@@ -53,7 +53,7 @@ fn file_share_contract() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let bob = register(&c, &base);
     let carol = register(&c, &base);
@@ -316,7 +316,7 @@ fn stale_file_shares_wait_for_the_owner() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let (alice, editor, leaver, carol) = (
         register(&c, &base),
         register(&c, &base),
@@ -517,7 +517,7 @@ fn editors_share_and_rename_when_allowed() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let (alice, carol, dave, erin) = (
         register(&c, &base),
         register(&c, &base),
@@ -671,7 +671,7 @@ fn a_public_link_to_one_file() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let (alice, bob) = (register(&c, &base), register(&c, &base));
     let folder = create_folder(&c, &base, &alice);
     let file = seal_file(&folder, &uuid(), b"just this file");
@@ -996,7 +996,7 @@ fn reports_take_public_links_down() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let (alice, admin) = (register(&c, &base), register(&c, &base));
     tokio::runtime::Runtime::new().unwrap().block_on(async {
         let pool = sqlx::PgPool::connect(&database_url).await.unwrap();

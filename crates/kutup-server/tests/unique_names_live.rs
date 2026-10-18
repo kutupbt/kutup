@@ -115,7 +115,7 @@ fn names_are_unique_in_a_folder() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let folder = create_folder(&c, &base, &owner);
     let report = name(&folder, "Report.pdf");
@@ -375,7 +375,7 @@ fn top_level_folder_names_are_unique_per_owner() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let top = drive_names::top_level_hash_key(&owner.master_key).unwrap();
     let projects = drive_names::name_hash(&top, "Projects").unwrap();

@@ -100,7 +100,7 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let folder = create_folder(&c, &base, &owner);
     let file = seal_file(&folder, &uuid(), b"first");
@@ -347,7 +347,7 @@ fn a_version_over_tus_stands_at_the_log_head() {
         eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_DATABASE_URL not set; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let folder = create_folder(&c, &base, &owner);
     let file = seal_file(&folder, &uuid(), b"report");
@@ -419,7 +419,7 @@ fn other_writers_and_the_owner() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let editor = register(&c, &base);
     let other_editor = register(&c, &base);

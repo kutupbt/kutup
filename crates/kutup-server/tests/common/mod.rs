@@ -21,6 +21,19 @@ use std::sync::{Mutex, OnceLock};
 /// settings). Read from the server, not assumed: the gates run servers named
 /// `kutup.localhost`, `kutup.test`, `backup.test`, `a.test` and `b.test`, and
 /// a Drive key binding or a named share made for another domain is refused.
+/// A client builder on the server's TLS provider: reqwest is built without
+/// one of its own (rustls with aws-lc-rs, X25519MLKEM768 first; the
+/// server's `tls` module), so it is installed as the process default first.
+pub fn client_builder() -> reqwest::blocking::ClientBuilder {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    Client::builder()
+}
+
+/// [`client_builder`] with reqwest's defaults.
+pub fn client() -> Client {
+    client_builder().build().expect("an HTTP client")
+}
+
 pub fn server_domain(c: &Client, base: &str) -> String {
     static DOMAINS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     let domains = DOMAINS.get_or_init(Default::default);

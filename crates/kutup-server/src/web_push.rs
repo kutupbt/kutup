@@ -166,7 +166,7 @@ async fn run(
     hub: ChatHub,
     mut receiver: mpsc::UnboundedReceiver<(Uuid, i32)>,
 ) {
-    let client = match reqwest::Client::builder()
+    let client = match crate::tls::client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))

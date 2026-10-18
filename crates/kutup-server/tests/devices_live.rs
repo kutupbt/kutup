@@ -36,7 +36,7 @@ fn only_the_accounts_own_statement_registers_a_device() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let mallory = register(&c, &base);
     let key = device_key();
@@ -205,7 +205,7 @@ fn a_device_lives_with_its_sign_in() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let mut alice = register(&c, &base);
     let device = register_device(&c, &base, &alice);
     let key = ed25519_dalek::SigningKey::from_bytes(&device.seed)
@@ -335,7 +335,7 @@ fn times_challenges_and_a_wipe() {
         eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let day = 24 * 3600 * 1000 + 60_000;
 
@@ -373,7 +373,9 @@ fn times_challenges_and_a_wipe() {
     let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
         let handles: Vec<_> = bodies
             .iter()
-            .map(|body| scope.spawn(|| post_device(&Client::new(), &base, &alice, body).0))
+            .map(|body| {
+                scope.spawn(|| post_device(&crate::common::client(), &base, &alice, body).0)
+            })
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });

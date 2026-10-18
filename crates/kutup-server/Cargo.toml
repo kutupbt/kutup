@@ -69,6 +69,8 @@ libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0
 zeroize.workspace = true
 
 [dev-dependencies]
+# A local TLS server for the post-quantum handshake test (src/tls.rs).
+tokio-rustls = { version = "0.26", default-features = false }
 # The collaboration socket in live tests (tests/collab_frames_live.rs); the
 # version axum's own WebSocket support already brings.
 tokio-tungstenite = "0.24.0"

@@ -4,7 +4,6 @@
 //! (docs/plans/sealed-revisions.md).
 
 use kutup_crypto::contact_card::{self, ContactEmailV1, ContactSummaryV1};
-use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -62,7 +61,7 @@ fn contact_revisions() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let user = register(&c, &base);
     let post = |body: Value| {
         bearer(c.post(format!("{base}/api/contacts")), &user.token)

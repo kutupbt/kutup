@@ -63,7 +63,7 @@ fn client() -> Client {
         "x-kutup-client",
         reqwest::header::HeaderValue::from_static("cli"),
     );
-    Client::builder()
+    crate::common::client_builder()
         .default_headers(headers)
         .danger_accept_invalid_certs(true)
         .build()

@@ -10,6 +10,14 @@ pub fn install_crypto_provider() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
+/// A reqwest client builder on that provider. reqwest is built without one
+/// of its own, so the provider is installed here too, wherever the client is
+/// built.
+pub fn client_builder() -> reqwest::blocking::ClientBuilder {
+    install_crypto_provider();
+    reqwest::blocking::Client::builder()
+}
+
 #[cfg(test)]
 mod tests {
     use rustls::NamedGroup;
