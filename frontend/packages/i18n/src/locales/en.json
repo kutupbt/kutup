@@ -439,5 +439,17 @@
   },
   "mailPlaces": {
     "unnamedFolder": "Unnamed folder"
+  },
+  "webAssembly": {
+    "title": "This browser can't run Kutup",
+    "why": "Kutup encrypts everything on your device, and that code runs as WebAssembly. This browser has WebAssembly turned off, so Kutup can't sign you in or open anything.",
+    "lockdownTitle": "On an iPhone, iPad or Mac with Lockdown Mode",
+    "lockdownBody": "Lockdown Mode turns off WebAssembly for websites. You can keep Lockdown Mode on and turn it off for this site only:",
+    "lockdownStep1": "In Safari, on this page, tap the Page Menu button in the address bar.",
+    "lockdownStep2": "Tap Website Settings, then turn off Lockdown Mode for this site.",
+    "lockdownStep3": "Reload the page.",
+    "lockdownSettings": "You can review the sites you excluded in Settings → Privacy & Security → Lockdown Mode → Configure Web Browsing.",
+    "otherBrowsers": "In another browser, turn WebAssembly back on (some hardened settings and company policies turn it off), or use an up-to-date Safari, Chrome, Firefox or Edge.",
+    "reload": "Reload"
   }
 }
