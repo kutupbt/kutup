@@ -828,6 +828,10 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
+            "/api/account/identity-suite",
+            post(identity::upgrade_identity_suite),
+        )
+        .route(
             "/api/user/identity-pins",
             get(identity::get_identity_pins)
                 .put(identity::put_identity_pins)

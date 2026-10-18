@@ -80,6 +80,9 @@ Specific codes, where an app does something particular (a test in
 | `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
+| `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
+| `identitySuiteCurrent` | 409 | The account's identity suite is current: nothing to upgrade |
+| `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
 | `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
 | `registrationCodeInvalid` | 403 | The referral code admits no one: one answer whether it is unknown, expired, revoked or used up |

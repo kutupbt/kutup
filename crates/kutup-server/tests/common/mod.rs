@@ -459,7 +459,7 @@ fn sign_up_sent(
     }
     if binding {
         body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
-            &identity, &person
+            &identity, &person, 1
         )
         .unwrap()));
     }
@@ -842,7 +842,7 @@ pub fn try_complete_setup(
             "accountIncarnationId": identity.incarnation_id(),
             "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
             "recoveryProof": b64(recovery_proof.as_slice()),
-            "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &person).unwrap()),
+            "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &person, 1).unwrap()),
         }))
         .send()
         .unwrap();

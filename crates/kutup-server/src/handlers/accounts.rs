@@ -39,10 +39,20 @@ pub(crate) async fn local_identity(
     state: &AppState,
     id: Uuid,
 ) -> AppResult<Option<AccountLookupResponse>> {
-    type Row = (String, String, String, String, String, Option<String>);
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i16,
+        i32,
+    );
     let row: Option<Row> = sqlx::query_as(
         "SELECT username, public_key, account_incarnation_id, drive_signing_public_key,
-                account_authority_public_key, drive_key_binding
+                account_authority_public_key, drive_key_binding, identity_suite,
+                drive_key_binding_epoch
            FROM users WHERE id = $1 AND is_active AND NOT is_first_login AND username IS NOT NULL",
     )
     .bind(id)
@@ -50,16 +60,20 @@ pub(crate) async fn local_identity(
     .await?;
     let server = state.config.chat_server_name.clone();
     Ok(row.map(
-        |(username, hpke, incarnation, signing, authority, binding)| AccountLookupResponse {
-            account: format!("{username}@{server}"),
-            username,
-            server,
-            account_id: id.to_string(),
-            drive_hpke_public_key: hpke,
-            account_incarnation_id: incarnation,
-            drive_signing_public_key: signing,
-            account_authority_public_key: authority,
-            drive_key_binding: binding,
+        |(username, hpke, incarnation, signing, authority, binding, suite, epoch)| {
+            AccountLookupResponse {
+                account: format!("{username}@{server}"),
+                username,
+                server,
+                account_id: id.to_string(),
+                drive_hpke_public_key: hpke,
+                account_incarnation_id: incarnation,
+                drive_signing_public_key: signing,
+                account_authority_public_key: authority,
+                drive_key_binding: binding,
+                identity_suite: suite,
+                drive_key_binding_epoch: epoch,
+            }
         },
     ))
 }
@@ -216,8 +230,7 @@ async fn fetch(state: &AppState, person: &AccountRef) -> AppResult<Fetched> {
             format!("the other server answered {}", response.status),
         ));
     }
-    let remote: AccountLookupResponse = serde_json::from_slice(&response.body)
-        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid account"))?;
+    let remote = crate::drive_federation::parse_remote_account(&response.body)?;
     if remote.server != person.server
         || remote.account_id != person.account_id
         || remote.account != format!("{}@{}", remote.username, person.server)
@@ -319,6 +332,8 @@ mod tests {
             drive_signing_public_key: String::new(),
             account_authority_public_key: String::new(),
             drive_key_binding: None,
+            identity_suite: 2,
+            drive_key_binding_epoch: 1,
         }))
     }
 

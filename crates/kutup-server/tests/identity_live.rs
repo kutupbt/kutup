@@ -44,10 +44,14 @@ fn drive_key_bindings() {
     assert_eq!(found["server"], alice.person.server.as_str());
     assert_eq!(found["accountId"], alice.person.account_id.as_str());
     let key = |field: &str| key32(found[field].as_str().unwrap());
+    assert_eq!(found["identitySuite"], 2);
     drive_key_binding::verify(
         &alice.person,
         &key("accountAuthorityPublicKey"),
-        &key("driveHpkePublicKey"),
+        found["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
+        &base64_decode(found["driveHpkePublicKey"].as_str().unwrap())
+            .try_into()
+            .unwrap(),
         &key("driveSigningPublicKey"),
         &base64_decode(found["driveKeyBinding"].as_str().unwrap()),
     )
@@ -91,7 +95,7 @@ fn drive_key_bindings() {
 
     // Registration refuses a binding that does not match the keys sent.
     let mallory = AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
-    let forged = drive_key_binding::sign(&mallory, &alice.person).unwrap();
+    let forged = drive_key_binding::sign(&mallory, &alice.person, 1).unwrap();
     let r = c
         .post(format!("{base}/api/auth/register"))
         .json(&json!({ "username": "forged", "driveKeyBinding": b64(&forged) }))

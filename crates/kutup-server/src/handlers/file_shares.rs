@@ -52,6 +52,9 @@ pub struct FileAccessMember {
     pub account_incarnation_id: String,
     /// Their Drive HPKE key, to seal them the file's next key.
     pub drive_public_key: String,
+    /// The key's identity suite: 2 (X-Wing), or 1 until the member signs in
+    /// again (nothing is sealed to it; docs/plans/pq-shares.md).
+    pub identity_suite: i16,
     pub drive_signing_public_key: Option<String>,
     pub can_edit: bool,
     /// The generation their envelope opens; below the file's, it waits for
@@ -352,6 +355,7 @@ pub async fn share_file(
     let domain = state.config.chat_server_name.as_str();
     let sharer = party(&state.pool, user_id, domain).await?;
     let recipient = party(&state.pool, req.recipient_user_id, domain).await?;
+    crate::handlers::identity::require_sealable(&state.pool, req.recipient_user_id).await?;
     let mut tx = state.pool.begin().await?;
     let generation = match owned_file(&mut tx, file_id, user_id).await {
         Ok((_, generation, _, _)) => generation,
@@ -446,13 +450,14 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
         Option<String>,
         String,
         String,
+        i16,
         Option<String>,
         bool,
         i32,
         OffsetDateTime,
     );
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key,
+        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
                 u.drive_signing_public_key, fs.can_edit, fs.key_generation, fs.created_at
          FROM file_shares fs JOIN users u ON u.id = fs.recipient_user_id
          WHERE fs.file_id = $1 ORDER BY fs.created_at",
@@ -468,6 +473,7 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
                 username,
                 incarnation,
                 public_key,
+                identity_suite,
                 signing,
                 can_edit,
                 key_generation,
@@ -478,6 +484,7 @@ async fn members(pool: &PgPool, file_id: Uuid, domain: &str) -> AppResult<Vec<Fi
                     account: format!("{}@{domain}", username.unwrap_or_default()),
                     account_incarnation_id: incarnation,
                     drive_public_key: public_key,
+                    identity_suite,
                     drive_signing_public_key: signing,
                     can_edit,
                     key_generation,

@@ -99,7 +99,7 @@ fn sign_up_takes_only_the_id_minted_for_it() {
             body["publicKey"] = json!(b64(&identity.drive_hpke_public_key()));
             body["driveSigningPublicKey"] = json!(b64(&identity.drive_signing_public_key()));
             body["driveKeyBinding"] = json!(b64(&kutup_crypto::drive_key_binding::sign(
-                &identity, &other
+                &identity, &other, 1
             )
             .unwrap()));
         })
@@ -213,10 +213,14 @@ fn accounts_are_found_by_id_and_keep_it_through_a_rename() {
             .try_into()
             .unwrap()
     };
+    assert_eq!(after["identitySuite"], 2);
     kutup_crypto::drive_key_binding::verify(
         &alice.person,
         &key("accountAuthorityPublicKey"),
-        &key("driveHpkePublicKey"),
+        after["driveKeyBindingEpoch"].as_u64().unwrap() as u32,
+        &b64_decode(after["driveHpkePublicKey"].as_str().unwrap())
+            .try_into()
+            .unwrap(),
         &key("driveSigningPublicKey"),
         &b64_decode(&binding),
     )

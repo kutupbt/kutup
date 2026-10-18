@@ -65,6 +65,10 @@ pub struct DrivePerson {
     pub account_incarnation_id: Option<String>,
     /// Their Drive HPKE key, to seal them your profile key.
     pub drive_public_key: Option<String>,
+    /// That key's identity suite (local people): 2 (X-Wing), or 1 until they
+    /// sign in again, when nothing is sealed to it (docs/plans/pq-shares.md).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_suite: Option<i16>,
     /// Their Drive signing key, to check the profile key they gave you.
     pub drive_signing_public_key: Option<String>,
     /// Their profile key, sealed to you (`ProfileKeyEnvelopeV1`), if they gave it.
@@ -214,9 +218,10 @@ pub async fn list_people(
 ) -> AppResult<Json<DrivePeopleResponse>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let domain = state.config.chat_server_name.as_str();
-    type LocalRow = (Uuid, String, String, String, Option<String>);
+    type LocalRow = (Uuid, String, String, String, i16, Option<String>);
     let local: Vec<LocalRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.drive_signing_public_key
+        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
+                u.drive_signing_public_key
          FROM users u
          WHERE u.is_active = true AND u.username IS NOT NULL AND u.id <> $1 AND u.id IN (
              SELECT cs.recipient_user_id FROM collection_shares cs
@@ -276,7 +281,7 @@ pub async fn list_people(
     }
     let mut people: Vec<DrivePerson> = local
         .into_iter()
-        .map(|(id, username, incarnation, public_key, signing)| {
+        .map(|(id, username, incarnation, public_key, suite, signing)| {
             let key = (domain.to_owned(), id);
             DrivePerson {
                 received_envelope: received.remove(&key),
@@ -287,6 +292,7 @@ pub async fn list_people(
                 local: true,
                 account_incarnation_id: Some(incarnation),
                 drive_public_key: Some(public_key),
+                identity_suite: Some(suite),
                 drive_signing_public_key: signing,
             }
         })
@@ -302,6 +308,7 @@ pub async fn list_people(
             local: false,
             account_incarnation_id: None,
             drive_public_key: None,
+            identity_suite: None,
             drive_signing_public_key: None,
         }
     }));

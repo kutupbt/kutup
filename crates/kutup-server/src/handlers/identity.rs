@@ -142,6 +142,126 @@ pub async fn put_identity_pins(
     ))
 }
 
+/// The answer to sharing with an account still on identity suite 1 (an
+/// X25519 Drive key, docs/plans/pq-shares.md): nothing is sealed to it; its
+/// owner's next sign-in upgrades it.
+pub(crate) fn keys_pending_upgrade() -> AppError {
+    AppError::conflict(
+        "this person's keys are being upgraded: share with them once they have signed in again",
+    )
+    .with_details(serde_json::json!({ "code": "keysPendingUpgrade" }))
+}
+
+/// Refuses (`keysPendingUpgrade`) a share to a local account that is still
+/// on identity suite 1.
+pub(crate) async fn require_sealable<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    user_id: uuid::Uuid,
+) -> AppResult<()> {
+    let suite: Option<i16> = sqlx::query_scalar("SELECT identity_suite FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(executor)
+        .await?;
+    match suite {
+        Some(suite) if suite < kutup_crypto::identity::IDENTITY_SUITE as i16 => {
+            Err(keys_pending_upgrade())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// An account's one-way move to identity suite 2 (docs/plans/pq-shares.md):
+/// its Drive key, derived again from the master key as X-Wing, the binding
+/// its unchanged authority signed for it, and the new private key (the
+/// X-Wing seed) sealed as before.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentitySuiteUpgrade {
+    /// Base64 of the 1216-byte X-Wing public key.
+    public_key: String,
+    /// Base64 of the suite-2 binding's signature.
+    drive_key_binding: String,
+    /// The binding's epoch (1 for the first suite-2 binding).
+    drive_key_binding_epoch: u32,
+    /// The X-Wing seed in its account envelope (purpose DriveHpkePrivateKey).
+    drive_private_key_envelope: String,
+}
+
+/// `POST /api/account/identity-suite` — moves the account from identity suite
+/// 1 (an X25519 Drive key) to suite 2 (X-Wing), once and only upward: the
+/// suite must strictly rise, the binding must verify under the account's own
+/// authority, and the key, binding and private key change together. The
+/// client then publishes its next Chat manifest with the new key. `409` with
+/// `code: identitySuiteCurrent` when the account is on suite 2 already.
+#[utoipa::path(
+    post,
+    path = "/api/account/identity-suite",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = IdentitySuiteUpgrade,
+    responses(
+        (status = 204, description = "Upgraded"),
+        (status = 400, description = "Not the account's binding, key or envelope"),
+        (status = 409, description = "identitySuiteCurrent: nothing to upgrade")
+    )
+)]
+pub async fn upgrade_identity_suite(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<IdentitySuiteUpgrade>,
+) -> AppResult<StatusCode> {
+    let id = trusted_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    let row: Option<(i16, String, String, String)> = sqlx::query_as(
+        "SELECT identity_suite, account_authority_public_key, drive_signing_public_key,
+                COALESCE(key_binding, '')
+           FROM users WHERE id = $1 AND is_active FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((suite, authority, signing, key_binding)) = row else {
+        return Err(AppError::unauthorized("unauthorized"));
+    };
+    if suite >= kutup_crypto::identity::IDENTITY_SUITE as i16 {
+        return Err(
+            AppError::conflict("this account's identity suite is current")
+                .with_details(serde_json::json!({ "code": "identitySuiteCurrent" })),
+        );
+    }
+    let account = crate::account_ids::local(&state.config.chat_server_name, id)?;
+    crate::handlers::auth::verify_drive_key_binding(
+        &account,
+        &authority,
+        req.drive_key_binding_epoch,
+        &req.public_key,
+        &signing,
+        &req.drive_key_binding,
+    )?;
+    crate::handlers::auth::validate_account_envelope(
+        &req.drive_private_key_envelope,
+        kutup_crypto::account_envelope::AccountEnvelopePurpose::DriveHpkePrivateKey,
+        &key_binding,
+        "drivePrivateKeyEnvelope",
+    )?;
+    sqlx::query(
+        "UPDATE users SET public_key = $2, drive_key_binding = $3,
+                drive_private_key_envelope = $4, identity_suite = $5,
+                drive_key_binding_epoch = $6, updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&req.public_key)
+    .bind(&req.drive_key_binding)
+    .bind(&req.drive_private_key_envelope)
+    .bind(kutup_crypto::identity::IDENTITY_SUITE as i16)
+    .bind(req.drive_key_binding_epoch as i32)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The most accounts one identity lookup answers.
 const MAX_IDENTITIES_PER_LOOKUP: usize = 100;
 
@@ -166,6 +286,11 @@ pub struct DriveIdentity {
     drive_signing_public_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     drive_key_binding: Option<String>,
+    /// 2: an X-Wing Drive key. 1: an X25519 one, not yet upgraded; nothing is
+    /// shared to it (`keysPendingUpgrade`; docs/plans/pq-shares.md).
+    identity_suite: i16,
+    /// The binding's epoch; a client keeps the highest it saw per account.
+    drive_key_binding_epoch: i32,
 }
 
 /// `POST /api/users/drive-identities` — the Drive identities of accounts on
@@ -197,10 +322,19 @@ pub async fn drive_identities(
         .filter(|username| !username.is_empty() && !username.contains('@'))
         .map(str::to_owned)
         .collect();
-    type Row = (uuid::Uuid, String, String, String, String, Option<String>);
+    type Row = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i16,
+        i32,
+    );
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT id, username, account_authority_public_key, public_key, drive_signing_public_key,
-                drive_key_binding
+                drive_key_binding, identity_suite, drive_key_binding_epoch
            FROM users
           WHERE id IN (SELECT kutup_current_user(name) FROM unnest($1::text[]) AS name)
             AND is_active AND NOT is_first_login",
@@ -211,7 +345,7 @@ pub async fn drive_identities(
     let identities: Vec<DriveIdentity> = rows
         .into_iter()
         .map(
-            |(id, username, authority, hpke, signing, binding)| DriveIdentity {
+            |(id, username, authority, hpke, signing, binding, suite, epoch)| DriveIdentity {
                 server: state.config.chat_server_name.clone(),
                 account_id: id.to_string(),
                 account: format!("{username}{suffix}"),
@@ -219,6 +353,8 @@ pub async fn drive_identities(
                 drive_hpke_public_key: hpke,
                 drive_signing_public_key: signing,
                 drive_key_binding: binding,
+                identity_suite: suite,
+                drive_key_binding_epoch: epoch,
             },
         )
         .collect();
