@@ -101,6 +101,10 @@ pub struct GroupRecordV1 {
     /// The member whose context showed it: only they clear it.
     #[serde(default)]
     pub fork_sender: Option<String>,
+    /// When this device first learned of the group (made it or got its
+    /// invitation), milliseconds: where it sorts before its first message.
+    #[serde(default)]
+    pub known_since_ms: Option<i64>,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -408,6 +412,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         synced_at_ms: None,
         fork_at_revision: None,
         fork_sender: None,
+        known_since_ms: None,
     };
     Ok((record, change))
 }
@@ -546,6 +551,7 @@ pub fn record_from_invite(
         synced_at_ms: None,
         fork_at_revision: None,
         fork_sender: None,
+        known_since_ms: None,
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {

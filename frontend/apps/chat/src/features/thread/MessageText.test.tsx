@@ -4,7 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 
 let groups = false
 vi.mock('../../app/chatStore', () => ({
-  useGroupsEnabled: () => groups,
+  useGroupLinksEnabled: () => groups,
   getChatState: () => ({ capabilities: { mlsGroups: groups } }),
 }))
 

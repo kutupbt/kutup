@@ -328,6 +328,62 @@ export interface SendSummary {
   safetyNumberChanges: string[]
 }
 
+/** A pairwise group this device knows (docs/plans/pairwise-groups.md). */
+export interface ChatGroupSummary {
+  /** 32 bytes, base64url: the group's id, from its master key. */
+  groupId: string
+  title?: string | null
+  status: 'invited' | 'requesting' | 'member' | 'gone'
+  revision?: number | null
+  memberCount: number
+  /** Who invited this account (`aci:<uuid>@<server>`), for an invitation. */
+  inviter?: string | null
+  /** A member's message named another history of the group than this device's. */
+  forkSuspected: boolean
+  /** When this device first learned of the group (made it or was invited), ms. */
+  knownSinceMs?: number | null
+}
+
+/** A member of a pairwise group, as this device checked them. */
+export interface ChatGroupMember {
+  /** The member's key in this group: what changes about them name. */
+  pseudonym: string
+  administrator: boolean
+  joinedAtRevision: number
+  /** Their account when their binding verified; absent for an unverified member. */
+  account?: string | null
+}
+
+/** How a catch-up with a group's home ended. */
+export type ChatGroupSync =
+  | { kind: 'current'; revision: number; keyConfirmed: boolean }
+  | { kind: 'unreachable'; reason: string }
+  | { kind: 'maybeRemoved'; sinceMs: number }
+  | { kind: 'gone' }
+  /** Moved on, with more of the log still to read. */
+  | { kind: 'partial'; revision: number }
+
+/** What a group send reached: member accounts delivered and still pending. */
+export interface ChatGroupSend {
+  sendId: string
+  delivered: number
+  pending: number
+}
+
+/** An invitation to a pairwise group that arrived. */
+export interface ChatGroupInvite {
+  groupId: string
+  /** The inviter's account. */
+  from: string
+  /** From someone who isn't a contact: a message request. */
+  request: boolean
+}
+
+/** The id of a pairwise group (32 bytes, base64url), not an MLS conversation's UUID. */
+export function isChatGroupId(groupId: string): boolean {
+  return /^[A-Za-z0-9_-]{43}$/.test(groupId)
+}
+
 export interface InboundFailure {
   id: string
   kind: string
@@ -336,6 +392,8 @@ export interface InboundFailure {
 
 export interface ReceiveReport {
   messages: ReceivedChatMessage[]
+  /** Invitations to pairwise groups that arrived. */
+  groupInvites?: ChatGroupInvite[]
   /** Group envelopes left queued until their sender can be confirmed. */
   held?: string[]
   synced: string[]
@@ -507,6 +565,11 @@ export interface ChatCapabilities {
   sealedSender: boolean
   /** Complete browser + local + federated MLS group path is available. */
   mlsGroups?: boolean
+  /**
+   * Pairwise groups (docs/plans/pairwise-groups.md): this server hosts them
+   * and relays to other homes (CHAT_GROUPS, with federation and sealed sender).
+   */
+  pairwiseGroups?: boolean
   /** The server fetches public pages for the sender's link previews. */
   linkPreviews?: boolean
   /** This server's SFU hosts group calls, so accounts here can start them. */
@@ -1893,6 +1956,25 @@ export interface WasmChatClientHandle {
   quarantineInbound(id: string): Promise<void>
   reconcile(): Promise<ReceiveReport>
   resolveDeadLetter(id: string): Promise<void>
+  createGroup?(title: string): Promise<{ groupId: string; titleSet: boolean }>
+  setGroupTitle?(groupId: string, title: string): Promise<void>
+  syncGroup?(groupId: string): Promise<ChatGroupSync>
+  groupMembers?(groupId: string): Promise<ChatGroupMember[]>
+  listGroups?(): Promise<ChatGroupSummary[]>
+  sendGroupText?(
+    groupId: string,
+    sendId: string,
+    sentAt: string,
+    text: string,
+    replyTo?: string,
+  ): Promise<ChatGroupSend>
+  flushGroupOutbox?(): Promise<ChatGroupSend[]>
+  inviteToGroup?(groupId: string, accounts: string[]): Promise<number>
+  acceptGroupInvite?(groupId: string): Promise<ChatGroupSync>
+  declineGroupInvite?(groupId: string): Promise<void>
+  leaveGroup?(groupId: string): Promise<void>
+  removeGroupMember?(groupId: string, pseudonym: string): Promise<void>
+  setGroupMemberAdmin?(groupId: string, pseudonym: string, administrator: boolean): Promise<void>
   sendText(
     sendId: string,
     peer: string,

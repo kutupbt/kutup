@@ -1048,6 +1048,25 @@ are switched on together.
 - The e2e stacks run with groups on from slice 1.
 - No interim limit is ever user-visible.
 
+**Slice 1's basic UI (as built).** Shown when the server offers pairwise
+groups (`chat.pairwiseGroups`):
+- *New group* asks for a name and the contacts to invite.
+- The list shows groups this account is in or invited to; an invitation from
+  a stranger reads as a message request.
+- The thread of an invitation offers Join, Decline and, from a stranger,
+  Block.
+- A member's thread sends text and replies only; reactions, edits, deletes for
+  everyone, media, polls, places, timers, typing and receipts stay hidden
+  there until their slice.
+- Above the thread, the group says when its server can't be reached, when this
+  account may have been removed, and when the server may be showing members
+  different keys or versions (never hidden).
+- Its details list the members (administrators marked, unverified ones said
+  so); administrators promote, demote and remove; anyone may rename it or
+  invite contacts as the group's access allows; leaving as the last
+  administrator names another first.
+- Group links stay MLS's until slice 2.
+
 **Slice 1 builds usable groups first.** In it, group messages are sender-key
 ciphertexts sent as one sealed envelope per member device, over the existing
 one-to-one sealed route with the profile keys from the state. This is Desktop's

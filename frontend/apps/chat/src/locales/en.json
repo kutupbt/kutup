@@ -400,7 +400,9 @@
       "adminsOnly": "Only administrators can send messages in this group.",
       "pendingInvitations_one": "Waiting for {{count}} invited member to accept before messages can be sent.",
       "pendingInvitations_other": "Waiting for {{count}} invited members to accept before messages can be sent.",
-      "left": "You left this group."
+      "left": "You left this group.",
+      "requesting": "Your request to join is waiting for an administrator.",
+      "notMember": "You're no longer a member of this group."
     },
     "details": {
       "open": "Chat details",
@@ -520,6 +522,37 @@
         "done": "You left the group",
         "leaving": "Leaving"
       }
+    },
+    "chatGroup": {
+      "unreachable": "Can't reach this group's server right now. Messages still go through; changes to the group wait until it's back.",
+      "invitationGone": "This invitation can't be used any more. Ask the person who invited you to invite you again.",
+      "invited": "{{name}} invited you to “{{group}}”",
+      "invitedRequest": "{{name}} isn't in your contacts. Join only if you know them. They won't see that you read this until you join.",
+      "invitedDescription": "Join to see the members and send messages. Until then, they don't know whether you saw the invitation.",
+      "decline": "Decline",
+      "join": "Join group",
+      "keyUnconfirmed": "This group's server may be showing you different keys than other members. Messages are still encrypted; verify with a member.",
+      "forkSuspected": "This group's server may be showing members different versions of the group. Messages are still encrypted; verify with a member.",
+      "maybeRemoved": "You may have been removed from this group. Its server doesn't recognise you as a member right now.",
+      "rename": "Rename group",
+      "renamed": "Group renamed",
+      "addMembers": "Add members",
+      "addMembersDescription": "Choose contacts to invite. They join when they accept.",
+      "loadingMembers": "Checking the members…",
+      "unverifiedMember": "Unverified member",
+      "unverifiedHint": "Couldn't be verified",
+      "someNotInvited_one": "{{count}} invitation couldn't be sent. Try inviting them again.",
+      "someNotInvited_other": "{{count}} invitations couldn't be sent. Try inviting them again.",
+      "invitedSent_one": "Invitation sent",
+      "invitedSent_other": "{{count}} invitations sent",
+      "invite_one": "Invite {{count}} contact",
+      "invite_other": "Invite {{count}} contacts",
+      "noContacts": "No contacts to invite yet. Groups invite people you already chat with.",
+      "contacts": "Contacts",
+      "titleNotSet": "The group was made, but its name couldn't be set. Rename it from its details.",
+      "newDescription": "An end-to-end encrypted group. Only its members can read its messages, name and member list; its server sees neither who is in it nor what is said.",
+      "chooseMembers": "Invite contacts",
+      "invitationPreview": "Group invitation"
     },
     "groupInvitations": {
       "title_one": "{{count}} group invitation",

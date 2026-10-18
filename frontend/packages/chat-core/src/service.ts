@@ -43,6 +43,13 @@ import type {
   SafetyNumberV1,
   WasmChatClientHandle,
 } from './types'
+import { isChatGroupId } from './types'
+import type {
+  ChatGroupMember,
+  ChatGroupSend,
+  ChatGroupSummary,
+  ChatGroupSync,
+} from './types'
 import { loadChatWasm } from './wasm'
 import { EngineLock } from './engineLock'
 import { SealedStorage } from './sealedStorage'
@@ -796,6 +803,15 @@ export class ChatService {
     expiresAfterSeconds?: number,
     extras?: ChatMessageExtras,
   ): Promise<SendSummary> {
+    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) {
+      // Slice 1 sends text and replies to a pairwise group; the composer
+      // offers nothing else there yet.
+      if (expiresAfterSeconds !== undefined || (extras && Object.keys(extras).length > 0)) {
+        throw new Error('this group takes text and replies only for now')
+      }
+      const sent = await this.sendChatGroupText(conversation.groupId, text, replyTo)
+      return { delivered: sent.pending === 0, deduplicated: false, attempts: 1, safetyNumberChanges: [] }
+    }
     if (conversation.kind === 'group') {
       return this.groupSend(() =>
         this.requireMls().sendText(
@@ -841,6 +857,7 @@ export class ChatService {
       descriptor,
       storageReferenceId,
     )
+    this.refuseChatGroup(conversation)
     if (conversation.kind === 'group') {
       return this.groupSend(() =>
         this.requireMls().sendAttachment(
@@ -931,6 +948,7 @@ export class ChatService {
     body: unknown,
     expiresAfterSeconds?: number,
   ): Promise<SendSummary> {
+    this.refuseChatGroup(conversation)
     if (conversation.kind === 'group') {
       return this.groupSend(() =>
         this.requireMls().sendPollContent(conversation.groupId, kind, body, expiresAfterSeconds),
@@ -950,6 +968,7 @@ export class ChatService {
     emoji: string,
     active: boolean,
   ): Promise<SendSummary> {
+    this.refuseChatGroup(conversation)
     if (conversation.kind === 'group') {
       return this.groupSend(() =>
         this.requireMls().sendReaction(
@@ -979,6 +998,7 @@ export class ChatService {
     operation: 'edit' | 'delete',
     replacementText?: string,
   ): Promise<SendSummary> {
+    this.refuseChatGroup(conversation)
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
         this.requireMls().mutateMessage(
@@ -1009,6 +1029,10 @@ export class ChatService {
     messageIds: string[],
     state: 'delivered' | 'read',
   ): Promise<SendSummary> {
+    // Receipts in pairwise groups come with a later slice: nothing is sent.
+    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) {
+      return { delivered: true, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
+    }
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
         this.requireMls().sendReceipt(conversation.groupId, messageIds, state),
@@ -1029,6 +1053,8 @@ export class ChatService {
   }
 
   async sendTyping(conversation: ConversationId, active: boolean): Promise<void> {
+    // Typing in pairwise groups comes with a later slice.
+    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) return
     if (conversation.kind === 'group') {
       await this.withMlsWorkflow(() =>
         this.requireMls().sendTyping(conversation.groupId, active),
@@ -1151,6 +1177,7 @@ export class ChatService {
     conversation: ConversationId,
     durationSeconds?: number,
   ): Promise<SendSummary> {
+    this.refuseChatGroup(conversation)
     if (conversation.kind === 'group') {
       const summary = await this.withMlsWorkflow(() =>
         this.requireMls().sendDisappearingTimer(conversation.groupId, durationSeconds),
@@ -1457,6 +1484,128 @@ export class ChatService {
         }
       })
     return this.reconcilePromise
+  }
+
+  // ----- pairwise groups (docs/plans/pairwise-groups.md) -----
+
+  /** What pairwise groups don't take yet (slice 1 sends text and replies). */
+  private refuseChatGroup(conversation: ConversationId): void {
+    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) {
+      throw new Error('this group takes text and replies only for now')
+    }
+  }
+
+  private groupClient(): Required<Pick<WasmChatClientHandle,
+    | 'createGroup' | 'setGroupTitle' | 'syncGroup' | 'groupMembers' | 'listGroups'
+    | 'sendGroupText' | 'flushGroupOutbox' | 'inviteToGroup' | 'acceptGroupInvite'
+    | 'declineGroupInvite' | 'leaveGroup' | 'removeGroupMember' | 'setGroupMemberAdmin'>> {
+    const client = this.client
+    if (this.capabilities.pairwiseGroups !== true || !client.createGroup || !client.listGroups
+      || !client.syncGroup || !client.groupMembers || !client.setGroupTitle
+      || !client.sendGroupText || !client.flushGroupOutbox || !client.inviteToGroup
+      || !client.acceptGroupInvite || !client.declineGroupInvite || !client.leaveGroup
+      || !client.removeGroupMember || !client.setGroupMemberAdmin) {
+      throw new ChatServiceError('serverUnsupported')
+    }
+    return client as never
+  }
+
+  /** The pairwise groups this device knows: invitations, memberships, ended ones. */
+  async chatGroups(): Promise<ChatGroupSummary[]> {
+    const client = this.groupClient()
+    return this.withLock(() => client.listGroups())
+  }
+
+  /**
+   * A new group on this server, this account its first administrator, and
+   * `members` (contacts' account keys) invited. The group exists even when
+   * its title or an invitation didn't go out; `invited` says how many did.
+   */
+  async createChatGroup(
+    title: string,
+    members: string[],
+  ): Promise<{ groupId: string; titleSet: boolean; invited: number }> {
+    const client = this.groupClient()
+    const created = await this.withLock(() => client.createGroup(title))
+    let invited = 0
+    if (members.length > 0) {
+      const accounts = members.map(requireAccountKey)
+      invited = await this.withLock(() => client.inviteToGroup(created.groupId, accounts))
+        .catch((error: unknown) => {
+          console.warn('chat: the group was made but its invitations did not go out', error)
+          return 0
+        })
+    }
+    this.notifyPeers()
+    return { ...created, invited }
+  }
+
+  /** Catches a group up with its home. */
+  async syncChatGroup(groupId: string): Promise<ChatGroupSync> {
+    const client = this.groupClient()
+    const sync = await this.withLock(() => client.syncGroup(groupId))
+    this.notifyPeers()
+    return sync
+  }
+
+  /** The group's members, each checked against their account's manifest. */
+  async chatGroupMembers(groupId: string): Promise<ChatGroupMember[]> {
+    const client = this.groupClient()
+    return this.withLock(() => client.groupMembers(groupId))
+  }
+
+  async renameChatGroup(groupId: string, title: string): Promise<void> {
+    await this.groupChange((client) => client.setGroupTitle(groupId, title))
+  }
+
+  /** Invites contacts (account keys): how many invitations went out. */
+  async inviteToChatGroup(groupId: string, members: string[]): Promise<number> {
+    const accounts = members.map(requireAccountKey)
+    let invited = 0
+    await this.groupChange(async (client) => {
+      invited = await client.inviteToGroup(groupId, accounts)
+    })
+    return invited
+  }
+
+  async acceptChatGroupInvite(groupId: string): Promise<ChatGroupSync> {
+    let sync: ChatGroupSync = { kind: 'unreachable', reason: 'unreachable' }
+    await this.groupChange(async (client) => {
+      sync = await client.acceptGroupInvite(groupId)
+    })
+    return sync
+  }
+
+  async declineChatGroupInvite(groupId: string): Promise<void> {
+    await this.groupChange((client) => client.declineGroupInvite(groupId))
+  }
+
+  async leaveChatGroup(groupId: string): Promise<void> {
+    await this.groupChange((client) => client.leaveGroup(groupId))
+  }
+
+  async removeChatGroupMember(groupId: string, pseudonym: string): Promise<void> {
+    await this.groupChange((client) => client.removeGroupMember(groupId, pseudonym))
+  }
+
+  async setChatGroupAdmin(groupId: string, pseudonym: string, administrator: boolean): Promise<void> {
+    await this.groupChange((client) => client.setGroupMemberAdmin(groupId, pseudonym, administrator))
+  }
+
+  private async sendChatGroupText(groupId: string, text: string, replyTo?: string): Promise<ChatGroupSend> {
+    const client = this.groupClient()
+    const sendId = crypto.randomUUID()
+    const sent = await this.withLock(() =>
+      client.sendGroupText(groupId, sendId, new Date().toISOString(), text, replyTo),
+    )
+    this.notifyPeers()
+    return sent
+  }
+
+  private async groupChange(change: (client: ReturnType<ChatService['groupClient']>) => Promise<void>): Promise<void> {
+    const client = this.groupClient()
+    await this.withLock(() => change(client))
+    this.notifyPeers()
   }
 
   async groups(): Promise<LocalMlsConversationRecord[]> {

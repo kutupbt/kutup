@@ -58,6 +58,7 @@ import { DeleteMessageDialog } from './DeleteMessageDialog'
 import { ForwardDialog } from './ForwardDialog'
 import { ConversationBar } from './ConversationBar'
 import { MessageBubble } from './MessageBubble'
+import { ChatGroupStatus } from './ChatGroupStatus'
 import { MessageScroller, TIMELINE_ROW } from './MessageScroller'
 import { NotInContactsBanner } from '../contacts/NotInContactsBanner'
 import { PeerWaitingBanner } from './PeerWaitingBanner'
@@ -251,8 +252,11 @@ export function ConversationView({
   const itemKeys = useMemo(() => rows.map((row) => row.key), [rows])
   const nameOf = useCallback((view: MessageView) => personName(view.author, profiles, self.key, t), [profiles, self.key, t])
   const lastOwnText = useMemo(
-    () => [...model.views].reverse().find((v) => v.outgoing && !v.mutation?.deleted && v.entry.content.text && !v.entry.content.attachment) ?? null,
-    [model.views],
+    () =>
+      model.textOnly
+        ? null
+        : ([...model.views].reverse().find((v) => v.outgoing && !v.mutation?.deleted && v.entry.content.text && !v.entry.content.attachment) ?? null),
+    [model.views, model.textOnly],
   )
   const typingIndicators = useTypingIndicators()
   const typing = typingIndicators
@@ -452,6 +456,8 @@ export function ConversationView({
       {!embedded && model.peer && model.address && !model.note && !model.readOnly ? (
         <NotInContactsBanner peer={model.peer} address={model.address} name={model.profile?.displayName} />
       ) : null}
+
+      {!embedded && model.chatGroup ? <ChatGroupStatus model={model} /> : null}
 
       <MessageScroller
         conversationKey={model.key}
@@ -660,12 +666,13 @@ export function ConversationView({
               actions={{
                 onJump: jump,
                 onReply: writable && view.entry.content.messageId ? () => { setEditing(null); setReplyingTo(view) } : undefined,
+                // Reactions and edits come to pairwise groups in a later slice.
                 onReact:
-                  writable && view.entry.content.messageId
+                  writable && !model.textOnly && view.entry.content.messageId
                     ? (emoji, active) => void actions.react(view.id, emoji, active).catch(() => undefined)
                     : undefined,
                 onEdit:
-                  writable && own && view.entry.content.messageId && view.entry.content.text && !view.entry.content.attachment
+                  writable && !model.textOnly && own && view.entry.content.messageId && view.entry.content.text && !view.entry.content.attachment
                     ? () => { setReplyingTo(null); setEditing(view) }
                     : undefined,
                 onDelete: view.entry.content.messageId && !view.viewedOnce ? () => setDeleting(view) : undefined,
@@ -718,12 +725,12 @@ export function ConversationView({
             setEditing(view)
           }}
           send={actions.send}
-          members={conversation.kind === 'group' ? members : undefined}
-          linkPreviews={linkPreviewsOn && chat.capabilities?.linkPreviews === true}
+          members={conversation.kind === 'group' && !model.textOnly ? members : undefined}
+          linkPreviews={linkPreviewsOn && !model.textOnly && chat.capabilities?.linkPreviews === true}
           // Beside a call there is room for the message box and attachments;
           // polls, places and stickers stay in the conversation itself.
-          onCreatePoll={model.note || embedded ? undefined : () => setNewPoll(true)}
-          onShareLocation={embedded ? undefined : () => setNewLocation(true)}
+          onCreatePoll={model.note || embedded || model.textOnly ? undefined : () => setNewPoll(true)}
+          onShareLocation={embedded || model.textOnly ? undefined : () => setNewLocation(true)}
           onSendSticker={
             !embedded && model.canSendMedia && chat.capabilities?.media && (conversation.kind === 'group' || model.note || chat.capabilities.sealedSender)
               ? (sticker) => {
@@ -771,7 +778,7 @@ export function ConversationView({
       <DeleteMessageDialog
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}
-        forEveryone={deleting !== null && deleting.outgoing && writable && !deleting.mutation?.deleted}
+        forEveryone={deleting !== null && deleting.outgoing && writable && !model.textOnly && !deleting.mutation?.deleted}
         onDeleteForMe={() => {
           const target = deleting
           setDeleting(null)

@@ -1635,6 +1635,7 @@ mod tests {
             synced_at_ms: None,
             fork_at_revision: None,
             fork_sender: None,
+            known_since_ms: None,
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();

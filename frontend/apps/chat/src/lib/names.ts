@@ -6,7 +6,7 @@ import { groupUpdateSentences } from './groupUpdate'
 import { accountName } from '../state/accountNames'
 
 /** A group's name; one never named shows "Group" and the start of its id. */
-export function groupTitle(groupId: string, t: TFunction, info?: MlsGroupInfo | null): string {
+export function groupTitle(groupId: string, t: TFunction, info?: Pick<MlsGroupInfo, 'name'> | { name?: string | null } | null): string {
   return info?.name || t('chat.group.untitled', { id: groupId.slice(0, 8) })
 }
 
@@ -31,7 +31,7 @@ export function conversationTitle(
   profile: PeerChatProfile | null,
   selfKey: string,
   t: TFunction,
-  groupInfo?: MlsGroupInfo | null,
+  groupInfo?: Pick<MlsGroupInfo, 'name'> | { name?: string | null } | null,
 ): string {
   if (conversation.kind === 'group') return groupTitle(conversation.groupId, t, groupInfo)
   if (key === selfKey) return t('chat.noteToSelf')

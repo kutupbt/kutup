@@ -40,7 +40,7 @@ function contact(peer: string, state: ContactRecord['state'], updatedAtMs = 0): 
 }
 
 function data(history: ChatHistoryEntry[], contacts: ContactRecord[] = []): ChatData {
-  return { history, contacts, profiles: [], groups: [] }
+  return { history, contacts, profiles: [], groups: [], chatGroups: [] }
 }
 
 describe('conversationList', () => {
@@ -63,6 +63,37 @@ describe('conversationList', () => {
   it('keeps a group whose live record is gone as protected history', () => {
     const list = conversationList(data([entry(group, 'incoming', 5, { messageId: 'g', text: 'x' })]), SELF, 100)
     expect(list[0]).toMatchObject({ key: 'group:g1', kind: 'history' })
+  })
+
+  it('lists pairwise groups the account is in or invited to; an ended one keeps its history', () => {
+    const pairwise = (groupId: string, status: 'member' | 'invited' | 'gone', knownSinceMs: number) => ({
+      groupId,
+      title: groupId,
+      status,
+      memberCount: 2,
+      forkSuspected: false,
+      knownSinceMs,
+    })
+    const ended: ConversationId = { kind: 'group', groupId: 'E'.repeat(43) }
+    const history = [entry(ended, 'incoming', 5, { messageId: 'x1', text: 'old' })]
+    const list = conversationList(
+      {
+        ...data(history),
+        chatGroups: [
+          pairwise('M'.repeat(43), 'member', 30),
+          pairwise('I'.repeat(43), 'invited', 20),
+          pairwise('E'.repeat(43), 'gone', 1),
+          pairwise('G'.repeat(43), 'gone', 40),
+        ],
+      },
+      SELF,
+      100,
+    )
+    expect(list.map((c) => [c.key, c.kind, c.chatGroup?.status])).toEqual([
+      [`group:${'M'.repeat(43)}`, 'group', 'member'],
+      [`group:${'I'.repeat(43)}`, 'group', 'invited'],
+      [`group:${'E'.repeat(43)}`, 'history', undefined],
+    ])
   })
 
   it('does not count reactions or receipts as the latest message', () => {

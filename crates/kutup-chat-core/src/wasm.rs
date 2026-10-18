@@ -975,6 +975,8 @@ struct GroupSummaryView {
     /// A member's message named another history at a revision this device
     /// verified: the home may be showing members different states.
     fork_suspected: bool,
+    /// When this device first learned of the group (ms).
+    known_since_ms: Option<i64>,
 }
 
 impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
@@ -996,6 +998,7 @@ impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
                 _ => None,
             },
             fork_suspected: summary.fork_suspected,
+            known_since_ms: summary.known_since_ms,
         }
     }
 }

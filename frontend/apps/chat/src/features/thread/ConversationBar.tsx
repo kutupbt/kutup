@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Button } from '@kutup/ui/components/button'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
+import { personName } from '../../lib/names'
 import type { ConversationModel } from './useConversationModel'
 
 /**
@@ -16,9 +17,32 @@ import type { ConversationModel } from './useConversationModel'
 export function ConversationBar({ model }: { model: ConversationModel }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { service } = useChat()
+  const { service, snapshot, self } = useChat()
   const [busy, setBusy] = useState(false)
   const peer = model.peer
+
+  /** An invitation to a pairwise group: join, decline, or block its sender. */
+  async function answerInvitation(action: 'join' | 'decline' | 'block') {
+    const groupId = model.chatGroup?.groupId
+    if (!service || !groupId) return
+    setBusy(true)
+    try {
+      if (action === 'join') {
+        const joined = await service.acceptChatGroupInvite(groupId)
+        if (joined.kind === 'unreachable') toast.error(t('chat.chatGroup.unreachable'))
+        else if (joined.kind !== 'current' && joined.kind !== 'partial') toast.error(t('chat.chatGroup.invitationGone'))
+      } else {
+        await service.declineChatGroupInvite(groupId)
+        if (action === 'block' && model.groupInviter) await service.blockContact(model.groupInviter)
+      }
+      await refreshChat()
+      if (action !== 'join') void navigate('/')
+    } catch (error) {
+      toast.error(chatErrorMessage(error, t))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function update(action: 'accept' | 'reject' | 'block' | 'unblock') {
     if (!service || !peer) return
@@ -59,6 +83,33 @@ export function ConversationBar({ model }: { model: ConversationModel }) {
           </div>
         </div>
       )
+    case 'invitation': {
+      const profiles = new Map(snapshot.profiles.map((profile) => [profile.peer, profile]))
+      const inviter = model.groupInviter ? personName(model.groupInviter, profiles, self?.key ?? '', t) : t('chat.someone')
+      return (
+        <div className={frame} data-testid="chat-group-invitation">
+          <p className="text-center text-sm">
+            <span className="font-semibold">{t('chat.chatGroup.invited', { name: inviter, group: model.title })}</span>
+          </p>
+          <p className="mt-1 text-center text-xs text-muted-foreground">
+            {t(model.groupInviteRequest ? 'chat.chatGroup.invitedRequest' : 'chat.chatGroup.invitedDescription')}
+          </p>
+          <div className="mt-3 flex flex-wrap justify-center gap-2">
+            {model.groupInviteRequest ? (
+              <Button variant="outline" disabled={busy} onClick={() => void answerInvitation('block')}>
+                {t('chat.requests.block')}
+              </Button>
+            ) : null}
+            <Button variant="outline" disabled={busy} onClick={() => void answerInvitation('decline')}>
+              {t('chat.chatGroup.decline')}
+            </Button>
+            <Button disabled={busy} onClick={() => void answerInvitation('join')}>
+              {t('chat.chatGroup.join')}
+            </Button>
+          </div>
+        </div>
+      )
+    }
     case 'blocked':
       return (
         <div className={frame}>

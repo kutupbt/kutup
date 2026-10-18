@@ -104,7 +104,14 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
                 state={state}
                 muted={isMuted(state, now)}
                 selected={item.key === selectedKey}
-                title={conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo)}
+                title={conversationTitle(
+                  item.conversation,
+                  item.peer,
+                  item.profile,
+                  self.key,
+                  t,
+                  item.groupInfo ?? (item.chatGroup ? { name: item.chatGroup.title } : null),
+                )}
                 snippet={snippet(item)}
                 time={item.last || item.activityMs ? formatShortTime(item.last?.timestampMs ?? item.activityMs, now, i18n.language, t) : ''}
                 unread={count}
@@ -167,6 +174,14 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
     const draft = item.key !== selectedKey ? drafts[item.key]?.text.trim() : undefined
     if (draft) return { text: draft, tone: 'draft' }
     if (item.contact?.state === 'pendingIncoming') return { text: t('chat.list.request'), tone: 'request' }
+    // An invitation to a pairwise group: from a stranger it is a request.
+    if (item.chatGroup?.status === 'invited') {
+      const inviter = item.chatGroup.inviter
+      const known = snapshot.contacts.some(
+        (c) => c.peer === inviter && (c.state === 'accepted' || c.state === 'pendingOutgoing'),
+      )
+      return { text: known ? t('chat.chatGroup.invitationPreview') : t('chat.list.request'), tone: 'request' }
+    }
     if (!item.last) {
       return { text: item.kind === 'group' ? t('chat.list.newGroup') : '' }
     }
