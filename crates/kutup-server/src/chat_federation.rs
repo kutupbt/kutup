@@ -3414,10 +3414,12 @@ mod sealed_live_tests {
         .unwrap();
         let (_, sequence, _) = outbox_row(&pool, id).await;
         let migration = include_str!("../migrations/20261018120000_sealed_sequences.up.sql");
-        let closing = migration
-            .split(';')
-            .find(|statement| statement.contains("closing_sequence"))
+        // The closing step: its UPDATE statement, up to its semicolon.
+        let start = migration
+            .find("UPDATE chat_sealed_federation_outbox")
             .expect("the closing step");
+        let closing = &migration[start..start + migration[start..].find(';').unwrap()];
+        assert!(closing.contains("closing_sequence"));
         sqlx::query(closing).execute(&pool).await.unwrap();
         assert_eq!(
             outbox_row(&pool, id).await,
