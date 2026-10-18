@@ -365,7 +365,9 @@ pub enum GroupOperationV1 {
     /// A change at `current + 1` (also a claim, a join or a join request):
     /// the body is the change.
     SubmitChange,
-    /// What a link shows before joining: no body; link-authorised.
+    /// What a newcomer needs before joining: no body. With a link's
+    /// password, a [`GroupJoinInfoV1`] with everything a link shows; signed
+    /// by a pending slot's claim key, only the revision and head to claim at.
     GetJoinInfo,
     /// A call token for the group's SFU: no body.
     CallToken,
@@ -389,8 +391,9 @@ impl GroupOperationV1 {
         }
     }
 
-    /// Whether a link's password, not a member pseudonym, authorises it.
-    pub fn is_link_authorised(self) -> bool {
+    /// Whether a link's password may authorise it (otherwise only a
+    /// signature: a member's pseudonym, or a slot's claim key for join info).
+    pub fn allows_link_password(self) -> bool {
         matches!(self, Self::GetJoinInfo)
     }
 }
@@ -465,21 +468,20 @@ impl GroupRequestV1 {
         if needs_body == body.is_empty() {
             return Err("request body does not fit its operation".into());
         }
-        match (&self.auth, self.operation.is_link_authorised()) {
-            (
-                GroupRequestAuthV1::Pseudonym {
-                    pseudonym,
-                    signature,
-                },
-                false,
-            ) => {
+        match &self.auth {
+            GroupRequestAuthV1::Pseudonym {
+                pseudonym,
+                signature,
+            } => {
                 verifying_key("pseudonym", pseudonym)?;
                 decode_fixed::<SIGNATURE_LEN>("signature", signature)?;
             }
-            (GroupRequestAuthV1::LinkPassword { proof }, true) => {
+            GroupRequestAuthV1::LinkPassword { proof } => {
+                if !self.operation.allows_link_password() {
+                    return Err("request authorisation does not fit its operation".into());
+                }
                 decode_fixed::<HASH_LEN>("proof", proof)?;
             }
-            _ => return Err("request authorisation does not fit its operation".into()),
         }
         Ok(())
     }
@@ -867,6 +869,28 @@ macro_rules! canonical_answer {
     };
 }
 
+/// What a newcomer learns before joining (Signal's `GroupJoinInfo`, plus
+/// the revision and head a newcomer's change names). With a link's password
+/// it carries the sealed title, description and avatar reference (as the
+/// state holds them) and whether joining needs approval; to a slot's claim
+/// key only the revision, head and member count. Never a member entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupJoinInfoV1 {
+    pub revision: u64,
+    pub head: String,
+    pub member_count: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_approval: Option<bool>,
+}
+
+canonical_answer!(GroupJoinInfoV1, "group join info");
 canonical_answer!(GroupStateAnswerV1, "group state answer");
 canonical_answer!(GroupLogPageV1, "group log page");
 
@@ -1133,7 +1157,8 @@ mod tests {
         };
         assert!(sign(GroupOperationV1::GetState, b"unexpected").is_err());
         assert!(sign(GroupOperationV1::SubmitChange, b"").is_err());
-        assert!(sign(GroupOperationV1::GetJoinInfo, b"").is_err());
+        // Join info also takes a signature (a slot's claim key).
+        assert!(sign(GroupOperationV1::GetJoinInfo, b"").is_ok());
         assert!(sign(
             GroupOperationV1::SubmitChange,
             &vec![0; MAX_REQUEST_BODY + 1]
@@ -1277,6 +1302,28 @@ mod tests {
         assert_eq!(
             String::from_utf8(canonical(&notary).unwrap()).unwrap(),
             include_str!("../tests/vectors/group-route-v1/notary.json").trim()
+        );
+    }
+
+    #[test]
+    fn join_info_for_a_claim_carries_no_sealed_fields() {
+        let for_claim = GroupJoinInfoV1 {
+            revision: 4,
+            head: STANDARD.encode([9u8; 32]),
+            member_count: 3,
+            title: None,
+            description: None,
+            avatar: None,
+            requires_approval: None,
+        };
+        let bytes = for_claim.canonical_bytes().unwrap();
+        assert_eq!(
+            String::from_utf8(bytes.clone()).unwrap(),
+            r#"{"revision":4,"head":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=","memberCount":3}"#
+        );
+        assert_eq!(
+            GroupJoinInfoV1::from_canonical_bytes(&bytes).unwrap(),
+            for_claim
         );
     }
 }
