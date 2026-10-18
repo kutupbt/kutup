@@ -28,6 +28,7 @@ fn groups_are_off_unless_switched_on() {
         .unwrap();
     let chat = &settings["chat"];
     assert_eq!(chat["mlsGroups"], false, "{chat}");
+    assert_eq!(chat["pairwiseGroups"], false, "{chat}");
     assert_eq!(chat["groupCalls"], false, "{chat}");
 
     let user = register(&c, &base);

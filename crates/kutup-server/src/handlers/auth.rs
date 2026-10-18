@@ -523,6 +523,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
         mls_groups,
+        pairwise_groups: state.config.chat_groups
+            && state.federation.is_some()
+            && sealed_sender_policy.is_some(),
         link_previews: state.config.chat_link_previews,
         web_push_public_key: state
             .web_push

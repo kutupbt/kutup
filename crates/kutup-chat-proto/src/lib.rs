@@ -893,6 +893,13 @@ pub struct ChatCapabilities {
     /// application delivery are complete on the local and federated paths.
     #[serde(default)]
     pub mls_groups: bool,
+    /// Pairwise groups (docs/plans/pairwise-groups.md): this server hosts
+    /// groups behind its anonymous gateway, relays its users' group requests
+    /// and takes sealed batches. On only with `CHAT_GROUPS`, federation and
+    /// sealed sender all on; separate from `mls_groups`, so the old MLS paths
+    /// can't turn on with it.
+    #[serde(default)]
+    pub pairwise_groups: bool,
     /// `POST /api/chat/link-preview` fetches public pages for the sender's
     /// link previews.
     #[serde(default)]
@@ -940,6 +947,7 @@ impl Default for ChatCapabilities {
             profiles: true,
             sealed_sender: false,
             mls_groups: false,
+            pairwise_groups: false,
             link_previews: false,
             web_push_public_key: None,
             group_calls: false,
