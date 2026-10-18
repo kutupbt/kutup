@@ -239,6 +239,57 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Leaves a group envelope waiting, within the hold limits: one over
+    /// them, or a week old, is acknowledged and dropped, and one given up
+    /// for it as well.
+    #[allow(clippy::too_many_arguments)]
+    async fn hold_group_envelope(
+        &mut self,
+        held: &mut crate::group_gate::HeldEnvelopes,
+        group_id: &str,
+        sender: &str,
+        inbound: &InboundEnvelope,
+        envelope: &kutup_chat_proto::DeliveredEnvelope,
+        report: &mut ReceiveReport,
+        ack_ids: &mut Vec<String>,
+    ) -> Result<()> {
+        use crate::group_gate::{HoldDecision, Standing};
+        let member = !group_id.is_empty()
+            && self
+                .group_membership(group_id)
+                .await
+                .is_ok_and(|membership| membership.standing(sender) != Standing::Stranger);
+        let decision = if group_id.is_empty() {
+            HoldDecision::Drop
+        } else {
+            held.keep(
+                group_id,
+                sender,
+                member,
+                &inbound.id,
+                envelope,
+                inbound.received_at,
+                self.now_ms(),
+            )
+        };
+        match decision {
+            HoldDecision::Keep => report.held.push(inbound.id.clone()),
+            HoldDecision::KeepEvicting(evicted, evicted_envelope) => {
+                self.session.ack_dropped(&evicted_envelope).await?;
+                report.held.retain(|id| *id != evicted);
+                ack_ids.push(evicted.clone());
+                report.suppressed.push(evicted);
+                report.held.push(inbound.id.clone());
+            }
+            HoldDecision::Drop => {
+                self.session.ack_dropped(envelope).await?;
+                ack_ids.push(inbound.id.clone());
+                report.suppressed.push(inbound.id.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// The engine's clock in milliseconds (the test offset included).
     pub(crate) fn now_ms(&self) -> i64 {
         unix_millis() + self.clock_offset_ms
@@ -2030,8 +2081,13 @@ impl Engine {
                                     if inspection.group_id.is_some() {
                                         // A sender-key message: a group's, under its
                                         // sender's key (docs/plans/pairwise-groups.md §1).
-                                        self.receive_group_envelope(&envelope, &inspection, &root)
-                                            .await
+                                        self.receive_group_envelope(
+                                            &envelope,
+                                            &inspection,
+                                            &root,
+                                            inbound.received_at,
+                                        )
+                                        .await
                                     } else {
                                         let local = self.canonical_self()?;
                                         self.session
@@ -2063,7 +2119,13 @@ impl Engine {
                     }) if !decided => {
                         decided = true;
                         let gate = match self
-                            .decide_group_content(group_id, sender, context.as_ref(), true)
+                            .decide_group_content(
+                                group_id,
+                                sender,
+                                context.as_ref(),
+                                true,
+                                inbound.received_at,
+                            )
                             .await
                         {
                             Ok(gate) => gate,
@@ -2206,15 +2268,25 @@ impl Engine {
                                 group_id, sender, ..
                             },
                         ) => (group_id, sender),
-                        _ => (String::new(), String::new()),
+                        // Never left by the group read; counted under the
+                        // group the envelope named.
+                        _ => (
+                            group_origin
+                                .map(|id| kutup_chat_proto::group::encode_group_id(&id))
+                                .unwrap_or_default(),
+                            origin.map(|(sender, _)| sender).unwrap_or_default(),
+                        ),
                     };
-                    if held.keep(&group_id, &sender, inbound.received_at, self.now_ms()) {
-                        report.held.push(inbound.id);
-                    } else {
-                        self.session.ack_dropped(&envelope).await?;
-                        ack_ids.push(inbound.id.clone());
-                        report.suppressed.push(inbound.id);
-                    }
+                    self.hold_group_envelope(
+                        &mut held,
+                        &group_id,
+                        &sender,
+                        &inbound,
+                        &envelope,
+                        report,
+                        &mut ack_ids,
+                    )
+                    .await?;
                 }
                 Err(error) => {
                     let unreadable = matches!(
@@ -2235,6 +2307,7 @@ impl Engine {
                                 device_id,
                                 &group_id,
                                 group_implicit,
+                                inbound.received_at,
                                 rng,
                             )
                             .await
@@ -2266,14 +2339,16 @@ impl Engine {
                                     });
                                 }
                                 let group_id = kutup_chat_proto::group::encode_group_id(&group_id);
-                                if held.keep(&group_id, &sender, inbound.received_at, self.now_ms())
-                                {
-                                    report.held.push(inbound.id);
-                                } else {
-                                    self.session.ack_dropped(&envelope).await?;
-                                    ack_ids.push(inbound.id.clone());
-                                    report.suppressed.push(inbound.id);
-                                }
+                                self.hold_group_envelope(
+                                    &mut held,
+                                    &group_id,
+                                    &sender,
+                                    &inbound,
+                                    &envelope,
+                                    report,
+                                    &mut ack_ids,
+                                )
+                                .await?;
                             }
                         }
                         continue;

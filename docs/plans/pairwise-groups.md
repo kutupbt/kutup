@@ -304,19 +304,25 @@ revision (`SignalService.proto:947-951`).
   - a context ahead of this device's verified state, or another head at the
     same revision, makes the device catch up and read the content again;
   - a sender who is a member at that state is taken;
-  - a stranger is refused once a catch-up reached the home's latest (as
-    Signal drops what still doesn't fit after its group fetch), when their own
-    context isn't ahead (a removed member, at once and without a catch-up),
-    or when readable content of theirs carries no context;
+  - a stranger is refused once this device reached the home's latest after
+    their envelope arrived (as Signal drops what still doesn't fit after its
+    group fetch; one catch-up settles every envelope that came before it),
+    when their own context isn't ahead (a removed member, at once and without
+    a catch-up), or when readable content of theirs carries no context;
   - what can't be decided now is **held**: a member whose manifest can't be
     fetched, or a stranger while no catch-up worked (an unreachable home). The
     envelope stays queued and is read again on later passes (the browser runs
-    another pass 5 seconds after one that held something), given up after a
-    week, at most 32 per sender and 256 per group, the rest dropped;
+    another pass 5 seconds after one that held something, doubling to 15
+    minutes), given up after a week. At most 8 wait per stranger, 32 per
+    member and 256 per group; a full group gives up the newest envelope of
+    its biggest holder, strangers before members, so strangers can't use up
+    members' room;
   - catch-ups are bounded per group: a context at most 64 revisions past this
     device's state and not asked for yet goes after a 2-second gap, anything
     else waits a back-off from 10 seconds, doubling on failure up to
-    15 minutes;
+    15 minutes; a catch-up that reaches the latest while the context is still
+    ahead (a forged one) counts as a failure, and one that stops at its page
+    limit isn't the latest yet;
   - members are looked up again when the state's head moves, a verified
     manifest's keys are kept for an hour, and a member whose manifest can't
     be fetched is looked up again after the same back-off;

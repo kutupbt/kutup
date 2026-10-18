@@ -84,6 +84,10 @@ pub enum GroupSync {
     /// This account is no longer in the group: a notarised change removed it,
     /// or the home has answered so for long enough.
     Gone,
+    /// Moved on to `revision`, with more of the log still to read (one
+    /// catch-up reads at most a bounded number of pages): not yet at the
+    /// home's latest.
+    Partial { revision: u64 },
 }
 
 /// How long the home must keep answering "not found" before a group is
@@ -434,6 +438,7 @@ impl Engine {
         let mut from = state.revision + 1;
         let mut newest = None;
         let mut history_refreshed = false;
+        let mut finished = false;
         for page_number in 0.. {
             if page_number == MAX_PAGES_PER_SYNC {
                 // Bounded: the rest is read on the next catch-up.
@@ -485,6 +490,7 @@ impl Engine {
             record.synced_at_ms = Some(crate::clock::unix_millis());
             self.save_group(&record).await?;
             if !page.more || record.status == GroupStatus::Gone {
+                finished = true;
                 break;
             }
         }
@@ -507,6 +513,9 @@ impl Engine {
             .map_err(group_error)?
             .map(|(state, _)| state.revision)
             .unwrap_or_default();
+        if !finished {
+            return Ok(GroupSync::Partial { revision });
+        }
         Ok(GroupSync::Current {
             revision,
             key_confirmed,

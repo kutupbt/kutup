@@ -143,6 +143,7 @@ impl Engine {
     /// group's thread (none for a change notice), and a request to its
     /// sender. A sender who isn't a member here makes this device catch up
     /// first (bounded), as a readable message would.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn repair_group_message<R: Rng + CryptoRng>(
         &mut self,
         envelope: &DeliveredEnvelope,
@@ -150,11 +151,12 @@ impl Engine {
         device_id: u32,
         group_id: &[u8; 32],
         implicit: bool,
+        received_at: i64,
         rng: &mut R,
     ) -> Result<GroupRepair> {
         let group_id = kutup_chat_proto::group::encode_group_id(group_id);
         match self
-            .decide_group_content(&group_id, sender, None, false)
+            .decide_group_content(&group_id, sender, None, false, received_at)
             .await?
         {
             GroupGate::Accept => {}

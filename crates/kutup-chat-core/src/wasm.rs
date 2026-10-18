@@ -907,6 +907,10 @@ enum GroupSyncView {
         since_ms: i64,
     },
     Gone,
+    /// More of the log still to read: not yet at the home's latest.
+    Partial {
+        revision: u64,
+    },
 }
 
 impl From<crate::group_engine::GroupSync> for GroupSyncView {
@@ -930,6 +934,7 @@ impl From<crate::group_engine::GroupSync> for GroupSyncView {
                 },
             },
             GroupSync::Gone => Self::Gone,
+            GroupSync::Partial { revision } => Self::Partial { revision },
         }
     }
 }

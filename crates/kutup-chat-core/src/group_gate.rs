@@ -12,8 +12,7 @@
 //! - What can't be decided now is held: a member whose manifest can't be
 //!   fetched, or a stranger while the catch-up couldn't be made or failed.
 //!   The envelope stays queued and is read again on a later pass, given up
-//!   after a week; at most [`MAX_HELD_PER_SENDER`] per sender and
-//!   [`MAX_HELD_PER_GROUP`] per group are kept waiting, the rest dropped. A
+//!   after a week, within the limits of [`HeldEnvelopes`]. A
 //!   long-held pairwise envelope relies on libsignal keeping skipped message
 //!   keys (2000 per chain, 5 chains); one past that reads as a duplicate.
 //! - Catch-ups are bounded per group: a context a small step past this
@@ -36,44 +35,104 @@ use crate::session::{GroupGate, ReceiveOutcome};
 /// up: as long as an unreadable message waits for its resend.
 pub(crate) const GROUP_HOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
-/// The most envelopes one sender may have waiting in one group, and one
-/// group in all; past that they are dropped.
+/// The most envelopes a member (unconfirmed now) may have waiting in one
+/// group, a stranger, and one group in all; past that they are dropped.
 pub(crate) const MAX_HELD_PER_SENDER: usize = 32;
+pub(crate) const MAX_HELD_PER_STRANGER: usize = 8;
 pub(crate) const MAX_HELD_PER_GROUP: usize = 256;
 
-/// The group envelopes left waiting in one pass, counted per sender and per
-/// group; the queue is read oldest first, so the oldest stay.
+/// One envelope left waiting in a pass.
+#[derive(Debug)]
+struct Held {
+    sender: String,
+    /// The sender is in the verified state (its manifest unconfirmed), not
+    /// a stranger.
+    member: bool,
+    id: String,
+    envelope: kutup_chat_proto::DeliveredEnvelope,
+}
+
+/// What becomes of an envelope that would wait.
+#[derive(Debug)]
+pub(crate) enum HoldDecision {
+    Keep,
+    /// It waits, and an envelope that waited is given up for it (its id and
+    /// envelope, to acknowledge).
+    KeepEvicting(String, Box<kutup_chat_proto::DeliveredEnvelope>),
+    /// Given up: too old, or over the limits.
+    Drop,
+}
+
+/// The group envelopes left waiting in one pass. A stranger keeps at most
+/// [`MAX_HELD_PER_STRANGER`], a member [`MAX_HELD_PER_SENDER`], a group
+/// [`MAX_HELD_PER_GROUP`]; a full group gives up the newest envelope of its
+/// biggest holder (strangers before members), never a member's for a
+/// stranger's, so strangers can't use up members' room.
 #[derive(Debug, Default)]
 pub(crate) struct HeldEnvelopes {
-    by_sender: std::collections::BTreeMap<(String, String), usize>,
-    by_group: std::collections::BTreeMap<String, usize>,
+    by_group: std::collections::BTreeMap<String, Vec<Held>>,
 }
 
 impl HeldEnvelopes {
-    /// Whether an envelope of `sender` in `group_id`, received at
-    /// `received_at`, may keep waiting: younger than a week and within the
-    /// limits (counted as waiting when it may).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn keep(
         &mut self,
         group_id: &str,
         sender: &str,
+        member: bool,
+        id: &str,
+        envelope: &kutup_chat_proto::DeliveredEnvelope,
         received_at: i64,
         now_ms: i64,
-    ) -> bool {
+    ) -> HoldDecision {
         if now_ms.saturating_sub(received_at) >= GROUP_HOLD_MS {
-            return false;
+            return HoldDecision::Drop;
         }
-        let by_sender = self
-            .by_sender
-            .entry((group_id.to_string(), sender.to_string()))
-            .or_default();
-        let by_group = self.by_group.entry(group_id.to_string()).or_default();
-        if *by_sender >= MAX_HELD_PER_SENDER || *by_group >= MAX_HELD_PER_GROUP {
-            return false;
+        let held = self.by_group.entry(group_id.to_string()).or_default();
+        let count = |sender: &str| held.iter().filter(|h| h.sender == sender).count();
+        let mine = count(sender);
+        let cap = if member {
+            MAX_HELD_PER_SENDER
+        } else {
+            MAX_HELD_PER_STRANGER
+        };
+        if mine >= cap {
+            return HoldDecision::Drop;
         }
-        *by_sender += 1;
-        *by_group += 1;
-        true
+        let entry = Held {
+            sender: sender.to_string(),
+            member,
+            id: id.to_string(),
+            envelope: envelope.clone(),
+        };
+        if held.len() < MAX_HELD_PER_GROUP {
+            held.push(entry);
+            return HoldDecision::Keep;
+        }
+        // Full: the biggest holder gives one up, strangers first; a stranger
+        // never takes a member's room.
+        let mut holders: Vec<(bool, usize, String)> = Vec::new();
+        for h in held.iter() {
+            if !holders.iter().any(|(_, _, s)| *s == h.sender) {
+                holders.push((h.member, count(&h.sender), h.sender.clone()));
+            }
+        }
+        let victim = holders
+            .into_iter()
+            .filter(|(victim_member, victim_count, _)| {
+                (member && !victim_member) || (*victim_member == member && *victim_count > mine + 1)
+            })
+            .max_by_key(|(victim_member, victim_count, _)| (!victim_member, *victim_count));
+        let Some((_, _, victim)) = victim else {
+            return HoldDecision::Drop;
+        };
+        let place = held
+            .iter()
+            .rposition(|h| h.sender == victim)
+            .expect("a holder holds one");
+        let evicted = held.remove(place);
+        held.push(entry);
+        HoldDecision::KeepEvicting(evicted.id, Box::new(evicted.envelope))
     }
 }
 
@@ -139,6 +198,9 @@ pub(crate) struct CatchUps {
     pub failures: u32,
     /// The highest revision a context asked for as news.
     pub asked_up_to: u64,
+    /// When a catch-up last reached the home's latest: content received
+    /// before it is decided as caught up (a stranger then is refused).
+    pub current_at_ms: i64,
 }
 
 impl CatchUps {
@@ -165,7 +227,8 @@ fn news(state: &CatchUps, revision: Option<u64>, verified: u64) -> bool {
 pub(crate) struct Reading {
     /// Not read since a catch-up for it.
     pub first: bool,
-    /// A catch-up for it reached the home's latest.
+    /// This device reached the home's latest after the content arrived (for
+    /// it, or for anything since).
     pub caught_up: bool,
     /// A catch-up may go now.
     pub may_catch_up: bool,
@@ -188,9 +251,14 @@ pub(crate) fn gate_for(
         }
     };
     match (check, standing) {
-        // The sender is further on, or on another head: who is in may have
-        // changed, so catch up before deciding.
-        (Some(ContextCheck::Behind | ContextCheck::Fork), _) if reading.first => wait(),
+        // The sender is further on, or on another head, and this device hasn't
+        // caught up since it came: who is in may have changed, so catch up
+        // before deciding.
+        (Some(ContextCheck::Behind | ContextCheck::Fork), _)
+            if reading.first && !reading.caught_up =>
+        {
+            wait()
+        }
         (_, Standing::Member) => GroupGate::Accept,
         (_, Standing::Unconfirmed) => GroupGate::Hold,
         // A stranger whose own context isn't ahead: not a member at a state
@@ -280,24 +348,43 @@ impl Engine {
             .is_none_or(|state| state.allows(self.now_ms(), revision, verified_revision(record)))
     }
 
-    /// Catches `record`'s group up for incoming content: true when it is
-    /// current with its home now.
+    /// Catches `record`'s group up for incoming content naming `context`
+    /// (none for content without one): true when it is current with its
+    /// home now. A catch-up that reaches the home's latest while the context
+    /// is still ahead counts as a failure for the back-off, so forged
+    /// contexts don't make a catch-up every few seconds.
     async fn catch_up_for_content(
         &mut self,
         record: &GroupRecordV1,
-        revision: Option<u64>,
+        context: Option<&GroupContextV1>,
     ) -> bool {
         let now = self.now_ms();
         let group_id = record.group_id.clone();
         let verified = verified_revision(record);
+        let revision = context.map(|context| context.revision);
         let current = matches!(
             self.sync_group(&group_id).await,
             Ok(GroupSync::Current { .. })
         );
+        let still_ahead = match (current, context) {
+            (true, Some(context)) => self
+                .session
+                .db()
+                .load_group(&group_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|record| context_check(&record, context))
+                .is_some_and(|check| matches!(check, ContextCheck::Behind | ContextCheck::Fork)),
+            _ => false,
+        };
         let state = self.group_catch_ups.entry(group_id).or_default();
         let was_news = news(state, revision, verified);
         state.last_ms = now;
-        state.failures = if current {
+        if current {
+            state.current_at_ms = now;
+        }
+        state.failures = if current && !still_ahead {
             0
         } else {
             state.failures.saturating_add(1)
@@ -306,6 +393,13 @@ impl Engine {
             state.asked_up_to = state.asked_up_to.max(revision);
         }
         current
+    }
+
+    /// Whether this device reached the group's latest after `received_at`.
+    fn caught_up_since(&self, group_id: &str, received_at: i64) -> bool {
+        self.group_catch_ups
+            .get(group_id)
+            .is_some_and(|state| state.current_at_ms >= received_at && state.current_at_ms > 0)
     }
 
     /// Whether `account` is blocked by this account: nothing of theirs is
@@ -362,11 +456,12 @@ impl Engine {
         sender: &str,
         context: Option<&GroupContextV1>,
         readable: bool,
+        received_at: i64,
     ) -> Result<GroupGate> {
         if self.is_blocked(sender).await? {
             return Ok(GroupGate::Refuse);
         }
-        let mut caught_up = false;
+        let mut caught_up = self.caught_up_since(group_id, received_at);
         for first in [true, false] {
             let Some(record) = self.session.db().load_group(group_id).await? else {
                 return Ok(GroupGate::Refuse);
@@ -391,7 +486,7 @@ impl Engine {
             };
             match gate_for(check, standing, reading) {
                 GroupGate::CatchUp => {
-                    caught_up = self.catch_up_for_content(&record, revision).await;
+                    caught_up = self.catch_up_for_content(&record, context).await;
                 }
                 GroupGate::Accept => {
                     if let (Some(check), Some(revision)) = (check, revision) {
@@ -414,8 +509,9 @@ impl Engine {
         envelope: &kutup_chat_proto::DeliveredEnvelope,
         inspection: &crate::session::SealedEnvelopeInspection,
         validating_root: &PublicKey,
+        received_at: i64,
     ) -> Result<ReceiveOutcome> {
-        use std::cell::Cell;
+        use std::cell::RefCell;
         let group_id = inspection
             .group_id
             .map(|id| kutup_chat_proto::group::encode_group_id(&id))
@@ -427,7 +523,7 @@ impl Engine {
             self.session.ack_dropped(envelope).await?;
             return Ok(dropped());
         }
-        let mut caught_up = false;
+        let mut caught_up = self.caught_up_since(&group_id, received_at);
         for first in [true, false] {
             let record = match self.session.db().load_group(&group_id).await? {
                 Some(record) if record.status == GroupStatus::Member => record,
@@ -444,7 +540,7 @@ impl Engine {
             let catch_ups = self.group_catch_ups.get(&group_id).copied();
             let now = self.now_ms();
             let verified = verified_revision(&record);
-            let seen = Cell::new(None);
+            let seen = RefCell::new(None);
             let gate = |context: &GroupContextV1| {
                 let Some(check) = context_check(&record, context) else {
                     return GroupGate::Refuse;
@@ -457,21 +553,28 @@ impl Engine {
                     readable: true,
                 };
                 let gate = gate_for(Some(check), standing, reading);
-                seen.set(Some((check, gate, context.revision)));
+                *seen.borrow_mut() = Some((check, gate, context.clone()));
                 gate
             };
             let outcome = self
                 .session
                 .receive_sealed_group_envelope(envelope, inspection, validating_root, &gate)
                 .await?;
+            let seen = seen.into_inner();
             if matches!(outcome, ReceiveOutcome::GroupCatchUp) {
-                let revision = seen.get().map(|(_, _, revision)| revision);
-                caught_up = self.catch_up_for_content(&record, revision).await;
+                let context = seen.map(|(_, _, context)| context);
+                caught_up = self.catch_up_for_content(&record, context.as_ref()).await;
                 continue;
             }
-            if let Some((check, GroupGate::Accept, revision)) = seen.get() {
-                self.note_group_context(&group_id, &inspection.sender, check, caught_up, revision)
-                    .await?;
+            if let Some((check, GroupGate::Accept, context)) = seen {
+                self.note_group_context(
+                    &group_id,
+                    &inspection.sender,
+                    check,
+                    caught_up,
+                    context.revision,
+                )
+                .await?;
             }
             return Ok(outcome);
         }
