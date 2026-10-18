@@ -58,28 +58,20 @@ function Install-KutupCli {
     }
     if ($version -match '^[0-9]') { $version = "v$version" }
     if ($version -notmatch '^v[0-9]') { throw "not a CLI release tag: $version (CLI tags look like v0.2.0)" }
-    $number = $version.Substring(1)
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("kutup-install-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp | Out-Null
     try {
-        # Two release layouts: the Rust build (.github/workflows/release.yml)
-        # names each archive after its target with a .sha256 file beside it
-        # (x86-64 only; ARM64 Windows runs it emulated); v0.1.0 (the earlier
-        # Go build) names them <version>_windows_<arch> with one checksums.txt.
+        # The release layout of .github/workflows/release.yml: one archive
+        # per target, with a .sha256 file beside it (x86-64 only; Windows on
+        # ARM64 runs it emulated).
         $sums = Join-Path $tmp 'sums'
-        $rustTarget = 'x86_64-pc-windows-msvc'
-        $archive = $null
+        $target = 'x86_64-pc-windows-msvc'
+        $archive = "kutup_${version}_$target.zip"
         try {
-            Invoke-WebRequest -UseBasicParsing -Uri "$base/$version/kutup_${version}_$rustTarget.sha256" -OutFile $sums
-            $archive = "kutup_${version}_$rustTarget.zip"
+            Invoke-WebRequest -UseBasicParsing -Uri "$base/$version/kutup_${version}_$target.sha256" -OutFile $sums
         } catch {
-            try {
-                Invoke-WebRequest -UseBasicParsing -Uri "$base/$version/checksums.txt" -OutFile $sums
-                $archive = "kutup_${number}_windows_$arch.zip"
-            } catch {
-                throw "release $version has no checksums for windows/$arch (is $version a published CLI release? see https://github.com/$repo/releases)"
-            }
+            throw "release $version has no Rust CLI build for windows/$arch (CLI releases from v0.2.0 on have one; see https://github.com/$repo/releases)"
         }
 
         Write-Host "kutup-install: downloading kutup $version for windows/$arch..."

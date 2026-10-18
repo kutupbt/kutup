@@ -200,17 +200,11 @@ esac
 
 # --- download and check --------------------------------------------------
 
-# Two release layouts: the Rust build (.github/workflows/release.yml) names
-# each archive after its target with a .sha256 file beside it; v0.1.0 (the
-# earlier Go build) names them <version>_<os>_<arch> with one checksums.txt.
-NUMBER="${VERSION#v}"
-if download "$BASE/$VERSION/kutup_${VERSION}_${TARGET}.sha256" "$TMP/sums" 2>/dev/null; then
-  ARCHIVE="kutup_${VERSION}_${TARGET}.tar.gz"
-elif download "$BASE/$VERSION/checksums.txt" "$TMP/sums" 2>/dev/null; then
-  ARCHIVE="kutup_${NUMBER}_${OS}_${ARCH}.tar.gz"
-else
-  die "release $VERSION has no checksums for $OS/$ARCH (is $VERSION a published CLI release? see https://github.com/$REPO/releases)"
-fi
+# The release layout of .github/workflows/release.yml: one archive per
+# target, with a .sha256 file beside it.
+ARCHIVE="kutup_${VERSION}_${TARGET}.tar.gz"
+download "$BASE/$VERSION/kutup_${VERSION}_${TARGET}.sha256" "$TMP/sums" 2>/dev/null ||
+  die "release $VERSION has no Rust CLI build for $OS/$ARCH (CLI releases from v0.2.0 on have one; see https://github.com/$REPO/releases)"
 
 say "downloading kutup $VERSION for $OS/$ARCH…"
 download "$BASE/$VERSION/$ARCHIVE" "$TMP/$ARCHIVE" ||

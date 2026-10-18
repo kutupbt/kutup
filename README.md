@@ -148,6 +148,9 @@ Scripting-friendly: every command honors a global `--json` flag (stdout is exact
 
 ### Install the CLI
 
+The one-line install works from the v0.2.0 release on (published soon); until
+then, install from source as below.
+
 On Linux or macOS (x86-64 or ARM64), into `~/.local/bin`:
 
 ```sh
