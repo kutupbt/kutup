@@ -1550,8 +1550,9 @@ fn blob_by_id(conn: &Connection, table: &str, id: u32) -> Result<Option<Vec<u8>>
 }
 
 fn decode_group(bytes: &[u8]) -> Result<crate::group::GroupRecordV1> {
-    serde_json::from_slice(bytes)
-        .map_err(|error| ChatError::Db(format!("decode group record: {error}")))
+    // The record holds keys: the decoder's message, which may quote a
+    // value, is not passed on.
+    serde_json::from_slice(bytes).map_err(|_| ChatError::Db("a group record doesn't read".into()))
 }
 
 #[cfg(test)]
@@ -1596,6 +1597,7 @@ mod tests {
             head: None,
             notary_sequence: None,
             gateway: Default::default(),
+            not_found_since_ms: None,
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();

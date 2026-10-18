@@ -82,6 +82,9 @@ pub struct GroupRecordV1 {
     pub notary_sequence: Option<u64>,
     /// The home's newest gateway key config and its identity history.
     pub gateway: crate::group_client::GatewayCache,
+    /// Since when the home has answered as if this account weren't in the
+    /// group (milliseconds), reset by any answer that isn't that.
+    pub not_found_since_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,7 +217,13 @@ impl GroupRecordV1 {
             (_, None) => Ok(()),
             (None, Some(_)) => Err(record_error("a verified group state can't be dropped")),
             (Some((new, new_head)), Some((old, old_head))) => {
-                if new > old || (new == old && new_head == old_head) {
+                // The same state can't take the status back to an invitation
+                // (which would bring back its claim key).
+                let regressed = matches!(self.status, GroupStatus::Invited { .. })
+                    && !matches!(stored.status, GroupStatus::Invited { .. });
+                if new == old && new_head == old_head && regressed {
+                    Err(record_error("a stale write can't bring back an invitation"))
+                } else if new > old || (new == old && new_head == old_head) {
                     Ok(())
                 } else if new == old {
                     Err(record_error("another state at the same revision (a fork)"))
@@ -316,6 +325,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         head: None,
         notary_sequence: None,
         gateway: Default::default(),
+        not_found_since_ms: None,
     };
     Ok((record, change))
 }
@@ -439,6 +449,7 @@ pub fn record_from_invite(invite: GroupInviteV1) -> Result<GroupRecordV1, GroupE
         head: None,
         notary_sequence: None,
         gateway: Default::default(),
+        not_found_since_ms: None,
     })
 }
 

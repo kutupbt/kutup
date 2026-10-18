@@ -23,7 +23,7 @@ use crate::db::Pending;
 use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::group::{self, GroupError, GroupMemberView, GroupRecordV1, GroupStatus, NewGroup};
-use crate::group_client::{self, RequestSigner, RouteFailure};
+use crate::group_client::{self, ConfigCheck, RequestSigner, RouteFailure};
 
 /// How many changes one log request asks for.
 const LOG_PAGE: u16 = 64;
@@ -38,16 +38,39 @@ pub struct GroupSummary {
     pub member_count: usize,
 }
 
+/// A group just made: its id, and whether its title was set too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedGroup {
+    pub group_id: String,
+    pub title_set: bool,
+}
+
 /// How a catch-up ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupSync {
-    /// At the home's latest revision.
-    Current { revision: u64 },
+    /// At the home's latest revision. `key_confirmed` is false when the
+    /// home's newest signature names a gateway key this device never held,
+    /// even after fetching it again: a rotation it slept through, or a relay
+    /// showing it another key. The group goes on; the view says so.
+    Current { revision: u64, key_confirmed: bool },
     /// The home couldn't be asked now; the last verified state stands.
     Unreachable(RouteFailure),
-    /// This account is no longer in the group.
+    /// The home answers as if this account weren't in the group: it may have
+    /// been removed, or the group ended. Not taken as final until it has
+    /// lasted [`NOT_FOUND_CONFIRM_MS`] (the home's answer is the same for
+    /// strangers, so it proves nothing on its own).
+    MaybeRemoved { since_ms: i64 },
+    /// This account is no longer in the group: a notarised change removed it,
+    /// or the home has answered so for long enough.
     Gone,
 }
+
+/// How long the home must keep answering "not found" before a group is
+/// taken as gone.
+pub const NOT_FOUND_CONFIRM_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// The most log pages one catch-up reads.
+const MAX_PAGES_PER_SYNC: usize = 256;
 
 fn group_error(error: GroupError) -> ChatError {
     match error {
@@ -112,7 +135,7 @@ impl Engine {
         body: &[u8],
     ) -> Result<std::result::Result<GroupResponseV1, RouteFailure>> {
         let group_id = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
-        let seed = *record.pseudonym().map_err(group_error)?.seed();
+        let seed = zeroize::Zeroizing::new(*record.pseudonym().map_err(group_error)?.seed());
         let home = record.home.clone();
         let transport = Rc::clone(&self.transport);
         group_client::call(
@@ -154,6 +177,11 @@ impl Engine {
             .identity_history
             .first()
             .ok_or_else(|| ChatError::Trust("this server published no identity".into()))?;
+        if first.server != server {
+            return Err(ChatError::Trust(
+                "this server's identity names another server".into(),
+            ));
+        }
         let root = GroupHomePinV1::of(first).map_err(ChatError::Trust)?;
         let current = root
             .follow(&answer.identity_history)
@@ -177,7 +205,7 @@ impl Engine {
 
     /// A new group on this account's server, with this account as its first
     /// administrator and `title` as its name.
-    pub async fn create_group(&mut self, title: &str) -> Result<String> {
+    pub async fn create_group(&mut self, title: &str) -> Result<CreatedGroup> {
         let profile_key = self.own_profile_key().await?;
         let profile_key = &profile_key;
         let (pin, cache) = self.own_home_pin().await?;
@@ -210,20 +238,32 @@ impl Engine {
             .map_err(|e| ChatError::Invalid(e.to_string()))?;
         group::accept_change(&mut record, &genesis, &answer.notary).map_err(group_error)?;
         self.save_group(&record).await?;
+        // The group exists from here; a title that can't be set now is
+        // reported, not an error, and can be set again.
+        let mut title_set = true;
         if !title.trim().is_empty() {
-            let value =
-                group::seal_attribute(&record, GroupAttribute::Title, title.trim().as_bytes())
-                    .map_err(group_error)?;
-            self.submit_group_change(
-                &mut record,
-                vec![GroupActionV1::ModifyAttribute {
-                    attribute: GroupAttribute::Title,
-                    value: Some(value),
-                }],
-            )
-            .await?;
+            title_set = match group::seal_attribute(
+                &record,
+                GroupAttribute::Title,
+                title.trim().as_bytes(),
+            ) {
+                Ok(value) => self
+                    .submit_group_change(
+                        &mut record,
+                        vec![GroupActionV1::ModifyAttribute {
+                            attribute: GroupAttribute::Title,
+                            value: Some(value),
+                        }],
+                    )
+                    .await
+                    .is_ok(),
+                Err(_) => false,
+            };
         }
-        Ok(record.group_id)
+        Ok(CreatedGroup {
+            group_id: record.group_id,
+            title_set,
+        })
     }
 
     /// Makes a change as this member and applies the home's notarised answer.
@@ -293,7 +333,13 @@ impl Engine {
             return self.take_whole_state(&mut record).await;
         };
         let mut from = state.revision + 1;
-        loop {
+        let mut newest = None;
+        let mut history_refreshed = false;
+        for page_number in 0.. {
+            if page_number == MAX_PAGES_PER_SYNC {
+                // Bounded: the rest is read on the next catch-up.
+                break;
+            }
             let query = serde_json::to_vec(&GroupLogQueryV1 {
                 from_revision: from,
                 limit: LOG_PAGE,
@@ -307,50 +353,88 @@ impl Engine {
                 Err(failure) => return Ok(GroupSync::Unreachable(failure)),
             };
             if response.status == GroupResponseStatusV1::NotFound {
-                // Removed: the home answers a former member as a stranger.
-                record.status = GroupStatus::Gone;
-                self.save_group(&record).await?;
-                return Ok(GroupSync::Gone);
+                return self.not_found(&mut record).await;
             }
             let page: GroupLogPageV1 = serde_json::from_slice(&accepted_body(response)?)
-                .map_err(|e| ChatError::Invalid(e.to_string()))?;
+                .map_err(|_| ChatError::Invalid("the group home's log page doesn't read".into()))?;
+            if page.entries.is_empty() && page.more {
+                return Err(ChatError::Trust(
+                    "the group home answered an empty page with more to come".into(),
+                ));
+            }
             for entry in &page.entries {
                 let change = GroupChangeV1::from_canonical_bytes(&decode_b64(&entry.change)?)
                     .map_err(ChatError::Invalid)?;
-                group::accept_change(&mut record, &change, &entry.notary).map_err(group_error)?;
+                match group::accept_change(&mut record, &change, &entry.notary) {
+                    Ok(_) => {}
+                    // A notary by an identity this device doesn't hold yet (the
+                    // home rotated it): fetch the history again, once, and retry.
+                    Err(GroupError::Notary) if !history_refreshed => {
+                        history_refreshed = true;
+                        self.refresh_gateway(&mut record).await?;
+                        group::accept_change(&mut record, &change, &entry.notary)
+                            .map_err(group_error)?;
+                    }
+                    Err(error) => return Err(group_error(error)),
+                }
                 from = change.revision + 1;
             }
-            // A newest notary that names a config this device doesn't hold:
-            // the relay may be hiding a newer one.
             if let Some(last) = page.entries.last() {
-                if !record.gateway.named_by(&last.notary) {
-                    let pin = record.home.clone();
-                    let transport = Rc::clone(&self.transport);
-                    record
-                        .gateway
-                        .refresh(transport.as_ref(), &pin, now_seconds())
-                        .await?;
-                    if !record.gateway.named_by(&last.notary) {
-                        return Err(ChatError::Trust(
-                            "the group home's key isn't the one its signatures name".into(),
-                        ));
-                    }
-                }
+                newest = Some(last.notary.clone());
             }
+            record.not_found_since_ms = None;
             self.save_group(&record).await?;
-            if !page.more {
+            if !page.more || record.status == GroupStatus::Gone {
                 break;
             }
+        }
+        // Only the newest notary must name the key this device is served (or
+        // one it took before): an older change was notarised under the key of
+        // its time.
+        let mut key_confirmed = true;
+        if let Some(notary) = newest {
+            if record.gateway.check(&notary) == ConfigCheck::Unknown {
+                self.refresh_gateway(&mut record).await?;
+                key_confirmed = record.gateway.check(&notary) != ConfigCheck::Unknown;
+                self.save_group(&record).await?;
+            }
+        }
+        if record.status == GroupStatus::Gone {
+            return Ok(GroupSync::Gone);
         }
         let revision = record
             .verified()
             .map_err(group_error)?
             .map(|(state, _)| state.revision)
             .unwrap_or_default();
+        Ok(GroupSync::Current {
+            revision,
+            key_confirmed,
+        })
+    }
+
+    async fn refresh_gateway(&mut self, record: &mut GroupRecordV1) -> Result<()> {
+        let pin = record.home.clone();
+        let transport = Rc::clone(&self.transport);
+        record
+            .gateway
+            .refresh(transport.as_ref(), &pin, now_seconds())
+            .await
+    }
+
+    /// The home answered "not found": kept as a possible removal until it
+    /// has lasted long enough.
+    async fn not_found(&mut self, record: &mut GroupRecordV1) -> Result<GroupSync> {
+        let now = crate::clock::unix_millis();
+        let since = *record.not_found_since_ms.get_or_insert(now);
+        if now - since >= NOT_FOUND_CONFIRM_MS {
+            record.status = GroupStatus::Gone;
+        }
+        self.save_group(record).await?;
         Ok(if record.status == GroupStatus::Gone {
             GroupSync::Gone
         } else {
-            GroupSync::Current { revision }
+            GroupSync::MaybeRemoved { since_ms: since }
         })
     }
 
@@ -362,16 +446,31 @@ impl Engine {
             Ok(response) => response,
             Err(failure) => return Ok(GroupSync::Unreachable(failure)),
         };
+        if response.status == GroupResponseStatusV1::NotFound {
+            return self.not_found(record).await;
+        }
         let answer: GroupStateAnswerV1 = serde_json::from_slice(&accepted_body(response)?)
-            .map_err(|e| ChatError::Invalid(e.to_string()))?;
+            .map_err(|_| ChatError::Invalid("the group home's state doesn't read".into()))?;
         let state = GroupStateV1::from_canonical_bytes(&decode_b64(&answer.state)?)
             .map_err(ChatError::Invalid)?;
         let change = GroupChangeV1::from_canonical_bytes(&decode_b64(&answer.change)?)
             .map_err(ChatError::Invalid)?;
-        group::accept_state(record, &state, &change, &answer.notary).map_err(group_error)?;
+        match group::accept_state(record, &state, &change, &answer.notary) {
+            Ok(()) => {}
+            // An identity this device doesn't hold yet: the history once more.
+            Err(GroupError::Notary) => {
+                self.refresh_gateway(record).await?;
+                group::accept_state(record, &state, &change, &answer.notary)
+                    .map_err(group_error)?;
+            }
+            Err(error) => return Err(group_error(error)),
+        }
+        record.not_found_since_ms = None;
         self.save_group(record).await?;
+        let key_confirmed = record.gateway.check(&answer.notary) != ConfigCheck::Unknown;
         Ok(GroupSync::Current {
             revision: state.revision,
+            key_confirmed,
         })
     }
 
@@ -384,9 +483,11 @@ impl Engine {
         let mut keys: BTreeMap<AccountRef, Vec<(u32, PublicKey)>> = BTreeMap::new();
         for account in accounts {
             let account_text = account.to_string();
-            let Some(manifest) = Rc::clone(&self.transport)
+            // A manifest that can't be fetched or verified now leaves that
+            // member unverified; the list still shows.
+            let Ok(Some(manifest)) = Rc::clone(&self.transport)
                 .fetch_manifest(&account_text)
-                .await?
+                .await
             else {
                 continue;
             };
@@ -436,5 +537,311 @@ impl Engine {
                 }
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::{Cell, RefCell};
+
+    use async_trait::async_trait;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use futures_executor::block_on;
+    use kutup_chat_proto::group::{check_change, check_genesis, decode_group_id, GroupLimits};
+    use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupNotaryV1, GroupRequestV1};
+    use kutup_chat_proto::{
+        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    };
+    use kutup_crypto::oblivious::GatewayKey;
+    use kutup_federation_proto::FederationIdentityDocumentV1;
+    use rand::rngs::OsRng;
+    use rand::TryRngCore as _;
+
+    use super::*;
+    use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, SendOutcome};
+    use crate::SqliteChatDb;
+
+    /// The home and this account's server in one: a gateway that opens what
+    /// it gets, a log it pages, and notaries made under the config of their
+    /// time.
+    struct Home {
+        identity: FederationIdentityDocumentV1,
+        key: SigningKey,
+        gateway: RefCell<GatewayKey>,
+        config: RefCell<GroupGatewayKeyConfigV1>,
+        /// What the gateway-key fetch serves (a home may serve one client
+        /// another config).
+        served: RefCell<Option<GroupGatewayKeyConfigV1>>,
+        log: RefCell<Vec<(GroupChangeV1, GroupNotaryV1)>>,
+        state: RefCell<Option<(GroupStateV1, [u8; 32])>>,
+        empty_pages: Cell<bool>,
+        not_found: Cell<bool>,
+    }
+
+    fn now() -> i64 {
+        crate::clock::unix_millis() / 1000
+    }
+
+    impl Home {
+        fn new() -> Self {
+            let key = SigningKey::from_bytes(&[1u8; 32]);
+            let identity = FederationIdentityDocumentV1::genesis("example.test", 10, &key).unwrap();
+            let gateway = GatewayKey::generate(1).unwrap();
+            let config = Self::sign_config(&identity, &key, &gateway, now() - 100);
+            Self {
+                identity,
+                key,
+                gateway: RefCell::new(gateway),
+                config: RefCell::new(config),
+                served: RefCell::new(None),
+                log: RefCell::new(Vec::new()),
+                state: RefCell::new(None),
+                empty_pages: Cell::new(false),
+                not_found: Cell::new(false),
+            }
+        }
+
+        fn sign_config(
+            identity: &FederationIdentityDocumentV1,
+            key: &SigningKey,
+            gateway: &GatewayKey,
+            issued_at: i64,
+        ) -> GroupGatewayKeyConfigV1 {
+            GroupGatewayKeyConfigV1::sign(
+                identity,
+                key,
+                gateway.key_id(),
+                &gateway.public_key(),
+                issued_at,
+                issued_at + 7 * 24 * 60 * 60,
+            )
+            .unwrap()
+        }
+
+        fn rotate(&self, key_id: u8) {
+            let gateway = GatewayKey::generate(key_id).unwrap();
+            *self.config.borrow_mut() =
+                Self::sign_config(&self.identity, &self.key, &gateway, now() - 50);
+            *self.gateway.borrow_mut() = gateway;
+        }
+
+        fn accept(&self, change: &GroupChangeV1) -> GroupNotaryV1 {
+            let next = match &*self.state.borrow() {
+                None => check_genesis(
+                    change,
+                    &GroupHomePinV1::of(&self.identity).unwrap(),
+                    &GroupLimits::MAX,
+                )
+                .unwrap(),
+                Some((state, head)) => {
+                    check_change(state, head, change, &GroupLimits::MAX).unwrap()
+                }
+            };
+            let hash = change.hash().unwrap();
+            let notary = GroupNotaryV1::sign(
+                &self.identity,
+                &self.key,
+                &self.config.borrow(),
+                &decode_group_id(&change.group_id).unwrap(),
+                change.revision,
+                &hash,
+                &next.hash().unwrap(),
+            )
+            .unwrap();
+            self.log.borrow_mut().push((change.clone(), notary.clone()));
+            *self.state.borrow_mut() = Some((next, hash));
+            notary
+        }
+    }
+
+    #[async_trait(?Send)]
+    impl ChatTransport for Home {
+        async fn register_device(&self, _: &RegisterChatDeviceRequest) -> Result<u32> {
+            Ok(1)
+        }
+        async fn fetch_bundles(&self, _: &str) -> Result<UserPreKeyBundlesResponse> {
+            unreachable!()
+        }
+        async fn send(&self, _: &str, _: &SendMessagesRequest) -> Result<SendOutcome> {
+            unreachable!()
+        }
+        async fn drain(&self, _: u32, _: Option<u64>, _: u32) -> Result<MailboxPage> {
+            unreachable!()
+        }
+        async fn ack(&self, _: u32, _: &[String]) -> Result<()> {
+            unreachable!()
+        }
+
+        async fn fetch_group_gateway(&self, _: &str, _: u64) -> Result<GroupGatewayAnswer> {
+            Ok(GroupGatewayAnswer {
+                config: self
+                    .served
+                    .borrow()
+                    .clone()
+                    .unwrap_or_else(|| self.config.borrow().clone()),
+                identity_history: vec![self.identity.clone()],
+            })
+        }
+
+        async fn relay_group_request(&self, _: &str, sealed: &[u8]) -> Result<GroupRelayOutcome> {
+            let Ok((body, context)) = self.gateway.borrow().open_request(sealed) else {
+                return Ok(GroupRelayOutcome::Unopenable);
+            };
+            let request = GroupRequestV1::from_canonical_bytes(&body).unwrap();
+            let response = if self.not_found.get() {
+                GroupResponseV1::new(GroupResponseStatusV1::NotFound, now(), b"")
+            } else {
+                assert_eq!(request.operation, GroupOperationV1::GetLogs);
+                let query: GroupLogQueryV1 =
+                    serde_json::from_slice(&request.body().unwrap()).unwrap();
+                let entries = if self.empty_pages.get() {
+                    Vec::new()
+                } else {
+                    self.log
+                        .borrow()
+                        .iter()
+                        .filter(|(change, _)| change.revision >= query.from_revision)
+                        .map(|(change, notary)| GroupLogEntryV1 {
+                            change: STANDARD.encode(change.canonical_bytes().unwrap()),
+                            notary: notary.clone(),
+                        })
+                        .collect()
+                };
+                let page = GroupLogPageV1 {
+                    entries,
+                    more: self.empty_pages.get(),
+                };
+                GroupResponseV1::new(
+                    GroupResponseStatusV1::Ok,
+                    now(),
+                    &serde_json::to_vec(&page).unwrap(),
+                )
+            };
+            Ok(GroupRelayOutcome::Answered(
+                context
+                    .seal_response(&response.canonical_bytes().unwrap())
+                    .unwrap(),
+            ))
+        }
+    }
+
+    /// An engine, and a group it holds at revision 0 under the home's first
+    /// key (its cache holding that key), with a title change at revision 1
+    /// the home notarised under the same key.
+    fn setup() -> (Engine, Rc<Home>, String) {
+        let home = Rc::new(Home::new());
+        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+        let engine = block_on(Engine::register(
+            db,
+            home.clone(),
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            10,
+            &mut OsRng.unwrap_err(),
+        ))
+        .unwrap();
+        let account = engine.session.account_ref().clone();
+        let device = SigningKey::from_bytes(&[3u8; 32]);
+        let sign = |bytes: &[u8]| Ok(device.sign(bytes).to_bytes().to_vec());
+        let (mut record, genesis) = group::create_group(NewGroup {
+            home: GroupHomePinV1::of(&home.identity).unwrap(),
+            me: &account,
+            device_id: 1,
+            profile_key: &[4u8; 32],
+            sign_binding: &sign,
+        })
+        .unwrap();
+        record.gateway.identity_history = vec![home.identity.clone()];
+        record.gateway.config = Some(home.config.borrow().clone());
+        let notary = home.accept(&genesis);
+        group::accept_change(&mut record, &genesis, &notary).unwrap();
+        let title = group::seal_attribute(&record, GroupAttribute::Title, b"T").unwrap();
+        let change = group::author_change(
+            &record,
+            vec![GroupActionV1::ModifyAttribute {
+                attribute: GroupAttribute::Title,
+                value: Some(title),
+            }],
+        )
+        .unwrap();
+        home.accept(&change);
+        block_on(engine.save_group(&record)).unwrap();
+        (engine, home, record.group_id)
+    }
+
+    #[test]
+    fn a_quiet_group_catches_up_across_a_key_rotation() {
+        let (mut engine, home, group_id) = setup();
+        // The change was notarised under key 1; the home has since moved to 2.
+        home.rotate(2);
+        let sync = block_on(engine.sync_group(&group_id)).unwrap();
+        assert_eq!(
+            sync,
+            GroupSync::Current {
+                revision: 1,
+                key_confirmed: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_newest_signature_naming_a_key_never_held_is_flagged_not_fatal() {
+        let (mut engine, home, group_id) = setup();
+        // This client is served a config of its own (validly signed), while the
+        // home's signatures name the one others get.
+        let other = GatewayKey::generate(9).unwrap();
+        *home.served.borrow_mut() = Some(Home::sign_config(
+            &home.identity,
+            &home.key,
+            &other,
+            now() - 10,
+        ));
+        // Its cache forgets the key it had, so it has never held the named one.
+        let mut record = block_on(engine.load_group_record(&group_id)).unwrap();
+        record.gateway.config = None;
+        record.gateway.accepted.clear();
+        block_on(engine.save_group(&record)).unwrap();
+        *home.gateway.borrow_mut() = other;
+        let sync = block_on(engine.sync_group(&group_id)).unwrap();
+        assert_eq!(
+            sync,
+            GroupSync::Current {
+                revision: 1,
+                key_confirmed: false
+            }
+        );
+    }
+
+    #[test]
+    fn an_empty_page_with_more_to_come_is_an_error() {
+        let (mut engine, home, group_id) = setup();
+        home.empty_pages.set(true);
+        assert!(matches!(
+            block_on(engine.sync_group(&group_id)),
+            Err(ChatError::Trust(_))
+        ));
+    }
+
+    #[test]
+    fn not_found_is_a_possible_removal_until_it_lasts() {
+        let (mut engine, home, group_id) = setup();
+        home.not_found.set(true);
+        let first = block_on(engine.sync_group(&group_id)).unwrap();
+        assert!(matches!(first, GroupSync::MaybeRemoved { .. }));
+        // Still answering so after the confirmation period: gone.
+        let mut record = block_on(engine.load_group_record(&group_id)).unwrap();
+        record.not_found_since_ms = Some(crate::clock::unix_millis() - NOT_FOUND_CONFIRM_MS - 1);
+        block_on(engine.save_group(&record)).unwrap();
+        assert_eq!(
+            block_on(engine.sync_group(&group_id)).unwrap(),
+            GroupSync::Gone
+        );
+        // And an answer that isn't "not found" resets the clock.
+        let (mut engine, home, group_id) = setup();
+        home.not_found.set(true);
+        block_on(engine.sync_group(&group_id)).unwrap();
+        home.not_found.set(false);
+        block_on(engine.sync_group(&group_id)).unwrap();
+        let record = block_on(engine.load_group_record(&group_id)).unwrap();
+        assert_eq!(record.not_found_since_ms, None);
     }
 }

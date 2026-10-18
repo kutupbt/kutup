@@ -10,6 +10,7 @@
 //! config is caught when a notary names a config this device doesn't hold
 //! ([`GatewayCache::named_by`]).
 
+use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupNotaryV1, GroupOperationV1, GroupRequestV1,
@@ -33,16 +34,47 @@ const REFRESH_MARGIN_SECS: i64 = 60 * 60;
 pub struct GatewayCache {
     pub config: Option<GroupGatewayKeyConfigV1>,
     pub identity_history: Vec<FederationIdentityDocumentV1>,
+    /// The hashes of every config this device took for the home, oldest
+    /// first (at most [`MAX_ACCEPTED_CONFIGS`]): a change notarised before a
+    /// rotation names one of them.
+    pub accepted: Vec<String>,
+}
+
+/// How many accepted configs a home's cache remembers.
+pub const MAX_ACCEPTED_CONFIGS: usize = 16;
+
+/// What the config a notary names is, to this device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigCheck {
+    /// The config this device is served now.
+    Current,
+    /// One it took before (the change came before a rotation).
+    Earlier,
+    /// One it never held: either a rotation it slept through, or a relay
+    /// showing it a config other members don't get.
+    Unknown,
 }
 
 impl GatewayCache {
-    /// Whether the home's newest notary names the config held here: when it
-    /// doesn't, the relay may be showing an old one, and the config is fetched
-    /// again before the route is used.
-    pub fn named_by(&self, notary: &GroupNotaryV1) -> bool {
-        self.config
+    /// What the config `notary` names is to this device. For a home's newest
+    /// notary, `Unknown` is fetched again; if it stays unknown, the group is
+    /// shown as not confirmed, without stopping it.
+    pub fn check(&self, notary: &GroupNotaryV1) -> ConfigCheck {
+        if self
+            .config
             .as_ref()
             .is_some_and(|config| notary.names(config).unwrap_or(false))
+        {
+            return ConfigCheck::Current;
+        }
+        if self
+            .accepted
+            .iter()
+            .any(|hash| hash == &notary.key_config_hash)
+        {
+            return ConfigCheck::Earlier;
+        }
+        ConfigCheck::Unknown
     }
 
     fn usable(&self, now: i64) -> Option<(u8, [u8; 32])> {
@@ -80,6 +112,18 @@ impl GatewayCache {
             .config
             .accept_after(self.config.as_ref(), now)
             .map_err(|error| ChatError::Trust(format!("group gateway key: {error}")))?;
+        let hash = base64::engine::general_purpose::STANDARD.encode(
+            answer
+                .config
+                .hash()
+                .map_err(|error| ChatError::Invalid(error.to_string()))?,
+        );
+        if !self.accepted.contains(&hash) {
+            self.accepted.push(hash);
+            if self.accepted.len() > MAX_ACCEPTED_CONFIGS {
+                self.accepted.remove(0);
+            }
+        }
         self.config = Some(answer.config);
         self.identity_history = answer.identity_history;
         Ok(())
@@ -124,6 +168,15 @@ pub async fn call(
     signer: &RequestSigner<'_>,
     now: i64,
 ) -> Result<std::result::Result<GroupResponseV1, RouteFailure>> {
+    // A key taken outside `refresh` (a new group's own server) is remembered too.
+    if let Some(config) = &cache.config {
+        if let Ok(hash) = config.hash() {
+            let hash = base64::engine::general_purpose::STANDARD.encode(hash);
+            if !cache.accepted.contains(&hash) {
+                cache.accepted.push(hash);
+            }
+        }
+    }
     let mut clock_offset = 0i64;
     let mut refreshed = false;
     for _ in 0..3 {

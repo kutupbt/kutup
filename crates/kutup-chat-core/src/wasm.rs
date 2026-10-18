@@ -867,10 +867,27 @@ struct SearchView {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedGroupView {
+    group_id: String,
+    title_set: bool,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum GroupSyncView {
-    Current { revision: u64 },
-    Unreachable { reason: &'static str },
+    #[serde(rename_all = "camelCase")]
+    Current {
+        revision: u64,
+        key_confirmed: bool,
+    },
+    Unreachable {
+        reason: &'static str,
+    },
+    #[serde(rename_all = "camelCase")]
+    MaybeRemoved {
+        since_ms: i64,
+    },
     Gone,
 }
 
@@ -879,7 +896,14 @@ impl From<crate::group_engine::GroupSync> for GroupSyncView {
         use crate::group_client::RouteFailure;
         use crate::group_engine::GroupSync;
         match sync {
-            GroupSync::Current { revision } => Self::Current { revision },
+            GroupSync::Current {
+                revision,
+                key_confirmed,
+            } => Self::Current {
+                revision,
+                key_confirmed,
+            },
+            GroupSync::MaybeRemoved { since_ms } => Self::MaybeRemoved { since_ms },
             GroupSync::Unreachable(failure) => Self::Unreachable {
                 reason: match failure {
                     RouteFailure::RateLimited => "rateLimited",
@@ -1026,8 +1050,14 @@ impl WasmChatClient {
     /// A new group on this account's server, this account its first
     /// administrator: its id.
     #[wasm_bindgen(js_name = createGroup)]
-    pub async fn create_group(&mut self, title: String) -> std::result::Result<String, JsValue> {
-        self.engine.create_group(&title).await.map_err(chat_error)
+    /// `{groupId, titleSet}`: the group exists even when its title couldn't
+    /// be set.
+    pub async fn create_group(&mut self, title: String) -> std::result::Result<JsValue, JsValue> {
+        let created = self.engine.create_group(&title).await.map_err(chat_error)?;
+        to_output(&CreatedGroupView {
+            group_id: created.group_id,
+            title_set: created.title_set,
+        })
     }
 
     #[wasm_bindgen(js_name = setGroupTitle)]

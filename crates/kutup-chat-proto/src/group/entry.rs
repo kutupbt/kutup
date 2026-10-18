@@ -63,6 +63,15 @@ impl std::fmt::Debug for GroupInviteV1 {
     }
 }
 
+/// The keys are wiped when the invitation is dropped (once claimed, they
+/// live only in the record's `Invited` status).
+impl Drop for GroupInviteV1 {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.master_key);
+        zeroize::Zeroize::zeroize(&mut self.claim_key_seed);
+    }
+}
+
 macro_rules! canonical_json {
     ($type:ty, $name:literal) => {
         impl $type {
