@@ -19,6 +19,7 @@ rust-version.workspace = true
 openapi = ["dep:utoipa"]
 
 [dependencies]
+zeroize = { workspace = true }
 kutup-crypto = { path = "../kutup-crypto", default-features = false }
 kutup-federation-proto = { path = "../kutup-federation-proto" }
 serde = { workspace = true }

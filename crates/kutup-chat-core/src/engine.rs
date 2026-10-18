@@ -162,8 +162,8 @@ const WAITING_GIVE_UP_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// A registered chat client: one device plus its transport.
 pub struct Engine {
-    session: Session,
-    transport: Rc<dyn ChatTransport>,
+    pub(crate) session: Session,
+    pub(crate) transport: Rc<dyn ChatTransport>,
     state: EngineState,
     events: VecDeque<ChatEvent>,
     manifest_policy: ManifestPolicy,
@@ -2806,7 +2806,7 @@ impl Engine {
         )
     }
 
-    async fn accept_current_manifest_evidence(
+    pub(crate) async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
         manifest: &AccountManifestV1,

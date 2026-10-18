@@ -209,6 +209,10 @@ CREATE TABLE IF NOT EXISTS contacts (
     sync_pending     INTEGER NOT NULL DEFAULT 0,
     sync_send_id     TEXT
 );
+CREATE TABLE IF NOT EXISTS chat_groups (
+    group_id TEXT PRIMARY KEY,
+    record   BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS local_profile (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     profile BLOB NOT NULL
@@ -671,6 +675,25 @@ impl ChatDb for SqliteChatDb {
         ))?;
         let rows = db(stmt.query_map([], contact_row))?;
         rows.map(db).collect()
+    }
+
+    async fn load_group(&self, group_id: &str) -> Result<Option<crate::group::GroupRecordV1>> {
+        let conn = self.conn.borrow();
+        let encoded: Option<Vec<u8>> = db(conn
+            .query_row(
+                "SELECT record FROM chat_groups WHERE group_id = ?1",
+                [group_id],
+                |row| row.get(0),
+            )
+            .optional())?;
+        encoded.map(|bytes| decode_group(&bytes)).transpose()
+    }
+
+    async fn list_groups(&self) -> Result<Vec<crate::group::GroupRecordV1>> {
+        let conn = self.conn.borrow();
+        let mut stmt = db(conn.prepare("SELECT record FROM chat_groups ORDER BY group_id"))?;
+        let rows = db(stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)))?;
+        rows.map(|row| decode_group(&db(row)?)).collect()
     }
 
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>> {
@@ -1141,6 +1164,30 @@ impl ChatDb for SqliteChatDb {
                 ],
             ))?;
         }
+        for (group_id, record) in &pending.groups {
+            // Never back to an older verified state, or to another one at the
+            // same revision (docs/plans/pairwise-groups.md §3), checked inside
+            // the write transaction.
+            let existing: Option<Vec<u8>> = db(tx
+                .query_row(
+                    "SELECT record FROM chat_groups WHERE group_id = ?1",
+                    [group_id],
+                    |row| row.get(0),
+                )
+                .optional())?;
+            if let Some(existing) = existing {
+                record
+                    .may_replace(&decode_group(&existing)?)
+                    .map_err(|error| ChatError::Trust(error.to_string()))?;
+            }
+            let encoded = serde_json::to_vec(record)
+                .map_err(|error| ChatError::Db(format!("encode group record: {error}")))?;
+            db(tx.execute(
+                "INSERT INTO chat_groups (group_id, record) VALUES (?1, ?2)
+                 ON CONFLICT(group_id) DO UPDATE SET record = excluded.record",
+                rusqlite::params![group_id, encoded],
+            ))?;
+        }
         if let Some(profile) = &pending.local_profile {
             let encoded = serde_json::to_vec(profile)
                 .map_err(|error| ChatError::Db(format!("encode local profile: {error}")))?;
@@ -1502,6 +1549,12 @@ fn blob_by_id(conn: &Connection, table: &str, id: u32) -> Result<Option<Vec<u8>>
     db(conn.query_row(&sql, [id], |row| row.get(0)).optional())
 }
 
+fn decode_group(bytes: &[u8]) -> Result<crate::group::GroupRecordV1> {
+    // The record holds keys: the decoder's message, which may quote a
+    // value, is not passed on.
+    serde_json::from_slice(bytes).map_err(|_| ChatError::Db("a group record doesn't read".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1521,6 +1574,47 @@ mod tests {
         assert_eq!(block_on(db.load_pre_key(7)).unwrap(), Some(vec![1, 2, 3]));
         assert_eq!(block_on(db.purge_used_pre_keys(i64::MAX)).unwrap(), 1);
         assert_eq!(block_on(db.load_pre_key(7)).unwrap(), None);
+    }
+
+    #[test]
+    fn group_records_are_kept_and_replaced_by_id() {
+        use crate::group::{GroupRecordV1, GroupStatus};
+        use futures_executor::block_on;
+
+        let record = |status| GroupRecordV1 {
+            version: 1,
+            group_id: "g".repeat(43),
+            master_key: crate::group::SecretText("AAAA".into()),
+            home: kutup_chat_proto::group_route::GroupHomePinV1 {
+                server: "home.example".into(),
+                identity_sequence: 1,
+                identity_document_hash: "9".repeat(64),
+            },
+            pseudonym_seed: crate::group::SecretText("BBBB".into()),
+            status,
+            min_revision: 0,
+            state: None,
+            head: None,
+            notary_sequence: None,
+            gateway: Default::default(),
+            not_found_since_ms: None,
+        };
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let mut first = Pending::default();
+        first
+            .groups
+            .insert("g".repeat(43), record(GroupStatus::Requesting));
+        block_on(db.apply(&first)).unwrap();
+        let mut second = Pending::default();
+        second
+            .groups
+            .insert("g".repeat(43), record(GroupStatus::Member));
+        block_on(db.apply(&second)).unwrap();
+
+        let loaded = block_on(db.load_group(&"g".repeat(43))).unwrap().unwrap();
+        assert_eq!(loaded.status, GroupStatus::Member);
+        assert_eq!(block_on(db.list_groups()).unwrap().len(), 1);
+        assert!(block_on(db.load_group("other")).unwrap().is_none());
     }
 
     #[test]

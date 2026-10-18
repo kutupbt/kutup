@@ -51,13 +51,14 @@ const INBOUND: &str = "inbound";
 const MANIFEST_TRUST: &str = "manifest_trust";
 const MANIFEST_HISTORY: &str = "manifest_history";
 const CONTACTS: &str = "contacts";
+const GROUPS: &str = "groups";
 const LOCAL_PROFILE: &str = "local_profile";
 const PEER_PROFILES: &str = "peer_profiles";
 const META: &str = "meta";
 /// Derived index records (conversation timelines), sealed like the rest.
 const INDEX: &str = "index_values";
 
-const ALL_STORES: [&str; 23] = [
+const ALL_STORES: [&str; 24] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -77,6 +78,7 @@ const ALL_STORES: [&str; 23] = [
     MANIFEST_TRUST,
     MANIFEST_HISTORY,
     CONTACTS,
+    GROUPS,
     LOCAL_PROFILE,
     PEER_PROFILES,
     META,
@@ -127,8 +129,9 @@ impl IndexedDbChatDb {
         }
 
         // Version 13 dropped the device-to-device history-transfer stores;
-        // an upgrade deletes every object store not listed here.
-        let mut builder = Rexie::builder(name).version(13);
+        // 14 added the groups store. An upgrade deletes every object store
+        // not listed here.
+        let mut builder = Rexie::builder(name).version(14);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -592,6 +595,16 @@ impl ChatDb for IndexedDbChatDb {
         Ok(contacts)
     }
 
+    async fn load_group(&self, group_id: &str) -> Result<Option<crate::group::GroupRecordV1>> {
+        self.get(GROUPS, string_key(group_id)).await
+    }
+
+    async fn list_groups(&self) -> Result<Vec<crate::group::GroupRecordV1>> {
+        let mut groups = self.all::<crate::group::GroupRecordV1>(GROUPS).await?;
+        groups.sort_by(|left, right| left.group_id.cmp(&right.group_id));
+        Ok(groups)
+    }
+
     async fn load_local_profile(&self) -> Result<Option<LocalProfile>> {
         self.get(LOCAL_PROFILE, string_key(SINGLETON)).await
     }
@@ -686,6 +699,16 @@ impl ChatDb for IndexedDbChatDb {
                 }
             }
         }
+        // A group record never goes back to an older verified state, or to
+        // another one at the same revision (docs/plans/pairwise-groups.md §3);
+        // checked under the same single writer.
+        for (group_id, record) in &pending.groups {
+            if let Some(existing) = self.load_group(group_id).await? {
+                record
+                    .may_replace(&existing)
+                    .map_err(|error| ChatError::Trust(error.to_string()))?;
+            }
+        }
         // Serialize before opening the transaction. Serialization cannot leave
         // a partially queued write-set, and 64-bit counters become JS BigInts
         // instead of lossy Numbers.
@@ -720,6 +743,7 @@ impl ChatDb for IndexedDbChatDb {
         let manifest_trust = store(MANIFEST_TRUST)?;
         let manifest_history = store(MANIFEST_HISTORY)?;
         let contacts = store(CONTACTS)?;
+        let groups = store(GROUPS)?;
         let local_profile = store(LOCAL_PROFILE)?;
         let peer_profiles = store(PEER_PROFILES)?;
         let meta = store(META)?;
@@ -802,6 +826,7 @@ impl ChatDb for IndexedDbChatDb {
             )?);
         }
         self.stage_puts(&mut operations, &contacts, writes.contacts)?;
+        self.stage_puts(&mut operations, &groups, writes.groups)?;
         if let Some(value) = writes.local_profile.take() {
             operations.push(self.put(&local_profile, string_key(SINGLETON), &value)?);
         }
@@ -944,6 +969,7 @@ struct PreparedWrites {
     manifest_trust: Vec<(String, Vec<u8>)>,
     manifest_history: Vec<((String, String, u64), Vec<u8>)>,
     contacts: Vec<(String, Vec<u8>)>,
+    groups: Vec<(String, Vec<u8>)>,
     local_profile: Option<Vec<u8>>,
     peer_profiles: Vec<(String, Vec<u8>)>,
     prekey_upload: Option<Option<Vec<u8>>>,
@@ -991,6 +1017,7 @@ impl PreparedWrites {
             manifest_trust: serialize_map(&pending.manifest_trust)?,
             manifest_history: serialize_map(&pending.manifest_history)?,
             contacts: serialize_map(&pending.contacts)?,
+            groups: serialize_map(&pending.groups)?,
             local_profile: pending.local_profile.as_ref().map(encode).transpose()?,
             peer_profiles: serialize_map(&pending.peer_profiles)?,
             prekey_upload: pending
@@ -1245,7 +1272,7 @@ mod tests {
         let name = format!("kutup-chat-test-unkeyed-{}", js_sys::Date::now());
         // A database with records but no wrapped store key: what a store
         // from before sealing, or one from an interrupted first open, holds.
-        let mut builder = Rexie::builder(&name).version(13);
+        let mut builder = Rexie::builder(&name).version(14);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }

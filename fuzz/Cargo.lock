@@ -979,6 +979,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
