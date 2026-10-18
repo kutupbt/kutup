@@ -1735,6 +1735,7 @@ fn a_sender_that_cannot_send_it_again_says_it_is_lost_and_the_notice_stays() {
         &kutup_chat_proto::SessionControlBody {
             action: kutup_chat_proto::SessionControlAction::Lost,
             send_ids: vec![lost_id.to_string()],
+            group: None,
         },
     );
     block_on(alice.send(

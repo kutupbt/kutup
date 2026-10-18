@@ -115,6 +115,13 @@ pub mod kind {
     /// A message sent once more, at the request of a device that could not
     /// read it, wrapped whole. [IMPL]
     pub const RESEND: &str = "resend";
+    /// A group sender key handed to one member device, pairwise and hidden
+    /// (docs/plans/pairwise-groups.md §1). Never history. [IMPL]
+    pub const SENDER_KEY_DISTRIBUTION: &str = "senderKeyDistribution";
+    /// An invitation to a group: the invitee's own copy, pairwise, carrying
+    /// the group's key and the slot's one-time claim key. Never sent to other
+    /// members. [IMPL]
+    pub const GROUP_INVITE: &str = "groupInvite";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -484,6 +491,94 @@ impl ChatContent {
 
     pub fn is_session_control(&self) -> bool {
         self.kind == kind::SESSION_CONTROL
+    }
+
+    fn hidden_with_id(
+        kind: &str,
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: serde_json::Value,
+    ) -> Self {
+        ChatContent {
+            v: Self::VERSION,
+            kind: kind.to_string(),
+            sent_at: sent_at.into(),
+            seq,
+            message_id: message_id.into(),
+            reply_to: None,
+            profile_key: None,
+            profile_suite: None,
+            body,
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    /// A group sender key for one member device: hidden, never history.
+    pub fn sender_key_distribution_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: &SenderKeyDistributionBody,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::SENDER_KEY_DISTRIBUTION,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::to_value(body).unwrap_or_default(),
+        )
+    }
+
+    pub fn as_sender_key_distribution(&self) -> Option<SenderKeyDistributionBody> {
+        if self.kind != kind::SENDER_KEY_DISTRIBUTION || self.v != Self::VERSION {
+            return None;
+        }
+        let body: SenderKeyDistributionBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
+    /// An invitation to a group, for the invitee only.
+    pub fn group_invite_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        invite: &crate::group::GroupInviteV1,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::GROUP_INVITE,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::to_value(invite).unwrap_or_default(),
+        )
+    }
+
+    pub fn as_group_invite(&self) -> Option<crate::group::GroupInviteV1> {
+        if self.kind != kind::GROUP_INVITE || self.v != Self::VERSION {
+            return None;
+        }
+        let invite: crate::group::GroupInviteV1 = serde_json::from_value(self.body.clone()).ok()?;
+        invite.validate().ok()?;
+        Some(invite)
+    }
+
+    /// Marks this content as a message of a group.
+    pub fn with_group_context(mut self, context: &crate::group::GroupContextV1) -> Self {
+        self.extra.insert(
+            GROUP_CONTEXT_FIELD.to_string(),
+            serde_json::to_value(context).unwrap_or_default(),
+        );
+        self
+    }
+
+    /// The group this content belongs to, if it carries a valid context.
+    pub fn group_context(&self) -> Option<crate::group::GroupContextV1> {
+        let value = self.extra.get(GROUP_CONTEXT_FIELD)?;
+        let context: crate::group::GroupContextV1 = serde_json::from_value(value.clone()).ok()?;
+        context.validate().ok()?;
+        Some(context)
     }
 
     /// The control's body, when this reader understands it. A control it
@@ -1071,6 +1166,8 @@ impl ChatContent {
                     | kind::SAFETY_NUMBER_CHANGED
                     | kind::PEER_RENAMED
                     | kind::RESEND
+                    | kind::SENDER_KEY_DISTRIBUTION
+                    | kind::GROUP_INVITE
             )
     }
 }
@@ -1163,6 +1260,47 @@ pub struct ReceiptBody {
 /// Top-level content field: the sender's signed device-list version.
 pub const DEVICE_LIST_VERSION_FIELD: &str = "deviceListVersion";
 
+/// Top-level content field: the group a group message belongs to
+/// ([`crate::group::GroupContextV1`]).
+pub const GROUP_CONTEXT_FIELD: &str = "group";
+
+/// Body of a [`kind::SENDER_KEY_DISTRIBUTION`]: libsignal's
+/// `SenderKeyDistributionMessage` for one group's distribution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SenderKeyDistributionBody {
+    pub group_id: String,
+    /// The sender's distribution id for the group (a UUID).
+    pub distribution_id: String,
+    /// The serialized distribution message, standard base64.
+    pub message: String,
+}
+
+impl SenderKeyDistributionBody {
+    pub fn validate(&self) -> Result<(), String> {
+        crate::group::decode_group_id(&self.group_id)?;
+        uuid::Uuid::parse_str(&self.distribution_id)
+            .map_err(|_| "distributionId must be a UUID".to_string())?;
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.message)
+            .map_err(|_| "message must be base64".to_string())?;
+        if bytes.is_empty() || bytes.len() > 1024 {
+            return Err("a distribution message has an invalid length".into());
+        }
+        Ok(())
+    }
+}
+
+/// With a group `refresh`: the group and the sender's distribution the
+/// writer couldn't read (docs/plans/pairwise-groups.md §2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionControlGroupV1 {
+    pub group_id: String,
+    pub distribution_id: String,
+}
+
 /// The most message ids one session control may name.
 pub const MAX_SESSION_CONTROL_SEND_IDS: usize = 64;
 
@@ -1175,6 +1313,9 @@ pub struct SessionControlBody {
     /// With `unavailable`: messages asked for that cannot be sent again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub send_ids: Vec<String>,
+    /// For a group message: which group and distribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<SessionControlGroupV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

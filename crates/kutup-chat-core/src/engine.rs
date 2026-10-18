@@ -2177,7 +2177,11 @@ impl Engine {
             send_id.clone(),
             crate::clock::rfc3339(unix_millis()),
             seq,
-            &kutup_chat_proto::SessionControlBody { action, send_ids },
+            &kutup_chat_proto::SessionControlBody {
+                action,
+                send_ids,
+                group: None,
+            },
         );
         let _ = self.send(&send_id, peer, &content, rng).await;
     }

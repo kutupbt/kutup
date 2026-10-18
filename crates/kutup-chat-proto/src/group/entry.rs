@@ -35,6 +35,48 @@ pub struct GroupSlotEntryV1 {
     pub account: AccountRef,
 }
 
+/// The group a group message belongs to, inside its encrypted content
+/// (Signal's `GroupContextV2`, plus the home and the chain head): a member
+/// that lost the group learns it again from any message, and every receiver
+/// compares the revision and head with its own (fork detection).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupContextV1 {
+    pub version: u16,
+    pub group_id: String,
+    pub master_key: String,
+    pub home: GroupHomePinV1,
+    pub revision: u64,
+    pub chain_hash: String,
+}
+
+impl GroupContextV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        require_version(self.version)?;
+        decode_group_id(&self.group_id)?;
+        decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
+        decode_exact::<32>("chainHash", &self.chain_hash)?;
+        Ok(())
+    }
+}
+
+/// Never prints the master key.
+impl std::fmt::Debug for GroupContextV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupContextV1")
+            .field("group_id", &self.group_id)
+            .field("revision", &self.revision)
+            .field("chain_hash", &self.chain_hash)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for GroupContextV1 {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.master_key);
+    }
+}
+
 /// What an invitee gets in their own copy of the adder's group update, never
 /// in the copy the other members get: the group, and the slot's one-time
 /// claim key.
