@@ -191,6 +191,7 @@ docker run --rm -v "$PWD:/repo" -w /repo \
 ./scripts/test-chat-backup-integration.sh        # real Postgres/SeaweedFS backup lifecycle
 ./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
 ./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
+KUTUP_SERVER=… ./scripts/verify-cli.sh          # the kutup CLI's Drive round trip (registers its own account)
 KUTUP_SERVER=… ./scripts/verify-pass-sync.sh    # two machines edit one KeePass vault offline (Kutup Pass K1)
 KUTUP_SERVER=… ./scripts/verify-pass-ssh.sh     # the kutup SSH agent against OpenSSH (Kutup Pass K3b)
 pnpm -C frontend run test:pass-wasm             # Kutup Pass WASM: edits, saves, merges (after build:wasm)
@@ -198,8 +199,11 @@ pnpm -C frontend run test:pass-wasm             # Kutup Pass WASM: edits, saves,
 
 The backup integration script owns a disposable Compose project and covers the
 HTTP lifecycle, fixed-cutoff mailbox/media retention, account purge, object
-cleanup, and exact Chat-byte release. It tears down its Postgres and SeaweedFS
-state even on failure.
+cleanup, and exact Chat-byte release. It ends with the `kutup` CLI end to end
+against the same backend: `scripts/verify-cli.sh`, `scripts/verify-pass-sync.sh`
+and `scripts/verify-pass-ssh.sh`, each on an account it registers with
+`kutup register`. It tears down its Postgres and SeaweedFS state even on
+failure.
 
 The federation harness uses its own Compose project, two tmpfs Postgres
 databases, and host ports 39081/39082. Despite its historical filename, it is
