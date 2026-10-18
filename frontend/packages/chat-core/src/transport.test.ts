@@ -243,6 +243,19 @@ describe('ApiChatTransport', () => {
     )
   })
 
+  it('sends a sealed batch anonymously to its destination server', async () => {
+    const base = await resolveApiBase()
+    const results = { results: [] }
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: results } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.sendSealedBatch('b.test', { recipients: [] })).resolves.toEqual(results)
+    expect(post).toHaveBeenLastCalledWith(
+      `${base}/chat/anonymous/messages/batch`,
+      { recipients: [] },
+      { params: { server: 'b.test' }, withCredentials: false, headers: { Authorization: undefined } },
+    )
+  })
+
   it('reports only the server\'s own sealed refusal as refused', async () => {
     await resolveApiBase()
     const refusal = (data: unknown) => new axios.AxiosError('failed', '404', undefined, undefined, { status: 404, data } as never)

@@ -209,6 +209,19 @@ pub trait ChatTransport {
         ))
     }
 
+    /// `POST /api/chat/anonymous/messages/batch?server={server}`: sealed sends
+    /// to several accounts of one server in one anonymous request, one result
+    /// each, in order.
+    async fn send_sealed_batch(
+        &self,
+        _server: &str,
+        _batch: &kutup_chat_proto::SealedBatchSubmissionV1,
+    ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement sealed batches".into(),
+        ))
+    }
+
     /// The account's synced identity pins, shared with Drive and its other
     /// apps; `None` before the first list. A transport without them answers
     /// `None`, and Chat keeps to its own pins.

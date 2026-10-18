@@ -124,6 +124,11 @@ pub(crate) struct World {
     cursor: Cell<u64>,
     /// Every sealed submission that was stored: `(recipient, submission)`.
     pub(crate) sealed_sent: RefCell<Vec<(String, SealedMessageSubmissionV1)>>,
+    /// How many sealed batches were sent.
+    pub(crate) batches: Cell<usize>,
+    /// One-shot answers the batch route gives an account instead of taking
+    /// its send.
+    pub(crate) batch_answers: RefCell<Vec<(String, kutup_chat_proto::SealedBatchOutcomeV1)>>,
     /// Accounts whose manifest can't be fetched now.
     pub(crate) manifests_down: RefCell<HashSet<String>>,
     /// The home can't be reached now.
@@ -208,6 +213,8 @@ impl World {
             mailboxes: RefCell::new(BTreeMap::new()),
             cursor: Cell::new(0),
             sealed_sent: RefCell::new(Vec::new()),
+            batches: Cell::new(0),
+            batch_answers: RefCell::new(Vec::new()),
             manifests_down: RefCell::new(HashSet::new()),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
@@ -832,6 +839,45 @@ impl ChatTransport for Client {
             return Err(ChatError::Transport("sealed delivery unavailable".into()));
         }
         self.world.bundles(account, None)
+    }
+
+    /// The batch route, recipient by recipient as the server applies it.
+    async fn send_sealed_batch(
+        &self,
+        server: &str,
+        batch: &kutup_chat_proto::SealedBatchSubmissionV1,
+    ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
+        use kutup_chat_proto::{SealedBatchOutcomeV1 as Outcome, SealedBatchResultV1};
+        batch.validate().map_err(ChatError::Invalid)?;
+        self.world.batches.set(self.world.batches.get() + 1);
+        let mut results = Vec::new();
+        for recipient in &batch.recipients {
+            let account = format!("aci:{}@{server}", recipient.account_id);
+            let scripted = {
+                let mut answers = self.world.batch_answers.borrow_mut();
+                answers
+                    .iter()
+                    .position(|(to, _)| *to == account)
+                    .map(|place| answers.remove(place).1)
+            };
+            let outcome = match scripted {
+                Some(outcome) => outcome,
+                None => match self.send_sealed(&account, &recipient.submission).await? {
+                    SendOutcome::Delivered { deduplicated } => Outcome::Delivered {
+                        stored: recipient.submission.envelopes.len(),
+                        deduplicated,
+                    },
+                    SendOutcome::Mismatch(mismatch) => Outcome::DeviceMismatch { mismatch },
+                    SendOutcome::Refused => Outcome::Unavailable,
+                },
+            };
+            results.push(SealedBatchResultV1 {
+                account_id: recipient.account_id.clone(),
+                send_id: recipient.submission.send_id.clone(),
+                outcome,
+            });
+        }
+        Ok(kutup_chat_proto::SealedBatchResponseV1 { results })
     }
 
     async fn send_sealed(
@@ -2241,4 +2287,72 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
     let later = crate::clock::unix_millis() + 61_000;
     block_on(alice.engine.session.purge_expired_history(later)).unwrap();
     assert!(!in_log(&alice));
+}
+
+// ----- sealed batches (#244) -----
+
+#[test]
+fn group_batches_a_message_goes_to_all_member_accounts_in_one_request() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let mut dave = world.person(0xd4);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol, &mut dave]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    // The first message: one request for the key's distribution, one for it.
+    let before = world.batches.get();
+    alice.send_text(&group_id, "with the key");
+    assert_eq!(world.batches.get() - before, 2);
+    // Then one request a message.
+    let before = world.batches.get();
+    let send_id = alice.send_text(&group_id, "one request");
+    assert_eq!(world.batches.get() - before, 1);
+    assert_eq!(reached(&world, &send_id).len(), 3);
+    for person in [&mut bob, &mut carol, &mut dave] {
+        person.receive();
+        let texts = person.group_texts(&group_id);
+        assert!(
+            texts.contains(&"with the key".to_string())
+                && texts.contains(&"one request".to_string())
+        );
+    }
+}
+
+#[test]
+fn group_batches_a_limited_leg_waits_and_a_refused_one_fails() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    world.batch_answers.borrow_mut().extend([
+        (bob.account.clone(), Outcome::RateLimited),
+        (carol.account.clone(), Outcome::Refused),
+    ]);
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(&send_id, ISSUED_AT, seq, "limited");
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    // Bob's leg waits, Carol's failed for good.
+    assert_eq!((summary.pending, summary.failed), (1, 1));
+    // The next flush takes Bob's, with the same send id; Carol's isn't tried.
+    let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!(flushed.len(), 1);
+    assert_eq!((flushed[0].pending, flushed[0].failed), (0, 1));
+    bob.receive();
+    assert!(bob.group_texts(&group_id).contains(&"limited".to_string()));
+    carol.receive();
+    assert!(!carol
+        .group_texts(&group_id)
+        .contains(&"limited".to_string()));
 }

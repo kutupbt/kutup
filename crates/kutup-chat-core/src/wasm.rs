@@ -299,6 +299,15 @@ extern "C" {
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    /// `POST /api/chat/anonymous/messages/batch?server=`: the
+    /// `SealedBatchResponseV1`.
+    #[wasm_bindgen(method, catch, js_name = sendSealedBatch)]
+    async fn js_send_sealed_batch(
+        this: &JsChatTransport,
+        server: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = sendSyncMessage)]
     async fn js_send_sync_message(
         this: &JsChatTransport,
@@ -666,6 +675,19 @@ impl ChatTransport for BrowserTransport {
         })
     }
 
+    async fn send_sealed_batch(
+        &self,
+        server: &str,
+        batch: &kutup_chat_proto::SealedBatchSubmissionV1,
+    ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
+        from_transport(
+            self.js
+                .js_send_sealed_batch(server, to_transport(batch)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
     async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
@@ -872,6 +894,8 @@ struct GroupSendView {
     send_id: String,
     delivered: usize,
     pending: usize,
+    /// Member accounts whose server refused it for good.
+    failed: usize,
 }
 
 impl From<crate::group_send::GroupSendSummary> for GroupSendView {
@@ -880,6 +904,7 @@ impl From<crate::group_send::GroupSendSummary> for GroupSendView {
             send_id: summary.send_id,
             delivered: summary.delivered,
             pending: summary.pending,
+            failed: summary.failed,
         }
     }
 }

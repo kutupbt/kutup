@@ -1067,6 +1067,16 @@ own fallback path (§1).
   The per-IP limit counts requests. The per-capability counters stay the
   real limit, one unit per recipient (§7). The origin forwards one federated
   transaction per destination.
+  - **As built.** A group message's legs and a new sender key's
+    distributions each go as one batch per destination server
+    (`POST /api/chat/anonymous/messages/batch`), cut at 64 recipients and
+    4 MiB. `delivered` and `pending` (queued by this server for the
+    recipient's) finish a leg; `unavailable` and `peerUnsupported` end it as
+    a refused direct send does; `refused` (for good, or over 1 MiB) ends it
+    as failed, which the send's summary reports; `deviceMismatch` amends the
+    leg (a device without the key gets the message pairwise) and sends it
+    again, up to five rounds; `rateLimited`, `conflict` and a batch that
+    didn't go leave the leg for a later flush under the same send id.
   - This is the multi-recipient route's outer shape without libsignal's
     format, so slice 2 replaces the body, not the plumbing.
   - Raising the per-IP default instead would weaken the outer wall for direct

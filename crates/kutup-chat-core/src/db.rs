@@ -228,6 +228,10 @@ pub struct GroupOutboxLeg {
     /// The devices the leg covered: the message's original recipients.
     pub devices: Vec<u32>,
     pub delivered: bool,
+    /// The recipient's server refused it for good (delivered is then true:
+    /// nothing more is tried).
+    #[serde(default)]
+    pub failed: bool,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox

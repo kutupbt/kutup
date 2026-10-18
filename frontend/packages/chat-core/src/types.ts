@@ -1422,6 +1422,8 @@ export interface ChatTransportPort {
     | { kind: 'mismatch'; mismatch: unknown }
     | { kind: 'refused' }
   >
+  /** The `SealedBatchResponseV1` of a sealed batch to accounts of `server`. */
+  sendSealedBatch(server: string, request: unknown): Promise<unknown>
   sendSyncMessage(
     request: unknown,
   ): Promise<
