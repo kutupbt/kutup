@@ -870,7 +870,7 @@ mod tests {
     fn setup() -> (Engine, Rc<Home>, String) {
         let home = Rc::new(Home::new());
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let engine = block_on(Engine::register(
+        let mut engine = block_on(Engine::register(
             db,
             home.clone(),
             "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",

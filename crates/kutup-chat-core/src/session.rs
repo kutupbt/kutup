@@ -4787,6 +4787,208 @@ mod sealed_tests {
             Some("sealed hello".into())
         );
     }
+
+    #[test]
+    fn a_group_message_is_encrypted_once_and_opened_with_the_senders_key() {
+        let mut rng = OsRng.unwrap_err();
+        let alice_name = "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example";
+        let bob_name = "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example";
+        let carol_name = "aci:00000000-0000-4000-8000-c0c0c0c0c0c0@chat.example";
+        let session = |name: &str, rng: &mut _| {
+            block_on(Session::generate(
+                Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+                name,
+                1,
+                4,
+                rng,
+            ))
+            .unwrap()
+        };
+        let mut alice = session(alice_name, &mut rng);
+        let mut bob = session(bob_name, &mut rng);
+        let mut carol = session(carol_name, &mut rng);
+        let trust_root = KeyPair::generate(&mut rng);
+        let server_key = KeyPair::generate(&mut rng);
+        let server_certificate =
+            ServerCertificate::new(1, server_key.public_key, &trust_root.private_key, &mut rng)
+                .unwrap();
+        let expiration =
+            Timestamp::from_epoch_millis(u64::try_from(now_millis()).unwrap() + 60 * 60 * 1000);
+        let certificate = SenderCertificate::new(
+            alice_name.into(),
+            None,
+            alice.local_identity_public_key(),
+            crate::address::device_id_u8(1).unwrap(),
+            expiration,
+            server_certificate,
+            &server_key.private_key,
+            &mut rng,
+        )
+        .unwrap();
+        let group_id = [5u8; 32];
+        let context = kutup_chat_proto::group::GroupContextV1 {
+            version: 1,
+            group_id: kutup_chat_proto::group::encode_group_id(&group_id),
+            master_key: kutup_chat_proto::group::encode(&[6u8; 32]),
+            home: kutup_chat_proto::group_route::GroupHomePinV1 {
+                server: "chat.example".into(),
+                identity_sequence: 0,
+                identity_document_hash: "9".repeat(64),
+            },
+            revision: 1,
+            chain_hash: kutup_chat_proto::group::encode(&[7u8; 32]),
+        };
+        let delivered = |id: &str, content: &str| DeliveredEnvelope {
+            id: id.into(),
+            cursor: 1,
+            sender: None,
+            sealed_sender: true,
+            sender_device_id: 0,
+            envelope_type: EnvelopeType::Message,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            content: content.into(),
+            server_timestamp: "2026-10-18T00:00:01Z".into(),
+            send_id: None,
+        };
+
+        // Alice's key goes to Bob pairwise, as hidden group content.
+        let distribution_id = uuid::Uuid::new_v4();
+        let message = block_on(alice.sender_key_distribution(distribution_id, &mut rng)).unwrap();
+        let content = ChatContent::sender_key_distribution_with_id(
+            "00000000-0000-4000-8000-000000000010",
+            "2026-10-18T00:00:00Z",
+            0,
+            &kutup_chat_proto::content::SenderKeyDistributionBody {
+                group_id: context.group_id.clone(),
+                distribution_id: distribution_id.to_string(),
+                message: base64::engine::general_purpose::STANDARD.encode(&message),
+            },
+        );
+        let sealed = block_on(alice.seal_pairwise(
+            bob_name,
+            &[bundle(&bob)],
+            &certificate,
+            &content,
+            &mut rng,
+        ))
+        .unwrap();
+        let envelope = delivered("pairwise-1", &sealed[0].content);
+        let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
+        assert!(
+            inspection.group_id.is_none(),
+            "a pairwise message names no group"
+        );
+        let ReceiveOutcome::GroupContent { from, content, .. } = block_on(
+            bob.receive_sealed_envelope(&envelope, &inspection, bob_name, &trust_root.public_key),
+        )
+        .unwrap() else {
+            panic!("a sender key is group content, never a direct message")
+        };
+        let body = content.as_sender_key_distribution().unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(body.message)
+            .unwrap();
+        block_on(bob.process_sender_key_distribution(&from, &bytes)).unwrap();
+
+        // Two messages, each encrypted once and sealed per device.
+        for (n, text) in ["first", "second"].into_iter().enumerate() {
+            let plaintext = serde_json::to_vec(
+                &ChatContent::text_with_id(
+                    format!("00000000-0000-4000-8000-00000000002{n}"),
+                    "2026-10-18T00:00:02Z",
+                    n as u64 + 1,
+                    text,
+                )
+                .with_group_context(&context),
+            )
+            .unwrap();
+            let encrypted =
+                block_on(alice.group_encrypt(distribution_id, &plaintext, &mut rng)).unwrap();
+            let sealed = block_on(alice.seal_group_message(
+                bob_name,
+                &[bundle(&bob)],
+                &certificate,
+                &group_id,
+                &encrypted,
+                &mut rng,
+            ))
+            .unwrap();
+            let envelope = delivered(&format!("group-{n}"), &sealed[0].content);
+            let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
+            assert_eq!(inspection.group_id, Some(group_id));
+            let ReceiveOutcome::Message(message) = block_on(bob.receive_sealed_group_envelope(
+                &envelope,
+                &inspection,
+                &trust_root.public_key,
+            ))
+            .unwrap() else {
+                panic!("a group message is a message")
+            };
+            assert_eq!(message.content.as_text().unwrap().text, text);
+            assert_eq!(message.content.group_context().unwrap(), context);
+
+            // Carol never got the key: unreadable, the kind that heals.
+            if n == 0 {
+                let sealed = block_on(alice.seal_group_message(
+                    carol_name,
+                    &[bundle(&carol)],
+                    &certificate,
+                    &group_id,
+                    &encrypted,
+                    &mut rng,
+                ))
+                .unwrap();
+                let envelope = delivered("carol-1", &sealed[0].content);
+                let inspection = block_on(carol.inspect_sealed_envelope(&envelope)).unwrap();
+                let Err(error) = block_on(carol.receive_sealed_group_envelope(
+                    &envelope,
+                    &inspection,
+                    &trust_root.public_key,
+                )) else {
+                    panic!("a message under a key never held can't be read")
+                };
+                assert_eq!(
+                    error.inbound_failure_kind(),
+                    crate::InboundFailureKind::MissingKeyMaterial
+                );
+            }
+        }
+
+        // A message naming another group inside than the one it was sealed for.
+        let mut other = context.clone();
+        other.group_id = kutup_chat_proto::group::encode_group_id(&[8u8; 32]);
+        let plaintext = serde_json::to_vec(
+            &ChatContent::text_with_id(
+                "00000000-0000-4000-8000-000000000030",
+                "2026-10-18T00:00:03Z",
+                3,
+                "elsewhere",
+            )
+            .with_group_context(&other),
+        )
+        .unwrap();
+        let encrypted =
+            block_on(alice.group_encrypt(distribution_id, &plaintext, &mut rng)).unwrap();
+        let sealed = block_on(alice.seal_group_message(
+            bob_name,
+            &[bundle(&bob)],
+            &certificate,
+            &group_id,
+            &encrypted,
+            &mut rng,
+        ))
+        .unwrap();
+        let envelope = delivered("group-x", &sealed[0].content);
+        let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
+        assert!(matches!(
+            block_on(bob.receive_sealed_group_envelope(
+                &envelope,
+                &inspection,
+                &trust_root.public_key
+            )),
+            Err(ChatError::Trust(_))
+        ));
+    }
 }
 
 /// Group calls exist only in MLS groups; a Direct copy is refused.
