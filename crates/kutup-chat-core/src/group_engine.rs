@@ -22,11 +22,8 @@ use libsignal_protocol::PublicKey;
 use crate::db::Pending;
 use crate::engine::Engine;
 use crate::error::{ChatError, Result};
-use crate::group::{
-    self, ContextCheck, GroupError, GroupMemberView, GroupRecordV1, GroupStatus, NewGroup,
-};
+use crate::group::{self, GroupError, GroupMemberView, GroupRecordV1, GroupStatus, NewGroup};
 use crate::group_client::{self, ConfigCheck, RequestSigner, RouteFailure};
-use crate::session::GroupGate;
 
 /// How many changes one log request asks for.
 const LOG_PAGE: u16 = 64;
@@ -96,42 +93,6 @@ pub const NOT_FOUND_CONFIRM_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// The most log pages one catch-up reads.
 const MAX_PAGES_PER_SYNC: usize = 256;
 
-/// A message from someone who isn't a member here makes this device catch up
-/// (they may have joined since) at most this often per group.
-pub(crate) const STRANGER_CATCH_UP_INTERVAL_MS: i64 = 30 * 1000;
-
-/// What a group message's context and sender mean for it, as Signal reads a
-/// group's state before a message that names a newer one
-/// (`maybeUpdateGroup`): `first_read` is false once this device caught up for
-/// it.
-pub(crate) fn gate_for(
-    check: ContextCheck,
-    member: bool,
-    first_read: bool,
-    may_catch_up: bool,
-) -> GroupGate {
-    match check {
-        // The sender is further on, or on another head: who is in may have
-        // changed, so catch up before deciding.
-        ContextCheck::Behind | ContextCheck::Fork if first_read => GroupGate::CatchUp,
-        _ if member => GroupGate::Accept,
-        // Not a member here: perhaps one who joined since.
-        _ if first_read && may_catch_up => GroupGate::CatchUp,
-        _ => GroupGate::Refuse,
-    }
-}
-
-/// How a message's context compares with the record's verified state;
-/// `None` for a context that doesn't read.
-fn context_check(
-    record: &GroupRecordV1,
-    context: &kutup_chat_proto::group::GroupContextV1,
-) -> Option<ContextCheck> {
-    let head =
-        kutup_chat_proto::group::decode_exact::<32>("chainHash", &context.chain_hash).ok()?;
-    group::compare_context(record, context.revision, &head).ok()
-}
-
 pub(crate) fn group_error(error: GroupError) -> ChatError {
     match error {
         GroupError::Notary => ChatError::Trust("the group home's signature doesn't verify".into()),
@@ -176,308 +137,9 @@ impl Engine {
         pending
             .groups
             .insert(record.group_id.clone(), record.clone());
-        self.session.db().apply(&pending).await?;
-        // The state may have changed: who is a member is checked again.
-        self.group_members_seen.remove(&record.group_id);
-        Ok(())
-    }
-
-    /// The group's verified member accounts (their bindings checked against
-    /// their manifests), kept for an hour.
-    pub(crate) async fn verified_member_accounts(&mut self, group_id: &str) -> Result<Vec<String>> {
-        let now = crate::clock::unix_millis();
-        if let Some((at, accounts)) = self.group_members_seen.get(group_id) {
-            if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
-                return Ok(accounts.clone());
-            }
-        }
-        let accounts: Vec<String> = self
-            .group_members(group_id)
-            .await?
-            .into_iter()
-            .filter_map(|member| member.verified.map(|verified| verified.account.to_string()))
-            .collect();
-        self.group_members_seen
-            .insert(group_id.to_string(), (now, accounts.clone()));
-        Ok(accounts)
-    }
-
-    /// Whether this device may catch up with the group's home for a
-    /// stranger's message now.
-    fn may_catch_up(record: &GroupRecordV1) -> bool {
-        let now = crate::clock::unix_millis();
-        record
-            .synced_at_ms
-            .is_none_or(|at| now.saturating_sub(at) >= STRANGER_CATCH_UP_INTERVAL_MS)
-    }
-
-    /// Whether `account` is blocked by this account: nothing of theirs is
-    /// taken in a group either, as in Signal.
-    async fn is_blocked(&self, account: &str) -> Result<bool> {
-        Ok(self
-            .session
-            .contact(account)
-            .await?
-            .is_some_and(|contact| contact.state == crate::ContactState::Blocked))
-    }
-
-    /// Notes what a member's accepted context said: a fork the catch-up
-    /// didn't settle is flagged, a matching head clears the flag.
-    async fn note_group_context(
-        &mut self,
-        group_id: &str,
-        check: ContextCheck,
-        revision: u64,
-    ) -> Result<()> {
-        let mut record = self.load_group_record(group_id).await?;
-        match check {
-            ContextCheck::Fork if record.fork_at_revision != Some(revision) => {
-                record.fork_at_revision = Some(revision);
-                self.save_group(&record).await?;
-                self.events.push_back(crate::ChatEvent::GroupForkSuspected {
-                    group_id: group_id.to_string(),
-                });
-            }
-            ContextCheck::Current if record.fork_at_revision.is_some() => {
-                record.fork_at_revision = None;
-                self.save_group(&record).await?;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    /// Whether group content `sender` sent pairwise may be taken: they must
-    /// be a member of a group this account is in. A context ahead of this
-    /// device's state, or a sender who isn't a member here, makes it catch
-    /// up from the home first (bounded for strangers).
-    pub(crate) async fn group_sender_checked(
-        &mut self,
-        group_id: &str,
-        sender: &str,
-        context: Option<&kutup_chat_proto::group::GroupContextV1>,
-    ) -> Result<bool> {
-        for first_read in [true, false] {
-            let Some(record) = self.session.db().load_group(group_id).await? else {
-                return Ok(false);
-            };
-            if record.status != GroupStatus::Member {
-                return Ok(false);
-            }
-            let member = self
-                .verified_member_accounts(group_id)
-                .await?
-                .iter()
-                .any(|account| account == sender);
-            let check = match context {
-                Some(context) => match context_check(&record, context) {
-                    Some(check) => Some((check, context.revision)),
-                    None => return Ok(false),
-                },
-                None => None,
-            };
-            let gate = gate_for(
-                check.map_or(ContextCheck::Current, |(check, _)| check),
-                member,
-                first_read,
-                Self::may_catch_up(&record),
-            );
-            match gate {
-                // Unreachable or refused: decided on what is held.
-                GroupGate::CatchUp => {
-                    let _ = self.sync_group(group_id).await;
-                }
-                GroupGate::Accept => {
-                    if let Some((check, revision)) = check {
-                        self.note_group_context(group_id, check, revision).await?;
-                    }
-                    return Ok(true);
-                }
-                GroupGate::Refuse => return Ok(false),
-            }
-        }
-        Ok(false)
-    }
-
-    /// A sender-key message: opened, then kept only when its sender is a
-    /// member at a state this device holds. A context ahead of that state,
-    /// or a sender who isn't a member, makes this device catch up from the
-    /// home and read it again, so a removal another administrator made is
-    /// known before the removed member's message is taken
-    /// (docs/plans/pairwise-groups.md §3).
-    pub(crate) async fn receive_group_envelope(
-        &mut self,
-        envelope: &kutup_chat_proto::DeliveredEnvelope,
-        inspection: &crate::session::SealedEnvelopeInspection,
-        validating_root: &PublicKey,
-    ) -> Result<crate::session::ReceiveOutcome> {
-        use crate::session::ReceiveOutcome;
-        use std::cell::Cell;
-        let group_id = inspection
-            .group_id
-            .map(|id| kutup_chat_proto::group::encode_group_id(&id))
-            .ok_or_else(|| ChatError::Trust("not a group message".into()))?;
-        let dropped = || ReceiveOutcome::Suppressed {
-            id: envelope.id.clone(),
-        };
-        if self.is_blocked(&inspection.sender).await? {
-            self.session.ack_dropped(envelope).await?;
-            return Ok(dropped());
-        }
-        // A catch-up that couldn't reach the home leaves a stranger's message
-        // waiting (retried with the inbound queue), never dropped unconfirmed.
-        let mut unconfirmed = false;
-        for first_read in [true, false] {
-            let record = match self.session.db().load_group(&group_id).await? {
-                Some(record) if record.status == GroupStatus::Member => record,
-                // Not a group this account is in.
-                _ => {
-                    self.session.ack_dropped(envelope).await?;
-                    return Ok(dropped());
-                }
-            };
-            let member = self
-                .verified_member_accounts(&group_id)
-                .await?
-                .contains(&inspection.sender);
-            let may_catch_up = Self::may_catch_up(&record);
-            let seen = Cell::new(None);
-            let gate = |context: &kutup_chat_proto::group::GroupContextV1| {
-                let Some(check) = context_check(&record, context) else {
-                    return GroupGate::Refuse;
-                };
-                let gate = match gate_for(check, member, first_read, may_catch_up) {
-                    GroupGate::Refuse if unconfirmed => GroupGate::CatchUp,
-                    gate => gate,
-                };
-                seen.set(Some((check, gate, context.revision)));
-                gate
-            };
-            let outcome = self
-                .session
-                .receive_sealed_group_envelope(envelope, inspection, validating_root, &gate)
-                .await?;
-            if matches!(outcome, ReceiveOutcome::GroupCatchUp) {
-                if !first_read {
-                    return Err(ChatError::Transport(
-                        "the group's server can't be reached to confirm the sender".into(),
-                    ));
-                }
-                // Otherwise decided on what is held.
-                unconfirmed = !matches!(
-                    self.sync_group(&group_id).await,
-                    Ok(GroupSync::Current { .. })
-                );
-                continue;
-            }
-            if let Some((check, GroupGate::Accept, revision)) = seen.get() {
-                self.note_group_context(&group_id, check, revision).await?;
-            }
-            return Ok(outcome);
-        }
-        Err(ChatError::Invalid(
-            "a group message asked to catch up twice".into(),
-        ))
-    }
-
-    /// Group content that came pairwise. A sender key or a message is taken
-    /// only from a member; an invitation starts an invited record that waits
-    /// for this account's choice. Nothing from a blocked account is taken.
-    pub(crate) async fn handle_group_content<R: rand::Rng + rand::CryptoRng>(
-        &mut self,
-        id: &str,
-        from: &crate::address::ChatAddress,
-        cursor: u64,
-        content: &kutup_chat_proto::ChatContent,
-        rng: &mut R,
-    ) -> Result<GroupContentOutcome> {
-        let sender = from.name();
-        if self.is_blocked(&sender).await? {
-            return Ok(GroupContentOutcome::Ignored);
-        }
-        if let Some(control) = content.as_session_control() {
-            let Some(group) = control.group.as_ref() else {
-                return Ok(GroupContentOutcome::Ignored);
-            };
-            if !self
-                .group_sender_checked(&group.group_id, &sender, None)
-                .await?
-            {
-                return Ok(GroupContentOutcome::Ignored);
-            }
-            if control.action == kutup_chat_proto::SessionControlAction::Refresh {
-                self.answer_group_refresh(from, &control, rng).await?;
-            } else {
-                self.session
-                    .settle_waiting(&sender, control.action, &control.send_ids)
-                    .await?;
-            }
-            return Ok(GroupContentOutcome::Ignored);
-        }
-        if let Some(body) = content.as_sender_key_distribution() {
-            if !self
-                .group_sender_checked(&body.group_id, &sender, None)
-                .await?
-            {
-                return Ok(GroupContentOutcome::Ignored);
-            }
-            let message = decode_b64(&body.message)?;
-            self.session
-                .process_sender_key_distribution(from, &message)
-                .await?;
-            return Ok(GroupContentOutcome::SenderKey);
-        }
-        if let Some(invite) = content.as_group_invite() {
-            let group_id = invite.group_id.clone();
-            // A group this account is in, or already invited to, is left as
-            // it is; one it left or declined takes a new invitation.
-            let previous = self.session.db().load_group(&group_id).await?;
-            if previous
-                .as_ref()
-                .is_some_and(|previous| previous.status != GroupStatus::Gone)
-            {
-                return Ok(GroupContentOutcome::Ignored);
-            }
-            let record = match group::record_from_invite(invite, &sender, previous.as_ref()) {
-                Ok(record) => record,
-                // A stale invitation for a membership that ended: dropped.
-                Err(_) if previous.is_some() => return Ok(GroupContentOutcome::Ignored),
-                Err(error) => return Err(group_error(error)),
-            };
-            self.save_group(&record).await?;
-            let request = !self.session.contact(&sender).await?.is_some_and(|contact| {
-                matches!(
-                    contact.state,
-                    crate::ContactState::Accepted | crate::ContactState::PendingOutgoing
-                )
-            });
-            return Ok(GroupContentOutcome::Invited {
-                group_id,
-                from: sender,
-                request,
-            });
-        }
-        let message = match content.as_resend() {
-            Some(resend) => *resend.content,
-            None => content.clone(),
-        };
-        if let Some(context) = message.group_context() {
-            if !self
-                .group_sender_checked(&context.group_id, &sender, Some(&context))
-                .await?
-            {
-                return Ok(GroupContentOutcome::Ignored);
-            }
-            // A change notice says only that the group moved on.
-            if message.kind == kutup_chat_proto::content::kind::GROUP_CHANGE {
-                return Ok(GroupContentOutcome::Ignored);
-            }
-            self.session
-                .store_group_message(id, from, cursor, &message)
-                .await?;
-            return Ok(GroupContentOutcome::Message(Box::new(message)));
-        }
-        Ok(GroupContentOutcome::Ignored)
+        // Who is a member is looked at again when the state's head moves
+        // (`group_membership`).
+        self.session.db().apply(&pending).await
     }
 
     pub(crate) async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
@@ -920,26 +582,56 @@ impl Engine {
     /// current verified manifest. A member whose device left the manifest
     /// shows unverified until they sign their binding again.
     pub async fn group_members(&mut self, group_id: &str) -> Result<Vec<GroupMemberView>> {
+        Ok(self.group_members_checked(group_id).await?.0)
+    }
+
+    /// [`Self::group_members`], and the member accounts whose manifest
+    /// couldn't be fetched now (their membership is unconfirmed, not
+    /// refused). A verified manifest's device keys are kept for the
+    /// known-devices interval.
+    pub(crate) async fn group_members_checked(
+        &mut self,
+        group_id: &str,
+    ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>)> {
         let record = self.load_group_record(group_id).await?;
         let accounts = group::member_accounts(&record).map_err(group_error)?;
+        let now = crate::clock::unix_millis();
         let mut keys: BTreeMap<AccountRef, Vec<(u32, PublicKey)>> = BTreeMap::new();
+        let mut unconfirmed = Vec::new();
         for account in accounts {
             let account_text = account.to_string();
-            // A manifest that can't be fetched or verified now leaves that
-            // member unverified; the list still shows.
-            let Ok(Some(manifest)) = Rc::clone(&self.transport)
+            if let Some((at, devices)) = self.manifest_keys_seen.get(&account_text) {
+                if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
+                    keys.insert(account, devices.clone());
+                    continue;
+                }
+            }
+            let manifest = match Rc::clone(&self.transport)
                 .fetch_manifest(&account_text)
                 .await
-            else {
-                continue;
+            {
+                Ok(Some(manifest)) => manifest,
+                // No manifest: an account with no devices, never a member's.
+                Ok(None) => continue,
+                // Not reachable now: neither in nor out.
+                Err(_) => {
+                    unconfirmed.push(account);
+                    continue;
+                }
             };
-            let Ok(manifest) = self
+            let manifest = match self
                 .accept_current_manifest_evidence(&account_text, &manifest)
                 .await
-            else {
-                continue;
+            {
+                Ok(manifest) => manifest,
+                Err(ChatError::Transport(_)) => {
+                    unconfirmed.push(account);
+                    continue;
+                }
+                // A manifest that doesn't verify: unverified.
+                Err(_) => continue,
             };
-            let devices = manifest
+            let devices: Vec<(u32, PublicKey)> = manifest
                 .devices
                 .iter()
                 .filter_map(|device| {
@@ -947,6 +639,8 @@ impl Engine {
                     Some((device.device_id, PublicKey::deserialize(&bytes).ok()?))
                 })
                 .collect();
+            self.manifest_keys_seen
+                .insert(account_text, (now, devices.clone()));
             keys.insert(account, devices);
         }
         let verify = |account: &AccountRef, device_id: u32, bytes: &[u8], signature: &[u8]| {
@@ -956,7 +650,8 @@ impl Engine {
                     .any(|(id, key)| *id == device_id && key.verify_signature(bytes, signature))
             })
         };
-        group::members(&record, &verify).map_err(group_error)
+        let members = group::members(&record, &verify).map_err(group_error)?;
+        Ok((members, unconfirmed))
     }
 
     /// Every group this device knows, with its title.

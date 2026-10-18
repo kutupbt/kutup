@@ -98,6 +98,9 @@ pub struct GroupRecordV1 {
     /// context matches again.
     #[serde(default)]
     pub fork_at_revision: Option<u64>,
+    /// The member whose context showed it: only they clear it.
+    #[serde(default)]
+    pub fork_sender: Option<String>,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -404,6 +407,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         sender_book: None,
         synced_at_ms: None,
         fork_at_revision: None,
+        fork_sender: None,
     };
     Ok((record, change))
 }
@@ -501,8 +505,9 @@ pub struct ClaimBasis {
 /// until the claim is accepted. The invitation is consumed.
 ///
 /// `previous` is the record of a membership that ended (declined, left or
-/// removed): its verified state is kept, so no older one is taken later, and
-/// only an invitation made after it starts the new one.
+/// removed), or of an older invitation (its slot perhaps revoked): its
+/// verified state is kept, so no older one is taken later, and only an
+/// invitation made after it starts the new one.
 pub fn record_from_invite(
     invite: GroupInviteV1,
     inviter: &str,
@@ -540,11 +545,17 @@ pub fn record_from_invite(
         sender_book: None,
         synced_at_ms: None,
         fork_at_revision: None,
+        fork_sender: None,
     };
     if let Some(previous) = previous {
-        if previous.group_id != record.group_id || previous.status != GroupStatus::Gone {
+        let replaceable = match &previous.status {
+            GroupStatus::Gone => true,
+            GroupStatus::Invited { slot_revision, .. } => invite.slot_revision > *slot_revision,
+            GroupStatus::Member | GroupStatus::Requesting => false,
+        };
+        if previous.group_id != record.group_id || !replaceable {
             return Err(record_error(
-                "only an ended membership takes a new invitation",
+                "only an ended membership or an older invitation takes a new one",
             ));
         }
         if previous.home != record.home {

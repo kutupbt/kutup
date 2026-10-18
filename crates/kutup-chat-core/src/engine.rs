@@ -104,6 +104,9 @@ pub struct ReceiveReport {
     pub errors: Vec<InboundFailure>,
     /// Invitations to groups that arrived.
     pub group_invites: Vec<GroupInviteNotice>,
+    /// Group envelopes left queued: their sender can't be confirmed as a
+    /// member now (docs/plans/pairwise-groups.md §3).
+    pub held: Vec<String>,
     /// Authenticated replays that were safely moved directly to pending-ack.
     pub duplicates: Vec<String>,
     /// Mailbox ids that could not be decrypted and were given up on, with
@@ -203,7 +206,14 @@ pub struct Engine {
     /// Each group's verified member accounts, and when they were checked
     /// (docs/plans/pairwise-groups.md §3): refreshed after
     /// `KNOWN_DEVICES_TTL_MS`, and dropped when the group's state changes.
-    pub(crate) group_members_seen: BTreeMap<String, (i64, Vec<String>)>,
+    pub(crate) group_members_seen: BTreeMap<String, crate::group_gate::GroupMembership>,
+    /// A verified manifest's device keys by account, and when they were
+    /// fetched: what group bindings are checked against, kept for
+    /// `KNOWN_DEVICES_TTL_MS`.
+    pub(crate) manifest_keys_seen:
+        BTreeMap<String, (i64, Vec<(u32, libsignal_protocol::PublicKey)>)>,
+    /// Each group's catch-ups for incoming content (`group_gate`).
+    pub(crate) group_catch_ups: BTreeMap<String, crate::group_gate::CatchUps>,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
@@ -259,6 +269,8 @@ impl Engine {
             known_devices: BTreeMap::new(),
             known_devices_at: BTreeMap::new(),
             group_members_seen: BTreeMap::new(),
+            manifest_keys_seen: BTreeMap::new(),
+            group_catch_ups: BTreeMap::new(),
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
             asked_again: BTreeMap::new(),
@@ -1987,48 +1999,77 @@ impl Engine {
             // The group a sender-key message named, for its repair.
             let mut group_origin: Option<[u8; 32]> = None;
             let mut group_implicit = false;
-            let receive_result = if envelope.sealed_sender {
-                origin = None;
-                let inspection = self.session.inspect_sealed_envelope(&envelope).await;
-                match inspection {
-                    Ok(inspection) => {
-                        let validation = self
-                            .validate_inbound_sealed_envelope(&envelope, &inspection)
-                            .await;
-                        match validation {
-                            Ok(root) => {
-                                origin =
-                                    Some((inspection.sender.clone(), inspection.sender_device_id));
-                                group_origin = inspection.group_id;
-                                group_implicit = inspection.implicit;
-                                if inspection.group_id.is_some() {
-                                    // A sender-key message: a group's, under its
-                                    // sender's key (docs/plans/pairwise-groups.md §1).
-                                    self.receive_group_envelope(&envelope, &inspection, &root)
-                                        .await
-                                } else {
-                                    let local = self.canonical_self()?;
-                                    self.session
-                                        .receive_sealed_envelope(
-                                            &envelope,
-                                            &inspection,
-                                            &local,
-                                            &root,
-                                        )
-                                        .await
+            // Group content that came pairwise is read once, decided about
+            // (its sender's membership, catching up if need be), and read
+            // again with the decision (docs/plans/pairwise-groups.md §3).
+            let mut decided = false;
+            let receive_result = loop {
+                let result = if envelope.sealed_sender {
+                    origin = None;
+                    let inspection = self.session.inspect_sealed_envelope(&envelope).await;
+                    match inspection {
+                        Ok(inspection) => {
+                            let validation = self
+                                .validate_inbound_sealed_envelope(&envelope, &inspection)
+                                .await;
+                            match validation {
+                                Ok(root) => {
+                                    origin = Some((
+                                        inspection.sender.clone(),
+                                        inspection.sender_device_id,
+                                    ));
+                                    group_origin = inspection.group_id;
+                                    group_implicit = inspection.implicit;
+                                    if inspection.group_id.is_some() {
+                                        // A sender-key message: a group's, under its
+                                        // sender's key (docs/plans/pairwise-groups.md §1).
+                                        self.receive_group_envelope(&envelope, &inspection, &root)
+                                            .await
+                                    } else {
+                                        let local = self.canonical_self()?;
+                                        self.session
+                                            .receive_sealed_envelope(
+                                                &envelope,
+                                                &inspection,
+                                                &local,
+                                                &root,
+                                            )
+                                            .await
+                                    }
                                 }
+                                Err(error) => Err(error),
                             }
-                            Err(error) => Err(error),
                         }
+                        Err(error) => Err(error),
                     }
-                    Err(error) => Err(error),
-                }
-            } else {
-                match self.validate_inbound_identified_envelope(&envelope).await {
-                    Ok(()) => self.session.receive_envelope(&envelope, rng).await,
-                    Err(error) => Err(error),
+                } else {
+                    match self.validate_inbound_identified_envelope(&envelope).await {
+                        Ok(()) => self.session.receive_envelope(&envelope, rng).await,
+                        Err(error) => Err(error),
+                    }
+                };
+                match &result {
+                    Ok(ReceiveOutcome::GroupCheck {
+                        group_id,
+                        sender,
+                        context,
+                    }) if !decided => {
+                        decided = true;
+                        let gate = match self
+                            .decide_group_content(group_id, sender, context.as_ref())
+                            .await
+                        {
+                            Ok(gate) => gate,
+                            // Not decidable now (the store, say): read again
+                            // on a later pass.
+                            Err(_) => crate::session::GroupGate::Hold,
+                        };
+                        self.session.decide_group(group_id, sender, gate);
+                    }
+                    _ => break result,
                 }
             };
+            self.session.clear_group_decisions();
             match receive_result {
                 Ok(ReceiveOutcome::Message(message)) => {
                     // The sender's device list moved on since this device
@@ -2137,9 +2178,22 @@ impl Engine {
                     ack_ids.push(id.clone());
                     report.undecodable.push(id);
                 }
-                // Settled inside the group read, which reads the envelope
-                // again after catching up; left for the next pass otherwise.
-                Ok(ReceiveOutcome::GroupCatchUp) => {}
+                // Group content that can't be confirmed now stays queued and
+                // is read again on a later pass; given up after a week.
+                Ok(
+                    ReceiveOutcome::GroupHeld
+                    | ReceiveOutcome::GroupCheck { .. }
+                    | ReceiveOutcome::GroupCatchUp,
+                ) => {
+                    let now = unix_millis() + self.clock_offset_ms;
+                    if now.saturating_sub(inbound.received_at) >= crate::group_gate::GROUP_HOLD_MS {
+                        self.session.ack_dropped(&envelope).await?;
+                        ack_ids.push(inbound.id.clone());
+                        report.suppressed.push(inbound.id);
+                    } else {
+                        report.held.push(inbound.id);
+                    }
+                }
                 Err(error) => {
                     let unreadable = matches!(
                         error.inbound_failure_kind(),
@@ -2161,9 +2215,9 @@ impl Engine {
                                 group_implicit,
                                 rng,
                             )
-                            .await?
+                            .await
                         {
-                            GroupRepair::Placeholder(notice) => {
+                            Ok(GroupRepair::Placeholder(notice)) => {
                                 self.events.push_back(ChatEvent::MessageReceived(Box::new(
                                     (*notice).clone(),
                                 )));
@@ -2173,9 +2227,25 @@ impl Engine {
                             }
                             // Asked for again without a placeholder (a change
                             // notice), or not a member's: nothing to show.
-                            GroupRepair::Asked | GroupRepair::Dropped => {
+                            Ok(GroupRepair::Asked | GroupRepair::Dropped) => {
                                 ack_ids.push(inbound.id.clone());
                                 report.suppressed.push(inbound.id);
+                            }
+                            // Its sender isn't confirmed yet, or the repair
+                            // couldn't be made now: left queued for a later
+                            // pass (perhaps readable then), given up after a
+                            // week.
+                            Ok(GroupRepair::Held) | Err(_) => {
+                                let now = unix_millis() + self.clock_offset_ms;
+                                if now.saturating_sub(inbound.received_at)
+                                    >= crate::group_gate::GROUP_HOLD_MS
+                                {
+                                    self.session.ack_dropped(&envelope).await?;
+                                    ack_ids.push(inbound.id.clone());
+                                    report.suppressed.push(inbound.id);
+                                } else {
+                                    report.held.push(inbound.id);
+                                }
                             }
                         }
                         continue;

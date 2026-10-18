@@ -29,6 +29,8 @@ mod group;
 mod group_client;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+mod group_gate;
 #[cfg(test)]
 mod group_harness_tests;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]

@@ -161,6 +161,18 @@ impl Engine {
         rng: &mut R,
     ) -> Result<()> {
         self.change_group(group_id, vec![GroupActionV1::Leave], rng)
-            .await
+            .await?;
+        // Nothing of the group is sent again: its send log goes, all but a
+        // change notice still on its way.
+        let mut pending = crate::db::Pending::default();
+        for entry in self.session.db().list_group_outbox().await? {
+            let notice = serde_json::from_slice::<ChatContent>(&entry.content)
+                .is_ok_and(|content| content.kind == kutup_chat_proto::content::kind::GROUP_CHANGE);
+            let undelivered = entry.legs.iter().any(|leg| !leg.delivered);
+            if entry.group_id == group_id && !(notice && undelivered) {
+                pending.group_outbox.insert(entry.send_id, None);
+            }
+        }
+        self.session.db().apply(&pending).await
     }
 }

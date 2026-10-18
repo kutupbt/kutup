@@ -116,6 +116,9 @@ pub(crate) enum GroupGate {
     CatchUp,
     /// Not from a member: acknowledged and dropped, nothing of it kept.
     Refuse,
+    /// Can't be confirmed now: nothing is kept and the envelope stays queued,
+    /// to be read again on a later pass.
+    Hold,
 }
 
 /// What [`Session::repair_undecryptable`] did.
@@ -203,14 +206,29 @@ pub(crate) enum ReceiveOutcome {
     /// A group message whose gate asked to catch up first: nothing was kept,
     /// and the envelope is read again after the catch-up.
     GroupCatchUp,
+    /// Group content that came pairwise, read but not kept: the engine
+    /// decides about its sender (`group_decisions`) and reads it again.
+    GroupCheck {
+        group_id: String,
+        sender: String,
+        context: Option<kutup_chat_proto::group::GroupContextV1>,
+    },
+    /// Group content that can't be confirmed now: nothing was kept, and the
+    /// envelope stays queued for a later pass.
+    GroupHeld,
     /// Decrypted but the plaintext wasn't a valid content document (a buggy/newer
     /// sender). Stored raw so it's never dropped; the app renders a placeholder.
     Undecodable { id: String },
 }
 
-/// How long a group's send log keeps a delivered message: as long as a
-/// member device waits for one it couldn't read before giving up.
-pub(crate) const GROUP_SEND_LOG_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// How long a group's send log keeps a delivered message for resends: a
+/// day, as Signal-Desktop's send log keeps them in practice
+/// (`Server.node.ts:1681-1696`). A later request is answered `unavailable`.
+pub(crate) const GROUP_SEND_LOG_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How long an undelivered group message is tried: a leg still not taken
+/// after a week (a server gone) fails, and its plaintext goes.
+pub(crate) const GROUP_UNDELIVERED_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// A registered local chat device, backed by a durable store.
 pub struct Session {
@@ -222,6 +240,10 @@ pub struct Session {
     /// `address` is the same account with this device's id: its libsignal address.
     account: String,
     address: ChatAddress,
+    /// What the engine decided for group content that came pairwise, by
+    /// `(group id, sender account)`, for the second read of an envelope
+    /// (`ReceiveOutcome::GroupCheck`).
+    group_decisions: std::collections::BTreeMap<(String, String), GroupGate>,
 }
 
 impl Session {
@@ -247,6 +269,7 @@ impl Session {
             registration: Some(material.registration),
             account,
             address,
+            group_decisions: Default::default(),
         })
     }
 
@@ -278,6 +301,7 @@ impl Session {
             registration: None,
             account,
             address,
+            group_decisions: Default::default(),
         };
         session.bootstrap_contacts().await?;
         Ok(session)
@@ -308,6 +332,7 @@ impl Session {
             registration: Some(registration),
             account,
             address,
+            group_decisions: Default::default(),
         })
     }
 
@@ -1357,17 +1382,51 @@ impl Session {
     ) -> Result<ReceiveOutcome> {
         let mut plaintext = plaintext;
         let mut parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
-        // A group's content goes to the engine, which checks membership: it
-        // never opens a direct conversation or a message request.
+        // A group's content never opens a direct conversation or a message
+        // request. Apart from an invitation, nothing of it is kept before the
+        // engine decided about its sender (docs/plans/pairwise-groups.md §3):
+        // read, set aside, and read again with the decision.
         if let Some(content) = parsed.as_ref().filter(|content| is_group_content(content)) {
-            self.stage_inbound_ack(envelope)?;
-            self.store.commit().await?;
-            return Ok(ReceiveOutcome::GroupContent {
-                id: envelope.id.clone(),
-                from,
-                cursor: envelope.cursor,
-                content: Box::new(content.clone()),
-            });
+            let group = group_of_content(content);
+            let decision = match &group {
+                None => Some(GroupGate::Accept),
+                Some((group_id, _)) => self
+                    .group_decisions
+                    .get(&(group_id.clone(), sender.clone()))
+                    .copied(),
+            };
+            match (decision, group) {
+                (Some(GroupGate::Accept), _) => {
+                    self.stage_inbound_ack(envelope)?;
+                    self.store.commit().await?;
+                    return Ok(ReceiveOutcome::GroupContent {
+                        id: envelope.id.clone(),
+                        from,
+                        cursor: envelope.cursor,
+                        content: Box::new(content.clone()),
+                    });
+                }
+                (Some(GroupGate::Refuse), _) => {
+                    self.store.discard();
+                    self.ack_dropped(envelope).await?;
+                    return Ok(ReceiveOutcome::Suppressed {
+                        id: envelope.id.clone(),
+                    });
+                }
+                (Some(GroupGate::Hold | GroupGate::CatchUp), _) => {
+                    self.store.discard();
+                    return Ok(ReceiveOutcome::GroupHeld);
+                }
+                (None, group) => {
+                    self.store.discard();
+                    let (group_id, context) = group.unwrap_or_default();
+                    return Ok(ReceiveOutcome::GroupCheck {
+                        group_id,
+                        sender,
+                        context,
+                    });
+                }
+            }
         }
         // A message sent again is handled as the message inside it, and
         // takes the place of the record that waited for it.
@@ -2018,15 +2077,17 @@ impl Session {
                 self.store.delete_outbox(&entry.send_id);
             }
         }
-        // A group's send log keeps what it may send again for as long as a
-        // member may ask for it (a week), and no message that disappeared or
-        // was deleted (docs/plans/pairwise-groups.md §2).
+        // A group's send log keeps a delivered message a day for resends, and
+        // tries an undelivered one for a week; nothing that disappeared or
+        // was deleted stays (docs/plans/pairwise-groups.md §2).
         for entry in self.store.db().list_group_outbox().await? {
             let conversation = kutup_chat_proto::ConversationId::Group {
                 group_id: entry.group_id.clone(),
             };
             let delivered = entry.legs.iter().all(|leg| leg.delivered);
-            if (delivered && now_ms.saturating_sub(entry.created_at) >= GROUP_SEND_LOG_MS)
+            let age = now_ms.saturating_sub(entry.created_at);
+            if (delivered && age >= GROUP_SEND_LOG_MS)
+                || age >= GROUP_UNDELIVERED_MS
                 || expired_content(
                     &entry.content,
                     &conversation,
@@ -3146,6 +3207,34 @@ impl Session {
         Ok(envelopes)
     }
 
+    /// A session with `peer` for a sealed send: established when there is
+    /// none, and set up again when the server now serves another identity
+    /// for the device (recorded as a safety-number change).
+    async fn prepare_sealed_session<R: Rng + CryptoRng>(
+        &mut self,
+        peer: &ChatAddress,
+        bundle: &DevicePreKeyBundle,
+        summary: &mut SendSummary,
+        rng: &mut R,
+    ) -> Result<()> {
+        let key = peer.to_protocol()?.to_string();
+        if self.store.has_session(&key).await? {
+            let served = decode_identity_key(&bundle.identity_key)?
+                .serialize()
+                .to_vec();
+            if self.store.peer_identity(&key).await?.as_deref() != Some(served.as_slice()) {
+                if self.accept_identity_staged(peer, bundle).await? {
+                    summary.safety_number_changes.push(peer.clone());
+                }
+                self.store.delete_session(&key);
+                self.establish_staged(peer, bundle, rng).await?;
+            }
+        } else {
+            self.establish_staged(peer, bundle, rng).await?;
+        }
+        Ok(())
+    }
+
     async fn build_sealed_send<R: Rng + CryptoRng>(
         &mut self,
         peer_user: &str,
@@ -3159,21 +3248,8 @@ impl Session {
         let mut envelopes = Vec::with_capacity(bundles.len());
         for bundle in bundles {
             let peer = ChatAddress::from_sender(peer_user, bundle.device_id)?;
-            let key = peer.to_protocol()?.to_string();
-            if self.store.has_session(&key).await? {
-                let served = decode_identity_key(&bundle.identity_key)?
-                    .serialize()
-                    .to_vec();
-                if self.store.peer_identity(&key).await?.as_deref() != Some(served.as_slice()) {
-                    if self.accept_identity_staged(&peer, bundle).await? {
-                        summary.safety_number_changes.push(peer.clone());
-                    }
-                    self.store.delete_session(&key);
-                    self.establish_staged(&peer, bundle, rng).await?;
-                }
-            } else {
-                self.establish_staged(&peer, bundle, rng).await?;
-            }
+            self.prepare_sealed_session(&peer, bundle, summary, rng)
+                .await?;
             let content = sealed_sender_encrypt(
                 &peer.to_protocol()?,
                 sender_certificate,
@@ -3982,6 +4058,10 @@ impl Session {
                 self.store.discard();
                 Ok(ReceiveOutcome::GroupCatchUp)
             }
+            Ok((GroupGate::Hold, ..)) => {
+                self.store.discard();
+                Ok(ReceiveOutcome::GroupHeld)
+            }
             Ok((GroupGate::Refuse, ..)) => {
                 self.store.discard();
                 self.ack_dropped(envelope).await?;
@@ -3994,6 +4074,18 @@ impl Session {
                 Err(error)
             }
         }
+    }
+
+    /// Sets what the engine decided for `(group id, sender)`'s pairwise
+    /// group content, for the next read of its envelope.
+    pub(crate) fn decide_group(&mut self, group_id: &str, sender: &str, gate: GroupGate) {
+        self.group_decisions
+            .insert((group_id.to_string(), sender.to_string()), gate);
+    }
+
+    /// Forgets the decisions after a pass.
+    pub(crate) fn clear_group_decisions(&mut self) {
+        self.group_decisions.clear();
     }
 
     /// Acknowledges an envelope that is dropped unread (a group message from
@@ -4097,7 +4189,8 @@ impl Session {
         sender_key_message: &[u8],
         hint: libsignal_protocol::ContentHint,
         rng: &mut R,
-    ) -> Result<Vec<SealedOutgoingEnvelopeV1>> {
+    ) -> Result<SealedGroupSend> {
+        let mut summary = SendSummary::default();
         let result = async {
             let usmc = libsignal_protocol::UnidentifiedSenderMessageContent::new(
                 libsignal_protocol::CiphertextMessageType::SenderKey,
@@ -4112,10 +4205,10 @@ impl Session {
                 if self.is_self(&peer) {
                     continue;
                 }
-                let key = peer.to_protocol()?.to_string();
-                if !self.store.has_session(&key).await? {
-                    self.establish_staged(&peer, bundle, rng).await?;
-                }
+                // The same identity check as a direct sealed send: a device
+                // whose served identity changed is set up again and shown.
+                self.prepare_sealed_session(&peer, bundle, &mut summary, rng)
+                    .await?;
                 let content = libsignal_protocol::sealed_sender_encrypt_from_usmc(
                     &peer.to_protocol()?,
                     &usmc,
@@ -4136,7 +4229,10 @@ impl Session {
         match result {
             Ok(envelopes) => {
                 self.store.commit().await?;
-                Ok(envelopes)
+                Ok(SealedGroupSend {
+                    envelopes,
+                    safety_number_changes: summary.safety_number_changes,
+                })
             }
             Err(error) => {
                 self.store.discard();
@@ -4155,7 +4251,7 @@ impl Session {
         sender_certificate: &SenderCertificate,
         content: &ChatContent,
         rng: &mut R,
-    ) -> Result<Vec<SealedOutgoingEnvelopeV1>> {
+    ) -> Result<SealedGroupSend> {
         let plaintext =
             serde_json::to_vec(content).map_err(|e| ChatError::Content(e.to_string()))?;
         let mut summary = SendSummary::default();
@@ -4172,7 +4268,10 @@ impl Session {
         match result {
             Ok(envelopes) => {
                 self.store.commit().await?;
-                Ok(envelopes)
+                Ok(SealedGroupSend {
+                    envelopes,
+                    safety_number_changes: summary.safety_number_changes,
+                })
             }
             Err(error) => {
                 self.store.discard();
@@ -4180,6 +4279,13 @@ impl Session {
             }
         }
     }
+}
+
+/// Envelopes sealed for one account, and its devices whose identity changed
+/// on the way (a safety-number change to show).
+pub(crate) struct SealedGroupSend {
+    pub envelopes: Vec<SealedOutgoingEnvelopeV1>,
+    pub safety_number_changes: Vec<ChatAddress>,
 }
 
 #[cfg(all(test, feature = "sqlite"))]
@@ -4931,17 +5037,38 @@ mod sealed_tests {
             &mut rng,
         ))
         .unwrap();
-        let envelope = delivered("pairwise-1", &sealed[0].content);
+        let envelope = delivered("pairwise-1", &sealed.envelopes[0].content);
         let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
         assert!(
             inspection.group_id.is_none(),
             "a pairwise message names no group"
         );
+        // Read once and set aside for the engine's decision about its
+        // sender; nothing is kept until then.
+        let ReceiveOutcome::GroupCheck {
+            group_id: checked,
+            sender,
+            ..
+        } = block_on(bob.receive_sealed_envelope(
+            &envelope,
+            &inspection,
+            bob_name,
+            &trust_root.public_key,
+        ))
+        .unwrap()
+        else {
+            panic!("a sender key is group content, never a direct message")
+        };
+        assert_eq!(
+            (checked.as_str(), sender.as_str()),
+            (context.group_id.as_str(), alice_name)
+        );
+        bob.decide_group(&checked, &sender, GroupGate::Accept);
         let ReceiveOutcome::GroupContent { from, content, .. } = block_on(
             bob.receive_sealed_envelope(&envelope, &inspection, bob_name, &trust_root.public_key),
         )
         .unwrap() else {
-            panic!("a sender key is group content, never a direct message")
+            panic!("taken once decided")
         };
         let body = content.as_sender_key_distribution().unwrap();
         let bytes = base64::engine::general_purpose::STANDARD
@@ -4973,7 +5100,7 @@ mod sealed_tests {
                 &mut rng,
             ))
             .unwrap();
-            let envelope = delivered(&format!("group-{n}"), &sealed[0].content);
+            let envelope = delivered(&format!("group-{n}"), &sealed.envelopes[0].content);
             let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
             assert_eq!(inspection.group_id, Some(group_id));
             assert!(!inspection.implicit);
@@ -5014,7 +5141,7 @@ mod sealed_tests {
                     &mut rng,
                 ))
                 .unwrap();
-                let envelope = delivered("carol-1", &sealed[0].content);
+                let envelope = delivered("carol-1", &sealed.envelopes[0].content);
                 let inspection = block_on(carol.inspect_sealed_envelope(&envelope)).unwrap();
                 let Err(error) = block_on(carol.receive_sealed_group_envelope(
                     &envelope,
@@ -5056,7 +5183,7 @@ mod sealed_tests {
             &mut rng,
         ))
         .unwrap();
-        let envelope = delivered("group-x", &sealed[0].content);
+        let envelope = delivered("group-x", &sealed.envelopes[0].content);
         let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
         assert!(matches!(
             block_on(bob.receive_sealed_group_envelope(
@@ -5091,7 +5218,7 @@ mod sealed_tests {
             &mut rng,
         ))
         .unwrap();
-        let envelope = delivered("group-refused", &sealed[0].content);
+        let envelope = delivered("group-refused", &sealed.envelopes[0].content);
         let inspection = block_on(bob.inspect_sealed_envelope(&envelope)).unwrap();
         assert!(inspection.implicit);
         let kept = block_on(bob.store.db().list_messages()).unwrap().len();
@@ -5133,6 +5260,37 @@ fn is_group_history_kind(kind: &str) -> bool {
 /// Content that belongs to a group: its hidden pairwise kinds, a group
 /// refresh, and any message carrying a group context (directly or inside a
 /// resend).
+/// The group pairwise content belongs to, and the context it carries;
+/// `None` for an invitation, which is decided on its own.
+fn group_of_content(
+    content: &ChatContent,
+) -> Option<(String, Option<kutup_chat_proto::group::GroupContextV1>)> {
+    if content.kind == kutup_chat_proto::content::kind::GROUP_INVITE {
+        return None;
+    }
+    let context = content.group_context().or_else(|| {
+        content
+            .as_resend()
+            .and_then(|resend| resend.content.group_context())
+    });
+    let group_id = context
+        .as_ref()
+        .map(|context| context.group_id.clone())
+        .or_else(|| {
+            content
+                .as_sender_key_distribution()
+                .map(|body| body.group_id)
+        })
+        .or_else(|| {
+            content
+                .as_session_control()
+                .and_then(|control| control.group.map(|group| group.group_id))
+        })
+        // Names no group that reads: decided as a stranger's.
+        .unwrap_or_default();
+    Some((group_id, context))
+}
+
 fn is_group_content(content: &ChatContent) -> bool {
     use kutup_chat_proto::content::kind;
     content.kind == kind::SENDER_KEY_DISTRIBUTION

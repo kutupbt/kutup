@@ -264,12 +264,15 @@ kept after delivery with the devices each leg went to (its ciphertexts
 cleared).
 - Desktop keeps a send log of 14 days at most (`background.preload.ts:1166-1181`),
   and in practice about a day (`Server.node.ts:1681-1696`).
-- Ours keeps a delivered message for a week, as long as a member device waits
-  for one it couldn't read (`GROUP_SEND_LOG_MS`). A message that disappeared, or
-  that its sender deleted for everyone, leaves the log at once, and the answer
-  is `unavailable`.
-- A key and each message are answered at most once an hour per requesting
-  device and group, across reloads and tabs (the direct resend limits).
+- Ours keeps a delivered message a day, as Desktop does in practice
+  (`GROUP_SEND_LOG_MS`); an undelivered one is tried for a week and then fails
+  (`GROUP_UNDELIVERED_MS`). A message that disappeared, or that its sender
+  deleted (for everyone or for themselves), leaves the log, and so does a
+  group's whole log when this account leaves it; the answer is then
+  `unavailable`.
+- A key and each named message, sent or not, are answered at most once an
+  hour per requesting device and group, across reloads and tabs (the direct
+  resend limits).
 
 **A new device of mine.**
 - It learns my groups, each group's master key and my capability from the
@@ -294,17 +297,30 @@ know:
 as Signal's `GroupContextV2 {masterKey, revision, groupChange}` carries the
 revision (`SignalService.proto:947-951`).
 - A member that is behind fetches the change log from the group's server (§3).
-- **As built (slice 1).** A sender-key message is decrypted, then checked
-  before anything of it is kept (one commit or none):
+- **As built (slice 1).** Group content is read, then decided about before
+  anything of it is kept (`group_gate.rs`; one commit or none), whether it
+  came under the sender key or pairwise (a sender key, a refresh, a resend, a
+  fallback; each carries the group context, an invitation aside):
   - a context ahead of this device's verified state, or another head at the
-    same revision, makes the device catch up and read the message again;
-  - a sender who isn't a member at that state makes it catch up too (they may
-    have joined since), at most every 30 seconds per group, and the message is
-    dropped if they still aren't one; when the home couldn't be reached, the
-    message stays in the inbound queue and is read again later;
-  - a fork still there after the catch-up is flagged on the group
-    (`forkSuspected`) and shown as a warning, and cleared when a member's
-    context matches again;
+    same revision, makes the device catch up and read the content again;
+  - a sender who is a member at that state is taken;
+  - a sender whose membership can't be confirmed now (a stranger who may
+    have joined since, a context still ahead, a member whose manifest can't
+    be fetched, an unreachable home) is **held**: the envelope stays queued
+    and is read again on later passes, given up after a week, never dropped
+    unconfirmed;
+  - a stranger whose own context isn't ahead (a removed member) is dropped
+    at once, without a catch-up;
+  - catch-ups are bounded per group: a context naming a revision not asked
+    for yet goes at once, anything else waits a back-off from 10 seconds,
+    doubling on failure up to 15 minutes;
+  - members are looked up again only when the state's head moves, and a
+    verified manifest's keys are kept for an hour; a failed fetch is never
+    kept;
+  - another head, or a context still ahead after a catch-up that reached the
+    home's latest, flags the group (`forkSuspected`, shown as "the group's
+    server may be showing members different versions"); only the member who
+    showed it clears it, by matching again;
   - nothing from a blocked account is taken, as in Signal.
   - Every change a member makes (title, invite, claim, leave, remove, role) is
     followed by a `groupChange` notice under the sender key: no body, only the

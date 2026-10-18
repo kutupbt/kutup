@@ -28,7 +28,7 @@ use crate::clock::{rfc3339, unix_millis};
 use crate::engine::{Engine, SESSION_RESET_INTERVAL_MS};
 use crate::error::{ChatError, Result};
 use crate::group::{BookDevice, GroupStatus};
-use crate::session::ReceivedMessage;
+use crate::session::{GroupGate, ReceivedMessage};
 use crate::transport::SendOutcome;
 
 /// What became of a group message this device couldn't read.
@@ -39,6 +39,9 @@ pub(crate) enum GroupRepair {
     Asked,
     /// Not a member's, or not a group this account is in: dropped.
     Dropped,
+    /// Its sender can't be confirmed as a member now: left queued, read
+    /// again on a later pass (perhaps with their key by then).
+    Held,
 }
 
 impl Engine {
@@ -67,10 +70,11 @@ impl Engine {
             ));
         }
         let certificate = self.issue_verified_sender_certificate().await?;
-        let envelopes = self
+        let sealed = self
             .session
             .seal_pairwise(account, &bundles, &certificate, content, rng)
             .await?;
+        let envelopes = self.sealed_envelopes(sealed);
         let request = SealedMessageSubmissionV1 {
             send_id: uuid::Uuid::new_v4().to_string(),
             capability: STANDARD.encode(capability),
@@ -118,6 +122,7 @@ impl Engine {
         send_ids: Vec<String>,
         rng: &mut R,
     ) -> Result<()> {
+        let record = self.load_group_record(group_id).await?;
         let content = ChatContent::session_control_with_id(
             uuid::Uuid::new_v4().to_string(),
             rfc3339(unix_millis()),
@@ -129,7 +134,8 @@ impl Engine {
                     group_id: group_id.to_string(),
                 }),
             },
-        );
+        )
+        .with_group_context(&Self::group_context(&record)?);
         self.send_to_group_device(group_id, to, &content, rng).await
     }
 
@@ -147,9 +153,13 @@ impl Engine {
         rng: &mut R,
     ) -> Result<GroupRepair> {
         let group_id = kutup_chat_proto::group::encode_group_id(group_id);
-        if !self.group_sender_checked(&group_id, sender, None).await? {
-            self.session.ack_dropped(envelope).await?;
-            return Ok(GroupRepair::Dropped);
+        match self.decide_group_content(&group_id, sender, None).await? {
+            GroupGate::Accept => {}
+            GroupGate::Refuse => {
+                self.session.ack_dropped(envelope).await?;
+                return Ok(GroupRepair::Dropped);
+            }
+            GroupGate::Hold | GroupGate::CatchUp => return Ok(GroupRepair::Held),
         }
         let record = self.load_group_record(&group_id).await?;
         let from = ChatAddress::from_sender(sender, device_id)?;
@@ -187,32 +197,34 @@ impl Engine {
         })))
     }
 
-    /// Whether `key` for `device` may be answered now (at most once an hour,
-    /// across reloads and tabs); recorded as answered when it may.
+    /// Which of `keys` for `device` may be answered now (at most once an
+    /// hour, across reloads and tabs); those are recorded as answered, in
+    /// one write before anything goes out, so a crash after the send can't
+    /// let a reload send them again within the hour.
     async fn may_answer_group_refresh(
         &mut self,
         device: &ChatAddress,
-        key: String,
-    ) -> Result<bool> {
+        keys: Vec<String>,
+    ) -> Result<Vec<bool>> {
         let now = unix_millis();
         self.load_repair_limits().await?;
         self.resent
             .retain(|_, at| now.saturating_sub(*at) < SESSION_RESET_INTERVAL_MS);
-        let key = (format!("{}.{}", device.name(), device.device_id), key);
-        if self.resent.contains_key(&key) {
-            return Ok(false);
+        let who = format!("{}.{}", device.name(), device.device_id);
+        let answers: Vec<bool> = keys
+            .into_iter()
+            .map(|key| self.resent.insert((who.clone(), key), now).is_none())
+            .collect();
+        if answers.iter().any(|answer| *answer) {
+            self.write_repair_limits().await?;
         }
-        self.resent.insert(key, now);
-        // Recorded before it goes out: a crash after the send must not let a
-        // reload send it again within the hour.
-        self.save_repair_limits().await?;
-        Ok(true)
+        Ok(answers)
     }
 
     /// Answers a member device's group refresh from this device's send log:
     /// its current key first, then each message it was sent; the rest is
-    /// `unavailable`. Each key and each message goes to a device at most once
-    /// an hour.
+    /// `unavailable`. The key and each named message, sent or not, are
+    /// answered to a device at most once an hour.
     pub(crate) async fn answer_group_refresh<R: Rng + CryptoRng>(
         &mut self,
         from: &ChatAddress,
@@ -235,54 +247,68 @@ impl Engine {
         {
             return Ok(());
         }
+        let context = Self::group_context(&record)?;
+        let key_answer = record
+            .sender_book
+            .as_ref()
+            .map(|book| format!("groupKey:{}:{}", group.group_id, book.distribution_id));
+        let mut keys: Vec<String> = body
+            .send_ids
+            .iter()
+            .map(|send_id| format!("group:{}:{}", group.group_id, send_id))
+            .collect();
+        keys.extend(key_answer.clone());
+        let mut answers = self.may_answer_group_refresh(from, keys).await?;
+        let key_due = key_answer.is_some() && answers.pop().unwrap_or(false);
         // The current key, entered for this device in the book.
-        if let Some(book) = record.sender_book.clone() {
-            let key = format!("groupKey:{}:{}", group.group_id, book.distribution_id);
-            if self.may_answer_group_refresh(from, key).await? {
-                let distribution_id = uuid::Uuid::parse_str(&book.distribution_id)
-                    .map_err(|_| ChatError::Invalid("the sender book's id isn't a UUID".into()))?;
-                let message = self
-                    .session
-                    .sender_key_distribution(distribution_id, rng)
-                    .await?;
-                let content = ChatContent::sender_key_distribution_with_id(
-                    uuid::Uuid::new_v4().to_string(),
-                    rfc3339(unix_millis()),
-                    0,
-                    &SenderKeyDistributionBody {
-                        group_id: group.group_id.clone(),
-                        distribution_id: distribution_id.to_string(),
-                        message: STANDARD.encode(&message),
-                    },
-                );
-                self.send_to_group_device(&group.group_id, from, &content, rng)
-                    .await?;
-                if let Some(book) = record.sender_book.as_mut() {
-                    let held = book.devices.iter().any(|device| {
-                        device.account == requester && device.device_id == from.device_id
-                    });
-                    if !held {
-                        if let Some(bundle) =
-                            self.known_devices.get(&requester).and_then(|bundles| {
-                                bundles.iter().find(|b| b.device_id == from.device_id)
-                            })
-                        {
-                            book.devices.push(BookDevice {
-                                account: requester.clone(),
-                                device_id: from.device_id,
-                                registration_id: bundle.registration_id,
-                            });
-                            book.devices.sort();
-                        }
+        if let (true, Some(book)) = (key_due, record.sender_book.clone()) {
+            let distribution_id = uuid::Uuid::parse_str(&book.distribution_id)
+                .map_err(|_| ChatError::Invalid("the sender book's id isn't a UUID".into()))?;
+            let message = self
+                .session
+                .sender_key_distribution(distribution_id, rng)
+                .await?;
+            let content = ChatContent::sender_key_distribution_with_id(
+                uuid::Uuid::new_v4().to_string(),
+                rfc3339(unix_millis()),
+                0,
+                &SenderKeyDistributionBody {
+                    group_id: group.group_id.clone(),
+                    distribution_id: distribution_id.to_string(),
+                    message: STANDARD.encode(&message),
+                },
+            )
+            .with_group_context(&context);
+            self.send_to_group_device(&group.group_id, from, &content, rng)
+                .await?;
+            if let Some(book) = record.sender_book.as_mut() {
+                let held = book.devices.iter().any(|device| {
+                    device.account == requester && device.device_id == from.device_id
+                });
+                if !held {
+                    if let Some(bundle) = self
+                        .known_devices
+                        .get(&requester)
+                        .and_then(|bundles| bundles.iter().find(|b| b.device_id == from.device_id))
+                    {
+                        book.devices.push(BookDevice {
+                            account: requester.clone(),
+                            device_id: from.device_id,
+                            registration_id: bundle.registration_id,
+                        });
+                        book.devices.sort();
                     }
                 }
-                self.save_group(&record).await?;
             }
+            self.save_group(&record).await?;
         }
         // Each message, only to a device it went to.
         let log = self.session.db().list_group_outbox().await?;
         let mut unavailable = Vec::new();
-        for send_id in &body.send_ids {
+        for (send_id, due) in body.send_ids.iter().zip(answers) {
+            if !due {
+                continue;
+            }
             let sent_to_device = log.iter().find(|entry| {
                 entry.send_id == *send_id
                     && entry.group_id == group.group_id
@@ -294,10 +320,6 @@ impl Engine {
                 unavailable.push(send_id.clone());
                 continue;
             };
-            let key = format!("group:{}:{}", group.group_id, send_id);
-            if !self.may_answer_group_refresh(from, key).await? {
-                continue;
-            }
             let Ok(original) = serde_json::from_slice::<ChatContent>(&entry.content) else {
                 unavailable.push(send_id.clone());
                 continue;
@@ -325,7 +347,8 @@ impl Engine {
                     send_ids: unavailable,
                     group: Some(group.clone()),
                 },
-            );
+            )
+            .with_group_context(&context);
             self.send_to_group_device(&group.group_id, from, &content, rng)
                 .await?;
         }

@@ -3493,6 +3493,8 @@ impl WasmChatClient {
             .engine
             .flush_profile(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
             .await;
+        // Group messages still on their way: best effort, retried each pass.
+        let _ = self.engine.flush_group_outbox(&mut rng).await;
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after

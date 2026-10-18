@@ -124,6 +124,12 @@ pub(crate) struct World {
     cursor: Cell<u64>,
     /// Every sealed submission that was stored: `(recipient, submission)`.
     pub(crate) sealed_sent: RefCell<Vec<(String, SealedMessageSubmissionV1)>>,
+    /// Accounts whose manifest can't be fetched now.
+    pub(crate) manifests_down: RefCell<HashSet<String>>,
+    /// The home can't be reached now.
+    pub(crate) home_down: Cell<bool>,
+    /// How many requests reached the home.
+    pub(crate) home_requests: Cell<usize>,
 }
 
 impl World {
@@ -202,6 +208,9 @@ impl World {
             mailboxes: RefCell::new(BTreeMap::new()),
             cursor: Cell::new(0),
             sealed_sent: RefCell::new(Vec::new()),
+            manifests_down: RefCell::new(HashSet::new()),
+            home_down: Cell::new(false),
+            home_requests: Cell::new(0),
         })
     }
 
@@ -675,6 +684,11 @@ impl ChatTransport for Client {
     }
 
     async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV1>> {
+        if self.world.manifests_down.borrow().contains(account) {
+            return Err(ChatError::Transport(
+                "the manifest can't be fetched now".into(),
+            ));
+        }
         Ok(self
             .world
             .accounts
@@ -934,9 +948,12 @@ impl ChatTransport for Client {
     }
 
     async fn relay_group_request(&self, home: &str, sealed: &[u8]) -> Result<GroupRelayOutcome> {
-        if home != SERVER {
+        if home != SERVER || self.world.home_down.get() {
             return Ok(GroupRelayOutcome::Unreachable);
         }
+        self.world
+            .home_requests
+            .set(self.world.home_requests.get() + 1);
         let Ok((body, context)) = self.world.gateway.open_request(sealed) else {
             return Ok(GroupRelayOutcome::Unopenable);
         };
@@ -1628,16 +1645,287 @@ fn group_review_the_same_send_id_sends_once() {
 #[test]
 fn group_review_the_gate_catches_up_once_then_decides() {
     use crate::group::ContextCheck::*;
-    use crate::group_engine::gate_for;
+    use crate::group_gate::gate_for;
+    use crate::group_gate::Standing::*;
     use crate::session::GroupGate::*;
-    // A context ahead or on another head: catch up first, whoever sent it.
-    assert_eq!(gate_for(Behind, true, true, false), CatchUp);
-    assert_eq!(gate_for(Fork, false, true, false), CatchUp);
-    // Then decided by membership.
-    assert_eq!(gate_for(Behind, true, false, true), Accept);
-    assert_eq!(gate_for(Fork, false, false, true), Refuse);
-    // A stranger: one catch-up, when the last isn't too recent.
-    assert_eq!(gate_for(Current, false, true, true), CatchUp);
-    assert_eq!(gate_for(SenderBehind, false, true, false), Refuse);
-    assert_eq!(gate_for(SenderBehind, true, true, true), Accept);
+    // A context ahead or on another head: catch up first when allowed,
+    // otherwise wait.
+    assert_eq!(gate_for(Some(Behind), Member, true, true), CatchUp);
+    assert_eq!(gate_for(Some(Fork), Stranger, true, true), CatchUp);
+    assert_eq!(gate_for(Some(Behind), Member, true, false), Hold);
+    // Then decided by membership; what can't be confirmed waits.
+    assert_eq!(gate_for(Some(Behind), Member, false, true), Accept);
+    assert_eq!(gate_for(Some(Behind), Stranger, false, true), Hold);
+    assert_eq!(gate_for(Some(Current), Unconfirmed, true, true), Hold);
+    // A stranger whose own context isn't ahead isn't a member.
+    assert_eq!(gate_for(Some(SenderBehind), Stranger, true, true), Refuse);
+    assert_eq!(gate_for(Some(Current), Stranger, true, true), Refuse);
+    // Nothing to tell by (an unreadable message): one bounded catch-up.
+    assert_eq!(gate_for(None, Stranger, true, true), CatchUp);
+    assert_eq!(gate_for(None, Stranger, true, false), Hold);
+    assert_eq!(gate_for(None, Member, true, true), Accept);
+}
+
+#[test]
+fn group_review_catch_ups_are_bounded_per_group() {
+    use crate::group_gate::CatchUps;
+    let now = 1_000_000;
+    let fresh = CatchUps {
+        last_ms: now,
+        failures: 0,
+        asked_up_to: 5,
+    };
+    // A revision not asked for yet goes at once; the same one waits.
+    assert!(fresh.allows(now, Some(6)));
+    assert!(!fresh.allows(now, Some(5)));
+    assert!(!fresh.allows(now + 9_000, None));
+    assert!(fresh.allows(now + 10_000, None));
+    // After failures, even news waits a growing back-off, at most 15 minutes.
+    let failing = CatchUps {
+        failures: 3,
+        ..fresh
+    };
+    assert!(!failing.allows(now + 79_000, Some(100)));
+    assert!(failing.allows(now + 80_000, Some(100)));
+    let failing = CatchUps {
+        failures: 30,
+        ..fresh
+    };
+    assert!(failing.allows(now + 15 * 60 * 1000, None));
+}
+
+// ----- the #242 re-review: nothing real is lost -----
+
+/// Forgets what `person` holds about members and catch-ups, as a reload does.
+fn forget_member_caches(person: &mut Person) {
+    person.engine.group_members_seen.clear();
+    person.engine.manifest_keys_seen.clear();
+    person.engine.group_catch_ups.clear();
+}
+
+#[test]
+fn group_rereview_a_new_members_first_messages_arrive_without_a_sync() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before carol");
+    deliver_all(&mut [&mut alice, &mut bob]);
+
+    befriend(&mut alice, &mut carol);
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[carol.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    // Bob catches up from Alice's notice, and nobody syncs again.
+    bob.receive();
+    carol.receive();
+    block_on(carol.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    carol.send_text(&group_id, "hi all");
+    carol.send_text(&group_id, "second");
+    for person in [&mut alice, &mut bob] {
+        let report = person.receive();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(report.held.is_empty(), "nothing waits: {:?}", report.held);
+        let texts = person.group_texts(&group_id);
+        assert!(
+            texts.contains(&"hi all".to_string()) && texts.contains(&"second".to_string()),
+            "{texts:?}"
+        );
+        assert_eq!(person.group_placeholders(&group_id), 0);
+    }
+}
+
+#[test]
+fn group_rereview_a_member_whose_manifest_cant_be_fetched_is_held_not_dropped() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    bob.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob]);
+
+    world
+        .manifests_down
+        .borrow_mut()
+        .insert(bob.account.clone());
+    forget_member_caches(&mut alice);
+    bob.send_text(&group_id, "while down");
+    let report = alice.receive();
+    assert_eq!(report.held.len(), 1, "{report:?}");
+    assert!(!alice
+        .group_texts(&group_id)
+        .contains(&"while down".to_string()));
+    // Read again on a later pass, once the manifest is back.
+    world.manifests_down.borrow_mut().clear();
+    let report = alice.receive();
+    assert!(report.held.is_empty());
+    assert!(alice
+        .group_texts(&group_id)
+        .contains(&"while down".to_string()));
+}
+
+#[test]
+fn group_rereview_an_unreachable_home_holds_a_new_member_then_delivers() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    befriend(&mut alice, &mut carol);
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[carol.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    carol.receive();
+    block_on(carol.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    // Bob's home goes away before he hears of Carol.
+    world.home_down.set(true);
+    carol.send_text(&group_id, "hello bob");
+    let report = bob.receive();
+    assert!(!report.held.is_empty(), "{report:?}");
+    assert!(!bob
+        .group_texts(&group_id)
+        .contains(&"hello bob".to_string()));
+    // Back, and past the back-off: delivered.
+    world.home_down.set(false);
+    bob.engine.group_catch_ups.clear();
+    bob.receive();
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"hello bob".to_string()));
+}
+
+#[test]
+fn group_rereview_a_removed_member_costs_no_catch_up() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, group_id) = group_with_two_admins(&world);
+    let carols = pseudonym_of(&mut bob, &group_id, &carol);
+    block_on(
+        bob.engine
+            .remove_group_member(&group_id, &carols, &mut rng()),
+    )
+    .unwrap();
+    alice.receive();
+    let before = world.home_requests.get();
+    // Carol, behind, keeps sending: refused at once, no catch-up for any.
+    for n in 0..3 {
+        carol.send_text(&group_id, &format!("still here {n}"));
+    }
+    let report = alice.receive();
+    assert!(
+        report.errors.is_empty() && report.held.is_empty(),
+        "{report:?}"
+    );
+    assert_eq!(world.home_requests.get(), before);
+    assert!(alice
+        .group_texts(&group_id)
+        .iter()
+        .all(|text| !text.starts_with("still here")));
+}
+
+#[test]
+fn group_rereview_a_fork_is_flagged_and_cleared_only_by_its_member() {
+    use crate::session::GroupGate;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    let current = Engine::group_context(&record).unwrap();
+    // Carol's context names another head at Alice's revision, still so after
+    // Alice catches up: taken (she is a member), and the group flagged.
+    let mut forked = current.clone();
+    forked.chain_hash = kutup_chat_proto::group::encode(&[9u8; 32]);
+    let before = world.home_requests.get();
+    let gate = block_on(alice.engine.decide_group_content(
+        &group_id,
+        &carol.account,
+        Some(&forked),
+    ))
+    .unwrap();
+    assert_eq!(gate, GroupGate::Accept);
+    assert!(world.home_requests.get() > before, "caught up first");
+    let flagged = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(flagged.fork_at_revision, Some(current.revision));
+    assert_eq!(flagged.fork_sender.as_deref(), Some(carol.account.as_str()));
+    assert!(alice
+        .engine
+        .events
+        .iter()
+        .any(|event| matches!(event, crate::ChatEvent::GroupForkSuspected { .. })));
+    // Bob matching doesn't clear it; Carol matching does.
+    block_on(
+        alice
+            .engine
+            .decide_group_content(&group_id, &bob.account, Some(&current)),
+    )
+    .unwrap();
+    assert!(block_on(alice.engine.load_group_record(&group_id))
+        .unwrap()
+        .fork_at_revision
+        .is_some());
+    block_on(
+        alice
+            .engine
+            .decide_group_content(&group_id, &carol.account, Some(&current)),
+    )
+    .unwrap();
+    assert!(block_on(alice.engine.load_group_record(&group_id))
+        .unwrap()
+        .fork_at_revision
+        .is_none());
+}
+
+#[test]
+fn group_rereview_the_refresh_limit_survives_a_reload() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let sent = alice.send_text(&group_id, "once");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    let bobs = bob.account.clone();
+    let to_bob = |world: &World| {
+        world
+            .sealed_sent
+            .borrow()
+            .iter()
+            .filter(|(account, _)| *account == bobs)
+            .count()
+    };
+    let from = crate::address::ChatAddress::from_sender(&alice.account, alice.device()).unwrap();
+    let ask = |bob: &mut Person| {
+        block_on(bob.engine.request_group_resend(
+            &group_id,
+            &from,
+            vec![sent.clone(), "never-sent".into()],
+            &mut rng(),
+        ))
+        .unwrap();
+    };
+    ask(&mut bob);
+    let before = to_bob(&world);
+    alice.receive();
+    // The key, the message, and "unavailable" for the unknown one.
+    assert_eq!(to_bob(&world) - before, 3);
+
+    // A reload of Alice's engine: the same requests aren't answered again.
+    let db = Rc::clone(alice.engine.session().db());
+    let device = alice.device();
+    let transport: Rc<dyn ChatTransport> = alice.client.clone();
+    let mut engine = block_on(Engine::open(db, transport, alice.account.clone(), device)).unwrap();
+    engine.set_sealed_sender_enabled(true);
+    alice.engine = engine;
+    ask(&mut bob);
+    let before = to_bob(&world);
+    alice.receive();
+    assert_eq!(to_bob(&world), before);
 }

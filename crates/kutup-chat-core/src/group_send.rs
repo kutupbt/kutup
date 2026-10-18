@@ -203,6 +203,7 @@ impl Engine {
         if rotate {
             record.sender_book = Some(SenderBook::new(now));
         }
+        let context = Self::group_context(record)?;
         let book = record.sender_book.clone().expect("set above");
         let distribution_id = uuid::Uuid::parse_str(&book.distribution_id)
             .map_err(|_| ChatError::Invalid("the sender book's id isn't a UUID".into()))?;
@@ -235,16 +236,20 @@ impl Engine {
                 continue;
             }
             let send_id = uuid::Uuid::new_v4().to_string();
+            // Its context lets a member who doesn't know this device's
+            // account yet (it just joined) catch up before taking the key.
             let content = ChatContent::sender_key_distribution_with_id(
                 send_id.clone(),
                 crate::clock::rfc3339(unix_millis()),
                 0,
                 &body,
-            );
-            let envelopes = self
+            )
+            .with_group_context(&context);
+            let sealed = self
                 .session
                 .seal_pairwise(&recipient.account, &devices, certificate, &content, rng)
                 .await?;
+            let envelopes = self.sealed_envelopes(sealed);
             let request = SealedMessageSubmissionV1 {
                 send_id,
                 capability: STANDARD.encode(recipient.capability),
@@ -408,7 +413,7 @@ impl Engine {
             if recipient.bundles.is_empty() {
                 continue;
             }
-            let envelopes = self
+            let sealed = self
                 .session
                 .seal_group_message(
                     &recipient.account,
@@ -420,6 +425,7 @@ impl Engine {
                     rng,
                 )
                 .await?;
+            let envelopes = self.sealed_envelopes(sealed);
             legs.push(GroupOutboxLeg {
                 account: recipient.account.clone(),
                 devices: envelopes
@@ -546,17 +552,12 @@ impl Engine {
                             .collect();
                         if !uncovered.is_empty() {
                             let certificate = self.issue_verified_sender_certificate().await?;
-                            envelopes.extend(
-                                self.session
-                                    .seal_pairwise(
-                                        &account,
-                                        &uncovered,
-                                        &certificate,
-                                        &content,
-                                        rng,
-                                    )
-                                    .await?,
-                            );
+                            let sealed = self
+                                .session
+                                .seal_pairwise(&account, &uncovered, &certificate, &content, rng)
+                                .await?;
+                            let sealed = self.sealed_envelopes(sealed);
+                            envelopes.extend(sealed);
                         }
                         entry.legs[index].devices = envelopes
                             .iter()
@@ -614,8 +615,23 @@ impl Engine {
         Ok(summaries)
     }
 
+    /// The envelopes of a sealed send, any identity change on the way shown
+    /// as for a direct send.
+    pub(crate) fn sealed_envelopes(
+        &mut self,
+        sealed: crate::session::SealedGroupSend,
+    ) -> Vec<SealedOutgoingEnvelopeV1> {
+        if !sealed.safety_number_changes.is_empty() {
+            self.events.push_back(crate::ChatEvent::IdentityChanged(
+                sealed.safety_number_changes,
+            ));
+        }
+        sealed.envelopes
+    }
+
     fn forget_known_devices_of(&mut self, account: &str) {
         self.known_devices.remove(account);
         self.known_devices_at.remove(account);
+        self.manifest_keys_seen.remove(account);
     }
 }
