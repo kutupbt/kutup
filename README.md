@@ -146,7 +146,42 @@ development and air-gapped image preparation.
 
 Scripting-friendly: every command honors a global `--json` flag (stdout is exactly one JSON document; prompts/progress/status go to stderr, and with `--json` even errors are emitted as JSON on stderr), and exit codes are differentiated — `0` ok, `1` generic, `2` usage, `3` auth/session, `4` not found, `5` network/server, `6` the account's history on the server was rolled back or forked (see `kutup account state`; `kutup account reanchor` goes on with the server's data). Destructive commands prompt `[y/N]` and take `--yes` for non-interactive use.
 
-**Build from source** (Rust ≥ 1.91.1):
+### Install the CLI
+
+On Linux or macOS (x86-64 or ARM64), into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.sh | sh
+```
+
+On Windows, in PowerShell, into `%LOCALAPPDATA%\Programs\kutup` (added to your user `PATH`):
+
+```powershell
+irm https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.ps1 | iex
+```
+
+Both install the newest CLI release from GitHub Releases and check the
+archive's SHA-256 against the release's checksums before installing; a
+mismatch or a missing entry stops the install. Neither needs root or
+administrator rights. To pick a release or a directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.sh | sh -s -- --version v0.2.0 --dir ~/bin
+# or KUTUP_VERSION=v0.2.0 KUTUP_INSTALL_DIR=~/bin, also for install-cli.ps1
+```
+
+Read the scripts first if you like: [`scripts/install-cli.sh`](scripts/install-cli.sh)
+and [`scripts/install-cli.ps1`](scripts/install-cli.ps1). Release binaries are
+built for Linux x86-64/ARM64 (glibc), macOS Intel/Apple Silicon, and Windows
+x86-64 by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+**From source** with Cargo (Rust ≥ 1.91.1):
+
+```sh
+cargo install --git https://github.com/kutupbt/kutup --locked kutup-cli   # → ~/.cargo/bin/kutup
+```
+
+Or from a checkout:
 
 ```sh
 git clone https://github.com/kutupbt/kutup.git
@@ -154,10 +189,6 @@ cd kutup
 cargo build --release -p kutup-cli   # → target/release/kutup
 install -m755 target/release/kutup ~/.local/bin/kutup
 ```
-
-Tagged release binaries are built for Linux x86-64/ARM64, macOS Intel/Apple
-Silicon, and Windows x86-64 and published on GitHub Releases (see
-[`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
 ### Common workflows
 
@@ -173,7 +204,7 @@ kutup login --server https://your.kutup.host --username you
 # Against the local Compose stack and its self-signed certificate (which is
 # its own CA, so the CLI's TLS stack refuses it as a server certificate):
 # KUTUP_INSECURE_TLS=1 skips certificate checks. Development only.
-KUTUP_INSECURE_TLS=1 kutup login --server https://localhost:38443 --email you@example.com
+KUTUP_INSECURE_TLS=1 kutup login --server https://localhost:38443 --username you
 
 # Opt-in SSH agent for the SSH keys kept in your vaults (KeeAgent entries, as
 # in KeePassXC), from a folder `kutup sync` keeps; asks before each use.
@@ -192,7 +223,7 @@ kutup ls <folder-id>           # contents of a sub-folder
 
 # Forgot the password? Reset it with the 24-word recovery phrase
 # (KUTUP_RECOVERY_PHRASE + KUTUP_PASSWORD for non-interactive use).
-kutup recover --server https://your.kutup.host --email you@example.com
+kutup recover --server https://your.kutup.host --username you
 
 # Upload a file. Chunked stream encryption (5 MB blocks via
 # crypto_secretstream), so file size is bounded by disk, not RAM.
