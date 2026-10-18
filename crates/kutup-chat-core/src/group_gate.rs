@@ -1,20 +1,25 @@
 //! What a group's incoming content may do (docs/plans/pairwise-groups.md §2,
 //! §3), decided before anything of it is kept, as Signal reads a group's
-//! state before a message that names a newer one (`maybeUpdateGroup`):
+//! state before a message that names a newer one (`maybeUpdateGroup`) and
+//! drops what still doesn't fit after that fetch:
 //!
 //! - A context ahead of this device's verified state, or on another head,
 //!   makes it catch up from the home and read the content again.
-//! - A sender who is a member at that state is taken; one whose membership
-//!   can't be confirmed now (a stranger who may have joined since, a member
-//!   whose manifest can't be fetched) is held: the envelope stays queued and
-//!   is read again on a later pass, never dropped unconfirmed. A held
-//!   envelope is given up after a week.
-//! - A stranger whose own context isn't ahead of this state isn't a member
-//!   (removed, or never one): dropped.
-//! - Catch-ups are bounded per group: a context naming a revision not asked
-//!   for yet goes at once, anything else waits a back-off that grows on
-//!   failure, so neither a removed member nor an unreachable home makes a
-//!   catch-up per message.
+//! - A sender who is a member at that state is taken.
+//! - A stranger is refused once this device is at the home's latest, or when
+//!   their own context isn't ahead of it (a removed member), or when readable
+//!   content of theirs carries no context at all.
+//! - What can't be decided now is held: a member whose manifest can't be
+//!   fetched, or a stranger while the catch-up couldn't be made or failed.
+//!   The envelope stays queued and is read again on a later pass, given up
+//!   after a week; at most [`MAX_HELD_PER_SENDER`] per sender and
+//!   [`MAX_HELD_PER_GROUP`] per group are kept waiting, the rest dropped. A
+//!   long-held pairwise envelope relies on libsignal keeping skipped message
+//!   keys (2000 per chain, 5 chains); one past that reads as a duplicate.
+//! - Catch-ups are bounded per group: a context a small step past this
+//!   device's state, not asked for yet, goes after a short gap; anything else
+//!   waits a back-off that grows on failure. Neither a removed member, a
+//!   forged revision nor an unreachable home makes a catch-up per message.
 
 use std::collections::BTreeSet;
 
@@ -31,10 +36,63 @@ use crate::session::{GroupGate, ReceiveOutcome};
 /// up: as long as an unreadable message waits for its resend.
 pub(crate) const GROUP_HOLD_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
+/// The most envelopes one sender may have waiting in one group, and one
+/// group in all; past that they are dropped.
+pub(crate) const MAX_HELD_PER_SENDER: usize = 32;
+pub(crate) const MAX_HELD_PER_GROUP: usize = 256;
+
+/// The group envelopes left waiting in one pass, counted per sender and per
+/// group; the queue is read oldest first, so the oldest stay.
+#[derive(Debug, Default)]
+pub(crate) struct HeldEnvelopes {
+    by_sender: std::collections::BTreeMap<(String, String), usize>,
+    by_group: std::collections::BTreeMap<String, usize>,
+}
+
+impl HeldEnvelopes {
+    /// Whether an envelope of `sender` in `group_id`, received at
+    /// `received_at`, may keep waiting: younger than a week and within the
+    /// limits (counted as waiting when it may).
+    pub(crate) fn keep(
+        &mut self,
+        group_id: &str,
+        sender: &str,
+        received_at: i64,
+        now_ms: i64,
+    ) -> bool {
+        if now_ms.saturating_sub(received_at) >= GROUP_HOLD_MS {
+            return false;
+        }
+        let by_sender = self
+            .by_sender
+            .entry((group_id.to_string(), sender.to_string()))
+            .or_default();
+        let by_group = self.by_group.entry(group_id.to_string()).or_default();
+        if *by_sender >= MAX_HELD_PER_SENDER || *by_group >= MAX_HELD_PER_GROUP {
+            return false;
+        }
+        *by_sender += 1;
+        *by_group += 1;
+        true
+    }
+}
+
 /// The first wait between catch-ups of one group that bring nothing new; it
 /// doubles on each failure, up to [`CATCH_UP_MAX_BACKOFF_MS`].
 const CATCH_UP_BACKOFF_MS: i64 = 10 * 1000;
 const CATCH_UP_MAX_BACKOFF_MS: i64 = 15 * 60 * 1000;
+
+/// A context counts as news (worth a catch-up sooner than the back-off) only
+/// this far past this device's state, and not sooner than this after the
+/// last catch-up.
+const NEWS_WINDOW: u64 = 64;
+const NEWS_MIN_GAP_MS: i64 = 2 * 1000;
+
+fn backoff_ms(failures: u32) -> i64 {
+    CATCH_UP_BACKOFF_MS
+        .saturating_mul(1i64 << failures.min(16))
+        .min(CATCH_UP_MAX_BACKOFF_MS)
+}
 
 /// Whether a sender is a member, as this device can tell now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,11 +107,14 @@ pub(crate) enum Standing {
 }
 
 /// A group's members as last checked: verified, and in the state but not
-/// confirmable now. Kept while the state's head is the same, for at most
-/// the known-devices interval, and only when every member was confirmed.
+/// confirmable now. Kept while the state's head is the same: for the
+/// known-devices interval when every member was confirmed, otherwise until a
+/// back-off for the unconfirmed ones passes (the verified ones' keys are
+/// kept apart, so only those are fetched again).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct GroupMembership {
-    pub at_ms: i64,
+    pub recheck_at_ms: i64,
+    pub failures: u32,
     pub head: Option<String>,
     pub verified: Vec<String>,
     pub unconfirmed: Vec<String>,
@@ -76,36 +137,51 @@ impl GroupMembership {
 pub(crate) struct CatchUps {
     pub last_ms: i64,
     pub failures: u32,
-    /// The highest revision a context asked for: a higher one is new.
+    /// The highest revision a context asked for as news.
     pub asked_up_to: u64,
 }
 
 impl CatchUps {
-    fn backoff_ms(&self) -> i64 {
-        let doubled = CATCH_UP_BACKOFF_MS.saturating_mul(1i64 << self.failures.min(16));
-        doubled.min(CATCH_UP_MAX_BACKOFF_MS)
-    }
-
     /// Whether a catch-up for content naming `revision` (none for content
-    /// without a context) may go now.
-    pub(crate) fn allows(&self, now_ms: i64, revision: Option<u64>) -> bool {
-        let news =
-            self.failures == 0 && revision.is_some_and(|revision| revision > self.asked_up_to);
-        news || now_ms.saturating_sub(self.last_ms) >= self.backoff_ms()
+    /// without a context) may go now, this device at `verified`.
+    pub(crate) fn allows(&self, now_ms: i64, revision: Option<u64>, verified: u64) -> bool {
+        let since = now_ms.saturating_sub(self.last_ms);
+        news(self, revision, verified) && since >= NEWS_MIN_GAP_MS
+            || since >= backoff_ms(self.failures)
     }
+}
+
+/// A revision a small step past `verified`, not asked for yet, while the
+/// home answers.
+fn news(state: &CatchUps, revision: Option<u64>, verified: u64) -> bool {
+    state.failures == 0
+        && revision.is_some_and(|revision| {
+            revision > state.asked_up_to && revision <= verified.saturating_add(NEWS_WINDOW)
+        })
+}
+
+/// Where a decision stands for one piece of content.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Reading {
+    /// Not read since a catch-up for it.
+    pub first: bool,
+    /// A catch-up for it reached the home's latest.
+    pub caught_up: bool,
+    /// A catch-up may go now.
+    pub may_catch_up: bool,
+    /// The content was read (not an unreadable message under repair).
+    pub readable: bool,
 }
 
 /// What group content may do, from how its context compares with this
 /// device's state (`None`: it carries none) and its sender's standing.
-/// `first_read` is false once this device caught up for it.
 pub(crate) fn gate_for(
     check: Option<ContextCheck>,
     standing: Standing,
-    first_read: bool,
-    may_catch_up: bool,
+    reading: Reading,
 ) -> GroupGate {
-    let catch_up = || {
-        if first_read && may_catch_up {
+    let wait = || {
+        if reading.first && reading.may_catch_up {
             GroupGate::CatchUp
         } else {
             GroupGate::Hold
@@ -114,7 +190,7 @@ pub(crate) fn gate_for(
     match (check, standing) {
         // The sender is further on, or on another head: who is in may have
         // changed, so catch up before deciding.
-        (Some(ContextCheck::Behind | ContextCheck::Fork), _) if first_read => catch_up(),
+        (Some(ContextCheck::Behind | ContextCheck::Fork), _) if reading.first => wait(),
         (_, Standing::Member) => GroupGate::Accept,
         (_, Standing::Unconfirmed) => GroupGate::Hold,
         // A stranger whose own context isn't ahead: not a member at a state
@@ -122,9 +198,15 @@ pub(crate) fn gate_for(
         (Some(ContextCheck::Current | ContextCheck::SenderBehind), Standing::Stranger) => {
             GroupGate::Refuse
         }
-        // Still ahead after a catch-up, or nothing to tell by: perhaps one
-        // who joined since.
-        (Some(ContextCheck::Behind | ContextCheck::Fork) | None, Standing::Stranger) => catch_up(),
+        // A stranger after a catch-up that reached the home's latest: not a
+        // member, whatever their context says.
+        (_, Standing::Stranger) if reading.caught_up => GroupGate::Refuse,
+        // Readable content without a context, from a stranger: nothing to
+        // catch up for.
+        (None, Standing::Stranger) if reading.readable => GroupGate::Refuse,
+        // Still ahead without a catch-up that worked, or an unreadable
+        // message: wait for one.
+        (Some(ContextCheck::Behind | ContextCheck::Fork) | None, Standing::Stranger) => wait(),
     }
 }
 
@@ -139,34 +221,49 @@ pub(crate) fn context_check(
     group::compare_context(record, context.revision, &head).ok()
 }
 
+/// The revision of the record's verified state (0 without one).
+fn verified_revision(record: &GroupRecordV1) -> u64 {
+    record
+        .verified()
+        .ok()
+        .flatten()
+        .map_or(0, |(state, _)| state.revision)
+}
+
 impl Engine {
     /// The group's members as this device can tell now: each in the state,
     /// verified against their manifest, or not confirmable now.
     pub(crate) async fn group_membership(&mut self, group_id: &str) -> Result<GroupMembership> {
-        let now = crate::clock::unix_millis();
+        let now = self.now_ms();
         let record = self.load_group_record(group_id).await?;
+        let mut failures = 0;
         if let Some(seen) = self.group_members_seen.get(group_id) {
-            if seen.head == record.head
-                && now.saturating_sub(seen.at_ms) < crate::engine::KNOWN_DEVICES_TTL_MS
-            {
-                return Ok(seen.clone());
+            if seen.head == record.head {
+                if now < seen.recheck_at_ms {
+                    return Ok(seen.clone());
+                }
+                failures = seen.failures;
             }
         }
         let (members, unconfirmed) = self.group_members_checked(group_id).await?;
+        let unconfirmed: Vec<String> = unconfirmed.iter().map(ToString::to_string).collect();
+        let (failures, wait) = if unconfirmed.is_empty() {
+            (0, crate::engine::KNOWN_DEVICES_TTL_MS)
+        } else {
+            (failures.saturating_add(1), backoff_ms(failures))
+        };
         let membership = GroupMembership {
-            at_ms: now,
+            recheck_at_ms: now.saturating_add(wait),
+            failures,
             head: record.head.clone(),
             verified: members
                 .into_iter()
                 .filter_map(|member| member.verified.map(|verified| verified.account.to_string()))
                 .collect(),
-            unconfirmed: unconfirmed.iter().map(ToString::to_string).collect(),
+            unconfirmed,
         };
-        // A failure isn't kept: the next look tries again.
-        if membership.unconfirmed.is_empty() {
-            self.group_members_seen
-                .insert(group_id.to_string(), membership.clone());
-        }
+        self.group_members_seen
+            .insert(group_id.to_string(), membership.clone());
         Ok(membership)
     }
 
@@ -175,33 +272,37 @@ impl Engine {
         Ok(self.group_membership(group_id).await?.verified)
     }
 
-    /// Whether a catch-up of `group_id` for content naming `revision` may go
-    /// now.
-    fn may_catch_up(&self, group_id: &str, revision: Option<u64>) -> bool {
+    /// Whether a catch-up of `record`'s group for content naming `revision`
+    /// may go now.
+    fn may_catch_up(&self, record: &GroupRecordV1, revision: Option<u64>) -> bool {
         self.group_catch_ups
-            .get(group_id)
-            .is_none_or(|state| state.allows(crate::clock::unix_millis(), revision))
+            .get(&record.group_id)
+            .is_none_or(|state| state.allows(self.now_ms(), revision, verified_revision(record)))
     }
 
-    /// Catches `group_id` up for incoming content: true when it is current
-    /// with its home now.
-    async fn catch_up_for_content(&mut self, group_id: &str, revision: Option<u64>) -> bool {
-        let now = crate::clock::unix_millis();
+    /// Catches `record`'s group up for incoming content: true when it is
+    /// current with its home now.
+    async fn catch_up_for_content(
+        &mut self,
+        record: &GroupRecordV1,
+        revision: Option<u64>,
+    ) -> bool {
+        let now = self.now_ms();
+        let group_id = record.group_id.clone();
+        let verified = verified_revision(record);
         let current = matches!(
-            self.sync_group(group_id).await,
+            self.sync_group(&group_id).await,
             Ok(GroupSync::Current { .. })
         );
-        let state = self
-            .group_catch_ups
-            .entry(group_id.to_string())
-            .or_default();
+        let state = self.group_catch_ups.entry(group_id).or_default();
+        let was_news = news(state, revision, verified);
         state.last_ms = now;
         state.failures = if current {
             0
         } else {
             state.failures.saturating_add(1)
         };
-        if let Some(revision) = revision {
+        if let (true, Some(revision)) = (was_news, revision) {
             state.asked_up_to = state.asked_up_to.max(revision);
         }
         current
@@ -252,19 +353,21 @@ impl Engine {
         Ok(())
     }
 
-    /// What group content `sender` sent pairwise may do: the gate above,
-    /// catching up at most once for it.
+    /// What group content `sender` sent pairwise may do (`readable`: false
+    /// for an unreadable message under repair): the gate above, catching up
+    /// at most once for it.
     pub(crate) async fn decide_group_content(
         &mut self,
         group_id: &str,
         sender: &str,
         context: Option<&GroupContextV1>,
+        readable: bool,
     ) -> Result<GroupGate> {
         if self.is_blocked(sender).await? {
             return Ok(GroupGate::Refuse);
         }
         let mut caught_up = false;
-        for first_read in [true, false] {
+        for first in [true, false] {
             let Some(record) = self.session.db().load_group(group_id).await? else {
                 return Ok(GroupGate::Refuse);
             };
@@ -280,15 +383,15 @@ impl Engine {
                 None => None,
             };
             let revision = context.map(|context| context.revision);
-            let gate = gate_for(
-                check,
-                standing,
-                first_read,
-                self.may_catch_up(group_id, revision),
-            );
-            match gate {
+            let reading = Reading {
+                first,
+                caught_up,
+                may_catch_up: self.may_catch_up(&record, revision),
+                readable,
+            };
+            match gate_for(check, standing, reading) {
                 GroupGate::CatchUp => {
-                    caught_up = self.catch_up_for_content(group_id, revision).await;
+                    caught_up = self.catch_up_for_content(&record, revision).await;
                 }
                 GroupGate::Accept => {
                     if let (Some(check), Some(revision)) = (check, revision) {
@@ -325,7 +428,7 @@ impl Engine {
             return Ok(dropped());
         }
         let mut caught_up = false;
-        for first_read in [true, false] {
+        for first in [true, false] {
             let record = match self.session.db().load_group(&group_id).await? {
                 Some(record) if record.status == GroupStatus::Member => record,
                 // Not a group this account is in.
@@ -338,19 +441,22 @@ impl Engine {
                 .group_membership(&group_id)
                 .await?
                 .standing(&inspection.sender);
-            let catch_ups = self
-                .group_catch_ups
-                .get(&group_id)
-                .copied()
-                .unwrap_or_default();
-            let now = crate::clock::unix_millis();
+            let catch_ups = self.group_catch_ups.get(&group_id).copied();
+            let now = self.now_ms();
+            let verified = verified_revision(&record);
             let seen = Cell::new(None);
             let gate = |context: &GroupContextV1| {
                 let Some(check) = context_check(&record, context) else {
                     return GroupGate::Refuse;
                 };
-                let may_catch_up = catch_ups.allows(now, Some(context.revision));
-                let gate = gate_for(Some(check), standing, first_read, may_catch_up);
+                let reading = Reading {
+                    first,
+                    caught_up,
+                    may_catch_up: catch_ups
+                        .is_none_or(|state| state.allows(now, Some(context.revision), verified)),
+                    readable: true,
+                };
+                let gate = gate_for(Some(check), standing, reading);
                 seen.set(Some((check, gate, context.revision)));
                 gate
             };
@@ -360,7 +466,7 @@ impl Engine {
                 .await?;
             if matches!(outcome, ReceiveOutcome::GroupCatchUp) {
                 let revision = seen.get().map(|(_, _, revision)| revision);
-                caught_up = self.catch_up_for_content(&group_id, revision).await;
+                caught_up = self.catch_up_for_content(&record, revision).await;
                 continue;
             }
             if let Some((check, GroupGate::Accept, revision)) = seen.get() {

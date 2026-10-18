@@ -1645,25 +1645,78 @@ fn group_review_the_same_send_id_sends_once() {
 #[test]
 fn group_review_the_gate_catches_up_once_then_decides() {
     use crate::group::ContextCheck::*;
-    use crate::group_gate::gate_for;
     use crate::group_gate::Standing::*;
+    use crate::group_gate::{gate_for, Reading};
     use crate::session::GroupGate::*;
+    let read = |first, caught_up, may_catch_up, readable| Reading {
+        first,
+        caught_up,
+        may_catch_up,
+        readable,
+    };
     // A context ahead or on another head: catch up first when allowed,
     // otherwise wait.
-    assert_eq!(gate_for(Some(Behind), Member, true, true), CatchUp);
-    assert_eq!(gate_for(Some(Fork), Stranger, true, true), CatchUp);
-    assert_eq!(gate_for(Some(Behind), Member, true, false), Hold);
-    // Then decided by membership; what can't be confirmed waits.
-    assert_eq!(gate_for(Some(Behind), Member, false, true), Accept);
-    assert_eq!(gate_for(Some(Behind), Stranger, false, true), Hold);
-    assert_eq!(gate_for(Some(Current), Unconfirmed, true, true), Hold);
-    // A stranger whose own context isn't ahead isn't a member.
-    assert_eq!(gate_for(Some(SenderBehind), Stranger, true, true), Refuse);
-    assert_eq!(gate_for(Some(Current), Stranger, true, true), Refuse);
-    // Nothing to tell by (an unreadable message): one bounded catch-up.
-    assert_eq!(gate_for(None, Stranger, true, true), CatchUp);
-    assert_eq!(gate_for(None, Stranger, true, false), Hold);
-    assert_eq!(gate_for(None, Member, true, true), Accept);
+    assert_eq!(
+        gate_for(Some(Behind), Member, read(true, false, true, true)),
+        CatchUp
+    );
+    assert_eq!(
+        gate_for(Some(Fork), Stranger, read(true, false, true, true)),
+        CatchUp
+    );
+    assert_eq!(
+        gate_for(Some(Behind), Member, read(true, false, false, true)),
+        Hold
+    );
+    // Then decided by membership.
+    assert_eq!(
+        gate_for(Some(Behind), Member, read(false, true, true, true)),
+        Accept
+    );
+    assert_eq!(
+        gate_for(Some(Current), Unconfirmed, read(true, false, true, true)),
+        Hold
+    );
+    // A stranger: refused once this device is at the home's latest, or when
+    // their context isn't ahead; held only while no catch-up worked.
+    assert_eq!(
+        gate_for(Some(Behind), Stranger, read(false, true, true, true)),
+        Refuse
+    );
+    assert_eq!(
+        gate_for(Some(Behind), Stranger, read(false, false, true, true)),
+        Hold
+    );
+    assert_eq!(
+        gate_for(Some(SenderBehind), Stranger, read(true, false, true, true)),
+        Refuse
+    );
+    assert_eq!(
+        gate_for(Some(Current), Stranger, read(true, false, true, true)),
+        Refuse
+    );
+    // Readable content without a context from a stranger: refused at once.
+    assert_eq!(
+        gate_for(None, Stranger, read(true, false, true, true)),
+        Refuse
+    );
+    // An unreadable message: one bounded catch-up, then decided.
+    assert_eq!(
+        gate_for(None, Stranger, read(true, false, true, false)),
+        CatchUp
+    );
+    assert_eq!(
+        gate_for(None, Stranger, read(true, false, false, false)),
+        Hold
+    );
+    assert_eq!(
+        gate_for(None, Stranger, read(false, true, true, false)),
+        Refuse
+    );
+    assert_eq!(
+        gate_for(None, Member, read(true, false, true, false)),
+        Accept
+    );
 }
 
 #[test]
@@ -1675,23 +1728,52 @@ fn group_review_catch_ups_are_bounded_per_group() {
         failures: 0,
         asked_up_to: 5,
     };
-    // A revision not asked for yet goes at once; the same one waits.
-    assert!(fresh.allows(now, Some(6)));
-    assert!(!fresh.allows(now, Some(5)));
-    assert!(!fresh.allows(now + 9_000, None));
-    assert!(fresh.allows(now + 10_000, None));
+    // News (a small step past this device's revision 5, not asked for yet)
+    // goes after a short gap; the same revision, or a far one, waits.
+    assert!(!fresh.allows(now + 1_000, Some(6), 5));
+    assert!(fresh.allows(now + 2_000, Some(6), 5));
+    assert!(!fresh.allows(now + 2_000, Some(5), 5));
+    assert!(!fresh.allows(now + 2_000, Some(u64::MAX), 5));
+    assert!(!fresh.allows(now + 9_000, None, 5));
+    assert!(fresh.allows(now + 10_000, None, 5));
     // After failures, even news waits a growing back-off, at most 15 minutes.
     let failing = CatchUps {
         failures: 3,
         ..fresh
     };
-    assert!(!failing.allows(now + 79_000, Some(100)));
-    assert!(failing.allows(now + 80_000, Some(100)));
+    assert!(!failing.allows(now + 79_000, Some(6), 5));
+    assert!(failing.allows(now + 80_000, Some(6), 5));
     let failing = CatchUps {
         failures: 30,
         ..fresh
     };
-    assert!(failing.allows(now + 15 * 60 * 1000, None));
+    assert!(failing.allows(now + 15 * 60 * 1000, None, 5));
+}
+
+#[test]
+fn group_review_held_envelopes_are_capped_and_given_up() {
+    use crate::group_gate::{
+        HeldEnvelopes, GROUP_HOLD_MS, MAX_HELD_PER_GROUP, MAX_HELD_PER_SENDER,
+    };
+    let mut held = HeldEnvelopes::default();
+    let now = 10 * GROUP_HOLD_MS;
+    let kept = (0..MAX_HELD_PER_SENDER + 5)
+        .filter(|_| held.keep("g", "stranger", now, now))
+        .count();
+    assert_eq!(kept, MAX_HELD_PER_SENDER);
+    // Other senders fill the group up to its own limit.
+    let others = (0..MAX_HELD_PER_GROUP)
+        .filter(|n| held.keep("g", &format!("sender-{n}"), now, now))
+        .count();
+    assert_eq!(others, MAX_HELD_PER_GROUP - MAX_HELD_PER_SENDER);
+    assert!(
+        held.keep("h", "stranger", now, now),
+        "another group has its own"
+    );
+    assert!(
+        !held.keep("h", "late", now - GROUP_HOLD_MS, now),
+        "a week old: given up"
+    );
 }
 
 // ----- the #242 re-review: nothing real is lost -----
@@ -1729,7 +1811,13 @@ fn group_rereview_a_new_members_first_messages_arrive_without_a_sync() {
     for person in [&mut alice, &mut bob] {
         let report = person.receive();
         assert!(report.errors.is_empty(), "{:?}", report.errors);
-        assert!(report.held.is_empty(), "nothing waits: {:?}", report.held);
+        // Carol's change came right after the last catch-up: it may wait the
+        // short gap between catch-ups, and is read on the next pass.
+        if !report.held.is_empty() {
+            person.engine.advance_clock_for_testing(2_000);
+            let report = person.receive();
+            assert!(report.held.is_empty(), "nothing waits: {:?}", report.held);
+        }
         let texts = person.group_texts(&group_id);
         assert!(
             texts.contains(&"hi all".to_string()) && texts.contains(&"second".to_string()),
@@ -1759,8 +1847,12 @@ fn group_rereview_a_member_whose_manifest_cant_be_fetched_is_held_not_dropped() 
     assert!(!alice
         .group_texts(&group_id)
         .contains(&"while down".to_string()));
-    // Read again on a later pass, once the manifest is back.
+    // Read again on a later pass, once the manifest is back and the
+    // back-off for it passed.
     world.manifests_down.borrow_mut().clear();
+    let report = alice.receive();
+    assert_eq!(report.held.len(), 1, "not looked up again at once");
+    alice.engine.advance_clock_for_testing(11_000);
     let report = alice.receive();
     assert!(report.held.is_empty());
     assert!(alice
@@ -1792,9 +1884,14 @@ fn group_rereview_an_unreachable_home_holds_a_new_member_then_delivers() {
     assert!(!bob
         .group_texts(&group_id)
         .contains(&"hello bob".to_string()));
-    // Back, and past the back-off: delivered.
+    // Back, but within the back-off: no catch-up, still waiting.
     world.home_down.set(false);
-    bob.engine.group_catch_ups.clear();
+    let requests = world.home_requests.get();
+    let report = bob.receive();
+    assert!(!report.held.is_empty());
+    assert_eq!(world.home_requests.get(), requests);
+    // Past it: caught up, and delivered.
+    bob.engine.advance_clock_for_testing(21_000);
     bob.receive();
     assert!(bob
         .group_texts(&group_id)
@@ -1849,6 +1946,7 @@ fn group_rereview_a_fork_is_flagged_and_cleared_only_by_its_member() {
         &group_id,
         &carol.account,
         Some(&forked),
+        true,
     ))
     .unwrap();
     assert_eq!(gate, GroupGate::Accept);
@@ -1865,7 +1963,7 @@ fn group_rereview_a_fork_is_flagged_and_cleared_only_by_its_member() {
     block_on(
         alice
             .engine
-            .decide_group_content(&group_id, &bob.account, Some(&current)),
+            .decide_group_content(&group_id, &bob.account, Some(&current), true),
     )
     .unwrap();
     assert!(block_on(alice.engine.load_group_record(&group_id))
@@ -1875,7 +1973,7 @@ fn group_rereview_a_fork_is_flagged_and_cleared_only_by_its_member() {
     block_on(
         alice
             .engine
-            .decide_group_content(&group_id, &carol.account, Some(&current)),
+            .decide_group_content(&group_id, &carol.account, Some(&current), true),
     )
     .unwrap();
     assert!(block_on(alice.engine.load_group_record(&group_id))
@@ -1928,4 +2026,121 @@ fn group_rereview_the_refresh_limit_survives_a_reload() {
     let before = to_bob(&world);
     alice.receive();
     assert_eq!(to_bob(&world), before);
+}
+
+// ----- the #242 third review: strangers can't make members wait -----
+
+#[test]
+fn group_third_a_removed_member_with_an_ahead_context_is_refused_after_one_catch_up() {
+    use crate::session::GroupGate;
+    let world = World::new();
+    let (mut alice, mut bob, carol, group_id) = group_with_two_admins(&world);
+    let carols = pseudonym_of(&mut bob, &group_id, &carol);
+    block_on(
+        bob.engine
+            .remove_group_member(&group_id, &carols, &mut rng()),
+    )
+    .unwrap();
+    alice.receive();
+    alice.engine.advance_clock_for_testing(60_000);
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    let mut ahead = Engine::group_context(&record).unwrap();
+    let before = world.home_requests.get();
+    // A forged revision a step ahead: one catch-up, then refused.
+    ahead.revision += 1;
+    let gate = block_on(alice.engine.decide_group_content(
+        &group_id,
+        &carol.account,
+        Some(&ahead),
+        true,
+    ))
+    .unwrap();
+    assert_eq!(gate, GroupGate::Refuse);
+    let after_first = world.home_requests.get();
+    assert!(after_first > before);
+    // More of them right after: never taken, no catch-up per message.
+    for step in 2..40 {
+        ahead.revision += step;
+        let gate = block_on(alice.engine.decide_group_content(
+            &group_id,
+            &carol.account,
+            Some(&ahead),
+            true,
+        ))
+        .unwrap();
+        assert_ne!(gate, GroupGate::Accept);
+    }
+    assert_eq!(world.home_requests.get(), after_first, "bounded");
+    // A sender key with no context from her: refused at once.
+    let gate = block_on(
+        alice
+            .engine
+            .decide_group_content(&group_id, &carol.account, None, true),
+    )
+    .unwrap();
+    assert_eq!(gate, GroupGate::Refuse);
+}
+
+#[test]
+fn group_third_an_undelivered_group_message_fails_after_a_week() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let send_id = alice.send_text(&group_id, "kept a while");
+    // Make the entry undelivered, as a leg to a server gone would stay.
+    let mut entry = block_on(alice.engine.session().db().list_group_outbox())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.send_id == send_id)
+        .unwrap();
+    for leg in &mut entry.legs {
+        leg.delivered = false;
+    }
+    let mut pending = crate::db::Pending::default();
+    pending.group_outbox.insert(send_id.clone(), Some(entry));
+    block_on(alice.engine.session().db().apply(&pending)).unwrap();
+    let in_log = |person: &Person| {
+        block_on(person.engine.session().db().list_group_outbox())
+            .unwrap()
+            .iter()
+            .any(|entry| entry.send_id == send_id)
+    };
+    // A day on: still tried.
+    let day = crate::clock::unix_millis() + crate::session::GROUP_SEND_LOG_MS + 1;
+    block_on(alice.engine.session.purge_expired_history(day)).unwrap();
+    assert!(in_log(&alice));
+    // A week on: failed, its plaintext gone.
+    let week = crate::clock::unix_millis() + crate::session::GROUP_UNDELIVERED_MS + 1;
+    block_on(alice.engine.session.purge_expired_history(week)).unwrap();
+    assert!(!in_log(&alice));
+}
+
+#[test]
+fn group_third_a_disappearing_group_message_leaves_the_send_log() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(&send_id, ISSUED_AT, seq, "gone in a minute")
+        .with_disappearing_after(60)
+        .unwrap();
+    block_on(
+        alice
+            .engine
+            .send_group_message(&group_id, &send_id, content, &mut rng()),
+    )
+    .unwrap();
+    let in_log = |person: &Person| {
+        block_on(person.engine.session().db().list_group_outbox())
+            .unwrap()
+            .iter()
+            .any(|entry| entry.send_id == send_id)
+    };
+    assert!(in_log(&alice));
+    let later = crate::clock::unix_millis() + 61_000;
+    block_on(alice.engine.session.purge_expired_history(later)).unwrap();
+    assert!(!in_log(&alice));
 }

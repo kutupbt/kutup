@@ -239,6 +239,11 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// The engine's clock in milliseconds (the test offset included).
+    pub(crate) fn now_ms(&self) -> i64 {
+        unix_millis() + self.clock_offset_ms
+    }
+
     /// Wrap an already-registered [`Session`] with a transport.
     pub fn new(session: Session, transport: Rc<dyn ChatTransport>) -> Self {
         Self::with_manifest_policy(session, transport, ManifestPolicy::Required)
@@ -1955,6 +1960,8 @@ impl Engine {
         // when only a fresh session is owed).
         let mut refresh_peers: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut resend_requests: Vec<(String, Vec<String>)> = Vec::new();
+        // Group envelopes left waiting this pass, oldest kept first.
+        let mut held = crate::group_gate::HeldEnvelopes::default();
         for inbound in self.session.pending_inbound().await? {
             if matches!(
                 inbound.state,
@@ -2056,13 +2063,20 @@ impl Engine {
                     }) if !decided => {
                         decided = true;
                         let gate = match self
-                            .decide_group_content(group_id, sender, context.as_ref())
+                            .decide_group_content(group_id, sender, context.as_ref(), true)
                             .await
                         {
                             Ok(gate) => gate,
                             // Not decidable now (the store, say): read again
-                            // on a later pass.
-                            Err(_) => crate::session::GroupGate::Hold,
+                            // on a later pass, and said.
+                            Err(error) => {
+                                self.events.push_back(ChatEvent::InboundNeedsAttention {
+                                    id: inbound.id.clone(),
+                                    kind: error.inbound_failure_kind(),
+                                    error: error.to_string(),
+                                });
+                                crate::session::GroupGate::Hold
+                            }
                         };
                         self.session.decide_group(group_id, sender, gate);
                     }
@@ -2179,19 +2193,27 @@ impl Engine {
                     report.undecodable.push(id);
                 }
                 // Group content that can't be confirmed now stays queued and
-                // is read again on a later pass; given up after a week.
+                // is read again on a later pass, within the hold limits.
                 Ok(
-                    ReceiveOutcome::GroupHeld
+                    ReceiveOutcome::GroupHeld { .. }
                     | ReceiveOutcome::GroupCheck { .. }
                     | ReceiveOutcome::GroupCatchUp,
                 ) => {
-                    let now = unix_millis() + self.clock_offset_ms;
-                    if now.saturating_sub(inbound.received_at) >= crate::group_gate::GROUP_HOLD_MS {
+                    let (group_id, sender) = match receive_result {
+                        Ok(
+                            ReceiveOutcome::GroupHeld { group_id, sender }
+                            | ReceiveOutcome::GroupCheck {
+                                group_id, sender, ..
+                            },
+                        ) => (group_id, sender),
+                        _ => (String::new(), String::new()),
+                    };
+                    if held.keep(&group_id, &sender, inbound.received_at, self.now_ms()) {
+                        report.held.push(inbound.id);
+                    } else {
                         self.session.ack_dropped(&envelope).await?;
                         ack_ids.push(inbound.id.clone());
                         report.suppressed.push(inbound.id);
-                    } else {
-                        report.held.push(inbound.id);
                     }
                 }
                 Err(error) => {
@@ -2235,16 +2257,22 @@ impl Engine {
                             // couldn't be made now: left queued for a later
                             // pass (perhaps readable then), given up after a
                             // week.
-                            Ok(GroupRepair::Held) | Err(_) => {
-                                let now = unix_millis() + self.clock_offset_ms;
-                                if now.saturating_sub(inbound.received_at)
-                                    >= crate::group_gate::GROUP_HOLD_MS
+                            repair @ (Ok(GroupRepair::Held) | Err(_)) => {
+                                if let Err(error) = repair {
+                                    self.events.push_back(ChatEvent::InboundNeedsAttention {
+                                        id: inbound.id.clone(),
+                                        kind: error.inbound_failure_kind(),
+                                        error: error.to_string(),
+                                    });
+                                }
+                                let group_id = kutup_chat_proto::group::encode_group_id(&group_id);
+                                if held.keep(&group_id, &sender, inbound.received_at, self.now_ms())
                                 {
+                                    report.held.push(inbound.id);
+                                } else {
                                     self.session.ack_dropped(&envelope).await?;
                                     ack_ids.push(inbound.id.clone());
                                     report.suppressed.push(inbound.id);
-                                } else {
-                                    report.held.push(inbound.id);
                                 }
                             }
                         }

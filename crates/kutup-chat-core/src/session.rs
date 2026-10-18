@@ -215,7 +215,7 @@ pub(crate) enum ReceiveOutcome {
     },
     /// Group content that can't be confirmed now: nothing was kept, and the
     /// envelope stays queued for a later pass.
-    GroupHeld,
+    GroupHeld { group_id: String, sender: String },
     /// Decrypted but the plaintext wasn't a valid content document (a buggy/newer
     /// sender). Stored raw so it's never dropped; the app renders a placeholder.
     Undecodable { id: String },
@@ -1413,9 +1413,12 @@ impl Session {
                         id: envelope.id.clone(),
                     });
                 }
-                (Some(GroupGate::Hold | GroupGate::CatchUp), _) => {
+                (Some(GroupGate::Hold | GroupGate::CatchUp), group) => {
                     self.store.discard();
-                    return Ok(ReceiveOutcome::GroupHeld);
+                    return Ok(ReceiveOutcome::GroupHeld {
+                        group_id: group.map(|(group_id, _)| group_id).unwrap_or_default(),
+                        sender,
+                    });
                 }
                 (None, group) => {
                     self.store.discard();
@@ -4060,7 +4063,10 @@ impl Session {
             }
             Ok((GroupGate::Hold, ..)) => {
                 self.store.discard();
-                Ok(ReceiveOutcome::GroupHeld)
+                Ok(ReceiveOutcome::GroupHeld {
+                    group_id: kutup_chat_proto::group::encode_group_id(&group_id),
+                    sender: inspection.sender.clone(),
+                })
             }
             Ok((GroupGate::Refuse, ..)) => {
                 self.store.discard();

@@ -336,6 +336,8 @@ export interface InboundFailure {
 
 export interface ReceiveReport {
   messages: ReceivedChatMessage[]
+  /** Group envelopes left queued until their sender can be confirmed. */
+  held?: string[]
   synced: string[]
   contactSynced: string[]
   profileKeyUpdated: string[]

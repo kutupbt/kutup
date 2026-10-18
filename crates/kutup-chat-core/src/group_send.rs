@@ -454,13 +454,11 @@ impl Engine {
                 },
             );
         }
-        // Deleted for everyone: nothing of it is sent again.
+        // Edited or deleted for everyone: the old text is never sent again.
         if let Some(mutation) = content.as_message_mutation() {
-            if mutation.operation == kutup_chat_proto::content::MessageMutationOperation::Delete {
-                pending
-                    .group_outbox
-                    .insert(mutation.target_message_id.clone(), None);
-            }
+            pending
+                .group_outbox
+                .insert(mutation.target_message_id.clone(), None);
         }
         if !legs.is_empty() {
             pending.group_outbox.insert(

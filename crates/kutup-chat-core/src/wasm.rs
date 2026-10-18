@@ -4085,6 +4085,8 @@ struct ReceiveReportView {
     send_failures: Vec<SendFailureView>,
     /// Group invitations that arrived.
     group_invites: Vec<GroupInviteView>,
+    /// Group envelopes left queued until their sender can be confirmed.
+    held: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -4134,6 +4136,7 @@ impl From<ReceiveReport> for ReceiveReportView {
                     request: notice.request,
                 })
                 .collect(),
+            held: report.held,
         }
     }
 }

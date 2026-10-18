@@ -153,7 +153,10 @@ impl Engine {
         rng: &mut R,
     ) -> Result<GroupRepair> {
         let group_id = kutup_chat_proto::group::encode_group_id(group_id);
-        match self.decide_group_content(&group_id, sender, None).await? {
+        match self
+            .decide_group_content(&group_id, sender, None, false)
+            .await?
+        {
             GroupGate::Accept => {}
             GroupGate::Refuse => {
                 self.session.ack_dropped(envelope).await?;

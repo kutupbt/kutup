@@ -267,7 +267,7 @@ cleared).
 - Ours keeps a delivered message a day, as Desktop does in practice
   (`GROUP_SEND_LOG_MS`); an undelivered one is tried for a week and then fails
   (`GROUP_UNDELIVERED_MS`). A message that disappeared, or that its sender
-  deleted (for everyone or for themselves), leaves the log, and so does a
+  edited or deleted (for everyone or for themselves), leaves the log, and so does a
   group's whole log when this account leaves it; the answer is then
   `unavailable`.
 - A key and each named message, sent or not, are answered at most once an
@@ -304,19 +304,22 @@ revision (`SignalService.proto:947-951`).
   - a context ahead of this device's verified state, or another head at the
     same revision, makes the device catch up and read the content again;
   - a sender who is a member at that state is taken;
-  - a sender whose membership can't be confirmed now (a stranger who may
-    have joined since, a context still ahead, a member whose manifest can't
-    be fetched, an unreachable home) is **held**: the envelope stays queued
-    and is read again on later passes, given up after a week, never dropped
-    unconfirmed;
-  - a stranger whose own context isn't ahead (a removed member) is dropped
-    at once, without a catch-up;
-  - catch-ups are bounded per group: a context naming a revision not asked
-    for yet goes at once, anything else waits a back-off from 10 seconds,
-    doubling on failure up to 15 minutes;
-  - members are looked up again only when the state's head moves, and a
-    verified manifest's keys are kept for an hour; a failed fetch is never
-    kept;
+  - a stranger is refused once a catch-up reached the home's latest (as
+    Signal drops what still doesn't fit after its group fetch), when their own
+    context isn't ahead (a removed member, at once and without a catch-up),
+    or when readable content of theirs carries no context;
+  - what can't be decided now is **held**: a member whose manifest can't be
+    fetched, or a stranger while no catch-up worked (an unreachable home). The
+    envelope stays queued and is read again on later passes (the browser runs
+    another pass 5 seconds after one that held something), given up after a
+    week, at most 32 per sender and 256 per group, the rest dropped;
+  - catch-ups are bounded per group: a context at most 64 revisions past this
+    device's state and not asked for yet goes after a 2-second gap, anything
+    else waits a back-off from 10 seconds, doubling on failure up to
+    15 minutes;
+  - members are looked up again when the state's head moves, a verified
+    manifest's keys are kept for an hour, and a member whose manifest can't
+    be fetched is looked up again after the same back-off;
   - another head, or a context still ahead after a catch-up that reached the
     home's latest, flags the group (`forkSuspected`, shown as "the group's
     server may be showing members different versions"); only the member who

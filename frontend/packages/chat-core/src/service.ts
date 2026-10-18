@@ -119,6 +119,13 @@ const POLL_HIDDEN_MS = 30_000
 /** Failed socket attempts before polling starts: a restart or a hand-over needs none. */
 const POLL_AFTER_ATTEMPTS = 2
 
+/**
+ * A pass that left group envelopes waiting (their sender not confirmable
+ * yet) is followed by another this much later, even with the socket open
+ * and nothing new arriving.
+ */
+const HELD_RETRY_MS = 5_000
+
 /** The protocol's limit on messages per delete-for-me control. */
 const DELETE_FOR_ME_BATCH = 64
 
@@ -200,6 +207,7 @@ export class ChatService {
   private pongDeadline: ReturnType<typeof setTimeout> | null = null
   private connection: ChatConnectionStatus = 'connecting'
   private pollTimer: ReturnType<typeof setTimeout> | null = null
+  private heldRetry: ReturnType<typeof setTimeout> | null = null
   /** A polling loop runs (its timer may be between ticks, or a read in flight). */
   private polling = false
   private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
@@ -1385,6 +1393,12 @@ export class ChatService {
           console.warn('chat: a queued message could not be sent yet', failure.error)
         }
         this.setWaitingPeers(waiting)
+        if ((report.held?.length ?? 0) > 0 && this.heldRetry === null && !this.disposed) {
+          this.heldRetry = setTimeout(() => {
+            this.heldRetry = null
+            if (!this.disposed) this.reconcileInBackground()
+          }, HELD_RETRY_MS)
+        }
         for (const message of report.messages ?? []) {
           if (message.conversation.kind !== 'direct' || !message.content.call) continue
           this.emitCall({
@@ -1777,6 +1791,7 @@ export class ChatService {
     if (this.disposed) return
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
+    if (this.heldRetry) clearTimeout(this.heldRetry)
     this.stopPolling()
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
