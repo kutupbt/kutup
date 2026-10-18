@@ -85,7 +85,7 @@ pub const NOT_FOUND_CONFIRM_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// The most log pages one catch-up reads.
 const MAX_PAGES_PER_SYNC: usize = 256;
 
-fn group_error(error: GroupError) -> ChatError {
+pub(crate) fn group_error(error: GroupError) -> ChatError {
     match error {
         GroupError::Notary => ChatError::Trust("the group home's signature doesn't verify".into()),
         GroupError::Change(change) => ChatError::Trust(format!("group change refused: {change}")),
@@ -93,18 +93,18 @@ fn group_error(error: GroupError) -> ChatError {
     }
 }
 
-fn decode_b64(value: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode_b64(value: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(value)
         .map_err(|_| ChatError::Invalid("group answer is not base64".into()))
 }
 
-fn now_seconds() -> i64 {
+pub(crate) fn now_seconds() -> i64 {
     crate::clock::unix_millis() / 1000
 }
 
 /// The answer's body, when the home said yes; its refusal, as an error.
-fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
+pub(crate) fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
     match response.status {
         GroupResponseStatusV1::Ok => response.body().map_err(ChatError::Invalid),
         GroupResponseStatusV1::Refused => Err(ChatError::Trust(format!(
@@ -267,14 +267,27 @@ impl Engine {
     }
 
     /// One request to `record`'s home, signed by this account's pseudonym.
-    async fn group_request(
+    pub(crate) async fn group_request(
         &mut self,
         record: &mut GroupRecordV1,
         operation: GroupOperationV1,
         body: &[u8],
     ) -> Result<std::result::Result<GroupResponseV1, RouteFailure>> {
-        let group_id = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
         let seed = zeroize::Zeroizing::new(*record.pseudonym().map_err(group_error)?.seed());
+        self.group_request_signed(record, operation, body, &seed)
+            .await
+    }
+
+    /// One request to `record`'s home signed by `seed` (a pseudonym, or a
+    /// slot's claim key for the join info a claimant needs).
+    pub(crate) async fn group_request_signed(
+        &mut self,
+        record: &mut GroupRecordV1,
+        operation: GroupOperationV1,
+        body: &[u8],
+        seed: &[u8; 32],
+    ) -> Result<std::result::Result<GroupResponseV1, RouteFailure>> {
+        let group_id = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
         let home = record.home.clone();
         let transport = Rc::clone(&self.transport);
         group_client::call(
@@ -284,14 +297,14 @@ impl Engine {
             &group_id,
             operation,
             body,
-            &RequestSigner::Key(&seed),
+            &RequestSigner::Key(seed),
             now_seconds(),
         )
         .await
     }
 
     /// This account's profile key, which its group entries carry.
-    async fn own_profile_key(&self) -> Result<[u8; 32]> {
+    pub(crate) async fn own_profile_key(&self) -> Result<[u8; 32]> {
         let profile = self
             .session
             .db()
@@ -406,7 +419,7 @@ impl Engine {
     }
 
     /// Makes a change as this member and applies the home's notarised answer.
-    async fn submit_group_change(
+    pub(crate) async fn submit_group_change(
         &mut self,
         record: &mut GroupRecordV1,
         actions: Vec<GroupActionV1>,
@@ -577,7 +590,10 @@ impl Engine {
         })
     }
 
-    async fn take_whole_state(&mut self, record: &mut GroupRecordV1) -> Result<GroupSync> {
+    pub(crate) async fn take_whole_state(
+        &mut self,
+        record: &mut GroupRecordV1,
+    ) -> Result<GroupSync> {
         let response = match self
             .group_request(record, GroupOperationV1::GetState, b"")
             .await?

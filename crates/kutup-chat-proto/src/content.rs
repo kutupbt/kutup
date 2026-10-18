@@ -464,6 +464,10 @@ impl ChatContent {
             || self.as_call().is_some()
             || self.is_session_control()
             || self.kind == kind::RESEND
+            // A group's hidden pairwise kinds: never history, never a
+            // transcript (docs/plans/pairwise-groups.md §1, §4).
+            || self.kind == kind::SENDER_KEY_DISTRIBUTION
+            || self.kind == kind::GROUP_INVITE
     }
 
     /// Builds the invisible message that carries a fresh session to a device

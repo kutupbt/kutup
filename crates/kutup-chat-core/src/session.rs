@@ -3836,30 +3836,6 @@ impl Session {
         }
     }
 
-    /// Decrypts a member device's sender-key message.
-    pub(crate) async fn group_decrypt(
-        &mut self,
-        sender: &ChatAddress,
-        message: &[u8],
-    ) -> Result<Vec<u8>> {
-        let result = libsignal_protocol::group_decrypt(
-            message,
-            &mut self.store.sender_key_store,
-            &sender.to_protocol()?,
-        )
-        .await;
-        match result {
-            Ok(padded) => {
-                self.store.commit().await?;
-                crate::padding::unpad(&padded)
-            }
-            Err(error) => {
-                self.store.discard();
-                Err(error.into())
-            }
-        }
-    }
-
     /// Opens a member device's sender-key message and stores what it carries,
     /// in one commit with the sender key's advance and the mailbox receipt.
     /// The engine has already checked the sender is a verified member of the

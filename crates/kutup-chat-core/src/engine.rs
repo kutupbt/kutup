@@ -92,6 +92,8 @@ pub struct ReceiveReport {
     pub undecodable: Vec<String>,
     /// Envelopes retained for repair/retry.
     pub errors: Vec<InboundFailure>,
+    /// Invitations to groups that arrived: `(group id, inviter account)`.
+    pub group_invites: Vec<(String, String)>,
     /// Authenticated replays that were safely moved directly to pending-ack.
     pub duplicates: Vec<String>,
     /// Mailbox ids that could not be decrypted and were given up on, with
@@ -2073,6 +2075,7 @@ impl Engine {
                             report.messages.push(message);
                         }
                         Ok(GroupContentOutcome::Invited { group_id, from }) => {
+                            report.group_invites.push((group_id.clone(), from.clone()));
                             self.events
                                 .push_back(ChatEvent::GroupInvited { group_id, from });
                             report.suppressed.push(id);
