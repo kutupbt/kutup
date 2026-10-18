@@ -440,7 +440,8 @@ pub async fn enqueue_sealed_send(
         Queued::Row(id) => {
             flush_sealed_destination(state, &recipient.server, DestinationLock::Wait)
                 .await?
-                .take(id)
+                .outcome(&state.pool, id)
+                .await
         }
     }
 }
@@ -549,7 +550,8 @@ pub(crate) async fn enqueue_sealed_row(
                 sqlx::query(
                     "UPDATE chat_sealed_federation_outbox
                      SET sequence = $3, transaction = $2, state = 'pending', attempts = 0,
-                         next_attempt_at = now(), last_error_class = NULL, updated_at = now()
+                         next_attempt_at = now(), last_error_class = NULL, answer = NULL,
+                         updated_at = now()
                      WHERE id = $1",
                 )
                 .bind(id)
@@ -657,13 +659,50 @@ impl SealedFlush {
         }
     }
 
-    /// What became of queued send `id`: its answer, or still waiting.
-    pub(crate) fn take(&mut self, id: Uuid) -> AppResult<FederatedSealedOutcome> {
-        self.outcomes.remove(&id).unwrap_or(Ok(if self.parked {
-            FederatedSealedOutcome::PeerUnsupported
-        } else {
-            FederatedSealedOutcome::Pending
-        }))
+    /// What became of queued send `id`: this flush's answer, or else what
+    /// its row says now (another flush, the retry worker's, may have settled
+    /// it meanwhile), or still waiting.
+    pub(crate) async fn outcome(
+        &mut self,
+        pool: &sqlx::PgPool,
+        id: Uuid,
+    ) -> AppResult<FederatedSealedOutcome> {
+        if let Some(outcome) = self.outcomes.remove(&id) {
+            return outcome;
+        }
+        let row: Option<(String, Option<String>, Option<Value>)> = sqlx::query_as(
+            "SELECT state, last_error_class, answer FROM chat_sealed_federation_outbox
+             WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        let waiting = |class: Option<&str>| {
+            if self.parked || class == Some("peer_unsupported") {
+                FederatedSealedOutcome::PeerUnsupported
+            } else {
+                FederatedSealedOutcome::Pending
+            }
+        };
+        let Some((state_name, class, answer)) = row else {
+            return Ok(waiting(None));
+        };
+        let answer = answer.unwrap_or(Value::Null);
+        Ok(match (state_name.as_str(), class.as_deref()) {
+            ("delivered", _) => match serde_json::from_value(answer) {
+                Ok(delivered) => FederatedSealedOutcome::Delivered(delivered),
+                Err(_) => waiting(None),
+            },
+            ("rejected", Some("device_mismatch")) => match serde_json::from_value(answer) {
+                Ok(FederationDeliveryError::DeviceListMismatch { mismatch }) => {
+                    FederatedSealedOutcome::Mismatch(mismatch)
+                }
+                _ => waiting(None),
+            },
+            ("rejected", Some("unavailable")) => FederatedSealedOutcome::Unavailable,
+            ("rejected", Some("refused")) => FederatedSealedOutcome::Refused,
+            (_, class) => waiting(class),
+        })
     }
 
     fn record(&mut self, id: Uuid, outcome: AppResult<FederatedSealedOutcome>) -> bool {
@@ -929,17 +968,20 @@ async fn settle_sealed_row(
     row: &SealedFederationOutboxRow,
     state_name: &str,
     class: Option<&str>,
+    answer: &[u8],
 ) -> AppResult<bool> {
+    let answer = serde_json::from_slice::<Value>(answer).unwrap_or(Value::Null);
     Ok(sqlx::query(
         "UPDATE chat_sealed_federation_outbox
          SET state = $3, attempts = attempts + 1,
-             last_error_class = $4, updated_at = now()
+             last_error_class = $4, answer = $5, updated_at = now()
          WHERE id = $1 AND state = 'pending' AND sequence = $2",
     )
     .bind(row.id)
     .bind(row.sequence)
     .bind(state_name)
     .bind(class)
+    .bind(answer)
     .execute(pool)
     .await?
     .rows_affected()
@@ -1000,7 +1042,7 @@ async fn apply_sealed_answer(
             return Ok(FederatedSealedOutcome::Pending);
         }
     };
-    if !settle_sealed_row(pool, row, state_name, class).await? {
+    if !settle_sealed_row(pool, row, state_name, class, body).await? {
         return Ok(FederatedSealedOutcome::Pending);
     }
     Ok(outcome)
@@ -3243,6 +3285,15 @@ mod sealed_live_tests {
             .unwrap();
         assert!(matches!(outcome, FederatedSealedOutcome::Mismatch(_)));
         assert_eq!(state_of().await, ("rejected".to_owned(), 5));
+        // A client whose flush didn't reach it (the worker's did) reads the
+        // answer from the row: the mismatch itself, not "pending".
+        let read_back = SealedFlush::new().outcome(&pool, id).await.unwrap();
+        match read_back {
+            FederatedSealedOutcome::Mismatch(mismatch) => {
+                assert_eq!(mismatch.stale_devices, [1])
+            }
+            _ => panic!("the stored mismatch is read back"),
+        }
         sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE id = $1")
             .bind(id)
             .execute(&pool)

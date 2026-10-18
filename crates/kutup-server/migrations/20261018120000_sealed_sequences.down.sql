@@ -1,3 +1,4 @@
+ALTER TABLE chat_sealed_federation_outbox DROP COLUMN answer;
 -- A recorded mismatch and its delivered resend share a sendId: keep the
 -- delivery, which is what the old constraint stood for.
 DELETE FROM chat_sealed_federation_inbound i

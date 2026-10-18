@@ -2086,7 +2086,7 @@ pub async fn send_sealed_batch(
     for (account_id, send_id, outcome) in queued {
         let outcome = match (outcome, flush.as_mut()) {
             (Err(settled), _) => settled,
-            (Ok(id), Some(flush)) => batch_outcome(flush.take(id)),
+            (Ok(id), Some(flush)) => batch_outcome(flush.outcome(&state.pool, id).await),
             (Ok(_), None) => Outcome::Pending,
         };
         results.push(result(&account_id, &send_id, outcome));

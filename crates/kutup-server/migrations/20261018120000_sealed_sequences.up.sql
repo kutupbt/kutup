@@ -15,3 +15,7 @@ UPDATE chat_sealed_federation_outbox
    SET state = 'pending', last_error_class = 'closing_sequence',
        next_attempt_at = now(), updated_at = now()
  WHERE state = 'rejected' AND last_error_class = 'device_mismatch';
+
+-- A settled send keeps its destination's answer, so a client whose send
+-- another flush settled (the retry worker's) still learns what it was.
+ALTER TABLE chat_sealed_federation_outbox ADD COLUMN answer jsonb;

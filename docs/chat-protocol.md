@@ -747,8 +747,9 @@ For another server, the origin queues each send exactly as a single sealed
 send (same outbox, sequence and `sendId` dedup), then flushes the
 destination's queue. One flush per destination runs at a time across every
 backend sharing the database (a Postgres advisory lock). A client waits a few
-seconds for a flush under way, and its send reads as `pending` if that flush
-doesn't reach it. A flush sends nothing while the queue's head is backing off
+seconds for a flush under way. A send that another flush settled meanwhile
+(the retry worker's) is answered from its outbox row, which keeps the
+destination's answer; only a send still queued reads as `pending`. A flush sends nothing while the queue's head is backing off
 or waits for the peer to support `chat.v2`. Otherwise it sends the run of
 consecutive pending sends from the head, sized before it is loaded, in signed
 `POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
