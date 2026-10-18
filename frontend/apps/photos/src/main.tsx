@@ -8,6 +8,7 @@ import { createRoot } from 'react-dom/client'
 import { initI18n } from '@kutup/i18n'
 import { configureClient } from '@kutup/session/client'
 import { App } from './App'
+import { WebAssemblyGate } from '@kutup/ui/components/webassembly-gate'
 import en from './locales/en.json'
 import tr from './locales/tr.json'
 
@@ -25,7 +26,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem storageKey="kutup-theme">
       <QueryClientProvider client={queryClient}>
-        <App />
+        <WebAssemblyGate>
+          <App />
+        </WebAssemblyGate>
       </QueryClientProvider>
     </ThemeProvider>
   </StrictMode>,
