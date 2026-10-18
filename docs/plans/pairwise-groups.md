@@ -446,6 +446,17 @@ to see members").**
   3. The home answers through the same relay.
 - **The keys.** The encapsulation is RFC 9458's, built with `kutup-crypto`'s
   HPKE (`hpke-rs`), so Rust owns the format.
+- **Post-quantum from the start** (decided 2026-10-18). The one suite is X-Wing
+  (X25519 + ML-KEM-768, draft-connolly-cfrg-xwing-kem-06, HPKE KEM 0x647a),
+  HKDF-SHA256 and ChaCha20-Poly1305, so a request recorded today can't be
+  opened later by a quantum computer. There is no X25519-only suite, no
+  fallback and no negotiation: the key config names 0x647a and carries the
+  1216-byte X-Wing public key, the notary names that config, and a client
+  refuses a config or request with any other KEM. The gateway's private key is
+  the 32-byte X-Wing seed (derived weekly from the federation identity, as
+  before). A request's encapsulated key grows to 1120 bytes. Checked against the
+  draft's own vectors; X-Wing runs on RustCrypto's `x-wing` and `ml-kem`
+  (`docs/roadmap.md`, dependency advisories, says why not libcrux yet).
 - **The home's key is authenticated end to end.** The client fetches the key
   config through its own server, which is also the relay. A dishonest relay
   could hand over its own key, read every request and pass it on. So:

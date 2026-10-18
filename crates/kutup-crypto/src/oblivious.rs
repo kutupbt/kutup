@@ -4,25 +4,31 @@
 //! the request nor the answer, and the answer is sealed to that request alone
 //! (docs/plans/pairwise-groups.md, "The anonymous route").
 //!
-//! The construction is RFC 9458 §4.3 and §4.4 unchanged, with the suite
-//! DHKEM(X25519, HKDF-SHA256), HKDF-SHA256 and ChaCha20-Poly1305 (the one HPKE
-//! suite `kutup-crypto` uses) and Kutup's own media labels. Both directions are
-//! padded to one of [`SIZES`], so a relay can't tell operations apart by length.
+//! The construction is RFC 9458 §4.3 and §4.4 unchanged, with Kutup's own
+//! media labels and one HPKE suite only: the X-Wing KEM (X25519 + ML-KEM-768,
+//! draft-connolly-cfrg-xwing-kem-06, HPKE codepoint 0x647a), HKDF-SHA256 and
+//! ChaCha20-Poly1305. Post-quantum from the start: a request recorded today
+//! can't be opened by a quantum computer later. There is no other KEM, no
+//! fallback and no negotiation; a request or key config naming another suite
+//! is refused. Both directions are padded to one of [`SIZES`], so a relay
+//! can't tell operations apart by length.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
-use hpke_rs::{HpkePrivateKey, HpkePublicKey};
+use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
+use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey, Mode};
+use hpke_rs_rust_crypto::HpkeRustCrypto;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
-use crate::named_share::hpke_suite;
 use crate::padding::Length;
 
 /// The HPKE suite's identifiers (RFC 9180 §7), written into every request.
-pub const KEM_X25519_HKDF_SHA256: u16 = 0x0020;
+/// X-Wing's is the HPKE registry's 0x647a (not the draft's earlier 0x004D).
+pub const KEM_XWING: u16 = 0x647a;
 pub const KDF_HKDF_SHA256: u16 = 0x0001;
 pub const AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
@@ -35,8 +41,12 @@ pub const RESPONSE_LABEL: &[u8] = b"application/kutup-oblivious-response";
 pub const SIZES: [usize; 5] = [1024, 4096, 16 * 1024, 64 * 1024, 256 * 1024];
 
 const HEADER_LEN: usize = 7;
-const ENC_LEN: usize = 32;
-const KEY_LEN: usize = 32;
+/// An X-Wing ciphertext: ML-KEM-768's 1088 bytes and an X25519 share.
+const ENC_LEN: usize = 1120;
+/// An X-Wing encapsulation key: ML-KEM-768's 1184 bytes and an X25519 key.
+pub const PUBLIC_KEY_LEN: usize = 1216;
+/// An X-Wing decapsulation key is its 32-byte seed.
+pub const PRIVATE_KEY_LEN: usize = 32;
 const AEAD_KEY_LEN: usize = 32;
 const AEAD_NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -46,10 +56,23 @@ const RESPONSE_NONCE_LEN: usize = 32;
 /// The largest body that fits the largest size (one byte of padding marker).
 pub const MAX_BODY: usize = SIZES[SIZES.len() - 1] - 1;
 
+/// The largest sealed request (header, encapsulated key, the largest padded
+/// size and the tag); an answer (response nonce, size, tag) is smaller.
+pub const MAX_SEALED: usize = HEADER_LEN + ENC_LEN + SIZES[SIZES.len() - 1] + TAG_LEN;
+
+fn hpke_suite() -> Hpke<HpkeRustCrypto> {
+    Hpke::new(
+        Mode::Base,
+        KemAlgorithm::XWingDraft06,
+        KdfAlgorithm::HkdfSha256,
+        AeadAlgorithm::ChaCha20Poly1305,
+    )
+}
+
 fn header(key_id: u8) -> [u8; HEADER_LEN] {
     let mut header = [0u8; HEADER_LEN];
     header[0] = key_id;
-    header[1..3].copy_from_slice(&KEM_X25519_HKDF_SHA256.to_be_bytes());
+    header[1..3].copy_from_slice(&KEM_XWING.to_be_bytes());
     header[3..5].copy_from_slice(&KDF_HKDF_SHA256.to_be_bytes());
     header[5..7].copy_from_slice(&AEAD_CHACHA20_POLY1305.to_be_bytes());
     header
@@ -88,43 +111,32 @@ fn backend(error: impl std::fmt::Debug) -> CryptoError {
 /// A gateway's HPKE key pair, with the one-byte key id clients name it by.
 pub struct GatewayKey {
     key_id: u8,
-    private_key: Zeroizing<Vec<u8>>,
-    public_key: [u8; KEY_LEN],
+    private_key: Zeroizing<[u8; PRIVATE_KEY_LEN]>,
+    public_key: [u8; PUBLIC_KEY_LEN],
 }
 
 impl GatewayKey {
     /// A new random key pair.
     pub fn generate(key_id: u8) -> Result<Self> {
-        // An X25519 private key is any 32 random bytes (clamped when used).
-        let mut private_key = Zeroizing::new([0u8; KEY_LEN]);
+        let mut private_key = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
         copy_randombytes(private_key.as_mut());
         Self::from_private_key(key_id, private_key.as_ref())
     }
 
-    /// A stored key pair; the public half must be the private half's.
+    /// A stored key pair from its 32-byte seed (the X-Wing decapsulation
+    /// key); the public key is derived from it.
     pub fn from_private_key(key_id: u8, private_key: &[u8]) -> Result<Self> {
-        if private_key.len() != KEY_LEN {
-            return Err(CryptoError::InvalidLength {
-                expected: KEY_LEN,
-                got: private_key.len(),
-            });
-        }
-        let secret: [u8; KEY_LEN] = private_key.try_into().expect("length checked");
-        let public_key = x25519_public(&secret);
-        Self::from_parts(key_id, private_key, &public_key)
-    }
-
-    fn from_parts(key_id: u8, private_key: &[u8], public_key: &[u8]) -> Result<Self> {
-        let public_key: [u8; KEY_LEN] =
-            public_key
+        let seed: [u8; PRIVATE_KEY_LEN] =
+            private_key
                 .try_into()
                 .map_err(|_| CryptoError::InvalidLength {
-                    expected: KEY_LEN,
-                    got: public_key.len(),
+                    expected: PRIVATE_KEY_LEN,
+                    got: private_key.len(),
                 })?;
+        let public_key = xwing_public_key(&seed)?;
         Ok(Self {
             key_id,
-            private_key: Zeroizing::new(private_key.to_vec()),
+            private_key: Zeroizing::new(seed),
             public_key,
         })
     }
@@ -133,12 +145,12 @@ impl GatewayKey {
         self.key_id
     }
 
-    pub fn public_key(&self) -> [u8; KEY_LEN] {
+    pub fn public_key(&self) -> [u8; PUBLIC_KEY_LEN] {
         self.public_key
     }
 
     pub fn private_key(&self) -> &[u8] {
-        &self.private_key
+        self.private_key.as_ref()
     }
 
     /// The request's body, and the context its answer is sealed with.
@@ -182,10 +194,15 @@ impl GatewayKey {
     }
 }
 
-fn x25519_public(secret: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
-    let mut public = [0u8; KEY_LEN];
-    dryoc::classic::crypto_core::crypto_scalarmult_base(&mut public, secret);
-    public
+/// X-Wing's GenerateKeyPairDerand: the encapsulation key from the seed.
+fn xwing_public_key(seed: &[u8; PRIVATE_KEY_LEN]) -> Result<[u8; PUBLIC_KEY_LEN]> {
+    use x_wing::{Decapsulator as _, KeyExport as _};
+    let key = x_wing::DecapsulationKey::from(*seed);
+    let public_key = key.encapsulation_key().to_bytes();
+    public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Backend("X-Wing public key has an unexpected length".into()))
 }
 
 /// Seals `body` to the gateway key `key_id` / `public_key`: the request bytes
@@ -195,9 +212,9 @@ pub fn seal_request(
     public_key: &[u8],
     body: &[u8],
 ) -> Result<(Vec<u8>, RequestContext)> {
-    if public_key.len() != KEY_LEN {
+    if public_key.len() != PUBLIC_KEY_LEN {
         return Err(CryptoError::InvalidLength {
-            expected: KEY_LEN,
+            expected: PUBLIC_KEY_LEN,
             got: public_key.len(),
         });
     }
@@ -385,6 +402,13 @@ mod tests {
             gateway.open_request(&wrong_id),
             Err(CryptoError::AuthFailed)
         ));
+        // The X25519-only suite (DHKEM 0x0020), or any other KEM: refused.
+        let mut classical = request.clone();
+        classical[1..3].copy_from_slice(&0x0020u16.to_be_bytes());
+        assert!(matches!(
+            gateway.open_request(&classical),
+            Err(CryptoError::AuthFailed)
+        ));
         let mut wrong_aead = request;
         wrong_aead[6] = 0x01;
         assert!(matches!(
@@ -404,6 +428,50 @@ mod tests {
         assert_eq!(again.public_key(), gateway.public_key());
         let (request, _) = seal_request(9, &gateway.public_key(), b"x").unwrap();
         assert!(again.open_request(&request).is_ok());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct XWingVectors {
+        vectors: Vec<XWingVector>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct XWingVector {
+        seed: String,
+        pk: String,
+        eseed: String,
+        ct: String,
+        ss: String,
+    }
+
+    /// The KEM against draft-connolly-cfrg-xwing-kem-06's own vectors: the
+    /// key pair from its seed, encapsulation with fixed randomness, and
+    /// decapsulation.
+    #[test]
+    fn x_wing_matches_the_drafts_vectors() {
+        use x_wing::{Decapsulate as _, Decapsulator as _};
+        let file: XWingVectors =
+            serde_json::from_str(include_str!("../tests/vectors/xwing-draft06.json")).unwrap();
+        assert_eq!(file.vectors.len(), 3);
+        for vector in file.vectors {
+            let seed: [u8; PRIVATE_KEY_LEN] =
+                hex::decode(&vector.seed).unwrap().try_into().unwrap();
+            assert_eq!(hex::encode(xwing_public_key(&seed).unwrap()), vector.pk);
+            assert_eq!(
+                hex::encode(GatewayKey::from_private_key(1, &seed).unwrap().public_key()),
+                vector.pk
+            );
+            let private_key = x_wing::DecapsulationKey::from(seed);
+            let eseed = hex::decode(&vector.eseed).unwrap();
+            let (ciphertext, shared) = private_key
+                .encapsulation_key()
+                .encapsulate_deterministic(eseed.as_slice().try_into().unwrap());
+            assert_eq!(hex::encode(ciphertext.as_slice()), vector.ct);
+            assert_eq!(hex::encode(shared.as_slice()), vector.ss);
+            let ciphertext = hex::decode(&vector.ct).unwrap();
+            let shared = private_key.decapsulate(ciphertext.as_slice().try_into().unwrap());
+            assert_eq!(hex::encode(shared.as_slice()), vector.ss);
+        }
     }
 
     #[derive(serde::Deserialize, serde::Serialize)]
