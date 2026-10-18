@@ -57,6 +57,7 @@ pub mod envelope;
 pub mod error;
 pub mod file_keyring;
 pub mod file_metadata;
+pub mod hpke_xwing;
 pub mod identity;
 pub mod identity_pins;
 pub mod kdf;
