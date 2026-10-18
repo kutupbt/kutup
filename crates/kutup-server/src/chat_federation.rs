@@ -3089,6 +3089,35 @@ mod sealed_live_tests {
         format!("o{}.test", &Uuid::new_v4().simple().to_string()[..12])
     }
 
+    /// A sealed single is named by its row and its bytes: a retry of the
+    /// same bytes keeps its request id (so the destination can replay its
+    /// answer), and the same row resent under a new sequence gets another
+    /// (or the destination's replay check refuses it, unsigned).
+    #[test]
+    fn a_resend_under_a_new_sequence_gets_its_own_request_id() {
+        let row = Uuid::new_v4();
+        let (recipient, send_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let body = |sequence: u64| {
+            serde_json::to_vec(&transaction(
+                "origin.test",
+                recipient,
+                sequence,
+                send_id,
+                [1; 16],
+                77,
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            delivery_request_id(row, &body(6)),
+            delivery_request_id(row, &body(6))
+        );
+        assert_ne!(
+            delivery_request_id(row, &body(6)),
+            delivery_request_id(row, &body(7))
+        );
+    }
+
     /// [n mismatch, n+1 valid]: the mismatch uses up n, so n+1 is delivered
     /// in the same batch; the corrected resend comes under a new sequence
     /// with the same sendId and is delivered too.
