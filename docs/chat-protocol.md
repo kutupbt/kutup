@@ -722,21 +722,58 @@ and invalid capability return the same response shape.
 
 **Sealed batches.** `POST /api/chat/anonymous/messages/batch?server=` carries
 1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
-recipient's `accountId` and its single-route submission), at most 4 MiB, as one
-anonymous attempt: a group message reaches every member device without one
-request per member. Each recipient's capability is checked and counted on its
-own, and each gets its own result in order (`delivered`, `deviceMismatch` with
-the single route's mismatch body, `unavailable` for a wrong capability or an
-unknown account alike, `pending`, `refused`, `peerUnsupported`). For another
-server, the origin queues each send exactly as a single sealed send (same
-outbox, sequence and `sendId` dedup) and delivers the destination's run of
-consecutive pending sends in one signed `POST /api/fed/chat/sealed/batch`
-(`FederatedSealedBatchV1`, at most 64 transactions and 4 MiB); the destination
-applies them one by one as single transactions and stops after the first
-answer that doesn't use up its sequence (a delivery, the uniform 404 and a
-refusal naming the sequence do; a device mismatch doesn't), answering each
-it tried. A peer that can't take a batch gets
-the same sends one by one, and the retry worker delivers queues in batches.
+recipient's `accountId` and its single-route submission), at most 4 MiB, in one
+request: a group message reaches every member device without one request per
+member. The address's anonymous limit counts recipients, as single sends
+would; each recipient's capability is checked and counted on its own, and
+each gets its own result in order:
+
+- `delivered`;
+- `deviceMismatch`, with the single route's mismatch body;
+- `unavailable`, for a wrong capability or an unknown account alike;
+- `pending`, only for a send that was queued for the recipient's server;
+- `refused`, refused for good by that server, or too large for one federated
+  transaction (1 MiB encoded), and then never queued;
+- `peerUnsupported`;
+- `rateLimited`, over the address's, the capability's or the recipient's
+  limit; nothing was stored or queued, so it is resent later;
+- `conflict`, other content under this `sendId` still queued; nothing was
+  queued, so it is resent once that one is answered.
+
+A recipient over a limit doesn't stop the others. A server error fails the
+whole request, which is safe to repeat because `sendId`s dedupe.
+
+For another server, the origin queues each send exactly as a single sealed
+send (same outbox, sequence and `sendId` dedup), then flushes the
+destination's queue. One flush per destination runs at a time across every
+backend sharing the database (a Postgres advisory lock). A client waits a few
+seconds for a flush under way, and its send reads as `pending` if that flush
+doesn't reach it. A flush sends nothing while the queue's head is backing off
+or waits for the peer to support `chat.v2`. Otherwise it sends the run of
+consecutive pending sends from the head, sized before it is loaded, in signed
+`POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
+64 transactions and 4 MiB). The destination checks the batch's shape first
+(one origin, consecutive sequences) and refuses a malformed batch before
+applying any of it. Otherwise it applies the transactions one by one as
+single transactions and stops after the first answer that doesn't use up its
+sequence, answering each it tried.
+
+**Every answer uses up its sequence.** The destination records each final
+answer to an origin's sequence (a delivery, the uniform 404, a device
+mismatch, a refusal naming the sequence) in the same transaction, under the
+origin's lock, as what it answers. A replay of that sequence then gets the
+same answer, and the next sequence follows. Only an unknown result (a timeout,
+a passing error, a rate limit, a gap) is tried again under the same sequence.
+
+A send answered with a device mismatch is corrected by its client and goes
+again under a new sequence with the same `sendId`; the recipient's mailbox
+deduplicates deliveries by `sendId`. So a send whose client never corrects it
+can't hold the origin's later sends to that server.
+
+The origin moves an outbox row only on an answer to the sequence the row
+still has, so a late answer to an old sequence changes nothing. A peer that
+answers a single send but not a batch (a server from before batches) gets
+singles for an hour. The retry worker flushes due queues the same way.
 
 ## 8. Private MLS groups
 

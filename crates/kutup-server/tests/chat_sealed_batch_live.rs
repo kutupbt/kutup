@@ -147,22 +147,13 @@ fn server_name(c: &Client, base: &str) -> String {
 }
 
 /// Sends a wrong capability for `carol`'s account, an account that doesn't
-/// exist (two uniform 404s, which use up their sequences, so the batch goes
-/// on), `bob` (deliverable, in the same batch after them), and `carol` with a
-/// stale registration id
-/// (last: a device mismatch doesn't use up a federated sequence, so the
-/// destination stops there and later sends wait behind it until the client
-/// resends a corrected copy), all to the accounts' server `server` through
-/// `base`. Then a send held behind the mismatch, the corrected resend, and
-/// repeats that show both were delivered once.
-fn exercise(
-    c: &Client,
-    base: &str,
-    server: &str,
-    bob: &Recipient,
-    carol: &Recipient,
-    federated: bool,
-) {
+/// exist (two uniform 404s), `bob` (deliverable, in the same batch after
+/// them) and `carol` with a stale registration id, all to the accounts'
+/// server `server` through `base`. Every answer uses up its sequence, a
+/// device mismatch included: a send after it is delivered at once, and the
+/// corrected resend (here first stale again, then right) goes under a new
+/// sequence and is stored once.
+fn exercise(c: &Client, base: &str, server: &str, bob: &Recipient, carol: &Recipient) {
     let bob_send = Uuid::new_v4().to_string();
     let wrong_send = Uuid::new_v4().to_string();
     let ghost_send = Uuid::new_v4().to_string();
@@ -184,6 +175,8 @@ fn exercise(
             (carol.device_id, registration_id),
         )
     };
+    let outcome =
+        |results: &[Value], index: usize| results[index]["outcome"].as_str().unwrap().to_owned();
     let results = batch(
         c,
         base,
@@ -201,8 +194,6 @@ fn exercise(
         ],
     );
     assert_eq!(results.len(), 4, "{results:?}");
-    let outcome =
-        |results: &[Value], index: usize| results[index]["outcome"].as_str().unwrap().to_owned();
     // A wrong capability and an unknown account read the same.
     assert_eq!(outcome(&results, 0), "unavailable", "{results:?}");
     assert_eq!(outcome(&results, 1), "unavailable", "{results:?}");
@@ -213,18 +204,34 @@ fn exercise(
     assert_eq!(outcome(&results, 3), "deviceMismatch", "{results:?}");
     assert!(results[3]["mismatch"]["staleDevices"].is_array());
 
-    // Across servers, a send after the mismatch waits behind it.
-    let held_send = Uuid::new_v4().to_string();
-    let held = batch(c, base, server, vec![bob_ok(&held_send)]);
-    let expected = if federated { "pending" } else { "delivered" };
-    assert_eq!(outcome(&held, 0), expected, "{held:?}");
+    // (a) Carol's client hasn't resent: a later send isn't held behind it.
+    let later_send = Uuid::new_v4().to_string();
+    let later = batch(c, base, server, vec![bob_ok(&later_send)]);
+    assert_eq!(outcome(&later, 0), "delivered", "{later:?}");
 
-    // The corrected resend is delivered, and with it what waited.
+    // (c) A resend that is stale again is another mismatch, then the right
+    // one is delivered.
+    let stale_again = batch(c, base, server, vec![carol_with(carol.registration_id + 2)]);
+    assert_eq!(
+        outcome(&stale_again, 0),
+        "deviceMismatch",
+        "{stale_again:?}"
+    );
     let corrected = batch(c, base, server, vec![carol_with(carol.registration_id)]);
     assert_eq!(outcome(&corrected, 0), "delivered", "{corrected:?}");
+    assert_eq!(corrected[0]["deduplicated"], false, "{corrected:?}");
 
-    // Each was stored once: repeats are deduplicated.
-    let again = batch(c, base, server, vec![bob_ok(&bob_send), bob_ok(&held_send)]);
+    // (b) Each was stored once: repeats are deduplicated.
+    let again = batch(
+        c,
+        base,
+        server,
+        vec![
+            bob_ok(&bob_send),
+            bob_ok(&later_send),
+            carol_with(carol.registration_id),
+        ],
+    );
     for result in &again {
         assert_eq!(result["outcome"], "delivered", "{again:?}");
         assert_eq!(result["deduplicated"], true, "{again:?}");
@@ -242,7 +249,7 @@ fn a_batch_answers_each_recipient_on_its_own() {
     let bob = recipient(&c, &base, 0x31);
     let carol = recipient(&c, &base, 0x32);
     let server = server_name(&c, &base);
-    exercise(&c, &base, &server, &bob, &carol, false);
+    exercise(&c, &base, &server, &bob, &carol);
 
     // Malformed batches are refused whole.
     let r = c
@@ -272,6 +279,35 @@ fn a_batch_to_another_server_is_delivered_in_one_federated_request() {
     let carol = recipient(&c, &b, 0x42);
     let server_b = server_name(&c, &b);
     // Sent through server A: queued there, delivered to B as one batch.
-    exercise(&c, &a, &server_b, &bob, &carol, true);
+    exercise(&c, &a, &server_b, &bob, &carol);
+
+    // Within a send's 1 MiB envelope budget, but too large for one
+    // federated transaction once wrapped: refused at once, never queued
+    // (where it would wait at the head for good).
+    let mut oversized = send(
+        &bob.user.person.account_id,
+        &Uuid::new_v4().to_string(),
+        &bob.capability,
+        (bob.device_id, bob.registration_id),
+    );
+    oversized["submission"]["envelopes"][0]["content"] =
+        json!(STANDARD.encode(vec![0x5au8; 786_420]));
+    let after = Uuid::new_v4().to_string();
+    let results = batch(
+        &c,
+        &a,
+        &server_b,
+        vec![
+            oversized,
+            send(
+                &bob.user.person.account_id,
+                &after,
+                &bob.capability,
+                (bob.device_id, bob.registration_id),
+            ),
+        ],
+    );
+    assert_eq!(results[0]["outcome"], "refused", "{results:?}");
+    assert_eq!(results[1]["outcome"], "delivered", "{results:?}");
     purge_accounts(&c, &b, &[&bob.user, &carol.user]);
 }

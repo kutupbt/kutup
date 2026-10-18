@@ -238,6 +238,12 @@ pub enum SealedBatchOutcomeV1 {
     Refused,
     /// The recipient's server doesn't take sealed mail yet.
     PeerUnsupported,
+    /// Over a rate limit (this address's, or the capability's or the
+    /// recipient's); nothing was stored or queued. Resend later.
+    RateLimited,
+    /// A send with this sendId and other content is still queued for the
+    /// recipient's server; nothing was queued. Resend once it is answered.
+    Conflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
