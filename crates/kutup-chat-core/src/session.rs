@@ -212,6 +212,11 @@ pub(crate) enum ReceiveOutcome {
         group_id: String,
         sender: String,
         context: Option<kutup_chat_proto::group::GroupContextV1>,
+        /// The recipient's pseudonym the content's context names
+        /// (`recipientPseudonym`, on content sent pairwise to this account):
+        /// what a device that lost the group recovers it by
+        /// (group_recover.rs).
+        named: Option<String>,
     },
     /// Group content that can't be confirmed now: nothing was kept, and the
     /// envelope stays queued for a later pass.
@@ -1413,10 +1418,14 @@ impl Session {
                 (None, group) => {
                     self.store.discard();
                     let (group_id, context) = group.unwrap_or_default();
+                    let named = context
+                        .as_ref()
+                        .and_then(|context| context.recipient_pseudonym.clone());
                     return Ok(ReceiveOutcome::GroupCheck {
                         group_id,
                         sender,
                         context,
+                        named,
                     });
                 }
             }
@@ -5035,6 +5044,7 @@ mod sealed_tests {
             },
             revision: 1,
             chain_hash: kutup_chat_proto::group::encode(&[7u8; 32]),
+            recipient_pseudonym: None,
         };
         let delivered = |id: &str, content: &str| DeliveredEnvelope {
             id: id.into(),

@@ -875,6 +875,7 @@ fn a_group_context_rides_inside_content_and_never_prints_its_key() {
         home: home_pin(),
         revision: 3,
         chain_hash: encode(&[7u8; 32]),
+        recipient_pseudonym: None,
     };
     let content = crate::ChatContent::text_with_id(
         "00000000-0000-4000-8000-000000000001",
@@ -914,7 +915,7 @@ fn distribution_and_invite_kinds_read_back_only_when_valid() {
     assert_eq!(content.as_sender_key_distribution().unwrap(), body);
     let bad = SenderKeyDistributionBody {
         distribution_id: "not-a-uuid".into(),
-        ..body
+        ..body.clone()
     };
     let content = crate::ChatContent::sender_key_distribution_with_id(
         "00000000-0000-4000-8000-000000000004",

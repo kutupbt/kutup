@@ -38,12 +38,14 @@ anonymity relays, and traffic-shape protection are separate milestones.
 - In a pairwise group (`docs/plans/pairwise-groups.md`, not yet on), a
   member's per-group pseudonym is derived from the account master key, the
   group id and a join epoch, and the binding of pseudonym to account is
-  signed by the account self-authority. A revoked or lost device can't forge
-  a binding and never makes its account unverified. The account master key
-  now also yields every group signing key and binding: the same blast radius
-  as the manifests and the group list it already protects. The group's home
-  answers a pseudonym that isn't a member exactly as an unknown group, so it
-  can't tell a device looking for its account's place from a stranger.
+  signed by the account self-authority. Revoking or replacing a device never
+  makes its account unverified. The account master key now also yields every
+  group signing key and binding: the same blast radius as the manifests and
+  the group list it already protects. A revoked device that once held the
+  master key (a browser) can forge bindings, as it can manifests, until the
+  account's authority is reset. The group's home answers a pseudonym that
+  isn't a member with the same status and body as an unknown group, and a
+  device asks it only for a pseudonym a member named to it.
 
 Kutup V1 deliberately has no global key-transparency log, sparse map,
 checkpoint monitor, witness, or auditor. The self-hosted deployment model does

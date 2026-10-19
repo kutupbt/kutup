@@ -276,6 +276,29 @@ fn a_rejoin_takes_the_next_join_epoch() {
     assert_eq!(listed.join_epoch, 5);
 }
 
+#[test]
+fn a_rejoiner_takes_only_a_state_newer_than_the_one_it_kept() {
+    let mut home = Home::new();
+    let (alice, bob) = (Person::new(1), Person::new(2));
+    let mut alice_record = created(&mut home, &alice);
+    let bob_record = invited(&mut home, &mut alice_record, &bob, GroupRole::Member);
+    let kept = home.states.last().unwrap().clone();
+    // Bob is invited again (his membership ended): his record keeps the
+    // state he verified.
+    let (_, invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
+    let mut ended = bob_record.clone();
+    ended.status = GroupStatus::Gone;
+    let rejoin = record_from_invite(invitation, INVITER, Some(&ended), None, &bob.keys).unwrap();
+    // The state he kept, or an older one, is a rollback: refused.
+    let (state, change, notary) = kept;
+    assert_eq!(
+        accept_state(&mut rejoin.clone(), &state, &change, &notary).unwrap_err(),
+        GroupError::Change(GroupChangeError::WrongRevision)
+    );
+    let (state, change, notary) = home.states[0].clone();
+    assert!(accept_state(&mut rejoin.clone(), &state, &change, &notary).is_err());
+}
+
 fn titled(record: &GroupRecordV1) -> GroupChangeV1 {
     let title = seal_attribute(record, GroupAttribute::Title, b"Kutup").unwrap();
     author_change(

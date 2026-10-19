@@ -482,8 +482,9 @@ mod tests {
     }
 
     /// The authority signs other objects too (manifests, device
-    /// registrations and revocations, renames, Drive key bindings, contact
-    /// summaries, mail keys): none of their signatures passes as a binding,
+    /// registrations and revocations, renames, Drive key bindings and
+    /// collection epochs, contact summaries, mail keys, Chat backup signers
+    /// and manifests): none of their signatures passes as a binding,
     /// and a binding's signed bytes can't be read as one of theirs, because
     /// every domain is distinct and none is a prefix of another.
     #[test]
@@ -498,6 +499,10 @@ mod tests {
             b"kutup/mail-group-key-share/v2\0",
             b"kutup/drive/collection-key-commitment/v1\0",
             b"kutup/account-manifest/v1\0",
+            b"kutup/chat-backup/signer-authorization/v1\0",
+            b"kutup/chat-backup/manifest/v1\0",
+            // A collection epoch statement starts with its magic.
+            b"KUTPCE1\0",
         ];
         let identity = crate::identity::AccountIdentityKeysV1::derive(&[0x11u8; 32]).unwrap();
         let authority = identity.authority_public_key();

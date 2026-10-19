@@ -293,19 +293,31 @@ cleared).
 
 **A device that lost its group list.** A device whose list entry was never
 written (the only device went within the write's random delay, §5) finds the
-group again from the next member's message, built in `group_recover.rs`:
-1. The member's next send gives the new device its sender key pairwise (the
-   device isn't in the member's book), and every group message carries the
-   master key and home in its context, as Signal's `GroupContextV2` does (§8).
-   The member sends to it because bindings are the account's (§3), not a
-   device's.
-2. The device derives its account's pseudonym at join epochs 0, 1, … (at most
-   16) and asks the home for the state with each. The home answers a
-   pseudonym that isn't a member exactly as an unknown group (same status,
-   empty body, the same single lookup), so the asking tells it nothing.
-3. It takes the first state served, checks that its own entry names its
-   account, keeps the group as opening it does, and writes the list entry
-   back with the usual delay. Once an hour per group, across reloads.
+group again from the next member's send, built in `group_recover.rs`:
+1. The member's next send reaches the new device pairwise: its sender key
+   (the device isn't in the member's book), or the message itself when the
+   member's device list was out of date. Its context carries the master key
+   and home, as Signal's `GroupContextV2` does (§8), and on anything sent
+   pairwise to one account it names that account's pseudonym in the group
+   (`recipientPseudonym`). The member sends to it because bindings are the
+   account's (§3), not a device's.
+2. The list comes first: the device reads it if it hasn't this run. A group
+   it says the account left is never taken up this way; one it holds is taken
+   up from the list (its home, epoch and verified revision).
+3. The named pseudonym must be one the account key gives (join epochs 0 to
+   15). Only then does the device ask the home, once, for that pseudonym. A
+   stranger who doesn't know it makes the device ask nothing.
+4. The state is kept only when it holds this account's own binding, verified
+   under its own authority (no home can make one up), and the sender is a
+   verified member of it. Nothing is kept on failure, and nothing is signed
+   anew: the entry is the account's already. The list entry is written back
+   with the usual delay.
+- Once an hour per group, and at most ten groups an hour per device, across
+  reloads.
+- The home answers a pseudonym that isn't a member with the same status and
+  empty body as an unknown group; only the time differs a little (a known
+  group's state is read in full), and the device asks at most once per
+  named pseudonym.
 - **What is left:** if nobody in the group sends after the loss, the new
   device gets the group back only once someone does. A resend request for
   such groups is not built.

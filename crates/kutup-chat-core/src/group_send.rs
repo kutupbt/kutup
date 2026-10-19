@@ -75,10 +75,32 @@ pub struct GroupSendSummary {
 
 /// A member account a group message goes to, with its devices and the
 /// capability its profile key gives.
+/// What a pairwise copy to one member account needs: the capability its
+/// profile key gives, and its pseudonym in the group (named in the copy's
+/// context, group_recover.rs).
+pub(crate) struct MemberTarget {
+    pub(crate) capability: [u8; 16],
+    pub(crate) pseudonym: Option<String>,
+}
+
+/// `content` naming `pseudonym` in its group context, when it has one: what
+/// a copy sent pairwise to one account carries.
+pub(crate) fn named_for(content: &ChatContent, pseudonym: Option<&str>) -> ChatContent {
+    match content.group_context() {
+        Some(context) => content
+            .clone()
+            .with_group_context(&context.naming(pseudonym)),
+        None => content.clone(),
+    }
+}
+
 struct Recipient {
     account: String,
     capability: [u8; 16],
     bundles: Vec<DevicePreKeyBundle>,
+    /// The account's pseudonym in the group (none for this account's own
+    /// devices when it isn't a member any more).
+    pseudonym: Option<String>,
 }
 
 fn group_err(error: group::GroupError) -> ChatError {
@@ -118,6 +140,7 @@ impl Engine {
             home: record.home.clone(),
             revision: state.revision,
             chain_hash: encode(&head),
+            recipient_pseudonym: None,
         })
     }
 
@@ -153,6 +176,7 @@ impl Engine {
                 account: me.clone(),
                 capability,
                 bundles,
+                pseudonym: None,
             });
         }
         for member in members {
@@ -177,24 +201,28 @@ impl Engine {
                 account,
                 capability,
                 bundles,
+                pseudonym: Some(member.pseudonym.clone()),
             });
         }
         Ok(recipients)
     }
 
-    /// The capability of each member account, derived again from the group's
-    /// state (it is never stored).
-    pub(crate) async fn group_capabilities(
+    /// Each member account a group's pairwise copies go to (this account
+    /// included, for its other devices): its capability and pseudonym.
+    pub(crate) async fn group_targets(
         &mut self,
         group_id: &str,
-    ) -> Result<BTreeMap<String, [u8; 16]>> {
-        let mut capabilities = BTreeMap::new();
+    ) -> Result<BTreeMap<String, MemberTarget>> {
+        let mut targets = BTreeMap::new();
         let profile_key = self.own_profile_key().await?;
         let me = self.session.account_ref().clone();
-        capabilities.insert(
+        targets.insert(
             me.to_string(),
-            kutup_chat_proto::derive_delivery_capability(&profile_key, &me)
-                .map_err(ChatError::Trust)?,
+            MemberTarget {
+                capability: kutup_chat_proto::derive_delivery_capability(&profile_key, &me)
+                    .map_err(ChatError::Trust)?,
+                pseudonym: None,
+            },
         );
         for member in self.group_members(group_id).await? {
             if let Some(verified) = member.verified {
@@ -203,10 +231,16 @@ impl Engine {
                     &verified.account,
                 )
                 .map_err(ChatError::Trust)?;
-                capabilities.insert(verified.account.to_string(), capability);
+                targets.insert(
+                    verified.account.to_string(),
+                    MemberTarget {
+                        capability,
+                        pseudonym: Some(member.pseudonym),
+                    },
+                );
             }
         }
-        Ok(capabilities)
+        Ok(targets)
     }
 
     /// Gives this device's sender key to every current device that doesn't
@@ -274,13 +308,16 @@ impl Engine {
             let send_id = uuid::Uuid::new_v4().to_string();
             // Its context lets a member who doesn't know this device's
             // account yet (it just joined) catch up before taking the key.
+            // Its context names the recipient's pseudonym, so a device of
+            // theirs that lost the group finds its place again
+            // (group_recover.rs).
             let content = ChatContent::sender_key_distribution_with_id(
                 send_id.clone(),
                 crate::clock::rfc3339(unix_millis()),
                 0,
                 &body,
             )
-            .with_group_context(&context);
+            .with_group_context(&context.naming(recipient.pseudonym.as_deref()));
             let sealed = self
                 .session
                 .seal_pairwise(&recipient.account, &devices, certificate, &content, rng)
@@ -578,7 +615,7 @@ impl Engine {
         };
         let original = entry.clone();
         let now = unix_millis();
-        let capabilities = self.group_capabilities(&entry.group_id).await?;
+        let targets = self.group_targets(&entry.group_id).await?;
         let content: Option<ChatContent> = serde_json::from_slice(&entry.content).ok();
         let expired = now.saturating_sub(entry.created_at) >= crate::session::GROUP_UNDELIVERED_MS;
         let mut retry: Vec<usize> = Vec::new();
@@ -592,7 +629,7 @@ impl Engine {
                 // failed, and says so.
                 leg.delivered = true;
                 leg.failed = true;
-            } else if !capabilities.contains_key(&leg.account) {
+            } else if !targets.contains_key(&leg.account) {
                 // A member removed since: nothing more goes to them.
                 leg.delivered = true;
             } else if leg.retry_at_ms.is_none_or(|at| at <= now) {
@@ -606,7 +643,7 @@ impl Engine {
                 round += 1;
                 let news;
                 (retry, news) = self
-                    .deliver_round(&mut entry, &retry, &capabilities, &content, now, rng)
+                    .deliver_round(&mut entry, &retry, &targets, &content, now, rng)
                     .await;
                 book_news.extend(news);
             }
@@ -639,7 +676,7 @@ impl Engine {
         &mut self,
         entry: &mut GroupOutboxEntry,
         retry: &[usize],
-        capabilities: &std::collections::BTreeMap<String, [u8; 16]>,
+        targets: &BTreeMap<String, MemberTarget>,
         content: &ChatContent,
         now: i64,
         rng: &mut R,
@@ -660,7 +697,7 @@ impl Engine {
                 leg.account.clone(),
                 SealedMessageSubmissionV1 {
                     send_id: entry.send_id.clone(),
-                    capability: STANDARD.encode(capabilities[&leg.account]),
+                    capability: STANDARD.encode(targets[&leg.account].capability),
                     envelopes,
                 },
             ));
@@ -718,7 +755,7 @@ impl Engine {
                     match self
                         .amend_leg(
                             &account,
-                            &capabilities[&account],
+                            &targets[&account],
                             submission.envelopes,
                             content,
                             rng,
@@ -813,14 +850,14 @@ impl Engine {
     async fn amend_leg<R: Rng + CryptoRng>(
         &mut self,
         account: &str,
-        capability: &[u8; 16],
+        target: &MemberTarget,
         mut envelopes: Vec<SealedOutgoingEnvelopeV1>,
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<(Vec<u32>, Vec<u8>)> {
         self.forget_known_devices_of(account);
         let bundles = self
-            .fetch_verified_sealed_bundles(account, capability)
+            .fetch_verified_sealed_bundles(account, &target.capability)
             .await?;
         let listed: std::collections::BTreeMap<u32, u32> = bundles
             .iter()
@@ -839,9 +876,12 @@ impl Engine {
             .collect();
         if !uncovered.is_empty() {
             let certificate = self.issue_verified_sender_certificate().await?;
+            // Pairwise to this account: its context names the account's
+            // pseudonym (a new device of theirs may have lost the group).
+            let content = named_for(content, target.pseudonym.as_deref());
             let sealed = self
                 .session
-                .seal_pairwise(account, &uncovered, &certificate, content, rng)
+                .seal_pairwise(account, &uncovered, &certificate, &content, rng)
                 .await?;
             envelopes.extend(self.sealed_envelopes(sealed));
         }

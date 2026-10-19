@@ -2145,14 +2145,15 @@ impl Engine {
                         group_id,
                         sender,
                         context,
+                        named,
                     }) if !decided => {
                         decided = true;
-                        // A group this device doesn't know: its account's
-                        // place in it may be found again from the message's
-                        // key (group_recover.rs). Best effort; the gate below
+                        // A group this device doesn't know: a member's key
+                        // naming this account's pseudonym may bring it back
+                        // (group_recover.rs). Best effort; the gate below
                         // decides either way.
-                        if let Some(context) = context.as_ref() {
-                            let _ = self.recover_group(context, rng).await;
+                        if let (Some(context), Some(named)) = (context.as_ref(), named.as_deref()) {
+                            let _ = self.recover_group(context, sender, named, rng).await;
                         }
                         let gate = match self
                             .decide_group_content(

@@ -355,11 +355,11 @@ impl Engine {
     }
 
     /// Re-signs this account's own entry in `group_id` when it went stale:
-    /// its binding's device is no longer in the account's verified manifest
-    /// (the device was replaced), or it gives an older profile key (rotated,
-    /// say after blocking someone). Without this, the others would take this
-    /// account as unverified, or deliver to it with a capability it no
-    /// longer takes. True when an entry was sent.
+    /// its binding doesn't verify under the account's current authority (it
+    /// was reset), or it gives an older profile key (rotated, say after
+    /// blocking someone). Without this, the others would take this account
+    /// as unverified, or deliver to it with a capability it no longer takes.
+    /// True when an entry was sent.
     pub async fn refresh_own_group_entry<R: rand::Rng + rand::CryptoRng>(
         &mut self,
         group_id: &str,
@@ -613,16 +613,22 @@ impl Engine {
         &mut self,
         record: &mut GroupRecordV1,
     ) -> Result<GroupSync> {
-        match self.probe_whole_state(record).await? {
-            Some(sync) => Ok(sync),
+        match self.fetch_whole_state(record).await? {
+            Some(sync) => {
+                if matches!(sync, GroupSync::Current { .. }) {
+                    self.save_group(record).await?;
+                }
+                Ok(sync)
+            }
             None => self.not_found(record).await,
         }
     }
 
-    /// [`Self::take_whole_state`], but `None` (nothing saved) when the home
-    /// answers that `record`'s pseudonym isn't a member: what a device asks
-    /// with a pseudonym it isn't sure of yet.
-    pub(crate) async fn probe_whole_state(
+    /// The home's whole state taken into `record`, saved by nobody: `None`
+    /// when the home answers that `record`'s pseudonym isn't a member. What a
+    /// device asks with a pseudonym it isn't sure of yet, keeping the record
+    /// only once its own checks pass.
+    pub(crate) async fn fetch_whole_state(
         &mut self,
         record: &mut GroupRecordV1,
     ) -> Result<Option<GroupSync>> {
@@ -654,7 +660,6 @@ impl Engine {
         }
         record.not_found_since_ms = None;
         record.synced_at_ms = Some(crate::clock::unix_millis());
-        self.save_group(record).await?;
         let key_confirmed = record.gateway.check(&answer.notary) != ConfigCheck::Unknown;
         Ok(Some(GroupSync::Current {
             revision: state.revision,
@@ -702,7 +707,7 @@ impl Engine {
     /// self-authority keys from their verified manifests (kept ones, except
     /// for `fresh` accounts), the accounts whose manifest couldn't be
     /// fetched, and those checked against kept keys.
-    async fn check_members(
+    pub(crate) async fn check_members(
         &mut self,
         record: &GroupRecordV1,
         accounts: &[AccountRef],

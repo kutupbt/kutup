@@ -47,6 +47,13 @@ pub struct GroupContextV1 {
     pub home: GroupHomePinV1,
     pub revision: u64,
     pub chain_hash: String,
+    /// On content sent pairwise to one account: that account's pseudonym in
+    /// the group, as the sender's verified state names it. A device of theirs
+    /// that lost the group matches it against the pseudonyms its account key
+    /// gives, and asks the home once (docs/plans/pairwise-groups.md §2, "A
+    /// device that lost its group list").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_pseudonym: Option<String>,
 }
 
 impl GroupContextV1 {
@@ -55,7 +62,17 @@ impl GroupContextV1 {
         decode_group_id(&self.group_id)?;
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
         decode_exact::<32>("chainHash", &self.chain_hash)?;
+        if let Some(pseudonym) = &self.recipient_pseudonym {
+            decode_exact::<32>("recipientPseudonym", pseudonym)?;
+        }
         Ok(())
+    }
+
+    /// This context naming `recipient`'s pseudonym (none: naming nobody).
+    pub fn naming(&self, recipient: Option<&str>) -> Self {
+        let mut context = self.clone();
+        context.recipient_pseudonym = recipient.map(str::to_string);
+        context
     }
 }
 

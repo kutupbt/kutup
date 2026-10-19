@@ -4,8 +4,8 @@
 //! account knows its groups.
 //!
 //! - An entry holds what another device needs to take the group up: its key,
-//!   its home, this account's pseudonym, and the revision and chain head
-//!   verified when it was written. Its id is an HMAC of the group id under a
+//!   its home, the join epoch this account's pseudonym is derived at, and the
+//!   revision and chain head verified when it was written. Its id is an HMAC of the group id under a
 //!   key of the account's, and every sealed entry has one size
 //!   (`kutup_crypto::chat_group_list`).
 //! - Writes are rare and spread out, so the account's server can't line
@@ -15,8 +15,8 @@
 //!   due then. What is due is kept with the group, so it survives a reload;
 //!   a device flushes it before it signs out.
 //! - A device reads the list when it starts and every so often: a group it
-//!   doesn't know is taken up (its whole state, then its own entry signed
-//!   again by this device when the old one's device left the account); one
+//!   doesn't know is taken up (its whole state; its own entry is the
+//!   account's, signed by its authority, so nothing is signed again); one
 //!   another device left is left here too.
 
 use std::collections::BTreeMap;
@@ -111,6 +111,21 @@ impl Engine {
             verified_revision: state.revision,
             chain_hash: encode(&head),
         }))
+    }
+
+    /// Reads the list when this device hasn't this run (best effort): what
+    /// a join's epoch must go past, after a reload too.
+    pub(crate) async fn ensure_group_list_read(&mut self) {
+        if self.group_list.is_some() && !self.group_list_read() {
+            let _ = self.read_group_list().await;
+        }
+    }
+
+    /// Whether this device read the list this run.
+    pub(crate) fn group_list_read(&self) -> bool {
+        self.group_list
+            .as_ref()
+            .is_some_and(|list| list.read_at_ms > 0)
     }
 
     /// What the list last said of `group_id` (as this device read or wrote

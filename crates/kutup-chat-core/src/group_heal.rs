@@ -113,14 +113,21 @@ impl Engine {
         rng: &mut R,
     ) -> Result<()> {
         let account = to.name();
-        let capability = *self
-            .group_capabilities(group_id)
+        let target = self
+            .group_targets(group_id)
             .await?
-            .get(&account)
+            .remove(&account)
             .ok_or_else(|| ChatError::Invalid("not a verified member of the group".into()))?;
-        self.send_sealed_pairwise(&account, &capability, Some(to.device_id), content, rng)
-            .await
-            .map(|_| ())
+        let content = crate::group_send::named_for(content, target.pseudonym.as_deref());
+        self.send_sealed_pairwise(
+            &account,
+            &target.capability,
+            Some(to.device_id),
+            &content,
+            rng,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Asks the device that sent `send_ids` in `group_id` to send them again.

@@ -676,6 +676,8 @@ impl Engine {
         if waiting.len() >= MAX_INVITATIONS_PER_SENDER {
             return Ok(GroupContentOutcome::Ignored);
         }
+        // The epoch goes past the list's (another device's) too.
+        self.ensure_group_list_read().await;
         let listed = self.listed_join(&group_id);
         let mut record = match group::record_from_invite(
             invite,

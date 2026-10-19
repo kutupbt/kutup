@@ -605,10 +605,7 @@ pub fn record_from_invite(
     let join_epoch = previous
         .map(|previous| after(&previous.status, previous.join_epoch))
         .into_iter()
-        .chain(listed.map(|(status, epoch)| match status {
-            GroupListStatus::Member => after(&GroupStatus::Member, epoch),
-            GroupListStatus::Gone => after(&GroupStatus::Gone, epoch),
-        }))
+        .chain(rejoin_epoch(listed))
         .max()
         .unwrap_or(0);
     let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
@@ -667,6 +664,12 @@ pub fn record_from_invite(
         record.min_revision = record.min_revision.max(previous.min_revision);
     }
     Ok(record)
+}
+
+/// The join epoch after the one the account's group list names for a group
+/// (a membership there, ended or not, is past).
+pub fn rejoin_epoch(listed: Option<(GroupListStatus, u32)>) -> Option<u32> {
+    listed.map(|(_, epoch)| epoch.saturating_add(1))
 }
 
 /// The claim key of an invited record: what signs the join-info request a
@@ -817,8 +820,16 @@ pub fn accept_state(
     // the log, so every change is checked, signatures and roles included. A
     // rejoiner's kept state only sets the lowest revision it takes (its new
     // pseudonym reads the log only from its claim on).
-    if record.verified()?.is_some() && !matches!(record.status, GroupStatus::Invited { .. }) {
+    let kept = record.verified()?;
+    if kept.is_some() && !matches!(record.status, GroupStatus::Invited { .. }) {
         return Err(record_error("a member catches up through the log"));
+    }
+    // A rejoiner takes only a state newer than the one it kept, from a notary
+    // no older than the one it took last: never a rollback.
+    if let Some((kept, _)) = &kept {
+        if state.revision <= kept.revision {
+            return Err(GroupError::Change(GroupChangeError::WrongRevision));
+        }
     }
     if state.revision < record.min_revision {
         return Err(GroupError::Change(GroupChangeError::WrongRevision));
@@ -832,7 +843,7 @@ pub fn accept_state(
     notary
         .verify(
             history,
-            None,
+            kept.as_ref().and(record.notary_sequence),
             &group_id,
             state.revision,
             &change_hash,

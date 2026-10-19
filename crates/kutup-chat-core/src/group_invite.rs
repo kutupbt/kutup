@@ -105,6 +105,21 @@ impl Engine {
         if !matches!(record.status, GroupStatus::Invited { .. }) {
             return Err(ChatError::Invalid("no invitation to this group".into()));
         }
+        // The list may say more now than when the invitation came (another
+        // device left the group meanwhile, or this one reloaded): the claim
+        // goes past its epoch, so a rejoin is never an old pseudonym.
+        self.ensure_group_list_read().await;
+        if let Some(epoch) = group::rejoin_epoch(self.listed_join(group_id)) {
+            if epoch > record.join_epoch {
+                let group = kutup_chat_proto::group::decode_group_id(group_id)
+                    .map_err(ChatError::Invalid)?;
+                let pseudonym = self.group_keys()?.pseudonyms.pseudonym(&group, epoch);
+                record.join_epoch = epoch;
+                record.pseudonym_seed =
+                    group::SecretText(kutup_chat_proto::group::encode(pseudonym.seed()));
+                self.save_group(&record).await?;
+            }
+        }
         let claim_key =
             zeroize::Zeroizing::new(group::claim_key_seed(&record).map_err(group_error)?);
         // The gateway key is fetched through the invitation's pin first.
@@ -163,8 +178,13 @@ impl Engine {
     /// pseudonym: another of its devices claimed the slot at the same time,
     /// and pseudonyms are derived, so it's this device's too.
     async fn claimed_elsewhere(&mut self, record: &mut GroupRecordV1) -> Result<GroupSync> {
-        match self.probe_whole_state(record).await? {
-            Some(sync) => Ok(sync),
+        match self.fetch_whole_state(record).await? {
+            Some(sync) => {
+                if matches!(sync, GroupSync::Current { .. }) {
+                    self.save_group(record).await?;
+                }
+                Ok(sync)
+            }
             None => Err(ChatError::Invalid(
                 "the invitation was taken back or has expired".into(),
             )),
