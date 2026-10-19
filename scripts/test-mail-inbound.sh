@@ -194,6 +194,7 @@ run_forward() {
   KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
     KUTUP_LIVE_SMTP="127.0.0.1:$smtp_port" \
   KUTUP_LIVE_FORWARDING_KEY="Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI=" \
+    KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
     KUTUP_LIVE_FORWARD_PHASE="$1" \
     KUTUP_LIVE_FORWARD_STATE="$forward_state" \
     KUTUP_LIVE_FORWARD_TOKEN="${2:-}" \

@@ -1641,7 +1641,9 @@ Pending forwardings past their expiry (7 days) lapse to `rejected` first.
 `201` with the forwarding, pending. The client chooses the id so the
 activation can bind it.
 
-**Outside Kutup** there is no `endToEnd`, and `forwardeeEmail` must be a plain mailbox (an RFC 5321
+**Outside Kutup** there is no `endToEnd`, the account must be allowed to send outside now (`403
+outsideSendingOff` under the server's policy, `403 sendingPaused` while its
+sending is paused; Mail's own rules), and `forwardeeEmail` must be a plain mailbox (an RFC 5321
 dot-atom local part, a domain of two or more labels; no quoting, IP
 literals, control characters or whitespace). The first outside forwarding of an
 address brings `"keyList"`: its next signed key list, every key as it is
@@ -1729,7 +1731,9 @@ but for the marker on top, from a return path of ours
 (`fwd-<forwarding>-<day>-<hmac>@<server>`) that a bounce comes back to: it is
 checked at RCPT (a forged or older-than-21-days one is refused there) and
 counted. Mail that arrived PGP-encrypted, and end-to-end Kutup mail, can't
-be re-sent: skipped and counted. A forwarder's new primary key makes
+be re-sent: skipped and counted, as is everything while the forwarder may
+not send outside (the server's policy, or its sending paused); confirmation
+emails wait likewise. A forwarder's new primary key makes
 its end-to-end forwardings `outdated` and deletes their k.
 
 ## Mail
