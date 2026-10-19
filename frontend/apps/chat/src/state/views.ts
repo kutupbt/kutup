@@ -201,7 +201,11 @@ export function conversationList(data: ChatData, selfKey: string, nowMs: number)
   }
   // A pairwise group this account left or was removed from keeps its
   // history as history; one it is in, or is invited to, is a group.
-  const liveChatGroups = data.chatGroups.filter((group) => group.status !== 'gone')
+  // An invitation from someone this account blocked is not shown, whichever
+  // conversation the block was made in.
+  const liveChatGroups = data.chatGroups.filter(
+    (group) => group.status !== 'gone' && !(group.status === 'invited' && group.inviter && contacts.get(group.inviter)?.state === 'blocked'),
+  )
   const liveGroups = new Set([...data.groups.map(groupIdOf), ...liveChatGroups.map((group) => group.groupId)])
   const items = new Map<string, ConversationSummary>()
 

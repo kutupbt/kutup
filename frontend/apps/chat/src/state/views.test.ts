@@ -96,6 +96,23 @@ describe('conversationList', () => {
     ])
   })
 
+  it('hides invitations from someone this account blocked, wherever it blocked them', () => {
+    const blocked = 'aci:00000000-0000-4000-8000-0000000000b1@a.test'
+    const list = conversationList(
+      {
+        ...data([]),
+        contacts: [{ peer: blocked, state: 'blocked' } as never],
+        chatGroups: [
+          { groupId: 'I'.repeat(43), title: 'x', status: 'invited', memberCount: 0, forkSuspected: false, knownSinceMs: 1, inviter: blocked },
+          { groupId: 'J'.repeat(43), title: 'y', status: 'invited', memberCount: 0, forkSuspected: false, knownSinceMs: 2, inviter: 'aci:00000000-0000-4000-8000-0000000000c3@a.test' },
+        ],
+      },
+      SELF,
+      100,
+    )
+    expect(list.map((c) => c.key)).toEqual([`group:${'J'.repeat(43)}`])
+  })
+
   it('does not count reactions or receipts as the latest message', () => {
     const history = [
       entry(bob, 'incoming', 10, { messageId: 'b1', text: 'hi' }),

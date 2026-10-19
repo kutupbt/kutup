@@ -81,7 +81,7 @@ function DetailsBody({ model }: { model: ConversationModel }) {
     <div className="pb-8">
       <div className="flex flex-col items-center gap-2 px-6 pb-6 pt-8 text-center">
         <Avatar name={model.title} image={model.group?.currentGroupInfo?.avatar?.data ?? model.profile?.avatar} contentType={model.group?.currentGroupInfo?.avatar?.contentType ?? model.profile?.avatarContentType} group={model.conversation.kind === 'group'} size={80} />
-        <h3 className="mt-2 text-lg font-semibold">{model.title}</h3>
+        <h3 className="mt-2 text-lg font-semibold" dir="auto">{model.title}</h3>
         {model.address && !model.note && model.profile?.displayName ? (
           <p className="break-all text-sm text-muted-foreground">{model.address}</p>
         ) : null}

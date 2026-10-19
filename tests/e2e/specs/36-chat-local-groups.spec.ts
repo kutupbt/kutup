@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { newAccount, registerAccount } from '../fixtures/apps'
+import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import {
   acceptGroup,
   befriend,
@@ -9,7 +9,10 @@ import {
   message,
   openChat,
   openDetails,
+  openConversationWith,
+  openDirectChat,
   openGroup,
+  removeGroupMember,
   send,
 } from '../fixtures/chat'
 
@@ -70,10 +73,7 @@ test('three people on one server share a group, rename it, remove a member and l
 
   // Alice removes Carol: Carol's next message reaches nobody, and her group
   // says she may have been removed.
-  await pageA
-    .getByTestId('chat-group-members')
-    .getByRole('button', { name: new RegExp(`^Remove ${carol.username}`) })
-    .click()
+  await removeGroupMember(pageA, carol.username)
   await expect(pageA.getByTestId('chat-group-members')).toContainText('2 members', { timeout: 45_000 })
   await closeDetails(pageA)
   const afterRemoval = `local-group-after-removal-${tag}`
@@ -104,4 +104,62 @@ test('three people on one server share a group, rename it, remove a member and l
   await contextA.close()
   await contextB.close()
   await contextC.close()
+})
+
+// An invitation from someone this browser has no contact with is a message
+// request (Signal's rule). Today that happens after the invitee lost every
+// browser: contact states don't come back with the history yet
+// (docs/roadmap.md), while the inviter still has them as a contact. Decline
+// turns one invitation down; Block stops every invitation of theirs.
+test('an invitation from someone not in contacts is a request: decline one, block them all', async ({ browser }) => {
+  test.slow()
+  const tag = Date.now().toString(36)
+  const alice = newAccount('reqalice', PASSWORD)
+  const dave = newAccount('reqdave', PASSWORD)
+  const erin = newAccount('reqerin', PASSWORD)
+  const contextA = await browser.newContext()
+  const contextD = await browser.newContext()
+  const contextE = await browser.newContext()
+  await registerAccount(contextA, alice)
+  await registerAccount(contextD, dave)
+  await registerAccount(contextE, erin)
+  const pageA = await openChat(contextA)
+  const firstD = await openChat(contextD)
+  const pageE = await openChat(contextE)
+  await befriend(pageA, firstD, dave.username, alice.username)
+
+  // Dave's browser is lost; a clean one signs in and has no contacts.
+  await contextD.close()
+  const restoredD = await browser.newContext()
+  await signIn(restoredD, dave)
+  const pageD = await openChat(restoredD)
+
+  // The first invitation is a request, by the name and the address; Decline
+  // turns it down, and it is gone.
+  const declined = await createGroup(pageA, dave.username, `Declined ${tag}`)
+  await openGroup(pageD, declined)
+  const invitation = pageD.getByTestId('chat-group-invitation')
+  await expect(invitation).toContainText("isn't in your contacts")
+  await expect(pageD.getByTestId('chat-group-inviter-address')).toContainText(alice.username)
+  await invitation.getByRole('button', { name: 'Decline' }).click()
+  await expect(pageD.getByTestId(`chat-group-${declined}`)).toHaveCount(0, { timeout: 45_000 })
+
+  // The second one: Block. It goes, and nothing more of Alice's comes.
+  const blocked = await createGroup(pageA, dave.username, `Blocked ${tag}`)
+  await openGroup(pageD, blocked)
+  await pageD.getByTestId('chat-group-invitation').getByRole('button', { name: 'Block' }).click()
+  await expect(pageD.getByTestId(`chat-group-${blocked}`)).toHaveCount(0, { timeout: 45_000 })
+  const after = await createGroup(pageA, dave.username, `After ${tag}`)
+  // Only once something sent later has arrived is the absence checked: a
+  // stranger's message to Dave, sent after Alice's invitation.
+  const probe = `request-probe-${tag}`
+  await openDirectChat(pageE, dave.username)
+  await send(pageE, probe)
+  await openConversationWith(pageD, erin.username)
+  await expect(message(pageD, probe)).toBeVisible({ timeout: 60_000 })
+  await expect(pageD.getByTestId(`chat-group-${after}`)).toHaveCount(0)
+
+  await contextA.close()
+  await restoredD.close()
+  await contextE.close()
 })

@@ -2,7 +2,16 @@ import { DoorOpen, Pencil, Shield, UserMinus, UserPlus } from 'lucide-react'
 import { useEffect, useId, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import type { ChatGroupMember, ChatGroupSummary } from '@kutup/chat-core/types'
+import type { ChatGroupAccessRequired, ChatGroupMember, ChatGroupSummary } from '@kutup/chat-core/types'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@kutup/ui/components/alert-dialog'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
@@ -18,6 +27,11 @@ import { Section } from './DetailsPanel'
 /** A title's longest (Signal's group name limit). */
 const TITLE_MAX = 32
 
+/** Whether this member may do what `required` guards (the home checks it too). */
+function allowed(required: ChatGroupAccessRequired | undefined, isAdmin: boolean): boolean {
+  return required === 'any' || required === 'member' || (required === 'administrator' && isAdmin)
+}
+
 /**
  * A pairwise group's members and what a member can do there
  * (docs/plans/pairwise-groups.md §3): Signal's two roles, administrators
@@ -31,6 +45,9 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
   const { service, snapshot, self } = useChat()
   const selfKey = self!.key
   const [members, setMembers] = useState<ChatGroupMember[] | null>(null)
+  const [membersFailed, setMembersFailed] = useState(false)
+  // A removal or a demotion, asked before it is done.
+  const [confirming, setConfirming] = useState<{ kind: 'remove' | 'demote'; member: ChatGroupMember; name: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [adding, setAdding] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -45,10 +62,16 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
     let current = true
     service
       .chatGroupMembers(group.groupId)
-      .then((list) => current && setMembers(list))
+      .then((list) => {
+        if (!current) return
+        setMembers(list)
+        setMembersFailed(false)
+      })
       .catch((error: unknown) => {
         console.warn('chat: the group members could not be read', error)
-        if (current) setMembers([])
+        // Unknown members stay unknown: nothing that depends on them (who
+        // is the last admin before leaving) is offered meanwhile.
+        if (current) setMembersFailed(true)
       })
     return () => {
       current = false
@@ -57,6 +80,8 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
 
   const me = members?.find((m) => m.account === selfKey) ?? null
   const isAdmin = me?.administrator === true
+  const canRename = members !== null && allowed(group.access?.attributes, isAdmin)
+  const canAdd = members !== null && allowed(group.access?.members, isAdmin)
 
   async function run(work: () => Promise<unknown>, done: string) {
     if (!service) return
@@ -79,25 +104,31 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
   )
   return (
     <>
-      <section className="flex justify-center px-6 pb-2">
-        <Button variant="outline" size="sm" onClick={() => setRenaming(true)} disabled={busy} data-testid="chat-group-rename">
-          <Pencil />
-          {t('chat.chatGroup.rename')}
-        </Button>
-      </section>
+      {canRename ? (
+        <section className="flex justify-center px-6 pb-2">
+          <Button variant="outline" size="sm" onClick={() => setRenaming(true)} disabled={busy} data-testid="chat-group-rename">
+            <Pencil />
+            {t('chat.chatGroup.rename')}
+          </Button>
+        </section>
+      ) : null}
       <Section title={t('chat.group.membersTitle', { count: members?.length ?? group.memberCount })} testId="chat-group-members">
-        <Button
-          variant="ghost"
-          className="mb-1 w-full justify-start"
-          onClick={() => setAdding(true)}
-          disabled={busy}
-          data-testid="chat-group-add-members"
-        >
-          <UserPlus />
-          {t('chat.chatGroup.addMembers')}
-        </Button>
+        {canAdd ? (
+          <Button
+            variant="ghost"
+            className="mb-1 w-full justify-start"
+            onClick={() => setAdding(true)}
+            disabled={busy}
+            data-testid="chat-group-add-members"
+          >
+            <UserPlus />
+            {t('chat.chatGroup.addMembers')}
+          </Button>
+        ) : null}
         {members === null ? (
-          <p className="px-2 py-2 text-sm text-muted-foreground">{t('chat.chatGroup.loadingMembers')}</p>
+          <p className="px-2 py-2 text-sm text-muted-foreground" role={membersFailed ? 'alert' : undefined}>
+            {membersFailed ? t('chat.chatGroup.membersFailed') : t('chat.chatGroup.loadingMembers')}
+          </p>
         ) : (
           <ul className="space-y-1">
             {sorted.map((m) => (
@@ -108,13 +139,11 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
                 self={m.account === selfKey}
                 canManage={isAdmin && m.account !== selfKey}
                 busy={busy}
-                onToggleAdmin={() =>
-                  void run(
-                    () => service!.setChatGroupAdmin(group.groupId, m.pseudonym, !m.administrator),
-                    m.administrator ? t('chat.group.adminRemoved') : t('chat.group.adminAdded'),
-                  )}
-                onRemove={() =>
-                  void run(() => service!.removeChatGroupMember(group.groupId, m.pseudonym), t('chat.group.memberRemoved'))}
+                onToggleAdmin={(name) =>
+                  m.administrator
+                    ? setConfirming({ kind: 'demote', member: m, name })
+                    : void run(() => service!.setChatGroupAdmin(group.groupId, m.pseudonym, true), t('chat.group.adminAdded'))}
+                onRemove={(name) => setConfirming({ kind: 'remove', member: m, name })}
               />
             ))}
           </ul>
@@ -134,6 +163,39 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
         </Button>
       </section>
 
+      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
+        <AlertDialogContent data-testid="chat-group-member-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirming?.kind === 'remove'
+                ? t('chat.chatGroup.removeTitle', { name: confirming.name })
+                : t('chat.chatGroup.demoteTitle', { name: confirming?.name ?? '' })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirming?.kind === 'remove' ? t('chat.chatGroup.removeBody') : t('chat.chatGroup.demoteBody')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              data-testid="chat-group-member-confirm-action"
+              onClick={() => {
+                const target = confirming
+                setConfirming(null)
+                if (!target) return
+                if (target.kind === 'remove') {
+                  void run(() => service!.removeChatGroupMember(group.groupId, target.member.pseudonym), t('chat.group.memberRemoved'))
+                } else {
+                  void run(() => service!.setChatGroupAdmin(group.groupId, target.member.pseudonym, false), t('chat.group.adminRemoved'))
+                }
+              }}
+            >
+              {confirming?.kind === 'remove' ? t('chat.chatGroup.removeConfirm') : t('chat.chatGroup.demoteConfirm')}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <RenameDialog
         open={renaming}
         onOpenChange={setRenaming}
@@ -193,8 +255,8 @@ function MemberRow({
   self: boolean
   canManage: boolean
   busy: boolean
-  onToggleAdmin: () => void
-  onRemove: () => void
+  onToggleAdmin: (name: string) => void
+  onRemove: (name: string) => void
 }) {
   const { t } = useTranslation()
   const address = member.account ? accountName(member.account) : null
@@ -202,7 +264,7 @@ function MemberRow({
     <li className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted" data-testid={`chat-group-member-${member.account ?? member.pseudonym}`}>
       <Avatar name={name} size={32} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium">{self ? t('chat.you') : name}</span>
+        <span className="block truncate text-sm font-medium" dir="auto">{self ? t('chat.you') : name}</span>
         <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
           {address && name !== address && !self ? <span className="truncate">{address}</span> : null}
           {member.administrator ? <span>{t('chat.group.admin')}</span> : null}
@@ -215,13 +277,20 @@ function MemberRow({
             size="icon"
             variant="ghost"
             disabled={busy}
-            onClick={onToggleAdmin}
+            onClick={() => onToggleAdmin(name)}
             aria-label={member.administrator ? t('chat.group.removeAdmin', { name }) : t('chat.group.makeAdmin', { name })}
             aria-pressed={member.administrator}
           >
             <Shield className={member.administrator ? 'text-primary' : undefined} />
           </Button>
-          <Button size="icon" variant="ghost" disabled={busy} onClick={onRemove} aria-label={t('chat.group.remove', { name })}>
+          <Button
+            size="icon"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => onRemove(name)}
+            aria-label={t('chat.group.remove', { name })}
+            data-testid="chat-group-member-remove"
+          >
             <UserMinus />
           </Button>
         </span>
@@ -260,7 +329,7 @@ function RenameDialog({
         >
           <DialogHeader>
             <DialogTitle>{t('chat.chatGroup.rename')}</DialogTitle>
-            <DialogDescription>{t('chat.group.info.description')}</DialogDescription>
+            <DialogDescription>{t('chat.chatGroup.renameDescription')}</DialogDescription>
           </DialogHeader>
           <Field
             label={t('chat.group.info.name')}
@@ -359,7 +428,7 @@ export function ContactPicker({
               />
               <label htmlFor={`${pickerId}-${account}`} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
                 <Avatar name={name} size={28} />
-                <span className="truncate text-sm">{name}</span>
+                <span className="truncate text-sm" dir="auto">{name}</span>
               </label>
             </div>
           </li>
@@ -389,13 +458,15 @@ function LeaveDialog({
   const { t } = useTranslation()
   const me = members.find((m) => m.account === selfKey)
   const others = members.filter((m) => m.account !== selfKey)
-  // Signal's rule: the last administrator names another before leaving.
+  // Signal's rule: the last administrator names another before leaving,
+  // someone whose membership this device verified.
   const needsSuccessor = me?.administrator === true && others.length > 0 && !others.some((m) => m.administrator)
+  const candidates = others.filter((m) => m.account)
   const [successor, setSuccessor] = useState('')
   useEffect(() => {
     if (open) setSuccessor('')
   }, [open])
-  const chosen = others.find((m) => m.pseudonym === successor)
+  const chosen = candidates.find((m) => m.pseudonym === successor)
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="sm:max-w-md" data-testid="chat-group-leave-dialog">
@@ -403,11 +474,14 @@ function LeaveDialog({
           <DialogTitle>{t('chat.group.leave.title')}</DialogTitle>
           <DialogDescription>{t('chat.group.leave.description')}</DialogDescription>
         </DialogHeader>
-        {needsSuccessor ? (
+        {needsSuccessor && candidates.length === 0 ? (
+          <p className="text-sm text-muted-foreground" role="alert">{t('chat.chatGroup.noVerifiedSuccessor')}</p>
+        ) : null}
+        {needsSuccessor && candidates.length > 0 ? (
           <div className="space-y-2">
             <p className="text-sm">{t('chat.group.leave.chooseAdmin')}</p>
             <ul className="max-h-56 space-y-1 overflow-y-auto" role="radiogroup" aria-label={t('chat.group.leave.chooseAdmin')}>
-              {others.map((m) => (
+              {candidates.map((m) => (
                 <li key={m.pseudonym}>
                   <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted">
                     <input
@@ -417,7 +491,7 @@ function LeaveDialog({
                       checked={successor === m.pseudonym}
                       onChange={() => setSuccessor(m.pseudonym)}
                     />
-                    <span className="truncate text-sm">{m.account ? nameOf(m.account) : t('chat.chatGroup.unverifiedMember')}</span>
+                    <span className="truncate text-sm" dir="auto">{nameOf(m.account!)}</span>
                   </label>
                 </li>
               ))}
