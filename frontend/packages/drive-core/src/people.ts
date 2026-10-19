@@ -40,6 +40,8 @@ interface DrivePerson {
   accountIncarnationId: string | null
   drivePublicKey: string | null
   driveSigningPublicKey: string | null
+  /** 1: not on X-Wing keys yet; nothing is sealed to them (docs/plans/pq-shares.md). */
+  identitySuite?: number
   receivedEnvelope: string | null
   sentProfileVersion: string | null
 }
@@ -50,6 +52,7 @@ interface RemoteUser {
   accountIncarnationId: string
   driveHpkePublicKey: string
   driveSigningPublicKey: string
+  identitySuite?: number
 }
 
 interface Keys {
@@ -76,9 +79,11 @@ function refOf(person: DrivePerson): AccountRef {
 
 /** Someone's Drive keys: from this server, or looked up on theirs by account id (once a session). */
 function keysOf(person: DrivePerson): Promise<Keys | null> {
+  // An account not on X-Wing keys yet gets nothing sealed to it: its profile
+  // follows once it has signed in again (docs/plans/pq-shares.md).
   if (person.local) {
     return Promise.resolve(
-      person.accountIncarnationId && person.drivePublicKey && person.driveSigningPublicKey
+      person.identitySuite !== 1 && person.accountIncarnationId && person.drivePublicKey && person.driveSigningPublicKey
         ? {
             incarnationId: person.accountIncarnationId,
             hpkePublicKey: person.drivePublicKey,
@@ -96,6 +101,7 @@ function keysOf(person: DrivePerson): Promise<Keys | null> {
       })
       .then(({ data }) => {
         if (data.server !== person.server || data.accountId !== person.accountId) throw new Error('another account')
+        if (data.identitySuite === 1) throw new Error('not upgraded yet')
         return data
       })
       .then((data) => ({

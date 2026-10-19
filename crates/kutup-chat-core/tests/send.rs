@@ -533,6 +533,59 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
 }
 
 #[test]
+fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let mut rng = test_rng();
+    let server = Rc::new(MockServer::default());
+    let master = [12; 32];
+    let authority = AccountAuthority::derive(&master).unwrap();
+    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
+    let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+    let session = block_on(Session::generate(db.clone(), account, 1, 10, &mut rng)).unwrap();
+    let mls = block_on(kutup_chat_core::MlsClient::new(db).initialize(&format!("{account}#1")))
+        .unwrap()
+        .manifest_binding();
+    let local = session.manifest_device_with_mls(mls);
+    // The account's manifest from before its upgrade: this very device, and
+    // the old X25519 Drive key (suite 1).
+    let mut before = authority
+        .sign_manifest(
+            account.parse().unwrap(),
+            1,
+            None,
+            vec![local],
+            "2026-07-15T12:00:00Z",
+        )
+        .unwrap();
+    before.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
+    before.drive.hpke_public_key = base64::engine::general_purpose::STANDARD.encode([5u8; 32]);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+    before.signature = base64::engine::general_purpose::STANDARD.encode(
+        identity
+            .authority_signing_key()
+            .sign(&before.signing_bytes().unwrap())
+            .to_bytes(),
+    );
+    before.verify().unwrap();
+    *server.own_manifest.borrow_mut() = Some(before.clone());
+    server.manifest_history.borrow_mut().push(before.clone());
+
+    let mut engine = Engine::new(session, server);
+    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
+    assert_eq!(next.sequence, 2);
+    assert_eq!(
+        next.previous_hash.as_deref(),
+        Some(before.manifest_hash().unwrap().as_str())
+    );
+    assert_eq!(next.drive, authority.drive_keys());
+    assert_eq!(next.devices, before.devices);
+    // Then nothing more to publish.
+    let again = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:02:00Z")).unwrap();
+    assert_eq!(again.sequence, 2);
+}
+
+#[test]
 fn first_messages_to_the_replaced_and_the_new_prekeys_both_decrypt() {
     let mut rng = test_rng();
     let mut bob = device(

@@ -25,11 +25,15 @@ describe('account vectors', () => {
   it('binds the Drive keys to the account', async () => {
     const sender = await parseAccountKey(vectors.sender)
     const keys = await deriveAccountIdentityKeys(vectors.senderMasterKey)
-    expect(await signDriveKeyBinding(vectors.senderMasterKey, sender)).toBe(vectors.binding)
+    expect(await signDriveKeyBinding(vectors.senderMasterKey, sender, 1)).toBe(vectors.binding)
     const verify = (person: AccountRef) =>
-      verifyDriveKeyBinding(person, keys.authorityPublicKey, keys.driveHpkePublicKey, keys.driveSigningPublicKey, vectors.binding)
+      verifyDriveKeyBinding(person, keys.authorityPublicKey, keys.driveHpkePublicKey, keys.driveSigningPublicKey, vectors.binding, 1)
     expect(await verify(sender)).toBe(true)
     expect(await verify(someoneElse(sender))).toBe(false)
+    // The epoch is signed: the same binding claimed for another one fails.
+    expect(
+      await verifyDriveKeyBinding(sender, keys.authorityPublicKey, keys.driveHpkePublicKey, keys.driveSigningPublicKey, vectors.binding, 2),
+    ).toBe(false)
   })
 
   it('opens shares only between their accounts', async () => {

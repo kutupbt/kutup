@@ -8,7 +8,8 @@ vi.mock('./client', () => ({
   getClientType: () => 'web-drive',
   refreshAccessToken: () => refresh(),
 }))
-const activateSession = vi.fn()
+// What it activated: the keys given (the upgrade is tested in identitySuite.test.ts).
+const activateSession = vi.fn((...a: unknown[]) => Promise.resolve(a[0]))
 const fetchProfile = vi.fn()
 vi.mock('./profile', async (importOriginal) => ({
   KeyBindingMismatchError: (await importOriginal<typeof import('./profile')>()).KeyBindingMismatchError,

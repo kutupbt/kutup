@@ -71,6 +71,12 @@ pub struct AccountLookupResponse {
     /// not signed one yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drive_key_binding: Option<String>,
+    /// 2: an X-Wing Drive key. 1: an X25519 one not yet upgraded, to which
+    /// nothing is shared (`keysPendingUpgrade`; docs/plans/pq-shares.md).
+    /// Required: a peer that doesn't send it runs an older version.
+    pub identity_suite: i16,
+    /// The binding's epoch; clients keep the highest seen per account.
+    pub drive_key_binding_epoch: i32,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -250,6 +256,28 @@ pub(crate) fn canonical_domain(domain: &str) -> AppResult<&str> {
     Ok(domain)
 }
 
+/// A peer's account answer. One without an identity suite comes from a
+/// server older than post-quantum Drive keys (docs/plans/pq-shares.md): it
+/// is refused as such, plainly, never read as an X25519-only answer.
+pub(crate) fn parse_remote_account(body: &[u8]) -> AppResult<AccountLookupResponse> {
+    serde_json::from_slice(body).map_err(|_| {
+        let outdated = serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| value.as_object().map(|object| !object.contains_key("identitySuite")))
+            .unwrap_or(false);
+        if outdated {
+            tracing::warn!("a peer answered an account lookup without identity suites; it runs an older version");
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "the other server runs an older Kutup version and must upgrade before sharing",
+            )
+            .with_details(serde_json::json!({ "code": "peerOutdated" }))
+        } else {
+            AppError::new(StatusCode::BAD_GATEWAY, "invalid account")
+        }
+    })
+}
+
 /// A peer's account answer's keys: canonical, and its incarnation the one
 /// its authority key stands for.
 pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
@@ -257,7 +285,7 @@ pub(crate) fn remote_keys_consistent(remote: &AccountLookupResponse) -> bool {
         return false;
     };
     let authority: [u8; 32] = authority.try_into().expect("32 bytes, checked");
-    canonical_public_key(&remote.drive_hpke_public_key).is_ok()
+    canonical_drive_hpke_key(&remote.drive_hpke_public_key, remote.identity_suite).is_ok()
         && canonical_public_key(&remote.drive_signing_public_key).is_ok()
         && remote.account_incarnation_id
             == kutup_crypto::identity::incarnation_id_from_authority_public(&authority)
@@ -275,6 +303,10 @@ pub(crate) async fn recipient_label(
     let remote = crate::handlers::accounts::remote_account(state, caller, recipient)
         .await?
         .ok_or_else(|| AppError::not_found("no such account on that server"))?;
+    // Sealed to X-Wing keys only (docs/plans/pq-shares.md).
+    if remote.identity_suite < kutup_crypto::identity::IDENTITY_SUITE as i16 {
+        return Err(crate::handlers::identity::keys_pending_upgrade());
+    }
     if remote.account_incarnation_id != hex::encode(sealed_to) {
         return Err(
             AppError::conflict("the recipient's keys changed; look them up again")
@@ -282,6 +314,23 @@ pub(crate) async fn recipient_label(
         );
     }
     Ok(remote.username)
+}
+
+/// A Drive HPKE public key of identity `suite`: X-Wing's 1216 bytes in suite
+/// 2, an X25519 key in suite 1 (until its account upgrades).
+pub(crate) fn canonical_drive_hpke_key(value: &str, suite: i16) -> AppResult<Vec<u8>> {
+    let len = match suite {
+        2 => kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
+        1 => kutup_chat_proto::legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN,
+        _ => return Err(AppError::bad_request("unknown account identity suite")),
+    };
+    let bytes = STANDARD
+        .decode(value)
+        .map_err(|_| AppError::bad_request("invalid Drive identity key"))?;
+    if bytes.len() != len || STANDARD.encode(&bytes) != value {
+        return Err(AppError::bad_request("invalid Drive identity key"));
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn canonical_public_key(value: &str) -> AppResult<Vec<u8>> {
@@ -443,8 +492,7 @@ pub(crate) async fn remote_user_by_name(
             format!("remote Drive directory returned {}", response.status),
         ));
     }
-    let remote: AccountLookupResponse = serde_json::from_slice(&response.body)
-        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote Drive user"))?;
+    let remote = parse_remote_account(&response.body)?;
     // Another spelling of the asked name is the same account (one per
     // folded name); the answer's spelling is the one it goes by.
     crate::account_ids::from_peer(server, &remote.account_id)?;
@@ -620,17 +668,37 @@ pub async fn get_user(
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
         // Any spelling finds the account; the answer names it as stored.
-        type Row = (Uuid, String, String, String, String, String, Option<String>);
+        type Row = (
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            i16,
+            i32,
+        );
         let identity: Option<Row> = sqlx::query_as(
             "SELECT id, username, public_key, account_incarnation_id, drive_signing_public_key,
-                    account_authority_public_key, drive_key_binding
+                    account_authority_public_key, drive_key_binding, identity_suite,
+                    drive_key_binding_epoch
              FROM users WHERE id = kutup_current_user($1) AND is_active = true",
         )
         .bind(username)
         .fetch_optional(&state.pool)
         .await?;
-        let Some((id, stored, hpke_key, incarnation_id, signing_key, authority_key, binding)) =
-            identity
+        let Some((
+            id,
+            stored,
+            hpke_key,
+            incarnation_id,
+            signing_key,
+            authority_key,
+            binding,
+            suite,
+            epoch,
+        )) = identity
         else {
             let error = crate::account_names::renamed_or(
                 &state.pool,
@@ -655,6 +723,8 @@ pub async fn get_user(
                 drive_signing_public_key: signing_key,
                 account_authority_public_key: authority_key,
                 drive_key_binding: binding,
+                identity_suite: suite,
+                drive_key_binding_epoch: epoch,
             },
         )
     }
