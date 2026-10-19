@@ -313,12 +313,26 @@ without changing any key.
       that is an open question (below).
 - **Loops.** Mail forwarded by us carries a marker header
   (`X-Kutup-Forwarded`, an HMAC of the forwarding id under a server
-  secret) and, for outside forwards, our SRS envelope sender. Neither
-  breaks the original DKIM signature. Mail that arrives with our marker,
-  with an envelope sender in our SRS form, or with more than 20 `Received`
-  headers is delivered but never forwarded again. That covers loops through
-  outside providers (A → outside → A, or A → outside → B → …), which
-  arrive without our internal flag.
+  secret), which doesn't break the original DKIM signature. Mail that
+  arrives with our marker, or with more than 20 `Received` headers, is
+  delivered but never forwarded again. That covers loops through outside
+  providers (A → outside → A, or A → outside → B → …), which arrive without
+  our internal flag. As built, the envelope sender isn't part of it: a
+  message coming back through another provider has that provider's envelope
+  sender (rewritten again by its own SRS, if any), never ours, so ours
+  can't tell a loop. The marker is what does, with the hop cap for a
+  provider that strips unknown headers.
+- **The return path (as built).** SRS0 encodes the original sender so a
+  bounce can be relayed to them. Ours, `fwd-<forwarding>-<day>-<hmac>`,
+  names the forwarding instead, because bounces are counted and dropped,
+  never relayed: the original sender isn't told a forward failed (Proton's
+  behaviour isn't visible). SPF holds for our hop either way. The bounce
+  check at RCPT is an HMAC-SHA256 under `MAIL_FORWARDING_KEYS` (separated
+  from k's sealing by its own label), cut to 64 bits (SRS0's hash is 24 to
+  30), over the forwarding id and the day; any configured key is tried, and
+  a path older than 21 days is refused. Recipients of forwards see the
+  forwarding's id in the return path: a random UUID, which links forwards
+  of one forwarding to each other and nothing else.
 - **Primary key change** makes the address's end-to-end forwardings
   Outdated, as Proton, and deletes their k (above). The key-change dialogs
   warn first, with Proton's wording.

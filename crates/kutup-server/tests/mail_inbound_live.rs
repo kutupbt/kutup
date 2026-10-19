@@ -6374,24 +6374,33 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nto alice and
             );
             assert_eq!(smtp_send(&smtp_address, &a.address, &outside), (250, 250));
             let outside_id = format!("ofw-{tag}@sender.test");
-            // Spam isn't forwarded; the gate's Stalwart may score the test
-            // sender either way, and the gate checks what follows.
-            let deadline = Instant::now() + Duration::from_secs(90);
-            let copy = loop {
-                if let Some(row) = messages(&c, &base, &alice_token)
-                    .into_iter()
-                    .find(|m| m["messageId"] == outside_id.as_str())
-                {
-                    break row;
+            let arrived = |id: &str| {
+                let deadline = Instant::now() + Duration::from_secs(90);
+                loop {
+                    if let Some(row) = messages(&c, &base, &alice_token)
+                        .into_iter()
+                        .find(|m| m["messageId"] == id)
+                    {
+                        break row;
+                    }
+                    assert!(Instant::now() < deadline, "{id} never arrived");
+                    std::thread::sleep(Duration::from_secs(1));
                 }
-                assert!(Instant::now() < deadline, "{outside_id} never arrived");
-                std::thread::sleep(Duration::from_secs(1));
             };
-            if copy["folder"] == "spam" {
-                println!("FORWARD-NOT {outside_id}");
-            } else {
-                println!("FORWARD-EXPECT {outside_id}");
-            }
+            // The gate's Stalwart takes test mail as ham: this one goes on.
+            assert_eq!(arrived(&outside_id)["folder"], "inbox");
+            println!("FORWARD-EXPECT {outside_id}");
+            // One carrying our marker came back through a loop: it stays.
+            let looped = format!(
+                "X-Kutup-Forwarded: 0123456789abcdef\r\nFrom: writer@sender.test\r\nTo: {}\r\n\
+Subject: outside loop\r\nDate: Mon, 19 Oct 2026 10:00:00 +0000\r\n\
+Message-ID: <oloop-{tag}@sender.test>\r\n\r\nround\r\n",
+                a.address
+            );
+            assert_eq!(smtp_send(&smtp_address, &a.address, &looped), (250, 250));
+            let loop_id = format!("oloop-{tag}@sender.test");
+            arrived(&loop_id);
+            println!("FORWARD-NOT {loop_id}");
             // Readable Kutup mail: re-sent; end-to-end Kutup mail: skipped.
             let carol = register(&c, &base);
             let cc = set_up_address(&c, &base, &carol);
