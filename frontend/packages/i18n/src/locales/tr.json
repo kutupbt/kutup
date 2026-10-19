@@ -451,5 +451,15 @@
     "lockdownSettings": "Hariç tuttuğunuz siteleri Ayarlar → Gizlilik ve Güvenlik → Kilitleme Modu → Web'de Gezinmeyi Yapılandır bölümünde görebilirsiniz.",
     "otherBrowsers": "Başka bir tarayıcıda WebAssembly'yi yeniden açın (bazı sıkılaştırılmış ayarlar ve şirket politikaları kapatır) ya da güncel bir Safari, Chrome, Firefox veya Edge kullanın.",
     "reload": "Yeniden yükle"
+  },
+  "apiErrors": {
+    "keysPendingUpgrade": "Bu kişiyle paylaşabilmeniz için Kutup'a bir kez daha giriş yapması gerekiyor: hesabı daha güçlü şifreleme anahtarlarına geçiyor.",
+    "peerOutdated": "Bu kişinin sunucusu Kutup'un eski bir sürümünü çalıştırıyor. Sunucu güncellendiğinde onunla paylaşabilirsiniz."
+  },
+  "pendingUpgrade": {
+    "title_one": "{{count}} kişi daha erişimini kaybedecek",
+    "title_other": "{{count}} kişi daha erişimini kaybedecek",
+    "body": "Güvenlik yükseltmesinden bu yana giriş yapmadıkları için yeni anahtar onlara verilemiyor; şimdi kaldırmak onların erişimini de kaldırır. Giriş yaptıktan sonra onlarla yeniden paylaşın.",
+    "removeToo": "Onları da kaldır"
   }
 }

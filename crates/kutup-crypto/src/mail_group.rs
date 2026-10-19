@@ -27,7 +27,7 @@ use crate::mail_key::{
     open_group_secret, seal_group_secret, GroupShareMember, MailKeyListV1, SignedMailKeyListV1,
 };
 
-const SIGNING_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-signing-share/v1\0";
+const SIGNING_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-signing-share/v2\0";
 const HANDOVER_DOMAIN: &[u8] = b"kutup/mail-group-signer-handover/v1\0";
 const HANDOVER_VERSION: u16 = 1;
 /// The handover's bytes after its domain: version, group, sequence, the
@@ -68,7 +68,7 @@ pub fn seal_group_signing_share(
     key: &GroupSigningKey,
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; 32],
+    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     seal_group_secret(
         SIGNING_SHARE_DOMAIN,

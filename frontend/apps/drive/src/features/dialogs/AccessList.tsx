@@ -29,7 +29,9 @@ import { useDriveIdentity } from '@kutup/drive-core/identity'
 import type { Folder } from '@kutup/drive-core/model'
 import { publicLinkUrl } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
+import { KeysPendingUpgrade, MembersPendingUpgrade } from '@kutup/drive-core/identityPins'
 import { VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
+import { PendingUpgradeConfirm } from '@kutup/drive-ui/PendingUpgradeConfirm'
 
 type Pending = { label: string; removal: Removal } | null
 
@@ -48,6 +50,8 @@ export function AccessList({ folder }: { folder: Folder }) {
   const setPermissions = useSetFolderPermissions()
   const people = usePeople()
   const [pending, setPending] = useState<Pending>(null)
+  // A removal that would also take people not yet upgraded: asked again.
+  const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
 
   if (access.isPending) return <LoadingPanel label={t('dialogs.access.loading')} />
   if (access.isError || !access.data) return <Alert variant="error">{t('dialogs.access.loadFailed')}</Alert>
@@ -68,14 +72,34 @@ export function AccessList({ folder }: { folder: Folder }) {
 
   function confirm() {
     if (!pending) return
+    const removal = pending.removal
     remove.mutate(
-      { folder, removed: pending.removal },
+      { folder, removed: removal },
       {
         onSuccess: () => {
           setPending(null)
           toast.success(t('dialogs.access.removed'))
         },
-        onError: () => setPending(null),
+        onError: (error) => {
+          setPending(null)
+          if (error instanceof MembersPendingUpgrade) setUpgrade({ removal, error })
+        },
+      },
+    )
+  }
+
+  function confirmUpgrade() {
+    if (!upgrade) return
+    const { removal } = upgrade
+    remove.mutate(
+      { folder, removed: removal, alsoRemove: upgrade.error.removal },
+      {
+        onSuccess: () => {
+          setUpgrade(null)
+          toast.success(t('dialogs.access.removed'))
+        },
+        // More of them since: asked again, naming them all.
+        onError: (next) => setUpgrade(next instanceof MembersPendingUpgrade ? { removal, error: next } : null),
       },
     )
   }
@@ -90,8 +114,10 @@ export function AccessList({ folder }: { folder: Folder }) {
 
   const busy = remove.isPending || setPermissions.isPending
   const error = setPermissions.error
-    ? t('dialogs.access.changeFailed')
-    : remove.error
+    ? setPermissions.error instanceof KeysPendingUpgrade
+      ? t('apiErrors.keysPendingUpgrade')
+      : t('dialogs.access.changeFailed')
+    : remove.error && !(remove.error instanceof MembersPendingUpgrade)
     ? remove.error instanceof AccessChanged
       ? t('dialogs.access.changed')
       : remove.error instanceof RecipientChanged
@@ -189,6 +215,17 @@ export function AccessList({ folder }: { folder: Folder }) {
             </Button>
           </div>
         </Alert>
+      ) : null}
+      {upgrade ? (
+        <PendingUpgradeConfirm
+          error={upgrade.error}
+          busy={remove.isPending}
+          onConfirm={confirmUpgrade}
+          onCancel={() => {
+            setUpgrade(null)
+            remove.reset()
+          }}
+        />
       ) : null}
       {error ? <Alert variant="error">{error}</Alert> : null}
     </section>

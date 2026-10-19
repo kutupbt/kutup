@@ -325,11 +325,13 @@ pub fn open_address_key(
     Ok(Zeroizing::new(secret.to_vec()))
 }
 
-/// A shared mailbox's key share's version byte.
-const GROUP_SHARE_VERSION: u8 = 1;
+/// A shared mailbox's share's version byte: 2, sealed with X-Wing
+/// (docs/plans/pq-shares.md); version 1 (X25519) is refused.
+const GROUP_SHARE_VERSION: u8 = 2;
 /// HPKE info and the start of the AAD of a group key share.
-const GROUP_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-key-share/v1\0";
-const GROUP_SHARE_HEADER_LEN: usize = 1 + 32 + 32;
+const GROUP_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-key-share/v2\0";
+/// The version byte, the member's incarnation id, the encapsulated key.
+const GROUP_SHARE_HEADER_LEN: usize = 1 + 32 + crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 
 /// Who a group key share is for: the member's account and the account
 /// incarnation whose Drive HPKE key it is sealed to.
@@ -367,7 +369,7 @@ pub(crate) fn seal_group_secret(
     group_id: &str,
     bound: &[u8],
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; 32],
+    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
     let incarnation =
@@ -385,7 +387,7 @@ pub(crate) fn seal_group_secret(
             None,
         )
         .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
-    if encapsulated.len() != 32 {
+    if encapsulated.len() != crate::hpke_xwing::ENCAPSULATED_KEY_LEN {
         return Err(CryptoError::Backend(
             "group share: encapsulated key length".into(),
         ));
@@ -439,7 +441,7 @@ pub fn seal_group_key_share(
     group_secret_key: &[u8],
     group_id: &str,
     member: &GroupShareMember<'_>,
-    member_hpke_public_key: &[u8; 32],
+    member_hpke_public_key: &[u8; crate::hpke_xwing::PUBLIC_KEY_LEN],
 ) -> Result<Vec<u8>> {
     let group_fingerprint = secret_key_fingerprint(group_secret_key)?;
     seal_group_secret(

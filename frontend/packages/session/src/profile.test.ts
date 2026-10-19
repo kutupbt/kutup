@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const get = vi.fn()
 const post = vi.fn()
+// The identity suite upgrade has its own tests (identitySuite.test.ts).
+vi.mock('./identitySuite', () => ({ upgradedKeys: (keys: unknown) => Promise.resolve(keys) }))
 vi.mock('./client', () => ({
   default: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a) },
 }))

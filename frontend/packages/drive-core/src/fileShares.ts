@@ -10,7 +10,15 @@ import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { opensInOffice } from './editorKind'
-import { confirmRecipient, lookupAddress, type AccountAnswer, type ClaimedKeys } from './identityPins'
+import {
+  confirmRecipient,
+  lookupAddress,
+  pendingUpgradeRemoval,
+  sealableDriveKey,
+  type AccountAnswer,
+  type ClaimedKeys,
+  type PendingUpgradeRemoval,
+} from './identityPins'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -271,6 +279,8 @@ export interface FileAccessMember {
   account: string
   accountIncarnationId: string
   drivePublicKey: string
+  /** 1: not on X-Wing keys yet; nothing is sealed to them (docs/plans/pq-shares.md). */
+  identitySuite?: number
   canEdit: boolean
   /** Below the file's, their access waits to be re-sealed. */
   keyGeneration: number
@@ -327,16 +337,19 @@ function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, gene
   return sealFor(me, file.id, key, generation, {
     person: { server: to.server, accountId: to.accountId },
     accountIncarnationId: to.accountIncarnationId,
-    drivePublicKey: to.driveHpkePublicKey,
+    drivePublicKey: sealableDriveKey(to.account, to.driveHpkePublicKey, to.identitySuite),
   })
 }
 
 /** Someone here the file is shared with: their account (user id here) and keys. */
-function memberTo(me: DriveIdentity, member: Pick<FileAccessMember, 'userId' | 'accountIncarnationId' | 'drivePublicKey'>): SealTo {
+function memberTo(
+  me: DriveIdentity,
+  member: Pick<FileAccessMember, 'userId' | 'account' | 'accountIncarnationId' | 'drivePublicKey' | 'identitySuite'>,
+): SealTo {
   return {
     person: { server: me.accountRef.server, accountId: member.userId },
     accountIncarnationId: member.accountIncarnationId,
-    drivePublicKey: member.drivePublicKey,
+    drivePublicKey: sealableDriveKey(member.account, member.drivePublicKey, member.identitySuite),
   }
 }
 
@@ -431,9 +444,18 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
   if (!fresh.fileKey) throw new Error('file is not open')
   const access = await loadFileAccess(fresh.id)
   if (access.keyGeneration !== fresh.keyGeneration) throw new AccessChanged()
-  const behind = access.members.filter((m) => m.keyGeneration < access.keyGeneration)
+  // Someone still on identity suite 1 gets nothing sealed: they stay behind
+  // (shown as not confirmed yet) until they have signed in again, and the
+  // next catch-up after that brings them up (docs/plans/pq-shares.md).
+  const behind = access.members.filter((m) => m.keyGeneration < access.keyGeneration && m.identitySuite !== 1)
   const linksBehind = access.publicLinks.filter((l) => l.keyGeneration < access.keyGeneration)
-  const remoteBehind = access.federatedShares.filter((f) => f.keyGeneration < access.keyGeneration)
+  const remoteBehind = (
+    await Promise.all(
+      access.federatedShares
+        .filter((f) => f.keyGeneration < access.keyGeneration)
+        .map(async (f) => ({ share: f, remote: await remoteRecipient(f) })),
+    )
+  ).filter(({ remote }) => remote.identitySuite !== 1)
   if (behind.length > 0 || linksBehind.length > 0 || remoteBehind.length > 0) {
     const members = await Promise.all(
       behind.map(async (m) => ({
@@ -448,9 +470,9 @@ export async function bringFileSharesUpToDate(folder: Folder, file: DriveFile, m
       })),
     )
     const federatedShares = await Promise.all(
-      remoteBehind.map(async (f) => ({
-        id: f.id,
-        shareEnvelope: await sealForRemote(me, fresh, fresh.fileKey!, fresh.keyGeneration, await remoteRecipient(f)),
+      remoteBehind.map(async ({ share, remote }) => ({
+        id: share.id,
+        shareEnvelope: await sealForRemote(me, fresh, fresh.fileKey!, fresh.keyGeneration, remote),
       })),
     )
     try {
@@ -584,17 +606,48 @@ export function useLeaveRemoteFileShare() {
  * Remove people from a shared file: the file moves to a new key, wrapped at
  * its folder's current epoch and re-sealed for everyone who stays, in one
  * request. Built from access as it is now, so anyone added since stays.
+ * People it keeps who are still on identity suite 1 can't get the new key:
+ * without `alsoRemove` naming them (the owner confirmed), it stops with
+ * `MembersPendingUpgrade`; with it, they are removed too.
  */
 export function useRemoveFileAccess() {
   const queryClient = useQueryClient()
   return useDriveMutation(async (
-    { folder, file, removed, removedLinks = [], removedFederated = [] }: { folder: Folder; file: DriveFile; removed: string[]; removedLinks?: string[]; removedFederated?: string[] },
+    {
+      folder,
+      file,
+      removed,
+      removedLinks = [],
+      removedFederated = [],
+      alsoRemove,
+    }: {
+      folder: Folder
+      file: DriveFile
+      removed: string[]
+      removedLinks?: string[]
+      removedFederated?: string[]
+      alsoRemove?: PendingUpgradeRemoval
+    },
     me,
   ) => {
     if (!canShareFile(folder, file)) throw new Error('file is not open')
     try {
       const access = await loadFileAccess(file.id)
       if (access.keyGeneration !== file.keyGeneration) throw new AccessChanged()
+      // Who stays, and the keys of those on other servers.
+      const keptMembers = access.members.filter((m) => !removed.includes(m.userId))
+      const keptRemote = await Promise.all(
+        access.federatedShares
+          .filter((f) => !removedFederated.includes(f.id))
+          .map(async (f) => ({ share: f, remote: await remoteRecipient(f) })),
+      )
+      const extra = pendingUpgradeRemoval(
+        {
+          members: keptMembers.map((m) => ({ id: m.userId, account: m.account, identitySuite: m.identitySuite })),
+          federatedShares: keptRemote.map(({ share, remote }) => ({ id: share.id, account: remote.account, identitySuite: remote.identitySuite })),
+        },
+        alsoRemove,
+      )
       const next = await rekeyFileRecordV1(
         { id: file.id, collectionId: file.collectionId, keyGeneration: file.keyGeneration, metadataRevision: file.metadataRevision },
         file.fileKey!,
@@ -603,8 +656,8 @@ export function useRemoveFileAccess() {
         fileMetadataOf(file),
       )
       const members = await Promise.all(
-        access.members
-          .filter((m) => !removed.includes(m.userId))
+        keptMembers
+          .filter((m) => !extra.members.includes(m.userId))
           .map(async (m) => ({ userId: m.userId, shareEnvelope: await sealFor(me, file.id, next.fileKey, next.keyGeneration, memberTo(me, m)) })),
       )
       const publicLinks = await Promise.all(
@@ -613,9 +666,9 @@ export function useRemoveFileAccess() {
           .map(async (l) => ({ id: l.id, keyEnvelope: await wrapForLink(file, next.fileKey, next.keyGeneration, await fileLinkKey(l, me), me) })),
       )
       const federatedShares = await Promise.all(
-        access.federatedShares
-          .filter((f) => !removedFederated.includes(f.id))
-          .map(async (f) => ({ id: f.id, shareEnvelope: await sealForRemote(me, file, next.fileKey, next.keyGeneration, await remoteRecipient(f)) })),
+        keptRemote
+          .filter(({ share }) => !extra.federatedShares.includes(share.id))
+          .map(async ({ share, remote }) => ({ id: share.id, shareEnvelope: await sealForRemote(me, file, next.fileKey, next.keyGeneration, remote) })),
       )
       await api.post(`/files/${file.id}/rotate`, {
         fromGeneration: file.keyGeneration,
@@ -623,11 +676,11 @@ export function useRemoveFileAccess() {
         metadataEnvelope: next.metadataEnvelope,
         previousKeyEnvelope: next.previousKeyEnvelope,
         members,
-        removed,
+        removed: [...removed, ...extra.members],
         publicLinks,
         removedLinks,
         federatedShares,
-        removedFederated,
+        removedFederated: [...removedFederated, ...extra.federatedShares],
       })
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) throw new AccessChanged()

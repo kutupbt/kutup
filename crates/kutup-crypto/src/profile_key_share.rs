@@ -21,8 +21,10 @@ use crate::named_share::{hpke_suite, parse_hex_32, read_person, take};
 
 const MAGIC: &[u8; 8] = b"KUTPPK1\0";
 const HPKE_INFO: &[u8] = b"kutup/drive/profile-key-hpke/v1\0";
-const SUITE_V1: u16 = 1;
-const ENCAPSULATED_KEY_LEN: usize = 32;
+/// X-Wing, HKDF-SHA256, ChaCha20-Poly1305, Ed25519 (docs/plans/pq-shares.md);
+/// suite 1 (X25519) is refused.
+const SUITE: u16 = 2;
+const ENCAPSULATED_KEY_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 const PROFILE_KEY_LEN: usize = 32;
 const CIPHERTEXT_LEN: usize = PROFILE_KEY_LEN + 16;
 const SIGNATURE_LEN: usize = 64;
@@ -55,7 +57,9 @@ impl ProfileKeyEnvelopeV1 {
         sender_signing_key: &SigningKey,
         recipient_hpke_public_key: &[u8],
     ) -> Result<Self> {
-        if profile_key.len() != PROFILE_KEY_LEN || recipient_hpke_public_key.len() != 32 {
+        if profile_key.len() != PROFILE_KEY_LEN
+            || recipient_hpke_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
+        {
             return Err(CryptoError::InvalidInput(
                 "profile key or recipient key has an invalid length".into(),
             ));
@@ -116,7 +120,7 @@ impl ProfileKeyEnvelopeV1 {
         let (sender, recipient) = (self.sender.bytes(), self.recipient.bytes());
         let mut bytes = Vec::with_capacity(FIXED_HEADER_LEN + sender.len() + recipient.len());
         bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&SUITE_V1.to_be_bytes());
+        bytes.extend_from_slice(&SUITE.to_be_bytes());
         bytes.extend_from_slice(&0u16.to_be_bytes());
         bytes.extend_from_slice(&self.sender_incarnation_id);
         bytes.extend_from_slice(&self.recipient_incarnation_id);
@@ -148,8 +152,7 @@ impl ProfileKeyEnvelopeV1 {
         if bytes.len() < FIXED_HEADER_LEN || bytes.get(..MAGIC.len()) != Some(MAGIC) {
             return Err(CryptoError::TooShort);
         }
-        if u16::from_be_bytes([bytes[8], bytes[9]]) != SUITE_V1 || bytes[10] != 0 || bytes[11] != 0
-        {
+        if u16::from_be_bytes([bytes[8], bytes[9]]) != SUITE || bytes[10] != 0 || bytes[11] != 0 {
             return Err(CryptoError::InvalidInput(
                 "unknown profile-key envelope suite".into(),
             ));
@@ -161,7 +164,7 @@ impl ProfileKeyEnvelopeV1 {
         let recipient = read_person(&bytes, &mut cursor)?;
         let encapsulated_key = take(&bytes, &mut cursor, ENCAPSULATED_KEY_LEN)?
             .try_into()
-            .expect("32-byte slice");
+            .expect("encapsulated-key slice");
         let ciphertext = take(&bytes, &mut cursor, CIPHERTEXT_LEN)?
             .try_into()
             .expect("48-byte slice");
