@@ -1,8 +1,8 @@
 # Mail: post-quantum OpenPGP, following Proton
 
-Status: the user's decisions are in (2026-10-18, below). Next: the spike
-(dependencies, deny, wasm32, interop), then the build after the shares work in
-[`pq-shares.md`](pq-shares.md). Rule ([`mail-address-keys.md`](mail-address-keys.md)):
+Status: **waiting on rPGP** (user, 2026-10-19). The spike (below) found
+rPGP's post-quantum support unusable as released; the build starts when an
+rPGP release meets the conditions in "Decision: wait for rPGP". Rule ([`mail-address-keys.md`](mail-address-keys.md)):
 copy Proton's answer where it has one; where its code doesn't show one, say so
 and propose ours.
 
@@ -255,13 +255,29 @@ The forwarding draft (`draft-wussler-openpgp-forwarding`) needs nothing new: it
 builds today (Curve25519 only).
 
 **What it takes.** rPGP's `pqc` must move to `ml-kem` 0.3, `ml-dsa` 0.1 and a
-current `slh-dsa`. We have three ways to get there:
-- **(a, proposed)** contribute that update to rPGP upstream: the APIs moved,
-  so it's a real change, but it's mechanical and their test vectors (the
-  RFC 9980 ones) check it;
-- **(b)** wait for rPGP to make it;
-- **(c)** carry a patched rPGP in `vendor/`, as `keepass` is. Only if (a)
-  stalls.
+current `slh-dsa`.
+
+### Decision: wait for rPGP (user, 2026-10-19)
+
+We wait. No upstream PR from us and no patched fork in `vendor/`. Mail PQ is
+built once rPGP itself makes the move, in a release.
+
+**Conditions for resuming**, all of them:
+- a **released** rPGP version (not a git dependency or a pre-release) whose
+  `pqc` feature depends on `kem` 0.3 and `ml-kem` 0.3, so it builds in one
+  graph with `x-wing` 0.1.1 and `ml-kem` 0.3.3;
+- the same release depends on `ml-dsa` 0.1.x or later (released, outside
+  RUSTSEC-2025-0144) and an `slh-dsa` without an open advisory;
+- `cargo deny check` is clean with `pqc` on, with no new ignore in
+  `deny.toml`, and `cargo metadata --locked` passes on all four Cargo roots.
+
+When those hold, the work resumes at step 1 of the order below (the wasm32
+size and interop parts of the spike), then steps 2–4. Whoever bumps rPGP
+checks this list; [`roadmap.md`](../roadmap.md) carries the blocker.
+
+**Forwarding is independent.** The end-to-end forwarding design (section
+"End-to-end forwarding") doesn't need `pqc`: it can be built on v4 keys with
+rPGP as it is. It isn't scheduled now.
 
 **Interop**, once rPGP builds:
 - OpenPGP.js 6 runs here (Node 22 is installed), so Proton's fork can be
