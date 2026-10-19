@@ -70,6 +70,10 @@ services:
       # Stalwart's name, the authserv-id of the Authentication-Results it
       # writes: the only one the backend trusts (RFC 8601 §5).
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:?set MAIL_HOSTNAME to mail.<domain>}
+      # End-to-end forwarding's sealing keys (docs/plans/mail-forwarding.md):
+      # `id:base64` of 32 random bytes, comma-separated; the highest id seals.
+      # Back it up with the database. Unset: end-to-end forwarding is off.
+      MAIL_FORWARDING_KEYS: ${MAIL_FORWARDING_KEYS:-}
       MAIL_SEND_RECIPIENTS_PER_HOUR: ${MAIL_SEND_RECIPIENTS_PER_HOUR:-100}
       MAIL_SEND_RECIPIENTS_PER_DAY: ${MAIL_SEND_RECIPIENTS_PER_DAY:-500}
       MAIL_NEW_ACCOUNT_DAYS: ${MAIL_NEW_ACCOUNT_DAYS:-7}

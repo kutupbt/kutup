@@ -88,6 +88,9 @@ pub struct EndToEndMaterial {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateMailForwarding {
+    /// Chosen by the forwarder's client (a UUID v4), so the activation can
+    /// bind it before the server has stored anything.
+    pub id: String,
     pub forwarder_address_id: String,
     pub forwardee_email: String,
     #[serde(rename = "match", default = "all")]
@@ -414,6 +417,10 @@ pub async fn create(
     let user_id = trusted_uuid(&user.user_id)?;
     let address_id =
         Uuid::parse_str(&req.forwarder_address_id).map_err(|_| AppError::not_found("not found"))?;
+    let id = Uuid::parse_str(&req.id)
+        .ok()
+        .filter(|id| id.get_version_num() == 4 && id.to_string() == req.id)
+        .ok_or_else(|| AppError::bad_request("id must be a lowercase UUID v4"))?;
     check_conditions(&req.conditions)?;
     let forwardee_email = req.forwardee_email.trim().to_ascii_lowercase();
     if forwardee_email.len() > 320 || !forwardee_email.contains('@') {
@@ -476,13 +483,12 @@ pub async fn create(
         return Err(unavailable());
     }
 
-    let id = Uuid::new_v4();
     let inserted = sqlx::query(
         "INSERT INTO mail_forwardings
            (id, user_id, forwarder_address_id, forwardee_email, forwardee_address_id,
             kind, state, match, conditions)
          VALUES ($1, $2, $3, $4, $5, 'end_to_end', 'pending', $6, $7)
-         ON CONFLICT (forwarder_address_id, forwardee_email) DO NOTHING",
+         ON CONFLICT DO NOTHING",
     )
     .bind(id)
     .bind(user_id)

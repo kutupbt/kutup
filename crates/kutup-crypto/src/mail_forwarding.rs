@@ -441,6 +441,17 @@ fn replacement_fingerprint(params: &PublicParams) -> Option<[u8; FINGERPRINT_LEN
     }
 }
 
+/// The public part of a forwarding key (binary): what the forwardee uploads
+/// at accept beside the sealed secret.
+pub fn forwarding_public_key(forwardee_secret_key: &[u8]) -> Result<Vec<u8>> {
+    let key = SignedSecretKey::from_bytes(forwardee_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("not a forwarding key".into()))?;
+    if !is_forwarding(&key) {
+        return Err(CryptoError::InvalidInput("not a forwarding key".into()));
+    }
+    SignedPublicKey::from(key).to_bytes().map_err(backend)
+}
+
 /// The subkey fingerprints of a forwardee key (public or secret, binary):
 /// what the server compares with a forwarding's stored fingerprints when
 /// the forwardee uploads the key at accept.

@@ -11,6 +11,8 @@ services:
       - "127.0.0.1:${KUTUP_MAIL_TEST_PORT:-39086}:3000"
     environment:
       MAIL_TEST_KEY_ORIGIN: http://mail-keys:8080
+      # A fixed test key for forwarding's sealed proxy factors.
+      MAIL_FORWARDING_KEYS: "1:Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI="
   stalwart-setup:
     restart: "no"
     environment:
