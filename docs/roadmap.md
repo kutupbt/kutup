@@ -644,6 +644,13 @@ arrival, and direct sending. Phases, each with its own plan before code:
   Cloudflare (checklist in `self-hosting.md`; for kutup.dev the website
   Worker must also pass WKD through) and the manual Proton check
   (`test/mail-proton.md`).
+- **Mail post-quantum (blocked on rPGP).** PQ by default with Proton's v6
+  key shape is decided ([`plans/mail-pq-openpgp.md`](plans/mail-pq-openpgp.md)),
+  but rPGP 0.21's `pqc` pins `ml-kem` 0.2.1 (doesn't build beside our `kem` 0.3)
+  and `ml-dsa` 0.0.4 (RUSTSEC-2025-0144). Decided 2026-10-19: wait for an rPGP
+  release on `ml-kem` 0.3 and `ml-dsa` 0.1.x with `cargo deny` clean; no
+  upstream PR or fork from us. End-to-end forwarding can be built on v4
+  independently; not scheduled.
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed

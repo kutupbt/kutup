@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { accountOfKey } from '@kutup/crypto/accountRef'
 import { toBase64 } from '@kutup/crypto/base64'
+import { exactBytes } from '@kutup/crypto/bytes'
 import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
@@ -541,13 +542,11 @@ export class ApiChatTransport implements ChatTransportPort {
    * learns only which home it goes to. The answer stays sealed.
    */
   async relayGroupRequest(home: string, sealed: Uint8Array): Promise<GroupRelayOutcome> {
-    // Exactly these bytes: `sealed` may be a view into the WASM memory, and
-    // a typed array's whole buffer is what the HTTP client would send.
-    const body = sealed.slice().buffer
     try {
+      // Exactly these bytes: `sealed` may be a view into the WASM memory.
       const response = await api.post<ArrayBuffer>(
         `/chat/groups/relay/${encodeURIComponent(home)}`,
-        body,
+        exactBytes(sealed),
         {
           headers: { 'Content-Type': 'message/ohttp-req' },
           responseType: 'arraybuffer',

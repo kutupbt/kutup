@@ -50,6 +50,8 @@ fn groups_are_off_unless_switched_on() {
             "/api/chat/groups/gateway-key?server={}&fromSequence=0",
             server_domain(&c, &base)
         ),
+        // Nor the account's group list.
+        "/api/chat/group-list",
     ] {
         assert_eq!(get(path), StatusCode::NOT_FOUND, "{path}");
     }

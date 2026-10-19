@@ -145,6 +145,10 @@ run_phase account-ids
 # home's signed X-Wing key config, sealed requests relayed and answered.
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
   cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
+# The account's group list (§5): sealed entries by keyed id, the revision
+# from each entry's header, the head's chatGroups scope, the limit.
+KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+  cargo test -p kutup-server --test chat_group_list_live -- --test-threads=1 --nocapture
 
 # Sealed batches: several sealed sends to one server's accounts in one
 # anonymous request; across servers, queued per recipient and delivered as

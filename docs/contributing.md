@@ -454,6 +454,15 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
 - Use semantic theme roles and the responsive ownership boundaries documented
   in [`frontend.md`](frontend.md). A viewport change must not remount services
   or trigger a mutation.
+- Bytes that leave the code (request bodies, Blobs, Files, `postMessage`,
+  storage) are exactly the view's bytes, never `view.buffer`: a typed array
+  from WASM can be a window on the whole WASM memory, and its `.buffer` is all
+  of it. Use `exactBytes(view)` from `@kutup/crypto/bytes`; ESLint refuses
+  `.buffer` inside those calls. The shared axios client and the default axios
+  instance also turn any typed-array body into its exact bytes
+  (`packages/session/src/client.ts`). Structured-clone sinks (IndexedDB,
+  `postMessage` of an object) copy a contained view's whole buffer and are not
+  linted, so store and post arrays that own their bytes.
 - Dependency fixes that cannot wait for upstream live in `frontend/patches/`
   (`pnpm patch`, listed under `pnpm.patchedDependencies`). Each patch is a
   small, commented change with a test that fails without it. Today there is
