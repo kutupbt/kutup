@@ -2110,34 +2110,7 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&mut *tx)
         .await?;
-    // The account head chain starts again with the new incarnation, and no
-    // listed value sealed under the old keys stays to be listed in it
-    // (docs/plans/rollback-protection.md, "Account reset"): contacts, labels,
-    // filters and Pass secrets go; custom folders keep their mail and lose
-    // their names, until their owner names them again. The identity pins
-    // were sealed under the old master key too: nothing can open them now.
-    for statement in [
-        "DELETE FROM account_heads WHERE user_id = $1",
-        "DELETE FROM identity_pins WHERE user_id = $1",
-        "DELETE FROM contacts WHERE user_id = $1",
-        "DELETE FROM mail_labels WHERE user_id = $1",
-        "DELETE FROM mail_filters WHERE user_id = $1",
-        "DELETE FROM pass_vault_secrets WHERE user_id = $1",
-        "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
-        // Old names held by the old incarnation stop receiving now: no one
-        // holds the keys their mail would be sealed to. They are freed on
-        // their own dates; the current name waits for the new incarnation,
-        // which complete-setup records (docs/plans/username-renames.md).
-        "UPDATE mail_addresses SET state = 'closed', receive_until = now()
-          WHERE user_id = $1 AND state = 'receiving'",
-        "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
-        "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
-    ] {
-        sqlx::query(statement)
-            .bind(target)
-            .execute(&mut *tx)
-            .await?;
-    }
+    clear_account_values(&mut tx, target).await?;
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',
@@ -2433,6 +2406,43 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
     AppError::internal("internal error")
 }
 
+/// The account head chain starts again with the new incarnation, and no
+/// listed value sealed under the old keys stays to be listed in it
+/// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
+/// group list, labels, filters and Pass secrets go; custom folders keep
+/// their mail and lose their names, until their owner names them again. The
+/// identity pins were sealed under the old master key too: nothing can open
+/// them now.
+async fn clear_account_values(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    target: Uuid,
+) -> Result<(), sqlx::Error> {
+    for statement in [
+        "DELETE FROM account_heads WHERE user_id = $1",
+        "DELETE FROM identity_pins WHERE user_id = $1",
+        "DELETE FROM contacts WHERE user_id = $1",
+        "DELETE FROM chat_group_list WHERE user_id = $1",
+        "DELETE FROM mail_labels WHERE user_id = $1",
+        "DELETE FROM mail_filters WHERE user_id = $1",
+        "DELETE FROM pass_vault_secrets WHERE user_id = $1",
+        "UPDATE mail_folders SET name_sealed = NULL WHERE user_id = $1",
+        // Old names held by the old incarnation stop receiving now: no one
+        // holds the keys their mail would be sealed to. They are freed on
+        // their own dates; the current name waits for the new incarnation,
+        // which complete-setup records (docs/plans/username-renames.md).
+        "UPDATE mail_addresses SET state = 'closed', receive_until = now()
+          WHERE user_id = $1 AND state = 'receiving'",
+        "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+        "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
+    ] {
+        sqlx::query(statement)
+            .bind(target)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2465,5 +2475,60 @@ mod tests {
             ..ActivityQuery::default()
         };
         assert!(validate_activity_query(&noncanonical_domain).is_err());
+    }
+
+    /// A reset leaves none of the old incarnation's group list behind, and
+    /// touches no other account's.
+    #[tokio::test]
+    async fn live_an_account_reset_clears_the_group_list() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let (reset, kept) = (Uuid::new_v4(), Uuid::new_v4());
+        for user_id in [reset, kept] {
+            sqlx::query(
+                "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                    drive_private_key_envelope, public_key, account_authority_public_key,
+                    account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+                 VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+            )
+            .bind(user_id)
+            .bind(format!("reset{}", &user_id.simple().to_string()[..12]))
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO chat_group_list (user_id, id, revision, envelope) VALUES ($1, $2, 1, $3)",
+            )
+            .bind(user_id)
+            .bind("A".repeat(43))
+            .bind(vec![0u8; kutup_crypto::chat_group_list::SEALED_LEN])
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let mut tx = pool.begin().await.unwrap();
+        clear_account_values(&mut tx, reset).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let count = |user_id: Uuid| {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chat_group_list WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_one(&pool)
+        };
+        assert_eq!(count(reset).await.unwrap(), 0);
+        assert_eq!(count(kept).await.unwrap(), 1);
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(vec![reset, kept])
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }

@@ -1,6 +1,6 @@
 //! The account head chain (docs/plans/rollback-protection.md).
 //!
-//! Every write of a listed value (a contact, a mail folder, label or filter
+//! Every write of a listed value (a contact, a group-list entry, a mail folder, label or filter
 //! name, the identity pins, a Pass vault secret) also writes the account's
 //! next head, in its transaction: the head's sequence must be the current
 //! one plus one (`409 head_conflict`), and once the account has a head, a
@@ -262,6 +262,7 @@ pub enum Scope {
     MailNames,
     Pins,
     PassSecrets,
+    ChatGroups,
 }
 
 impl Scope {
@@ -271,6 +272,7 @@ impl Scope {
             "mailNames" => Scope::MailNames,
             "pins" => Scope::Pins,
             "passSecrets" => Scope::PassSecrets,
+            "chatGroups" => Scope::ChatGroups,
             _ => return None,
         })
     }
@@ -278,11 +280,12 @@ impl Scope {
 
 impl Scope {
     /// Every scope, in the order the basis covers them.
-    pub const ALL: [Scope; 4] = [
+    pub const ALL: [Scope; 5] = [
         Scope::Contacts,
         Scope::MailNames,
         Scope::Pins,
         Scope::PassSecrets,
+        Scope::ChatGroups,
     ];
 
     fn name(self) -> &'static str {
@@ -291,6 +294,7 @@ impl Scope {
             Scope::MailNames => "mailNames",
             Scope::Pins => "pins",
             Scope::PassSecrets => "passSecrets",
+            Scope::ChatGroups => "chatGroups",
         }
     }
 }
@@ -298,7 +302,8 @@ impl Scope {
 /// A scope's `(id, revision)` pairs, sorted by id. Ids per scope: a contact's
 /// id; `folder:`, `label:` or `filter:` and the id for mail names (a folder
 /// without a name, kept through an account reset, is left out until it is
-/// named); `pins` for the one pin list; the vault's file id for a Pass secret
+/// named); `pins` for the one pin list; an entry's keyed id for the group
+/// list; the vault's file id for a Pass secret
 /// (every one the account keeps, trashed or out of reach included: the secret
 /// stays until its owner forgets it with a head).
 async fn values(
@@ -343,6 +348,12 @@ async fn values(
             rows.into_iter()
                 .map(|(id, envelope)| Ok((id, crate::handlers::pass::revision_of(&envelope)?)))
                 .collect::<AppResult<_>>()?
+        }
+        Scope::ChatGroups => {
+            sqlx::query_as("SELECT id, revision FROM chat_group_list WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_all(&mut *conn)
+                .await?
         }
     };
     values.sort();
