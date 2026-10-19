@@ -342,7 +342,12 @@ export interface ChatGroupSummary {
   forkSuspected: boolean
   /** When this device first learned of the group (made it or was invited), ms. */
   knownSinceMs?: number | null
+  /** Who may rename it (`attributes`) and add members (`members`), as its verified state says. */
+  access?: { attributes: ChatGroupAccessRequired; members: ChatGroupAccessRequired; addFromInviteLink: ChatGroupAccessRequired } | null
 }
+
+/** Who may do something in a group (Signal's `AccessControl.AccessRequired`). */
+export type ChatGroupAccessRequired = 'any' | 'member' | 'administrator' | 'unsatisfiable'
 
 /** A member of a pairwise group, as this device checked them. */
 export interface ChatGroupMember {

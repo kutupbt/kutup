@@ -427,6 +427,16 @@ protocol state for new messages. The UI reports missing, invalid, offline, or
 quota-blocked backup state explicitly. Automated manual-fixture setup must not
 publish disposable headless devices unless it retains or revokes them.
 
+**Gap: contact states after total device loss.** Accepting and blocking
+someone reach the account's other devices only (contact controls over Note to
+Self). The history backup doesn't carry them, so a browser restored after
+every device was lost knows no accepted contacts: both people accept each
+other again, and a block is gone. Signal keeps these in its storage service;
+the fix is an account-synced, sealed contact list (an account-head scope, as
+the Chat group list), to be designed (`docs/plans/chat-contacts-sync.md`).
+Restoring "accepted" from history alone is not done, because it would undo
+blocks.
+
 #### Phase 6 attachment storage and download decision
 
 The normative protocol and threat model are
@@ -634,6 +644,13 @@ arrival, and direct sending. Phases, each with its own plan before code:
   Cloudflare (checklist in `self-hosting.md`; for kutup.dev the website
   Worker must also pass WKD through) and the manual Proton check
   (`test/mail-proton.md`).
+- **Mail post-quantum (blocked on rPGP).** PQ by default with Proton's v6
+  key shape is decided ([`plans/mail-pq-openpgp.md`](plans/mail-pq-openpgp.md)),
+  but rPGP 0.21's `pqc` pins `ml-kem` 0.2.1 (doesn't build beside our `kem` 0.3)
+  and `ml-dsa` 0.0.4 (RUSTSEC-2025-0144). Decided 2026-10-19: wait for an rPGP
+  release on `ml-kem` 0.3 and `ml-dsa` 0.1.x with `cargo deny` clean; no
+  upstream PR or fork from us. End-to-end forwarding can be built on v4
+  independently; not scheduled.
 - **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
   reminders. Replaces Chat meetings' `.ics` download.
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed

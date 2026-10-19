@@ -28,9 +28,15 @@ struct Vectors {
     revision: u64,
     plain: String,
     nonce: String,
-    /// The sealed entry is 4032 bytes: its header, then a digest of the whole.
+    /// The derived keys and the AAD, so a second implementation can find
+    /// where it parts from this one.
+    id_key: String,
+    seal_key: String,
+    aad: String,
+    /// The sealed entry (4032 bytes): its header, a digest, and in full.
     sealed_header: String,
     sealed_sha256: String,
+    sealed: String,
 }
 
 fn sealed() -> Vec<u8> {
@@ -55,16 +61,25 @@ fn computed() -> Vectors {
         .unwrap()
         .group_id();
     let sealed = sealed();
+    let entry_id = key.entry_id(&group_id);
+    let (id_key, seal_key) = key.vector_keys();
     Vectors {
         account_master_key: STANDARD.encode(master),
         key_binding: "6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607".into(),
         group_id: URL_SAFE_NO_PAD.encode(group_id),
-        entry_id: chat_group_list::encode_entry_id(&key.entry_id(&group_id)),
+        entry_id: chat_group_list::encode_entry_id(&entry_id),
         revision: 5,
         plain: STANDARD.encode(br#"{"version":1,"groupId":"example"}"#),
         nonce: STANDARD.encode([0x33u8; 24]),
+        id_key: STANDARD.encode(id_key),
+        seal_key: STANDARD.encode(seal_key),
+        aad: STANDARD.encode(
+            chat_group_list::vector_aad(5, "6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607", &entry_id)
+                .unwrap(),
+        ),
         sealed_header: STANDARD.encode(&sealed[..42]),
         sealed_sha256: hex::encode(Sha256::digest(&sealed)),
+        sealed: STANDARD.encode(&sealed),
     }
 }
 

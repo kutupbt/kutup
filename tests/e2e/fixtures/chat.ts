@@ -272,9 +272,26 @@ export async function createGroup(page: Page, members: string | string[], name =
     const shown = member.split('@')[0]
     await dialog.getByRole('checkbox', { name: new RegExp(escapeRegExp(shown)) }).click()
   }
+  // The new group's own address: not the group open before, if any.
+  const before = page.url()
   await dialog.getByTestId('chat-group-create-submit').click()
-  await page.waitForURL((url) => decodeURIComponent(url.pathname).includes('/c/group:'), { timeout: 90_000 })
+  await page.waitForURL((url) => decodeURIComponent(url.pathname).includes('/c/group:') && url.href !== before, { timeout: 90_000 })
   return decodeURIComponent(new URL(page.url()).pathname).split('/c/group:')[1]
+}
+
+/**
+ * Removes `username` from the group whose details are open, confirming the
+ * question first (a removal is asked before it is done).
+ */
+export async function removeGroupMember(page: Page, username: string): Promise<void> {
+  await page
+    .getByTestId('chat-group-members')
+    .getByRole('button', { name: new RegExp(`^Remove ${escapeRegExp(username)}`) })
+    .click()
+  const confirm = page.getByTestId('chat-group-member-confirm')
+  await expect(confirm).toContainText('from the group?')
+  await confirm.getByTestId('chat-group-member-confirm-action').click()
+  await expect(confirm).toBeHidden()
 }
 
 /** Joins a group from its invitation and opens it. */

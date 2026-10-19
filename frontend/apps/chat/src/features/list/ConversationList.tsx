@@ -252,7 +252,7 @@ function ConversationRow({
             <span className="min-w-0 flex-1">
               <span className="flex items-baseline gap-1.5">
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-                  {title}
+                  <bdi>{title}</bdi>
                   {muted ? (
                     <BellOff className="ml-1 inline size-3.5 align-[-2px] text-muted-foreground" aria-label={t('chat.list.muted')} />
                   ) : null}

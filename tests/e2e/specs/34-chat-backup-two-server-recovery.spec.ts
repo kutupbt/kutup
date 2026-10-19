@@ -315,6 +315,13 @@ test.describe('two-server continuous backup recovery', () => {
     const directAfterRestore = `direct-after-restore-${tag}`
     await say(restoredA, directAfterRestore)
     await arrives(restoredB, directAfterRestore)
+    // Contact states (accepted, blocked) don't come back with the history
+    // yet (docs/roadmap.md): after losing every browser, the two accept each
+    // other again, as people do today, before one invites the other.
+    await acceptRequest(restoredB)
+    const answerAfterRestore = `answer-after-restore-${tag}`
+    await say(restoredB, answerAfterRestore)
+    await arrives(restoredA, answerAfterRestore)
 
     const freshConversationId = await createGroup(restoredA, bob.username)
     await acceptGroup(restoredB, freshConversationId)

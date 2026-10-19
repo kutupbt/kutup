@@ -8,7 +8,9 @@ import {
   message,
   openChat,
   openDetails,
+  openConversationWith,
   openGroup,
+  removeGroupMember,
   send,
 } from '../fixtures/chat'
 
@@ -67,10 +69,7 @@ test.describe('groups across two servers', () => {
     // catches up; his next message doesn't go to Carol, and Carol's later
     // one isn't taken by him.
     await openDetails(pageA)
-    await pageA
-      .getByTestId('chat-group-members')
-      .getByRole('button', { name: new RegExp(`^Remove ${carol.username}`) })
-      .click()
+    await removeGroupMember(pageA, carol.username)
     await expect(pageA.getByTestId('chat-group-members')).toContainText('2 members', { timeout: 60_000 })
     await closeDetails(pageA)
     const afterRemoval = `fed-group-after-removal-${tag}`
@@ -84,8 +83,23 @@ test.describe('groups across two servers', () => {
     await pageB.reload()
     await openGroup(pageB, groupId)
     await expect(message(pageB, bobAfter)).toBeVisible({ timeout: 90_000 })
+    // Absence is checked only once something sent later has arrived: a
+    // direct message from Alice, sent after both, reaches each of them first.
+    const probeB = `fed-group-probe-bob-${tag}`
+    const probeC = `fed-group-probe-carol-${tag}`
+    await openConversationWith(pageA, bob.username)
+    await send(pageA, probeB)
+    await openConversationWith(pageA, carol.username)
+    await send(pageA, probeC)
+    await openConversationWith(pageB, alice.username)
+    await expect(message(pageB, probeB)).toBeVisible({ timeout: 90_000 })
+    await openConversationWith(pageC, alice.username)
+    await expect(message(pageC, probeC)).toBeVisible({ timeout: 90_000 })
+    await openGroup(pageB, groupId)
     await expect(message(pageB, carolLate)).toHaveCount(0)
+    await openGroup(pageC, groupId)
     await expect(message(pageC, bobAfter)).toHaveCount(0)
+    await openGroup(pageA, groupId)
 
     // A new name reaches the remote member.
     await openDetails(pageA)

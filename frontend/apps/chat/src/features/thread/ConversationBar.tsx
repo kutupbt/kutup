@@ -7,7 +7,17 @@ import { Button } from '@kutup/ui/components/button'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
 import { personName } from '../../lib/names'
+import { accountName } from '../../state/accountNames'
 import type { ConversationModel } from './useConversationModel'
+
+/**
+ * Text someone else chose (a stranger's name, a group's title), set inside a
+ * sentence as its own direction-isolated run (U+2068 … U+2069), so its
+ * bidirectional controls can't reorder the words around it.
+ */
+function isolate(text: string): string {
+  return `\u2068${text}\u2069`
+}
 
 /**
  * What stands where the composer would when nothing can be written, as in
@@ -31,9 +41,16 @@ export function ConversationBar({ model }: { model: ConversationModel }) {
         const joined = await service.acceptChatGroupInvite(groupId)
         if (joined.kind === 'unreachable') toast.error(t('chat.chatGroup.unreachable'))
         else if (joined.kind !== 'current' && joined.kind !== 'partial') toast.error(t('chat.chatGroup.invitationGone'))
+      } else if (action === 'block' && model.groupInviter) {
+        // Blocked first, so nothing more from them lands meanwhile; then
+        // every invitation of theirs goes, not just this one.
+        const inviter = model.groupInviter
+        await service.blockContact(inviter)
+        const theirs = snapshot.chatGroups.filter((group) => group.status === 'invited' && group.inviter === inviter)
+        for (const group of theirs) await service.declineChatGroupInvite(group.groupId)
+        if (!theirs.some((group) => group.groupId === groupId)) await service.declineChatGroupInvite(groupId)
       } else {
         await service.declineChatGroupInvite(groupId)
-        if (action === 'block' && model.groupInviter) await service.blockContact(model.groupInviter)
       }
       await refreshChat()
       if (action !== 'join') void navigate('/')
@@ -86,11 +103,19 @@ export function ConversationBar({ model }: { model: ConversationModel }) {
     case 'invitation': {
       const profiles = new Map(snapshot.profiles.map((profile) => [profile.peer, profile]))
       const inviter = model.groupInviter ? personName(model.groupInviter, profiles, self?.key ?? '', t) : t('chat.someone')
+      // Someone who isn't a contact is shown by the address their name
+      // could imitate, too.
+      const address = model.groupInviteRequest && model.groupInviter ? accountName(model.groupInviter) : null
       return (
         <div className={frame} data-testid="chat-group-invitation">
           <p className="text-center text-sm">
-            <span className="font-semibold">{t('chat.chatGroup.invited', { name: inviter, group: model.title })}</span>
+            <span className="font-semibold">{t('chat.chatGroup.invited', { name: isolate(inviter), group: isolate(model.title) })}</span>
           </p>
+          {address && address !== inviter ? (
+            <p className="text-center text-xs text-muted-foreground" dir="auto" data-testid="chat-group-inviter-address">
+              {address}
+            </p>
+          ) : null}
           <p className="mt-1 text-center text-xs text-muted-foreground">
             {t(model.groupInviteRequest ? 'chat.chatGroup.invitedRequest' : 'chat.chatGroup.invitedDescription')}
           </p>

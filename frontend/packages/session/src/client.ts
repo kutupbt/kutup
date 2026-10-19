@@ -1,4 +1,5 @@
-import axios from 'axios'
+import axios, { type InternalAxiosRequestConfig } from 'axios'
+import { exactBytes } from '@kutup/crypto/bytes'
 import { broadcastLogout } from './sessionSync'
 import { resolveApiBase } from './apiBase'
 import { clearPersisted } from './persistedStore'
@@ -111,6 +112,20 @@ export async function refreshOrEnd(): Promise<string> {
 const api = axios.create({
   withCredentials: true,
 })
+
+/**
+ * A typed-array or DataView body goes as exactly its own bytes. Left to
+ * itself axios sends a view's whole backing buffer, which for a view that
+ * WASM handed back is the module's whole memory (`@kutup/crypto/bytes`).
+ * On this client and on the default instance (anonymous and raw calls).
+ */
+export function exactBody<T extends Pick<InternalAxiosRequestConfig, 'data'>>(config: T): T {
+  if (ArrayBuffer.isView(config.data)) config.data = exactBytes(config.data)
+  return config
+}
+
+api.interceptors.request.use(exactBody)
+axios.interceptors.request.use(exactBody)
 
 // Attach access token + resolve base URL on every request.
 api.interceptors.request.use(async (config) => {

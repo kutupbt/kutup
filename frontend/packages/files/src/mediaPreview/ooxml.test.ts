@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { strToU8, zipSync } from 'fflate'
+import { exactBytes } from '@kutup/crypto/bytes'
 import { describe, expect, it } from 'vitest'
 import { inspectOoxmlContainerV1 } from './ooxml'
 
 function officeFile(entries: Record<string, Uint8Array>): File {
-  return new File([zipSync(entries).slice().buffer], 'fixture.zip', { type: 'application/zip' })
+  return new File([exactBytes(zipSync(entries))], 'fixture.zip', { type: 'application/zip' })
 }
 
 describe('bounded OOXML container inspection', () => {
@@ -64,7 +65,7 @@ describe('bounded OOXML container inspection', () => {
       'ppt/presentation.xml': strToU8('<presentation/>'),
     })
     await expect(inspectOoxmlContainerV1(new Blob([
-      valid.subarray(0, valid.length - 4).slice().buffer,
+      exactBytes(valid.subarray(0, valid.length - 4)),
     ])))
       .resolves.toBeNull()
   })

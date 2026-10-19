@@ -344,7 +344,7 @@ export function ConversationView({
         >
           <Avatar name={model.title} image={model.group?.currentGroupInfo?.avatar?.data ?? model.profile?.avatar} contentType={model.group?.currentGroupInfo?.avatar?.contentType ?? model.profile?.avatarContentType} group={conversation.kind === 'group'} size={32} />
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold">{model.title}</span>
+            <span className="block truncate text-sm font-semibold" dir="auto">{model.title}</span>
             {subtitle ? (
               <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
                 {model.timerSeconds !== undefined && !model.note ? <Timer className="size-3 shrink-0" aria-hidden /> : null}

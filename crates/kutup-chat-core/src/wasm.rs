@@ -1030,6 +1030,9 @@ struct GroupSummaryView {
     fork_suspected: bool,
     /// When this device first learned of the group (ms).
     known_since_ms: Option<i64>,
+    /// Who may rename it (`attributes`) and add members (`members`):
+    /// `any`, `member`, `administrator` or `unsatisfiable`.
+    access: Option<kutup_chat_proto::group::GroupAccessV1>,
 }
 
 impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
@@ -1052,6 +1055,7 @@ impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
             },
             fork_suspected: summary.fork_suspected,
             known_since_ms: summary.known_since_ms,
+            access: summary.access,
         }
     }
 }

@@ -550,9 +550,18 @@
       "noContacts": "Davet edilecek kişi yok. Gruplara zaten yazıştığınız kişiler davet edilir.",
       "contacts": "Kişiler",
       "titleNotSet": "Grup oluşturuldu ama adı ayarlanamadı. Ayrıntılarından yeniden adlandırın.",
-      "newDescription": "Uçtan uca şifreli bir grup. Mesajlarını, adını ve üye listesini yalnızca üyeleri okuyabilir; sunucusu ne kimlerin üye olduğunu ne de konuşulanları görür.",
+      "newDescription": "Uçtan uca şifreli bir grup. Mesajlarını, adını ve üye listesini yalnızca üyeleri okuyabilir. Sunucusu mesajları okuyamaz ve kimlerin grupta olduğunu öğrenmez; yalnızca aynı sunucuyu kullanan üyeleri bilir.",
       "chooseMembers": "Kişileri davet et",
-      "invitationPreview": "Grup daveti"
+      "invitationPreview": "Grup daveti",
+      "renameDescription": "Grubun adını yalnızca üyeleri görebilir.",
+      "membersFailed": "Üyeler yüklenemedi. Daha sonra yeniden deneyin.",
+      "removeTitle": "{{name}} gruptan çıkarılsın mı?",
+      "removeBody": "Artık grubun mesajlarını almayacak. Onu daha sonra yeniden davet edebilirsiniz.",
+      "removeConfirm": "Çıkar",
+      "demoteTitle": "{{name}} yöneticilikten çıkarılsın mı?",
+      "demoteBody": "Artık üye ekleyip çıkaramayacak ve yöneticileri değiştiremeyecek.",
+      "demoteConfirm": "Yöneticilikten çıkar",
+      "noVerifiedSuccessor": "Henüz doğrulanmış başka üye yok, bu yüzden kimse yönetici yapılamıyor. Üyelikleri doğrulandıktan sonra yeniden deneyin."
     },
     "groupInvitations": {
       "title_one": "{{count}} grup daveti",
