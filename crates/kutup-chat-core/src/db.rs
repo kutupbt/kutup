@@ -696,6 +696,9 @@ impl Pending {
 /// The durable client store. Methods are async and implementors may be `!Send`
 /// (the engine drives one session on one thread). Object-safe by design — the
 /// engine holds an `Rc<dyn ChatDb>`.
+// `async_trait` marks each method's boxed future `#[must_use]` without a
+// message, which clippy reads as a second `must_use` on a `Result`.
+#[allow(clippy::double_must_use)]
 #[async_trait(?Send)]
 pub trait ChatDb {
     /// The installed device's identity, or `None` on a fresh store.

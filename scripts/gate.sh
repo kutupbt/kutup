@@ -46,13 +46,12 @@ static() {
     cargo fmt --manifest-path "$crate/Cargo.toml" -- --check
   done
   cargo fmt --manifest-path fuzz/Cargo.toml -- --check
-  step "Clippy (workspace)"
+  step "Clippy (workspace, standalone crates)"
   cargo clippy --locked --workspace --all-targets -- -D warnings
+  for crate in "${standalone_crates[@]}"; do
+    cargo clippy --locked --manifest-path "$crate/Cargo.toml" --all-targets -- -D warnings
+  done
   deny
-  # TODO(after the clean-slate release): clippy -D warnings for the
-  # standalone crates too. Chat core has 76 findings and the FFI one, never
-  # checked before; they are fixed once the Chat wire changes have landed,
-  # to keep that churn out of the same release.
 }
 
 # Advisories, licences, sources and bans for every Cargo root, by the one
@@ -102,6 +101,10 @@ web() {
     || { echo "gate: web needs Node 22.18 or newer (this is $(node -v))" >&2; return 2; }
   step "Frontend dependencies"
   pnpm -C frontend install --frozen-lockfile
+  # Chat core's browser build compiles code the host clippy run never sees.
+  step "Clippy (Chat core, WASM)"
+  cargo clippy --locked --manifest-path crates/kutup-chat-core/Cargo.toml --lib \
+    --target wasm32-unknown-unknown --no-default-features --features wasm -- -D warnings
   step "WASM modules"
   pnpm -C frontend run build:wasm
   step "Type check and lint"

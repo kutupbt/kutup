@@ -581,8 +581,7 @@ pub(super) fn parse_device_credential_identity(identity: &str) -> Result<(String
     let device_id: u32 = device_id
         .parse()
         .map_err(|_| ChatError::Trust("MLS credential device id is invalid".into()))?;
-    if !(1..=127).contains(&device_id) || format!("{}#{device_id}", address.to_string()) != identity
-    {
+    if !(1..=127).contains(&device_id) || format!("{address}#{device_id}") != identity {
         return Err(ChatError::Trust(
             "MLS credential identity is not canonical".into(),
         ));

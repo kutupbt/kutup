@@ -2938,7 +2938,7 @@ fn group_invite_after_a_declined_one_from_the_same_person_is_taken() {
         let group_id = block_on(alice.engine.create_group(title)).unwrap().group_id;
         let sent = block_on(alice.engine.invite_to_group(
             &group_id,
-            &[bob_account.clone()],
+            std::slice::from_ref(&bob_account),
             &mut rng(),
         ))
         .unwrap();
@@ -2976,7 +2976,7 @@ fn group_invite_from_a_stranger_after_a_declined_one_is_taken() {
         let group_id = block_on(alice.engine.create_group(title)).unwrap().group_id;
         let sent = block_on(alice.engine.invite_to_group(
             &group_id,
-            &[bob_account.clone()],
+            std::slice::from_ref(&bob_account),
             &mut rng(),
         ))
         .unwrap();
