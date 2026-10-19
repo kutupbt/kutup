@@ -1,8 +1,9 @@
 # Chat contacts that survive device loss
 
-Status: draft for review (2026-10-19). Third session (client and chat-core).
-The server half reuses the group list's routes, so it's small; the second
-session owns it. No code before the main session's review and the user's go.
+Status: second draft (2026-10-19), after the main session's review of the
+first. Third session (client and chat-core). The server half reuses the group
+list's routes; the second session owns it. The user's answers on the open
+choices are pending. No code before the main session's review and the user's go.
 
 - Gap: [`roadmap.md`](../roadmap.md), "contact states after total device
   loss"; found by spec 34 on #247.
@@ -24,8 +25,8 @@ So when every device is lost and a clean browser signs in:
   stays pending;
 - groups offer no one to invite (only contacts can be invited);
 - **a block is gone**: someone the account blocked can write to it again;
-- the contacts' profile keys are gone, so their names and avatars are missing
-  until each one writes again.
+- the contacts' profile keys are gone, so names and avatars are missing until
+  each one writes again.
 
 Accepting everyone found in the restored history isn't a fix: it would undo
 blocks too.
@@ -37,61 +38,120 @@ Signal keeps this in the storage service, one encrypted record per contact
 carries, among others:
 - `whitelisted` (profile sharing: the person is accepted);
 - `blocked`, and since when;
-- `profileKey` and `identityKey`, with `identityState` (verified or not);
-- `archived`, `markedUnread`, `mutedUntilTimestamp`, `hidden`.
+- `profileKey` and `identityKey`, with `identityState`;
+- `archived`, `markedUnread`, `mutedUntilTimestamp`, `hidden`, `nickname`,
+  `note`.
 
-Records are written about half a second after a change (`runStorageServiceUploadJob`,
-a 500 ms debounce). Each record gets a new random id on every change, and a
-sealed manifest lists the current ids, so the server can't link one version of
-a record to the next.
+Records are uploaded half a second after a change (`runStorageServiceUploadJob`,
+a 500 ms debounce). A changed record gets a new random storage id, but the same
+write deletes the old id and inserts the new one
+(`storage.preload.ts`, around lines 242–262), so the server sees which record
+replaced which. The rotating ids exist for manifest diffing and per-record
+keys, not to hide linkage.
 
 ## What Kutup does
 
 ### The list
 
-The account head gets one more scope, `chatContacts`, built exactly like
-`chatGroups`:
+The account head gets one more scope, `chatContacts`. It is not the address
+book's contacts (the Contacts app's own scope). It is built like `chatGroups`:
 - **Keys** from the account master key: HKDF-SHA256 with salt
   `kutup/chat-contact-list/v1\0`, infos `kutup/chat-contact-list/id-key/v1\0`
-  and `kutup/chat-contact-list/seal-key/v1\0`. They are separate from the
-  group list's keys.
+  and `kutup/chat-contact-list/seal-key/v1\0`, separate from the group list's.
 - **Entry id**: `HMAC-SHA256(id key, "kutup/chat-contact-list/id/v1\0" ‖
-  the contact's account, canonical form)`, base64url without padding.
+  AccountRef::bytes())`, exactly those bytes, base64url without padding.
 - **Sealed entry**: the group list's layout with its own magic
-  (`"KUTPCL1\0"`), suite 1, the revision in the authenticated header, and
-  the AAD binding the account's key binding and the entry id. Every entry is
-  one fixed size.
-- **Routes**: `GET/PUT/DELETE /api/chat/contact-list[/{id}]`, the same bodies
-  and codes as the group list, listed by the account head.
+  (`"KUTPCL1\0"`), suite 1, the write revision in the authenticated header,
+  and the AAD binding the account's key binding and the entry id.
+- **Size**: every sealed entry is exactly **2048 bytes**, padded as the group
+  list's are.
+- **Routes**: `GET/PUT/DELETE /api/chat/contact-list[/{id}]`, with the group
+  list's bodies and codes, listed by the account head. They answer wherever
+  Chat is on, not only with `CHAT_GROUPS`.
 
 ### An entry, `ChatContactEntryV1`
 
-- `account`: the contact (`AccountRef`), never an address.
-- `state`: `accepted`, `pendingOutgoing`, `rejected` or `blocked`.
-  `pendingIncoming` is never written: a request someone else sent belongs to
-  their messages, not to this account's choices.
-- `previousState`: the state an unblock returns to, as now.
-- `blockedAtMs` when blocked.
-- `profileKey`: the contact's profile key as last received, so a new device
-  shows their name and reaches them sealed at once (Signal's `profileKey`).
-- `revision`, `sourceDeviceId` and `updatedAtMs`: the contact control's own
-  fields, so the merge rule below is the one devices already use.
+Fields and their budget (canonical JSON, before padding):
+
+| Field | What | Bytes |
+| --- | --- | --- |
+| `version` | 1 | ~15 |
+| `account` | the contact's `AccountRef` (server, account id) | ~120 |
+| `state` | `accepted`, `pendingOutgoing`, `rejected` or `blocked` | ~30 |
+| `previousState` | what an unblock returns to | ~35 |
+| `blockedAtMs` | when blocked | ~30 |
+| `profileKey` | the contact's profile key, base64 | ~60 |
+| `control` | `{revision, sourceDeviceId, updatedAtMs}`, see below | ~80 |
+| keys and punctuation | | ~100 |
+
+That is about 500 bytes. 2048 leaves room for Signal's later fields (a
+nickname, a note, mute and archive), each a few hundred bytes at most.
+
+A device keeps the fields it doesn't know and writes them back as they were.
+The plaintext type has no `deny_unknown_fields`: unknown fields are kept in
+a flattened map and re-serialized canonically.
+
+`pendingIncoming` is never written: a request someone else sent belongs to
+their messages, not to this account's choices.
 
 Not here:
-- identity pins: they already live in the account's sealed pin list
-  ([`drive-identity-pins.md`](drive-identity-pins.md)), shared with Drive;
-- mute, archive, read state: device-local today, a separate decision.
+- **Identity and verified state.** They already live in the account's sealed
+  pin list ([`drive-identity-pins.md`](drive-identity-pins.md)), as
+  `seen|verified`, shared with Drive. Not duplicated here; the pin list is
+  read before the mailbox too (see Reading).
+- **Mute, archive, read state.** Device-local today; a separate decision.
 
-### Writing
+### Two revisions
 
-A device writes a contact's entry after each explicit transition (accept,
-reject, block, unblock, and a sent request) and after a new profile key from
-an accepted contact.
+They are two different things:
+- **The write revision**, in the sealed header. Per entry, it rises by one on
+  every write; it is what the server compares (`baseRevision`) and what the
+  account head lists.
+- **The control order**, `control` inside the plaintext. It is the contact
+  control's `(revision, sourceDeviceId)`, which devices already use to agree.
 
-Signal writes within half a second. Kutup doesn't, for the same reason as the
-group list: two accounts on the same server accepting each other write
-entries at nearly the same moment, and the server would learn they are
-contacts. Sealed sender hides exactly that. So, as for groups:
+A write is refused with 409 when another device wrote first. The device then
+reads the entry, merges by the control order, and writes the result at the
+stored write revision + 1. A change that leaves the control order as it was
+(a new profile key; an implicit contact at control revision 0) is still a new
+write revision.
+
+### Merging: one order, blocks winning ties
+
+One function orders contact states, and both the Note-to-Self contact control
+and the list use it:
+
+`order = (control.revision, state == blocked, control.sourceDeviceId)`
+
+The higher order wins. At an equal revision a block wins, whatever device
+wrote the other. An older accept never undoes a block.
+
+### What is written
+
+**Explicit transitions**, as now (accept, reject, block, unblock, a sent
+request): the entry is written.
+
+**Implicit transitions** are written too, with the same delay:
+- `PendingOutgoing → Accepted` when the person replies
+  (`stage_incoming_contact`). Without it, an accepted request would restore
+  as pending forever.
+- A contact first met through this account's own sent transcript
+  (`stage_transcript_contact`, `sourceDeviceId` 0, revision 0), and its moves
+  from `Rejected` or `PendingIncoming`.
+- `Rejected → PendingIncoming` (the rejected person writes again) is **not**
+  written: the entry keeps `rejected`, the account's last choice. A restored
+  device shows their new message as a request again, as every device does
+  today.
+
+**Profile-key-only changes** (a contact's new key, as after a block rotates
+it, `engine.rs` around 748) are written lazily: with the next write already
+due, or after a long random delay (up to an hour).
+
+### When it is written
+
+Two accounts on the same server that accept each other would write entries at
+nearly the same moment, and the server would learn they are contacts. Sealed
+sender hides exactly that. So, as for the group list:
 - each write waits a random 0–10 minutes, and writes due together go
   together;
 - what is due is kept with the contact, so it survives a reload;
@@ -99,56 +159,92 @@ contacts. Sealed sender hides exactly that. So, as for groups:
 - the device-to-device contact control stays as it is, so the account's own
   devices still agree within seconds.
 
-A block is the one exception to the delay. A blocked person must stay blocked
-if the device is lost a minute later, so a block is written at once. It
-leaks less: blocking is one-sided, so nothing on the other side lines up with
-it.
+**A block is written at once.** A blocked person must stay blocked if the
+device is lost a minute later. It leaks less: blocking is one-sided, so
+nothing on the other side lines up with it.
+
+**The pin list follows the same rule.** Today `identity_sync::record` writes
+the pin list at once on first contact, with a millisecond timestamp as its
+revision. That alone lines up two accounts meeting each other, and undoes the
+delay above (it weakens the group list's reasoning in the same way). Pin
+writes are delayed and batched the same way; verifying someone in person
+stays immediate, since it is one-sided.
+
+**Said honestly:** the delay is weaker on a small server. With few accounts
+active, two writes ten minutes apart can still line up. The delay raises the
+cost of the correlation; it does not remove it.
 
 ### Reading
 
-A device reads the list:
-- when Chat starts on a device with no contacts (a clean browser), before it
-  processes its mailbox, so nothing from a blocked person is shown first;
-- every few minutes while it runs, and after a write was refused (409).
+On a clean device (no contacts, no highest-seen account head):
+1. read the pin list and the contact list (`check_index` against the account
+   head);
+2. apply the contacts;
+3. only then drain the mailbox and process transcripts. The mailbox is
+   **held** until the list has been read, so nothing from a blocked person is
+   taken first.
 
-It merges each entry with the local record by the contact control's rule:
-the higher `(revision, sourceDeviceId)` wins. A block is never lost to an
-older accept.
+`bootstrap_contacts` goes. It marks every peer in the device's own message
+tables as Accepted at revision 0, which would run before the list and accept
+blocked people. It was an upgrade path from before contact states existed,
+and pre-v1 needs no such shim. The web history restore writes to the
+backup's display records, not to chat-core's message tables, so nothing else
+reads restored history as contacts.
+
+A running device reads the list every few minutes, and after a 409.
+
+**Rollback limits.** The list is trust-on-first-use for a clean device: with
+no highest-seen account head, it takes the head the server presents. From the
+first read on, the account head stops the server from serving an older list
+(as for the pin list and the group list).
+
+### Size and deletion
+
+At most **10,000** entries, as the pin list (`MAX_PINS`). Beyond that, the
+oldest `rejected` entries go first, then the oldest `pendingOutgoing`. A
+`blocked` entry is never evicted. Deletion happens only on eviction, and is
+delayed like a write.
 
 ### The server
 
-It is the group list's server half with a second scope and its own routes,
+The group list's server half with a second scope and its own routes,
 following the main session's review of #252:
-- the server reads the revision from the header;
-- it refuses any size but the one;
+- the server reads the write revision from the header;
+- it refuses any size but 2048;
 - writes are listed by the account head;
 - account reset clears it.
 
-## Choices for the review
+## Choices for the user
 
-1. **Entry ids.**
-   - Stable HMAC ids, as the group list has (proposed): the server sees which
-     entry changed, never whose it is.
-   - Signal's random id per version, with a sealed manifest: the server
-     can't link versions either, but it needs a manifest object and its own
-     conflict rule. If the review wants that, the group list should move with
-     it.
+The main session is relaying the user's answers:
+1. **Entry ids**: stable HMAC ids (proposed), or a random id per version.
+   Given the correction above, random ids don't hide linkage on Kutup either;
+   stable ids keep the conflict rule simple.
 2. **Profile keys in the entry** (proposed: yes, as Signal). Without them, a
    restored device shows contacts by address only, and can't send them a
    sealed message until they write first.
-3. **The immediate write for a block** (proposed: yes).
+3. **Writing a block at once** (proposed: yes).
 4. **Rollout.** Every existing device uploads its contacts once, at random
    moments over the first hour after the update. kutup.dev's accounts keep
-   their contacts with no wipe.
+   their contacts, with no wipe.
 
 ## Tests
 
-- Vectors for the keys, the id and a sealed entry (`chat-contact-list-v1.json`).
+- Vectors: the keys, an id from `AccountRef::bytes()`, a sealed 2048-byte
+  entry (`chat-contact-list-v1.json`).
 - Harness:
   - a device that lost everything restores accepts and blocks;
-  - a stranger's request stays a request;
-  - a blocked person's message is dropped before the list is read;
-  - concurrent transitions on two devices merge by revision.
+  - an accepted outgoing request restores as accepted (the implicit write);
+  - the mailbox is held until the list is read, so a blocked person's
+    message is never taken;
+  - a block wins a tie with an accept at the same control revision, in the
+    list and in the contact control;
+  - a 409 merges and writes at the stored revision + 1;
+  - a profile-key-only change is written without moving the control order;
+  - unknown fields survive a rewrite;
+  - a block, keyed by the account id, holds after the blocked person resets
+    their account (a new incarnation of the same account);
+  - eviction never drops a block.
 - Browser: spec 34's restored pair is mutual contacts again with no
   re-accept, and a block made before the loss holds after it.
 
@@ -156,6 +252,12 @@ following the main session's review of #252:
 
 1. kutup-crypto `chat_contact_list` with vectors (third session).
 2. The server scope and routes (second session).
-3. chat-core: entries, the merge, the read before the mailbox, writes with
-   their delay, and the flush at sign-out; WASM and TypeScript transport.
+3. chat-core:
+   - the one order function, used by the contact control too;
+   - entries, implicit writes and their delay;
+   - delayed pin writes;
+   - the held mailbox and the read before it;
+   - removing `bootstrap_contacts`;
+   - the flush at sign-out;
+   - the WASM and TypeScript transport.
 4. Spec 34 without its re-accept step; the roadmap gap closes.
