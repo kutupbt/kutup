@@ -676,12 +676,13 @@ impl Engine {
         if waiting.len() >= MAX_INVITATIONS_PER_SENDER {
             return Ok(GroupContentOutcome::Ignored);
         }
-        let record = match group::record_from_invite(invite, sender, previous.as_ref()) {
+        let mut record = match group::record_from_invite(invite, sender, previous.as_ref()) {
             Ok(record) => record,
             // A stale invitation for a membership that ended: dropped.
             Err(_) if previous.is_some() => return Ok(GroupContentOutcome::Ignored),
             Err(error) => return Err(group_error(error)),
         };
+        record.known_since_ms = Some(crate::clock::unix_millis());
         self.save_group(&record).await?;
         let request = !self.session.contact(sender).await?.is_some_and(|contact| {
             matches!(

@@ -107,7 +107,7 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                 <NotebookPen />
                 {t('chat.noteToSelf')}
               </Button>
-              {chat.capabilities?.mlsGroups ? (
+              {chat.capabilities?.pairwiseGroups ? (
                 <Button
                   type="button"
                   variant="ghost"

@@ -58,40 +58,49 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<bool> {
-        let bundles: Vec<_> = self
-            .sealed_bundles_for_send(account, capability)
-            .await?
-            .into_iter()
-            .filter(|bundle| device_id.is_none_or(|device_id| bundle.device_id == device_id))
-            .collect();
-        if bundles.is_empty() {
-            return Err(ChatError::Invalid(
-                "the device isn't the account's now".into(),
-            ));
-        }
-        let certificate = self.issue_verified_sender_certificate().await?;
-        let sealed = self
-            .session
-            .seal_pairwise(account, &bundles, &certificate, content, rng)
-            .await?;
-        let envelopes = self.sealed_envelopes(sealed);
-        let request = SealedMessageSubmissionV1 {
-            send_id: uuid::Uuid::new_v4().to_string(),
-            capability: STANDARD.encode(capability),
-            envelopes,
-        };
-        request.validate().map_err(ChatError::Invalid)?;
-        match Rc::clone(&self.transport)
-            .send_sealed(account, &request)
-            .await?
-        {
-            SendOutcome::Delivered { .. } => Ok(true),
-            SendOutcome::Refused => Ok(false),
-            SendOutcome::Mismatch(_) => {
-                self.known_devices.remove(account);
-                Err(ChatError::Transport("the account's devices changed".into()))
+        // The account's devices changed since they were read (one was linked
+        // just now): read them again and send once more, as a direct send
+        // does. To one named device, a mismatch means it is gone.
+        let attempts = if device_id.is_none() { 2 } else { 1 };
+        for attempt in 1..=attempts {
+            let bundles: Vec<_> = self
+                .sealed_bundles_for_send(account, capability)
+                .await?
+                .into_iter()
+                .filter(|bundle| device_id.is_none_or(|device_id| bundle.device_id == device_id))
+                .collect();
+            if bundles.is_empty() {
+                return Err(ChatError::Invalid(
+                    "the device isn't the account's now".into(),
+                ));
+            }
+            let certificate = self.issue_verified_sender_certificate().await?;
+            let sealed = self
+                .session
+                .seal_pairwise(account, &bundles, &certificate, content, rng)
+                .await?;
+            let envelopes = self.sealed_envelopes(sealed);
+            let request = SealedMessageSubmissionV1 {
+                send_id: uuid::Uuid::new_v4().to_string(),
+                capability: STANDARD.encode(capability),
+                envelopes,
+            };
+            request.validate().map_err(ChatError::Invalid)?;
+            match Rc::clone(&self.transport)
+                .send_sealed(account, &request)
+                .await?
+            {
+                SendOutcome::Delivered { .. } => return Ok(true),
+                SendOutcome::Refused => return Ok(false),
+                SendOutcome::Mismatch(_) => {
+                    self.known_devices.remove(account);
+                    if attempt == attempts {
+                        return Err(ChatError::Transport("the account's devices changed".into()));
+                    }
+                }
             }
         }
+        unreachable!("the last attempt returns")
     }
 
     /// Sends `content` pairwise to one member device of `group_id`, sealed

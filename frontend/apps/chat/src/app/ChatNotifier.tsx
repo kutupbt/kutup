@@ -111,8 +111,12 @@ export function ChatNotifier({ unread }: { unread: number }) {
 
   const profiles = useMemo(() => new Map(chat.snapshot.profiles.map((p) => [p.peer, p])), [chat.snapshot.profiles])
   const groupInfo = useMemo(
-    () => new Map(chat.snapshot.groups.map((group) => [group.request.genesis.conversationId, group.currentGroupInfo])),
-    [chat.snapshot.groups],
+    () =>
+      new Map<string, { name?: string | null } | null | undefined>([
+        ...chat.snapshot.groups.map((group) => [group.request.genesis.conversationId, group.currentGroupInfo] as const),
+        ...chat.snapshot.chatGroups.map((group) => [group.groupId, { name: group.title }] as const),
+      ]),
+    [chat.snapshot.groups, chat.snapshot.chatGroups],
   )
 
   function describe(notice: Notice): { title: string; body: string } {

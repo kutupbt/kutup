@@ -114,6 +114,13 @@ Left before the tag:
   (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
   routes and `chat_mls_*` tables are removed. The checklist's group-limit
   split and authority-quorum UI are obsolete with them.
+  Slice 1 (state engine, sender keys, sealed batches, basic UI) is built.
+  Still to come before groups ship, besides slices 2–5: a new device of a
+  member keeps their groups (the account head's `chatGroups` scope with each
+  group's key and pseudonym, and the member's binding signed again by the new
+  device). Until then a member who replaces their only device loses the
+  group, so `specs/38-chat-group-device-replaced.spec.ts` is out of the
+  chat-backup suite, and comes back with it.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -419,6 +426,16 @@ verified encrypted base and event tail, then establishes fresh Direct/MLS
 protocol state for new messages. The UI reports missing, invalid, offline, or
 quota-blocked backup state explicitly. Automated manual-fixture setup must not
 publish disposable headless devices unless it retains or revokes them.
+
+**Gap: contact states after total device loss.** Accepting and blocking
+someone reach the account's other devices only (contact controls over Note to
+Self). The history backup doesn't carry them, so a browser restored after
+every device was lost knows no accepted contacts: both people accept each
+other again, and a block is gone. Signal keeps these in its storage service;
+the fix is an account-synced, sealed contact list (an account-head scope, as
+the Chat group list), to be designed (`docs/plans/chat-contacts-sync.md`).
+Restoring "accepted" from history alone is not done, because it would undo
+blocks.
 
 #### Phase 6 attachment storage and download decision
 

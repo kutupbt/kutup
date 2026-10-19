@@ -1,69 +1,60 @@
 import { Loader2 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import type { AccountRef } from '@kutup/chat-core/identity'
-import { resolveTyped } from '../../lib/resolveAddress'
-import { SomeoneElseNotice } from '../contacts/SomeoneElseNotice'
-import { MLS_GROUP_NAME_MAX_CHARS } from '@kutup/chat-core/types'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
-import { groupIdOf } from '../../state/views'
+import { personName } from '../../lib/names'
+import { ContactPicker } from '../details/ChatGroupDetails'
 import { pathForConversation } from './paths'
 
+/** A title's longest (Signal's group name limit). */
+const TITLE_MAX = 32
+
 /**
- * A new private (MLS) group, started with one other member; more are added
- * from the group's details. This account becomes its administrator and owner.
+ * A new group (docs/plans/pairwise-groups.md), as Signal starts one: a name
+ * and the contacts to invite. It lives on this account's server, with this
+ * account its first administrator; the people chosen get an invitation to
+ * accept. Only contacts can be invited, as Signal adds only people whose
+ * profile it holds.
  */
 export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { service, capabilities } = useChat()
+  const { service, snapshot, self } = useChat()
   const [name, setName] = useState('')
-  const [value, setValue] = useState('')
-  const [error, setError] = useState<string | undefined>()
+  const [chosen, setChosen] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
-  /** The address typed leads to someone else than the person known there: added only on a second press. */
-  const [warned, setWarned] = useState<{ value: string; account: AccountRef; text: string } | null>(null)
+  const selfKey = self?.key ?? ''
+  const profiles = useMemo(() => new Map(snapshot.profiles.map((p) => [p.peer, p])), [snapshot.profiles])
+  const candidates = snapshot.contacts.filter((c) => c.state === 'accepted' && c.peer !== selfKey).map((c) => c.peer)
+  const tooLong = [...name.trim()].length > TITLE_MAX
 
   function close() {
     onOpenChange(false)
     setName('')
-    setValue('')
-    setError(undefined)
-    setWarned(null)
+    setChosen([])
   }
 
   async function create(event: FormEvent) {
     event.preventDefault()
-    if (!service) return
+    if (!service || tooLong || !name.trim()) return
     setBusy(true)
     try {
-      let account: AccountRef
-      if (warned && warned.value === value) {
-        account = warned.account
-      } else {
-        const member = await resolveTyped(value, capabilities?.serverName, t)
-        if ('error' in member) {
-          setError(member.error)
-          return
-        }
-        if (member.warning) {
-          setWarned({ value, account: member.account, text: member.warning })
-          return
-        }
-        account = member.account
-      }
-      const group = await service.createGroup(account, name.trim())
+      const created = await service.createChatGroup(name.trim(), chosen)
       await refreshChat()
       close()
+      if (!created.titleSet) toast.error(t('chat.chatGroup.titleNotSet'))
+      if (created.invited < chosen.length) {
+        toast.error(t('chat.chatGroup.someNotInvited', { count: chosen.length - created.invited }))
+      }
       toast.success(t('chat.group.created'))
-      void navigate(pathForConversation({ kind: 'group', groupId: groupIdOf(group) }))
+      void navigate(pathForConversation({ kind: 'group', groupId: created.groupId }))
     } catch (cause) {
       toast.error(chatErrorMessage(cause, t))
     } finally {
@@ -77,11 +68,12 @@ export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <form onSubmit={(e) => void create(e)} className="space-y-4">
           <DialogHeader>
             <DialogTitle>{t('chat.group.newTitle')}</DialogTitle>
-            <DialogDescription>{t('chat.group.newDescription')}</DialogDescription>
+            <DialogDescription>{t('chat.chatGroup.newDescription')}</DialogDescription>
           </DialogHeader>
           <Field
             label={t('chat.group.info.name')}
-            description={t('chat.group.info.counter', { count: [...name.trim()].length, max: MLS_GROUP_NAME_MAX_CHARS })}
+            description={t('chat.group.info.counter', { count: [...name.trim()].length, max: TITLE_MAX })}
+            error={tooLong ? t('chat.group.info.nameTooLong', { count: TITLE_MAX }) : undefined}
             required
           >
             {(props) => (
@@ -95,35 +87,22 @@ export function NewGroupDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               />
             )}
           </Field>
-          <Field label={t('chat.group.firstMember')} error={error}>
-            {(props) => (
-              <Input
-                {...props}
-                autoComplete="off"
-                spellCheck={false}
-                placeholder={t('chat.username')}
-                value={value}
-                onChange={(e) => {
-                  setValue(e.target.value)
-                  setWarned(null)
-                  setError(undefined)
-                }}
-                data-testid="chat-group-initial-member"
-              />
-            )}
-          </Field>
-          {warned ? <SomeoneElseNotice text={warned.text} /> : null}
+          <div className="space-y-2">
+            <p className="text-sm font-medium">{t('chat.chatGroup.chooseMembers')}</p>
+            <ContactPicker
+              candidates={candidates}
+              chosen={chosen}
+              onChange={setChosen}
+              nameOf={(account) => personName(account, profiles, selfKey, t)}
+            />
+          </div>
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={close}>
               {t('common.cancel')}
             </Button>
-            <Button
-              type="submit"
-              disabled={!value.trim() || !name.trim() || [...name.trim()].length > MLS_GROUP_NAME_MAX_CHARS || busy}
-              data-testid="chat-group-create-submit"
-            >
+            <Button type="submit" disabled={!name.trim() || tooLong || busy} data-testid="chat-group-create-submit">
               {busy ? <Loader2 className="animate-spin" /> : null}
-              {warned ? t('chat.someoneElse.continueAnyway') : t('chat.group.create')}
+              {t('chat.group.create')}
             </Button>
           </DialogFooter>
         </form>

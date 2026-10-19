@@ -195,34 +195,25 @@ test.describe('two-server continuous backup recovery', () => {
     await expect(pageB.getByTestId('chat-disappearing-timer'))
       .toHaveAccessibleName('Disappearing messages are off', { timeout: 45_000 })
 
-    const conversationId = await createGroup(pageA, bobAddress)
+    // A group (docs/plans/pairwise-groups.md): text and replies, as slice 1
+    // sends them; Alice and Bob are contacts from the chat above.
+    const conversationId = await createGroup(pageA, bob.username)
     await acceptGroup(pageB, conversationId)
-    await expect(pageA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
 
-    const mlsFromAlice = `mls-before-loss-a-${tag}`
-    await say(pageA, mlsFromAlice)
-    await arrives(pageB, mlsFromAlice)
-    const mlsFromBob = `mls-before-loss-b-${tag}`
-    await say(pageB, mlsFromBob)
-    await arrives(pageA, mlsFromBob)
-    const mlsReply = `mls-reply-${tag}`
-    await replyTo(pageB, mlsFromAlice, mlsReply)
-    await arrives(pageA, mlsReply)
-    await reactTo(pageB, mlsFromAlice, '❤️')
-    await expect(reaction(pageA, mlsFromAlice, '❤️')).toHaveAttribute('data-count', '1', { timeout: 45_000 })
-    const editedMls = `mls-edited-${tag}`
-    await editMessage(pageB, mlsFromBob, editedMls)
-    await arrives(pageA, editedMls)
-    const deletedMls = `mls-deleted-${tag}`
-    await say(pageA, deletedMls)
-    await arrives(pageB, deletedMls)
-    await deleteForEveryone(pageA, deletedMls)
-    await expect(message(pageB, deletedMls)).toHaveCount(0, { timeout: 45_000 })
+    const groupFromAlice = `group-before-loss-a-${tag}`
+    await say(pageA, groupFromAlice)
+    await arrives(pageB, groupFromAlice)
+    const groupFromBob = `group-before-loss-b-${tag}`
+    await say(pageB, groupFromBob)
+    await arrives(pageA, groupFromBob)
+    const groupReply = `group-reply-${tag}`
+    await replyTo(pageB, groupFromAlice, groupReply)
+    await arrives(pageA, groupReply)
     const aliceCursorBeforeFinalMutation = await backupCursor(pageA)
     const bobCursorBeforeFinalMutation = await backupCursor(pageB)
-    const mlsAttachment = `mls-protected-${tag}.txt`
-    await sendAttachment(pageA, mlsAttachment, `MLS protected media ${tag}`)
-    await expect(attachmentIn(pageB, mlsAttachment)).toBeVisible({ timeout: 90_000 })
+    const groupLast = `group-last-before-loss-${tag}`
+    await say(pageA, groupLast)
+    await arrives(pageB, groupLast)
 
     await waitForProtection(pageA, aliceCursorBeforeFinalMutation)
     await waitForProtection(pageB, bobCursorBeforeFinalMutation)
@@ -297,22 +288,16 @@ test.describe('two-server continuous backup recovery', () => {
     await expect(restoredB.getByRole('button', { name: `${directAttachment} is available in Kutup` }))
       .toBeVisible({ timeout: 45_000 })
 
+    // The group's history comes back with the account's (read-only until
+    // the group itself follows to new devices).
     for (const page of [restoredA, restoredB]) {
       await page.getByTestId(`chat-group-${conversationId}`).click()
-      await expect(message(page, mlsFromAlice)).toBeVisible({ timeout: 45_000 })
-      await expect(message(page, editedMls)).toBeVisible()
-      await expect(message(page, mlsReply).getByTestId('chat-reply-context')).toContainText(mlsFromAlice)
-      await expect(reaction(page, mlsFromAlice, '❤️')).toHaveAttribute('data-count', '1')
-      await expect(message(page, deletedMls)).toHaveCount(0)
-      await expect(attachmentIn(page, mlsAttachment)).toBeVisible({ timeout: 45_000 })
+      await expect(message(page, groupFromAlice)).toBeVisible({ timeout: 45_000 })
+      await expect(message(page, groupFromBob)).toBeVisible()
+      await expect(message(page, groupReply).getByTestId('chat-reply-context')).toContainText(groupFromAlice)
+      await expect(message(page, groupLast)).toBeVisible()
     }
-    const mlsProtectedDownload = restoredA.waitForResponse((response) => {
-      const path = new URL(response.url()).pathname
-      return response.request().method() === 'GET' && path.includes('/api/chat/backup/media/') && response.ok()
-    })
-    await restoredA.getByRole('button', { name: `Download ${mlsAttachment} into Kutup` }).click()
-    await mlsProtectedDownload
-    recordSafeCheckpoint('two-server-recovery', 'direct-and-mls-restored', { accounts: 2, media: 2 })
+    recordSafeCheckpoint('two-server-recovery', 'direct-and-group-restored', { accounts: 2, media: 1 })
     expect(transferRequests).toEqual([])
     expect(backupFacts('postgres-a', alice.username).objects).toBeGreaterThan(0)
     expect(backupFacts('postgres-b', bob.username).objects).toBeGreaterThan(0)
@@ -320,9 +305,8 @@ test.describe('two-server continuous backup recovery', () => {
     expect(backupFacts('postgres-b', alice.username)).toEqual({ backups: 0, objects: 0, media: 0 })
 
     // A closed browser remains a signed account device until the recovered
-    // account explicitly revokes it. MLS intentionally requires a fresh
-    // KeyPackage for every signed destination device, so retire both lost
-    // devices before proving that the recovered devices can form new state.
+    // account explicitly revokes it: retire both lost devices before proving
+    // that the recovered devices can start a new group.
     await revokeOtherDevices(restoredA, 1)
     await revokeOtherDevices(restoredB, 1)
 
@@ -331,13 +315,19 @@ test.describe('two-server continuous backup recovery', () => {
     const directAfterRestore = `direct-after-restore-${tag}`
     await say(restoredA, directAfterRestore)
     await arrives(restoredB, directAfterRestore)
+    // Contact states (accepted, blocked) don't come back with the history
+    // yet (docs/roadmap.md): after losing every browser, the two accept each
+    // other again, as people do today, before one invites the other.
+    await acceptRequest(restoredB)
+    const answerAfterRestore = `answer-after-restore-${tag}`
+    await say(restoredB, answerAfterRestore)
+    await arrives(restoredA, answerAfterRestore)
 
-    const freshConversationId = await createGroup(restoredA, bobAddress)
+    const freshConversationId = await createGroup(restoredA, bob.username)
     await acceptGroup(restoredB, freshConversationId)
-    await expect(restoredA.getByTestId('chat-group-delivery-readiness')).toHaveCount(0, { timeout: 90_000 })
-    const mlsAfterRestore = `mls-after-restore-${tag}`
-    await say(restoredB, mlsAfterRestore)
-    await arrives(restoredA, mlsAfterRestore)
+    const groupAfterRestore = `group-after-restore-${tag}`
+    await say(restoredB, groupAfterRestore)
+    await arrives(restoredA, groupAfterRestore)
     await waitForProtection(restoredA, aliceCursorBeforeFreshMessages)
     await waitForProtection(restoredB, bobCursorBeforeFreshMessages)
     await cleanA.close()

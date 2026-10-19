@@ -101,6 +101,10 @@ pub struct GroupRecordV1 {
     /// The member whose context showed it: only they clear it.
     #[serde(default)]
     pub fork_sender: Option<String>,
+    /// When this device first learned of the group (made it or got its
+    /// invitation), milliseconds: where it sorts before its first message.
+    #[serde(default)]
+    pub known_since_ms: Option<i64>,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -168,6 +172,10 @@ pub enum GroupStatus {
         /// Who sent the invitation (their account): a stranger's is a
         /// message request.
         inviter: String,
+        /// The group's name as the invitation gave it, shown until the state
+        /// is read.
+        #[serde(default)]
+        title: Option<String>,
     },
     /// Asked to join through the link; waits for an administrator.
     Requesting,
@@ -408,6 +416,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         synced_at_ms: None,
         fork_at_revision: None,
         fork_sender: None,
+        known_since_ms: None,
     };
     Ok((record, change))
 }
@@ -488,6 +497,13 @@ pub fn invite(
         // The slot is added by the next revision.
         slot_revision: state.revision + 1,
         claim_key_seed: encode(claim_key.seed()),
+        title: attribute(record, GroupAttribute::Title)
+            .ok()
+            .flatten()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .filter(|title| {
+                title.chars().count() <= kutup_chat_proto::group::entry::MAX_INVITE_TITLE_CHARS
+            }),
     };
     invite.validate().map_err(record_error)?;
     Ok((action, invite, claim_key.public_key()))
@@ -534,6 +550,7 @@ pub fn record_from_invite(
             slot_revision: invite.slot_revision,
             claim_key_seed: SecretText(invite.claim_key_seed.clone()),
             inviter: inviter.to_string(),
+            title: invite.title.clone(),
         },
         // Raised to the claim's revision when the claim is made.
         min_revision: invite.slot_revision,
@@ -546,6 +563,7 @@ pub fn record_from_invite(
         synced_at_ms: None,
         fork_at_revision: None,
         fork_sender: None,
+        known_since_ms: None,
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {

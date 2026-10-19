@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { mlsGroupInvitationReadiness, type MlsGroupInvitationReadiness } from '@kutup/chat-core/group-readiness'
 import { accountKey, conversationKey, directKey } from '@kutup/chat-core/identity'
-import type { ChatGroupCall, ChatHistoryEntry, ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
+import type { ChatGroupCall, ChatGroupSummary, ChatHistoryEntry, ContactRecord, ConversationId, LocalMlsConversationRecord, PeerChatProfile } from '@kutup/chat-core/types'
 import { useChat } from '../../app/chatStore'
 import { conversationTitle } from '../../lib/names'
 import { activeGroupCall } from '../calls/groupCallController'
@@ -19,6 +19,12 @@ export type ReadOnlyReason =
   | 'closed'
   | 'adminsOnly'
   | 'pendingInvitations'
+  /** Invited to a pairwise group: join or decline first. */
+  | 'invitation'
+  /** Asked to join a pairwise group; an administrator decides. */
+  | 'requesting'
+  /** No longer in a pairwise group (left, removed or declined). */
+  | 'notMember'
 
 export interface ConversationModel {
   key: string
@@ -38,6 +44,13 @@ export interface ConversationModel {
   profile: PeerChatProfile | null
   contact: ContactRecord | null
   group: LocalMlsConversationRecord | null
+  /** A pairwise group (docs/plans/pairwise-groups.md), this account's standing in it. */
+  chatGroup: ChatGroupSummary | null
+  /** Who invited this account to `chatGroup`, and whether they aren't a contact (a request). */
+  groupInviter: string | null
+  groupInviteRequest: boolean
+  /** Only text and replies can be sent here (a pairwise group, slice 1). */
+  textOnly: boolean
   /** Group messages this account wrote before losing the live group. */
   historyOnly: boolean
   isAdmin: boolean
@@ -75,7 +88,13 @@ export function useConversationModel(conversation: ConversationId, now: number):
     const contact = peer ? (snapshot.contacts.find((c) => c.peer === peer) ?? null) : null
     const group =
       conversation.kind === 'group' ? (snapshot.groups.find((g) => groupIdOf(g) === conversation.groupId) ?? null) : null
-    const historyOnly = conversation.kind === 'group' && !group
+    const chatGroup =
+      conversation.kind === 'group' ? (snapshot.chatGroups.find((g) => g.groupId === conversation.groupId) ?? null) : null
+    const historyOnly = conversation.kind === 'group' && !group && !chatGroup
+    const groupInviter = chatGroup?.status === 'invited' ? (chatGroup.inviter ?? null) : null
+    const inviterContact = groupInviter ? snapshot.contacts.find((c) => c.peer === groupInviter) : undefined
+    const groupInviteRequest =
+      groupInviter !== null && inviterContact?.state !== 'accepted' && inviterContact?.state !== 'pendingOutgoing'
     const me = group?.currentRoster.find((m) => accountKey(m.account) === selfKey)
     const isAdmin = me?.isAdmin === true
     const readiness = group ? mlsGroupInvitationReadiness(group, snapshot.invitationFeedback, selfKey) : noReadiness
@@ -84,6 +103,9 @@ export function useConversationModel(conversation: ConversationId, now: number):
     if (contact?.state === 'pendingIncoming') readOnly = 'request'
     else if (contact?.state === 'blocked') readOnly = 'blocked'
     else if (historyOnly) readOnly = 'history'
+    else if (chatGroup?.status === 'invited') readOnly = 'invitation'
+    else if (chatGroup?.status === 'requesting') readOnly = 'requesting'
+    else if (chatGroup?.status === 'gone') readOnly = 'notMember'
     else if (group?.left) readOnly = 'left'
     else if (group?.status === 'closed') readOnly = 'closed'
     else if (group && group.currentAuthorizationPolicy.applicationSenders !== 1 && !isAdmin) readOnly = 'adminsOnly'
@@ -93,13 +115,24 @@ export function useConversationModel(conversation: ConversationId, now: number):
     return {
       key,
       conversation,
-      title: conversationTitle(conversation, peer, profile, selfKey, t, group?.currentGroupInfo),
+      title: conversationTitle(
+        conversation,
+        peer,
+        profile,
+        selfKey,
+        t,
+        group?.currentGroupInfo ?? (chatGroup ? { name: chatGroup.title } : null),
+      ),
       peer,
       address: note ? self!.address : peer ? accountName(peer) : null,
       note,
       profile,
       contact,
       group,
+      chatGroup,
+      groupInviter,
+      groupInviteRequest,
+      textOnly: chatGroup !== null,
       historyOnly,
       isAdmin,
       readiness,
@@ -109,8 +142,8 @@ export function useConversationModel(conversation: ConversationId, now: number):
       complete: thread.complete,
       trim: thread.trim,
       readOnly,
-      canSendMedia: !readOnly && established,
-      canSetTimer: !readOnly && established,
+      canSendMedia: !readOnly && established && !chatGroup,
+      canSetTimer: !readOnly && established && !chatGroup,
       // Rename the group, change its picture or description (Signal's "Edit group").
       canEditGroupInfo:
         group !== null &&
@@ -118,7 +151,8 @@ export function useConversationModel(conversation: ConversationId, now: number):
         !group.left &&
         (isAdmin || group.currentAuthorizationPolicy.groupInfoEditors === 1),
       canSendTyping:
-        !readOnly && !note && (conversation.kind === 'group' || contact?.state === 'accepted' || contact?.state === 'pendingOutgoing'),
+        !readOnly && !note && !chatGroup &&
+        (conversation.kind === 'group' || contact?.state === 'accepted' || contact?.state === 'pendingOutgoing'),
       // Signal rings only for accepted contacts; group calls come later.
       canCall: !readOnly && !note && conversation.kind === 'direct' && contact?.state === 'accepted',
       groupCall: group
