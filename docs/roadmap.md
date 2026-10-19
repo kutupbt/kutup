@@ -632,10 +632,14 @@ arrival, and direct sending. Phases, each with its own plan before code:
   but rPGP 0.21's `pqc` pins `ml-kem` 0.2.1 (doesn't build beside our `kem` 0.3)
   and `ml-dsa` 0.0.4 (RUSTSEC-2025-0144). Decided 2026-10-19: wait for an rPGP
   release on `ml-kem` 0.3 and `ml-dsa` 0.1.x with `cargo deny` clean; no
-  upstream PR or fork from us. End-to-end forwarding can be built on v4
-  independently; not scheduled.
-- **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
-  reminders. Replaces Chat meetings' `.ics` download.
+  upstream PR or fork from us. End-to-end forwarding is built on v4
+  independently ([`plans/mail-forwarding.md`](plans/mail-forwarding.md),
+  in progress).
+- **D. Calendar** (next, decided 2026-10-19): starts once the work in
+  flight is done (Chat groups slice 1, Mail forwarding, Chat contacts sync).
+  Proton Calendar is the reference: per-calendar keys, sharing, iTIP
+  invitations over Mail, reminders; no CalDAV (as Proton). A plan note comes
+  first, copying Proton's code. Replaces Chat meetings' `.ics` download.
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;
