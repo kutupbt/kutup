@@ -18,7 +18,6 @@ use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use rand::RngCore;
-use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -58,7 +57,7 @@ fn share_revocation_contract() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();

@@ -95,7 +95,7 @@ fn drive_move_contract() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();

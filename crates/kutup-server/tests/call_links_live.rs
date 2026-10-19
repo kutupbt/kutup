@@ -99,7 +99,7 @@ fn a_seat_shows_the_accounts_current_name() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let server = server_name(&c, &base);
     let owner = register(&c, &base);
     let mut joiner = register(&c, &base);
@@ -149,7 +149,7 @@ fn a_knock_shows_the_accounts_current_name() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let server = server_name(&c, &base);
     let owner = register(&c, &base);
     let mut knocker = register(&c, &base);

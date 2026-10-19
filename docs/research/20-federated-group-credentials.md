@@ -244,6 +244,9 @@ targeted check (2026-10-17), not a complete survey.
   though its documentation still warns that it tracks the drafts. We can encode
   RFC 9458's encapsulation with our own HPKE, which keeps "Rust owns the
   formats".
+- **Post-quantum (decided 2026-10-18).** The HPKE suite is X-Wing (X25519 +
+  ML-KEM-768, HPKE KEM 0x647a) only, from the start, with no X25519-only
+  fallback: `docs/plans/pairwise-groups.md`, "The anonymous route".
 
 **Sending and calls.**
 - Group sends never touch the home. They use sender keys, multi-recipient sealed

@@ -132,7 +132,7 @@ pub(crate) async fn fetch(
     for _ in 0..=MAX_REDIRECTS {
         let address = resolve_public(&url, checks.public).await?;
         let host = url.host_str().expect("checked host").to_owned();
-        let client = reqwest::Client::builder()
+        let client = crate::tls::client_builder()
             .resolve(&host, address)
             // A proxy from the environment would resolve the name again.
             .no_proxy()

@@ -245,7 +245,7 @@ fn a_batch_answers_each_recipient_on_its_own() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let bob = recipient(&c, &base, 0x31);
     let carol = recipient(&c, &base, 0x32);
     let server = server_name(&c, &base);
@@ -274,7 +274,7 @@ fn a_batch_to_another_server_is_delivered_in_one_federated_request() {
         a.trim_end_matches('/').to_string(),
         b.trim_end_matches('/').to_string(),
     );
-    let c = Client::new();
+    let c = crate::common::client();
     let bob = recipient(&c, &b, 0x41);
     let carol = recipient(&c, &b, 0x42);
     let server_b = server_name(&c, &b);

@@ -65,7 +65,7 @@ struct Home {
     pin: GroupHomePinV1,
     config: GroupGatewayKeyConfigV1,
     key_id: u8,
-    public_key: [u8; 32],
+    public_key: [u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN],
 }
 
 fn home(c: &Client, base: &str, user: &User) -> Home {
@@ -303,7 +303,7 @@ fn live() -> Option<String> {
 #[test]
 fn a_group_is_created_joined_and_read_through_the_anonymous_route() {
     let Some(base) = live() else { return };
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let bob = register(&c, &base);
     let home = home(&c, &base, &alice);
@@ -416,7 +416,7 @@ fn a_group_is_created_joined_and_read_through_the_anonymous_route() {
 #[test]
 fn the_home_refuses_what_its_checks_refuse() {
     let Some(base) = live() else { return };
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let home = home(&c, &base, &alice);
     let alice_key = GroupKeyPair::generate();
@@ -586,7 +586,7 @@ fn create_again(
 #[test]
 fn removed_members_and_strangers_learn_nothing() {
     let Some(base) = live() else { return };
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let bob = register(&c, &base);
     let home = home(&c, &base, &alice);
@@ -685,7 +685,7 @@ fn removed_members_and_strangers_learn_nothing() {
 #[test]
 fn link_join_info_needs_the_link_on_and_its_password() {
     let Some(base) = live() else { return };
-    let c = Client::new();
+    let c = crate::common::client();
     let alice = register(&c, &base);
     let home = home(&c, &base, &alice);
     let alice_key = GroupKeyPair::generate();
@@ -738,7 +738,7 @@ fn link_join_info_needs_the_link_on_and_its_password() {
 #[test]
 fn the_relay_needs_a_signed_in_account() {
     let Some(base) = live() else { return };
-    let c = Client::new();
+    let c = crate::common::client();
     let name = server_name(&c, &base);
     let r = c
         .post(format!("{base}/api/chat/groups/relay/{name}"))

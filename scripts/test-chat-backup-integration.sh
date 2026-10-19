@@ -239,3 +239,11 @@ if [[ "$backup_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]]; then
   echo "account purge left Chat backup object bytes" >&2
   exit 1
 fi
+
+# The kutup CLI end to end, as a person runs it: Drive (scripts/verify-cli.sh),
+# then Kutup Pass sync between two machines and its SSH agent. Each makes its
+# own account with `kutup register`. After the purge checks above, which
+# expect no account's bytes left.
+for check in verify-cli verify-pass-sync verify-pass-ssh; do
+  KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
+done

@@ -141,6 +141,11 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 # new inheriting nothing.
 run_phase account-ids
 
+# Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
+# home's signed X-Wing key config, sealed requests relayed and answered.
+KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+  cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
+
 # Sealed batches: several sealed sends to one server's accounts in one
 # anonymous request; across servers, queued per recipient and delivered as
 # one federated batch (docs/chat-protocol.md §7).

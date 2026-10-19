@@ -345,4 +345,39 @@ describe('ApiChatTransport', () => {
       },
     )
   })
+
+  it('reaches a group home through this account\'s relay, with the answer still sealed', async () => {
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { config: 'c', identityHistory: [] } } as never)
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue({ data: new Uint8Array([1, 2, 3]).buffer } as never)
+    const transport = new ApiChatTransport()
+
+    await expect(transport.fetchGroupGateway('home.example', '4')).resolves.toEqual({ config: 'c', identityHistory: [] })
+    expect(get).toHaveBeenCalledWith('/chat/groups/gateway-key', { params: { server: 'home.example', fromSequence: '4' } })
+
+    const sealed = new Uint8Array([9, 9])
+    await expect(transport.relayGroupRequest('home.example', sealed)).resolves.toEqual({ kind: 'answered', body: 'AQID' })
+    expect(post).toHaveBeenCalledWith('/chat/groups/relay/home.example', sealed, {
+      headers: { 'Content-Type': 'message/ohttp-req' },
+      responseType: 'arraybuffer',
+    })
+  })
+
+  it('maps the relay\'s refusals to what the engine does next', async () => {
+    const transport = new ApiChatTransport()
+    for (const [status, kind] of [
+      [400, 'unopenable'],
+      [429, 'rateLimited'],
+      [502, 'unreachable'],
+      [404, 'groupsOff'],
+    ] as const) {
+      const failure = new axios.AxiosError('refused', String(status), undefined, undefined, { status } as never)
+      vi.spyOn(api, 'post').mockRejectedValueOnce(failure)
+      await expect(transport.relayGroupRequest('home.example', new Uint8Array([1]))).resolves.toEqual({ kind })
+    }
+    const other = new axios.AxiosError('boom', '500', undefined, undefined, { status: 500 } as never)
+    vi.spyOn(api, 'post').mockRejectedValueOnce(other)
+    await expect(transport.relayGroupRequest('home.example', new Uint8Array([1]))).rejects.toBe(other)
+  })
 })

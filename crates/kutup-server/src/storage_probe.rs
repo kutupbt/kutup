@@ -37,7 +37,7 @@ impl StorageProbe {
         if master_url.is_empty() {
             return None;
         }
-        let client = reqwest::Client::builder()
+        let client = crate::tls::client_builder()
             .timeout(TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .build()

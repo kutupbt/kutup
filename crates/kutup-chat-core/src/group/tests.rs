@@ -9,6 +9,9 @@ use kutup_federation_proto::FederationIdentityDocumentV1;
 
 use super::*;
 
+/// Who the tests' invitations come from.
+const INVITER: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@home.example";
+
 /// The group's home, as far as these tests need one: it runs the shared
 /// check and notarises what it accepts.
 struct Home {
@@ -29,8 +32,15 @@ impl Home {
     fn with_key(byte: u8, server: &str) -> Self {
         let key = SigningKey::from_bytes(&[byte; 32]);
         let identity = FederationIdentityDocumentV1::genesis(server, 10, &key).unwrap();
-        let config =
-            GroupGatewayKeyConfigV1::sign(&identity, &key, 1, &[9u8; 32], 100, 200).unwrap();
+        let config = GroupGatewayKeyConfigV1::sign(
+            &identity,
+            &key,
+            1,
+            &[9u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN],
+            100,
+            200,
+        )
+        .unwrap();
         Self {
             identity,
             key,
@@ -157,7 +167,7 @@ fn invited(
     apply_at(home, alice, &add);
 
     let sign = bob.sign();
-    let mut record = record_from_invite(invitation).unwrap();
+    let mut record = record_from_invite(invitation, INVITER, None).unwrap();
     record.gateway.identity_history = home.history();
     assert!(matches!(record.status, GroupStatus::Invited { .. }));
     let claim_change = claim(
@@ -283,7 +293,7 @@ fn a_joiner_takes_no_snapshot_older_than_its_claim_or_without_it() {
     apply_at(&mut home, &mut alice_record, &add);
     let before_claim = home.states.last().unwrap().clone();
 
-    let mut record = record_from_invite(invitation).unwrap();
+    let mut record = record_from_invite(invitation, INVITER, None).unwrap();
     record.gateway.identity_history = home.history();
     let claim_change = claim(
         &mut record,
@@ -351,7 +361,7 @@ fn an_invitation_whose_key_isnt_its_groups_is_refused() {
     let alice_record = created(&mut home, &alice);
     let (_, mut invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
     invitation.master_key = encode(&[9u8; 32]);
-    assert!(record_from_invite(invitation).is_err());
+    assert!(record_from_invite(invitation, INVITER, None).is_err());
 }
 
 #[test]
@@ -409,4 +419,39 @@ fn secrets_never_print() {
     let printed = format!("{invitation:?}");
     assert!(!printed.contains(&invitation.claim_key_seed));
     assert!(!printed.contains(&invitation.master_key));
+}
+
+fn device(account: &str, device_id: u32, registration_id: u32) -> BookDevice {
+    BookDevice {
+        account: account.into(),
+        device_id,
+        registration_id,
+    }
+}
+
+#[test]
+fn a_sender_key_rotates_on_a_removal_a_departed_device_a_new_registration_or_age() {
+    let now = 1_000_000;
+    let mut book = SenderBook::new(now);
+    let current = vec![device("a", 1, 10), device("b", 1, 20), device("b", 2, 21)];
+    // A new key reaches every current device.
+    assert_eq!(book.missing(&current), current);
+    book.devices = current.clone();
+    assert!(book.missing(&current).is_empty());
+    assert!(!book.must_rotate(now + 1, &current));
+    // A member's new device only needs the key; nothing rotates.
+    let grown = [current.clone(), vec![device("c", 1, 30)]].concat();
+    assert!(!book.must_rotate(now, &grown));
+    assert_eq!(book.missing(&grown), vec![device("c", 1, 30)]);
+    // A removed member, a device gone from a manifest, a reinstalled device.
+    assert!(book.must_rotate(now, &[device("a", 1, 10)]));
+    assert!(book.must_rotate(now, &[device("a", 1, 10), device("b", 1, 20)]));
+    assert!(book.must_rotate(
+        now,
+        &[device("a", 1, 10), device("b", 1, 99), device("b", 2, 21)]
+    ));
+    // Ninety days.
+    assert!(book.must_rotate(now + SENDER_KEY_MAX_AGE_MS, &current));
+    // A new book has a new distribution id.
+    assert_ne!(SenderBook::new(now).distribution_id, book.distribution_id);
 }

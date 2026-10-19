@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { accountOfKey } from '@kutup/crypto/accountRef'
+import { toBase64 } from '@kutup/crypto/base64'
 import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
@@ -523,7 +524,59 @@ export class ApiChatTransport implements ChatTransportPort {
   async ackMessages(deviceId: number, ids: string[]): Promise<void> {
     await api.post('/chat/messages/ack', { ids }, { params: { deviceId } })
   }
+
+  /**
+   * A group home's gateway key config and identity history, through this
+   * account's own server (docs/plans/pairwise-groups.md §3). The engine takes
+   * them only through the group's pin.
+   */
+  async fetchGroupGateway(home: string, fromSequence: string): Promise<unknown> {
+    return api
+      .get('/chat/groups/gateway-key', { params: { server: home, fromSequence } })
+      .then((response) => response.data)
+  }
+
+  /**
+   * Relays a sealed group request through this account's own server, which
+   * learns only which home it goes to. The answer stays sealed.
+   */
+  async relayGroupRequest(home: string, sealed: Uint8Array): Promise<GroupRelayOutcome> {
+    try {
+      const response = await api.post<ArrayBuffer>(
+        `/chat/groups/relay/${encodeURIComponent(home)}`,
+        sealed,
+        {
+          headers: { 'Content-Type': 'message/ohttp-req' },
+          responseType: 'arraybuffer',
+        },
+      )
+      return { kind: 'answered', body: toBase64(new Uint8Array(response.data)) }
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        switch (error.response?.status) {
+          // The home couldn't open it: an old key; the engine fetches it again.
+          case 400:
+            return { kind: 'unopenable' }
+          case 429:
+            return { kind: 'rateLimited' }
+          case 502:
+            return { kind: 'unreachable' }
+          case 404:
+            return { kind: 'groupsOff' }
+        }
+      }
+      throw error
+    }
+  }
 }
+
+/** What this account's server answered a relayed group request with. */
+export type GroupRelayOutcome =
+  | { kind: 'answered'; body: string }
+  | { kind: 'unopenable' }
+  | { kind: 'rateLimited' }
+  | { kind: 'unreachable' }
+  | { kind: 'groupsOff' }
 
 function isSealedRefusal(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'sealed delivery unavailable'

@@ -23,6 +23,7 @@ mod session;
 #[cfg(unix)]
 mod sshagent;
 mod syncengine;
+mod tls;
 mod transfer;
 mod uploader;
 mod vaultsync;
@@ -257,6 +258,7 @@ enum Commands {
 }
 
 fn main() {
+    tls::install_crypto_provider();
     let cli = Cli::parse();
     let result = match &cli.command {
         Commands::Register { server, username } => {

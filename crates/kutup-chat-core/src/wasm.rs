@@ -868,6 +868,24 @@ struct SearchView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct GroupSendView {
+    send_id: String,
+    delivered: usize,
+    pending: usize,
+}
+
+impl From<crate::group_send::GroupSendSummary> for GroupSendView {
+    fn from(summary: crate::group_send::GroupSendSummary) -> Self {
+        Self {
+            send_id: summary.send_id,
+            delivered: summary.delivered,
+            pending: summary.pending,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CreatedGroupView {
     group_id: String,
     title_set: bool,
@@ -889,6 +907,10 @@ enum GroupSyncView {
         since_ms: i64,
     },
     Gone,
+    /// More of the log still to read: not yet at the home's latest.
+    Partial {
+        revision: u64,
+    },
 }
 
 impl From<crate::group_engine::GroupSync> for GroupSyncView {
@@ -912,6 +934,7 @@ impl From<crate::group_engine::GroupSync> for GroupSyncView {
                 },
             },
             GroupSync::Gone => Self::Gone,
+            GroupSync::Partial { revision } => Self::Partial { revision },
         }
     }
 }
@@ -947,6 +970,11 @@ struct GroupSummaryView {
     status: &'static str,
     revision: Option<u64>,
     member_count: usize,
+    /// Who invited this account, for an invitation (their account).
+    inviter: Option<String>,
+    /// A member's message named another history at a revision this device
+    /// verified: the home may be showing members different states.
+    fork_suspected: bool,
 }
 
 impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
@@ -963,6 +991,11 @@ impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
             },
             revision: summary.revision,
             member_count: summary.member_count,
+            inviter: match &summary.status {
+                GroupStatus::Invited { inviter, .. } => Some(inviter.clone()),
+                _ => None,
+            },
+            fork_suspected: summary.fork_suspected,
         }
     }
 }
@@ -1066,8 +1099,38 @@ impl WasmChatClient {
         group_id: String,
         title: String,
     ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
         self.engine
-            .set_group_title(&group_id, &title)
+            .set_group_title(&group_id, &title, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Removes a member, by their pseudonym (an administrator's right).
+    #[wasm_bindgen(js_name = removeGroupMember)]
+    pub async fn remove_group_member(
+        &mut self,
+        group_id: String,
+        pseudonym: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .remove_group_member(&group_id, &pseudonym, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Makes a member an administrator, or a member again.
+    #[wasm_bindgen(js_name = setGroupMemberAdmin)]
+    pub async fn set_group_member_admin(
+        &mut self,
+        group_id: String,
+        pseudonym: String,
+        administrator: bool,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_member_admin(&group_id, &pseudonym, administrator, &mut rng)
             .await
             .map_err(chat_error)
     }
@@ -1101,6 +1164,104 @@ impl WasmChatClient {
                 .map(GroupMemberWasmView::from)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    /// Sends a text to a group: `{sendId, delivered, pending}` (member
+    /// accounts reached, and still to reach, which `flushGroupOutbox` retries).
+    #[wasm_bindgen(js_name = sendGroupText)]
+    pub async fn send_group_text(
+        &mut self,
+        group_id: String,
+        send_id: String,
+        sent_at: String,
+        text: String,
+        reply_to: Option<String>,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let content = ChatContent::text_with_id(&send_id, sent_at, seq, text)
+            .with_reply_to(reply_to.as_deref())
+            .map_err(|error| js_error(&error))?;
+        let summary = self
+            .engine
+            .send_group_message(&group_id, &send_id, content, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupSendView::from(summary))
+    }
+
+    /// Delivers group messages still waiting (after a reconnect).
+    #[wasm_bindgen(js_name = flushGroupOutbox)]
+    pub async fn flush_group_outbox(&mut self) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let summaries = self
+            .engine
+            .flush_group_outbox(&mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(
+            &summaries
+                .into_iter()
+                .map(GroupSendView::from)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Invites accounts (their `aci:<uuid>@<server>` forms): how many
+    /// invitations went out.
+    #[wasm_bindgen(js_name = inviteToGroup)]
+    pub async fn invite_to_group(
+        &mut self,
+        group_id: String,
+        accounts: Vec<String>,
+    ) -> std::result::Result<u32, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let sent = self
+            .engine
+            .invite_to_group(&group_id, &accounts, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        Ok(u32::try_from(sent).unwrap_or(u32::MAX))
+    }
+
+    /// Accepts an invitation; answers as `syncGroup` does.
+    #[wasm_bindgen(js_name = acceptGroupInvite)]
+    pub async fn accept_group_invite(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let outcome = self
+            .engine
+            .accept_group_invite(&group_id, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupSyncView::from(outcome))
+    }
+
+    #[wasm_bindgen(js_name = declineGroupInvite)]
+    pub async fn decline_group_invite(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<(), JsValue> {
+        self.engine
+            .decline_group_invite(&group_id)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = leaveGroup)]
+    pub async fn leave_group(&mut self, group_id: String) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .leave_group(&group_id, &mut rng)
+            .await
+            .map_err(chat_error)
     }
 
     #[wasm_bindgen(js_name = listGroups)]
@@ -3337,6 +3498,8 @@ impl WasmChatClient {
             .engine
             .flush_profile(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
             .await;
+        // Group messages still on their way: best effort, retried each pass.
+        let _ = self.engine.flush_group_outbox(&mut rng).await;
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after
@@ -3925,6 +4088,18 @@ struct ReceiveReportView {
     repaired: Vec<String>,
     /// Queued messages that could not be delivered on this pass.
     send_failures: Vec<SendFailureView>,
+    /// Group invitations that arrived.
+    group_invites: Vec<GroupInviteView>,
+    /// Group envelopes left queued until their sender can be confirmed.
+    held: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupInviteView {
+    group_id: String,
+    from: String,
+    request: bool,
 }
 
 #[derive(Serialize)]
@@ -3957,6 +4132,16 @@ impl From<ReceiveReport> for ReceiveReportView {
             duplicates: report.duplicates,
             repaired: report.repaired,
             send_failures: Vec::new(),
+            group_invites: report
+                .group_invites
+                .into_iter()
+                .map(|notice| GroupInviteView {
+                    group_id: notice.group_id,
+                    from: notice.from,
+                    request: notice.request,
+                })
+                .collect(),
+            held: report.held,
         }
     }
 }

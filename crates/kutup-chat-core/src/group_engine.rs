@@ -36,6 +36,27 @@ pub struct GroupSummary {
     pub status: GroupStatus,
     pub revision: Option<u64>,
     pub member_count: usize,
+    /// See [`GroupRecordV1::fork_at_revision`].
+    pub fork_suspected: bool,
+}
+
+/// What group content that came pairwise did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupContentOutcome {
+    /// A member's sender key was taken.
+    SenderKey,
+    /// An invitation: an invited record now waits for this account's choice.
+    /// `request` when it came from someone who isn't a contact (Signal shows
+    /// it as a message request).
+    Invited {
+        group_id: String,
+        from: String,
+        request: bool,
+    },
+    /// A group message was kept.
+    Message(Box<kutup_chat_proto::ChatContent>),
+    /// Not from a member, or not for a group this account is in: dropped.
+    Ignored,
 }
 
 /// A group just made: its id, and whether its title was set too.
@@ -63,6 +84,10 @@ pub enum GroupSync {
     /// This account is no longer in the group: a notarised change removed it,
     /// or the home has answered so for long enough.
     Gone,
+    /// Moved on to `revision`, with more of the log still to read (one
+    /// catch-up reads at most a bounded number of pages): not yet at the
+    /// home's latest.
+    Partial { revision: u64 },
 }
 
 /// How long the home must keep answering "not found" before a group is
@@ -72,7 +97,7 @@ pub const NOT_FOUND_CONFIRM_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// The most log pages one catch-up reads.
 const MAX_PAGES_PER_SYNC: usize = 256;
 
-fn group_error(error: GroupError) -> ChatError {
+pub(crate) fn group_error(error: GroupError) -> ChatError {
     match error {
         GroupError::Notary => ChatError::Trust("the group home's signature doesn't verify".into()),
         GroupError::Change(change) => ChatError::Trust(format!("group change refused: {change}")),
@@ -80,18 +105,18 @@ fn group_error(error: GroupError) -> ChatError {
     }
 }
 
-fn decode_b64(value: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode_b64(value: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(value)
         .map_err(|_| ChatError::Invalid("group answer is not base64".into()))
 }
 
-fn now_seconds() -> i64 {
+pub(crate) fn now_seconds() -> i64 {
     crate::clock::unix_millis() / 1000
 }
 
 /// The answer's body, when the home said yes; its refusal, as an error.
-fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
+pub(crate) fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
     match response.status {
         GroupResponseStatusV1::Ok => response.body().map_err(ChatError::Invalid),
         GroupResponseStatusV1::Refused => Err(ChatError::Trust(format!(
@@ -111,15 +136,17 @@ fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
 }
 
 impl Engine {
-    async fn save_group(&self, record: &GroupRecordV1) -> Result<()> {
+    pub(crate) async fn save_group(&mut self, record: &GroupRecordV1) -> Result<()> {
         let mut pending = Pending::default();
         pending
             .groups
             .insert(record.group_id.clone(), record.clone());
+        // Who is a member is looked at again when the state's head moves
+        // (`group_membership`).
         self.session.db().apply(&pending).await
     }
 
-    async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
+    pub(crate) async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
         self.session
             .db()
             .load_group(group_id)
@@ -128,14 +155,27 @@ impl Engine {
     }
 
     /// One request to `record`'s home, signed by this account's pseudonym.
-    async fn group_request(
+    pub(crate) async fn group_request(
         &mut self,
         record: &mut GroupRecordV1,
         operation: GroupOperationV1,
         body: &[u8],
     ) -> Result<std::result::Result<GroupResponseV1, RouteFailure>> {
-        let group_id = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
         let seed = zeroize::Zeroizing::new(*record.pseudonym().map_err(group_error)?.seed());
+        self.group_request_signed(record, operation, body, &seed)
+            .await
+    }
+
+    /// One request to `record`'s home signed by `seed` (a pseudonym, or a
+    /// slot's claim key for the join info a claimant needs).
+    pub(crate) async fn group_request_signed(
+        &mut self,
+        record: &mut GroupRecordV1,
+        operation: GroupOperationV1,
+        body: &[u8],
+        seed: &[u8; 32],
+    ) -> Result<std::result::Result<GroupResponseV1, RouteFailure>> {
+        let group_id = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
         let home = record.home.clone();
         let transport = Rc::clone(&self.transport);
         group_client::call(
@@ -145,14 +185,14 @@ impl Engine {
             &group_id,
             operation,
             body,
-            &RequestSigner::Key(&seed),
+            &RequestSigner::Key(seed),
             now_seconds(),
         )
         .await
     }
 
     /// This account's profile key, which its group entries carry.
-    async fn own_profile_key(&self) -> Result<[u8; 32]> {
+    pub(crate) async fn own_profile_key(&self) -> Result<[u8; 32]> {
         let profile = self
             .session
             .db()
@@ -267,7 +307,7 @@ impl Engine {
     }
 
     /// Makes a change as this member and applies the home's notarised answer.
-    async fn submit_group_change(
+    pub(crate) async fn submit_group_change(
         &mut self,
         record: &mut GroupRecordV1,
         actions: Vec<GroupActionV1>,
@@ -299,8 +339,70 @@ impl Engine {
         Ok(next)
     }
 
+    /// Makes a change as this member, then tells the group (a change
+    /// notice), so the other members catch up at once.
+    pub(crate) async fn change_group<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        actions: Vec<GroupActionV1>,
+        rng: &mut R,
+    ) -> Result<()> {
+        let mut record = self.load_group_record(group_id).await?;
+        self.submit_group_change(&mut record, actions).await?;
+        self.announce_group_change(group_id, rng).await;
+        Ok(())
+    }
+
+    /// Removes a member (an administrator's right). The removed member's
+    /// devices lose this device's sender key at its next send.
+    pub async fn remove_group_member<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        pseudonym: &str,
+        rng: &mut R,
+    ) -> Result<()> {
+        self.change_group(
+            group_id,
+            vec![GroupActionV1::RemoveMember {
+                pseudonym: pseudonym.to_string(),
+            }],
+            rng,
+        )
+        .await
+    }
+
+    /// Makes a member an administrator, or a member again (Signal's
+    /// last-administrator rule applies: the home refuses leaving none).
+    pub async fn set_group_member_admin<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        pseudonym: &str,
+        administrator: bool,
+        rng: &mut R,
+    ) -> Result<()> {
+        let role = if administrator {
+            kutup_chat_proto::group::GroupRole::Administrator
+        } else {
+            kutup_chat_proto::group::GroupRole::Member
+        };
+        self.change_group(
+            group_id,
+            vec![GroupActionV1::ModifyRole {
+                pseudonym: pseudonym.to_string(),
+                role,
+            }],
+            rng,
+        )
+        .await
+    }
+
     /// Changes the group's title (who may: Signal's `attributes` access).
-    pub async fn set_group_title(&mut self, group_id: &str, title: &str) -> Result<()> {
+    pub async fn set_group_title<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        title: &str,
+        rng: &mut R,
+    ) -> Result<()> {
         let mut record = self.load_group_record(group_id).await?;
         let value = if title.trim().is_empty() {
             None
@@ -317,8 +419,9 @@ impl Engine {
                 value,
             }],
         )
-        .await
-        .map(|_| ())
+        .await?;
+        self.announce_group_change(group_id, rng).await;
+        Ok(())
     }
 
     /// Catches up with the home: the log from the next revision on, every
@@ -335,6 +438,7 @@ impl Engine {
         let mut from = state.revision + 1;
         let mut newest = None;
         let mut history_refreshed = false;
+        let mut finished = false;
         for page_number in 0.. {
             if page_number == MAX_PAGES_PER_SYNC {
                 // Bounded: the rest is read on the next catch-up.
@@ -383,8 +487,10 @@ impl Engine {
                 newest = Some(last.notary.clone());
             }
             record.not_found_since_ms = None;
+            record.synced_at_ms = Some(crate::clock::unix_millis());
             self.save_group(&record).await?;
             if !page.more || record.status == GroupStatus::Gone {
+                finished = true;
                 break;
             }
         }
@@ -407,6 +513,9 @@ impl Engine {
             .map_err(group_error)?
             .map(|(state, _)| state.revision)
             .unwrap_or_default();
+        if !finished {
+            return Ok(GroupSync::Partial { revision });
+        }
         Ok(GroupSync::Current {
             revision,
             key_confirmed,
@@ -438,7 +547,10 @@ impl Engine {
         })
     }
 
-    async fn take_whole_state(&mut self, record: &mut GroupRecordV1) -> Result<GroupSync> {
+    pub(crate) async fn take_whole_state(
+        &mut self,
+        record: &mut GroupRecordV1,
+    ) -> Result<GroupSync> {
         let response = match self
             .group_request(record, GroupOperationV1::GetState, b"")
             .await?
@@ -466,6 +578,7 @@ impl Engine {
             Err(error) => return Err(group_error(error)),
         }
         record.not_found_since_ms = None;
+        record.synced_at_ms = Some(crate::clock::unix_millis());
         self.save_group(record).await?;
         let key_confirmed = record.gateway.check(&answer.notary) != ConfigCheck::Unknown;
         Ok(GroupSync::Current {
@@ -478,26 +591,56 @@ impl Engine {
     /// current verified manifest. A member whose device left the manifest
     /// shows unverified until they sign their binding again.
     pub async fn group_members(&mut self, group_id: &str) -> Result<Vec<GroupMemberView>> {
+        Ok(self.group_members_checked(group_id).await?.0)
+    }
+
+    /// [`Self::group_members`], and the member accounts whose manifest
+    /// couldn't be fetched now (their membership is unconfirmed, not
+    /// refused). A verified manifest's device keys are kept for the
+    /// known-devices interval.
+    pub(crate) async fn group_members_checked(
+        &mut self,
+        group_id: &str,
+    ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>)> {
         let record = self.load_group_record(group_id).await?;
         let accounts = group::member_accounts(&record).map_err(group_error)?;
+        let now = crate::clock::unix_millis();
         let mut keys: BTreeMap<AccountRef, Vec<(u32, PublicKey)>> = BTreeMap::new();
+        let mut unconfirmed = Vec::new();
         for account in accounts {
             let account_text = account.to_string();
-            // A manifest that can't be fetched or verified now leaves that
-            // member unverified; the list still shows.
-            let Ok(Some(manifest)) = Rc::clone(&self.transport)
+            if let Some((at, devices)) = self.manifest_keys_seen.get(&account_text) {
+                if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
+                    keys.insert(account, devices.clone());
+                    continue;
+                }
+            }
+            let manifest = match Rc::clone(&self.transport)
                 .fetch_manifest(&account_text)
                 .await
-            else {
-                continue;
+            {
+                Ok(Some(manifest)) => manifest,
+                // No manifest: an account with no devices, never a member's.
+                Ok(None) => continue,
+                // Not reachable now: neither in nor out.
+                Err(_) => {
+                    unconfirmed.push(account);
+                    continue;
+                }
             };
-            let Ok(manifest) = self
+            let manifest = match self
                 .accept_current_manifest_evidence(&account_text, &manifest)
                 .await
-            else {
-                continue;
+            {
+                Ok(manifest) => manifest,
+                Err(ChatError::Transport(_)) => {
+                    unconfirmed.push(account);
+                    continue;
+                }
+                // A manifest that doesn't verify: unverified.
+                Err(_) => continue,
             };
-            let devices = manifest
+            let devices: Vec<(u32, PublicKey)> = manifest
                 .devices
                 .iter()
                 .filter_map(|device| {
@@ -505,6 +648,8 @@ impl Engine {
                     Some((device.device_id, PublicKey::deserialize(&bytes).ok()?))
                 })
                 .collect();
+            self.manifest_keys_seen
+                .insert(account_text, (now, devices.clone()));
             keys.insert(account, devices);
         }
         let verify = |account: &AccountRef, device_id: u32, bytes: &[u8], signature: &[u8]| {
@@ -514,7 +659,8 @@ impl Engine {
                     .any(|(id, key)| *id == device_id && key.verify_signature(bytes, signature))
             })
         };
-        group::members(&record, &verify).map_err(group_error)
+        let members = group::members(&record, &verify).map_err(group_error)?;
+        Ok((members, unconfirmed))
     }
 
     /// Every group this device knows, with its title.
@@ -534,6 +680,7 @@ impl Engine {
                     status: record.status.clone(),
                     revision: verified.as_ref().map(|(state, _)| state.revision),
                     member_count: verified.map_or(0, |(state, _)| state.members.len()),
+                    fork_suspected: record.fork_at_revision.is_some(),
                 }
             })
             .collect())
@@ -731,7 +878,7 @@ mod tests {
     fn setup() -> (Engine, Rc<Home>, String) {
         let home = Rc::new(Home::new());
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let engine = block_on(Engine::register(
+        let mut engine = block_on(Engine::register(
             db,
             home.clone(),
             "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",

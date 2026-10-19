@@ -28,7 +28,7 @@ fn one_listing_of_every_readable_folder() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let friend = register(&c, &base);
     let stranger = register(&c, &base);

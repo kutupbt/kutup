@@ -12,7 +12,6 @@
 
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
-use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -25,7 +24,7 @@ fn drive_integrity_contract() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -307,7 +306,7 @@ fn admin_delete_user_hands_contributions_over() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
