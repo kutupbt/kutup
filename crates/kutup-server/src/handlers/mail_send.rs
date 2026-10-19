@@ -1591,7 +1591,9 @@ pub(crate) async fn deliver(
             crate::mail::auto_reply::spawn(&state, copy);
         }
         for arrived in forwards {
-            crate::mail::forwarding::spawn_forward(&state, arrived);
+            if crate::mail::forwarding::forwards(&state.pool, arrived.address_id).await {
+                crate::mail::forwarding::spawn_forward(&state, arrived);
+            }
         }
         for (key, version) in &blocked {
             if let Err(error) = state.storage.delete_stored(key, version).await {

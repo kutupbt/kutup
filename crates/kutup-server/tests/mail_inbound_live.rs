@@ -5945,6 +5945,29 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <far-{tag}@sender.test>\r\n
     wait_for(&c, &base, &alice, &far_id);
     never_arrives(&c, &base, &bob, &far_id);
 
+    // The forwarded copy goes through Bob's own rules: a sender he blocks
+    // isn't stored for him, and Alice sees it counted as not forwarded.
+    let r = bearer(c.post(format!("{base}/api/mail/sender-rules")), &bob.token)
+        .json(&json!({ "patterns": ["blocked@sender.test"], "kind": "block" }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "block rule: {}", r.status());
+    let blocked = format!(
+        "From: blocked@sender.test\r\nTo: {}\r\nSubject: forward me\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>\r\n\r\nno\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &blocked), (250, 250));
+    let blocked_id = format!("blocked-{tag}@sender.test");
+    assert_eq!(wait_for(&c, &base, &alice, &blocked_id)["folder"], "inbox");
+    never_arrives(&c, &base, &bob, &blocked_id);
+    let skipped: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &alice.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(skipped["outgoing"][0]["skipped"], 1);
+
     // Sealed on arrival by the server (Kutup mail sent readable, sealed as
     // mail from outside is): always reaches Bob, opened only as forwarded.
     let readable = send_readable(&c, &base, &carol, &cc, &a.address, "readable for alice");
