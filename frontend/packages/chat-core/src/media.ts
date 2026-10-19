@@ -12,6 +12,7 @@ import {
   openChatMediaStreamV1,
 } from '@kutup/crypto/chatMedia'
 import { toBase64 } from '@kutup/crypto/base64'
+import { exactBytes } from '@kutup/crypto/bytes'
 import { getSodium } from '@kutup/crypto/sodium'
 import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -653,7 +654,7 @@ export async function openCachedChatMediaV1(
     }
   }
   return {
-    blob: new Blob([plaintext.slice().buffer], { type: mimeType }),
+    blob: new Blob([exactBytes(plaintext)], { type: mimeType }),
     mimeType,
     kind,
   }

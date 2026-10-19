@@ -6,6 +6,7 @@
 
 import axios from 'axios'
 import api from '@kutup/session/client'
+import { exactBytes } from '@kutup/crypto/bytes'
 import { localBase } from './api'
 import {
   openWhiteboardAssetV1,
@@ -26,7 +27,7 @@ export async function uploadAsset(
 ): Promise<void> {
   const envelope = await sealWhiteboardAssetV1(plaintext, fileKey, context)
   const fd = new FormData()
-  fd.append('file', new Blob([envelope.buffer as ArrayBuffer], { type: 'application/octet-stream' }))
+  fd.append('file', new Blob([exactBytes(envelope)], { type: 'application/octet-stream' }))
   try {
     await api.put(`${base}/assets/${context.assetId}`, fd)
   } catch (err) {
