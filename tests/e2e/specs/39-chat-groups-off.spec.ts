@@ -10,9 +10,12 @@ const PASSWORD = 'Deneme123*GroupsOffPassword'
 test('with groups off, Chat offers direct chats only and they work', async ({ browser, request }) => {
   test.slow()
   const settings = (await (await request.get(apiUrl('/auth/settings'))).json()) as {
-    chat: { serverName: string; mlsGroups: boolean; groupCalls: boolean }
+    chat: { serverName: string; mlsGroups: boolean; pairwiseGroups?: boolean; groupCalls: boolean }
   }
-  test.skip(settings.chat.mlsGroups, 'this stack offers group chats (CHAT_GROUPS is on)')
+  test.skip(
+    settings.chat.pairwiseGroups === true || settings.chat.mlsGroups,
+    'this stack offers group chats (CHAT_GROUPS is on)',
+  )
   expect(settings.chat.groupCalls).toBe(false)
 
   const tag = Date.now()

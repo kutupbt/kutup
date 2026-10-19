@@ -114,6 +114,13 @@ Left before the tag:
   (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
   routes and `chat_mls_*` tables are removed. The checklist's group-limit
   split and authority-quorum UI are obsolete with them.
+  Slice 1 (state engine, sender keys, sealed batches, basic UI) is built.
+  Still to come before groups ship, besides slices 2–5: a new device of a
+  member keeps their groups (the account head's `chatGroups` scope with each
+  group's key and pseudonym, and the member's binding signed again by the new
+  device). Until then a member who replaces their only device loses the
+  group, so `specs/38-chat-group-device-replaced.spec.ts` is out of the
+  chat-backup suite, and comes back with it.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -420,6 +427,16 @@ protocol state for new messages. The UI reports missing, invalid, offline, or
 quota-blocked backup state explicitly. Automated manual-fixture setup must not
 publish disposable headless devices unless it retains or revokes them.
 
+**Gap: contact states after total device loss.** Accepting and blocking
+someone reach the account's other devices only (contact controls over Note to
+Self). The history backup doesn't carry them, so a browser restored after
+every device was lost knows no accepted contacts: both people accept each
+other again, and a block is gone. Signal keeps these in its storage service;
+the fix is an account-synced, sealed contact list (an account-head scope, as
+the Chat group list), to be designed (`docs/plans/chat-contacts-sync.md`).
+Restoring "accepted" from history alone is not done, because it would undo
+blocks.
+
 #### Phase 6 attachment storage and download decision
 
 The normative protocol and threat model are
@@ -627,8 +644,19 @@ arrival, and direct sending. Phases, each with its own plan before code:
   Cloudflare (checklist in `self-hosting.md`; for kutup.dev the website
   Worker must also pass WKD through) and the manual Proton check
   (`test/mail-proton.md`).
-- **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
-  reminders. Replaces Chat meetings' `.ics` download.
+- **Mail post-quantum (blocked on rPGP).** PQ by default with Proton's v6
+  key shape is decided ([`plans/mail-pq-openpgp.md`](plans/mail-pq-openpgp.md)),
+  but rPGP 0.21's `pqc` pins `ml-kem` 0.2.1 (doesn't build beside our `kem` 0.3)
+  and `ml-dsa` 0.0.4 (RUSTSEC-2025-0144). Decided 2026-10-19: wait for an rPGP
+  release on `ml-kem` 0.3 and `ml-dsa` 0.1.x with `cargo deny` clean; no
+  upstream PR or fork from us. End-to-end forwarding is built on v4
+  independently ([`plans/mail-forwarding.md`](plans/mail-forwarding.md),
+  in progress).
+- **D. Calendar** (next, decided 2026-10-19): starts once the work in
+  flight is done (Chat groups slice 1, Mail forwarding, Chat contacts sync).
+  Proton Calendar is the reference: per-calendar keys, sharing, iTIP
+  invitations over Mail, reminders; no CalDAV (as Proton). A plan note comes
+  first, copying Proton's code. Replaces Chat meetings' `.ics` download.
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;
@@ -1208,6 +1236,14 @@ One failure of that day is not explained by the fix: in
 `34-chat-backup-two-server-recovery`, a group attachment did not appear in a
 restored clean browser within 45 seconds, once in three runs.
 
+### Security · TLS 1.2 still accepted by the bundled Nginx
+
+`nginx/nginx.conf` allows `TLSv1.2 TLSv1.3` on the web and TURN listeners.
+Kept for now (decided 2026-10-18, post-quantum audit) for older clients; the
+server's outbound TLS is rustls with aws-lc-rs and prefers X25519MLKEM768.
+Revisit together with the inbound key-exchange groups (Nginx's OpenSSL decides
+whether browsers get X25519MLKEM768 from it).
+
 ### Security · dependency advisories left open
 
 `deny.toml` ignores these, each with its reason; remove an entry as soon as
@@ -1220,9 +1256,18 @@ its fix is in the lockfile. Recorded 2026-10-17.
   affected. **Before the native apps:** bump libsignal to a release that pins
   `libcrux-secrets` 0.0.6 or later (chat-core).
 - **`libcrux-sha3` 0.0.8** (RUSTSEC-2026-0207 and -0208, SHAKE): neither
-  touches ML-KEM, and `hpke-rs` 0.6.1 uses it only for X-Wing and ML-KEM key
-  derivation, not Kutup's DHKEM(X25519) suite. Goes with the same libsignal
-  bump and a newer `hpke-rs`.
+  touches ML-KEM, and `hpke-rs` 0.6.1 uses it only in `derive_key_pair` for
+  X-Wing and ML-KEM, which Kutup never calls (the groups' X-Wing keys are their
+  seeds; X-Wing itself runs on RustCrypto). Goes with the same libsignal bump
+  and a newer `hpke-rs`.
+- **`hpke-rs` 0.8 waits on the same libsignal bump.** Every `hpke-rs` 0.8
+  backend needs `hax-lib` 0.3.7 or later through `libcrux-sha3` 0.0.11, and
+  libsignal 0.97.2 pins `hax-lib` 0.3.6 through `libcrux-ml-kem` 0.0.8. Until
+  then, the groups' X-Wing suite uses `hpke-rs-rust-crypto` 0.6.1's
+  post-quantum KEMs over the released `x-wing` 0.1.1 and `ml-kem` 0.3.3 (pinned
+  exactly). `hpke-rs-libcrux` 0.6.1 was not taken: its libcrux 0.0.7 crates
+  carry RUSTSEC-2026-0124 (in its ChaCha20-Poly1305), -0209/-0210/-0211 and
+  -0330/-0331.
 - **`rsa` 0.9.10** (RUSTSEC-2023-0071, Marvin; no fixed release): Kutup never
   decrypts or signs with an RSA private key.
 - **Unmaintained**, no replacement in their parents yet: `number_prefix`

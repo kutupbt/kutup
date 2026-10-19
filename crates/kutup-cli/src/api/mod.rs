@@ -174,14 +174,14 @@ impl Client {
             "x-kutup-client",
             reqwest::header::HeaderValue::from_static("cli"),
         );
-        let http = HttpClient::builder()
+        let http = crate::tls::client_builder()
             .default_headers(headers.clone())
             .timeout(Duration::from_secs(60))
             .connect_timeout(Duration::from_secs(30))
             .danger_accept_invalid_certs(insecure)
             .build()
             .expect("build http client");
-        let upload = HttpClient::builder()
+        let upload = crate::tls::client_builder()
             .default_headers(headers)
             .timeout(None) // per-phase only; large bodies must not hit a total deadline
             .connect_timeout(Duration::from_secs(30))

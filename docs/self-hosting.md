@@ -279,6 +279,12 @@ renewing or replacing them, reload Nginx:
 docker compose exec nginx nginx -s reload
 ```
 
+The server's own outbound HTTPS (federation with other Kutup servers, Web
+Push, outside mail keys, maps and the rest) runs on rustls with aws-lc-rs and
+offers the post-quantum hybrid key exchange X25519MLKEM768 first, falling back
+to X25519 or the NIST curves for peers without it. Nothing needs configuring.
+The bundled Nginx still accepts TLS 1.2 as well as 1.3 (`docs/roadmap.md`).
+
 ### Automatic certificates
 
 `docker-compose.acme.yml` adds a small companion that gets a Let's Encrypt
@@ -717,9 +723,20 @@ Database migrations run automatically on backend startup.
 Servers that federate Chat with each other update together when a federation
 wire version changes. Sealed Chat federation moved to version 2 on 2026-10-18
 (a device mismatch now closes its sequence): a server on version 2 and one on
-version 1 refuse each other's sealed sends for good, the client sees them as
-refused, and both logs say "sealed federation peer runs another version".
+version 1 refuse each other's sealed sends for good, and the client sees them
+as refused. The version-2 server logs "sealed federation peer runs another
+version" when it refuses a version-1 send, and "the recipient's server refused
+a sealed send for good" (with the peer's error) when a version-1 server
+refuses its own; the version-1 server logs only a generic invalid transaction.
 Sealed sends between the two resume once both run the same version.
+
+Each backend also holds up to `SEALED_FLUSH_LOCK_CONNECTIONS` (default 4)
+Postgres sessions of its own beside its main pool: one per destination server
+it is delivering sealed Chat to at that moment, holding a session advisory
+lock so two backends never deliver to the same server at once. Count them in
+Postgres's `max_connections`. Session advisory locks need a direct connection
+or a session-mode pooler: behind PgBouncer in transaction mode they don't
+hold.
 
 ---
 

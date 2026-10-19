@@ -398,6 +398,9 @@ const SEALED_BATCH_OVERHEAD_BYTES: usize = 64 * 1024;
 /// ended at a sequence an earlier answer already settled.
 const MAX_SEALED_FLUSH_ROUNDS: usize = 4;
 
+/// The most passes one held flush makes for sends that arrived during it.
+const MAX_SEALED_FLUSH_PASSES: usize = 4;
+
 /// How long a destination is sent singles after it answered a single but not
 /// a batch (a server from before batches).
 const NO_SEALED_BATCH_ROUTE_FOR: Duration = Duration::from_secs(3600);
@@ -438,7 +441,7 @@ pub async fn enqueue_sealed_send(
     match enqueue_sealed_row(state, recipient, request).await? {
         Queued::Settled(outcome) => Ok(outcome),
         Queued::Row(id) => {
-            flush_sealed_destination(state, &recipient.server)
+            flush_sealed_destination(state, &recipient.server, FlushTrigger::Client)
                 .await?
                 .outcome(&state.pool, id)
                 .await
@@ -616,6 +619,7 @@ async fn requeue_sealed(
     let sequence = next_sealed_sequence(tx, destination).await?;
     transaction.sequence = u64::try_from(sequence)
         .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?;
+    transaction.version = kutup_chat_proto::SEALED_FEDERATION_VERSION;
     sqlx::query(
         "UPDATE chat_sealed_federation_outbox
          SET sequence = $3, transaction = $2, state = 'pending', attempts = 0,
@@ -660,52 +664,68 @@ fn settled_outcome(
 /// flush never holds one of the main pool's, nor a transaction, across its
 /// network calls.
 pub(crate) struct SealedFlushLocks {
-    flushing: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The destinations this backend is flushing, each with whether a send
+    /// for it arrived meanwhile (its flush then runs again before it ends).
+    flushing: std::sync::Mutex<std::collections::HashMap<String, bool>>,
+    /// One permit per lock connection: a flush takes a free one or skips at
+    /// once, so a few slow peers never make others wait for the pool.
+    permits: std::sync::Arc<tokio::sync::Semaphore>,
     pool: sqlx::PgPool,
 }
 
-/// Connections for held flush locks: a flush beyond these waits for the
-/// next round.
-const FLUSH_LOCK_CONNECTIONS: u32 = 4;
-
 impl SealedFlushLocks {
-    pub(crate) fn new(pool: &sqlx::PgPool) -> Self {
+    /// Holds at most `connections` flush locks at once
+    /// (`SEALED_FLUSH_LOCK_CONNECTIONS`): that many Postgres sessions beside
+    /// the main pool, per backend.
+    pub(crate) fn new(pool: &sqlx::PgPool, connections: u32) -> Self {
+        let connections = connections.max(1);
         Self {
-            flushing: std::sync::Mutex::new(std::collections::HashSet::new()),
+            flushing: std::sync::Mutex::new(std::collections::HashMap::new()),
+            permits: std::sync::Arc::new(tokio::sync::Semaphore::new(connections as usize)),
             pool: sqlx::postgres::PgPoolOptions::new()
-                .max_connections(FLUSH_LOCK_CONNECTIONS)
+                .max_connections(connections)
                 .min_connections(0)
-                .acquire_timeout(Duration::from_secs(1))
+                // Only opening a connection can take time: a permit means
+                // one is free or may be opened.
+                .acquire_timeout(Duration::from_secs(5))
                 .connect_lazy_with((*pool.connect_options()).clone()),
         }
     }
 
     /// `destination`'s flush lock, or `None` at once if a flush of it is
-    /// under way here or on another backend. Nobody waits for it.
-    async fn try_lock(&self, destination: &str) -> AppResult<Option<FlushLock<'_>>> {
-        if !self.flushing.lock().unwrap().insert(destination.to_owned()) {
-            return Ok(None);
+    /// under way here (which then runs again for the send that asked) or on
+    /// another backend, or no lock connection is free. Nobody waits for it;
+    /// what is not flushed now the retry worker takes.
+    async fn try_lock(&self, destination: &str) -> Option<FlushLock<'_>> {
+        {
+            let mut flushing = self.flushing.lock().unwrap();
+            if let Some(again) = flushing.get_mut(destination) {
+                *again = true;
+                return None;
+            }
+            flushing.insert(destination.to_owned(), false);
         }
         let mut lock = FlushLock {
             locks: self,
             destination: destination.to_owned(),
             connection: None,
+            permit: None,
+            listed: true,
+            locked: false,
         };
-        let mut connection = match self.pool.acquire().await {
+        let permit = self.permits.clone().try_acquire_owned().ok()?;
+        lock.permit = Some(permit);
+        // The client's rows are queued already: a lock that can't be had now
+        // (no connection, a failed query) only leaves them to the worker.
+        let connection = match self.pool.acquire().await {
             Ok(connection) => connection,
-            Err(sqlx::Error::PoolTimedOut) => return Ok(None),
-            Err(error) => return Err(error.into()),
+            Err(error) => {
+                tracing::warn!(%destination, %error, "sealed flush lock: no connection; the retry worker sends");
+                return None;
+            }
         };
-        let locked: bool =
-            sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 771944))")
-                .bind(destination)
-                .fetch_one(&mut *connection)
-                .await?;
-        if !locked {
-            return Ok(None);
-        }
         lock.connection = Some(connection);
-        Ok(Some(lock))
+        lock.relock().await.then_some(lock)
     }
 }
 
@@ -716,32 +736,103 @@ struct FlushLock<'a> {
     locks: &'a SealedFlushLocks,
     destination: String,
     connection: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// Still in this backend's set of destinations being flushed.
+    listed: bool,
+    /// The database lock is held on `connection`.
+    locked: bool,
 }
 
 impl FlushLock<'_> {
-    async fn release(mut self) {
-        if let Some(mut connection) = self.connection.take() {
-            let unlocked = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 771944))")
-                .bind(&self.destination)
-                .execute(&mut *connection)
-                .await;
-            if unlocked.is_err() {
-                connection.close_on_drop();
+    /// Whether a send for this destination arrived during the flush (and
+    /// clears the mark): then the flush runs again.
+    fn take_again(&self) -> bool {
+        let mut flushing = self.locks.flushing.lock().unwrap();
+        match flushing.get_mut(&self.destination) {
+            Some(again) if *again => {
+                *again = false;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Stops listing the flush in this backend: a send from now on starts
+    /// its own.
+    fn stop_listing(&mut self) {
+        if self.listed {
+            self.locks
+                .flushing
+                .lock()
+                .unwrap()
+                .remove(&self.destination);
+            self.listed = false;
+        }
+    }
+
+    /// Takes the database lock on the held connection, if no other backend
+    /// holds it. A failed query reads as not taken.
+    async fn relock(&mut self) -> bool {
+        let Some(connection) = self.connection.as_mut() else {
+            return false;
+        };
+        match sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 771944))")
+            .bind(&self.destination)
+            .fetch_one(&mut **connection)
+            .await
+        {
+            Ok(locked) => {
+                self.locked = locked;
+                locked
+            }
+            Err(error) => {
+                tracing::warn!(destination = %self.destination, %error, "sealed flush lock: the lock query failed; the retry worker sends");
+                false
             }
         }
+    }
+
+    /// Gives the database lock back, keeping the connection; one that can't
+    /// be unlocked is closed, which ends the lock with its session.
+    async fn unlock(&mut self) {
+        if !self.locked {
+            return;
+        }
+        self.locked = false;
+        if let Some(connection) = self.connection.as_mut() {
+            let unlocked = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 771944))")
+                .bind(&self.destination)
+                .execute(&mut **connection)
+                .await;
+            if unlocked.is_err() {
+                if let Some(mut connection) = self.connection.take() {
+                    connection.close_on_drop();
+                }
+            }
+        }
+    }
+
+    async fn release(mut self) {
+        self.unlock().await;
+        self.stop_listing();
     }
 }
 
 impl Drop for FlushLock<'_> {
     fn drop(&mut self) {
         if let Some(mut connection) = self.connection.take() {
-            connection.close_on_drop();
+            if self.locked {
+                connection.close_on_drop();
+            }
         }
-        self.locks
-            .flushing
-            .lock()
-            .unwrap()
-            .remove(&self.destination);
+        if self.listed {
+            self.locks
+                .flushing
+                .lock()
+                .unwrap()
+                .remove(&self.destination);
+        }
+        self.permit.take();
     }
 }
 
@@ -805,28 +896,79 @@ impl SealedFlush {
     }
 }
 
+/// Who asks for a flush: a client's send, or the retry worker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlushTrigger {
+    Client,
+    Worker,
+}
+
+/// How often a client's send may try a destination whose queue is backing
+/// off: with the queue's head alone, so a server that is back is noticed at
+/// once rather than after the backoff, and one that isn't costs one request
+/// per this many seconds.
+const SEALED_PROBE_SECONDS: i64 = 5;
+
 /// Delivers a destination's queued sealed sends, under its flush lock: the
 /// run of pending rows from its head, if the head is due (not backing off,
 /// not parked for an upgrade), in federated batches (at most
 /// [`MAX_SEALED_BATCH_ITEMS`] and [`MAX_SEALED_BATCH_BYTES`] each). Nothing
 /// is sent without the lock or a due head; sends it doesn't reach wait, and
-/// with the lock taken elsewhere this flush sends nothing. The flush runs in
-/// its own task, so a client that goes away doesn't cut it short.
+/// with the lock taken elsewhere this flush sends nothing. A client's send
+/// may also try a backing-off head alone ([`claim_sealed_probe`]). The flush
+/// runs in its own task, so a client that goes away doesn't cut it short.
 pub(crate) async fn flush_sealed_destination(
     state: &AppState,
     destination: &str,
+    trigger: FlushTrigger,
 ) -> AppResult<SealedFlush> {
     let (state, destination) = (state.clone(), destination.to_owned());
-    tokio::spawn(async move { flush_locked(&state, &destination).await })
+    tokio::spawn(async move { flush_locked(&state, &destination, trigger).await })
         .await
         .map_err(|error| AppError::internal(format!("sealed flush task: {error}")))?
 }
 
-async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFlush> {
+async fn flush_locked(
+    state: &AppState,
+    destination: &str,
+    trigger: FlushTrigger,
+) -> AppResult<SealedFlush> {
     let mut flush = SealedFlush::new();
-    let Some(lock) = state.sealed_flush.try_lock(destination).await? else {
+    let Some(mut lock) = state.sealed_flush.try_lock(destination).await else {
         return Ok(flush);
     };
+    // Again while sends arrive during the flush (each would otherwise wait
+    // for the retry worker), a few times at most. At the end the database
+    // lock goes first and the listing last, with one more look between: a
+    // send that met the listing after the last look is flushed here, and
+    // one after the listing is gone takes the lock itself.
+    let mut passes = 0;
+    loop {
+        flush_rounds(state, destination, trigger, &mut flush).await?;
+        passes += 1;
+        if passes >= MAX_SEALED_FLUSH_PASSES {
+            break;
+        }
+        if lock.take_again() {
+            continue;
+        }
+        lock.unlock().await;
+        if lock.take_again() && lock.relock().await {
+            continue;
+        }
+        break;
+    }
+    lock.release().await;
+    Ok(flush)
+}
+
+/// One pass of a held flush: up to [`MAX_SEALED_FLUSH_ROUNDS`] batches.
+async fn flush_rounds(
+    state: &AppState,
+    destination: &str,
+    trigger: FlushTrigger,
+    flush: &mut SealedFlush,
+) -> AppResult<()> {
     for _ in 0..MAX_SEALED_FLUSH_ROUNDS {
         // Sizes first: only the rows that fit one batch are loaded.
         let queued: Vec<(Uuid, i64, i32, bool, Option<String>)> = sqlx::query_as(
@@ -840,10 +982,15 @@ async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFl
         .bind(MAX_SEALED_BATCH_ITEMS as i64)
         .fetch_all(&state.pool)
         .await?;
-        let Some((_, _, _, due, class)) = queued.first() else {
+        let Some((head, _, _, due, class)) = queued.first() else {
             break;
         };
-        if !due {
+        // A head backing off waits for the worker, but a client's send may
+        // try it alone now and then.
+        let probe = !due
+            && trigger == FlushTrigger::Client
+            && claim_sealed_probe(&state.pool, *head).await?;
+        if !due && !probe {
             flush.parked = class.as_deref() == Some("peer_unsupported");
             break;
         }
@@ -851,7 +998,7 @@ async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFl
         // settled ends this run, and the next round starts after it.
         let mut run = Vec::new();
         let mut size = 0usize;
-        for (id, sequence, weight, _, _) in &queued {
+        for (id, sequence, weight, _, _) in queued.iter().take(if probe { 1 } else { usize::MAX }) {
             let weight = usize::try_from(*weight).unwrap_or(usize::MAX);
             if let Some(&(_, last)) = run.last() {
                 if last + 1 != *sequence
@@ -874,12 +1021,30 @@ async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFl
         .bind(&ids)
         .fetch_all(&state.pool)
         .await?;
-        if !send_sealed_run(state, destination, &rows, &mut flush).await? {
+        if !send_sealed_run(state, destination, &rows, flush).await? {
             break;
         }
     }
-    lock.release().await;
-    Ok(flush)
+    Ok(())
+}
+
+/// Claims a try of a backing-off queue head: at most one per
+/// [`SEALED_PROBE_SECONDS`] per head, whichever backend asks, and never for a
+/// head parked for an upgrade or one already due. The claim stamps the row,
+/// so the limit holds whatever the try then answers.
+async fn claim_sealed_probe(pool: &sqlx::PgPool, head: Uuid) -> AppResult<bool> {
+    Ok(sqlx::query(
+        "UPDATE chat_sealed_federation_outbox SET updated_at = now()
+         WHERE id = $1 AND state = 'pending' AND next_attempt_at > now()
+           AND last_error_class IS DISTINCT FROM 'peer_unsupported'
+           AND updated_at <= now() - ($2 * interval '1 second')",
+    )
+    .bind(head)
+    .bind(SEALED_PROBE_SECONDS)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
 }
 
 /// Sends one run of a destination's queued rows: as a batch, or one by one
@@ -994,8 +1159,8 @@ async fn send_sealed_singles(
 fn stored_sealed_transaction(
     row: &SealedFederationOutboxRow,
 ) -> AppResult<FederatedSealedTransactionV1> {
-    let transaction: FederatedSealedTransactionV1 = serde_json::from_value(row.transaction.clone())
-        .map_err(|error| {
+    let mut transaction: FederatedSealedTransactionV1 =
+        serde_json::from_value(row.transaction.clone()).map_err(|error| {
             AppError::internal(format!("stored sealed transaction is invalid: {error}"))
         })?;
     if transaction.recipient
@@ -1005,6 +1170,10 @@ fn stored_sealed_transaction(
             "sealed outbox recipient does not match its transaction",
         ));
     }
+    // Sent at this server's version, whatever version it was queued under
+    // (a row from before version 2, a migration's closing send): the
+    // destination answers it at that version.
+    transaction.version = kutup_chat_proto::SEALED_FEDERATION_VERSION;
     Ok(transaction)
 }
 
@@ -1139,7 +1308,10 @@ async fn apply_sealed_answer(
             let refusal = serde_json::from_slice::<Value>(body).unwrap_or(Value::Null);
             tracing::warn!(
                 destination = %row.destination,
-                code = refusal.get("code").and_then(serde_json::Value::as_str).unwrap_or(""),
+                code = refusal
+                    .get("code")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unspecified"),
                 error = refusal.get("error").and_then(serde_json::Value::as_str).unwrap_or(""),
                 "the recipient's server refused a sealed send for good"
             );
@@ -1685,7 +1857,7 @@ async fn due_sealed_destinations(pool: &sqlx::PgPool) -> AppResult<Vec<String>> 
 
 async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
     for destination in due_sealed_destinations(&state.pool).await? {
-        match flush_sealed_destination(state, &destination).await {
+        match flush_sealed_destination(state, &destination, FlushTrigger::Worker).await {
             Ok(flush) => {
                 for (id, outcome) in flush.outcomes {
                     if let Err(error) = outcome {
@@ -2091,12 +2263,6 @@ async fn apply_sealed_one(
     let invalid = if transaction.version != kutup_chat_proto::SEALED_FEDERATION_VERSION {
         // A peer on another sealed version reads sequences differently:
         // refused outright, never waited on (docs/self-hosting.md, Updating).
-        tracing::warn!(
-            %origin,
-            version = transaction.version,
-            expected = kutup_chat_proto::SEALED_FEDERATION_VERSION,
-            "sealed federation peer runs another version; federating servers upgrade together"
-        );
         Some((
             "sealed federation version is not this server's".to_owned(),
             Some("sealedVersionUnsupported"),
@@ -2160,6 +2326,14 @@ async fn apply_sealed_one(
         ));
     }
     if let Some((error, code)) = invalid {
+        if code == Some("sealedVersionUnsupported") {
+            tracing::warn!(
+                %origin,
+                version = transaction.version,
+                expected = kutup_chat_proto::SEALED_FEDERATION_VERSION,
+                "sealed federation peer runs another version; federating servers upgrade together"
+            );
+        }
         return Ok((
             refuse_sealed(tx, origin, transaction, sequence, error, code).await?,
             Vec::new(),
@@ -2722,13 +2896,6 @@ fn signed_json<T: serde::Serialize>(
     federation.signed_response(authenticated, status, JSON_CONTENT_TYPE, body)
 }
 
-/// Refuses a sealed transaction (400). The refusal is final only when it is
-/// recorded against the transaction's sequence (that sequence is next, and
-/// its sendId is a fresh UUID): then the answer names the sequence
-/// (`refused.sequence`), a replay gets the same answer, and the origin's
-/// later sends meet no gap. Otherwise the 400 names nothing and the origin
-/// keeps the send pending. Counted in the origin's rate first, so refusals
-/// cannot be written faster than deliveries.
 /// Counts one transaction against its origin's sealed rate, as a delivery
 /// does: an answer that stores nothing (a refusal, a mismatch, the uniform
 /// 404) is charged too, so none of them is a free probe.
@@ -2748,6 +2915,13 @@ async fn charge_sealed_origin(
         .await
 }
 
+/// Refuses a sealed transaction (400). The refusal is final only when it is
+/// recorded against the transaction's sequence (that sequence is next, and
+/// its sendId is a fresh UUID): then the answer names the sequence
+/// (`refused.sequence`), a replay gets the same answer, and the origin's
+/// later sends meet no gap. Otherwise the 400 names nothing and the origin
+/// keeps the send pending. Counted in the origin's rate first, so refusals
+/// cannot be written faster than deliveries.
 async fn refuse_sealed(
     mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
     origin: &str,
@@ -3260,22 +3434,22 @@ mod sealed_live_tests {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
         };
-        let locks = SealedFlushLocks::new(&pool);
+        let locks = SealedFlushLocks::new(&pool, 4);
         let destination = origin();
-        let first = locks.try_lock(&destination).await.unwrap().expect("free");
-        assert!(locks.try_lock(&destination).await.unwrap().is_none());
-        assert!(locks.try_lock("other.test").await.unwrap().is_some());
+        let first = locks.try_lock(&destination).await.expect("free");
+        assert!(locks.try_lock(&destination).await.is_none());
+        assert!(locks.try_lock("other.test").await.is_some());
         first.release().await;
         // Held by another backend.
-        let other = SealedFlushLocks::new(&pool);
-        let elsewhere = other.try_lock(&destination).await.unwrap().expect("free");
-        assert!(locks.try_lock(&destination).await.unwrap().is_none());
+        let other = SealedFlushLocks::new(&pool, 4);
+        let elsewhere = other.try_lock(&destination).await.expect("free");
+        assert!(locks.try_lock(&destination).await.is_none());
         // Dropped without its release: its connection closes, and with it
         // the lock.
         drop(elsewhere);
         let mut again = None;
         for _ in 0..50 {
-            again = locks.try_lock(&destination).await.unwrap();
+            again = locks.try_lock(&destination).await;
             if again.is_some() {
                 break;
             }
@@ -3445,6 +3619,251 @@ mod sealed_live_tests {
             Queued::Row(same) if same == id
         ));
         assert_eq!(outbox_row(&pool, id).await.1, sequence);
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// A send queued before version 2 (a stored version-1 row, a migration's
+    /// closing send) goes out at this server's version and is accepted, not
+    /// refused for good.
+    #[tokio::test]
+    async fn live_a_row_queued_at_version_1_is_sent_at_version_2() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let origin = origin();
+        let capability = [0x65; 16];
+        let bob = recipient(&pool, capability).await;
+        let mut queued = transaction(&origin, bob, 1, Uuid::new_v4(), capability, 77);
+        queued.version = 1;
+        let row = SealedFederationOutboxRow {
+            id: Uuid::new_v4(),
+            destination: DESTINATION.to_owned(),
+            sequence: 1,
+            recipient_account_id: bob,
+            transaction: serde_json::to_value(&queued).unwrap(),
+            attempts: 0,
+        };
+        let sent = stored_sealed_transaction(&row).unwrap();
+        assert_eq!(sent.version, kutup_chat_proto::SEALED_FEDERATION_VERSION);
+        let (answer, delivered) = apply_sealed_one(&pool, DESTINATION, &origin, &sent)
+            .await
+            .unwrap();
+        assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(stored(&pool, bob).await, 1);
+        clean(&pool, &origin, &[bob]).await;
+    }
+
+    /// A send that meets a flush under way makes that flush run again, so it
+    /// doesn't wait for the retry worker; with every lock connection taken,
+    /// a flush of another destination skips at once.
+    #[tokio::test]
+    async fn live_a_send_during_a_flush_runs_it_again_and_no_one_waits() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let locks = SealedFlushLocks::new(&pool, 1);
+        let destination = origin();
+        let mut held = locks.try_lock(&destination).await.expect("free");
+        // A send arrives: no lock for it, and the holder runs again.
+        assert!(locks.try_lock(&destination).await.is_none());
+        assert!(held.take_again());
+        assert!(!held.take_again());
+        // At the end the database lock goes first, the listing stays: a send
+        // now still marks this flush (and doesn't take the lock itself),
+        // which takes the lock back and runs again.
+        held.unlock().await;
+        assert!(locks.try_lock(&destination).await.is_none());
+        assert!(held.take_again());
+        assert!(held.relock().await);
+        // The one lock connection is taken: another destination skips at
+        // once rather than waiting for it.
+        let started = std::time::Instant::now();
+        assert!(locks.try_lock("other.test").await.is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
+        held.release().await;
+        locks
+            .try_lock("other.test")
+            .await
+            .expect("free again")
+            .release()
+            .await;
+    }
+
+    /// A backing-off head is tried once per [`SEALED_PROBE_SECONDS`]: 100
+    /// sends at once through two backends' flush locks claim one try between
+    /// them; a head parked for an upgrade or already due is never claimed,
+    /// and once the interval has passed the next send may try again.
+    #[tokio::test]
+    async fn live_a_backing_off_head_is_probed_once_per_interval() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let destination = origin();
+        let head: Uuid = sqlx::query_scalar(
+            "INSERT INTO chat_sealed_federation_outbox
+                 (destination, sequence, recipient_account_id, send_id, transaction,
+                  attempts, next_attempt_at, last_error_class, updated_at)
+             VALUES ($1, 1, gen_random_uuid(), gen_random_uuid(), '{}'::jsonb,
+                     3, now() + interval '5 minutes', 'transport', now() - interval '1 minute')
+             RETURNING id",
+        )
+        .bind(&destination)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let backends = [
+            std::sync::Arc::new(SealedFlushLocks::new(&pool, 4)),
+            std::sync::Arc::new(SealedFlushLocks::new(&pool, 4)),
+        ];
+        let sends = |pool: sqlx::PgPool| {
+            let backends = backends.clone();
+            let destination = destination.clone();
+            async move {
+                let tries = (0..100).map(|n| {
+                    let (locks, pool, destination) =
+                        (backends[n % 2].clone(), pool.clone(), destination.clone());
+                    tokio::spawn(async move {
+                        let Some(lock) = locks.try_lock(&destination).await else {
+                            return false;
+                        };
+                        let claimed = claim_sealed_probe(&pool, head).await.unwrap();
+                        lock.release().await;
+                        claimed
+                    })
+                });
+                let mut claimed = 0;
+                for done in futures_util::future::join_all(tries).await {
+                    claimed += usize::from(done.unwrap());
+                }
+                claimed
+            }
+        };
+        assert_eq!(sends(pool.clone()).await, 1, "one try per interval");
+        assert_eq!(sends(pool.clone()).await, 0, "still inside the interval");
+
+        let age = |interval: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(&format!(
+                    "UPDATE chat_sealed_federation_outbox
+                        SET updated_at = now() - interval '{interval}' WHERE id = $1"
+                ))
+                .bind(head)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        };
+        age("6 seconds").await;
+        assert_eq!(sends(pool.clone()).await, 1, "the next interval");
+
+        // Parked for an upgrade: never tried before its hour.
+        age("1 minute").await;
+        sqlx::query(
+            "UPDATE chat_sealed_federation_outbox
+                SET last_error_class = 'peer_unsupported' WHERE id = $1",
+        )
+        .bind(head)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sends(pool.clone()).await, 0, "a parked head");
+        // Due: a flush sends it in full, not as a probe.
+        sqlx::query(
+            "UPDATE chat_sealed_federation_outbox
+                SET last_error_class = 'transport', next_attempt_at = now() WHERE id = $1",
+        )
+        .bind(head)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !claim_sealed_probe(&pool, head).await.unwrap(),
+            "a due head"
+        );
+
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// The migration stamps queued, undelivered rows with version 2 (the
+    /// closing step's sends among them); delivered rows keep what they were.
+    #[tokio::test]
+    async fn live_the_migration_stamps_queued_rows_with_version_2() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let destination = origin();
+        let insert = |sequence: i64, state: &'static str| {
+            let pool = pool.clone();
+            let destination = destination.clone();
+            async move {
+                let mut queued = transaction(
+                    "origin.test",
+                    Uuid::new_v4(),
+                    sequence as u64,
+                    Uuid::new_v4(),
+                    [1; 16],
+                    77,
+                );
+                queued.version = 1;
+                let id = Uuid::new_v4();
+                sqlx::query(
+                    "INSERT INTO chat_sealed_federation_outbox
+                         (id, destination, sequence, recipient_account_id, send_id, transaction, state)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                )
+                .bind(id)
+                .bind(&destination)
+                .bind(sequence)
+                .bind(Uuid::new_v4())
+                .bind(Uuid::new_v4())
+                .bind(serde_json::to_value(&queued).unwrap())
+                .bind(state)
+                .execute(&pool)
+                .await
+                .unwrap();
+                id
+            }
+        };
+        let pending = insert(1, "pending").await;
+        let delivered = insert(2, "delivered").await;
+        let migration = include_str!("../migrations/20261018120000_sealed_sequences.up.sql");
+        let start = migration
+            .find("UPDATE chat_sealed_federation_outbox\n   SET transaction = jsonb_set")
+            .expect("the stamping step");
+        let stamp = &migration[start..start + migration[start..].find(';').unwrap()];
+        sqlx::query(&format!("{stamp} AND destination = $1"))
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let version = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT transaction->>'version' FROM chat_sealed_federation_outbox WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(version(pending).await, "2");
+        assert_eq!(version(delivered).await, "1");
         sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
             .bind(&destination)
             .execute(&pool)

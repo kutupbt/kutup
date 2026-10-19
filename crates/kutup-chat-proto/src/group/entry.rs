@@ -90,6 +90,10 @@ pub struct GroupInviteV1 {
     pub slot_id: String,
     pub slot_revision: u64,
     pub claim_key_seed: String,
+    /// The group's name when the invitation was made, so the invitation can
+    /// name the group before the invitee joins (and reads the state).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// Never prints the master key or the claim key.
@@ -170,6 +174,16 @@ impl GroupInviteV1 {
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
         decode_exact::<SLOT_ID_LEN>("slotId", &self.slot_id)?;
         decode_exact::<32>("claimKeySeed", &self.claim_key_seed)?;
+        if self
+            .title
+            .as_ref()
+            .is_some_and(|title| title.chars().count() > MAX_INVITE_TITLE_CHARS)
+        {
+            return Err("an invitation's title is too long".into());
+        }
         Ok(())
     }
 }
+
+/// The longest group name an invitation carries.
+pub const MAX_INVITE_TITLE_CHARS: usize = 64;

@@ -16,6 +16,21 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+/// A client builder on the server's TLS provider: reqwest is built without
+/// one of its own (rustls with aws-lc-rs, X25519MLKEM768 first; the
+/// server's `tls` module), so it is installed as the process default first.
+// The one place a client is built (clippy.toml).
+#[allow(clippy::disallowed_methods)]
+pub fn client_builder() -> reqwest::blocking::ClientBuilder {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    Client::builder()
+}
+
+/// [`client_builder`] with reqwest's defaults.
+pub fn client() -> Client {
+    client_builder().build().expect("an HTTP client")
+}
+
 /// The domain the server under test names its accounts with
 /// (`CHAT_SERVER_NAME`, advertised as `chat.serverName` in the public
 /// settings). Read from the server, not assumed: the gates run servers named

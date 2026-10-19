@@ -91,6 +91,7 @@ const emptySnapshot: ChatSnapshot = {
   contacts: [],
   profiles: [],
   groups: [],
+  chatGroups: [],
   attention: [],
   profile: null,
   invitations: [],
@@ -142,8 +143,12 @@ export function useChat(): ChatState {
   return useSyncExternalStore(subscribe, getChatState)
 }
 
-/** Whether this server offers groups (CHAT_GROUPS): one boolean, so a message re-renders only when it changes. */
-export function useGroupsEnabled(): boolean {
+/**
+ * Whether group links can be followed here: one boolean, so a message
+ * re-renders only when it changes. Joining by link is the MLS groups' until
+ * pairwise groups take links (docs/plans/pairwise-groups.md §10).
+ */
+export function useGroupLinksEnabled(): boolean {
   return useSyncExternalStore(subscribe, () => state.capabilities?.mlsGroups === true)
 }
 
@@ -165,7 +170,8 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         console.warn('chat: part of the reload kept its last value', error)
         return fallback
       })
-    const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals] =
+    const pairwise = state.capabilities?.pairwiseGroups === true
+    const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals, chatGroups] =
       await Promise.all([
         // The live window, not the whole history (Phase 2b): read again only
         // for the conversations that changed.
@@ -181,6 +187,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         mlsGroups ? orPrevious(service.groupInvitations(), previous.invitations) : Promise.resolve([]),
         mlsGroups ? orPrevious(service.groupInvitationFeedback(), previous.invitationFeedback) : Promise.resolve([]),
         mlsGroups ? orPrevious(service.pendingGroupOwnerApprovals(), previous.ownerApprovals) : Promise.resolve([]),
+        pairwise ? orPrevious(service.chatGroups(), previous.chatGroups) : Promise.resolve([]),
       ])
     if (mine !== generation || state.service !== service) return
     set({
@@ -191,6 +198,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         profile,
         profiles,
         groups,
+        chatGroups,
         invitations,
         invitationFeedback,
         ownerApprovals,

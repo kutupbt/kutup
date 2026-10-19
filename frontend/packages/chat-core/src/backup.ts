@@ -1,6 +1,7 @@
 import api from '@kutup/session/client'
 import { ACCOUNT_ENVELOPE_PURPOSE, openAccountEnvelope, sealAccountEnvelope } from '@kutup/crypto/accountEnvelope'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
+import { exactBytes } from '@kutup/crypto/bytes'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
 import { getSodium } from '@kutup/crypto/sodium'
@@ -322,7 +323,7 @@ const browserTransport: ChatBackupTransport = {
   async stageBase(metadata, ciphertext) {
     const form = new FormData()
     form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
-    form.append('ciphertext', new Blob([ciphertext.slice().buffer as ArrayBuffer]), 'base.bin')
+    form.append('ciphertext', new Blob([exactBytes(ciphertext)]), 'base.bin')
     await api.post('/chat/backup/bases', form)
   },
   async downloadBase(objectId) {
@@ -777,7 +778,7 @@ export class ChatBackupCoordinator {
     let outerBytes = 0
     const appendOuter = (bytes: Uint8Array) => {
       sodium.crypto_hash_sha256_update(hash, bytes)
-      parts.push(bytes.slice().buffer as ArrayBuffer)
+      parts.push(exactBytes(bytes))
       outerBytes += bytes.length
     }
     appendOuter(typedHeader)

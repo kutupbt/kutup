@@ -61,6 +61,7 @@ mod storage_check;
 mod storage_pool;
 mod storage_probe;
 mod telemetry;
+mod tls;
 mod totp;
 mod ui_preferences;
 mod version_retention;
@@ -165,6 +166,7 @@ fn known_command(rest: &[String]) -> bool {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    tls::install_crypto_provider();
     let _telemetry = telemetry::init()?;
 
     let args: Vec<String> = std::env::args().collect();
@@ -427,7 +429,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
         opaque,
-        sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(&pool)),
+        sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(
+            &pool,
+            config.sealed_flush_lock_connections,
+        )),
         pool,
         config: Arc::new(config),
         storage,
@@ -828,6 +833,16 @@ fn build_router(state: AppState) -> Router {
             post(feedback::send_feedback)
                 // A message of 5000 characters and a few details.
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route("/api/chat/group-list", get(handlers::chat_group_list::list))
+        .route(
+            "/api/chat/group-list/:id",
+            put(handlers::chat_group_list::put)
+                .delete(handlers::chat_group_list::delete)
+                // One sealed entry, base64, and the head.
+                .route_layer(DefaultBodyLimit::max(
+                    handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
+                )),
         )
         .route(
             "/api/user/identity-pins",

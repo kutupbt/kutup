@@ -77,7 +77,7 @@ impl GatewayCache {
         ConfigCheck::Unknown
     }
 
-    fn usable(&self, now: i64) -> Option<(u8, [u8; 32])> {
+    fn usable(&self, now: i64) -> Option<(u8, [u8; kutup_crypto::oblivious::PUBLIC_KEY_LEN])> {
         let config = self.config.as_ref()?;
         if now + REFRESH_MARGIN_SECS >= config.expires_at {
             return None;

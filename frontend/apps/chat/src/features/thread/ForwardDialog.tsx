@@ -79,6 +79,7 @@ export function ForwardDialog({
         contact: null,
         profile: null,
         groupInfo: null,
+        chatGroup: null,
       })
     }
     return items

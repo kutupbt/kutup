@@ -38,6 +38,10 @@ pub struct GroupSummary {
     pub member_count: usize,
     /// See [`GroupRecordV1::fork_at_revision`].
     pub fork_suspected: bool,
+    /// See [`GroupRecordV1::known_since_ms`].
+    pub known_since_ms: Option<i64>,
+    /// Who may rename it and add members, as the verified state says.
+    pub access: Option<kutup_chat_proto::group::GroupAccessV1>,
 }
 
 /// What group content that came pairwise did.
@@ -262,6 +266,7 @@ impl Engine {
         })
         .map_err(group_error)?;
         record.gateway = cache;
+        record.known_since_ms = Some(crate::clock::unix_millis());
         let body = genesis.canonical_bytes().map_err(ChatError::Invalid)?;
         let response = match self
             .group_request(&mut record, GroupOperationV1::Create, &body)
@@ -672,8 +677,13 @@ impl Engine {
                 let title = group::attribute(&record, GroupAttribute::Title)
                     .ok()
                     .flatten()
-                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .or_else(|| match &record.status {
+                        GroupStatus::Invited { title, .. } => title.clone(),
+                        _ => None,
+                    });
                 let verified = record.verified().ok().flatten();
+                let access = verified.as_ref().map(|(state, _)| state.access);
                 GroupSummary {
                     group_id: record.group_id.clone(),
                     title,
@@ -681,6 +691,8 @@ impl Engine {
                     revision: verified.as_ref().map(|(state, _)| state.revision),
                     member_count: verified.map_or(0, |(state, _)| state.members.len()),
                     fork_suspected: record.fork_at_revision.is_some(),
+                    known_since_ms: record.known_since_ms,
+                    access,
                 }
             })
             .collect())

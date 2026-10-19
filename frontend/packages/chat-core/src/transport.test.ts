@@ -369,12 +369,14 @@ describe('ApiChatTransport', () => {
     await expect(transport.fetchGroupGateway('home.example', '4')).resolves.toEqual({ config: 'c', identityHistory: [] })
     expect(get).toHaveBeenCalledWith('/chat/groups/gateway-key', { params: { server: 'home.example', fromSequence: '4' } })
 
-    const sealed = new Uint8Array([9, 9])
+    // A view into a larger buffer (as WASM memory is): only its own bytes go.
+    const memory = new Uint8Array([7, 7, 9, 9, 7])
+    const sealed = memory.subarray(2, 4)
     await expect(transport.relayGroupRequest('home.example', sealed)).resolves.toEqual({ kind: 'answered', body: 'AQID' })
-    expect(post).toHaveBeenCalledWith('/chat/groups/relay/home.example', sealed, {
-      headers: { 'Content-Type': 'message/ohttp-req' },
-      responseType: 'arraybuffer',
-    })
+    const [path, body, options] = post.mock.calls[0]
+    expect(path).toBe('/chat/groups/relay/home.example')
+    expect(new Uint8Array(body as ArrayBuffer)).toEqual(new Uint8Array([9, 9]))
+    expect(options).toEqual({ headers: { 'Content-Type': 'message/ohttp-req' }, responseType: 'arraybuffer' })
   })
 
   it('maps the relay\'s refusals to what the engine does next', async () => {

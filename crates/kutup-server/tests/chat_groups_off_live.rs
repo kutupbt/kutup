@@ -8,7 +8,6 @@
 mod common;
 use common::*;
 
-use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -19,7 +18,7 @@ fn groups_are_off_unless_switched_on() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let settings: Value = c
         .get(format!("{base}/api/auth/settings"))
         .send()
@@ -51,6 +50,8 @@ fn groups_are_off_unless_switched_on() {
             "/api/chat/groups/gateway-key?server={}&fromSequence=0",
             server_domain(&c, &base)
         ),
+        // Nor the account's group list.
+        "/api/chat/group-list",
     ] {
         assert_eq!(get(path), StatusCode::NOT_FOUND, "{path}");
     }

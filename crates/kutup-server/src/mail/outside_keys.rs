@@ -153,7 +153,7 @@ async fn fetch(state: &AppState, url: &str) -> Result<Vec<u8>, Unusable> {
                 .map(|q| format!("?{q}"))
                 .unwrap_or_default()
         );
-        let response = reqwest::Client::builder()
+        let response = crate::tls::client_builder()
             .timeout(TOTAL_TIMEOUT)
             .build()
             .map_err(|_| Unusable)?

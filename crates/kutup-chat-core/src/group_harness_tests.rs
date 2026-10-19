@@ -2556,3 +2556,126 @@ fn group_batches_a_leg_that_keeps_conflicting_fails_on_the_second() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn group_invite_reaches_a_device_linked_just_before() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    // Alice knows Bob's one device; then Bob links another (or signs in on a
+    // clean browser): the invitation's first send meets a device mismatch,
+    // and goes again to the devices he has now.
+    let mut bob2 = world.link_device(&bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    let sent = block_on(alice.engine.invite_to_group(
+        &group_id,
+        &[bob.account.clone()],
+        &mut rng(),
+    ))
+    .unwrap();
+    assert_eq!(sent, 1);
+    bob2.receive();
+    assert!(
+        matches!(bob2.status(&group_id), GroupStatus::Invited { .. }),
+        "{:?}",
+        bob2.status(&group_id)
+    );
+}
+
+#[test]
+fn group_invite_after_a_declined_one_from_the_same_person_is_taken() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let bob_account = bob.account.clone();
+    let invite = |alice: &mut Person, title: &str| {
+        let group_id = block_on(alice.engine.create_group(title)).unwrap().group_id;
+        let sent = block_on(alice.engine.invite_to_group(
+            &group_id,
+            &[bob_account.clone()],
+            &mut rng(),
+        ))
+        .unwrap();
+        assert_eq!(sent, 1);
+        group_id
+    };
+    let first = invite(&mut alice, "First");
+    bob.receive();
+    assert!(matches!(bob.status(&first), GroupStatus::Invited { .. }));
+    block_on(bob.engine.decline_group_invite(&first)).unwrap();
+    let second = invite(&mut alice, "Second");
+    bob.receive();
+    assert!(
+        matches!(bob.status(&second), GroupStatus::Invited { .. }),
+        "{:?}",
+        block_on(bob.engine.session().db().load_group(&second))
+            .unwrap()
+            .map(|r| r.status)
+    );
+}
+
+#[test]
+fn group_invite_from_a_stranger_after_a_declined_one_is_taken() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    // A device of Bob's that knows no contacts (a clean browser).
+    let mut bob2 = world.link_device(&bob);
+    assert!(block_on(bob2.engine.session().contact(&alice.account))
+        .unwrap()
+        .is_none());
+    let bob_account = bob.account.clone();
+    let invite = |alice: &mut Person, title: &str| {
+        let group_id = block_on(alice.engine.create_group(title)).unwrap().group_id;
+        let sent = block_on(alice.engine.invite_to_group(
+            &group_id,
+            &[bob_account.clone()],
+            &mut rng(),
+        ))
+        .unwrap();
+        assert_eq!(sent, 1);
+        group_id
+    };
+    let first = invite(&mut alice, "First");
+    bob2.receive();
+    assert!(matches!(bob2.status(&first), GroupStatus::Invited { .. }));
+    block_on(bob2.engine.decline_group_invite(&first)).unwrap();
+    let second = invite(&mut alice, "Second");
+    bob2.receive();
+    assert!(
+        matches!(bob2.status(&second), GroupStatus::Invited { .. }),
+        "{:?}",
+        block_on(bob2.engine.session().db().load_group(&second))
+            .unwrap()
+            .map(|r| r.status)
+    );
+}
+
+#[test]
+fn group_ui_an_invitation_names_the_group_before_joining() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    let listed = block_on(bob.engine.list_groups()).unwrap();
+    let invited = listed
+        .iter()
+        .find(|group| group.group_id == group_id)
+        .unwrap();
+    assert_eq!(invited.title.as_deref(), Some("Team"));
+}

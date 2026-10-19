@@ -463,7 +463,7 @@ fn client() -> Client {
         "x-kutup-client",
         reqwest::header::HeaderValue::from_static("cli"),
     );
-    Client::builder()
+    crate::common::client_builder()
         .default_headers(headers)
         .timeout(Duration::from_secs(10))
         .build()

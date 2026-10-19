@@ -749,12 +749,20 @@ destination's queue. One flush per destination runs at a time: in each
 backend a set of the destinations being flushed, and across backends sharing
 the database a session advisory lock held on a small pool of its own, so no
 flush holds a main-pool connection or a transaction across its network calls.
-Nobody waits for that lock: a client whose send meets a flush under way is
+A send that meets a flush under way in the same backend makes that flush run
+again before it ends, a few passes at most; one that finds every lock
+connection taken (`SEALED_FLUSH_LOCK_CONNECTIONS`) skips at once, and the
+retry worker sends it. Nobody waits for that lock: a client whose send meets a flush under way is
 answered from its outbox row, which keeps the destination's final answer, so
 it reads its real answer if another flush (the retry worker's) settled it, and
 `pending` only while it is still queued. A flush runs in its own task, so a
-client that goes away doesn't cut it short. A flush sends nothing while the queue's head is backing off
-or waits for the peer to support `chat.v2`. Otherwise it sends the run of
+client that goes away doesn't cut it short. A flush sends nothing while the queue's head waits for
+the peer to support `chat.v2`. While the head is backing off after an error,
+the retry worker waits it out, but a client's send may try the head alone,
+at most once every 5 seconds per head whichever backend asks
+(`SEALED_PROBE_SECONDS`, claimed by stamping the row): a server that is back
+is noticed at once, and the rest of the queue follows when the head settles.
+Otherwise it sends the run of
 consecutive pending sends from the head, sized before it is loaded, in signed
 `POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
 64 transactions and 4 MiB). The destination checks the batch's shape first
@@ -766,9 +774,13 @@ sequence, answering each it tried.
 **Version 2.** Every sealed transaction and batch carries
 `version` 2 (`SEALED_FEDERATION_VERSION`), the version in which every answer
 uses up its sequence. A server refuses another version's transactions for
-good, by sequence, with `code: sealedVersionUnsupported`, and both sides log
-it: a peer that reads sequences differently is refused, never waited on.
-Federating servers upgrade together (`docs/self-hosting.md`, Updating).
+good, by sequence, with `code: sealedVersionUnsupported`, and logs it; an
+origin logs every refusal it gets, with the peer's code and error. A peer that
+reads sequences differently is refused, never waited on. A send refused this
+way stays refused: an identical resend gets the stored `refused` again. A
+send queued before version 2 goes out at version 2, so an upgrade loses
+nothing in flight. Federating servers upgrade together (`docs/self-hosting.md`,
+Updating).
 
 **Every answer uses up its sequence.** The destination records each final
 answer to an origin's sequence (a delivery, the uniform 404, a device

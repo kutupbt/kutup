@@ -17,12 +17,14 @@ yanked = "deny"
 ignore = [
     # libcrux-sha3 0.0.8: wrong output from repeated incremental portable SHAKE
     # squeezes, and a panic in AVX2 SHAKE-256 for odd output lengths. Neither
-    # touches ML-KEM (both advisories say so). hpke-rs 0.6.1 calls it only to
-    # derive X-Wing and ML-KEM key pairs; Kutup's HPKE suite is DHKEM(X25519).
+    # touches ML-KEM (both advisories say so). hpke-rs 0.6.1 calls it only in
+    # `derive_key_pair` for X-Wing and ML-KEM, which Kutup never calls: the
+    # groups' X-Wing gateway keys are their 32-byte seeds, and X-Wing itself
+    # runs on RustCrypto's x-wing and sha3.
     # Lifted by libsignal pinning libcrux-ml-kem >= the fixed sha3, and a newer
     # hpke-rs.
-    { id = "RUSTSEC-2026-0207", reason = "SHAKE incremental squeeze: not used by ML-KEM or Kutup's HPKE suite" },
-    { id = "RUSTSEC-2026-0208", reason = "AVX2 SHAKE-256 odd lengths: not used by ML-KEM or Kutup's HPKE suite" },
+    { id = "RUSTSEC-2026-0207", reason = "SHAKE incremental squeeze: not used by ML-KEM, nor by any hpke-rs call Kutup makes" },
+    { id = "RUSTSEC-2026-0208", reason = "AVX2 SHAKE-256 odd lengths: not used by ML-KEM, nor by any hpke-rs call Kutup makes" },
     # libcrux-secrets 0.0.5: constant-time swap/select may be wrong on aarch64,
     # inside libsignal 0.97.2's ML-KEM (=0.0.5 pin). The browser runs it as
     # WASM (no aarch64 assembly) and the server uses libsignal only for sealed

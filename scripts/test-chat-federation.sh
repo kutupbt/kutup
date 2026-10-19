@@ -141,6 +141,15 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 # new inheriting nothing.
 run_phase account-ids
 
+# Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
+# home's signed X-Wing key config, sealed requests relayed and answered.
+KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+  cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
+# The account's group list (§5): sealed entries by keyed id, the revision
+# from each entry's header, the head's chatGroups scope, the limit.
+KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+  cargo test -p kutup-server --test chat_group_list_live -- --test-threads=1 --nocapture
+
 # Sealed batches: several sealed sends to one server's accounts in one
 # anonymous request; across servers, queued per recipient and delivered as
 # one federated batch (docs/chat-protocol.md §7).
@@ -196,15 +205,16 @@ if [[ "${KUTUP_FEDERATION_SKIP_BROWSER:-0}" != "1" ]]; then
       npm exec -- playwright test \
         specs/25-tus-upload.spec.ts \
         specs/32-chat-two-server-security.spec.ts \
-        specs/34-chat-backup-two-server-recovery.spec.ts --project=chromium
+        specs/34-chat-backup-two-server-recovery.spec.ts \
+        specs/161-chat-groups-two-server.spec.ts --project=chromium
   )
 
-  # The destination necessarily sees its local recipient, but anonymous MLS
-  # handling must never log the remote sender or application plaintext.
+  # The member's server necessarily sees its local recipient, but anonymous
+  # group handling must never log the remote sender or application plaintext.
   if compose logs --no-color backend-b \
-      | grep -Eq 'mlsalice[0-9]+|mls-from-alice'; then
-    echo "destination MLS logs contain sender identity or plaintext" >&2
+      | grep -Eq 'fedgrpalice[0-9a-z]+|fed-group-from-alice|mlsalice[0-9]+|mls-from-alice'; then
+    echo "destination group logs contain sender identity or plaintext" >&2
     exit 1
   fi
-  echo "MLS DESTINATION LOG METADATA PRIVACY VERIFIED"
+  echo "GROUP DESTINATION LOG METADATA PRIVACY VERIFIED"
 fi

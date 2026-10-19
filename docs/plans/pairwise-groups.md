@@ -446,6 +446,17 @@ to see members").**
   3. The home answers through the same relay.
 - **The keys.** The encapsulation is RFC 9458's, built with `kutup-crypto`'s
   HPKE (`hpke-rs`), so Rust owns the format.
+- **Post-quantum from the start** (decided 2026-10-18). The one suite is X-Wing
+  (X25519 + ML-KEM-768, draft-connolly-cfrg-xwing-kem-06, HPKE KEM 0x647a),
+  HKDF-SHA256 and ChaCha20-Poly1305, so a request recorded today can't be
+  opened later by a quantum computer. There is no X25519-only suite, no
+  fallback and no negotiation: the key config names 0x647a and carries the
+  1216-byte X-Wing public key, the notary names that config, and a client
+  refuses a config or request with any other KEM. The gateway's private key is
+  the 32-byte X-Wing seed (derived weekly from the federation identity, as
+  before). A request's encapsulated key grows to 1120 bytes. Checked against the
+  draft's own vectors; X-Wing runs on RustCrypto's `x-wing` and `ml-kem`
+  (`docs/roadmap.md`, dependency advisories, says why not libcrux yet).
 - **The home's key is authenticated end to end.** The client fetches the key
   config through its own server, which is also the relay. A dishonest relay
   could hand over its own key, read every request and pass it on. So:
@@ -675,11 +686,13 @@ different branches, or hold changes back. The defences:
   own revision with a different hash fetches again. If the difference persists,
   it shows a warning that the group's server is showing members different
   histories.
-- Each `chatGroups` entry (§5) keeps the last verified revision and chain hash,
-  protected by the account head. A rollback, or an older branch served to
-  another of this account's devices, is detected. The device refuses older
-  state, as `revisionGuard` does in
-  [`rollback-protection.md`](rollback-protection.md).
+- Each `chatGroups` entry (§5) keeps the revision and chain hash verified at
+  joining, protected by the account head, so another of this account's
+  devices refuses a history that doesn't extend it. Each device keeps its own
+  last verified revision and refuses older state, as `revisionGuard` does in
+  [`rollback-protection.md`](rollback-protection.md). The list is not written
+  for every new revision (§5): what one device saw later is not a floor for
+  the others.
 - One server orders, as in Signal; the signatures and these checks make that
   order verifiable.
 
@@ -733,7 +746,9 @@ them on pseudonyms (§3).
        for the adder's other devices, which learn of the slot from the log.
        Only contacts can be invited (their profile key gives the sealed
        capability), as Signal adds only people whose profile key it holds. A
-       slot whose invitation couldn't be delivered is revoked at once.
+       slot whose invitation couldn't be delivered is revoked at once. The
+       invitation also carries the group's name, so it can be shown before the
+       invitee joins and reads the state.
      Its encrypted group context carries the master key, the group's server and
      the home's pinned identity, as Signal's `GroupContextV2` carries the master
      key.
@@ -835,13 +850,39 @@ them on pseudonyms (§3).
   - the joined revision;
   - my pseudonym key pair for the group (§3);
   - my current group capability;
-  - the last verified revision and chain hash.
+  - the revision and chain hash it verified when it joined.
 - Writes go through `listedWrite`, so the server can neither drop a group from
   the list nor bring back a group the person left without the devices noticing
   ([`rollback-protection.md`](rollback-protection.md)). The native clients
   write the head when they arrive, as for pins.
-- The last-seen revision is written at most once a minute per group, and on
-  every membership change, to keep head writes few.
+- The entry format (`kutup_crypto::chat_group_list`, vectors in
+  `chat-group-list-v1.json`), so that the account's server learns as little
+  as possible:
+  - Two keys from the account master key: HKDF-SHA256 with salt
+    `kutup/chat-group-list/v1\0`, infos `kutup/chat-group-list/id-key/v1\0`
+    and `kutup/chat-group-list/seal-key/v1\0`.
+  - The entry id is `HMAC-SHA256(id key, "kutup/chat-group-list/id/v1\0" ‖
+    group id)`, base64url without padding (43 characters). The server never
+    sees a group id, and two accounts in one group have unrelated ids.
+  - A sealed entry is `"KUTPGL1\0" ‖ suite u16 (1, XChaCha20-Poly1305) ‖
+    revision u64 ‖ nonce (24) ‖ ciphertext and tag`. The AAD is the header
+    (magic, suite, revision), the account's key binding (u16 length, then the
+    binding) and the 32-byte entry id, so an entry opens only under its own
+    id and revision, for this incarnation of the account.
+  - The plaintext is `u16 length ‖ GroupListEntryV1 JSON ‖ zeros`, so every
+    sealed entry is exactly 4032 bytes. The server reads the revision from
+    the header (`inspect`), orders writes by it, and refuses any other size.
+- Writes are rare and spread out, so the server can't line up co-members by
+  when they write:
+  - a device writes an entry only when the account joins a group and when it
+    leaves it (or the group ends, or it is removed), never for other changes;
+  - each write waits a random 0–10 minutes, and writes that are due together
+    go out together; a pending write is kept in the local store, so it
+    survives a reload;
+  - a device flushes its pending writes before it signs out or unlinks
+    itself. A device removed from elsewhere loses them; the account's other
+    devices learn of the group through their own sync and write any group
+    missing from the list.
 - The chat backup ([`chat-backup.md`](../chat-backup.md)) is unchanged: display
   records stay keyed by conversation. A group conversation's key changes from
   today's `Group{groupId: uuid}` to the 32-byte derived id, encoded as
@@ -1047,6 +1088,25 @@ every slice is done: links and requests, calls, and the MLS removal. Then they
 are switched on together.
 - The e2e stacks run with groups on from slice 1.
 - No interim limit is ever user-visible.
+
+**Slice 1's basic UI (as built).** Shown when the server offers pairwise
+groups (`chat.pairwiseGroups`):
+- *New group* asks for a name and the contacts to invite.
+- The list shows groups this account is in or invited to; an invitation from
+  a stranger reads as a message request.
+- The thread of an invitation offers Join, Decline and, from a stranger,
+  Block.
+- A member's thread sends text and replies only; reactions, edits, deletes for
+  everyone, media, polls, places, timers, typing and receipts stay hidden
+  there until their slice.
+- Above the thread, the group says when its server can't be reached, when this
+  account may have been removed, and when the server may be showing members
+  different keys or versions (never hidden).
+- Its details list the members (administrators marked, unverified ones said
+  so); administrators promote, demote and remove; anyone may rename it or
+  invite contacts as the group's access allows; leaving as the last
+  administrator names another first.
+- Group links stay MLS's until slice 2.
 
 **Slice 1 builds usable groups first.** In it, group messages are sender-key
 ciphertexts sent as one sealed envelope per member device, over the existing

@@ -58,6 +58,7 @@ tempfile.workspace = true
 multer.workspace = true
 # Unified federation transport and storage capacity probe.
 reqwest.workspace = true
+rustls.workspace = true
 rand.workspace = true
 rand09 = { package = "rand", version = "0.9" }
 # Direct use of the pinned libsignal sealed-sender certificate primitives. The
@@ -68,6 +69,8 @@ libsignal-protocol = { git = "https://github.com/signalapp/libsignal", tag = "v0
 zeroize.workspace = true
 
 [dev-dependencies]
+# A local TLS server for the post-quantum handshake test (src/tls.rs).
+tokio-rustls = { version = "0.26", default-features = false }
 # The collaboration socket in live tests (tests/collab_frames_live.rs); the
 # version axum's own WebSocket support already brings.
 tokio-tungstenite = "0.24.0"
