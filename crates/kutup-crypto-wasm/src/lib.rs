@@ -4391,3 +4391,184 @@ pub fn fold_name(name: &str) -> String {
 pub fn fold_address(address: &str) -> Option<String> {
     kutup_crypto::names::fold_address(address)
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailForwardingInstanceView {
+    forwarder_fingerprint: String,
+    forwardee_fingerprint: String,
+    proxy_parameter: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailForwardingMaterialView {
+    forwardee_public_key: String,
+    instances: Vec<MailForwardingInstanceView>,
+    activation: String,
+}
+
+/// The material for an end-to-end forwarding (docs/plans/mail-forwarding.md):
+/// the forwarder's address key is opened from its envelope here and never
+/// leaves WASM. Returns `{ forwardeePublicKey, instances: [{
+/// forwarderFingerprint, forwardeeFingerprint, proxyParameter }],
+/// activation }`, the body of `POST /api/mail/forwardings`' `endToEnd`. The
+/// forwardee key itself leaves only sealed in the activation, to
+/// `forwardee_public_key_base64` (the forwardee address's primary key, from
+/// its verified key list), binding `forwarding_id` (a UUID v4 the client
+/// chose) and the expiry.
+#[wasm_bindgen(js_name = makeMailForwarding)]
+#[allow(clippy::too_many_arguments)]
+pub fn make_mail_forwarding(
+    master_key_base64: &str,
+    binding: &str,
+    forwarder_address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    forwardee_address: &str,
+    forwardee_public_key_base64: &str,
+    forwarding_id: &str,
+    created_at_secs: u32,
+    expires_at_secs: f64,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_forwarding::{self as forwarding, ActivationTerms};
+    let secret = open_mail_secret(
+        master_key_base64,
+        binding,
+        forwarder_address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let forwardee_key = decode_canonical_base64(forwardee_public_key_base64, "forwardee key")?;
+    let material = forwarding::generate_material(&secret, forwardee_address, created_at_secs)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let terms = ActivationTerms {
+        forwarding_id: forwarding_id.to_owned(),
+        forwarder_address: forwarder_address.to_owned(),
+        forwardee_address: forwardee_address.to_owned(),
+        expires_at_secs: expires_at_secs as u64,
+    };
+    let activation = forwarding::seal_activation(&forwardee_key, &secret, &terms, &material)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    serde_wasm_bindgen::to_value(&MailForwardingMaterialView {
+        forwardee_public_key: encode(&material.forwardee_public_key),
+        instances: material
+            .instances
+            .iter()
+            .map(|instance| MailForwardingInstanceView {
+                forwarder_fingerprint: hex::encode(instance.forwarder_fingerprint),
+                forwardee_fingerprint: hex::encode(instance.forwardee_fingerprint),
+                proxy_parameter: encode(instance.proxy_parameter.as_slice()),
+            })
+            .collect(),
+        activation,
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcceptedMailForwardingView {
+    public_key: String,
+    private_key_envelope: String,
+    fingerprint: String,
+}
+
+/// The forwardee's accept: opens the activation with their address key
+/// (opened from its envelope here), checks it is signed by
+/// `forwarder_public_key_base64` (from the forwarder's verified key list,
+/// not from the server), for this forwarding and addresses and unexpired at
+/// `now_secs`, and that the key stands in for the forwarder's current key.
+/// Returns `{ publicKey, privateKeyEnvelope, fingerprint }` for `POST
+/// /api/mail/forwardings/{id}/accept`; the key itself never leaves WASM
+/// unsealed.
+#[wasm_bindgen(js_name = acceptMailForwarding)]
+#[allow(clippy::too_many_arguments)]
+pub fn accept_mail_forwarding(
+    master_key_base64: &str,
+    binding: &str,
+    forwardee_address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    forwarder_address: &str,
+    forwarder_public_key_base64: &str,
+    forwarding_id: &str,
+    now_secs: f64,
+    activation: &str,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::mail_forwarding::{self as forwarding, ActivationTerms};
+    let secret = open_mail_secret(
+        master_key_base64,
+        binding,
+        forwardee_address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let forwarder_key = decode_canonical_base64(forwarder_public_key_base64, "forwarder key")?;
+    let expected = ActivationTerms {
+        forwarding_id: forwarding_id.to_owned(),
+        forwarder_address: forwarder_address.to_owned(),
+        forwardee_address: forwardee_address.to_owned(),
+        expires_at_secs: 0,
+    };
+    let key = forwarding::open_activation(
+        &secret,
+        &forwarder_key,
+        &expected,
+        now_secs as u64,
+        activation.as_bytes(),
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    let public_key =
+        forwarding::forwarding_public_key(&key).map_err(|error| js_error(&error.to_string()))?;
+    let master_key = master_key_32(master_key_base64)?;
+    let envelope =
+        kutup_crypto::mail_key::seal_address_key(&master_key[..], binding, forwardee_address, &key)
+            .map_err(|error| js_error(&error.to_string()))?;
+    let fingerprint =
+        kutup_crypto::mail_key::inspect_address_public_key(&public_key, forwardee_address)
+            .map_err(|error| js_error(&error.to_string()))?
+            .fingerprint;
+    let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    serde_wasm_bindgen::to_value(&AcceptedMailForwardingView {
+        public_key: encode(&public_key),
+        private_key_envelope: encode(&envelope),
+        fingerprint: hex::encode(fingerprint),
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Opens a message forwarded to the address (its row's `forwardedFrom` is
+/// set) with the address's forwarding key, sealed in `envelope_base64`; no
+/// other key opens one, and this opens nothing else.
+#[wasm_bindgen(js_name = openForwardedMailMessage)]
+#[allow(clippy::too_many_arguments)]
+pub fn open_forwarded_mail_message(
+    master_key_base64: &str,
+    binding: &str,
+    address: &str,
+    envelope_base64: &str,
+    fingerprint_hex: &str,
+    message: &[u8],
+    sender_public_key_base64: Option<String>,
+) -> Result<OpenedMailJs, JsValue> {
+    let secret = open_mail_secret(
+        master_key_base64,
+        binding,
+        address,
+        envelope_base64,
+        fingerprint_hex,
+    )?;
+    let sender = sender_public_key_base64
+        .map(|key| decode_canonical_base64(&key, "sender public key"))
+        .transpose()?;
+    let opened =
+        kutup_crypto::mail_forwarding::decrypt_forwarded(&secret, message, sender.as_deref())
+            .map_err(|error| js_error(&error.to_string()))?;
+    Ok(OpenedMailJs {
+        data: opened.data.to_vec(),
+        signed: opened.signed,
+        verified: opened.verified,
+    })
+}
