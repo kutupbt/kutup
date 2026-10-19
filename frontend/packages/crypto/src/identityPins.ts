@@ -70,20 +70,32 @@ export function pinAddress(pin: IdentityPin): string | undefined {
   return pin.addresses?.at(-1)?.address
 }
 
-/** The account's Drive key binding, signed with its authority for `account` (its server and id). */
-export async function signDriveKeyBinding(masterKeyBase64: string, account: AccountRef): Promise<string> {
-  return (await getCryptoWasm()).signDriveKeyBinding(masterKeyBase64, account)
+/** A new account's first Drive key binding epoch (docs/plans/pq-shares.md). */
+export const FIRST_DRIVE_KEY_BINDING_EPOCH = 1
+
+/**
+ * The account's Drive key binding at `bindingEpoch`, signed with its
+ * authority for `account` (its server and id). Each new set of Drive keys
+ * takes the next epoch.
+ */
+export async function signDriveKeyBinding(masterKeyBase64: string, account: AccountRef, bindingEpoch: number): Promise<string> {
+  return (await getCryptoWasm()).signDriveKeyBinding(masterKeyBase64, account, bindingEpoch)
 }
 
-/** Whether `authority` vouches for these Drive keys of `account`. */
+/**
+ * Whether `authority` vouches for these Drive keys (X-Wing) of `account` at
+ * `bindingEpoch`. A caller that saw a higher epoch for the account before
+ * refuses a lower one itself.
+ */
 export async function verifyDriveKeyBinding(
   account: AccountRef,
   authorityPublicKey: string,
   driveHpkePublicKey: string,
   driveSigningPublicKey: string,
   binding: string,
+  bindingEpoch: number,
 ): Promise<boolean> {
-  return (await getCryptoWasm()).verifyDriveKeyBinding(account, authorityPublicKey, driveHpkePublicKey, driveSigningPublicKey, binding)
+  return (await getCryptoWasm()).verifyDriveKeyBinding(account, authorityPublicKey, driveHpkePublicKey, driveSigningPublicKey, binding, bindingEpoch)
 }
 
 /** The incarnation id an authority key stands for. */

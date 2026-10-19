@@ -102,6 +102,31 @@ export interface PublishedIdentity {
   driveHpkePublicKey: string
   driveSigningPublicKey: string
   driveKeyBinding?: string | null
+  /**
+   * 2: X-Wing Drive keys. 1: an account that has not signed in since they
+   * came (docs/plans/pq-shares.md): its X25519 key is never vouched for, and
+   * nothing is shared to it until it upgrades.
+   */
+  identitySuite?: number
+  /** The epoch its binding was signed at. */
+  driveKeyBindingEpoch?: number
+}
+
+/**
+ * Whether the person's own authority vouches for the Drive keys their server
+ * publishes. An account still on identity suite 1, or a binding without its
+ * epoch, never is.
+ */
+async function keysBound(person: PublishedIdentity): Promise<boolean> {
+  if (!person.driveKeyBinding || person.identitySuite !== 2 || !Number.isSafeInteger(person.driveKeyBindingEpoch)) return false
+  return verifyDriveKeyBinding(
+    refOf(person),
+    person.accountAuthorityPublicKey,
+    person.driveHpkePublicKey,
+    person.driveSigningPublicKey,
+    person.driveKeyBinding,
+    person.driveKeyBindingEpoch!,
+  ).catch(() => false)
 }
 
 /** An account as a single lookup answers it (`/users/by-address`, `/users/by-id`). */
@@ -628,16 +653,11 @@ async function checkPublished(
   const match = await lookupIdentityPin(pins.pins, refOf(person), account, person.accountAuthorityPublicKey)
   const pin = match.kind === 'pinned' ? match.pin : null
   // ...and those its authority vouches for. A binding is never withdrawn: a
-  // pinned account without one is a server leaving it out.
+  // pinned account without one is a server leaving it out. An account not
+  // yet on X-Wing keys has none that count until it signs in again.
+  if (person.identitySuite === 1) return { kind: 'unproven' }
   if (!person.driveKeyBinding) return pin ? { kind: 'invalid' } : { kind: 'unproven' }
-  const bound = await verifyDriveKeyBinding(
-    refOf(person),
-    person.accountAuthorityPublicKey,
-    person.driveHpkePublicKey,
-    person.driveSigningPublicKey,
-    person.driveKeyBinding,
-  ).catch(() => false)
-  if (!bound) return { kind: 'invalid' }
+  if (!(await keysBound(person))) return { kind: 'invalid' }
   if (match.kind === 'pinned') {
     // Someone the list knows holds this address: the account found there is
     // not them, whatever its keys; it is shown by its own name. First, so a
@@ -760,6 +780,27 @@ export async function recipientError(me: DriveIdentity, account: string, error: 
   return followed ? new RecipientRenamed(account, followed.now) : error
 }
 
+/**
+ * Sharing to an account still on identity suite 1 (docs/plans/pq-shares.md):
+ * nothing is sealed to its X25519 key; it can be shared with once it has
+ * signed in again. Its `code` is the server's for the same refusal.
+ */
+export class KeysPendingUpgrade extends Error {
+  readonly code = 'keysPendingUpgrade'
+  constructor(readonly account: string) {
+    super(`${account} has to sign in again before anything is shared with them`)
+  }
+}
+
+/**
+ * The Drive key to seal to for `account`, unless the account is still on
+ * identity suite 1: then nothing is sealed to it (`KeysPendingUpgrade`).
+ */
+export function sealableDriveKey(account: string, key: string, identitySuite: number | undefined): string {
+  if (identitySuite === 1) throw new KeysPendingUpgrade(account)
+  return key
+}
+
 /** Sharing to someone whose identity is in doubt, before the user said to go on. */
 export class IdentityNotConfirmed extends Error {
   constructor(
@@ -784,6 +825,7 @@ export async function confirmRecipient(
   person: AccountAnswer,
   confirmed = false,
 ): Promise<IdentityStatus> {
+  if (person.identitySuite === 1) throw new KeysPendingUpgrade(address)
   const status = await checkAnswer(me, address, person)
   if ((status.kind === 'changed' || status.kind === 'invalid' || status.kind === 'someoneElse') && !confirmed) {
     throw new IdentityNotConfirmed(address, status)
@@ -822,15 +864,8 @@ export async function lookupAddress(me: DriveIdentity, address: string): Promise
  */
 export async function acceptIdentity(me: DriveIdentity, account: string): Promise<void> {
   const person = await publishedIdentity(me, account)
-  if (!person.driveKeyBinding) throw new Error('this account has not signed its keys yet')
-  const bound = await verifyDriveKeyBinding(
-    refOf(person),
-    person.accountAuthorityPublicKey,
-    person.driveHpkePublicKey,
-    person.driveSigningPublicKey,
-    person.driveKeyBinding,
-  )
-  if (!bound) throw new Error('the keys are not signed by this account')
+  if (!person.driveKeyBinding || person.identitySuite === 1) throw new Error('this account has not signed its keys yet')
+  if (!(await keysBound(person))) throw new Error('the keys are not signed by this account')
   const recorded = await recordPin(me, person, 'accepted')
   // Another account's authority handed out for this one: never accepted.
   if (recorded.kind === 'authorityElsewhere') throw new Error('these keys belong to another account')
@@ -842,16 +877,7 @@ export async function acceptIdentity(me: DriveIdentity, account: string): Promis
 /** A person's published identity, once their binding is checked; throws otherwise. */
 async function boundIdentity(me: DriveIdentity, account: string): Promise<PublishedIdentity> {
   const person = await publishedIdentity(me, account)
-  const bound =
-    Boolean(person.driveKeyBinding) &&
-    (await verifyDriveKeyBinding(
-      refOf(person),
-      person.accountAuthorityPublicKey,
-      person.driveHpkePublicKey,
-      person.driveSigningPublicKey,
-      person.driveKeyBinding!,
-    ).catch(() => false))
-  if (!bound) throw new IdentityUnproven(account)
+  if (!(await keysBound(person))) throw new IdentityUnproven(account)
   return person
 }
 

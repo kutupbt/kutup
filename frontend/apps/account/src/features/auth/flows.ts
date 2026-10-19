@@ -5,6 +5,7 @@
 
 import {
   ACCOUNT_ENVELOPE_PURPOSE,
+  currentDriveKeys,
   decryptPrivateKey,
   generateAccountKeySet,
   openAccountEnvelope,
@@ -14,7 +15,7 @@ import {
   type AccountKeySet,
 } from '@kutup/crypto'
 import { startOpaqueRegistration, type OpaqueRegistrar, type OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
-import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
+import { FIRST_DRIVE_KEY_BINDING_EPOCH, signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import type { SessionKeys } from '@kutup/session/keys'
@@ -46,6 +47,11 @@ interface LoginResponse {
   /** The server moved to a new OPAQUE setup: re-register with this grant (purpose `rotate`). */
   rotate?: boolean
   grant?: string
+  /**
+   * The account's identity suite (docs/plans/pq-shares.md): 1 while its
+   * Drive key is still X25519, which this sign-in upgrades. Only with a session.
+   */
+  identitySuite?: number
 }
 
 /**
@@ -93,10 +99,10 @@ async function serverName(): Promise<string> {
  * The account's Drive key binding (docs/plans/drive-identity-pins.md): its
  * authority vouching for its Drive keys as this account (its server and
  * permanent id, never its name), so the people it shares with can check
- * them. Sent with every new set of keys.
+ * them. Sent with every new set of keys: a new account's first, at epoch 1.
  */
 async function driveKeyBindingFor(keys: AccountKeys, accountId: string): Promise<string> {
-  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId })
+  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId }, FIRST_DRIVE_KEY_BINDING_EPOCH)
 }
 
 /**
@@ -125,8 +131,13 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     // The master envelope opens only under its own binding, so once it has
     // opened the binding is verified.
     const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
-    const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, binding)
-    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey: data.publicKey, keyBinding: binding })
+    const drive =
+      data.identitySuite === 1
+        ? await upgradeIdentitySuite(data, masterKey, binding)
+        : null
+    const privateKey = drive?.privateKey ?? (await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, binding))
+    const publicKey = drive?.publicKey ?? data.publicKey
+    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey, keyBinding: binding })
     // A new server setup: the password just used (held by the sign-in's
     // worker) is registered again under it, without asking. A failure leaves
     // the old record, and the next sign-in asks again.
@@ -135,6 +146,49 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     opened.close()
   }
   return { kind: 'signedIn' }
+}
+
+/**
+ * An account from before X-Wing Drive keys (identity suite 1) moves to them
+ * at this sign-in, once (docs/plans/pq-shares.md): its keys are derived again
+ * from the master key, its authority signs their first binding, and the
+ * private key is sealed as before. Until then nobody can share with it
+ * (`keysPendingUpgrade`). Chat publishes the account's next manifest with
+ * the new key when it next starts. Another device that upgraded first
+ * (`identitySuiteCurrent`) published the same keys. A failure leaves the old
+ * keys for this session, and the next sign-in tries again.
+ */
+async function upgradeIdentitySuite(
+  data: LoginResponse,
+  masterKey: Uint8Array,
+  binding: string,
+): Promise<{ publicKey: string; privateKey: Uint8Array } | null> {
+  try {
+    const drive = await currentDriveKeys(masterKey, binding)
+    const driveKeyBinding = await signDriveKeyBinding(
+      toBase64(masterKey),
+      { server: await serverName(), accountId: data.userId },
+      FIRST_DRIVE_KEY_BINDING_EPOCH,
+    )
+    try {
+      // Before the session is activated: its token goes with this request alone.
+      await api.post(
+        '/account/identity-suite',
+        {
+          publicKey: drive.publicKey,
+          driveKeyBinding,
+          driveKeyBindingEpoch: FIRST_DRIVE_KEY_BINDING_EPOCH,
+          drivePrivateKeyEnvelope: drive.drivePrivateKeyEnvelope,
+        },
+        { headers: { Authorization: `Bearer ${data.accessToken}` } },
+      )
+    } catch (error) {
+      if (conflictCode(error) !== 'identitySuiteCurrent') throw error
+    }
+    return { publicKey: drive.publicKey, privateKey: drive.privateKey }
+  } catch {
+    return null
+  }
 }
 
 export async function completeTotp(challenge: TotpChallenge, code: string): Promise<SignInResult> {

@@ -132,6 +132,16 @@ impl AccountAuthority {
         self.identity.incarnation_id()
     }
 
+    /// The Drive keys this authority's manifests carry: the account's
+    /// current suite (X-Wing).
+    pub fn drive_keys(&self) -> AccountManifestDriveKeysV1 {
+        AccountManifestDriveKeysV1 {
+            suite: AccountIdentitySuiteId::XWingEd25519V2,
+            hpke_public_key: STANDARD.encode(self.identity.drive_hpke_public_key()),
+            share_signing_public_key: STANDARD.encode(self.identity.drive_signing_public_key()),
+        }
+    }
+
     pub fn sign_manifest(
         &self,
         account: AccountRef,
@@ -147,11 +157,7 @@ impl AccountAuthority {
             incarnation_id: self.incarnation_id(),
             sequence,
             previous_hash,
-            drive: AccountManifestDriveKeysV1 {
-                suite: AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: STANDARD.encode(self.identity.drive_hpke_public_key()),
-                share_signing_public_key: STANDARD.encode(self.identity.drive_signing_public_key()),
-            },
+            drive: self.drive_keys(),
             devices,
             issued_at: issued_at.into(),
             authority_key_id: self.key_id(),

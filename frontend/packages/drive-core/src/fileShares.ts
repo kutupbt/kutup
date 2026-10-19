@@ -10,7 +10,7 @@ import { AccessChanged, RecipientChanged } from './access'
 import { loadFolderFiles, toDriveFile, type FileRowLike } from './files'
 import { useFolders } from './folders'
 import { opensInOffice } from './editorKind'
-import { confirmRecipient, lookupAddress, type AccountAnswer, type ClaimedKeys } from './identityPins'
+import { confirmRecipient, lookupAddress, sealableDriveKey, type AccountAnswer, type ClaimedKeys } from './identityPins'
 import { publicLinkUrl, useDriveMutation, RecipientNotFound } from './mutations'
 import { rekeyFile } from './rekey'
 import { fileMetadataOf, type DriveFile, type Folder } from './model'
@@ -271,6 +271,8 @@ export interface FileAccessMember {
   account: string
   accountIncarnationId: string
   drivePublicKey: string
+  /** 1: not on X-Wing keys yet; nothing is sealed to them (docs/plans/pq-shares.md). */
+  identitySuite?: number
   canEdit: boolean
   /** Below the file's, their access waits to be re-sealed. */
   keyGeneration: number
@@ -327,16 +329,19 @@ function sealForRemote(me: DriveIdentity, file: DriveFile, key: Uint8Array, gene
   return sealFor(me, file.id, key, generation, {
     person: { server: to.server, accountId: to.accountId },
     accountIncarnationId: to.accountIncarnationId,
-    drivePublicKey: to.driveHpkePublicKey,
+    drivePublicKey: sealableDriveKey(to.account, to.driveHpkePublicKey, to.identitySuite),
   })
 }
 
 /** Someone here the file is shared with: their account (user id here) and keys. */
-function memberTo(me: DriveIdentity, member: Pick<FileAccessMember, 'userId' | 'accountIncarnationId' | 'drivePublicKey'>): SealTo {
+function memberTo(
+  me: DriveIdentity,
+  member: Pick<FileAccessMember, 'userId' | 'account' | 'accountIncarnationId' | 'drivePublicKey' | 'identitySuite'>,
+): SealTo {
   return {
     person: { server: me.accountRef.server, accountId: member.userId },
     accountIncarnationId: member.accountIncarnationId,
-    drivePublicKey: member.drivePublicKey,
+    drivePublicKey: sealableDriveKey(member.account, member.drivePublicKey, member.identitySuite),
   }
 }
 

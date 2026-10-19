@@ -117,11 +117,13 @@ tracing: the keys would be printed into the log.
 
 ## Server rollbacks
 
-Spec 157's rollback test makes the server show an older account history
-(`docs/plans/rollback-protection.md`), which only the stack's owner can do.
-It runs when `E2E_PSQL` holds a command that runs the SQL on its stdin
-against the stack's database. Otherwise it is skipped, as in CI. For a
-Compose stack:
+Two specs need what only the stack's owner can do: spec 157's rollback test
+makes the server show an older account history
+(`docs/plans/rollback-protection.md`), and spec 162 makes an account from
+before X-Wing Drive keys (`docs/plans/pq-shares.md`). They run when
+`E2E_PSQL` holds a command that runs the SQL on its stdin against the
+stack's database (CI's single-server browser job sets it); otherwise they
+are skipped. For a Compose stack:
 
 ```sh
 E2E_PSQL='docker exec -i <project>-postgres-1 psql -U kutup -d kutup -v ON_ERROR_STOP=1'

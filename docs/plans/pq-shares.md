@@ -167,25 +167,44 @@ manifest trust, and refuse a lower one as a rollback.
   key is not this version's"), and the check logs it. Self-hosted peers upgrade
   together, which `docs/self-hosting.md` (Updating) will say.
 
-## Web and WASM (third session's area, after #242/#245)
+## Web and WASM (as built)
 
-- **Same exports, new byte strings.** The WASM exports keep their names. Only
-  the keys and envelopes they carry change size:
-  - `deriveAccountIdentityKeys`
-  - `seal/openNamedShareEnvelope`, `seal/openFileShareEnvelope`,
-    `seal/openProfileKeyEnvelope`
-  - the mail group share functions
-  - `sign/verifyDriveKeyBinding`
-- **TypeScript changes.** TypeScript changes only where it assumes 32 bytes
-  for a Drive HPKE public key:
-  - drive-core's `identityPins.ts`, `access.ts`, `people.ts` and
-    `fileShares.ts`;
-  - mail-core's `groups.ts`;
-  - the session's stored key, which is unchanged at 32 bytes since it is the
-    seed;
-  - any IndexedDB schema that sizes `drive_hpke_public_key`.
-- **Before the TypeScript work.** The third session gets the list of call sites
-  with the PR.
+- **Same exports, new byte strings.** The WASM exports keep their names; the
+  keys and envelopes they carry change size. `sign/verifyDriveKeyBinding`
+  take the binding epoch as their last argument
+  (`FIRST_DRIVE_KEY_BINDING_EPOCH` = 1 at registration and at the upgrade).
+- **Sign-in upgrade** (`apps/account/src/features/auth/flows.ts`). A sign-in
+  answered with `identitySuite: 1` derives the keys again
+  (`currentDriveKeys`), signs their binding at epoch 1, seals the seed under
+  the account's key binding and sends `POST /account/identity-suite` with
+  the session's token, before the session is activated. `identitySuiteCurrent`
+  means another device did it first, with the same keys. A failure signs in
+  with the old keys, and the next sign-in tries again.
+- **The manifest.** Chat-core's `sync_own_manifest` signs a next manifest
+  whenever the published one carries other Drive keys than the account's
+  (`AccountAuthority::drive_keys`), so Chat publishes the X-Wing key the next
+  time it starts.
+- **Lookups.** Drive and Mail read `identitySuite` and
+  `driveKeyBindingEpoch` from every lookup. A binding counts only on suite 2,
+  verified at its epoch. A suite-1 account shows as not confirmed yet
+  (`unproven`), never as invalid.
+- **Nothing sealed to suite 1.** Every seal to a person goes through
+  `confirmRecipient` or `sealableDriveKey`, which throw `KeysPendingUpgrade`
+  (code `keysPendingUpgrade`) before any sealing: new shares, re-seals at a
+  folder or file key rotation, permission changes, federated members and
+  mail group members. Profile keys wait until the account has upgraded.
+- **Messages.** `apiErrorMessage` says `keysPendingUpgrade` and
+  `peerOutdated` in the user's language (`apiErrors.*` in the shared
+  locales), from the server's answer or from the client's own refusal.
+- **Not yet.** A rotation while a remaining member is still on suite 1 is
+  refused, naming that member: removing someone waits for them (an open
+  decision). Pins don't record the binding epoch yet: only epoch 1 exists,
+  so there is nothing to roll back to; it goes into the pin format before a
+  second epoch can be signed.
+- **Spec 162** (account suite; it needs `E2E_PSQL`, which CI's single-server
+  job sets) makes an account suite 1 as the backup gate does, checks that a
+  share to it is refused with the message, signs it in again, checks
+  `identity_suite = 2` with a 1216-byte key, and shares again.
 
 ## Details from review
 

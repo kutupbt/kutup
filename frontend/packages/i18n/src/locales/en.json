@@ -451,5 +451,9 @@
     "lockdownSettings": "You can review the sites you excluded in Settings → Privacy & Security → Lockdown Mode → Configure Web Browsing.",
     "otherBrowsers": "In another browser, turn WebAssembly back on (some hardened settings and company policies turn it off), or use an up-to-date Safari, Chrome, Firefox or Edge.",
     "reload": "Reload"
+  },
+  "apiErrors": {
+    "keysPendingUpgrade": "This person needs to sign in to Kutup once more before you can share with them: their account is moving to stronger encryption keys.",
+    "peerOutdated": "Their server runs an older version of Kutup. You can share with them once it is updated."
   }
 }

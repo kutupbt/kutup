@@ -7,6 +7,7 @@ import { DRIVE_ENVELOPE_PURPOSE, sealDriveEnvelope } from '@kutup/crypto/driveEn
 import { openOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
 import type { DriveIdentity } from './identity'
+import { sealableDriveKey } from './identityPins'
 import { useDriveMutation } from './mutations'
 import type { Folder } from './model'
 
@@ -22,6 +23,8 @@ export interface AccessMember {
   account: string
   accountIncarnationId: string
   drivePublicKey: string
+  /** 1: not on X-Wing keys yet; nothing is sealed to them (docs/plans/pq-shares.md). */
+  identitySuite?: number
   canUpload: boolean
   canDelete: boolean
   uploadQuotaBytes: number | null
@@ -155,7 +158,7 @@ export async function rotateFolder(
       .filter((m) => !removed.members.includes(m.userId))
       .map(async (m) => ({
         userId: m.userId,
-        namedShareEnvelope: await seal(m.drivePublicKey, memberRef(me, m), m.accountIncarnationId),
+        namedShareEnvelope: await seal(sealableDriveKey(m.account, m.drivePublicKey, m.identitySuite), memberRef(me, m), m.accountIncarnationId),
       })),
   )
   const publicLinks = await Promise.all(
@@ -177,7 +180,14 @@ export async function rotateFolder(
         // Their Drive key, from their server by their account id; it must
         // still belong to the account incarnation the folder was shared with.
         const to: AccountRef = { server: f.recipientServer, accountId: f.recipientAccountId }
-        const { data: remote } = await api.get<{ server: string; accountId: string; account: string; driveHpkePublicKey: string; accountIncarnationId: string }>(
+        const { data: remote } = await api.get<{
+          server: string
+          accountId: string
+          account: string
+          driveHpkePublicKey: string
+          accountIncarnationId: string
+          identitySuite?: number
+        }>(
           `/users/by-id/${encodeURIComponent(to.accountId)}`,
           { params: { server: to.server } },
         )
@@ -185,7 +195,11 @@ export async function rotateFolder(
         if (remote.accountIncarnationId !== f.recipientIncarnationId) throw new RecipientChanged(remote.account)
         return {
           id: f.id,
-          namedShareEnvelope: await seal(remote.driveHpkePublicKey, to, remote.accountIncarnationId),
+          namedShareEnvelope: await seal(
+            sealableDriveKey(remote.account, remote.driveHpkePublicKey, remote.identitySuite),
+            to,
+            remote.accountIncarnationId,
+          ),
         }
       }),
   )
@@ -230,7 +244,8 @@ export function useSetFolderPermissions() {
     ) => {
       if (!folder.key || !folder.canManage) throw new Error('only the folder\'s manager changes what people may do')
       try {
-        const namedShareEnvelope = await sealNamedShareEnvelope(folder.key, me.masterKey, member.drivePublicKey, {
+        const publicKey = sealableDriveKey(member.account, member.drivePublicKey, member.identitySuite)
+        const namedShareEnvelope = await sealNamedShareEnvelope(folder.key, me.masterKey, publicKey, {
           collectionId: folder.id,
           epoch: folder.keyEpoch,
           sender: me.accountRef,
