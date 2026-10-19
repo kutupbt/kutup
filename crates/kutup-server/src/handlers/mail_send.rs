@@ -1424,6 +1424,11 @@ pub(crate) async fn deliver(
                     object_version: copy.version.clone(),
                     readable: readable.clone(),
                     may_forward: true,
+                    // Sent readable (the address forwards outside Kutup, or
+                    // Encrypt was off): the message the server read.
+                    plaintext: (copy.protection == "zero_access")
+                        .then(|| mime.map(|mime| std::sync::Arc::new(mime.to_vec())))
+                        .flatten(),
                 });
             } else {
                 blocked.push((copy.key.clone(), copy.version.clone()));

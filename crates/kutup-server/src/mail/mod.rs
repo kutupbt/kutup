@@ -190,6 +190,9 @@ pub enum Target {
     Group(groups::Group, Vec<groups::Receiver>),
     /// A shared mailbox: its mail is encrypted to the group's key.
     Shared(groups::Group, Vec<u8>),
+    /// A bounce of an outside forward, to its return path: counted on the
+    /// forwarding and dropped (docs/plans/mail-forwarding.md).
+    ForwardBounce(Uuid),
 }
 
 /// [`resolve`], groups included: a group that takes `sender`'s mail, has
@@ -199,6 +202,17 @@ pub async fn resolve_target(
     recipient: &str,
     sender: groups::Sender,
 ) -> Result<Target, Reply> {
+    // Our return paths are checked here, at RCPT: a forged or stale one is
+    // refused before any data, so nothing becomes backscatter.
+    if let Some((local, domain)) = recipient.trim().rsplit_once('@') {
+        if domain.eq_ignore_ascii_case(&state.config.chat_server_name)
+            && local.to_ascii_lowercase().starts_with("fwd-")
+        {
+            return forwarding::bounce_forwarding(&state.config.mail_forwarding_keys, local)
+                .map(Target::ForwardBounce)
+                .ok_or_else(unknown);
+        }
+    }
     let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
     let lookup_failed = |error: sqlx::Error| {
         tracing::warn!(error = %error, "mail: group lookup failed");
@@ -304,6 +318,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                     object_version: version.clone(),
                     readable: readable.clone(),
                     may_forward: forwarding::may_forward(raw),
+                    plaintext: Some(std::sync::Arc::new(raw.to_vec())),
                 },
             );
             if may_answer && readable.bounce.is_none() {
@@ -607,6 +622,13 @@ impl lmtp::Delivery for Receiver {
                 groups::store_from_outside(&self.0, group, receivers, message).await
             }
             Target::Shared(group, key) => groups::store_shared(&self.0, group, key, message).await,
+            Target::ForwardBounce(forwarding) => {
+                if let Err(error) = forwarding::record_bounce(&self.0.pool, *forwarding).await {
+                    tracing::warn!(error = %error, "mail: a forwarding bounce was not counted");
+                    return try_later();
+                }
+                Reply::new(250, "2.0.0", "noted")
+            }
         }
     }
 }

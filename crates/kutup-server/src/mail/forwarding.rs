@@ -96,6 +96,29 @@ pub async fn outdate(
 /// A pending forwarding the forwardee declined, or that lapsed: its proxy
 /// factors and activation go, and the forwarder may ask again with new
 /// material.
+/// After an outside forwarding of `address` ends or is declined: when it
+/// was the last, the address owes a key list without EMAIL_NO_ENCRYPT,
+/// which only its owner's client can sign (it does at its next Mail
+/// sign-in).
+pub async fn settle_outside(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    address: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE mail_addresses SET key_list_owed = true
+          WHERE id = $1
+            AND NOT EXISTS (SELECT 1 FROM mail_forwardings
+                             WHERE forwarder_address_id = $1 AND kind = 'outside'
+                               AND state <> 'rejected')
+            AND EXISTS (SELECT 1 FROM mail_address_keys
+                         WHERE address_id = $1 AND NOT is_forwarding AND flags & 4 <> 0)",
+    )
+    .bind(address)
+    .execute(&mut **tx)
+    .await
+    .map(drop)
+}
+
 pub async fn reject(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     forwarding: Uuid,
@@ -112,7 +135,12 @@ pub async fn reject(
     .bind(forwarding)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    let address: Uuid =
+        sqlx::query_scalar("SELECT forwarder_address_id FROM mail_forwardings WHERE id = $1")
+            .bind(forwarding)
+            .fetch_one(&mut **tx)
+            .await?;
+    settle_outside(tx, address).await
 }
 
 /// Pending forwardings past their expiry lapse, as a decline does.
@@ -130,6 +158,100 @@ pub async fn sweep_expired(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
         reject(&mut tx, forwarding).await?;
     }
     tx.commit().await
+}
+
+/// A return path lasts this many days (as SRS0's timestamp).
+const RETURN_PATH_DAYS: i64 = 21;
+/// Bounces in one day that pause an outside forwarding.
+pub const MAX_BOUNCES_PER_DAY: i32 = 5;
+/// Forwardings one account may make in an hour.
+pub const MAX_CREATED_PER_HOUR: i64 = 10;
+/// Confirmation emails one outside forwarding may send in a day.
+pub const MAX_INVITES_PER_DAY: i32 = 3;
+const RETURN_PATH_DOMAIN: &[u8] = b"kutup/mail-forwarding/return-path/v1\0";
+
+fn return_path_mac(key: &[u8; 32], forwarding: Uuid, day: i64) -> String {
+    use hmac::{Hmac, Mac as _};
+    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
+    mac.update(RETURN_PATH_DOMAIN);
+    mac.update(forwarding.as_bytes());
+    mac.update(&day.to_be_bytes());
+    hex::encode(&mac.finalize().into_bytes()[..8])
+}
+
+fn today() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp() / 86_400
+}
+
+/// The envelope sender an outside forward goes out with: our domain (so
+/// SPF holds for the hop we make), naming the forwarding and the day under
+/// an HMAC, so a bounce comes back to us, is checked at RCPT and counted on
+/// its forwarding. SRS's purpose in a VERP form: bounces are counted here,
+/// not relayed. `None` without `MAIL_FORWARDING_KEYS`.
+pub fn return_path(keys: &OpaqueSetupKeys, server_name: &str, forwarding: Uuid) -> Option<String> {
+    let (_, key) = keys.current()?;
+    let day = today();
+    Some(format!(
+        "fwd-{}-{day}-{}@{server_name}",
+        forwarding.simple(),
+        return_path_mac(key, forwarding, day)
+    ))
+}
+
+/// The forwarding a bounce's recipient local part names, when it is one of
+/// our return paths, its HMAC holds under any configured key and it is no
+/// older than [`RETURN_PATH_DAYS`].
+pub fn bounce_forwarding(keys: &OpaqueSetupKeys, local: &str) -> Option<Uuid> {
+    let rest = local.to_ascii_lowercase();
+    let rest = rest.strip_prefix("fwd-")?;
+    let mut parts = rest.split('-');
+    let (id, day, mac) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() || id.len() != 32 || mac.len() != 16 {
+        return None;
+    }
+    let forwarding = Uuid::parse_str(id).ok()?;
+    let day: i64 = day.parse().ok()?;
+    let age = today() - day;
+    if !(0..=RETURN_PATH_DAYS).contains(&age) {
+        return None;
+    }
+    keys.ids()
+        .filter_map(|id| keys.get(id))
+        .any(|key| {
+            let expected = return_path_mac(key, forwarding, day);
+            expected.len() == mac.len()
+                && expected
+                    .bytes()
+                    .zip(mac.bytes())
+                    .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                    == 0
+        })
+        .then_some(forwarding)
+}
+
+/// A bounce came back for an outside forwarding: counted for the day, and
+/// after [`MAX_BOUNCES_PER_DAY`] the forwarding pauses with a notice.
+pub async fn record_bounce(pool: &sqlx::PgPool, forwarding: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE mail_forwardings SET
+                bounces_today = CASE WHEN day = current_date THEN bounces_today + 1 ELSE 1 END,
+                sent_today = CASE WHEN day = current_date THEN sent_today ELSE 0 END,
+                invites_today = CASE WHEN day = current_date THEN invites_today ELSE 0 END,
+                day = current_date, updated_at = now()
+          WHERE id = $1 AND kind = 'outside'",
+    )
+    .bind(forwarding)
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE mail_forwardings SET state = 'paused', notice = 'bounces'
+          WHERE id = $1 AND state = 'active' AND bounces_today >= $2",
+    )
+    .bind(forwarding)
+    .bind(MAX_BOUNCES_PER_DAY)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// How often [`spawn`]'s loop tidies forwardings.
@@ -176,7 +298,16 @@ pub struct Arrived {
     /// through a forwarding loop (our marker header, our SRS sender, or more
     /// than [`MAX_HOPS`] `Received` headers).
     pub may_forward: bool,
+    /// The message as it arrived, when the server read it (mail from
+    /// outside, or Kutup mail sent readable): what an outside forwarding
+    /// re-sends. `None` for end-to-end Kutup mail, which can't go outside.
+    pub plaintext: Option<std::sync::Arc<Vec<u8>>>,
 }
+
+/// What one forwarding of an address may re-send outside in a day, and one
+/// account across its forwardings.
+pub const OUTSIDE_PER_FORWARDING_PER_DAY: i32 = 200;
+pub const OUTSIDE_PER_ACCOUNT_PER_DAY: i64 = 500;
 
 /// Whether arriving mail may be forwarded: not when it carries our
 /// forwarding marker, or has come through more than [`MAX_HOPS`] hops.
@@ -213,19 +344,33 @@ pub fn spawn_forward(state: &AppState, arrived: Arrived) {
     });
 }
 
-type Forwarding = (Uuid, String, serde_json::Value, Uuid, Uuid, String);
+/// id, kind, match, conditions, forwardee address and account (end to end),
+/// forwardee email, forwarder address, forwarder account.
+type Forwarding = (
+    Uuid,
+    String,
+    String,
+    serde_json::Value,
+    Option<Uuid>,
+    Option<Uuid>,
+    String,
+    String,
+    Uuid,
+);
 
 async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> {
     if !arrived.may_forward {
         return Ok(());
     }
     let forwardings: Vec<Forwarding> = sqlx::query_as(
-        "SELECT f.id, f.match, f.conditions, b.id, b.user_id, a.address
+        "SELECT f.id, f.kind, f.match, f.conditions, b.id, b.user_id, f.forwardee_email,
+                a.address, f.user_id
            FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id
-           JOIN mail_addresses b ON b.id = f.forwardee_address_id AND b.state = 'active'
-           JOIN users u ON u.id = b.user_id AND u.is_active
-          WHERE f.forwarder_address_id = $1 AND f.kind = 'end_to_end' AND f.state = 'active'",
+           LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
+           LEFT JOIN users u ON u.id = b.user_id
+          WHERE f.forwarder_address_id = $1 AND f.state = 'active'
+            AND (f.kind = 'outside' OR (b.state = 'active' AND u.is_active))",
     )
     .bind(arrived.address_id)
     .fetch_all(&state.pool)
@@ -253,7 +398,17 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
         attachments: readable.attachment_count,
     };
     let mut message: Option<Vec<u8>> = None;
-    for (id, rule, conditions, forwardee_address, forwardee_user, forwarder_address) in forwardings
+    for (
+        id,
+        kind,
+        rule,
+        conditions,
+        forwardee_address,
+        forwardee_user,
+        forwardee_email,
+        forwarder_address,
+        forwarder_user,
+    ) in forwardings
     {
         let conditions: Vec<Condition> = serde_json::from_value(conditions).unwrap_or_default();
         let rule = if rule == "any" {
@@ -264,6 +419,25 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
         if !conditions.is_empty() && !filters::matches(rule, &conditions, &subject) {
             continue;
         }
+        if kind == "outside" {
+            let sent = forward_outside(
+                state,
+                id,
+                forwarder_user,
+                &forwardee_email,
+                readable,
+                arrived.plaintext.as_deref(),
+            )
+            .await?;
+            if !sent {
+                count_skip(state, id).await?;
+            }
+            continue;
+        }
+        let (Some(forwardee_address), Some(forwardee_user)) = (forwardee_address, forwardee_user)
+        else {
+            continue;
+        };
         let Some(instances) = instances(state, id).await? else {
             continue;
         };
@@ -298,13 +472,119 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
             Err(_) => false,
         };
         if !delivered {
-            sqlx::query("UPDATE mail_forwardings SET skipped = skipped + 1 WHERE id = $1")
-                .bind(id)
-                .execute(&state.pool)
-                .await?;
+            count_skip(state, id).await?;
         }
     }
     Ok(())
+}
+
+async fn count_skip(state: &AppState, forwarding: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE mail_forwardings SET skipped = skipped + 1 WHERE id = $1")
+        .bind(forwarding)
+        .execute(&state.pool)
+        .await
+        .map(drop)
+}
+
+/// The marker header an outside forward carries, so it is never forwarded
+/// again when it comes back (an HMAC of the forwarding, so it names nothing).
+fn marker(keys: &OpaqueSetupKeys, forwarding: Uuid) -> Option<String> {
+    let (_, key) = keys.current()?;
+    Some(format!(
+        "X-Kutup-Forwarded: {}\r\n",
+        return_path_mac(key, forwarding, 0)
+    ))
+}
+
+/// Claims one message of the day's budgets: the forwarding's and its
+/// account's. `false` (and the forwarding's notice set) when either is
+/// spent; it goes on the next day.
+async fn claim_budget(
+    state: &AppState,
+    forwarding: Uuid,
+    account: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = state.pool.begin().await?;
+    // Each account's forwards are counted one at a time.
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(account)
+        .execute(&mut *tx)
+        .await?;
+    let claimed = sqlx::query(
+        "UPDATE mail_forwardings SET
+                sent_today = CASE WHEN day = current_date THEN sent_today + 1 ELSE 1 END,
+                bounces_today = CASE WHEN day = current_date THEN bounces_today ELSE 0 END,
+                invites_today = CASE WHEN day = current_date THEN invites_today ELSE 0 END,
+                notice = CASE WHEN day = current_date THEN notice ELSE NULL END,
+                day = current_date
+          WHERE id = $1 AND (day <> current_date OR sent_today < $2)",
+    )
+    .bind(forwarding)
+    .bind(OUTSIDE_PER_FORWARDING_PER_DAY)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    let account_total: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(sent_today), 0) FROM mail_forwardings
+          WHERE user_id = $1 AND day = current_date",
+    )
+    .bind(account)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !claimed || account_total > OUTSIDE_PER_ACCOUNT_PER_DAY {
+        drop(tx);
+        sqlx::query("UPDATE mail_forwardings SET notice = 'budget' WHERE id = $1")
+            .bind(forwarding)
+            .execute(&state.pool)
+            .await?;
+        return Ok(false);
+    }
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Re-sends a message to an outside forwardee through Stalwart: unchanged
+/// but for our marker header on top, from our return path. `false` when it
+/// can't go: the server never read it (end-to-end mail), it arrived
+/// PGP-encrypted, the budget is spent, or submission failed.
+async fn forward_outside(
+    state: &AppState,
+    forwarding: Uuid,
+    account: Uuid,
+    forwardee_email: &str,
+    readable: &Readable,
+    plaintext: Option<&Vec<u8>>,
+) -> anyhow::Result<bool> {
+    let keys = &state.config.mail_forwarding_keys;
+    let (Some(plaintext), false) = (plaintext, readable.pgp_encrypted) else {
+        return Ok(false);
+    };
+    let (Some(marker), Some(from)) = (
+        marker(keys, forwarding),
+        return_path(keys, &state.config.chat_server_name, forwarding),
+    ) else {
+        return Ok(false);
+    };
+    if !claim_budget(state, forwarding, account).await? {
+        return Ok(false);
+    }
+    let message = [marker.as_bytes(), plaintext.as_slice()].concat();
+    let submitted = super::submit::submit(
+        &state.config.mail_submission_addr,
+        &format!("kutup@{}", state.config.chat_server_name),
+        &state.config.mail_inbound_token,
+        super::submit::Envelope {
+            from: &from,
+            recipients: &[forwardee_email.to_owned()],
+            message: &message,
+        },
+    )
+    .await;
+    if let Err(error) = &submitted {
+        tracing::warn!(%forwarding, error = %error, "mail: an outside forward was not submitted");
+    }
+    Ok(submitted.is_ok())
 }
 
 /// Forwarder and forwardee fingerprints, the forwardee key, the sealed k and
@@ -455,5 +735,44 @@ mod tests {
         assert_eq!(seal(&both, forwarding, &instance).unwrap().0, 2);
         assert!(open(&keys(TWO), id, forwarding, [1u8; 20], [2u8; 20], &sealed).is_none());
         assert!(seal(&OpaqueSetupKeys::default(), forwarding, &instance).is_none());
+    }
+
+    /// A return path names its forwarding under the configured keys and
+    /// for a while only; anything else isn't one.
+    #[test]
+    fn return_paths_check_their_hmac_and_age() {
+        let forwarding = Uuid::new_v4();
+        let path = return_path(&keys(ONE), "kutup.test", forwarding).unwrap();
+        let local = path.split_once('@').unwrap().0;
+        assert!(local.len() <= 64);
+        assert_eq!(bounce_forwarding(&keys(ONE), local), Some(forwarding));
+        assert_eq!(
+            bounce_forwarding(&keys(&format!("{ONE},{TWO}")), local),
+            Some(forwarding)
+        );
+        assert_eq!(bounce_forwarding(&keys(TWO), local), None, "another key");
+        assert_eq!(
+            bounce_forwarding(&keys(ONE), &local.to_uppercase()),
+            Some(forwarding)
+        );
+        let other = local.replace(
+            &forwarding.simple().to_string(),
+            &Uuid::new_v4().simple().to_string(),
+        );
+        assert_eq!(
+            bounce_forwarding(&keys(ONE), &other),
+            None,
+            "another forwarding"
+        );
+        let day = today();
+        let old = format!(
+            "fwd-{}-{}-{}",
+            forwarding.simple(),
+            day - RETURN_PATH_DAYS - 1,
+            return_path_mac(&[1u8; 32], forwarding, day - RETURN_PATH_DAYS - 1)
+        );
+        assert_eq!(bounce_forwarding(&keys(ONE), &old), None, "too old");
+        assert_eq!(bounce_forwarding(&keys(ONE), "alice"), None);
+        assert_eq!(bounce_forwarding(&keys(ONE), "fwd-x-1-y"), None);
     }
 }
