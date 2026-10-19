@@ -492,7 +492,11 @@ mod tests {
             .seal_response_with_nonce(vector.response_body.as_bytes(), &nonce)
             .unwrap();
         assert_eq!(hex::encode(&response), vector.response);
-        // The client's side derives the same response key from its context.
+        // A test shortcut, not the client's path: the client's context is
+        // built here from the server's exported secret (the vector records
+        // no client randomness), so this checks the response open, not the
+        // client's own key schedule (`a_request_and_its_answer_round_trip`
+        // does that).
         let client = RequestContext(ExchangeSecret {
             enc: server.0.enc.clone(),
             secret: server.0.secret.clone(),

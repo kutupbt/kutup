@@ -46,6 +46,45 @@ mod tests {
     use super::*;
     use hpke_rs::{HpkePrivateKey, HpkePublicKey};
 
+    #[derive(serde::Deserialize)]
+    struct LibcruxVector {
+        seed: String,
+        #[serde(rename = "publicKey")]
+        public_key: String,
+        info: String,
+        aad: String,
+        plaintext: String,
+        enc: String,
+        ciphertext: String,
+    }
+
+    /// An HPKE message sealed by another implementation (hpke-rs with the
+    /// libcrux backend, its own X-Wing and ML-KEM) opens here byte for byte:
+    /// the suite's decapsulation, key schedule and AEAD agree with it, not
+    /// just with the x-wing crate's own vectors.
+    #[test]
+    fn a_message_sealed_by_libcrux_opens_here() {
+        let v: LibcruxVector =
+            serde_json::from_str(include_str!("../tests/vectors/hpke-xwing-libcrux-v1.json"))
+                .unwrap();
+        let hex = |value: &str| hex::decode(value).unwrap();
+        let seed: [u8; SEED_LEN] = hex(&v.seed).try_into().unwrap();
+        assert_eq!(public_key(&seed).to_vec(), hex(&v.public_key));
+        let opened = suite()
+            .open(
+                &hex(&v.enc),
+                &HpkePrivateKey::new(seed.to_vec()),
+                &hex(&v.info),
+                &hex(&v.aad),
+                &hex(&v.ciphertext),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(opened, hex(&v.plaintext));
+    }
+
     /// The KEM through hpke-rs's backend, the path every envelope takes:
     /// a seal to a seed's public key opens with the seed, and nothing else
     /// opens it.
