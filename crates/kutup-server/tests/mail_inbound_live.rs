@@ -6095,46 +6095,6 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nfor alice an
         .all(|f| f["id"] != declined));
 }
 
-/// Kutup mail sent readable (Encrypt off for the recipient, as the
-/// composer does for an address that forwards outside Kutup).
-fn send_readable(
-    c: &Client,
-    base: &str,
-    sender: &User,
-    from: &Address,
-    to: &str,
-    subject: &str,
-) -> String {
-    let domain = from.address.split_once('@').unwrap().1;
-    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
-    let mime = format!(
-        "From: {}\r\nTo: {to}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nreadable for {to}\r\n",
-        from.address
-    );
-    let split =
-        mail_key::encrypt_split(&[&from.public_key], &from.secret_key, mime.as_bytes()).unwrap();
-    let meta = json!({
-        "to": [{ "address": to }],
-        "subject": subject,
-        "messageId": message_id,
-        "keyPackets": { "self": b64(&split.key_packets[0]) },
-    });
-    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
-        .multipart(form(vec![
-            ("meta", serde_json::to_vec(&meta).unwrap()),
-            ("data", split.data_packet),
-            ("mime", mime.into_bytes()),
-        ]))
-        .send()
-        .unwrap();
-    assert!(
-        r.status().is_success(),
-        "send readable: {}",
-        r.text().unwrap()
-    );
-    message_id
-}
-
 /// What the phases of [`outside_forwarding`] hand on.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ForwardState {
@@ -6335,7 +6295,25 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nto alice and
                 a.address
             );
             assert_eq!(smtp_send(&smtp_address, &a.address, &outside), (250, 250));
-            println!("FORWARD-EXPECT ofw-{tag}@sender.test");
+            let outside_id = format!("ofw-{tag}@sender.test");
+            // Spam isn't forwarded; the gate's Stalwart may score the test
+            // sender either way, and the gate checks what follows.
+            let deadline = Instant::now() + Duration::from_secs(90);
+            let copy = loop {
+                if let Some(row) = messages(&c, &base, &alice_token)
+                    .into_iter()
+                    .find(|m| m["messageId"] == outside_id.as_str())
+                {
+                    break row;
+                }
+                assert!(Instant::now() < deadline, "{outside_id} never arrived");
+                std::thread::sleep(Duration::from_secs(1));
+            };
+            if copy["folder"] == "spam" {
+                println!("FORWARD-NOT {outside_id}");
+            } else {
+                println!("FORWARD-EXPECT {outside_id}");
+            }
             // Readable Kutup mail: re-sent; end-to-end Kutup mail: skipped.
             let carol = register(&c, &base);
             let cc = set_up_address(&c, &base, &carol);

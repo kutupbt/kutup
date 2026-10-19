@@ -215,13 +215,14 @@ for expected in $(grep -o 'FORWARD-EXPECT [^ ]*' "$forward_output" | cut -d' ' -
   grep -q "^DKIM-Signature: v=1; a=ed25519-sha256" <<<"$forwarded" \
     || { echo "the forward of $expected is not DKIM-signed" >&2; exit 1; }
 done
-[[ "$(grep -c 'FORWARD-EXPECT ' "$forward_output")" == "2" ]] \
-  || { echo "the forwarding test did not report its two messages" >&2; exit 1; }
-sealed_id="$(grep -o 'FORWARD-NOT [^ ]*' "$forward_output" | cut -d' ' -f2)"
-if [[ -n "$(sink_message "Message-ID: <$sealed_id>")" ]]; then
-  echo "end-to-end Kutup mail was forwarded outside" >&2
-  exit 1
-fi
+(( $(grep -c 'FORWARD-EXPECT ' "$forward_output") >= 1 )) \
+  || { echo "the forwarding test reported nothing to forward" >&2; exit 1; }
+for unexpected in $(grep -o 'FORWARD-NOT [^ ]*' "$forward_output" | cut -d' ' -f2); do
+  if [[ -n "$(sink_message "Message-ID: <$unexpected>")" ]]; then
+    echo "$unexpected was forwarded outside (end-to-end, or spam)" >&2
+    exit 1
+  fi
+done
 run_forward end
 rm -f "$forward_state" "$forward_output"
 echo "OUTSIDE FORWARDING VERIFIED"
