@@ -56,6 +56,9 @@ Specific codes, where an app does something particular (a test in
 | `rateLimited` | 429 | This address asked too often (a minute); nginx's own 429 too |
 | `peerUnsupported` | 503 | The recipient's server lacks this Chat wire; the message waits |
 | `peerRefused` | 502 | The recipient's server refused this message for good |
+| `deviceListMismatch` | 409 | Federation: the recipient's device list changed; the body lists missing, stale and extra devices |
+| `sequenceGap` | 409 | Federation: a transaction arrived out of order; `expectedSequence` names the next one |
+| `sealedVersionUnsupported` | 400 | Federation: a sealed transaction of another wire version, refused for good |
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |

@@ -134,6 +134,10 @@ pub struct Config {
     /// The most groups this server hosts (`CHAT_GROUP_MAX_GROUPS`, default
     /// 100000): with the per-server creation limit, a peer can't fill it.
     pub chat_group_max_groups: i64,
+    /// Sealed-federation flush locks held at once, each a Postgres session
+    /// beside the main pool (`SEALED_FLUSH_LOCK_CONNECTIONS`, 1 to 64,
+    /// default 4; docs/self-hosting.md).
+    pub sealed_flush_lock_connections: u32,
     /// Fetch pages for Chat link previews on behalf of this server's users
     /// (`CHAT_LINK_PREVIEWS`, default on). The server then sees the links
     /// its users preview, never their messages.
@@ -358,6 +362,10 @@ impl Config {
         if !(1..=256).contains(&chat_group_max_members) {
             env.error("CHAT_GROUP_MAX_MEMBERS must be between 1 and 256");
         }
+        let sealed_flush_lock_connections = get_env_i64("SEALED_FLUSH_LOCK_CONNECTIONS", 4);
+        if !(1..=64).contains(&sealed_flush_lock_connections) {
+            env.error("SEALED_FLUSH_LOCK_CONNECTIONS must be between 1 and 64");
+        }
         let chat_group_max_groups = get_env_i64("CHAT_GROUP_MAX_GROUPS", 100_000);
         if chat_group_max_groups < 1 {
             env.error("CHAT_GROUP_MAX_GROUPS must be at least 1");
@@ -499,6 +507,7 @@ impl Config {
             registration_mode,
             chat_groups: get_env_bool("CHAT_GROUPS", false),
             chat_group_max_members: chat_group_max_members.clamp(1, 256) as usize,
+            sealed_flush_lock_connections: sealed_flush_lock_connections.clamp(1, 64) as u32,
             chat_group_max_groups: chat_group_max_groups.max(1),
             chat_link_previews: get_env_bool("CHAT_LINK_PREVIEWS", true),
             chat_web_push: get_env_bool("CHAT_WEB_PUSH", true),

@@ -137,6 +137,9 @@ pub struct AppState {
     pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
     /// The OPAQUE setups (docs/plans/opaque.md §5), opened at startup.
     pub(crate) opaque: Arc<opaque_setup::OpaqueServer>,
+    /// One sealed-federation flush per destination at a time
+    /// (docs/chat-protocol.md §7).
+    pub(crate) sealed_flush: Arc<chat_federation::SealedFlushLocks>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -426,6 +429,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     let state = AppState {
         opaque,
+        sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(
+            &pool,
+            config.sealed_flush_lock_connections,
+        )),
         pool,
         config: Arc::new(config),
         storage,
@@ -1407,6 +1414,14 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
+            "/api/chat/anonymous/messages/batch",
+            post(chat::send_sealed_batch)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_chat_proto::MAX_SEALED_BATCH_BYTES + 64 * 1024,
+                ))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
             "/api/chat/anonymous/accounts/:account_id/messages",
             post(chat::send_sealed_messages)
                 .route_layer(DefaultBodyLimit::max(1024 * 1024))
@@ -1710,6 +1725,14 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/chat/sealed/accounts/:account_id/keys",
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/sealed/batch",
+            post(chat_federation::deliver_sealed_batch)
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_chat_proto::MAX_SEALED_BATCH_BYTES,
+                ))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
