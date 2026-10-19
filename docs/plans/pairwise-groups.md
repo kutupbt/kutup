@@ -304,9 +304,12 @@ group again from the next member's send, built in `group_recover.rs`:
 2. The list comes first: the device reads it if it hasn't this run. A group
    it says the account left is never taken up this way; one it holds is taken
    up from the list (its home, epoch and verified revision).
-3. The named pseudonym must be one the account key gives (join epochs 0 to
-   15). Only then does the device ask the home, once, for that pseudonym. A
-   stranger who doesn't know it makes the device ask nothing.
+3. The context's key must be its group's at the home it names (the id binds
+   the home), so nobody can name a home of their own. The named pseudonym
+   must be one the account key gives (join epochs 0 to 15). Only then does
+   the device ask the home, once, for that pseudonym. A stranger who doesn't
+   know it makes the device ask nothing. A list that can't be read stops it
+   (it may say the account left).
 4. The state is kept only when it holds this account's own binding, verified
    under its own authority (no home can make one up), and the sender is a
    verified member of it. Nothing is kept on failure, and nothing is signed
@@ -395,6 +398,24 @@ revision (`SignalService.proto:947-951`).
   the state key are derived. Signal derives `GroupSecretParams` the same way
   (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
+  - **The id binds the home** (decided 2026-10-19, after the #268 review). A
+    member who keeps the master key after removal (it isn't rotated, as in
+    Signal) can't make the group live on a home of their own: there it is
+    another group id, which no member's binding names, and every record
+    checks that its key gives its id at its home.
+    - The id is HKDF-SHA256 over the master key, salt `kutup/chat-group/v1`,
+      info `kutup/chat-group/id/v2\0` ‖ the home digest (32 bytes).
+    - The home digest is SHA-256 of `kutup/chat-group/home/v1\0` ‖ the server
+      name (u16 big-endian length, then its bytes) ‖ the identity document
+      hash as the pin writes it (u16 length, then its bytes) ‖ the identity
+      sequence (u64 big-endian). A field that is empty or over 255 bytes is
+      refused, never cut. Vectors: `chat-group-id-v2.json`.
+    - The home is the pin made when the group was created (the genesis
+      names it), kept for the group's life. The home's federation identity
+      rotating later doesn't move the id: members follow the rotation from
+      the pin.
+    - The home is fixed (above), so a group never moves; a group on another
+      home would be a new group, with a new id.
 - **Roles: Signal's two, nothing more (the user, 2026-10-17).**
   `ADMINISTRATOR` and `DEFAULT`, with any number of administrators.
 - **Access rules.** `AccessControl {attributes, members, addFromInviteLink}`
@@ -748,7 +769,7 @@ different branches, or hold changes back. The defences:
 The rules are Signal's, as the Desktop client applies them. The server checks
 them on pseudonyms (§3).
 - **Create.** The creator is the first administrator. Revision 0 is a signed
-  genesis change; the group id comes from the master key.
+  genesis change; the group id comes from the master key at its home.
 - **Who may do what** (Signal-Desktop):
   - edit the title, description, avatar and timer: administrators, or every
     member when `attributes` is `MEMBER` (`canEditGroupInfo.preload.ts:9-30`;

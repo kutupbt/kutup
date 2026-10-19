@@ -37,7 +37,11 @@ pub const SLOT_ID_LEN: usize = 16;
 pub const HASH_LEN: usize = 32;
 
 const KDF_SALT: &[u8] = b"kutup/chat-group/v1";
-const ID_INFO: &[u8] = b"kutup/chat-group/id/v1";
+/// v2: the id binds the group's home (its server and the federation identity
+/// it was pinned at), so the same master key at another home is another
+/// group.
+const ID_INFO: &[u8] = b"kutup/chat-group/id/v2\0";
+const HOME_DOMAIN: &[u8] = b"kutup/chat-group/home/v1\0";
 const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v1";
 
 const SEAL_DOMAIN: &[u8] = b"kutup/chat-group/sealed-field/v1\0";
@@ -51,31 +55,81 @@ const BINDING_DOMAIN: &[u8] = b"kutup/chat-group/binding/v1\0";
 const CHANGE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/change-hash/v1\0";
 const STATE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/state-hash/v1\0";
 
-/// A group's master key: the one secret every member holds.
-pub struct GroupMasterKey(Zeroizing<[u8; MASTER_KEY_LEN]>);
+/// A group's home, as its id binds it: the server the group lives on, for
+/// its whole life, and the federation identity document it was pinned at
+/// (the notary's key follows from it). A member who keeps the master key
+/// can't make the group live elsewhere: a home of theirs is another group id,
+/// which no member's binding names.
+#[derive(Clone, Copy, Debug)]
+pub struct GroupHome<'a> {
+    pub server: &'a str,
+    pub identity_sequence: u64,
+    pub identity_document_hash: &'a str,
+}
+
+/// The longest server name or identity hash a home binds (a DNS name is at
+/// most 253 bytes): anything longer, or empty, is refused, never cut.
+const MAX_HOME_FIELD: usize = 255;
+
+impl GroupHome<'_> {
+    /// The home's digest: SHA-256 over the domain, the server name and the
+    /// identity document hash (each u16-length-prefixed, 1 to 255 bytes),
+    /// then the identity sequence (u64 big-endian). This is the pin made at
+    /// the group's creation, kept for its life: the home's identity rotating
+    /// later doesn't move the id (members follow the rotation from the pin).
+    fn digest(&self) -> Result<[u8; 32]> {
+        let mut hash = Sha256::new();
+        hash.update(HOME_DOMAIN);
+        for text in [self.server, self.identity_document_hash] {
+            if text.is_empty() || text.len() > MAX_HOME_FIELD {
+                return Err(CryptoError::InvalidInput(
+                    "a group home field has an invalid length".into(),
+                ));
+            }
+            hash.update((text.len() as u16).to_be_bytes());
+            hash.update(text.as_bytes());
+        }
+        hash.update(self.identity_sequence.to_be_bytes());
+        Ok(hash.finalize().into())
+    }
+}
+
+/// A group's master key, the one secret every member holds, with the home
+/// it belongs to.
+pub struct GroupMasterKey {
+    key: Zeroizing<[u8; MASTER_KEY_LEN]>,
+    home: [u8; 32],
+}
 
 impl GroupMasterKey {
-    pub fn generate() -> Self {
+    /// A new group's key, at `home`.
+    pub fn generate(home: GroupHome<'_>) -> Result<Self> {
+        let home = home.digest()?;
         let mut key = Zeroizing::new([0u8; MASTER_KEY_LEN]);
         copy_randombytes(key.as_mut());
-        Self(key)
+        Ok(Self { key, home })
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    /// A group's key from its bytes, for the group at `home`.
+    pub fn from_bytes(bytes: &[u8], home: GroupHome<'_>) -> Result<Self> {
         let key: [u8; MASTER_KEY_LEN] = bytes
             .try_into()
             .map_err(|_| CryptoError::InvalidInput("group master key length".into()))?;
-        Ok(Self(Zeroizing::new(key)))
+        Ok(Self {
+            key: Zeroizing::new(key),
+            home: home.digest()?,
+        })
     }
 
     pub fn as_bytes(&self) -> &[u8; MASTER_KEY_LEN] {
-        &self.0
+        &self.key
     }
 
-    /// The group's id, what the server and every message name it by.
+    /// The group's id, what the server and every message name it by: the
+    /// master key's, at its home.
     pub fn group_id(&self) -> [u8; GROUP_ID_LEN] {
         let mut id = [0u8; GROUP_ID_LEN];
-        self.expand(ID_INFO, &mut id);
+        self.expand(&[ID_INFO, &self.home].concat(), &mut id);
         id
     }
 
@@ -90,7 +144,7 @@ impl GroupMasterKey {
     }
 
     fn expand(&self, info: &[u8], out: &mut [u8]) {
-        Hkdf::<Sha256>::new(Some(KDF_SALT), self.0.as_ref())
+        Hkdf::<Sha256>::new(Some(KDF_SALT), self.key.as_ref())
             .expand(info, out)
             .expect("HKDF output length is fixed and valid");
     }
@@ -423,8 +477,63 @@ pub fn state_hash(state_bytes: &[u8]) -> [u8; HASH_LEN] {
 mod tests {
     use super::*;
 
+    const HOME: GroupHome<'static> = GroupHome {
+        server: "home.example",
+        identity_sequence: 1,
+        identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    };
+
+    #[test]
+    fn the_same_key_at_another_home_is_another_group() {
+        let at = |home: GroupHome<'_>| {
+            GroupMasterKey::from_bytes(&[7u8; 32], home)
+                .unwrap()
+                .group_id()
+        };
+        let here = at(HOME);
+        assert_eq!(here, at(HOME));
+        assert_ne!(
+            here,
+            at(GroupHome {
+                server: "elsewhere.example",
+                ..HOME
+            })
+        );
+        assert_ne!(
+            here,
+            at(GroupHome {
+                identity_sequence: 2,
+                ..HOME
+            })
+        );
+        assert_ne!(
+            here,
+            at(GroupHome {
+                identity_document_hash:
+                    "1f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                ..HOME
+            })
+        );
+        // A field too long for its prefix, or empty, is refused, not cut.
+        let long = "a".repeat(256);
+        assert!(GroupMasterKey::from_bytes(
+            &[7u8; 32],
+            GroupHome {
+                server: &long,
+                ..HOME
+            }
+        )
+        .is_err());
+        assert!(GroupMasterKey::from_bytes(&[7u8; 32], GroupHome { server: "", ..HOME }).is_err());
+        assert!(GroupMasterKey::generate(GroupHome {
+            identity_document_hash: &long,
+            ..HOME
+        })
+        .is_err());
+    }
+
     fn master() -> GroupMasterKey {
-        GroupMasterKey::from_bytes(&[7u8; 32]).unwrap()
+        GroupMasterKey::from_bytes(&[7u8; 32], HOME).unwrap()
     }
 
     fn account() -> AccountRef {
@@ -457,7 +566,9 @@ mod tests {
             &signature
         )
         .is_err());
-        let another_group = GroupMasterKey::from_bytes(&[8u8; 32]).unwrap().group_id();
+        let another_group = GroupMasterKey::from_bytes(&[8u8; 32], HOME)
+            .unwrap()
+            .group_id();
         assert!(verify_binding(
             &authority,
             &another_group,
@@ -523,7 +634,7 @@ mod tests {
     #[test]
     fn ids_and_keys_are_derived_and_distinct() {
         let a = master();
-        let b = GroupMasterKey::from_bytes(&[8u8; 32]).unwrap();
+        let b = GroupMasterKey::from_bytes(&[8u8; 32], HOME).unwrap();
         assert_eq!(a.group_id(), master().group_id());
         assert_ne!(a.group_id(), b.group_id());
         assert_ne!(a.group_id().as_slice(), a.state_key().key.as_slice());
@@ -549,7 +660,9 @@ mod tests {
         assert!(key
             .open(SealedField::SlotEntry, &[1u8; 32], &sealed)
             .is_err());
-        let other = GroupMasterKey::from_bytes(&[9u8; 32]).unwrap().state_key();
+        let other = GroupMasterKey::from_bytes(&[9u8; 32], HOME)
+            .unwrap()
+            .state_key();
         assert!(other
             .open(SealedField::MemberEntry, &[1u8; 32], &sealed)
             .is_err());

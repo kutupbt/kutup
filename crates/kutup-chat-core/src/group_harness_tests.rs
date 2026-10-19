@@ -136,6 +136,8 @@ pub(crate) struct World {
     pub(crate) state_requests: Cell<usize>,
     /// How many changes the group home took.
     pub(crate) group_changes: Cell<usize>,
+    /// The group list can't be read (its server is down).
+    pub(crate) group_list_down: Cell<bool>,
     /// One-shot answers the batch route gives an account instead of taking
     /// its send.
     pub(crate) batch_answers: RefCell<Vec<(String, kutup_chat_proto::SealedBatchOutcomeV1)>>,
@@ -228,6 +230,7 @@ impl World {
             batches: Cell::new(0),
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
+            group_list_down: Cell::new(false),
             batch_answers: RefCell::new(Vec::new()),
             batch_failures: Cell::new(0),
             manifests_down: RefCell::new(HashSet::new()),
@@ -906,6 +909,9 @@ impl ChatTransport for Client {
     }
 
     async fn fetch_group_list(&self) -> Result<Vec<crate::GroupListItem>> {
+        if self.world.group_list_down.get() {
+            return Err(ChatError::Transport("the group list is down".into()));
+        }
         Ok(self
             .world
             .group_lists
@@ -3407,6 +3413,140 @@ fn group_recover_a_made_up_state_without_his_binding_is_not_joined() {
             .get(&bob.account)
             .map_or(0, BTreeMap::len),
         0
+    );
+}
+
+#[test]
+fn group_recover_a_home_of_a_former_members_is_another_group() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    // Mallory, removed long ago, kept the key and saw Bob's binding; she
+    // names a home of her own for the real group id. The id binds the home,
+    // so that is another group: refused before anything is asked.
+    let mut context = context_of(&alice, &group_id);
+    context.home.server = "mallory.test".into();
+    let probes = world.state_requests.get();
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    let mut context = context_of(&alice, &group_id);
+    context.home.identity_sequence += 1;
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.state_requests.get(), probes);
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+    // The honest recovery isn't locked out by it.
+    assert!(recover(
+        &mut bob2,
+        &context_of(&alice, &group_id),
+        &alice,
+        &bobs
+    ));
+}
+
+#[test]
+fn group_recover_fails_closed_when_the_list_cant_be_read() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    // A fresh device that hasn't read the list this run, which is down.
+    let mut bob2 = world.link_device(&bob);
+    drop(bob);
+    world.group_list_down.set(true);
+    let probes = world.state_requests.get();
+    assert!(!recover(
+        &mut bob2,
+        &context_of(&alice, &group_id),
+        &alice,
+        &bobs
+    ));
+    assert_eq!(world.state_requests.get(), probes);
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+}
+
+#[test]
+fn group_recover_takes_up_at_most_ten_groups_an_hour() {
+    let world = World::new();
+    let alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let home = context_of_new_group(&world);
+    let probes = world.state_requests.get();
+    // Eleven groups he isn't in (unknown at the home): ten are asked about.
+    for _ in 0..11 {
+        let (context, group_id) = home();
+        let named = derived_pseudonym(&bob, &group_id, 0);
+        assert!(!recover(&mut bob, &context, &alice, &named));
+    }
+    assert_eq!(
+        world.state_requests.get() - probes,
+        crate::group_recover::MAX_RECOVERIES_PER_HOUR
+    );
+}
+
+/// Contexts of groups that don't exist at the test home, each with a fresh
+/// key bound to it (as a real one would be).
+fn context_of_new_group(world: &Rc<World>) -> impl Fn() -> (GroupContextV1, String) {
+    let template = {
+        let mut someone = world.person(0xe5);
+        let group_id = block_on(someone.engine.create_group("Template"))
+            .unwrap()
+            .group_id;
+        context_of(&someone, &group_id)
+    };
+    move || {
+        let key = kutup_crypto::chat_group::GroupMasterKey::generate(crate::group::home_of(
+            &template.home,
+        ))
+        .unwrap();
+        let group_id = kutup_chat_proto::group::encode_group_id(&key.group_id());
+        let mut context = template.clone();
+        context.group_id = group_id.clone();
+        context.master_key = kutup_chat_proto::group::encode(key.as_bytes());
+        (context, group_id)
+    }
+}
+
+#[test]
+fn group_claim_goes_past_an_epoch_the_list_learnt_after_the_invitation() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    // Bob's second device reads his (empty) list early in its run.
+    let mut bob2 = world.link_device(&bob);
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    // The invitation reaches both devices; the first joins (epoch 0) and
+    // leaves again, and the list says so.
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    bob.flush_list();
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    deliver_all(&mut [&mut alice, &mut bob, &mut bob2]);
+    // Alice invites him back; the second device, still on its early read
+    // and its first invitation's epoch, accepts: the claim reads the list
+    // again and goes past epoch 0, which he left.
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob2.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob2.receive();
+    let invited = block_on(bob2.engine.load_group_record(&group_id)).unwrap();
+    assert!(matches!(invited.status, GroupStatus::Invited { .. }));
+    assert_eq!(
+        invited.join_epoch, 0,
+        "the invitation came on the early read"
+    );
+    block_on(bob2.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert_eq!(
+        block_on(bob2.engine.load_group_record(&group_id))
+            .unwrap()
+            .join_epoch,
+        1
     );
 }
 

@@ -25,9 +25,8 @@
 //!   an hour per device, across reloads. If nobody in the group sends after
 //!   the loss, the device gets the group back only once someone does.
 
-use kutup_chat_proto::group::{decode_exact, decode_group_id, encode, GroupContextV1};
+use kutup_chat_proto::group::{decode_group_id, encode, GroupContextV1};
 use kutup_crypto::account_ref::AccountRef;
-use kutup_crypto::chat_group::GroupMasterKey;
 use rand::{CryptoRng, Rng};
 
 use crate::clock::unix_millis;
@@ -66,13 +65,10 @@ impl Engine {
             return Ok(false);
         }
         let group = decode_group_id(&group_id).map_err(ChatError::Invalid)?;
-        let master = decode_exact::<32>("masterKey", &context.master_key)
-            .map_err(ChatError::Invalid)
-            .and_then(|bytes| {
-                GroupMasterKey::from_bytes(&bytes)
-                    .map_err(|error| ChatError::Invalid(error.to_string()))
-            })?;
-        if master.group_id() != group {
+        // The key must be the group's at the home the context names: the id
+        // binds the home, so a member who kept the key can't name a home of
+        // their own (that is another group, which no binding names).
+        if group::master_at(&context.master_key, &group_id, &context.home).is_err() {
             return Ok(false);
         }
         // The list first: read this run, it takes up what it holds.
@@ -80,6 +76,11 @@ impl Engine {
             let _ = self.sync_group_list(rng).await;
             if self.session.db().load_group(&group_id).await?.is_some() {
                 return Ok(true);
+            }
+            // A list that couldn't be read may say the account left: fail
+            // closed, and try again with the next message (after the hour).
+            if !self.group_list_read() {
+                return Ok(false);
             }
         }
         // A group the list says this account left stays left; one it holds

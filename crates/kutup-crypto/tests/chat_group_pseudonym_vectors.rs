@@ -9,7 +9,14 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use kutup_crypto::chat_group::{GroupMasterKey, GroupPseudonymKey};
+use kutup_crypto::chat_group::{GroupHome, GroupMasterKey, GroupPseudonymKey};
+
+/// The vectors' group home (the id binds it).
+const HOME: GroupHome<'static> = GroupHome {
+    server: "home.example",
+    identity_sequence: 1,
+    identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -36,7 +43,7 @@ struct Vectors {
 
 fn computed() -> Vectors {
     let master = [0x11u8; 32];
-    let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32])
+    let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32], HOME)
         .unwrap()
         .group_id();
     let cases = [0u32, 1, 0x0102_0304]
@@ -69,10 +76,10 @@ fn the_group_pseudonym_matches_its_vector() {
 
 #[test]
 fn pseudonyms_differ_by_account_group_and_epoch() {
-    let group = GroupMasterKey::from_bytes(&[0x22u8; 32])
+    let group = GroupMasterKey::from_bytes(&[0x22u8; 32], HOME)
         .unwrap()
         .group_id();
-    let other_group = GroupMasterKey::from_bytes(&[0x23u8; 32])
+    let other_group = GroupMasterKey::from_bytes(&[0x23u8; 32], HOME)
         .unwrap()
         .group_id();
     let key = |master: u8, group: &[u8; 32], epoch| {

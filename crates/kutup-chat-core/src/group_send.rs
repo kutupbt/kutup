@@ -73,8 +73,6 @@ pub struct GroupSendSummary {
     pub error: Option<String>,
 }
 
-/// A member account a group message goes to, with its devices and the
-/// capability its profile key gives.
 /// What a pairwise copy to one member account needs: the capability its
 /// profile key gives, and its pseudonym in the group (named in the copy's
 /// context, group_recover.rs).
@@ -94,6 +92,8 @@ pub(crate) fn named_for(content: &ChatContent, pseudonym: Option<&str>) -> ChatC
     }
 }
 
+/// A member account a group message goes to, with its devices and the
+/// capability its profile key gives.
 struct Recipient {
     account: String,
     capability: [u8; 16],

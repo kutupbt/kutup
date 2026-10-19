@@ -213,7 +213,12 @@ fn apply(group: &mut Group, home: &Home, entry: &GroupLogEntryV1) {
 }
 
 fn create(c: &Client, user: &User, home: &Home, creator: &GroupKeyPair) -> Group {
-    let master = GroupMasterKey::generate();
+    let master = GroupMasterKey::generate(kutup_crypto::chat_group::GroupHome {
+        server: &home.pin.server,
+        identity_sequence: home.pin.identity_sequence,
+        identity_document_hash: &home.pin.identity_document_hash,
+    })
+    .unwrap();
     let id = master.group_id();
     let mut genesis = GroupChangeV1 {
         version: GROUP_FORMAT_VERSION,

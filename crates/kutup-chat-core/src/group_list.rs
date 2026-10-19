@@ -121,6 +121,14 @@ impl Engine {
         }
     }
 
+    /// Reads the list again now (best effort): what a claim's epoch must go
+    /// past, if another device left or joined since the invitation came.
+    pub(crate) async fn reread_group_list(&mut self) {
+        if self.group_list.is_some() {
+            let _ = self.read_group_list().await;
+        }
+    }
+
     /// Whether this device read the list this run.
     pub(crate) fn group_list_read(&self) -> bool {
         self.group_list
@@ -336,6 +344,22 @@ impl Engine {
                 // backup) stays history.
                 None => {}
                 Some(mut record) => {
+                    // Invited here while another device joined: the claim
+                    // there was at the list's epoch, so this device's
+                    // pseudonym is that one too (it finds the account in).
+                    if matches!(record.status, GroupStatus::Invited { .. })
+                        && entry.status == GroupListStatus::Member
+                        && record.join_epoch != entry.join_epoch
+                    {
+                        let group = decode_group_id(&entry.group_id).map_err(ChatError::Invalid)?;
+                        let pseudonym = self
+                            .group_keys()?
+                            .pseudonyms
+                            .pseudonym(&group, entry.join_epoch);
+                        record.join_epoch = entry.join_epoch;
+                        record.pseudonym_seed = SecretText(encode(pseudonym.seed()));
+                        self.save_group(&record).await?;
+                    }
                     let mut changed = record.listed_status != Some(entry.status);
                     record.listed_status = Some(entry.status);
                     if entry.status == GroupListStatus::Gone && record.status == GroupStatus::Member

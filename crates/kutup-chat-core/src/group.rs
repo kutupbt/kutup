@@ -269,10 +269,37 @@ fn record_error(error: impl ToString) -> GroupError {
     GroupError::Record(error.to_string())
 }
 
+/// A home pin as the group id binds it (`kutup_crypto::chat_group::GroupHome`).
+pub fn home_of(pin: &GroupHomePinV1) -> kutup_crypto::chat_group::GroupHome<'_> {
+    kutup_crypto::chat_group::GroupHome {
+        server: &pin.server,
+        identity_sequence: pin.identity_sequence,
+        identity_document_hash: &pin.identity_document_hash,
+    }
+}
+
+/// The master key `master_key` (base64) of the group `group_id` at `home`:
+/// refused unless the key at that home is that group's. A member who keeps
+/// the key can't move the group to a home of theirs.
+pub fn master_at(
+    master_key: &str,
+    group_id: &str,
+    home: &GroupHomePinV1,
+) -> Result<GroupMasterKey, GroupError> {
+    let bytes = Zeroizing::new(decode_exact::<32>("masterKey", master_key).map_err(record_error)?);
+    let master = GroupMasterKey::from_bytes(bytes.as_ref(), home_of(home)).map_err(record_error)?;
+    let id = decode_group_id(group_id).map_err(record_error)?;
+    if master.group_id() != id {
+        return Err(record_error("the key is not this group's at this home"));
+    }
+    Ok(master)
+}
+
 impl GroupRecordV1 {
+    /// The group's master key, at the record's home: refused unless that is
+    /// the group's id there.
     pub fn master(&self) -> Result<GroupMasterKey, GroupError> {
-        let bytes = decode_exact::<32>("masterKey", &self.master_key.0).map_err(record_error)?;
-        GroupMasterKey::from_bytes(&bytes).map_err(record_error)
+        master_at(&self.master_key.0, &self.group_id, &self.home)
     }
 
     pub fn pseudonym(&self) -> Result<GroupKeyPair, GroupError> {
@@ -418,7 +445,7 @@ pub struct NewGroup<'a> {
 /// A new group: its record (not yet verified by the home) and its genesis,
 /// to send with `Create`.
 pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1), GroupError> {
-    let master = GroupMasterKey::generate();
+    let master = GroupMasterKey::generate(home_of(&new.home)).map_err(record_error)?;
     let group_id = master.group_id();
     // The creator's first join.
     let join_epoch = 0;
@@ -590,14 +617,10 @@ pub fn record_from_invite(
     keys: &GroupAccountKeys,
 ) -> Result<GroupRecordV1, GroupError> {
     invite.validate().map_err(record_error)?;
-    let master = GroupMasterKey::from_bytes(
-        &decode_exact::<32>("masterKey", &invite.master_key).map_err(record_error)?,
-    )
-    .map_err(record_error)?;
+    // The key must be the group's at the home the invitation names.
+    master_at(&invite.master_key, &invite.group_id, &invite.home)
+        .map_err(|_| record_error("the invitation's key is not its group's"))?;
     let group_id = decode_group_id(&invite.group_id).map_err(record_error)?;
-    if master.group_id() != group_id {
-        return Err(record_error("the invitation's key is not its group's"));
-    }
     let after = |status: &GroupStatus, epoch: u32| match status {
         GroupStatus::Invited { .. } | GroupStatus::Requesting => epoch,
         GroupStatus::Member | GroupStatus::Gone => epoch.saturating_add(1),

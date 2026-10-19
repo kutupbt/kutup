@@ -61,7 +61,16 @@ fn apply(group: &mut Group, change: &GroupChangeV1) {
 }
 
 fn create(creator: &GroupKeyPair) -> Group {
-    let master = GroupMasterKey::from_bytes(&[5u8; 32]).unwrap();
+    let pin = home_pin();
+    let master = GroupMasterKey::from_bytes(
+        &[5u8; 32],
+        kutup_crypto::chat_group::GroupHome {
+            server: &pin.server,
+            identity_sequence: pin.identity_sequence,
+            identity_document_hash: &pin.identity_document_hash,
+        },
+    )
+    .unwrap();
     let mut change = GroupChangeV1 {
         version: GROUP_FORMAT_VERSION,
         group_id: encode_group_id(&master.group_id()),
@@ -839,7 +848,16 @@ fn a_newcomers_change_names_no_state_and_others_must() {
 #[test]
 fn a_genesis_must_name_the_expected_home() {
     let creator = GroupKeyPair::generate();
-    let master = GroupMasterKey::from_bytes(&[5u8; 32]).unwrap();
+    let pin = home_pin();
+    let master = GroupMasterKey::from_bytes(
+        &[5u8; 32],
+        kutup_crypto::chat_group::GroupHome {
+            server: &pin.server,
+            identity_sequence: pin.identity_sequence,
+            identity_document_hash: &pin.identity_document_hash,
+        },
+    )
+    .unwrap();
     let mut change = GroupChangeV1 {
         version: GROUP_FORMAT_VERSION,
         group_id: encode_group_id(&master.group_id()),

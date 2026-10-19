@@ -106,9 +106,10 @@ impl Engine {
             return Err(ChatError::Invalid("no invitation to this group".into()));
         }
         // The list may say more now than when the invitation came (another
-        // device left the group meanwhile, or this one reloaded): the claim
-        // goes past its epoch, so a rejoin is never an old pseudonym.
-        self.ensure_group_list_read().await;
+        // device left the group meanwhile, or this one reloaded): it is read
+        // again, and the claim goes past its epoch, so a rejoin is never an
+        // old pseudonym.
+        self.reread_group_list().await;
         if let Some(epoch) = group::rejoin_epoch(self.listed_join(group_id)) {
             if epoch > record.join_epoch {
                 let group = kutup_chat_proto::group::decode_group_id(group_id)

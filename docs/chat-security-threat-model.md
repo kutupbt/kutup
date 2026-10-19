@@ -43,9 +43,11 @@ anonymity relays, and traffic-shape protection are separate milestones.
   group signing key and binding: the same blast radius as the manifests and
   the group list it already protects. A revoked device that once held the
   master key (a browser) can forge bindings, as it can manifests, until the
-  account's authority is reset. The group's home answers a pseudonym that
-  isn't a member with the same status and body as an unknown group, and a
-  device asks it only for a pseudonym a member named to it.
+  account's authority is reset. A group's id binds its home, so a former
+  member who kept the master key can't move the group to a server of theirs.
+  The group's home answers a pseudonym that isn't a member with the same
+  status and body as an unknown group, and a device asks it only for a
+  pseudonym a member named to it.
 
 Kutup V1 deliberately has no global key-transparency log, sparse map,
 checkpoint monitor, witness, or auditor. The self-hosted deployment model does
