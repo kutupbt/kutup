@@ -1493,13 +1493,15 @@ follow, newest first, with their keys, which open the mail they received.
     "id": "uuid", "fingerprint": "40 hex", "sha256Fingerprint": "64 hex",
     "publicKey": "base64 binary OpenPGP certificate",
     "privateKeyEnvelope": "base64 AccountEnvelopeV1",
-    "primary": true, "flags": 3, "createdAt": "RFC 3339"
+    "primary": true, "flags": 3, "createdAt": "RFC 3339", "forwarding": false
   }],
   "keyList": { "data": "base64 canonical MailKeyListV1", "signature": "base64 Ed25519" }
 }]
 ```
 
-`keyList` is null until the first key is added.
+`keyList` is null until the first key is added. A key with `forwarding: true`
+is a forwarding key (below): it opens only mail forwarded to the address, is
+never primary or encrypted to, and isn't in `keyList`.
 
 ### POST /api/mail/addresses/:id/keys
 
@@ -1588,6 +1590,92 @@ The advanced method answers the same at
 name (served on `openpgpkey.<server name>`); any other domain is `404`.
 
 ---
+
+## Mail forwarding
+
+Proton's forwarding ([`plans/mail-forwarding.md`](plans/mail-forwarding.md)).
+To a Kutup address on this server it is end to end: the server turns each
+arriving key packet into one for the forwardee with a proxy factor k, and
+reads no message. Forwarding outside Kutup is refused for now
+(`409 outsideForwardingUnavailable`). k is sealed at once under
+`MAIL_FORWARDING_KEYS` and no answer carries it. **Auth:** Bearer JWT for all.
+
+A forwarding: `{ "id", "kind": "end_to_end"|"outside", "state":
+"pending"|"active"|"outdated"|"paused"|"rejected", "forwarderAddress",
+"forwardeeEmail", "match": "all"|"any", "conditions": [filter conditions on
+sender, subject, attachments], "skipped": <messages that couldn't be
+forwarded>, "createdAt", "expiresAt" | null }`.
+
+### GET /api/mail/forwardings
+
+`{ "outgoing": [...], "incoming": [...] }`: the caller's addresses'
+forwardings ("From me") and those to them ("To me", declined ones left out).
+Pending forwardings past their expiry (7 days) lapse to `rejected` first.
+
+### POST /api/mail/forwardings
+
+`{ "id": "<UUID v4 the client chose>", "forwarderAddressId", "forwardeeEmail",
+"match", "conditions", "endToEnd": { "forwardeePublicKey": "<base64>",
+"instances": [{ "forwarderFingerprint", "forwardeeFingerprint",
+"proxyParameter": "<base64, 32 bytes>" }], "activation": "<armored>" } }` →
+`201` with the forwarding, pending. The client chooses the id so the
+activation can bind it. The forwarder address must be the caller's current
+one; the forwardee a Kutup person address of someone else on this server.
+The instances must cover exactly the forwarder primary key's encryption
+subkeys and name exactly the forwardee key's subkeys
+(`400 forwardingMaterialMismatch`). `400 endToEndRequired` without
+`endToEnd`; `409 forwardingExists` for the same pair; `409 forwardingLimit`
+past 10 per address or 25 per account; `409 forwardingUnavailable` when the
+server has no `MAIL_FORWARDING_KEYS`.
+
+### PUT /api/mail/forwardings/:id
+
+The forwarder renews an `outdated` or `rejected` forwarding with new
+material: `{ "endToEnd": {...} }` as above → pending again.
+
+### PUT /api/mail/forwardings/:id/pause · /resume · /conditions
+
+The forwarder pauses an active forwarding (k is kept), resumes a paused one,
+or changes `{ "match", "conditions" }`. `409 forwardingState` from the wrong
+state.
+
+### GET /api/mail/forwardings/:id/activation
+
+The forwardee's pending activation: `{ "forwardingId", "forwarderAddress",
+"forwardeeAddress", "activation", "expiresAt" }`. Their client checks it
+(signed by the forwarder's key from its signed key list, for this
+forwarding, unexpired) before accepting.
+
+### POST /api/mail/forwardings/:id/accept
+
+The forwardee keeps the forwarding key: `{ "publicKey": "<base64>",
+"privateKeyEnvelope": "<base64, purpose MailAddressPrivateKey>" }`. Its
+subkeys must be exactly the forwarding's. The key becomes an address key
+with `forwarding: true`; the forwarding is active, and its activation is
+dropped.
+
+### POST /api/mail/forwardings/:id/decline
+
+The forwardee declines a pending forwarding → `204`; its k and activation go
+and it is `rejected` for the forwarder.
+
+### DELETE /api/mail/forwardings/:id
+
+Either side ends a forwarding → `204`; its k goes. The forwardee keeps the
+forwarding key until they delete it.
+
+### DELETE /api/mail/addresses/:address/forwarding-keys/:key
+
+The forwardee deletes a forwarding key → `204`; the forwarding it serves
+ends with it.
+
+**Forwarded mail** is stored for the forwardee as the forwarder's copy with
+its key packet transformed (the data packet unchanged) and carries
+`forwardedFrom: "<forwarder address>"` on its message row: open it with the
+forwarding key only. Spam, mail that itself came by forwarding, and mail
+that came back through a loop (our `X-Kutup-Forwarded` marker, more than 20
+`Received` headers) aren't forwarded. A forwarder's new primary key makes
+its end-to-end forwardings `outdated` and deletes their k.
 
 ## Mail
 

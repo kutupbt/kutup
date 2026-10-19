@@ -181,7 +181,9 @@ without changing any key.
   - Deleting the last outside forwarding clears the flag again.
 - **Catch-all forwardees refused, as Proton.** No forwarding to an address
   of the same account. No forwarding to a list or shared mailbox (theirs
-  aren't person keys).
+  aren't person keys). A forwarding is of an address: mail a member gets
+  through a list or shared mailbox arrives at the list's address, so it
+  isn't forwarded by the member's.
 
 ### Crypto (kutup-crypto, the `mail` feature plus rPGP's forwarding feature)
 
@@ -358,7 +360,13 @@ without changing any key.
   - `GET outgoing|incoming`;
   - `POST`, `PUT {id}` (new material), `DELETE {id}`;
   - `PUT {id}/pause|resume|reinvite|conditions`;
-  - accept = `POST /api/mail/addresses/{id}/keys` with `forwardingId`.
+  - `GET {id}/activation`, `POST {id}/accept` (the forwarding key as an
+    address key), `POST {id}/decline`;
+  - `DELETE /api/mail/addresses/{address}/forwarding-keys/{key}` (the
+    forwardee deletes the key; its forwarding ends);
+  - the forwarder's client chooses the forwarding's id (a UUID v4), so the
+    activation can bind it before anything is stored (as built; see
+    `docs/api.md`, "Mail forwarding").
   - The outside confirmation goes through `GET|PUT|DELETE
     /api/mail/forwardings/external/{token}`. That token is single-use and
     lives 7 days; an expired one sends a new link.
