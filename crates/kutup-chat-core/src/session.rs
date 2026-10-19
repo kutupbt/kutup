@@ -1601,6 +1601,7 @@ impl Session {
                     delivered: true,
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: None,
                 };
                 self.store.stage_sent_message(message.clone());
                 Some(message)
@@ -2520,6 +2521,7 @@ impl Session {
                 delivered: true,
                 deduplicated: false,
                 failed_recipients: 0,
+                waiting_recipients: None,
             });
         }
         if let Err(error) = self.store.commit().await {
@@ -2771,6 +2773,7 @@ impl Session {
                     delivered: false,
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: None,
                 });
                 self.stage_outgoing_contact(peer_user, created_at).await?;
             }
@@ -2873,6 +2876,7 @@ impl Session {
                     delivered: false,
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: None,
                 });
                 self.stage_outgoing_contact(peer_user, created_at).await?;
             }
@@ -3032,6 +3036,7 @@ impl Session {
                     delivered: false,
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: None,
                 });
                 self.store.commit().await?;
                 Ok(envelopes)
@@ -3185,6 +3190,7 @@ impl Session {
                 delivered: true,
                 deduplicated: false,
                 failed_recipients: 0,
+                waiting_recipients: None,
             });
             self.store.commit().await
         }
@@ -4445,6 +4451,7 @@ mod sealed_tests {
                     delivered: true,
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: None,
                 },
             )
         };
@@ -4683,6 +4690,7 @@ mod sealed_tests {
                 delivered: true,
                 deduplicated: false,
                 failed_recipients: 0,
+                waiting_recipients: None,
             },
         );
         for (id, seq, conversation, target) in [
@@ -4713,6 +4721,7 @@ mod sealed_tests {
                     delivered: true,
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: None,
                 },
             );
         }

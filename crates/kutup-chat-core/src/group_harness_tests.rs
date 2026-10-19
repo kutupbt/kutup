@@ -2674,7 +2674,7 @@ fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
 }
 
 #[test]
-fn group_batches_a_queued_sender_key_is_not_in_the_book() {
+fn group_batches_a_queued_sender_key_is_not_in_the_book_nor_queued_again_within_the_hour() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
     let mut alice = world.person(0xa1);
@@ -2695,12 +2695,90 @@ fn group_batches_a_queued_sender_key_is_not_in_the_book() {
             .any(|device| device.account == bob.account),
         "a key only queued is handed out again"
     );
-    // The next send hands it out again, and Bob reads both.
-    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    assert!(book
+        .queued
+        .iter()
+        .any(|queued| queued.device.account == bob.account));
+    // A send within the hour doesn't queue it again for a server that is down.
+    let batches = world.batches.get();
     alice_sends(&mut alice, &group_id, "second");
+    assert_eq!(world.batches.get(), batches + 1, "only the message, no key");
+    // An hour on, the key is handed out again, and Bob reads what follows.
+    let mut record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    for queued in &mut record.sender_book.as_mut().unwrap().queued {
+        queued.at_ms -= crate::group::QUEUED_KEY_WAIT_MS;
+    }
+    block_on(alice.engine.save_group(&record)).unwrap();
+    alice_sends(&mut alice, &group_id, "third");
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
     block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
     bob.receive();
-    assert!(bob.group_texts(&group_id).contains(&"second".to_string()));
+    assert!(bob.group_texts(&group_id).contains(&"third".to_string()));
+}
+
+#[test]
+fn group_batches_a_message_is_sent_once_its_server_has_every_leg() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let mut dave = world.person(0xd4);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol, &mut dave]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    let sent = |alice: &Person, send_id: &str| {
+        block_on(alice.engine.session().db().load_sent_message(send_id))
+            .unwrap()
+            .unwrap()
+    };
+    // Bob's server is down (queued at ours), Carol's is over a limit, Dave
+    // takes no sealed mail.
+    world.batch_answers.borrow_mut().extend([
+        (bob.account.clone(), Outcome::Pending),
+        (carol.account.clone(), Outcome::RateLimited),
+        (dave.account.clone(), Outcome::PeerUnsupported),
+    ]);
+    let send_id = alice_sends(&mut alice, &group_id, "slow");
+    // Still sending to Carol; Bob's is with our server.
+    let first = sent(&alice, &send_id);
+    assert_eq!(
+        (first.delivered, first.waiting_recipients),
+        (false, Some(1))
+    );
+    // Carol's goes; Bob's server is still down: sent, not yet delivered.
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::Pending));
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    let second = sent(&alice, &send_id);
+    assert_eq!(
+        (second.delivered, second.waiting_recipients),
+        (false, Some(0))
+    );
+    // Bob's server comes back: done, and Dave's server never took it.
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    let done = sent(&alice, &send_id);
+    assert_eq!(
+        (
+            done.delivered,
+            done.waiting_recipients,
+            done.failed_recipients
+        ),
+        (true, Some(0), 1)
+    );
+    // A direct message carries no such count.
+    assert!(
+        block_on(alice.engine.session().db().list_sent_messages())
+            .unwrap()
+            .iter()
+            .filter(|message| message.waiting_recipients.is_none())
+            .count()
+            > 0
+    );
 }
 
 /// Alice sends `text` to the group; its send id.

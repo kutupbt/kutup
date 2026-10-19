@@ -320,6 +320,12 @@ export interface ChatHistoryEntry {
   deduplicated: boolean
   /** A group message: how many member accounts it never reached. */
   failedRecipients?: number
+  /**
+   * A pairwise group message sent from here: how many member accounts this
+   * account's server hasn't taken it for yet (0: sent, still followed until
+   * every member's server has it).
+   */
+  waitingRecipients?: number
   content: ChatContentView
 }
 

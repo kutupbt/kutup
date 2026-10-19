@@ -244,12 +244,16 @@ pub struct GroupOutboxLeg {
     /// Not tried again before this moment (milliseconds).
     #[serde(default)]
     pub retry_at_ms: Option<i64>,
+    /// This account's server has it: queued for the recipient's (a
+    /// `pending` answer, or its own copy already queued).
+    #[serde(default)]
+    pub queued: bool,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox
 /// may be deleted after confirmation; this record remains for UI/history and
 /// tracks whether the exact ciphertext is still awaiting delivery.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SentMessage {
     pub send_id: String,
     pub peer: String,
@@ -268,6 +272,11 @@ pub struct SentMessage {
     /// server refused it, or a week passed). Shown on the message.
     #[serde(default)]
     pub failed_recipients: u32,
+    /// For a pairwise group message: how many member accounts this account's
+    /// server hasn't taken it for yet. `None` for any other message. It shows
+    /// as "sending" while above 0, and "sent" at 0.
+    #[serde(default)]
+    pub waiting_recipients: Option<u32>,
 }
 
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled

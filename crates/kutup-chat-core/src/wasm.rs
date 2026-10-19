@@ -132,6 +132,8 @@ export interface KutupChatHistoryEntry {
   deduplicated: boolean;
   /** A group message: how many member accounts it never reached. */
   failedRecipients?: number;
+  /** A pairwise group message sent from here: how many member accounts this account's server hasn't taken it for yet. */
+  waitingRecipients?: number;
   content: KutupChatContentView;
 }
 
@@ -4506,6 +4508,10 @@ struct HistoryEntry {
     /// A group message: how many member accounts it never reached.
     #[serde(skip_serializing_if = "is_zero")]
     failed_recipients: u32,
+    /// A pairwise group message this account sent: how many member accounts
+    /// this account's server hasn't taken it for yet (0: sent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waiting_recipients: Option<u32>,
     content: ContentView,
 }
 
@@ -4549,6 +4555,7 @@ impl HistoryEntry {
             delivered: true,
             deduplicated: false,
             failed_recipients: 0,
+            waiting_recipients: None,
             content: content.into(),
         })
     }
@@ -4571,6 +4578,7 @@ impl HistoryEntry {
             delivered: message.delivered,
             deduplicated: message.deduplicated,
             failed_recipients: message.failed_recipients,
+            waiting_recipients: message.waiting_recipients,
             content: content.into(),
         })
     }
@@ -4591,6 +4599,7 @@ impl HistoryEntry {
             delivered: false,
             deduplicated: false,
             failed_recipients: 0,
+            waiting_recipients: None,
             content: content.into(),
         })
     }
@@ -4621,6 +4630,7 @@ impl HistoryEntry {
             delivered: message.delivered,
             deduplicated: message.deduplicated,
             failed_recipients: 0,
+            waiting_recipients: None,
             content: content.into(),
         })
     }

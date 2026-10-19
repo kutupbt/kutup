@@ -1153,10 +1153,19 @@ own fallback path (§1).
       15 minutes.
 
     A leg not taken within the send log's week fails. A sender key only
-    `pending` is not entered in the book, so the next message hands it out
-    again. An error on one leg (its devices can't be read, its envelopes
-    can't be sealed) leaves that leg waiting; every pass saves what it
-    learned. The message shows how many member accounts it never reached.
+    `pending` is not entered in the book: it is noted as queued, not handed
+    out again for an hour (a server that is down isn't sent a new copy with
+    every message), and handed out again after that. An error on one leg
+    (its devices can't be read, its envelopes can't be sealed) leaves that
+    leg waiting; one message that can't go never holds up the others; a
+    pass that changed nothing writes nothing.
+
+    What the message shows, as Signal does: **sending to N members** while
+    this account's server hasn't taken it for some (a limit, no answer);
+    **sent** once it has it for every member, even while a member's own
+    server is slow or down; and how many member accounts it **never
+    reached** (`refused`, `unavailable`, `peerUnsupported`, or the week
+    gone). A group message is never shown as "not sent".
   - This is the multi-recipient route's outer shape without libsignal's
     format, so slice 2 replaces the body, not the plumbing.
   - Raising the per-IP default instead would weaken the outer wall for direct
