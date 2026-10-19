@@ -554,6 +554,7 @@ mod history_tests {
                 delivered_at: None,
                 delivered: false,
                 deduplicated: false,
+                failed_recipients: 0,
             },
             "alice@chat.test",
         )
