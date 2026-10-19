@@ -1,6 +1,7 @@
 // Turn unlocked keys + a live access token into the app's Session.
 
 import api from './client'
+import { upgradedKeys } from './identitySuite'
 import type { SessionKeys } from './keys'
 import { resetSessionVersion, setSessionVersionHandler } from './sessionVersion'
 import { signOut } from './signOut'
@@ -8,6 +9,8 @@ import { clearSession, getSession, setAccessToken, setSession, updateSession } f
 
 export interface MeResponse {
   id: string
+  /** This server's name: with `id`, who the account is (docs/plans/account-ids.md). */
+  server?: string
   /** The Kutup address. */
   address: string
   envelopeBinding: string
@@ -49,14 +52,15 @@ export class KeyBindingMismatchError extends Error {
  * comes from `keys` (verified on this device), and `me` must name the same.
  */
 export async function activateSession(
-  keys: SessionKeys,
+  given: SessionKeys,
   accessToken: string,
   sessionId: string,
   prefetched?: MeResponse,
-): Promise<void> {
+): Promise<SessionKeys> {
   setAccessToken(accessToken)
   resetSessionVersion()
   const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
+  let keys = given
   if (me.id !== keys.userId) {
     throw new Error('the session belongs to a different account than its keys')
   }
@@ -69,6 +73,9 @@ export async function activateSession(
     keys.privateKey.fill(0)
     throw new KeyBindingMismatchError()
   }
+  // An account from before X-Wing Drive keys moves to them before any app
+  // uses its keys (docs/plans/pq-shares.md).
+  keys = await upgradedKeys(keys, me, accessToken)
   setSession(
     {
       sessionId,
@@ -89,6 +96,7 @@ export async function activateSession(
     },
     accessToken,
   )
+  return keys
 }
 
 /**

@@ -305,7 +305,38 @@ pub const MAX_ACCOUNT_MANIFEST_DEVICES: usize = 10;
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
 pub enum AccountIdentitySuiteId {
+    /// An X25519 Drive key, from before X-Wing: readable, never sealed to,
+    /// until its account upgrades ([`legacy_suite1_for_upgrade`]).
     X25519Ed25519V1 = 1,
+    /// An X-Wing Drive key (docs/plans/pq-shares.md).
+    XWingEd25519V2 = 2,
+}
+
+impl AccountIdentitySuiteId {
+    /// The Drive HPKE public key's length in this suite.
+    pub const fn hpke_public_key_len(self) -> usize {
+        match self {
+            Self::X25519Ed25519V1 => legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN,
+            Self::XWingEd25519V2 => 1216,
+        }
+    }
+
+    /// Whether anything may be sealed to this suite's Drive key: X-Wing only.
+    /// A suite-1 account's lookups say `keysPendingUpgrade` instead.
+    pub const fn sealable(self) -> bool {
+        matches!(self, Self::XWingEd25519V2)
+    }
+}
+
+/// What stays of identity suite 1 (X25519 Drive keys) while accounts upgrade
+/// to suite 2 at their next sign-in (docs/plans/pq-shares.md): its manifests
+/// stay readable, so Chat keeps working with an account that hasn't signed in
+/// since, and so a client can see the suite rise. Nothing is sealed to a
+/// suite-1 key. The enforcing change, once every account is counted as
+/// upgraded, deletes this module and the suite.
+pub mod legacy_suite1_for_upgrade {
+    /// A suite-1 Drive key: raw X25519.
+    pub const HPKE_PUBLIC_KEY_LEN: usize = 32;
 }
 
 impl From<AccountIdentitySuiteId> for u16 {
@@ -320,6 +351,7 @@ impl TryFrom<u16> for AccountIdentitySuiteId {
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::X25519Ed25519V1),
+            2 => Ok(Self::XWingEd25519V2),
             _ => Err(format!("unknown account identity suite {value}")),
         }
     }
@@ -330,7 +362,8 @@ impl TryFrom<u16> for AccountIdentitySuiteId {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountManifestDriveKeysV1 {
     pub suite: AccountIdentitySuiteId,
-    /// Canonical padded base64 raw X25519 public key.
+    /// Canonical padded base64 Drive HPKE public key: X-Wing's 1216 bytes in
+    /// suite 2 (suite 1's raw X25519 key until its account upgrades).
     pub hpke_public_key: String,
     /// Canonical padded base64 raw Ed25519 public key used only to authenticate
     /// named Drive share envelopes.
@@ -399,7 +432,7 @@ impl AccountManifestV1 {
         out.extend_from_slice(&decode_canonical_base64_exact(
             "drive.hpkePublicKey",
             &self.drive.hpke_public_key,
-            32,
+            self.drive.suite.hpke_public_key_len(),
         )?);
         out.extend_from_slice(&decode_canonical_base64_exact(
             "drive.shareSigningPublicKey",
@@ -492,7 +525,11 @@ impl AccountManifestV1 {
             return Err("incarnationId does not match selfAuthorityKey".into());
         }
 
-        decode_canonical_base64_exact("drive.hpkePublicKey", &self.drive.hpke_public_key, 32)?;
+        decode_canonical_base64_exact(
+            "drive.hpkePublicKey",
+            &self.drive.hpke_public_key,
+            self.drive.suite.hpke_public_key_len(),
+        )?;
         let drive_signing = decode_canonical_base64_exact(
             "drive.shareSigningPublicKey",
             &self.drive.share_signing_public_key,
@@ -985,8 +1022,8 @@ mod tests {
             sequence: 1,
             previous_hash: None,
             drive: AccountManifestDriveKeysV1 {
-                suite: AccountIdentitySuiteId::X25519Ed25519V1,
-                hpke_public_key: base64::engine::general_purpose::STANDARD.encode([9; 32]),
+                suite: AccountIdentitySuiteId::XWingEd25519V2,
+                hpke_public_key: base64::engine::general_purpose::STANDARD.encode([9; 1216]),
                 share_signing_public_key: base64::engine::general_purpose::STANDARD
                     .encode(drive_signing.verifying_key().to_bytes()),
             },

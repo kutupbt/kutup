@@ -17,7 +17,7 @@ vi.mock('@kutup/crypto', () => crypto_)
 const registrar = vi.hoisted(() => ({ register: vi.fn(), close: vi.fn() }))
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ startOpaqueRegistration: vi.fn(() => Promise.resolve(registrar)) }))
 const signDriveKeyBinding = vi.hoisted(() => vi.fn(() => Promise.resolve('binding')))
-vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding }))
+vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding, FIRST_DRIVE_KEY_BINDING_EPOCH: 1 }))
 vi.mock('@kutup/session/apps', () => ({ loadServerSettings: vi.fn(() => Promise.resolve({ chat: { serverName: 'kutup.dev' } })) }))
 const opaque = vi.hoisted(() => ({
   opaqueLogin: vi.fn(),
@@ -30,7 +30,8 @@ const opaque = vi.hoisted(() => ({
       : null,
 }))
 vi.mock('@kutup/session/opaque', () => opaque)
-const activateSession = vi.hoisted(() => vi.fn())
+// What it activated: the keys given (the session layer's upgrade is tested there).
+const activateSession = vi.hoisted(() => vi.fn((keys: unknown) => Promise.resolve(keys)))
 vi.mock('@kutup/session/profile', () => ({ activateSession }))
 
 import { abandonTotp, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
@@ -58,7 +59,7 @@ const keys = () =>
 
 beforeEach(() => {
   post.mockReset()
-  activateSession.mockReset()
+  activateSession.mockClear()
   registrar.close.mockClear()
   opaque.registerWith.mockReset()
   opaque.reregisterWith.mockReset()
@@ -149,10 +150,11 @@ describe('registerAndSignIn', () => {
     // The password registered with the keys, the id the server minted for
     // the sign-up and the Drive key binding for that id go with it
     // (docs/plans/opaque.md, account-ids.md).
-    expect(signDriveKeyBinding).toHaveBeenCalledWith(expect.any(String), {
-      server: 'kutup.dev',
-      accountId: '11111111-1111-4111-8111-111111111111',
-    })
+    expect(signDriveKeyBinding).toHaveBeenCalledWith(
+      expect.any(String),
+      { server: 'kutup.dev', accountId: '11111111-1111-4111-8111-111111111111' },
+      1,
+    )
     expect(post.mock.calls[0][1]).toMatchObject({
       username: 'a',
       accountId: '11111111-1111-4111-8111-111111111111',
@@ -181,7 +183,7 @@ describe('registerAndSignIn', () => {
     expect(opaque.registerWith).toHaveBeenCalledWith(registrar, k.keyBinding, k.masterKey, null)
     // The new start minted a new id: the binding names that one.
     expect(post.mock.calls[1][1]).toMatchObject({ keyBinding: k.keyBinding, opaqueRecord: 'record-2', opaqueServerKeyId: 2, accountId: second, accountIdProof: 'proof-2' })
-    expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId: second })
+    expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId: second }, 1)
     expect(crypto_.rebindAccountKeySet).not.toHaveBeenCalled()
   })
 
@@ -215,7 +217,7 @@ describe('completeSetup', () => {
     expect(post.mock.calls[0][0]).toBe('/auth/complete-setup')
     expect(post.mock.calls[0][1]).toMatchObject({ keyBinding: keys().keyBinding, driveKeyBinding: 'binding' })
     // The binding names the account by its id; the setup sends no minted id.
-    expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId })
+    expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId }, 1)
     expect(post.mock.calls[0][1]).not.toHaveProperty('accountId')
     expect(post.mock.calls[0][2]).toMatchObject({ headers: { Authorization: 'Bearer setup' } })
   })

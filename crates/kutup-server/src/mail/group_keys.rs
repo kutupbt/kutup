@@ -158,17 +158,25 @@ pub async fn check_shares(
         let user_id = Uuid::parse_str(&input.user_id)
             .map_err(|_| AppError::bad_request("userId must be an account id"))?;
         let share = decode(&input.share, "share")?;
-        let current: Option<String> = sqlx::query_scalar(
-            "SELECT account_incarnation_id FROM users
+        let current: Option<(String, i16)> = sqlx::query_as(
+            "SELECT account_incarnation_id, identity_suite FROM users
               WHERE id = $1 AND is_active AND NOT is_first_login AND account_incarnation_id <> ''",
         )
         .bind(user_id)
         .fetch_optional(&mut *conn)
         .await?;
-        let Some(current) = current else {
+        let Some((current, suite)) = current else {
             return Err(AppError::bad_request("a member has no account keys yet")
                 .with_details(serde_json::json!({ "code": "noAccountKey", "userId": user_id })));
         };
+        // Sealed to X-Wing keys only (docs/plans/pq-shares.md).
+        if suite < kutup_crypto::identity::IDENTITY_SUITE as i16 {
+            let mut error = crate::handlers::identity::keys_pending_upgrade();
+            if let Some(details) = error.details.as_mut() {
+                details.insert("userId".into(), serde_json::json!(user_id));
+            }
+            return Err(error);
+        }
         if mail_key::group_key_share_incarnation(&share)
             .ok()
             .as_deref()

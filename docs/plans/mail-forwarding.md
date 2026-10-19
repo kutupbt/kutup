@@ -322,6 +322,17 @@ without changing any key.
 - **Primary key change** makes the address's end-to-end forwardings
   Outdated, as Proton, and deletes their k (above). The key-change dialogs
   warn first, with Proton's wording.
+- **The forwardee key never signs or verifies either** (as built, from
+  review): its forwarder made it and knows its secret, so a signature by it
+  would prove nothing about the forwardee whose address it names. Its
+  primary only certifies its subkeys, and kutup-crypto refuses it as a
+  signer, as a key to verify with and as a recipient.
+- **A forwarded copy is the forwardee's mail**: it goes through their
+  block, spam and allow lists and their filters like any arrival; one they
+  block isn't stored and counts as not forwarded.
+- **Abuse:** at most 5 forwardings pending to one address at a time. A
+  deactivated account's forwardings, either side, lose k and become
+  Outdated.
 - **The forwardee key is never an encryption target.** It stays out of the
   keys endpoint, WKD, the outside key lookups and the composer's choice of
   keys. At accept the server checks that the uploaded key's subkey

@@ -23,6 +23,8 @@ use crate::AppState;
 /// 2026-10-19).
 pub const MAX_PER_ADDRESS: i64 = 10;
 pub const MAX_PER_ACCOUNT: i64 = 25;
+/// Pending forwardings to one address at a time.
+pub const MAX_PENDING_PER_FORWARDEE: i64 = 5;
 /// A pending forwarding's activation or confirmation link lives this long.
 pub const PENDING_DAYS: i64 = 7;
 /// Mail that arrives with more `Received` headers than this is delivered
@@ -275,6 +277,35 @@ pub fn spawn(state: AppState) {
 /// One pass of [`spawn`]'s loop.
 pub async fn tidy(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     sweep_expired(pool).await?;
+    // A deactivated account's forwardings, either side, keep no proxy
+    // factor: they are Outdated, and re-enabled with new material if the
+    // account comes back.
+    let stopped: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT f.id FROM mail_forwardings f
+           JOIN users fu ON fu.id = f.user_id
+           LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
+           LEFT JOIN users bu ON bu.id = b.user_id
+          WHERE f.kind = 'end_to_end' AND f.state <> 'outdated'
+            AND (NOT fu.is_active OR NOT COALESCE(bu.is_active, true))",
+    )
+    .fetch_all(pool)
+    .await?;
+    for forwarding in stopped {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM mail_forwarding_keys WHERE forwarding_id = $1")
+            .bind(forwarding)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE mail_forwardings SET state = 'outdated', activation = NULL,
+                    expires_at = NULL, updated_at = now()
+              WHERE id = $1",
+        )
+        .bind(forwarding)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+    }
     sqlx::query(
         "DELETE FROM mail_forwardings f
           USING mail_addresses a
@@ -308,6 +339,19 @@ pub struct Arrived {
 /// account across its forwardings.
 pub const OUTSIDE_PER_FORWARDING_PER_DAY: i32 = 200;
 pub const OUTSIDE_PER_ACCOUNT_PER_DAY: i64 = 500;
+
+/// Whether the address has an active forwarding: the arrival paths ask
+/// before copying a message or starting a task for it.
+pub async fn forwards(pool: &sqlx::PgPool, address: Uuid) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_forwardings
+                         WHERE forwarder_address_id = $1 AND state = 'active')",
+    )
+    .bind(address)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
 
 /// Whether arriving mail may be forwarded: not when it carries our
 /// forwarding marker, or has come through more than [`MAX_HOPS`] hops.

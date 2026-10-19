@@ -309,18 +309,20 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
     let answer = match record(state, recipient, id, &key, &version, size, &readable).await {
         Ok(Some(stored)) => {
             // On to the address's forwardings, after its own copy is kept.
-            forwarding::spawn_forward(
-                state,
-                forwarding::Arrived {
-                    address_id: recipient.address_id,
-                    message_id: id,
-                    object_key: key.clone(),
-                    object_version: version.clone(),
-                    readable: readable.clone(),
-                    may_forward: forwarding::may_forward(raw),
-                    plaintext: Some(std::sync::Arc::new(raw.to_vec())),
-                },
-            );
+            if forwarding::forwards(&state.pool, recipient.address_id).await {
+                forwarding::spawn_forward(
+                    state,
+                    forwarding::Arrived {
+                        address_id: recipient.address_id,
+                        message_id: id,
+                        object_key: key.clone(),
+                        object_version: version.clone(),
+                        readable: readable.clone(),
+                        may_forward: forwarding::may_forward(raw),
+                        plaintext: Some(std::sync::Arc::new(raw.to_vec())),
+                    },
+                );
+            }
             if may_answer && readable.bounce.is_none() {
                 auto_reply::spawn(
                     state,

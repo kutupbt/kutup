@@ -140,7 +140,9 @@ export async function restoreSession(): Promise<RestoreResult> {
   }
 
   try {
-    await activateSession(keys, accessToken, sessionId, await profile)
+    const activated = await activateSession(keys, accessToken, sessionId, await profile)
+    // Moved to X-Wing keys just now: kept that way here.
+    if (activated !== keys) await persistKeys(sessionId, activated)
   } catch (error) {
     // The server now names another key binding than these keys were
     // verified under: this sign-in is over.

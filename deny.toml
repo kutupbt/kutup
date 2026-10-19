@@ -17,10 +17,10 @@ yanked = "deny"
 ignore = [
     # libcrux-sha3 0.0.8: wrong output from repeated incremental portable SHAKE
     # squeezes, and a panic in AVX2 SHAKE-256 for odd output lengths. Neither
-    # touches ML-KEM (both advisories say so). hpke-rs 0.6.1 calls it only in
-    # `derive_key_pair` for X-Wing and ML-KEM, which Kutup never calls: the
-    # groups' X-Wing gateway keys are their 32-byte seeds, and X-Wing itself
-    # runs on RustCrypto's x-wing and sha3.
+    # touches ML-KEM (both advisories say so). In hpke-rs 0.6.1 it is reached
+    # only through `derive_key_pair`, and Kutup never calls that: every X-Wing
+    # key (Drive keys, the groups' gateway keys) is a 32-byte seed expanded by
+    # RustCrypto's x-wing, which hashes with RustCrypto's sha3.
     # Lifted by libsignal pinning libcrux-ml-kem >= the fixed sha3, and a newer
     # hpke-rs.
     { id = "RUSTSEC-2026-0207", reason = "SHAKE incremental squeeze: not used by ML-KEM, nor by any hpke-rs call Kutup makes" },

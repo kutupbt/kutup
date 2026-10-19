@@ -1,9 +1,9 @@
-//! Authenticated HPKE envelopes for named local and federated Drive shares.
+//! Authenticated HPKE envelopes for named local and federated Drive shares,
+//! sealed with X-Wing ([`crate::hpke_xwing`]; docs/plans/pq-shares.md).
 
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
-use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
-use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey, Mode};
+use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey};
 use hpke_rs_rust_crypto::HpkeRustCrypto;
 
 use crate::account_ref::AccountRef;
@@ -18,7 +18,7 @@ const FILE_MAGIC: &[u8; 8] = b"KUTPFS1\0";
 const FILE_HPKE_INFO: &[u8] = b"kutup/drive/file-share-hpke/v1\0";
 /// The AAD before the two people, plus their two server-length prefixes.
 const FIXED_AAD_LEN: usize = 8 + 2 + 2 + 16 + 4 + 32 + 32 + 2 + 2;
-const X25519_ENCAPSULATED_KEY_LEN: usize = 32;
+const ENCAPSULATED_KEY_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 const COLLECTION_KEY_CIPHERTEXT_LEN: usize = 32 + 16;
 const SIGNATURE_LEN: usize = 64;
 const MAX_ACCOUNT_LEN: usize = 320;
@@ -26,7 +26,9 @@ const MAX_ACCOUNT_LEN: usize = 320;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum NamedShareSuiteId {
-    X25519HkdfSha256ChaCha20Poly1305Ed25519V1 = 1,
+    /// X-Wing, HKDF-SHA256, ChaCha20-Poly1305, an Ed25519 signature
+    /// (docs/plans/pq-shares.md). Suite 1 (X25519) is refused.
+    XWingHkdfSha256ChaCha20Poly1305Ed25519V2 = 2,
 }
 
 impl NamedShareSuiteId {
@@ -40,7 +42,7 @@ impl TryFrom<u16> for NamedShareSuiteId {
 
     fn try_from(value: u16) -> Result<Self> {
         match value {
-            1 => Ok(Self::X25519HkdfSha256ChaCha20Poly1305Ed25519V1),
+            2 => Ok(Self::XWingHkdfSha256ChaCha20Poly1305Ed25519V2),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown named-share suite {value}"
             ))),
@@ -65,7 +67,7 @@ macro_rules! share_envelope {
             pub recipient_incarnation_id: [u8; 32],
             pub sender: AccountRef,
             pub recipient: AccountRef,
-            pub encapsulated_key: [u8; X25519_ENCAPSULATED_KEY_LEN],
+            pub encapsulated_key: [u8; ENCAPSULATED_KEY_LEN],
             pub ciphertext: [u8; COLLECTION_KEY_CIPHERTEXT_LEN],
             pub signature: [u8; SIGNATURE_LEN],
         }
@@ -83,13 +85,16 @@ macro_rules! share_envelope {
                 recipient_incarnation_id: &str,
                 recipient_hpke_public_key: &[u8],
             ) -> Result<Self> {
-                if object_key.len() != 32 || recipient_hpke_public_key.len() != 32 || $number == 0 {
+                if object_key.len() != 32
+                    || recipient_hpke_public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN
+                    || $number == 0
+                {
                     return Err(CryptoError::InvalidInput(
                         concat!($what, " key length or number is invalid").into(),
                     ));
                 }
                 let mut envelope = Self {
-                    suite: NamedShareSuiteId::X25519HkdfSha256ChaCha20Poly1305Ed25519V1,
+                    suite: NamedShareSuiteId::XWingHkdfSha256ChaCha20Poly1305Ed25519V2,
                     $id: parse_canonical_uuid($id, $label)?,
                     $number,
                     sender_incarnation_id: parse_hex_32(
@@ -102,7 +107,7 @@ macro_rules! share_envelope {
                     )?,
                     sender: sender.clone(),
                     recipient: recipient.clone(),
-                    encapsulated_key: [0u8; X25519_ENCAPSULATED_KEY_LEN],
+                    encapsulated_key: [0u8; ENCAPSULATED_KEY_LEN],
                     ciphertext: [0u8; COLLECTION_KEY_CIPHERTEXT_LEN],
                     signature: [0u8; SIGNATURE_LEN],
                 };
@@ -131,7 +136,7 @@ macro_rules! share_envelope {
                 envelope.encapsulated_key =
                     encapsulated_key.try_into().map_err(|value: Vec<u8>| {
                         CryptoError::InvalidLength {
-                            expected: X25519_ENCAPSULATED_KEY_LEN,
+                            expected: ENCAPSULATED_KEY_LEN,
                             got: value.len(),
                         }
                     })?;
@@ -165,7 +170,7 @@ macro_rules! share_envelope {
 
             fn signing_bytes(&self) -> Result<Vec<u8>> {
                 let mut bytes = self.aad_bytes()?;
-                bytes.extend_from_slice(&(X25519_ENCAPSULATED_KEY_LEN as u16).to_be_bytes());
+                bytes.extend_from_slice(&(ENCAPSULATED_KEY_LEN as u16).to_be_bytes());
                 bytes.extend_from_slice(&self.encapsulated_key);
                 bytes.extend_from_slice(&(COLLECTION_KEY_CIPHERTEXT_LEN as u16).to_be_bytes());
                 bytes.extend_from_slice(&self.ciphertext);
@@ -184,7 +189,8 @@ macro_rules! share_envelope {
 
             pub fn decode(bytes: &[u8]) -> Result<Self> {
                 // Each person: at least a three-byte server and the id's 16 bytes.
-                if bytes.len() < FIXED_AAD_LEN + 2 * (3 + 16) + 2 + 32 + 2 + 48 + 64
+                if bytes.len()
+                    < FIXED_AAD_LEN + 2 * (3 + 16) + 2 + ENCAPSULATED_KEY_LEN + 2 + 48 + 64
                     || bytes.get(..$magic.len()) != Some($magic)
                 {
                     return Err(CryptoError::TooShort);
@@ -213,14 +219,14 @@ macro_rules! share_envelope {
                         concat!($what_space, " sender and recipient must differ").into(),
                     ));
                 }
-                if read_u16(bytes, &mut cursor)? as usize != X25519_ENCAPSULATED_KEY_LEN {
+                if read_u16(bytes, &mut cursor)? as usize != ENCAPSULATED_KEY_LEN {
                     return Err(CryptoError::InvalidInput(
                         concat!($what, " encapsulated key length is invalid").into(),
                     ));
                 }
-                let encapsulated_key = take(bytes, &mut cursor, X25519_ENCAPSULATED_KEY_LEN)?
+                let encapsulated_key = take(bytes, &mut cursor, ENCAPSULATED_KEY_LEN)?
                     .try_into()
-                    .expect("32-byte slice");
+                    .expect("encapsulated-key slice");
                 if read_u16(bytes, &mut cursor)? as usize != COLLECTION_KEY_CIPHERTEXT_LEN {
                     return Err(CryptoError::InvalidInput(
                         concat!($what, " ciphertext length is invalid").into(),
@@ -375,13 +381,9 @@ share_envelope!(
     "file share"
 );
 
+/// The suite every share envelope seals with ([`crate::hpke_xwing`]).
 pub(crate) fn hpke_suite() -> Hpke<HpkeRustCrypto> {
-    Hpke::new(
-        Mode::Base,
-        KemAlgorithm::DhKem25519,
-        KdfAlgorithm::HkdfSha256,
-        AeadAlgorithm::ChaCha20Poly1305,
-    )
+    crate::hpke_xwing::suite()
 }
 
 pub(crate) fn canonical_account(value: &str) -> Result<String> {
@@ -572,9 +574,12 @@ mod tests {
             .is_err());
         bytes.push(0);
         assert!(NamedShareEnvelopeV1::decode(&bytes).is_err());
-        bytes = envelope.encode().unwrap();
-        bytes[9] = 2;
-        assert!(NamedShareEnvelopeV1::decode(&bytes).is_err());
+        // Suite 1 (X25519) and unknown suites are refused.
+        for suite in [1u8, 3] {
+            bytes = envelope.encode().unwrap();
+            bytes[9] = suite;
+            assert!(NamedShareEnvelopeV1::decode(&bytes).is_err());
+        }
     }
 
     #[test]

@@ -90,8 +90,10 @@ pub fn generate_material(
     let mut rng = rand::rngs::OsRng;
     let mut forwardee = SecretKeyParamsBuilder::default()
         .key_type(KeyType::Ed25519Legacy)
+        // Certifies its subkeys only: a forwarding key never signs (its
+        // forwarder knows the secret).
         .can_certify(true)
-        .can_sign(true)
+        .can_sign(false)
         .created_at(created_at)
         .primary_user_id(mail_key::user_id(&address))
         .build()
@@ -1061,5 +1063,32 @@ P0GnopWOyFNNFWK77LQN
             forward_message(&other, &material.forwardee_public_key, &material.instances).is_err()
         );
         assert!(forward_message(&[], &material.forwardee_public_key, &material.instances).is_err());
+    }
+
+    /// A forwarding key opens forwarded mail and nothing else: its forwarder
+    /// made it, so it never signs, verifies or is encrypted to.
+    #[test]
+    fn a_forwarding_key_never_signs_verifies_or_receives() {
+        let Setup {
+            forwarder,
+            material,
+            ..
+        } = setup();
+        let secret = material.forwardee_secret_key.as_slice();
+        let public = material.forwardee_public_key.as_slice();
+        assert!(mail_key::sign_detached(secret, b"x").is_err());
+        assert!(mail_key::sign_cleartext(secret, "x").is_err());
+        assert!(mail_key::encrypt(&forwarder.public_key, Some(secret), b"x").is_err());
+        assert!(mail_key::encrypt_split(&[forwarder.public_key.as_slice()], secret, b"x").is_err());
+        assert!(mail_key::encrypt_binary(public, b"x").is_err());
+        let signature = mail_key::sign_detached(&forwarder.secret_key, b"x").unwrap();
+        assert!(mail_key::verify_detached(signature.as_bytes(), b"x", public).is_err());
+        let signed =
+            mail_key::encrypt(&forwarder.public_key, Some(&forwarder.secret_key), b"x").unwrap();
+        assert!(mail_key::decrypt(&forwarder.secret_key, signed.as_bytes(), Some(public)).is_err());
+        // Its primary certifies its subkeys and nothing more.
+        let key = SignedSecretKey::from_bytes(secret).unwrap();
+        let flags = key.details.users[0].signatures[0].key_flags();
+        assert!(flags.certify() && !flags.sign());
     }
 }

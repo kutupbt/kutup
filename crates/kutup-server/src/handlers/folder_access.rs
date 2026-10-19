@@ -127,6 +127,9 @@ pub struct AccessMember {
     pub account_incarnation_id: String,
     /// The member's Drive HPKE key, to seal them the next epoch's key.
     pub drive_public_key: String,
+    /// The key's identity suite: 2 (X-Wing), or 1 until the member signs in
+    /// again (nothing is sealed to it; docs/plans/pq-shares.md).
+    pub identity_suite: i16,
     /// The member's Drive signing key, to check the profile key they gave.
     pub drive_signing_public_key: Option<String>,
     pub can_upload: bool,
@@ -225,6 +228,7 @@ pub async fn access(
         Option<String>,
         String,
         String,
+        i16,
         Option<String>,
         bool,
         bool,
@@ -232,7 +236,7 @@ pub async fn access(
         OffsetDateTime,
     );
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key,
+        "SELECT u.id, u.username, u.account_incarnation_id, u.public_key, u.identity_suite,
                 u.drive_signing_public_key, cs.can_upload, cs.can_delete, cs.upload_quota_bytes, cs.created_at
          FROM collection_shares cs JOIN users u ON u.id = cs.recipient_user_id
          WHERE cs.collection_id = $1 ORDER BY cs.created_at",
@@ -279,6 +283,7 @@ pub async fn access(
                     username,
                     incarnation,
                     public_key,
+                    identity_suite,
                     signing_public_key,
                     can_upload,
                     can_delete,
@@ -290,6 +295,7 @@ pub async fn access(
                         account: format!("{}@{domain}", username.unwrap_or_default()),
                         account_incarnation_id: incarnation,
                         drive_public_key: public_key,
+                        identity_suite,
                         drive_signing_public_key: signing_public_key,
                         can_upload,
                         can_delete,

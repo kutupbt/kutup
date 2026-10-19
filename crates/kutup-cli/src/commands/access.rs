@@ -263,6 +263,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
             if remote.account_incarnation_id != f.recipient_incarnation_id {
                 bail!("{} has reset their account; remove them too", remote.account);
             }
+            remote.require_sealable()?;
             Ok(serde_json::json!({
                 "id": f.id,
                 "namedShareEnvelope": seal(&remote.drive_hpke_public_key, &person, &remote.account_incarnation_id)?,

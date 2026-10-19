@@ -8,10 +8,14 @@ import asyncio
 async def session(reader, writer):
     writer.write(b"220 sink LMTP\r\n")
     recipients = 0
+    envelope_from = b""
     while line := await reader.readline():
         verb = line[:4].upper()
         if verb == b"LHLO":
             writer.write(b"250-sink\r\n250-8BITMIME\r\n250 PIPELINING\r\n")
+        elif verb == b"MAIL":
+            envelope_from = line[10:].strip().split(b" ")[0]
+            writer.write(b"250 ok\r\n")
         elif verb == b"RCPT":
             # bounce.test stands in for addresses that do not exist.
             if b"@bounce.test" in line.lower():
@@ -26,6 +30,8 @@ async def session(reader, writer):
             while (chunk := await reader.readline()) not in (b".\r\n", b""):
                 data += chunk
             print("SINK-MESSAGE-BEGIN", flush=True)
+            # The envelope sender, for the gate (the forwarding return path).
+            print("X-Sink-Envelope-From: " + envelope_from.decode(errors="replace"), flush=True)
             print(data.decode(errors="replace"), flush=True)
             print("SINK-MESSAGE-END", flush=True)
             writer.write(b"250 stored\r\n" * recipients)

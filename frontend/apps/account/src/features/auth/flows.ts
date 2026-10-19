@@ -14,7 +14,7 @@ import {
   type AccountKeySet,
 } from '@kutup/crypto'
 import { startOpaqueRegistration, type OpaqueRegistrar, type OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
-import { signDriveKeyBinding } from '@kutup/crypto/identityPins'
+import { FIRST_DRIVE_KEY_BINDING_EPOCH, signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import type { SessionKeys } from '@kutup/session/keys'
@@ -77,8 +77,10 @@ async function activate(
   response: Pick<LoginResponse, 'accessToken' | 'sessionId'>,
   keys: SessionKeys,
 ): Promise<void> {
-  await activateSession(keys, response.accessToken, response.sessionId)
-  await persistKeys(response.sessionId, keys)
+  // The session layer also moves an account from before X-Wing Drive keys
+  // to them (docs/plans/pq-shares.md): what it activated is what is kept.
+  const activated = await activateSession(keys, response.accessToken, response.sessionId)
+  await persistKeys(response.sessionId, activated)
 }
 
 /** This server's name: with an account id, who an account is (docs/plans/account-ids.md). */
@@ -93,10 +95,10 @@ async function serverName(): Promise<string> {
  * The account's Drive key binding (docs/plans/drive-identity-pins.md): its
  * authority vouching for its Drive keys as this account (its server and
  * permanent id, never its name), so the people it shares with can check
- * them. Sent with every new set of keys.
+ * them. Sent with every new set of keys: a new account's first, at epoch 1.
  */
 async function driveKeyBindingFor(keys: AccountKeys, accountId: string): Promise<string> {
-  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId })
+  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId }, FIRST_DRIVE_KEY_BINDING_EPOCH)
 }
 
 /**

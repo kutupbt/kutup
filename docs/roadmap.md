@@ -1236,6 +1236,16 @@ One failure of that day is not explained by the fix: in
 `34-chat-backup-two-server-recovery`, a group attachment did not appear in a
 restored clean browser within 45 seconds, once in three runs.
 
+### Security · Drive key binding epochs are not pinned yet
+
+Suite-2 Drive key bindings carry an epoch (docs/plans/pq-shares.md) so a
+client can refuse an older binding a server still holds. Today only epoch 1
+exists (registration and the suite upgrade, which the server requires to be
+1), so nothing can roll back, and pins (`identity_pins`, the Rust pin format)
+don't record it. **Before any epoch 2 is signed** (a suite-2 key change), pins
+must store the highest (suite, epoch) per account and refuse a lower one, and
+the pin should record the suite rather than infer it from the key's length.
+
 ### Security · TLS 1.2 still accepted by the bundled Nginx
 
 `nginx/nginx.conf` allows `TLSv1.2 TLSv1.3` on the web and TURN listeners.

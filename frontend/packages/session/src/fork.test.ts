@@ -8,7 +8,8 @@ vi.mock('./client', () => ({
 vi.mock('./apps', () => ({
   appUrl: (app: string, path: string) => `https://${app}.example.org${path}`,
 }))
-const activateSession = vi.fn()
+// What it activated: the keys given (the upgrade is tested in identitySuite.test.ts).
+const activateSession = vi.fn((...a: unknown[]) => Promise.resolve(a[0]))
 vi.mock('./profile', () => ({ activateSession: (...a: unknown[]) => activateSession(...a) }))
 const persistKeys = vi.fn()
 vi.mock('./persist', () => ({ persistKeys: (...a: unknown[]) => persistKeys(...a) }))
@@ -38,7 +39,7 @@ function visit(url: string) {
 
 beforeEach(() => {
   post.mockReset()
-  activateSession.mockReset()
+  activateSession.mockClear()
   persistKeys.mockReset()
   sessionStorage.clear()
   clearSession()

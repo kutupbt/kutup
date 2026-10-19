@@ -85,11 +85,12 @@ fn write_vectors() {
     let binding_bytes = drive_key_binding::binding_bytes(
         &sender,
         &from.authority_public_key(),
+        1,
         &from.drive_hpke_public_key(),
         &from.drive_signing_public_key(),
     )
     .unwrap();
-    let binding = drive_key_binding::sign(&from, &sender).unwrap();
+    let binding = drive_key_binding::sign(&from, &sender, 1).unwrap();
     let collection_id = "5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b";
     let collection_key = [0x33u8; 32];
     let named_share = NamedShareEnvelopeV1::seal(
@@ -177,20 +178,21 @@ fn the_drive_key_binding_names_the_account() {
     );
     assert_eq!(
         hex::encode(
-            drive_key_binding::binding_bytes(&sender, &authority, &hpke, &signing).unwrap()
+            drive_key_binding::binding_bytes(&sender, &authority, 1, &hpke, &signing).unwrap()
         ),
         v.binding_bytes
     );
     // Ed25519 is deterministic: the same signature, byte for byte.
     assert_eq!(
-        STANDARD.encode(drive_key_binding::sign(&from, &sender).unwrap()),
+        STANDARD.encode(drive_key_binding::sign(&from, &sender, 1).unwrap()),
         v.binding
     );
     let binding = b64(&v.binding);
-    drive_key_binding::verify(&sender, &authority, &hpke, &signing, &binding).unwrap();
+    drive_key_binding::verify(&sender, &authority, 1, &hpke, &signing, &binding).unwrap();
     assert!(drive_key_binding::verify(
         &someone_else(&sender),
         &authority,
+        1,
         &hpke,
         &signing,
         &binding

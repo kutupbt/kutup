@@ -5878,18 +5878,96 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nfor alice an
     assert_eq!(smtp_send(&smtp_address, &a.address, &outside), (250, 250));
     let message_id = format!("fw-{tag}@sender.test");
     let alice_copy = wait_for(&c, &base, &alice, &message_id);
-    // Spam is never forwarded. The gate's Stalwart may score a test sender
-    // as spam (no SPF), so either way is checked.
-    if alice_copy["folder"] == "spam" {
-        never_arrives(&c, &base, &bob, &message_id);
-    } else {
-        let forwarded = wait_for(&c, &base, &bob, &message_id);
-        assert_eq!(forwarded["forwardedFrom"], json!(a.address));
-        let stored = content(&c, &base, &bob, &forwarded);
-        let opened = mail_forwarding::decrypt_forwarded(&forwarding_key, &stored, None).unwrap();
-        assert!(String::from_utf8_lossy(&opened.data).contains("for alice and bob"));
-        assert!(mail_key::decrypt(&b.secret_key, &stored, None).is_err());
-    }
+    // The gate's Stalwart takes test mail as ham (tests/mail/plan.ndjson).
+    assert_eq!(alice_copy["folder"], "inbox");
+    let forwarded = wait_for(&c, &base, &bob, &message_id);
+    assert_eq!(forwarded["forwardedFrom"], json!(a.address));
+    // Sealed once on arrival for Alice; Bob's copy is the same data packet
+    // under a transformed key packet: the server didn't seal it again.
+    let (alice_stored, bob_stored) = (
+        content(&c, &base, &alice, &alice_copy),
+        content(&c, &base, &bob, &forwarded),
+    );
+    let split_first = |message: &[u8]| -> usize {
+        assert_eq!(message[0], 0xc1, "a new-format key packet");
+        2 + message[1] as usize
+    };
+    assert_eq!(
+        alice_stored[split_first(&alice_stored)..],
+        bob_stored[split_first(&bob_stored)..],
+        "the data packet is Alice's, byte for byte"
+    );
+    let opened = mail_forwarding::decrypt_forwarded(&forwarding_key, &bob_stored, None).unwrap();
+    assert!(String::from_utf8_lossy(&opened.data).contains("for alice and bob"));
+    assert!(mail_key::decrypt(&b.secret_key, &bob_stored, None).is_err());
+
+    // Spam isn't forwarded: Alice files this sender's mail as spam.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/sender-rules")),
+        &alice.token,
+    )
+    .json(&json!({ "patterns": ["spammer@sender.test"], "kind": "spam" }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "spam rule: {}", r.status());
+    let spam = format!(
+        "From: spammer@sender.test\r\nTo: {}\r\nSubject: forward me too\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <spam-{tag}@sender.test>\r\n\r\nno\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &spam), (250, 250));
+    let spam_id = format!("spam-{tag}@sender.test");
+    assert_eq!(wait_for(&c, &base, &alice, &spam_id)["folder"], "spam");
+    never_arrives(&c, &base, &bob, &spam_id);
+
+    // A loop: mail that already went through one of our forwardings (our
+    // marker) or through too many hops is delivered but not forwarded.
+    let looped = format!(
+        "X-Kutup-Forwarded: 0123456789abcdef\r\nFrom: writer@sender.test\r\nTo: {}\r\n\
+Subject: forward me again\r\nDate: Mon, 19 Oct 2026 10:00:00 +0000\r\n\
+Message-ID: <loop-{tag}@sender.test>\r\n\r\nround and round\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &looped), (250, 250));
+    let loop_id = format!("loop-{tag}@sender.test");
+    wait_for(&c, &base, &alice, &loop_id);
+    never_arrives(&c, &base, &bob, &loop_id);
+    let hops: String = (0..21)
+        .map(|n| format!("Received: from hop{n}.test by hop{}.test\r\n", n + 1))
+        .collect();
+    let far = format!(
+        "{hops}From: writer@sender.test\r\nTo: {}\r\nSubject: forward me from afar\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <far-{tag}@sender.test>\r\n\r\nfar\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &far), (250, 250));
+    let far_id = format!("far-{tag}@sender.test");
+    wait_for(&c, &base, &alice, &far_id);
+    never_arrives(&c, &base, &bob, &far_id);
+
+    // The forwarded copy goes through Bob's own rules: a sender he blocks
+    // isn't stored for him, and Alice sees it counted as not forwarded.
+    let r = bearer(c.post(format!("{base}/api/mail/sender-rules")), &bob.token)
+        .json(&json!({ "patterns": ["blocked@sender.test"], "kind": "block" }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "block rule: {}", r.status());
+    let blocked = format!(
+        "From: blocked@sender.test\r\nTo: {}\r\nSubject: forward me\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>\r\n\r\nno\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &blocked), (250, 250));
+    let blocked_id = format!("blocked-{tag}@sender.test");
+    assert_eq!(wait_for(&c, &base, &alice, &blocked_id)["folder"], "inbox");
+    never_arrives(&c, &base, &bob, &blocked_id);
+    let skipped: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &alice.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(skipped["outgoing"][0]["skipped"], 1);
+
     // Sealed on arrival by the server (Kutup mail sent readable, sealed as
     // mail from outside is): always reaches Bob, opened only as forwarded.
     let readable = send_readable(&c, &base, &carol, &cc, &a.address, "readable for alice");

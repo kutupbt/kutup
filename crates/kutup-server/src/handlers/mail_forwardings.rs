@@ -373,8 +373,6 @@ pub async fn list(
     user: AuthUser,
 ) -> AppResult<Json<MailForwardings>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    // Lapsed pending forwardings are swept first, so neither side sees one.
-    forwarding::sweep_expired(&state.pool).await?;
     let outgoing: Vec<Row> = sqlx::query_as(&format!(
         "{SELECT} WHERE f.user_id = $1 ORDER BY f.created_at"
     ))
@@ -463,6 +461,21 @@ pub async fn create(
             "endToEndRequired",
         ));
     };
+    // Nobody may pile requests on someone: at most a few pending to one
+    // address at a time.
+    let pending_to: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mail_forwardings
+          WHERE forwardee_address_id = $1 AND state = 'pending'",
+    )
+    .bind(forwardee_address_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if pending_to >= forwarding::MAX_PENDING_PER_FORWARDEE {
+        return Err(code(
+            AppError::conflict("this address has too many forwardings waiting"),
+            "forwardingLimit",
+        ));
+    }
     let material = check_material(material, &forwarder_key)?;
     if state.config.mail_forwarding_keys.current().is_none() {
         return Err(unavailable());
@@ -1180,7 +1193,7 @@ pub async fn renew(
         "SELECT k.public_key FROM mail_forwardings f
            JOIN mail_addresses a ON a.id = f.forwarder_address_id AND a.state = 'active'
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE f.id = $1",
+          WHERE f.id = $1 AND f.kind = 'end_to_end'",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
