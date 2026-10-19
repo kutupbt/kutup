@@ -73,6 +73,16 @@ pub struct GroupListDelete {
     pub head: Option<String>,
 }
 
+/// The list exists where pairwise groups do (`CHAT_GROUPS` and federation),
+/// as the other group routes; elsewhere `404`.
+fn enabled(state: &AppState) -> AppResult<()> {
+    if state.config.chat_groups && state.federation.is_some() {
+        Ok(())
+    } else {
+        Err(AppError::not_found("not found"))
+    }
+}
+
 fn entry_id(id: &str) -> AppResult<String> {
     URL_SAFE_NO_PAD
         .decode(id)
@@ -115,6 +125,7 @@ async fn current_revision(state: &AppState, user_id: uuid::Uuid, id: &str) -> Ap
     responses((status = 200, description = "The account's entries", body = GroupList))
 )]
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<GroupList>> {
+    enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let rows: Vec<(String, i64, Vec<u8>)> = sqlx::query_as(
         "SELECT id, revision, envelope FROM chat_group_list WHERE user_id = $1 ORDER BY id",
@@ -155,6 +166,7 @@ pub async fn put(
     Path(id): Path<String>,
     Json(input): Json<GroupListWrite>,
 ) -> AppResult<Json<GroupListEntry>> {
+    enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let id = entry_id(&id)?;
     let sealed = envelope(&input.envelope)?;
@@ -231,6 +243,7 @@ pub async fn delete(
     Path(id): Path<String>,
     Json(input): Json<GroupListDelete>,
 ) -> AppResult<StatusCode> {
+    enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let id = entry_id(&id)?;
     let head = NextHead::parse(input.head.as_deref())?;
