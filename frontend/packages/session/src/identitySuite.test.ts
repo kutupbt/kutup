@@ -7,7 +7,15 @@ vi.mock('./client', () => ({ default: { post } }))
 const currentDriveKeys = vi.hoisted(() =>
   vi.fn(() => Promise.resolve({ publicKey: 'xwing', privateKey: new Uint8Array(32).fill(7), drivePrivateKeyEnvelope: 'sealed-seed' })),
 )
-vi.mock('@kutup/crypto', () => ({ currentDriveKeys, toBase64: () => 'master' }))
+const deriveAccountIdentityKeys = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve({ driveHpkePublicKey: 'xwing', driveHpkePrivateKey: 'seed' })),
+)
+vi.mock('@kutup/crypto', () => ({
+  currentDriveKeys,
+  deriveAccountIdentityKeys,
+  toBase64: () => 'master',
+  fromBase64: () => new Uint8Array(32).fill(7),
+}))
 const signDriveKeyBinding = vi.hoisted(() => vi.fn(() => Promise.resolve('binding')))
 vi.mock('@kutup/crypto/identityPins', () => ({ signDriveKeyBinding, FIRST_DRIVE_KEY_BINDING_EPOCH: 1 }))
 
@@ -29,6 +37,8 @@ const keys = (): SessionKeys => ({
 beforeEach(() => {
   post.mockReset()
   signDriveKeyBinding.mockClear()
+  currentDriveKeys.mockClear()
+  deriveAccountIdentityKeys.mockClear()
 })
 
 describe('the identity suite upgrade where a session starts (docs/plans/pq-shares.md)', () => {
@@ -63,6 +73,22 @@ describe('the identity suite upgrade where a session starts (docs/plans/pq-share
     expect(await upgradedKeys(current, { id: 'u', server: 'kutup.dev', publicKey: 'xwing' }, 'token')).toBe(current)
     const older = await upgradedKeys(keys(), { id: 'u', server: 'kutup.dev', publicKey: 'xwing' }, 'token')
     expect(older.publicKey).toBe('xwing')
+    expect(older.privateKey).toEqual(new Uint8Array(32).fill(7))
     expect(post).not.toHaveBeenCalled()
+    // Compared first: nothing is sealed for a server that is current.
+    expect(currentDriveKeys).not.toHaveBeenCalled()
+  })
+
+  it('a derivation that fails keeps the keys: the session still starts', async () => {
+    deriveAccountIdentityKeys.mockRejectedValueOnce(new Error('the crypto runtime did not load'))
+    const given = keys()
+    expect(await upgradedKeys(given, { id: 'u', server: 'kutup.dev', publicKey: 'x25519' }, 'token')).toBe(given)
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('a sealing that fails keeps the keys too', async () => {
+    currentDriveKeys.mockRejectedValueOnce(new Error('seal failed'))
+    const given = keys()
+    expect(await upgradedKeys(given, { id: 'u', server: 'kutup.dev', publicKey: 'x25519' }, 'token')).toBe(given)
   })
 })
