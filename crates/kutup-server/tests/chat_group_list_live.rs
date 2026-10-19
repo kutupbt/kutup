@@ -23,7 +23,7 @@ fn a_group_list_keeps_sealed_entries_by_revision() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = reqwest::blocking::Client::new();
+    let c = crate::common::client();
     let user = register(&c, &base);
     let put = |id: &str, body: Value| {
         bearer(
