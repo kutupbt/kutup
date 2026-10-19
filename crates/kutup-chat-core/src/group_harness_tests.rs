@@ -878,6 +878,13 @@ impl ChatTransport for Client {
         revision: u64,
         envelope: &str,
     ) -> Result<bool> {
+        // As the server: the revision from the sealed header, one size only.
+        let sealed = STANDARD
+            .decode(envelope)
+            .map_err(|_| ChatError::Transport("malformed envelope".into()))?;
+        let header = kutup_crypto::chat_group_list::inspect(&sealed)
+            .map_err(|error| ChatError::Transport(error.to_string()))?;
+        assert_eq!(header, revision, "the head lists the sealed revision");
         let mut lists = self.world.group_lists.borrow_mut();
         let entries = lists.entry(self.account.clone()).or_default();
         let listed = entries.get(id).map_or(0, |(revision, _)| *revision);
@@ -1090,6 +1097,12 @@ impl Person {
             .unwrap();
         assert_eq!(summary.pending, 0, "every leg went out");
         send_id
+    }
+
+    /// Writes this device's due group list entries now (as before signing
+    /// out); how many were written.
+    pub(crate) fn flush_list(&mut self) -> usize {
+        block_on(self.engine.flush_group_list(true)).unwrap()
     }
 
     pub(crate) fn status(&self, group_id: &str) -> GroupStatus {
@@ -2331,7 +2344,8 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
     let group_id = group_of(&mut alice, &mut [&mut bob]);
     alice.send_text(&group_id, "before");
     deliver_all(&mut [&mut alice, &mut bob]);
-    // Bob's entry is in his list.
+    // Bob's entry is in his list (once his delayed write went).
+    bob.flush_list();
     assert_eq!(
         world
             .group_lists
@@ -2388,10 +2402,12 @@ fn group_list_a_group_left_on_one_device_is_left_on_the_other() {
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
     let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    bob.flush_list();
     let mut bob2 = world.link_device(&bob);
     block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
     assert_eq!(bob2.status(&group_id), GroupStatus::Member);
     block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
     block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
     assert_eq!(bob2.status(&group_id), GroupStatus::Gone);
 }
@@ -2402,6 +2418,8 @@ fn group_list_entries_are_per_account_and_sealed() {
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.flush_list();
+    bob.flush_list();
     let lists = world.group_lists.borrow();
     let ids = |account: &str| lists[account].keys().cloned().collect::<Vec<_>>();
     // The same group under unrelated ids, and no group id in the clear.
@@ -2410,8 +2428,55 @@ fn group_list_entries_are_per_account_and_sealed() {
         for (id, (_, envelope)) in entries {
             assert_ne!(*id, group_id);
             assert!(!envelope.contains(&group_id));
+            // One size for every entry.
+            assert_eq!(
+                STANDARD.decode(envelope).unwrap().len(),
+                kutup_crypto::chat_group_list::SEALED_LEN
+            );
         }
     }
+}
+
+#[test]
+fn group_list_writes_wait_and_only_joins_and_leaves_write() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let written = |account: &str| {
+        world
+            .group_lists
+            .borrow()
+            .get(account)
+            .map_or(0, BTreeMap::len)
+    };
+    // Joined: due at a random moment in the next ten minutes, not at once.
+    assert_eq!(written(&bob.account), 0);
+    let due = block_on(bob.engine.load_group_record(&group_id))
+        .unwrap()
+        .list_due_at_ms
+        .expect("a write is due");
+    let now = crate::clock::unix_millis();
+    assert!(
+        due >= now - 60_000 && due <= now + 10 * 60 * 1000,
+        "{due} vs {now}"
+    );
+    assert_eq!(bob.flush_list(), 1);
+    assert_eq!(written(&bob.account), 1);
+
+    // Messages and other changes write nothing; a second device that reads
+    // the list writes nothing either.
+    alice.send_text(&group_id, "hello");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    assert_eq!(bob.flush_list(), 0);
+    let mut bob2 = world.link_device(&bob);
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob2.flush_list(), 0);
+
+    // Leaving writes, once.
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    assert_eq!(bob.flush_list(), 1);
+    assert_eq!(bob.flush_list(), 0);
 }
 
 #[test]

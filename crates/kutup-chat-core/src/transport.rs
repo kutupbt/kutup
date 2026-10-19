@@ -73,8 +73,9 @@ pub struct GroupGatewayAnswer {
 }
 
 /// One entry of the account's group list (`GET /api/chat/group-list`), as
-/// the account head vouches for it: its opaque id, its revision and its
-/// sealed body (docs/plans/pairwise-groups.md §5).
+/// the account head vouches for it: its opaque id, its revision (as the
+/// server read it from the sealed header) and its sealed body
+/// (docs/plans/pairwise-groups.md §5).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupListItem {
@@ -338,7 +339,8 @@ pub trait ChatTransport {
 
     /// `PUT /api/chat/group-list/{id}` with the next account head: `false`
     /// when the listed revision isn't `base_revision` (another device wrote
-    /// first; read the list again).
+    /// first; read the list again). `revision` is the one in the entry's
+    /// sealed header, where the server reads it; the account head lists it.
     async fn store_group_entry(
         &self,
         _id: &str,

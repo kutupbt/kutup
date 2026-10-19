@@ -105,6 +105,14 @@ pub struct GroupRecordV1 {
     /// invitation), milliseconds: where it sorts before its first message.
     #[serde(default)]
     pub known_since_ms: Option<i64>,
+    /// What the account's group list says of the group, as this device last
+    /// wrote or read it: a write is due when the group's status differs.
+    #[serde(default)]
+    pub listed_status: Option<kutup_chat_proto::group::GroupListStatus>,
+    /// When this device writes the group's list entry (milliseconds): a
+    /// random moment after the change that made it due (§5's write pattern).
+    #[serde(default)]
+    pub list_due_at_ms: Option<i64>,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -417,6 +425,8 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         fork_at_revision: None,
         fork_sender: None,
         known_since_ms: None,
+        listed_status: None,
+        list_due_at_ms: None,
     };
     Ok((record, change))
 }
@@ -564,6 +574,8 @@ pub fn record_from_invite(
         fork_at_revision: None,
         fork_sender: None,
         known_since_ms: None,
+        listed_status: None,
+        list_due_at_ms: None,
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {

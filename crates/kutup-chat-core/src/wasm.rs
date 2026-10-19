@@ -344,7 +344,8 @@ extern "C" {
     async fn js_fetch_group_list(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
 
     /// One entry with the next account head (`{id, baseRevision, revision,
-    /// envelope}`): `false` when another device wrote first.
+    /// envelope}`; `revision` is the sealed header's, for the account head
+    /// only): `false` when another device wrote first.
     #[wasm_bindgen(method, catch, js_name = storeGroupEntry)]
     async fn js_store_group_entry(
         this: &JsChatTransport,
@@ -1321,6 +1322,19 @@ impl WasmChatClient {
             .leave_group(&group_id, &mut rng)
             .await
             .map_err(chat_error)
+    }
+
+    /// Writes this device's due group list entries now: before it signs out
+    /// or unlinks itself, so a group just joined or left isn't missing from
+    /// the account's list (docs/plans/pairwise-groups.md §5).
+    #[wasm_bindgen(js_name = flushGroupList)]
+    pub async fn flush_group_list(&mut self) -> std::result::Result<u32, JsValue> {
+        let written = self
+            .engine
+            .flush_group_list(true)
+            .await
+            .map_err(chat_error)?;
+        Ok(u32::try_from(written).unwrap_or(u32::MAX))
     }
 
     #[wasm_bindgen(js_name = listGroups)]

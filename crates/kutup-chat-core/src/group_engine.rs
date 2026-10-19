@@ -303,7 +303,7 @@ impl Engine {
                 Err(_) => false,
             };
         }
-        let _ = self.publish_group_entry(&record.group_id).await;
+        let _ = self.schedule_group_entry(&record.group_id).await;
         Ok(CreatedGroup {
             group_id: record.group_id,
             title_set,

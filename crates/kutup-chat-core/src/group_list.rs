@@ -4,11 +4,16 @@
 //! account knows its groups.
 //!
 //! - An entry holds what another device needs to take the group up: its key,
-//!   its home, this account's pseudonym, and the newest state verified (no
-//!   device then takes an older one). Its id is an HMAC of the group id under
-//!   a key of the account's, so lists can't be matched across accounts.
-//! - A device writes its entry when it joins, leaves or is removed, and when
-//!   the verified revision moved on, at most once a minute.
+//!   its home, this account's pseudonym, and the revision and chain head
+//!   verified when it was written. Its id is an HMAC of the group id under a
+//!   key of the account's, and every sealed entry has one size
+//!   (`kutup_crypto::chat_group_list`).
+//! - Writes are rare and spread out, so the account's server can't line
+//!   co-members up by when they write: an entry is written only when the
+//!   account joins a group and when it leaves it (or is removed, or the group
+//!   ends), each a random 0–10 minutes later, together with whatever else is
+//!   due then. What is due is kept with the group, so it survives a reload;
+//!   a device flushes it before it signs out.
 //! - A device reads the list when it starts and every so often: a group it
 //!   doesn't know is taken up (its whole state, then its own entry signed
 //!   again by this device when the old one's device left the account); one
@@ -16,31 +21,29 @@
 
 use std::collections::BTreeMap;
 
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::group::{decode_group_id, encode, GroupListEntryV1, GroupListStatus};
-use kutup_crypto::chat_group::{GroupListKey, LIST_ENTRY_ID_LEN};
+use kutup_crypto::chat_group_list::{self, GroupListKey};
 use rand::{CryptoRng, Rng};
+use rand_core::{OsRng, RngCore as _};
 
 use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::group::{GroupRecordV1, GroupStatus, SecretText};
 use crate::group_engine::GroupSync;
 
-/// A verified revision is written at most this often (status changes at
-/// once).
-const REVISION_WRITE_EVERY_MS: i64 = 60 * 1000;
+/// A due write waits a random time up to this long (§5).
+const WRITE_DELAY_MAX_MS: i64 = 10 * 60 * 1000;
 
 /// The list is read again at most this often by a running device.
 const READ_EVERY_MS: i64 = 10 * 60 * 1000;
 
-/// What this device last wrote or read of one entry.
+/// One entry as the list holds it: its revision and what it says.
 #[derive(Debug, Clone, Copy)]
 struct Listed {
     revision: u64,
     status: GroupListStatus,
-    verified_revision: u64,
-    at_ms: i64,
 }
 
 /// The list's keys and what this device knows of it.
@@ -54,16 +57,18 @@ pub(crate) struct GroupListSync {
 impl GroupListSync {
     fn entry_id(&self, group_id: &str) -> Result<String> {
         let group = decode_group_id(group_id).map_err(ChatError::Invalid)?;
-        Ok(URL_SAFE_NO_PAD.encode(self.key.entry_id(&group)))
+        Ok(chat_group_list::encode_entry_id(&self.key.entry_id(&group)))
     }
 }
 
-fn decode_entry_id(id: &str) -> Result<[u8; LIST_ENTRY_ID_LEN]> {
-    URL_SAFE_NO_PAD
-        .decode(id)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| ChatError::Invalid("a group list entry id isn't 32 bytes".into()))
+/// What the list should say of a group in `status`: nothing for one this
+/// account is only invited to or asking to join.
+fn list_status(status: &GroupStatus) -> Option<GroupListStatus> {
+    match status {
+        GroupStatus::Member => Some(GroupListStatus::Member),
+        GroupStatus::Gone => Some(GroupListStatus::Gone),
+        GroupStatus::Invited { .. } | GroupStatus::Requesting => None,
+    }
 }
 
 impl Engine {
@@ -84,10 +89,8 @@ impl Engine {
     /// The entry `record` should have in the list, if any: a group this
     /// account is in, or one it was in (gone).
     fn list_entry_of(record: &GroupRecordV1) -> Result<Option<GroupListEntryV1>> {
-        let status = match record.status {
-            GroupStatus::Member => GroupListStatus::Member,
-            GroupStatus::Gone => GroupListStatus::Gone,
-            GroupStatus::Invited { .. } | GroupStatus::Requesting => return Ok(None),
+        let Some(status) = list_status(&record.status) else {
+            return Ok(None);
         };
         let Some((state, head)) = record
             .verified()
@@ -107,58 +110,92 @@ impl Engine {
         }))
     }
 
-    /// Writes `group_id`'s entry when its status changed, or its verified
-    /// revision moved on and the last write is a minute old. Best effort for
-    /// callers: a failed write is made again at the next chance.
-    pub(crate) async fn publish_group_entry(&mut self, group_id: &str) -> Result<()> {
-        let Some(list) = self.group_list.as_ref() else {
+    /// Makes `group_id`'s entry due when the list doesn't say what the group
+    /// is now (joined, or left): at a random moment in the next ten minutes.
+    /// Nothing for any other change.
+    pub(crate) async fn schedule_group_entry(&mut self, group_id: &str) -> Result<()> {
+        if self.group_list.is_none() {
             return Ok(());
-        };
-        let record = self.load_group_record(group_id).await?;
-        let Some(entry) = Self::list_entry_of(&record)? else {
-            return Ok(());
-        };
-        let id = list.entry_id(group_id)?;
-        let now = self.now_ms();
-        let known = list.listed.get(&id).copied();
-        if let Some(known) = known {
-            let unchanged = known.status == entry.status
-                && (entry.verified_revision <= known.verified_revision
-                    || now.saturating_sub(known.at_ms) < REVISION_WRITE_EVERY_MS);
-            if unchanged {
-                return Ok(());
-            }
-        } else if entry.status == GroupListStatus::Gone {
-            // Never listed here: read the list first, so a gone group isn't
-            // written over an entry another device holds.
-            self.read_group_list().await?;
         }
-        let plain = entry.canonical_bytes().map_err(ChatError::Invalid)?;
-        for _ in 0..2 {
-            let list = self.group_list.as_ref().expect("checked above");
-            let base = match list.listed.get(&id) {
-                Some(listed) => listed.revision,
-                None => 0,
+        let mut record = self.load_group_record(group_id).await?;
+        let Some(status) = list_status(&record.status) else {
+            return Ok(());
+        };
+        if record.listed_status == Some(status) || record.list_due_at_ms.is_some() {
+            return Ok(());
+        }
+        let delay = i64::from(OsRng.next_u32()) % (WRITE_DELAY_MAX_MS + 1);
+        record.list_due_at_ms = Some(self.now_ms() + delay);
+        self.save_group(&record).await
+    }
+
+    /// Writes the entries that are due (all of them with `all`, before this
+    /// device signs out), together. The list is read first: an entry that
+    /// already says the same is not written again. Best effort for callers:
+    /// what fails stays due.
+    pub async fn flush_group_list(&mut self, all: bool) -> Result<usize> {
+        if self.group_list.is_none() {
+            return Ok(0);
+        }
+        let now = self.now_ms();
+        let due: Vec<GroupRecordV1> = self
+            .session
+            .db()
+            .list_groups()
+            .await?
+            .into_iter()
+            .filter(|record| record.list_due_at_ms.is_some_and(|at| all || at <= now))
+            .collect();
+        if due.is_empty() {
+            return Ok(0);
+        }
+        self.read_group_list().await?;
+        let mut written = 0;
+        for mut record in due {
+            let Some(entry) = Self::list_entry_of(&record)? else {
+                record.list_due_at_ms = None;
+                self.save_group(&record).await?;
+                continue;
             };
+            let list = self.group_list.as_ref().expect("checked above");
+            let id = list.entry_id(&record.group_id)?;
+            if list.listed.get(&id).map(|listed| listed.status) != Some(entry.status) {
+                self.write_group_entry(&id, &entry).await?;
+                written += 1;
+            }
+            record.listed_status = Some(entry.status);
+            record.list_due_at_ms = None;
+            self.save_group(&record).await?;
+        }
+        Ok(written)
+    }
+
+    /// Writes one entry over the revision the list has, once more over
+    /// another device's if it wrote first.
+    async fn write_group_entry(&mut self, id: &str, entry: &GroupListEntryV1) -> Result<()> {
+        let plain = entry.canonical_bytes().map_err(ChatError::Invalid)?;
+        let entry_id = chat_group_list::decode_entry_id(id)
+            .map_err(|error| ChatError::Invalid(error.to_string()))?;
+        for _ in 0..2 {
+            let list = self.group_list.as_ref().expect("enabled by the caller");
+            let base = list.listed.get(id).map_or(0, |listed| listed.revision);
             let revision = base + 1;
             let sealed = list
                 .key
-                .seal(&list.binding, &decode_entry_id(&id)?, revision, &plain)
+                .seal(&list.binding, &entry_id, revision, &plain)
                 .map_err(|error| ChatError::Invalid(error.to_string()))?;
             let envelope = STANDARD.encode(sealed);
             let transport = std::rc::Rc::clone(&self.transport);
             if transport
-                .store_group_entry(&id, base, revision, &envelope)
+                .store_group_entry(id, base, revision, &envelope)
                 .await?
             {
-                let list = self.group_list.as_mut().expect("checked above");
+                let list = self.group_list.as_mut().expect("enabled by the caller");
                 list.listed.insert(
-                    id.clone(),
+                    id.to_string(),
                     Listed {
                         revision,
                         status: entry.status,
-                        verified_revision: entry.verified_revision,
-                        at_ms: now,
                     },
                 );
                 return Ok(());
@@ -172,7 +209,7 @@ impl Engine {
     }
 
     /// Reads the list: what each entry says, opened (an entry that doesn't
-    /// open is skipped).
+    /// open, or is filed under another group's id, is skipped).
     async fn read_group_list(&mut self) -> Result<Vec<GroupListEntryV1>> {
         let transport = std::rc::Rc::clone(&self.transport);
         let items = transport.fetch_group_list().await?;
@@ -182,29 +219,28 @@ impl Engine {
         };
         let mut entries = Vec::new();
         for item in items {
-            let Ok(id) = decode_entry_id(&item.id) else {
+            let Ok(id) = chat_group_list::decode_entry_id(&item.id) else {
                 continue;
             };
             let Ok(sealed) = STANDARD.decode(&item.envelope) else {
                 continue;
             };
-            let Ok(plain) = list.key.open(&list.binding, &id, item.revision, &sealed) else {
+            // The revision is the one the entry was sealed at, whatever the
+            // server says.
+            let Ok(opened) = list.key.open(&list.binding, &id, &sealed) else {
                 continue;
             };
-            let Ok(entry) = GroupListEntryV1::from_canonical_bytes(&plain) else {
+            let Ok(entry) = GroupListEntryV1::from_canonical_bytes(&opened.plain) else {
                 continue;
             };
-            // An entry filed under another group's id is the server's doing.
             if list.entry_id(&entry.group_id).ok().as_deref() != Some(item.id.as_str()) {
                 continue;
             }
             list.listed.insert(
                 item.id,
                 Listed {
-                    revision: item.revision,
+                    revision: opened.revision,
                     status: entry.status,
-                    verified_revision: entry.verified_revision,
-                    at_ms: now,
                 },
             );
             entries.push(entry);
@@ -214,8 +250,10 @@ impl Engine {
     }
 
     /// Reads the list and follows it: takes up the groups this device
-    /// doesn't know, leaves here the ones another device left, and raises
-    /// each group's lowest acceptable state. Returns the groups taken up.
+    /// doesn't know, leaves here the ones another device left, raises each
+    /// group's lowest acceptable state, and writes a group this device knows
+    /// that the list lacks (one another device joined and couldn't write
+    /// before it went). Returns the groups taken up.
     pub async fn sync_group_list<R: Rng + CryptoRng>(
         &mut self,
         rng: &mut R,
@@ -225,7 +263,9 @@ impl Engine {
         }
         let entries = self.read_group_list().await?;
         let mut taken_up = Vec::new();
+        let mut listed_groups = std::collections::BTreeSet::new();
         for entry in entries {
+            listed_groups.insert(entry.group_id.clone());
             match self.session.db().load_group(&entry.group_id).await? {
                 None if entry.status == GroupListStatus::Member => {
                     let record = GroupRecordV1 {
@@ -246,6 +286,8 @@ impl Engine {
                         fork_at_revision: None,
                         fork_sender: None,
                         known_since_ms: Some(self.now_ms()),
+                        listed_status: Some(GroupListStatus::Member),
+                        list_due_at_ms: None,
                     };
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a
@@ -258,7 +300,8 @@ impl Engine {
                 // backup) stays history.
                 None => {}
                 Some(mut record) => {
-                    let mut changed = false;
+                    let mut changed = record.listed_status != Some(entry.status);
+                    record.listed_status = Some(entry.status);
                     if entry.status == GroupListStatus::Gone && record.status == GroupStatus::Member
                     {
                         record.status = GroupStatus::Gone;
@@ -271,14 +314,27 @@ impl Engine {
                     if changed {
                         self.save_group(&record).await?;
                     }
+                    // This device says otherwise (it joined or left since):
+                    // its write follows, as any.
+                    let _ = self.schedule_group_entry(&entry.group_id).await;
                 }
             }
+        }
+        // Groups this device knows that the list lacks.
+        for mut record in self.session.db().list_groups().await? {
+            if listed_groups.contains(&record.group_id) || list_status(&record.status).is_none() {
+                continue;
+            }
+            if record.listed_status.take().is_some() {
+                self.save_group(&record).await?;
+            }
+            let _ = self.schedule_group_entry(&record.group_id).await;
         }
         Ok(taken_up)
     }
 
     /// [`Self::sync_group_list`] when the last read is a while ago (a running
-    /// device's periodic look).
+    /// device's periodic look), then the writes that are due.
     pub async fn sync_group_list_if_due<R: Rng + CryptoRng>(
         &mut self,
         rng: &mut R,
@@ -287,16 +343,19 @@ impl Engine {
             .group_list
             .as_ref()
             .is_some_and(|list| self.now_ms().saturating_sub(list.read_at_ms) >= READ_EVERY_MS);
-        if !due {
-            return Ok(Vec::new());
-        }
-        self.sync_group_list(rng).await
+        let taken_up = if due {
+            self.sync_group_list(rng).await?
+        } else {
+            Vec::new()
+        };
+        let _ = self.flush_group_list(false).await;
+        Ok(taken_up)
     }
 
-    /// After a catch-up or a change: the list follows (best effort).
+    /// After a catch-up or a change: a join or a leave makes the entry due.
     pub(crate) async fn list_after(&mut self, group_id: &str, sync: &GroupSync) {
         if matches!(sync, GroupSync::Current { .. } | GroupSync::Gone) {
-            let _ = self.publish_group_entry(group_id).await;
+            let _ = self.schedule_group_entry(group_id).await;
         }
     }
 }

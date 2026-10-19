@@ -248,9 +248,9 @@ export class ApiChatTransport implements ChatTransportPort {
       return Promise.resolve({
         changes: [[write.id, write.revision]] as const,
         send: async (head: string) => {
+          // The server reads the revision from the entry's sealed header.
           await api.put(`/chat/group-list/${encodeURIComponent(write.id)}`, {
             baseRevision: write.baseRevision,
-            revision: write.revision,
             envelope: write.envelope,
             head,
           })

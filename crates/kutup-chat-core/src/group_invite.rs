@@ -163,7 +163,7 @@ impl Engine {
     ) -> Result<()> {
         self.change_group(group_id, vec![GroupActionV1::Leave], rng)
             .await?;
-        let _ = self.publish_group_entry(group_id).await;
+        let _ = self.schedule_group_entry(group_id).await;
         // Nothing of the group is sent again: its send log goes, all but a
         // change notice still on its way.
         let mut pending = crate::db::Pending::default();

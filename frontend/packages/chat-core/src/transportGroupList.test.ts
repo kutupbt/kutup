@@ -63,7 +63,7 @@ describe('the group list under the account head', () => {
     head.index = () => [['a', 2]]
     http.put.mockResolvedValue({ data: null })
     expect(await transport.storeGroupEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe(true)
-    expect(http.put).toHaveBeenCalledWith('/chat/group-list/a', { baseRevision: 2, revision: 3, envelope: 'E', head: 'head-1' })
+    expect(http.put).toHaveBeenCalledWith('/chat/group-list/a', { baseRevision: 2, envelope: 'E', head: 'head-1' })
     // A new entry starts at base 0.
     http.put.mockClear()
     expect(await transport.storeGroupEntry({ id: 'n', baseRevision: 0, revision: 1, envelope: 'N' })).toBe(true)

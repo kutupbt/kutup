@@ -1977,6 +1977,8 @@ export interface WasmChatClientHandle {
   acceptGroupInvite?(groupId: string): Promise<ChatGroupSync>
   declineGroupInvite?(groupId: string): Promise<void>
   leaveGroup?(groupId: string): Promise<void>
+  /** Writes the due group list entries now (before signing out); how many. */
+  flushGroupList?(): Promise<number>
   removeGroupMember?(groupId: string, pseudonym: string): Promise<void>
   setGroupMemberAdmin?(groupId: string, pseudonym: string, administrator: boolean): Promise<void>
   sendText(
