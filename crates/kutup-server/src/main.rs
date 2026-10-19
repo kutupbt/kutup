@@ -469,6 +469,7 @@ async fn main() -> anyhow::Result<()> {
     mail::retention::spawn(state.clone());
     mail::outbox::spawn(state.clone());
     mail::snooze::spawn(state.clone());
+    mail::forwarding::spawn(state.clone());
     mail::expiry::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -996,6 +997,42 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/filters/:id",
             patch(handlers::mail_filters::update).delete(handlers::mail_filters::delete),
+        )
+        .route(
+            "/api/mail/forwardings",
+            get(handlers::mail_forwardings::list).post(handlers::mail_forwardings::create),
+        )
+        .route(
+            "/api/mail/forwardings/:id",
+            put(handlers::mail_forwardings::renew).delete(handlers::mail_forwardings::delete),
+        )
+        .route(
+            "/api/mail/forwardings/:id/pause",
+            put(handlers::mail_forwardings::pause),
+        )
+        .route(
+            "/api/mail/forwardings/:id/resume",
+            put(handlers::mail_forwardings::resume),
+        )
+        .route(
+            "/api/mail/forwardings/:id/conditions",
+            put(handlers::mail_forwardings::conditions),
+        )
+        .route(
+            "/api/mail/forwardings/:id/activation",
+            get(handlers::mail_forwardings::activation),
+        )
+        .route(
+            "/api/mail/forwardings/:id/accept",
+            post(handlers::mail_forwardings::accept),
+        )
+        .route(
+            "/api/mail/forwardings/:id/decline",
+            post(handlers::mail_forwardings::decline),
+        )
+        .route(
+            "/api/mail/addresses/:address/forwarding-keys/:key",
+            delete(handlers::mail_forwardings::delete_key),
         )
         .route(
             "/api/mail/labels",

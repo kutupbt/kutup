@@ -297,6 +297,44 @@ fn parse_activation(plain: &[u8]) -> Result<(ActivationTerms, Zeroizing<Vec<u8>>
     ))
 }
 
+/// The server's step on a whole stored message (`key packet(s) ‖ data
+/// packet`): the key packet to one of the forwarder's subkeys an `instances`
+/// entry covers becomes one for its forwardee subkey, and the rest of the
+/// message is kept byte for byte. Fails (the message is then skipped and
+/// counted, never the forwarder's delivery) when no key packet is to a
+/// covered subkey, or it can't be transformed (v6, wildcard).
+pub fn forward_message(
+    message: &[u8],
+    forwardee_public_key: &[u8],
+    instances: &[ProxyInstance],
+) -> Result<Vec<u8>> {
+    let mut rest = message;
+    let mut key_packets: Vec<&[u8]> = Vec::new();
+    loop {
+        let (tag, _, length) = mail_key::packet_extent(rest)?;
+        if tag != mail_key::TAG_PKESK {
+            break;
+        }
+        key_packets.push(&rest[..length]);
+        rest = &rest[length..];
+    }
+    for key_packet in key_packets {
+        let Ok(key_id) = mail_key::key_packet_key_id(key_packet) else {
+            continue;
+        };
+        if let Some(instance) = instances
+            .iter()
+            .find(|instance| instance.forwarder_fingerprint[12..] == key_id)
+        {
+            let transformed = transform(key_packet, forwardee_public_key, instance)?;
+            return Ok([transformed.as_slice(), rest].concat());
+        }
+    }
+    Err(CryptoError::InvalidInput(
+        "no key packet to the forwarder's key".into(),
+    ))
+}
+
 /// Seals the forwardee key for the forwardee under `terms`: encrypted to
 /// their address key, signed by the forwarder's. Armored. Proton's locked
 /// key and `ActivationToken` in one: Kutup's address keys have no
@@ -474,6 +512,21 @@ pub fn decrypt_forwarded(
         .decrypt_the_ring(ring, true)
         .map_err(|_| CryptoError::AuthFailed)?;
     mail_key::read_decrypted(decrypted, signer_public_key)
+}
+
+/// The fingerprints of an address key's encryption subkeys (binary public
+/// key): what a forwarding's proxy factors must cover, one each.
+pub fn encryption_fingerprints(public_key: &[u8]) -> Result<Vec<[u8; FINGERPRINT_LEN]>> {
+    let key = SignedPublicKey::from_bytes(public_key)
+        .map_err(|_| CryptoError::InvalidInput("key does not parse".into()))?;
+    key.public_subkeys
+        .iter()
+        .filter(|subkey| subkey.key.algorithm().can_encrypt() && !subkey.key.is_forwardee_key())
+        .map(|subkey| match subkey.key.fingerprint() {
+            Fingerprint::V4(fingerprint) => Ok(fingerprint),
+            _ => Err(CryptoError::InvalidInput("not a v4 key".into())),
+        })
+        .collect()
 }
 
 const SEAL_DOMAIN: &[u8] = b"kutup/mail-forwarding/proxy-parameter/v1\0";
@@ -973,5 +1026,29 @@ P0GnopWOyFNNFWK77LQN
             open_proxy_parameter(&key, 1, &forwarding, [1u8; 20], [2u8; 20], &sealed[..24])
                 .is_err()
         );
+    }
+
+    /// A whole stored copy forwards: the key packet to the forwarder is
+    /// transformed, the data packet kept; a copy for someone else doesn't.
+    #[test]
+    fn a_stored_copy_forwards_whole() {
+        let Setup {
+            forwarder,
+            forwardee_address_key,
+            material,
+        } = setup();
+        let stored = mail_key::encrypt_binary(&forwarder.public_key, b"stored").unwrap();
+        let forwarded =
+            forward_message(&stored, &material.forwardee_public_key, &material.instances).unwrap();
+        let (_, data) = first_packet(&stored);
+        assert!(forwarded.ends_with(&data));
+        let opened = decrypt_forwarded(&material.forwardee_secret_key, &forwarded, None).unwrap();
+        assert_eq!(opened.data.as_slice(), b"stored");
+        let other =
+            mail_key::encrypt_binary(&forwardee_address_key.public_key, b"not alice's").unwrap();
+        assert!(
+            forward_message(&other, &material.forwardee_public_key, &material.instances).is_err()
+        );
+        assert!(forward_message(&[], &material.forwardee_public_key, &material.instances).is_err());
     }
 }

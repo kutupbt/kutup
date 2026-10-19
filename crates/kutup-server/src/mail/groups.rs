@@ -255,6 +255,7 @@ pub async fn store_list(
                     group_id: Some(group.id),
                     key_packet: Some(packet),
                     sent_by: None,
+                    forwarded_from: None,
                 },
             )
             .await?;
@@ -488,6 +489,7 @@ pub async fn store_shared_copy(
             group_id: Some(group.id),
             key_packet: None,
             sent_by: None,
+            forwarded_from: None,
         },
     )
     .await?;

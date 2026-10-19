@@ -195,7 +195,7 @@ async fn group_sender(
 async fn from_old_address(state: &AppState, user_id: Uuid, key_id: [u8; 8]) -> AppResult<bool> {
     let keys: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
-          WHERE a.user_id = $1 AND a.state <> 'active'",
+          WHERE a.user_id = $1 AND a.state <> 'active' AND NOT k.is_forwarding",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -505,6 +505,7 @@ pub async fn create_draft(
                 group_id: None,
                 key_packet: None,
                 sent_by: None,
+                forwarded_from: None,
             },
         )
         .await?;
@@ -1365,6 +1366,7 @@ pub(crate) async fn deliver(
                 group_id: from_group.as_ref().map(|group| group.id),
                 key_packet: None,
                 sent_by: from_group.is_some().then_some(user_id),
+                forwarded_from: None,
             },
         )
         .await?;
@@ -1373,6 +1375,8 @@ pub(crate) async fn deliver(
         let mut blocked: Vec<(String, String)> = Vec::new();
         // Copies delivered: answered after the commit when their auto-reply is on.
         let mut delivered = Vec::new();
+        // Copies delivered: forwarded after the commit (docs/plans/mail-forwarding.md).
+        let mut forwards = Vec::new();
         for copy in &copies {
             let pool = pools.get_mut(&copy.recipient.user_id).expect("locked");
             if !pool.fits(copy.size, 0) {
@@ -1403,6 +1407,7 @@ pub(crate) async fn deliver(
                     group_id: None,
                     key_packet: None,
                     sent_by: None,
+                    forwarded_from: None,
                 },
             )
             .await?;
@@ -1411,6 +1416,14 @@ pub(crate) async fn deliver(
                 delivered.push(crate::mail::auto_reply::Delivered {
                     user_id: copy.recipient.user_id,
                     message: copy_id,
+                });
+                forwards.push(crate::mail::forwarding::Arrived {
+                    address_id: copy.recipient.address_id,
+                    message_id: copy_id,
+                    object_key: copy.key.clone(),
+                    object_version: copy.version.clone(),
+                    readable: readable.clone(),
+                    may_forward: true,
                 });
             } else {
                 blocked.push((copy.key.clone(), copy.version.clone()));
@@ -1576,6 +1589,9 @@ pub(crate) async fn deliver(
         tx.commit().await?;
         for copy in delivered {
             crate::mail::auto_reply::spawn(&state, copy);
+        }
+        for arrived in forwards {
+            crate::mail::forwarding::spawn_forward(&state, arrived);
         }
         for (key, version) in &blocked {
             if let Err(error) = state.storage.delete_stored(key, version).await {

@@ -294,6 +294,18 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
         .await?;
     let answer = match record(state, recipient, id, &key, &version, size, &readable).await {
         Ok(Some(stored)) => {
+            // On to the address's forwardings, after its own copy is kept.
+            forwarding::spawn_forward(
+                state,
+                forwarding::Arrived {
+                    address_id: recipient.address_id,
+                    message_id: id,
+                    object_key: key.clone(),
+                    object_version: version.clone(),
+                    readable: readable.clone(),
+                    may_forward: forwarding::may_forward(raw),
+                },
+            );
             if may_answer && readable.bounce.is_none() {
                 auto_reply::spawn(
                     state,
@@ -386,6 +398,7 @@ async fn record(
             group_id: None,
             key_packet: None,
             sent_by: None,
+            forwarded_from: None,
         },
     )
     .await?;
@@ -423,6 +436,9 @@ pub(crate) struct NewMessage<'a> {
     pub key_packet: Option<&'a [u8]>,
     /// The member who sent it as a shared mailbox.
     pub sent_by: Option<Uuid>,
+    /// The address it was forwarded from (docs/plans/mail-forwarding.md):
+    /// opened only with the forwarding key, never forwarded again.
+    pub forwarded_from: Option<&'a str>,
 }
 
 /// The thread of the newest message in the mailbox of `owner` (an account,
@@ -496,10 +512,10 @@ pub(crate) async fn insert_message(
              object_version, size_bytes, sent_at, subject, from_address, from_name, to_list,
              cc_list, reply_to, bcc_list, message_id, in_reply_to, references_list,
              attachment_count, external_recipients, group_id, key_packet, sent_by, unsubscribable,
-             attachments, expires_at, notify_at)
+             attachments, expires_at, notify_at, forwarded_from)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
                  $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END)
+                 CASE WHEN $5 = 'inbound' AND NOT $7 THEN now() END, $31)
          ON CONFLICT (address_id, message_id) WHERE direction = 'inbound' AND message_id IS NOT NULL
          DO NOTHING
          RETURNING id",
@@ -534,6 +550,7 @@ pub(crate) async fn insert_message(
     .bind(readable.list_unsubscribe)
     .bind(sqlx::types::Json(&readable.attachments))
     .bind(readable.expires_at)
+    .bind(message.forwarded_from)
     .fetch_optional(&mut **tx)
     .await?;
     if inserted.is_none() {

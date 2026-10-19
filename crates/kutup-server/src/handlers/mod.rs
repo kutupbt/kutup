@@ -27,6 +27,7 @@ pub mod mail;
 pub mod mail_auto_reply;
 pub mod mail_filters;
 pub mod mail_folders;
+pub mod mail_forwardings;
 pub mod mail_groups;
 pub mod mail_identity;
 pub mod mail_image_senders;

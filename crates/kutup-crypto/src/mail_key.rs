@@ -1277,7 +1277,7 @@ const MAX_SPLIT_RECIPIENTS: usize = 100;
 /// Key packets one split message may carry: every member of a distribution
 /// list (at most 1000, docs/plans/mail-groups.md) and the sender's own.
 const MAX_LIST_RECIPIENTS: usize = 1001;
-const TAG_PKESK: u8 = 1;
+pub(crate) const TAG_PKESK: u8 = 1;
 const TAG_SEIPD: u8 = 18;
 const TAG_AEAD: u8 = 20;
 
@@ -1291,7 +1291,7 @@ fn packet_tag(first: u8) -> Option<u8> {
 
 /// A packet's tag, header length and whole length (header and body), for
 /// packets with a definite length; key packets always have one.
-fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
+pub(crate) fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
     let invalid = || CryptoError::InvalidInput("malformed OpenPGP packet".into());
     let first = *bytes.first().ok_or_else(invalid)?;
     let tag = packet_tag(first).ok_or_else(invalid)?;
