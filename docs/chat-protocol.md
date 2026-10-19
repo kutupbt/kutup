@@ -756,8 +756,13 @@ retry worker sends it. Nobody waits for that lock: a client whose send meets a f
 answered from its outbox row, which keeps the destination's final answer, so
 it reads its real answer if another flush (the retry worker's) settled it, and
 `pending` only while it is still queued. A flush runs in its own task, so a
-client that goes away doesn't cut it short. A flush sends nothing while the queue's head is backing off
-or waits for the peer to support `chat.v2`. Otherwise it sends the run of
+client that goes away doesn't cut it short. A flush sends nothing while the queue's head waits for
+the peer to support `chat.v2`. While the head is backing off after an error,
+the retry worker waits it out, but a client's send may try the head alone,
+at most once every 5 seconds per head whichever backend asks
+(`SEALED_PROBE_SECONDS`, claimed by stamping the row): a server that is back
+is noticed at once, and the rest of the queue follows when the head settles.
+Otherwise it sends the run of
 consecutive pending sends from the head, sized before it is loaded, in signed
 `POST /api/fed/chat/sealed/batch` requests (`FederatedSealedBatchV1`, at most
 64 transactions and 4 MiB). The destination checks the batch's shape first
