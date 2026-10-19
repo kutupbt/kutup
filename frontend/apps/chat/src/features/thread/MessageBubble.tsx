@@ -239,7 +239,7 @@ function Countdown({ expiresAt }: { expiresAt: number }) {
   )
 }
 
-function DeliveryStatus({ view }: { view: MessageView }) {
+export function DeliveryStatus({ view }: { view: MessageView }) {
   const { t } = useTranslation()
   const { receipt, entry } = view
   // A group message some members never got: said, whatever else reached.

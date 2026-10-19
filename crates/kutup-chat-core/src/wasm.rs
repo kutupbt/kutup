@@ -900,6 +900,15 @@ struct GroupSendView {
     pending: usize,
     /// Member accounts whose server refused it for good.
     failed: usize,
+    /// Why this pass couldn't try it (it waits for the next).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    fn console_warn(message: &str);
 }
 
 impl From<crate::group_send::GroupSendSummary> for GroupSendView {
@@ -909,6 +918,7 @@ impl From<crate::group_send::GroupSendSummary> for GroupSendView {
             delivered: summary.delivered,
             pending: summary.pending,
             failed: summary.failed,
+            error: summary.error,
         }
     }
 }
@@ -3537,7 +3547,18 @@ impl WasmChatClient {
             .flush_profile(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
             .await;
         // Group messages still on their way: best effort, retried each pass.
-        let _ = self.engine.flush_group_outbox(&mut rng).await;
+        if let Ok(summaries) = self.engine.flush_group_outbox(&mut rng).await {
+            // A message that couldn't be tried this pass waits for the next;
+            // why is worth seeing in the console.
+            for error in summaries
+                .iter()
+                .filter_map(|summary| summary.error.as_deref())
+            {
+                console_warn(&format!(
+                    "chat: a group message waits for the next pass: {error}"
+                ));
+            }
+        }
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after

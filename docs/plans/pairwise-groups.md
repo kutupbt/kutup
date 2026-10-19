@@ -1155,7 +1155,12 @@ own fallback path (§1).
     A leg not taken within the send log's week fails. A sender key only
     `pending` is not entered in the book: it is noted as queued, not handed
     out again for an hour (a server that is down isn't sent a new copy with
-    every message), and handed out again after that. An error on one leg
+    every message), and handed out again after that. Once a later message
+    to the same devices is stored at the recipient's server, the queued key
+    (ahead of it in the same queue) is entered in the book; a device
+    mismatch drops that account's queued keys, so a fresh one goes to the
+    current devices. A `deviceMismatch` after `pending` makes the leg
+    *sending* again, since the amended copy isn't held yet. An error on one leg
     (its devices can't be read, its envelopes can't be sealed) leaves that
     leg waiting; one message that can't go never holds up the others; a
     pass that changed nothing writes nothing.
@@ -1165,7 +1170,9 @@ own fallback path (§1).
     **sent** once it has it for every member, even while a member's own
     server is slow or down; and how many member accounts it **never
     reached** (`refused`, `unavailable`, `peerUnsupported`, or the week
-    gone). A group message is never shown as "not sent".
+    gone), shown as soon as it is known, while the rest may still wait. A
+    group message is never shown as "not sent"; a pass that fails as a
+    whole is logged to the console and tried again next pass.
   - This is the multi-recipient route's outer shape without libsignal's
     format, so slice 2 replaces the body, not the plumbing.
   - Raising the per-IP default instead would weaken the outer wall for direct

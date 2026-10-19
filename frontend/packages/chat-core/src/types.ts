@@ -383,6 +383,8 @@ export interface ChatGroupSend {
   pending: number
   /** Member accounts it never reached (refused for good, or a week passed). */
   failed: number
+  /** Why this pass couldn't try it at all (it waits for the next). */
+  error?: string
 }
 
 /** An invitation to a pairwise group that arrived. */
