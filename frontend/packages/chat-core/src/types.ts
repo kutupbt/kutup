@@ -318,6 +318,8 @@ export interface ChatHistoryEntry {
   timestampMs: number
   delivered: boolean
   deduplicated: boolean
+  /** A group message: how many member accounts it never reached. */
+  failedRecipients?: number
   content: ChatContentView
 }
 
@@ -373,6 +375,8 @@ export interface ChatGroupSend {
   sendId: string
   delivered: number
   pending: number
+  /** Member accounts it never reached (refused for good, or a week passed). */
+  failed: number
 }
 
 /** An invitation to a pairwise group that arrived. */

@@ -256,6 +256,20 @@ describe('ApiChatTransport', () => {
     )
   })
 
+  it('a batch the server refuses as a whole is no answer: the engine keeps its legs for later', async () => {
+    await resolveApiBase()
+    const transport = new ApiChatTransport()
+    for (const status of [429, 404, 503]) {
+      const failure = new axios.AxiosError('failed', String(status), undefined, undefined, { status, data: { error: 'no' } } as never)
+      vi.spyOn(axios, 'post').mockRejectedValueOnce(failure)
+      await expect(transport.sendSealedBatch('b.test', { recipients: [] })).rejects.toBeTruthy()
+    }
+    // An older server without this Chat version says so, as for one send.
+    const unsupported = new axios.AxiosError('failed', '503', undefined, undefined, { status: 503, data: { code: 'peerUnsupported' } } as never)
+    vi.spyOn(axios, 'post').mockRejectedValueOnce(unsupported)
+    await expect(transport.sendSealedBatch('b.test', { recipients: [] })).rejects.toThrow(/peerUnsupported/)
+  })
+
   it('reports only the server\'s own sealed refusal as refused', async () => {
     await resolveApiBase()
     const refusal = (data: unknown) => new axios.AxiosError('failed', '404', undefined, undefined, { status: 404, data } as never)

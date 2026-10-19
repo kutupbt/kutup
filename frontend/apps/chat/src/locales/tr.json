@@ -266,7 +266,9 @@
       "settingDescription": "Açıkken, sohbet ettiğin kişiler mesajlarını ne zaman okuduğunu görebilir. Birebir sohbetlerde iletim bildirimleri her zaman şifreli olarak gönderilir.",
       "sending": "Gönderiliyor…",
       "notSent": "Gönderilemedi",
-      "retryHint": "Şimdi yeniden göndermeyi dene"
+      "retryHint": "Şimdi yeniden göndermeyi dene",
+      "notDeliveredTo_one": "{{count}} üyeye iletilemedi",
+      "notDeliveredTo_other": "{{count}} üyeye iletilemedi"
     },
     "replies": {
       "reply": "Mesajı yanıtla",

@@ -242,6 +242,15 @@ function Countdown({ expiresAt }: { expiresAt: number }) {
 function DeliveryStatus({ view }: { view: MessageView }) {
   const { t } = useTranslation()
   const { receipt, entry } = view
+  // A group message some members never got: said, whatever else reached.
+  if (entry.failedRecipients) {
+    const label = t('chat.receipts.notDeliveredTo', { count: entry.failedRecipients })
+    return (
+      <span className="flex items-center text-status-warn" title={label} aria-label={label} data-testid="chat-receipt-partial">
+        <AlertCircle className="size-3.5" />
+      </span>
+    )
+  }
   if (receipt?.read) {
     const label = t('chat.receipts.readBy', { count: receipt.read })
     return (

@@ -129,6 +129,8 @@ pub(crate) struct World {
     /// One-shot answers the batch route gives an account instead of taking
     /// its send.
     pub(crate) batch_answers: RefCell<Vec<(String, kutup_chat_proto::SealedBatchOutcomeV1)>>,
+    /// How many batch requests fail outright (no answer) before they go.
+    pub(crate) batch_failures: Cell<u32>,
     /// Accounts whose manifest can't be fetched now.
     pub(crate) manifests_down: RefCell<HashSet<String>>,
     /// The home can't be reached now.
@@ -215,6 +217,7 @@ impl World {
             sealed_sent: RefCell::new(Vec::new()),
             batches: Cell::new(0),
             batch_answers: RefCell::new(Vec::new()),
+            batch_failures: Cell::new(0),
             manifests_down: RefCell::new(HashSet::new()),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
@@ -849,6 +852,12 @@ impl ChatTransport for Client {
     ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
         use kutup_chat_proto::{SealedBatchOutcomeV1 as Outcome, SealedBatchResultV1};
         batch.validate().map_err(ChatError::Invalid)?;
+        if self.world.batch_failures.get() > 0 {
+            self.world
+                .batch_failures
+                .set(self.world.batch_failures.get() - 1);
+            return Err(ChatError::Transport("the batch request failed".into()));
+        }
         self.world.batches.set(self.world.batches.get() + 1);
         let mut results = Vec::new();
         for recipient in &batch.recipients {
@@ -2345,7 +2354,11 @@ fn group_batches_a_limited_leg_waits_and_a_refused_one_fails() {
     .unwrap();
     // Bob's leg waits, Carol's failed for good.
     assert_eq!((summary.pending, summary.failed), (1, 1));
-    // The next flush takes Bob's, with the same send id; Carol's isn't tried.
+    // Not before its wait has passed; then the next flush takes Bob's, with
+    // the same send id; Carol's isn't tried.
+    let waiting = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!((waiting[0].pending, waiting[0].failed), (1, 1));
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
     let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
     assert_eq!(flushed.len(), 1);
     assert_eq!((flushed[0].pending, flushed[0].failed), (0, 1));
@@ -2525,7 +2538,7 @@ fn group_followup_an_evicted_envelope_is_acknowledged_and_reported() {
 }
 
 #[test]
-fn group_batches_a_leg_that_keeps_conflicting_fails_on_the_second() {
+fn group_batches_a_conflicting_leg_waits_for_its_queued_copy() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
     let mut alice = world.person(0xa1);
@@ -2533,28 +2546,175 @@ fn group_batches_a_leg_that_keeps_conflicting_fails_on_the_second() {
     let group_id = group_of(&mut alice, &mut [&mut bob]);
     alice.send_text(&group_id, "with the key");
     deliver_all(&mut [&mut alice, &mut bob]);
+    // Our own earlier copy is still queued under the send id: it goes out,
+    // so a conflict waits, however often, and never fails the leg.
     world.batch_answers.borrow_mut().extend([
         (bob.account.clone(), Outcome::Conflict),
         (bob.account.clone(), Outcome::Conflict),
     ]);
-    let send_id = uuid::Uuid::new_v4().to_string();
-    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
-    let content = ChatContent::text_with_id(&send_id, ISSUED_AT, seq, "conflicted");
-    let summary = block_on(alice.engine.send_group_message(
-        &group_id,
-        &send_id,
-        content,
-        &mut rng(),
-    ))
+    let send_id = alice_sends(&mut alice, &group_id, "conflicted");
+    for _ in 0..2 {
+        let summary = block_on(alice.engine.deliver_group_entry(&send_id, &mut rng())).unwrap();
+        assert_eq!((summary.pending, summary.failed), (1, 0));
+        block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    }
+    let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!(
+        (flushed[0].pending, flushed[0].failed, flushed[0].delivered),
+        (0, 0, 1)
+    );
+    bob.receive();
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"conflicted".to_string()));
+}
+
+#[test]
+fn group_batches_a_queued_leg_waits_and_reaches_a_device_linked_meanwhile() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // Queued for Bob's server, which can't be reached: not delivered yet.
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::Pending));
+    let send_id = alice_sends(&mut alice, &group_id, "queued");
+    let sent = block_on(alice.engine.session().db().load_sent_message(&send_id))
+        .unwrap()
+        .unwrap();
+    assert!(!sent.delivered, "a queued leg is not delivered");
+    // Meanwhile Bob links a device; the next try meets the new device set,
+    // and both his devices get it.
+    let bob2 = world.link_device(&bob);
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!((flushed[0].pending, flushed[0].failed), (0, 0));
+    // The amended leg covers both his devices (the new one takes the group
+    // up from the account's group list, which is the continuity slice), and
+    // the first reads it.
+    let entry = block_on(alice.engine.session().db().list_group_outbox())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.send_id == send_id)
+        .unwrap();
+    let leg = entry
+        .legs
+        .iter()
+        .find(|leg| leg.account == bob.account)
+        .unwrap();
+    assert!(leg.delivered && !leg.failed);
+    assert!(
+        leg.devices.contains(&bob.device()) && leg.devices.contains(&bob2.device()),
+        "{:?}",
+        leg.devices
+    );
+    bob.receive();
+    assert!(bob.group_texts(&group_id).contains(&"queued".to_string()));
+}
+
+#[test]
+fn group_batches_a_failed_batch_goes_again_with_the_same_send_ids() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    world.batch_failures.set(1);
+    let send_id = alice_sends(&mut alice, &group_id, "after a failure");
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!(
+        (flushed[0].send_id.as_str(), flushed[0].pending),
+        (send_id.as_str(), 0)
+    );
+    bob.receive();
+    let texts = bob.group_texts(&group_id);
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| *text == "after a failure")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::RateLimited));
+    let send_id = alice_sends(&mut alice, &group_id, "too late");
+    block_on(
+        alice
+            .engine
+            .age_group_entry_for_testing(&send_id, crate::session::GROUP_UNDELIVERED_MS),
+    )
     .unwrap();
-    // Once: it waits.
-    assert_eq!((summary.pending, summary.failed), (1, 0));
-    // Twice: it fails, and isn't tried again.
     let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
     assert_eq!((flushed[0].pending, flushed[0].failed), (0, 1));
-    assert!(block_on(alice.engine.flush_group_outbox(&mut rng()))
+    let sent = block_on(alice.engine.session().db().load_sent_message(&send_id))
         .unwrap()
-        .is_empty());
+        .unwrap();
+    assert!(sent.delivered);
+    assert_eq!(sent.failed_recipients, 1);
+}
+
+#[test]
+fn group_batches_a_queued_sender_key_is_not_in_the_book() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    // The first send hands out the key: queued for Bob's server, not stored.
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::Pending));
+    alice_sends(&mut alice, &group_id, "first");
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    let book = record.sender_book.expect("a key");
+    assert!(
+        !book
+            .devices
+            .iter()
+            .any(|device| device.account == bob.account),
+        "a key only queued is handed out again"
+    );
+    // The next send hands it out again, and Bob reads both.
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    alice_sends(&mut alice, &group_id, "second");
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    bob.receive();
+    assert!(bob.group_texts(&group_id).contains(&"second".to_string()));
+}
+
+/// Alice sends `text` to the group; its send id.
+fn alice_sends(alice: &mut Person, group_id: &str, text: &str) -> String {
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(&send_id, ISSUED_AT, seq, text);
+    block_on(
+        alice
+            .engine
+            .send_group_message(group_id, &send_id, content, &mut rng()),
+    )
+    .unwrap();
+    send_id
 }
 
 #[test]

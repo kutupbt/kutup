@@ -1600,6 +1600,7 @@ impl Session {
                     delivered_at: Some(received_at),
                     delivered: true,
                     deduplicated: false,
+                    failed_recipients: 0,
                 };
                 self.store.stage_sent_message(message.clone());
                 Some(message)
@@ -2108,6 +2109,25 @@ impl Session {
                     .deleted_content(&entry.content, &conversation)
                     .is_some()
             {
+                // Not taken within the week: the message says it never
+                // reached those accounts, rather than sending for ever.
+                if !delivered && age >= GROUP_UNDELIVERED_MS {
+                    if let Some(mut sent) =
+                        self.store.db().load_sent_message(&entry.send_id).await?
+                    {
+                        sent.delivered = true;
+                        sent.delivered_at = Some(now_ms);
+                        sent.failed_recipients = u32::try_from(
+                            entry
+                                .legs
+                                .iter()
+                                .filter(|leg| leg.failed || !leg.delivered)
+                                .count(),
+                        )
+                        .unwrap_or(u32::MAX);
+                        self.store.stage_sent_message(sent);
+                    }
+                }
                 self.store.delete_group_outbox(&entry.send_id);
             }
         }
@@ -2499,6 +2519,7 @@ impl Session {
                 delivered_at: Some(now),
                 delivered: true,
                 deduplicated: false,
+                failed_recipients: 0,
             });
         }
         if let Err(error) = self.store.commit().await {
@@ -2749,6 +2770,7 @@ impl Session {
                     delivered_at: None,
                     delivered: false,
                     deduplicated: false,
+                    failed_recipients: 0,
                 });
                 self.stage_outgoing_contact(peer_user, created_at).await?;
             }
@@ -2850,6 +2872,7 @@ impl Session {
                     delivered_at: None,
                     delivered: false,
                     deduplicated: false,
+                    failed_recipients: 0,
                 });
                 self.stage_outgoing_contact(peer_user, created_at).await?;
             }
@@ -3008,6 +3031,7 @@ impl Session {
                     delivered_at: None,
                     delivered: false,
                     deduplicated: false,
+                    failed_recipients: 0,
                 });
                 self.store.commit().await?;
                 Ok(envelopes)
@@ -3160,6 +3184,7 @@ impl Session {
                 delivered_at: Some(now),
                 delivered: true,
                 deduplicated: false,
+                failed_recipients: 0,
             });
             self.store.commit().await
         }
@@ -4419,6 +4444,7 @@ mod sealed_tests {
                     delivered_at: None,
                     delivered: true,
                     deduplicated: false,
+                    failed_recipients: 0,
                 },
             )
         };
@@ -4656,6 +4682,7 @@ mod sealed_tests {
                 delivered_at: Some(2_000),
                 delivered: true,
                 deduplicated: false,
+                failed_recipients: 0,
             },
         );
         for (id, seq, conversation, target) in [
@@ -4685,6 +4712,7 @@ mod sealed_tests {
                     delivered_at: Some(1_001),
                     delivered: true,
                     deduplicated: false,
+                    failed_recipients: 0,
                 },
             );
         }

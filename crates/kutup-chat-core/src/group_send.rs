@@ -42,12 +42,19 @@ use crate::error::{ChatError, Result};
 use crate::group::{self, BookDevice, GroupRecordV1, GroupStatus, SenderBook};
 use crate::group_engine::GroupSync;
 
-/// How many times one leg is retried after the server says the device set
-/// changed.
-const MAX_LEG_ATTEMPTS: u32 = 5;
+/// How many mismatch rounds one pass runs (a device set that changes again
+/// while it is amended).
+const MAX_ROUNDS_PER_PASS: u32 = 5;
 
-/// How many `conflict` answers a leg takes before it fails.
-const MAX_LEG_CONFLICTS: u32 = 2;
+/// How many device mismatches a leg takes in all, across passes, before it
+/// fails: a recipient whose devices never settle.
+const MAX_LEG_MISMATCHES: u32 = 20;
+
+/// The first wait of a leg left waiting, doubled each pass it still waits.
+const FIRST_WAIT_MS: i64 = 10 * 1000;
+
+/// The longest wait between two tries of one leg.
+const MAX_WAIT_MS: i64 = 15 * 60 * 1000;
 
 /// A send catches up with the home first when the last catch-up is older.
 pub(crate) const SEND_CATCH_UP_AFTER_MS: i64 = 5 * 60 * 1000;
@@ -74,6 +81,17 @@ struct Recipient {
 
 fn group_err(error: group::GroupError) -> ChatError {
     ChatError::Invalid(error.to_string())
+}
+
+/// A leg that waits: tried again after a wait that doubles each pass it
+/// still waits, up to [`MAX_WAIT_MS`].
+fn wait(leg: &mut GroupOutboxLeg, now: i64) {
+    let doublings = leg.waits.min(16);
+    let wait = FIRST_WAIT_MS
+        .saturating_mul(1i64 << doublings)
+        .min(MAX_WAIT_MS);
+    leg.waits = leg.waits.saturating_add(1);
+    leg.retry_at_ms = Some(now.saturating_add(wait));
 }
 
 impl Engine {
@@ -268,10 +286,13 @@ impl Engine {
             ));
             covered.push(devices);
         }
-        let outcomes = self.send_sealed_batches(&sends).await?;
+        let outcomes = self.send_sealed_batches(&sends).await;
         for (((account, _), devices), outcome) in sends.iter().zip(covered).zip(outcomes) {
             match outcome {
-                Some(SealedBatchOutcomeV1::Delivered { .. } | SealedBatchOutcomeV1::Pending) => {
+                // Only a key the recipient's server stored is in the book: one
+                // queued for another server may yet be refused there (a
+                // device mismatch), and is sent again with the next message.
+                Some(SealedBatchOutcomeV1::Delivered { .. }) => {
                     let book = record.sender_book.as_mut().expect("set above");
                     for device in &devices {
                         book.devices.push(BookDevice {
@@ -452,7 +473,9 @@ impl Engine {
                     .map_err(|e| ChatError::Content(e.to_string()))?,
                 delivered: false,
                 failed: false,
-                conflicts: 0,
+                mismatches: 0,
+                waits: 0,
+                retry_at_ms: None,
             });
         }
         let created_at = unix_millis();
@@ -469,6 +492,7 @@ impl Engine {
                     delivered_at: None,
                     delivered: legs.is_empty(),
                     deduplicated: false,
+                    failed_recipients: 0,
                 },
             );
         }
@@ -496,7 +520,11 @@ impl Engine {
 
     /// Delivers what is left of a group message: each leg sealed to its
     /// account; a device set that moved on is amended (pairwise for the
-    /// devices it didn't cover) and sent again.
+    /// devices it didn't cover) and sent again. A leg the server only
+    /// queued, or that waits (a limit, a conflict, a failure), is tried
+    /// again on a later pass, after a growing wait; a leg not taken within
+    /// the send log's week fails. What a pass learned is always saved, even
+    /// when one leg's amendment fails.
     pub(crate) async fn deliver_group_entry<R: Rng + CryptoRng>(
         &mut self,
         send_id: &str,
@@ -514,151 +542,259 @@ impl Engine {
                 failed: 0,
             });
         };
+        let now = unix_millis();
         let capabilities = self.group_capabilities(&entry.group_id).await?;
-        let content: ChatContent = serde_json::from_slice(&entry.content)
-            .map_err(|e| ChatError::Content(e.to_string()))?;
-        // Legs still to go, retried after a device mismatch; one left out
-        // after a failed batch, a limit or a conflict waits for the next
-        // flush.
+        let content: Option<ChatContent> = serde_json::from_slice(&entry.content).ok();
+        let expired = now.saturating_sub(entry.created_at) >= crate::session::GROUP_UNDELIVERED_MS;
         let mut retry: Vec<usize> = Vec::new();
         for index in 0..entry.legs.len() {
-            if entry.legs[index].delivered {
+            let leg = &mut entry.legs[index];
+            if leg.delivered {
                 continue;
             }
-            // A member removed since: nothing more goes to them.
-            if capabilities.contains_key(&entry.legs[index].account) {
+            if expired || content.is_none() {
+                // Not taken within the week (or nothing left to send): it
+                // failed, and says so.
+                leg.delivered = true;
+                leg.failed = true;
+            } else if !capabilities.contains_key(&leg.account) {
+                // A member removed since: nothing more goes to them.
+                leg.delivered = true;
+            } else if leg.retry_at_ms.is_none_or(|at| at <= now) {
                 retry.push(index);
-            } else {
-                entry.legs[index].delivered = true;
             }
         }
-        for _ in 0..MAX_LEG_ATTEMPTS {
-            if retry.is_empty() {
-                break;
+        if let Some(content) = content {
+            let mut round = 0;
+            while !retry.is_empty() && round < MAX_ROUNDS_PER_PASS {
+                round += 1;
+                retry = self
+                    .deliver_round(&mut entry, &retry, &capabilities, &content, now, rng)
+                    .await;
             }
-            let mut sends = Vec::with_capacity(retry.len());
-            for &index in &retry {
-                let leg = &entry.legs[index];
-                sends.push((
-                    leg.account.clone(),
-                    SealedMessageSubmissionV1 {
-                        send_id: send_id.to_string(),
-                        capability: STANDARD.encode(capabilities[&leg.account]),
-                        envelopes: serde_json::from_slice(&leg.envelopes)
-                            .map_err(|e| ChatError::Content(e.to_string()))?,
-                    },
-                ));
-            }
-            let outcomes = self.send_sealed_batches(&sends).await?;
-            let mut again = Vec::new();
-            for ((index, (account, submission)), outcome) in
-                retry.iter().copied().zip(sends).zip(outcomes)
-            {
-                match outcome {
-                    // Taken: stored, or queued by this server for the
-                    // recipient's.
-                    Some(
-                        SealedBatchOutcomeV1::Delivered { .. } | SealedBatchOutcomeV1::Pending,
-                    ) => {
-                        entry.legs[index].delivered = true;
-                    }
-                    // A capability the member no longer takes (they blocked
-                    // this account, or rotated their key), or a server that
-                    // takes no sealed mail: the leg is done, as a refused
-                    // direct send is; the group refresh brings the new key.
-                    Some(
-                        SealedBatchOutcomeV1::Unavailable | SealedBatchOutcomeV1::PeerUnsupported,
-                    ) => {
-                        entry.legs[index].delivered = true;
-                    }
-                    // Refused for good (too large to queue, or by the
-                    // recipient's server): the leg failed, and says so.
-                    Some(SealedBatchOutcomeV1::Refused) => {
-                        entry.legs[index].delivered = true;
-                        entry.legs[index].failed = true;
-                    }
-                    Some(SealedBatchOutcomeV1::DeviceMismatch { mismatch }) => {
-                        let capability = capabilities[&account];
-                        self.forget_known_devices_of(&account);
-                        let bundles = self
-                            .fetch_verified_sealed_bundles(&account, &capability)
-                            .await?;
-                        let mut envelopes: Vec<SealedOutgoingEnvelopeV1> = submission.envelopes;
-                        envelopes.retain(|envelope| {
-                            !mismatch.extra_devices.contains(&envelope.device_id)
-                                && !mismatch.stale_devices.contains(&envelope.device_id)
-                        });
-                        let uncovered: Vec<DevicePreKeyBundle> = bundles
-                            .into_iter()
-                            .filter(|bundle| {
-                                mismatch.missing_devices.contains(&bundle.device_id)
-                                    || mismatch.stale_devices.contains(&bundle.device_id)
-                            })
-                            .collect();
-                        // A device without the key gets the message pairwise.
-                        if !uncovered.is_empty() {
-                            let certificate = self.issue_verified_sender_certificate().await?;
-                            let sealed = self
-                                .session
-                                .seal_pairwise(&account, &uncovered, &certificate, &content, rng)
-                                .await?;
-                            let sealed = self.sealed_envelopes(sealed);
-                            envelopes.extend(sealed);
-                        }
-                        entry.legs[index].devices = envelopes
-                            .iter()
-                            .map(|envelope| envelope.device_id)
-                            .collect();
-                        entry.legs[index].envelopes = serde_json::to_vec(&envelopes)
-                            .map_err(|e| ChatError::Content(e.to_string()))?;
-                        again.push(index);
-                    }
-                    // Another payload is queued under this send id: once,
-                    // the leg waits for it to be answered; a second time it
-                    // fails, as it would conflict for ever.
-                    Some(SealedBatchOutcomeV1::Conflict) => {
-                        let leg = &mut entry.legs[index];
-                        leg.conflicts = leg.conflicts.saturating_add(1);
-                        if leg.conflicts >= MAX_LEG_CONFLICTS {
-                            leg.delivered = true;
-                            leg.failed = true;
-                        }
-                    }
-                    // Over a limit, offline or a server error: the leg stays
-                    // for a later flush (the same send id is safe to repeat).
-                    Some(SealedBatchOutcomeV1::RateLimited) | None => {}
-                }
-            }
-            retry = again;
         }
+        self.save_group_entry(&entry).await?;
+        let failed = entry.legs.iter().filter(|leg| leg.failed).count();
         let delivered = entry.legs.iter().filter(|leg| leg.delivered).count();
-        let pending_legs = entry.legs.len() - delivered;
+        Ok(GroupSendSummary {
+            send_id: send_id.to_string(),
+            delivered: delivered - failed,
+            pending: entry.legs.len() - delivered,
+            failed,
+        })
+    }
+
+    /// One batch round over the legs `retry`: their outcomes applied to
+    /// `entry`, and the legs amended after a device mismatch returned for
+    /// the next round. An error on one leg leaves it waiting; it never
+    /// loses what the round learned of the others.
+    async fn deliver_round<R: Rng + CryptoRng>(
+        &mut self,
+        entry: &mut GroupOutboxEntry,
+        retry: &[usize],
+        capabilities: &std::collections::BTreeMap<String, [u8; 16]>,
+        content: &ChatContent,
+        now: i64,
+        rng: &mut R,
+    ) -> Vec<usize> {
+        let mut sends = Vec::with_capacity(retry.len());
+        let mut places = Vec::with_capacity(retry.len());
+        for &index in retry {
+            let leg = &mut entry.legs[index];
+            let Ok(envelopes) =
+                serde_json::from_slice::<Vec<SealedOutgoingEnvelopeV1>>(&leg.envelopes)
+            else {
+                // Its stored ciphertexts don't read back: it can't go.
+                leg.delivered = true;
+                leg.failed = true;
+                continue;
+            };
+            sends.push((
+                leg.account.clone(),
+                SealedMessageSubmissionV1 {
+                    send_id: entry.send_id.clone(),
+                    capability: STANDARD.encode(capabilities[&leg.account]),
+                    envelopes,
+                },
+            ));
+            places.push(index);
+        }
+        let outcomes = self.send_sealed_batches(&sends).await;
+        let mut again = Vec::new();
+        for ((index, (account, submission)), outcome) in places.into_iter().zip(sends).zip(outcomes)
+        {
+            match outcome {
+                // Stored at the recipient's server.
+                Some(SealedBatchOutcomeV1::Delivered { .. }) => {
+                    let leg = &mut entry.legs[index];
+                    leg.delivered = true;
+                    leg.retry_at_ms = None;
+                }
+                // A capability the member no longer takes (they blocked this
+                // account, or rotated their key), or a server that takes no
+                // sealed mail: the leg is done, as a refused direct send is;
+                // the group refresh brings the new key.
+                Some(SealedBatchOutcomeV1::Unavailable | SealedBatchOutcomeV1::PeerUnsupported) => {
+                    entry.legs[index].delivered = true;
+                }
+                // Refused for good (too large to queue, or by the recipient's
+                // server): the leg failed, and says so.
+                Some(SealedBatchOutcomeV1::Refused) => {
+                    let leg = &mut entry.legs[index];
+                    leg.delivered = true;
+                    leg.failed = true;
+                }
+                Some(SealedBatchOutcomeV1::DeviceMismatch { .. }) => {
+                    let leg = &mut entry.legs[index];
+                    leg.mismatches = leg.mismatches.saturating_add(1);
+                    if leg.mismatches >= MAX_LEG_MISMATCHES {
+                        leg.delivered = true;
+                        leg.failed = true;
+                        continue;
+                    }
+                    match self
+                        .amend_leg(
+                            &account,
+                            &capabilities[&account],
+                            submission.envelopes,
+                            content,
+                            rng,
+                        )
+                        .await
+                    {
+                        Ok((devices, envelopes)) => {
+                            let leg = &mut entry.legs[index];
+                            leg.devices = devices;
+                            leg.envelopes = envelopes;
+                            again.push(index);
+                        }
+                        // The devices couldn't be read or sealed to now: the
+                        // leg waits for a later pass.
+                        Err(_) => wait(&mut entry.legs[index], now),
+                    }
+                }
+                // Queued at this account's server for the recipient's (which
+                // may still answer that the devices changed), our own earlier
+                // copy still queued under this send id (it will go out), a
+                // limit, or no answer: the leg waits and goes again later;
+                // the same send id is safe to repeat, the server answers from
+                // its row.
+                Some(
+                    SealedBatchOutcomeV1::Pending
+                    | SealedBatchOutcomeV1::Conflict
+                    | SealedBatchOutcomeV1::RateLimited,
+                )
+                | None => wait(&mut entry.legs[index], now),
+            }
+        }
+        again
+    }
+
+    /// A leg's envelopes after its recipient's devices changed: the
+    /// recipient's verified device list decides, never the server's answer.
+    /// Envelopes to devices still listed are kept; a listed device without
+    /// one gets the message pairwise. Returns the devices and envelopes.
+    async fn amend_leg<R: Rng + CryptoRng>(
+        &mut self,
+        account: &str,
+        capability: &[u8; 16],
+        mut envelopes: Vec<SealedOutgoingEnvelopeV1>,
+        content: &ChatContent,
+        rng: &mut R,
+    ) -> Result<(Vec<u32>, Vec<u8>)> {
+        self.forget_known_devices_of(account);
+        let bundles = self
+            .fetch_verified_sealed_bundles(account, capability)
+            .await?;
+        let listed: std::collections::BTreeMap<u32, u32> = bundles
+            .iter()
+            .map(|bundle| (bundle.device_id, bundle.registration_id))
+            .collect();
+        // Kept: a device still listed, under the registration it was sealed to.
+        envelopes
+            .retain(|envelope| listed.get(&envelope.device_id) == Some(&envelope.registration_id));
+        let uncovered: Vec<DevicePreKeyBundle> = bundles
+            .into_iter()
+            .filter(|bundle| {
+                !envelopes
+                    .iter()
+                    .any(|envelope| envelope.device_id == bundle.device_id)
+            })
+            .collect();
+        if !uncovered.is_empty() {
+            let certificate = self.issue_verified_sender_certificate().await?;
+            let sealed = self
+                .session
+                .seal_pairwise(account, &uncovered, &certificate, content, rng)
+                .await?;
+            envelopes.extend(self.sealed_envelopes(sealed));
+        }
+        let devices = envelopes
+            .iter()
+            .map(|envelope| envelope.device_id)
+            .collect();
+        let bytes =
+            serde_json::to_vec(&envelopes).map_err(|e| ChatError::Content(e.to_string()))?;
+        Ok((devices, bytes))
+    }
+
+    /// Saves `entry` as the pass left it; once no leg waits, as the send
+    /// log (without its ciphertexts), and the sent message says how many
+    /// accounts it never reached.
+    async fn save_group_entry(&mut self, entry: &GroupOutboxEntry) -> Result<()> {
+        let mut entry = entry.clone();
         let mut pending = Pending::default();
-        if pending_legs == 0 {
-            // Kept as the send log, without its ciphertexts.
+        if entry.legs.iter().all(|leg| leg.delivered) {
             for leg in &mut entry.legs {
                 leg.envelopes.clear();
             }
-            pending
-                .group_outbox
-                .insert(send_id.to_string(), Some(entry.clone()));
-            if let Some(mut sent) = self.session.db().load_sent_message(send_id).await? {
+            if let Some(mut sent) = self.session.db().load_sent_message(&entry.send_id).await? {
                 sent.delivered = true;
                 sent.delivered_at = Some(unix_millis());
-                pending.sent_messages.insert(send_id.to_string(), sent);
+                sent.failed_recipients =
+                    u32::try_from(entry.legs.iter().filter(|leg| leg.failed).count())
+                        .unwrap_or(u32::MAX);
+                pending.sent_messages.insert(entry.send_id.clone(), sent);
             }
-        } else {
+        }
+        pending
+            .group_outbox
+            .insert(entry.send_id.clone(), Some(entry));
+        self.session.db().apply(&pending).await
+    }
+
+    /// Every waiting leg due now, as if its wait had passed (tests).
+    #[cfg(test)]
+    pub(crate) async fn group_legs_due_now_for_testing(&mut self) -> Result<()> {
+        let mut pending = Pending::default();
+        for mut entry in self.session.db().list_group_outbox().await? {
+            for leg in &mut entry.legs {
+                leg.retry_at_ms = None;
+            }
             pending
                 .group_outbox
-                .insert(send_id.to_string(), Some(entry.clone()));
+                .insert(entry.send_id.clone(), Some(entry));
         }
-        self.session.db().apply(&pending).await?;
-        Ok(GroupSendSummary {
-            send_id: send_id.to_string(),
-            delivered,
-            pending: pending_legs,
-            failed: entry.legs.iter().filter(|leg| leg.failed).count(),
-        })
+        self.session.db().apply(&pending).await
+    }
+
+    /// Makes a group message as old as `age_ms` (tests).
+    #[cfg(test)]
+    pub(crate) async fn age_group_entry_for_testing(
+        &mut self,
+        send_id: &str,
+        age_ms: i64,
+    ) -> Result<()> {
+        let mut pending = Pending::default();
+        for mut entry in self.session.db().list_group_outbox().await? {
+            if entry.send_id == send_id {
+                entry.created_at = unix_millis() - age_ms;
+                pending
+                    .group_outbox
+                    .insert(entry.send_id.clone(), Some(entry));
+            }
+        }
+        self.session.db().apply(&pending).await
     }
 
     /// Delivers every group message still waiting (at start, after a
@@ -683,13 +819,19 @@ impl Engine {
     pub(crate) async fn send_sealed_batches(
         &self,
         sends: &[(String, SealedMessageSubmissionV1)],
-    ) -> Result<Vec<Option<SealedBatchOutcomeV1>>> {
+    ) -> Vec<Option<SealedBatchOutcomeV1>> {
         let mut outcomes = vec![None; sends.len()];
-        // By server, keeping each one's place.
+        // By server, keeping each one's place. One that doesn't validate (or
+        // names no account) goes nowhere and is answered `None`; the others
+        // still go.
         let mut by_server: BTreeMap<String, Vec<(usize, SealedBatchRecipientV1)>> = BTreeMap::new();
         for (index, (account, submission)) in sends.iter().enumerate() {
-            submission.validate().map_err(ChatError::Invalid)?;
-            let account = crate::address::parse_account(account)?;
+            if submission.validate().is_err() {
+                continue;
+            }
+            let Ok(account) = crate::address::parse_account(account) else {
+                continue;
+            };
             by_server.entry(account.server.clone()).or_default().push((
                 index,
                 SealedBatchRecipientV1 {
@@ -704,7 +846,9 @@ impl Engine {
                 let (places, recipients): (Vec<usize>, Vec<SealedBatchRecipientV1>) =
                     chunk.into_iter().unzip();
                 let batch = SealedBatchSubmissionV1 { recipients };
-                batch.validate().map_err(ChatError::Invalid)?;
+                if batch.validate().is_err() {
+                    continue;
+                }
                 let Ok(response) = transport.send_sealed_batch(&server, &batch).await else {
                     continue;
                 };
@@ -725,7 +869,7 @@ impl Engine {
                 }
             }
         }
-        Ok(outcomes)
+        outcomes
     }
 
     /// The envelopes of a sealed send, any identity change on the way shown

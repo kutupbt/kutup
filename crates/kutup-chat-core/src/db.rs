@@ -232,11 +232,18 @@ pub struct GroupOutboxLeg {
     /// nothing more is tried).
     #[serde(default)]
     pub failed: bool,
-    /// How often the server answered that another payload is queued under
-    /// this send id: a second time fails the leg (its own payload would
-    /// conflict for ever).
+    /// How often the server answered that the recipient's devices changed:
+    /// a leg that keeps mismatching fails (kept across flushes).
     #[serde(default)]
-    pub conflicts: u32,
+    pub mismatches: u32,
+    /// How many passes in a row left it waiting (queued at the other
+    /// server, a limit, a conflict, a failure): the wait before the next try
+    /// grows with it.
+    #[serde(default)]
+    pub waits: u32,
+    /// Not tried again before this moment (milliseconds).
+    #[serde(default)]
+    pub retry_at_ms: Option<i64>,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox
@@ -257,6 +264,10 @@ pub struct SentMessage {
     pub delivered_at: Option<i64>,
     pub delivered: bool,
     pub deduplicated: bool,
+    /// For a group message: how many member accounts it never reached (their
+    /// server refused it, or a week passed). Shown on the message.
+    #[serde(default)]
+    pub failed_recipients: u32,
 }
 
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
