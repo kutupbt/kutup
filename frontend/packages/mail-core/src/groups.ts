@@ -18,7 +18,7 @@ import {
 } from '@kutup/crypto'
 import { incarnationIdOfAuthority, verifyDriveKeyBinding } from '@kutup/crypto/identityPins'
 import type { DriveIdentity } from '@kutup/drive-core/identity'
-import { confirmRecipient } from '@kutup/drive-core/identityPins'
+import { confirmRecipient, KeysPendingUpgrade } from '@kutup/drive-core/identityPins'
 import api from '@kutup/session/client'
 import { POLL_MS, type GroupKeyHolderOf } from './api'
 
@@ -174,6 +174,9 @@ interface MemberIdentity {
   driveSigningPublicKey: string
   accountAuthorityPublicKey: string
   driveKeyBinding?: string | null
+  /** 2: X-Wing Drive keys; 1: not upgraded yet (docs/plans/pq-shares.md). */
+  identitySuite?: number
+  driveKeyBindingEpoch?: number
 }
 
 /** The member's account key is not one their account signed. */
@@ -202,10 +205,22 @@ export interface MemberTrust {
 async function memberKey(member: { userId: string }, trust: MemberTrust): Promise<GroupKeyMember> {
   const { data } = await api.get<MemberIdentity>(`/users/by-id/${encodeURIComponent(member.userId)}`)
   const account = { server: data.server, accountId: data.accountId }
+  if (data.accountId === member.userId && data.identitySuite === 1) {
+    throw new KeysPendingUpgrade(`${data.username}@${data.server}`)
+  }
   const bound =
     data.accountId === member.userId &&
     !!data.driveKeyBinding &&
-    (await verifyDriveKeyBinding(account, data.accountAuthorityPublicKey, data.driveHpkePublicKey, data.driveSigningPublicKey, data.driveKeyBinding))
+    data.identitySuite === 2 &&
+    Number.isSafeInteger(data.driveKeyBindingEpoch) &&
+    (await verifyDriveKeyBinding(
+      account,
+      data.accountAuthorityPublicKey,
+      data.driveHpkePublicKey,
+      data.driveSigningPublicKey,
+      data.driveKeyBinding,
+      data.driveKeyBindingEpoch!,
+    ))
   if (!bound || (await incarnationIdOfAuthority(data.accountAuthorityPublicKey)) !== data.accountIncarnationId) {
     throw new MemberKeyUnproven(member.userId)
   }

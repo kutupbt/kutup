@@ -649,10 +649,14 @@ arrival, and direct sending. Phases, each with its own plan before code:
   but rPGP 0.21's `pqc` pins `ml-kem` 0.2.1 (doesn't build beside our `kem` 0.3)
   and `ml-dsa` 0.0.4 (RUSTSEC-2025-0144). Decided 2026-10-19: wait for an rPGP
   release on `ml-kem` 0.3 and `ml-dsa` 0.1.x with `cargo deny` clean; no
-  upstream PR or fork from us. End-to-end forwarding can be built on v4
-  independently; not scheduled.
-- **D. Calendar:** per-calendar keys, sharing, iTIP invitations over Mail,
-  reminders. Replaces Chat meetings' `.ics` download.
+  upstream PR or fork from us. End-to-end forwarding is built on v4
+  independently ([`plans/mail-forwarding.md`](plans/mail-forwarding.md),
+  in progress).
+- **D. Calendar** (next, decided 2026-10-19): starts once the work in
+  flight is done (Chat groups slice 1, Mail forwarding, Chat contacts sync).
+  Proton Calendar is the reference: per-calendar keys, sharing, iTIP
+  invitations over Mail, reminders; no CalDAV (as Proton). A plan note comes
+  first, copying Proton's code. Replaces Chat meetings' `.ics` download.
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;
@@ -1231,6 +1235,16 @@ make the next such failure diagnosable from CI alone.
 One failure of that day is not explained by the fix: in
 `34-chat-backup-two-server-recovery`, a group attachment did not appear in a
 restored clean browser within 45 seconds, once in three runs.
+
+### Security · Drive key binding epochs are not pinned yet
+
+Suite-2 Drive key bindings carry an epoch (docs/plans/pq-shares.md) so a
+client can refuse an older binding a server still holds. Today only epoch 1
+exists (registration and the suite upgrade, which the server requires to be
+1), so nothing can roll back, and pins (`identity_pins`, the Rust pin format)
+don't record it. **Before any epoch 2 is signed** (a suite-2 key change), pins
+must store the highest (suite, epoch) per account and refuse a lower one, and
+the pin should record the suite rather than infer it from the key's length.
 
 ### Security · TLS 1.2 still accepted by the bundled Nginx
 

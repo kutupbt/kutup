@@ -246,7 +246,7 @@ impl Engine {
     /// them, or a week old, is acknowledged and dropped, and one given up
     /// for it as well.
     #[allow(clippy::too_many_arguments)]
-    async fn hold_group_envelope(
+    pub(crate) async fn hold_group_envelope(
         &mut self,
         held: &mut crate::group_gate::HeldEnvelopes,
         group_id: &str,
@@ -1069,10 +1069,14 @@ impl Engine {
                 }
                 let mut devices = current.devices.clone();
                 match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
+                    // Unchanged, unless the account's Drive keys moved on (an
+                    // upgrade to X-Wing, docs/plans/pq-shares.md): then the
+                    // next manifest carries them.
                     Ok(index)
                         if devices[index].identity_key == local.identity_key
                             && devices[index].registration_id == local.registration_id
-                            && devices[index].mls == local.mls =>
+                            && devices[index].mls == local.mls
+                            && current.drive == authority.drive_keys() =>
                     {
                         current
                     }
@@ -1913,7 +1917,10 @@ impl Engine {
             if page.envelopes.is_empty() {
                 break;
             }
-            self.session.journal_envelopes(&page.envelopes).await?;
+            let received_at = self.now_ms();
+            self.session
+                .journal_envelopes(&page.envelopes, received_at)
+                .await?;
             after = self.session.last_cursor().await?;
             let ids: Vec<String> = page.envelopes.iter().map(|item| item.id.clone()).collect();
             self.process_inbound(Some(&ids), &mut report, rng).await?;

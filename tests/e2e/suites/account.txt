@@ -3,3 +3,4 @@ specs/155-registration-codes.spec.ts
 specs/156-account-password.spec.ts
 specs/157-account-head.spec.ts
 specs/160-username-rename.spec.ts
+specs/162-identity-suite-upgrade.spec.ts

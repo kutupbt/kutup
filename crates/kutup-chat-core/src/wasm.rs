@@ -130,6 +130,8 @@ export interface KutupChatHistoryEntry {
   timestampMs: number;
   delivered: boolean;
   deduplicated: boolean;
+  /** A group message: how many member accounts it never reached. */
+  failedRecipients?: number;
   content: KutupChatContentView;
 }
 
@@ -296,6 +298,15 @@ extern "C" {
     async fn js_send_sealed_message(
         this: &JsChatTransport,
         account: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `POST /api/chat/anonymous/messages/batch?server=`: the
+    /// `SealedBatchResponseV1`.
+    #[wasm_bindgen(method, catch, js_name = sendSealedBatch)]
+    async fn js_send_sealed_batch(
+        this: &JsChatTransport,
+        server: &str,
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
@@ -719,6 +730,19 @@ impl ChatTransport for BrowserTransport {
         })
     }
 
+    async fn send_sealed_batch(
+        &self,
+        server: &str,
+        batch: &kutup_chat_proto::SealedBatchSubmissionV1,
+    ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
+        from_transport(
+            self.js
+                .js_send_sealed_batch(server, to_transport(batch)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
     async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
         let outcome: BrowserSendOutcome = from_transport(
             self.js
@@ -925,6 +949,8 @@ struct GroupSendView {
     send_id: String,
     delivered: usize,
     pending: usize,
+    /// Member accounts whose server refused it for good.
+    failed: usize,
 }
 
 impl From<crate::group_send::GroupSendSummary> for GroupSendView {
@@ -933,6 +959,7 @@ impl From<crate::group_send::GroupSendSummary> for GroupSendView {
             send_id: summary.send_id,
             delivered: summary.delivered,
             pending: summary.pending,
+            failed: summary.failed,
         }
     }
 }
@@ -1198,8 +1225,10 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
-    /// Catches a group up with its home: `{kind: "current", revision}`,
-    /// `{kind: "unreachable", reason}` or `{kind: "gone"}`.
+    /// Catches a group up with its home: `{kind: "current", revision,
+    /// keyConfirmed}`, `{kind: "partial", revision}` (more of the log still
+    /// to read), `{kind: "unreachable", reason}`, `{kind: "maybeRemoved",
+    /// sinceMs}` or `{kind: "gone"}`.
     #[wasm_bindgen(js_name = syncGroup)]
     pub async fn sync_group(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
         let mut rng = OsRng.unwrap_err();
@@ -4547,7 +4576,14 @@ struct HistoryEntry {
     timestamp_ms: i64,
     delivered: bool,
     deduplicated: bool,
+    /// A group message: how many member accounts it never reached.
+    #[serde(skip_serializing_if = "is_zero")]
+    failed_recipients: u32,
     content: ContentView,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl HistoryEntry {
@@ -4585,6 +4621,7 @@ impl HistoryEntry {
             timestamp_ms: message.received_at,
             delivered: true,
             deduplicated: false,
+            failed_recipients: 0,
             content: content.into(),
         })
     }
@@ -4606,6 +4643,7 @@ impl HistoryEntry {
             timestamp_ms: message.created_at,
             delivered: message.delivered,
             deduplicated: message.deduplicated,
+            failed_recipients: message.failed_recipients,
             content: content.into(),
         })
     }
@@ -4625,6 +4663,7 @@ impl HistoryEntry {
             timestamp_ms: entry.created_at,
             delivered: false,
             deduplicated: false,
+            failed_recipients: 0,
             content: content.into(),
         })
     }
@@ -4654,6 +4693,7 @@ impl HistoryEntry {
             timestamp_ms: message.timestamp_ms,
             delivered: message.delivered,
             deduplicated: message.deduplicated,
+            failed_recipients: 0,
             content: content.into(),
         })
     }

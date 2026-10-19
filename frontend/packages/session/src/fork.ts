@@ -188,8 +188,8 @@ export async function consumeFork(): Promise<string> {
     const keys = decodeKeys(plaintext)
     plaintext.fill(0)
     if (keys.userId !== data.userId) throw new Error('the fork belongs to another account')
-    await activateSession(keys, data.accessToken, data.sessionId)
-    await persistKeys(data.sessionId, keys)
+    const activated = await activateSession(keys, data.accessToken, data.sessionId)
+    await persistKeys(data.sessionId, activated)
     return returnTo
   } finally {
     key.fill(0)

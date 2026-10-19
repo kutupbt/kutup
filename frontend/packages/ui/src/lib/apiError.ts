@@ -1,4 +1,5 @@
 import { AxiosError } from 'axios'
+import { getI18n } from 'react-i18next'
 
 /**
  * The error body every kutup-server handler returns: `{ "error": "<message>" }`.
@@ -54,17 +55,37 @@ export function apiErrorCode(error: unknown): ApiErrorCode | null {
 }
 
 /**
- * A message worth showing. The server's 4xx message is preferred: it is the
- * only party that knows why a request was refused. `fallback` covers network
+ * Refusals whose `code` has its own words in every language, wherever they
+ * come from (the server's message is English): the post-quantum Drive key
+ * upgrade (docs/plans/pq-shares.md).
+ */
+const CODE_MESSAGES: Record<string, string> = {
+  keysPendingUpgrade: 'apiErrors.keysPendingUpgrade',
+  peerOutdated: 'apiErrors.peerOutdated',
+}
+
+/** `value`'s message for its `code`: a server body, or a client error that stops before asking. */
+function codeMessage(value: unknown): string | null {
+  const code = typeof value === 'object' && value !== null ? (value as { code?: unknown }).code : undefined
+  const key = typeof code === 'string' ? CODE_MESSAGES[code] : undefined
+  const i18n = key ? getI18n() : undefined
+  return key && i18n?.exists(key) ? i18n.t(key) : null
+}
+
+/**
+ * A message worth showing. A refusal with a known code says it in the user's
+ * language; otherwise the server's 4xx message is preferred: it is the only
+ * party that knows why a request was refused. `fallback` covers network
  * failures, 5xx (generic by design) and bodies that are not our shape.
  */
 export function apiErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof AxiosError) {
-    const status = error.response?.status ?? 0
-    const body: unknown = error.response?.data
-    if (status >= 400 && status < 500 && isApiErrorBody(body) && body.error.trim() !== '') {
-      return body.error
-    }
+  if (!(error instanceof AxiosError)) return codeMessage(error) ?? fallback
+  const status = error.response?.status ?? 0
+  const body: unknown = error.response?.data
+  const coded = codeMessage(body)
+  if (coded) return coded
+  if (status >= 400 && status < 500 && isApiErrorBody(body) && body.error.trim() !== '') {
+    return body.error
   }
   return fallback
 }

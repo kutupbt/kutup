@@ -549,6 +549,23 @@ export class ApiChatTransport implements ChatTransportPort {
     }
   }
 
+  /**
+   * Sealed sends to several accounts of `server` in one anonymous request
+   * (`SealedBatchSubmissionV1`): one result per recipient, in order.
+   */
+  async sendSealedBatch(server: string, request: unknown): Promise<unknown> {
+    try {
+      const response = await axios.post(
+        `${apiBase()}/chat/anonymous/messages/batch`,
+        request,
+        { params: { server }, withCredentials: false, headers: { Authorization: undefined } },
+      )
+      return response.data
+    } catch (error) {
+      throw peerSendError(error)
+    }
+  }
+
   async sendSyncMessage(
     request: unknown,
   ): Promise<

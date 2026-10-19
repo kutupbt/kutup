@@ -186,6 +186,7 @@ fn share_folder(
         .client
         .get_user_by_address(address)
         .with_context(|| format!("look up user {address}"))?;
+    recipient.require_sealable()?;
     confirm_recipient(
         &ctx,
         profile,
@@ -294,6 +295,7 @@ fn share_federated(
         .client
         .get_user_by_address(target)
         .context("fetch remote public key")?;
+    remote.require_sealable()?;
     confirm_recipient(
         &ctx,
         profile,

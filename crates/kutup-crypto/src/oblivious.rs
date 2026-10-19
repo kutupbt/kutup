@@ -17,9 +17,7 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
-use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
-use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey, Mode};
-use hpke_rs_rust_crypto::HpkeRustCrypto;
+use hpke_rs::{HpkePrivateKey, HpkePublicKey};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -28,7 +26,7 @@ use crate::padding::Length;
 
 /// The HPKE suite's identifiers (RFC 9180 §7), written into every request.
 /// X-Wing's is the HPKE registry's 0x647a (not the draft's earlier 0x004D).
-pub const KEM_XWING: u16 = 0x647a;
+pub const KEM_XWING: u16 = crate::hpke_xwing::KEM_ID;
 pub const KDF_HKDF_SHA256: u16 = 0x0001;
 pub const AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
@@ -41,12 +39,9 @@ pub const RESPONSE_LABEL: &[u8] = b"application/kutup-oblivious-response";
 pub const SIZES: [usize; 5] = [1024, 4096, 16 * 1024, 64 * 1024, 256 * 1024];
 
 const HEADER_LEN: usize = 7;
-/// An X-Wing ciphertext: ML-KEM-768's 1088 bytes and an X25519 share.
-const ENC_LEN: usize = 1120;
-/// An X-Wing encapsulation key: ML-KEM-768's 1184 bytes and an X25519 key.
-pub const PUBLIC_KEY_LEN: usize = 1216;
-/// An X-Wing decapsulation key is its 32-byte seed.
-pub const PRIVATE_KEY_LEN: usize = 32;
+const ENC_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
+pub const PUBLIC_KEY_LEN: usize = crate::hpke_xwing::PUBLIC_KEY_LEN;
+pub const PRIVATE_KEY_LEN: usize = crate::hpke_xwing::SEED_LEN;
 const AEAD_KEY_LEN: usize = 32;
 const AEAD_NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -60,13 +55,8 @@ pub const MAX_BODY: usize = SIZES[SIZES.len() - 1] - 1;
 /// size and the tag); an answer (response nonce, size, tag) is smaller.
 pub const MAX_SEALED: usize = HEADER_LEN + ENC_LEN + SIZES[SIZES.len() - 1] + TAG_LEN;
 
-fn hpke_suite() -> Hpke<HpkeRustCrypto> {
-    Hpke::new(
-        Mode::Base,
-        KemAlgorithm::XWingDraft06,
-        KdfAlgorithm::HkdfSha256,
-        AeadAlgorithm::ChaCha20Poly1305,
-    )
+fn hpke_suite() -> hpke_rs::Hpke<hpke_rs_rust_crypto::HpkeRustCrypto> {
+    crate::hpke_xwing::suite()
 }
 
 fn header(key_id: u8) -> [u8; HEADER_LEN] {
@@ -196,13 +186,7 @@ impl GatewayKey {
 
 /// X-Wing's GenerateKeyPairDerand: the encapsulation key from the seed.
 fn xwing_public_key(seed: &[u8; PRIVATE_KEY_LEN]) -> Result<[u8; PUBLIC_KEY_LEN]> {
-    use x_wing::{Decapsulator as _, KeyExport as _};
-    let key = x_wing::DecapsulationKey::from(*seed);
-    let public_key = key.encapsulation_key().to_bytes();
-    public_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| CryptoError::Backend("X-Wing public key has an unexpected length".into()))
+    Ok(crate::hpke_xwing::public_key(seed))
 }
 
 /// Seals `body` to the gateway key `key_id` / `public_key`: the request bytes
@@ -508,7 +492,11 @@ mod tests {
             .seal_response_with_nonce(vector.response_body.as_bytes(), &nonce)
             .unwrap();
         assert_eq!(hex::encode(&response), vector.response);
-        // The client's side derives the same response key from its context.
+        // A test shortcut, not the client's path: the client's context is
+        // built here from the server's exported secret (the vector records
+        // no client randomness), so this checks the response open, not the
+        // client's own key schedule (`a_request_and_its_answer_round_trip`
+        // does that).
         let client = RequestContext(ExchangeSecret {
             enc: server.0.enc.clone(),
             secret: server.0.secret.clone(),

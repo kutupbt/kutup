@@ -85,6 +85,10 @@ pub struct LoginResponse {
     pub rotate: bool,
     #[serde(default)]
     pub grant: Option<String>,
+    /// 1: the account's Drive key is still X25519 and this sign-in upgrades
+    /// it (docs/plans/pq-shares.md).
+    #[serde(default)]
+    pub identity_suite: Option<i16>,
     #[serde(default)]
     pub requires_totp: bool,
     #[serde(default)]
@@ -444,6 +448,27 @@ pub struct AccountLookup {
     pub account_authority_public_key: String,
     #[serde(default)]
     pub drive_key_binding: Option<String>,
+    /// 2: an X-Wing Drive key; 1: an X25519 one, not yet upgraded, which
+    /// nothing is sealed to (docs/plans/pq-shares.md).
+    #[serde(default)]
+    pub identity_suite: i16,
+    #[serde(default)]
+    pub drive_key_binding_epoch: u32,
+}
+
+impl AccountLookup {
+    /// Refuses sealing to an account still on identity suite 1 (an X25519
+    /// Drive key, docs/plans/pq-shares.md): its owner's next sign-in
+    /// upgrades it.
+    pub fn require_sealable(&self) -> anyhow::Result<()> {
+        if self.identity_suite < 2 {
+            anyhow::bail!(
+                "{}'s keys are being upgraded: share with them once they have signed in again",
+                self.account
+            );
+        }
+        Ok(())
+    }
 }
 
 /// The account's sealed identity pin list (`GET/PUT /api/user/identity-pins`).

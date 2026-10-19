@@ -106,6 +106,11 @@ pub struct LoginResponse {
     rotate: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     grant: Option<String>,
+    /// The account's identity suite (docs/plans/pq-shares.md): 1 means its
+    /// Drive key is still X25519, and the client upgrades it now
+    /// (`POST /api/account/identity-suite`). Absent on the 2FA/setup branches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity_suite: Option<i16>,
     #[serde(skip_serializing_if = "is_false")]
     requires_totp: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,9 +310,11 @@ fn checked_drive_key_binding(
     if req.drive_key_binding.is_empty() {
         return Err(AppError::bad_request("driveKeyBinding is required"));
     }
+    // A new account's first binding is epoch 1.
     verify_drive_key_binding(
         account,
         &req.account_authority_public_key,
+        1,
         &req.public_key,
         &req.drive_signing_public_key,
         &req.drive_key_binding,
@@ -315,10 +322,12 @@ fn checked_drive_key_binding(
     Ok(req.drive_key_binding.clone())
 }
 
-/// Checks that the authority vouches for these Drive keys of `account`.
+/// Checks that the authority vouches for these Drive keys of `account` at
+/// `epoch`: the X-Wing key of identity suite 2.
 pub(crate) fn verify_drive_key_binding(
     account: &kutup_crypto::account_ref::AccountRef,
     authority: &str,
+    epoch: u32,
     hpke: &str,
     signing: &str,
     binding: &str,
@@ -328,11 +337,16 @@ pub(crate) fn verify_drive_key_binding(
             .try_into()
             .expect("validated length"))
     };
+    let hpke: [u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN] =
+        decode_canonical_base64_exact(hpke, kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN, "publicKey")?
+            .try_into()
+            .expect("validated length");
     let signature = decode_canonical_base64_exact(binding, 64, "driveKeyBinding")?;
     kutup_crypto::drive_key_binding::verify(
         account,
         &key(authority, "accountAuthorityPublicKey")?,
-        &key(hpke, "publicKey")?,
+        epoch,
+        &hpke,
         &key(signing, "driveSigningPublicKey")?,
         &signature,
     )
@@ -346,7 +360,12 @@ fn validate_account_identity(req: &RegisterRequest) -> AppResult<()> {
         "accountAuthorityPublicKey",
     )?;
     let authority: [u8; 32] = authority.try_into().expect("validated length");
-    decode_canonical_base64_exact(&req.public_key, 32, "publicKey")?;
+    // The Drive key is X-Wing (identity suite 2, docs/plans/pq-shares.md).
+    decode_canonical_base64_exact(
+        &req.public_key,
+        kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN,
+        "publicKey",
+    )?;
     decode_canonical_base64_exact(&req.drive_signing_public_key, 32, "driveSigningPublicKey")?;
     if req.account_authority_key_id
         != kutup_crypto::identity::authority_key_id_from_public(&authority)
@@ -653,8 +672,8 @@ pub async fn register(
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
-            key_binding, id
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1,$17)
+            key_binding, id, identity_suite, drive_key_binding_epoch
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1,$17,2,1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
@@ -1546,6 +1565,7 @@ pub async fn complete_setup(
               recovery_key_verifier = $12,
               drive_key_binding = $14,
               key_binding = $15,
+              identity_suite = 2, drive_key_binding_epoch = 1,
               is_first_login = false, updated_at = NOW()
            WHERE id = $13 AND is_first_login
              AND substring(sha256(opaque_record) from 1 for 16) = $16"#,
@@ -1721,6 +1741,10 @@ async fn issue_tokens_and_respond(
         sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
         return Err(stale());
     };
+    let identity_suite: i16 = sqlx::query_scalar("SELECT identity_suite FROM users WHERE id = $1")
+        .bind(uid)
+        .fetch_one(&mut *tx)
+        .await?;
     // Registered under a setup that is no longer the current one: moved by
     // the client now, while it holds the password (docs/plans/opaque.md §5).
     let rotate_grant = match record_key {
@@ -1761,6 +1785,7 @@ async fn issue_tokens_and_respond(
         envelope_binding: envelope_binding.to_string(),
         rotate: rotate_grant.is_some(),
         grant: rotate_grant,
+        identity_suite: Some(identity_suite),
         ..Default::default()
     };
     if client.uses_cookie() {

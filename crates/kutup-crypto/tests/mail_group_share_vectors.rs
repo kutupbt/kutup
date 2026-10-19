@@ -97,8 +97,12 @@ fn the_checked_in_share_opens_for_its_member_only() {
     let member: AccountRef = v.member.parse().unwrap();
     let keys = member_keys(&v.member_master_key);
     let share = STANDARD.decode(&v.share).unwrap();
-    // The layout: version 1, the member's incarnation, then the HPKE parts.
-    assert_eq!(share[0], 1);
+    // The layout: version 2 (X-Wing), the member's incarnation, then the HPKE
+    // parts; a version-1 (X25519) share is refused.
+    assert_eq!(share[0], 2);
+    let mut old = share.clone();
+    old[0] = 1;
+    assert!(group_key_share_incarnation(&old).is_err());
     assert_eq!(
         group_key_share_incarnation(&share).unwrap(),
         v.member_incarnation_id

@@ -76,6 +76,35 @@ describe('ChatService history', () => {
     expect(client.history).toHaveBeenCalledTimes(2)
   })
 
+  it('reads held group envelopes again, backing off, and starts over once none is held', async () => {
+    vi.useFakeTimers({ now: 1_000 })
+    const { svc, client } = service(() => [])
+    Object.assign(svc, { heldRetry: null, heldRetryDelay: 5_000, disposed: false })
+    let held = ['envelope']
+    client.reconcile.mockImplementation(async () => ({ messages: [], held }))
+    await svc.reconcile()
+    expect(client.reconcile).toHaveBeenCalledTimes(1)
+    // After 5 s, then 10 s.
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(client.reconcile).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(client.reconcile).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(client.reconcile).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(client.reconcile).toHaveBeenCalledTimes(3)
+    // Nothing held any more: no further pass, and the next hold starts at 5 s.
+    held = []
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(client.reconcile).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(client.reconcile).toHaveBeenCalledTimes(4)
+    held = ['another']
+    await svc.reconcile()
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(client.reconcile).toHaveBeenCalledTimes(6)
+  })
+
   it('tells nobody about a reconcile that wrote nothing', async () => {
     let commits = 4
     const { svc, updates } = service(() => [], () => commits)

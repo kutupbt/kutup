@@ -52,6 +52,11 @@ References used:
   the IndexedDB `SENDER_KEYS` store and the SQLite `sender_keys` table. Both are
   marked "groups; reserved". No new storage format is needed.
 
+**What the servers see of a batch.** One batch request names, to this
+account's server and to the destination server, the member accounts on that
+server that receive the message together. That is what per-recipient sends
+from one IP at the same moment already show; the batch doesn't add to it.
+
 **Distribution.**
 - The distribution message carries the chain key at the current iteration, so a
   new holder can't read anything sent before it.
@@ -1127,6 +1132,31 @@ own fallback path (§1).
   The per-IP limit counts requests. The per-capability counters stay the
   real limit, one unit per recipient (§7). The origin forwards one federated
   transaction per destination.
+  - **As built.** A group message's legs and a new sender key's
+    distributions each go as one batch per destination server
+    (`POST /api/chat/anonymous/messages/batch`), cut at 64 recipients and
+    4 MiB. Per leg:
+    - `delivered` (stored at the recipient's server) finishes it;
+    - `unavailable` and `peerUnsupported` end it as a refused direct send
+      does;
+    - `refused` (for good, or over 1 MiB) ends it as failed;
+    - `deviceMismatch` amends it from the recipient's **verified** device
+      list (envelopes to devices still listed are kept, a listed device
+      without one gets the message pairwise) and sends it again, up to five
+      rounds a pass; a leg that mismatches 20 times in all fails;
+    - `pending` (queued at this account's server for the recipient's, which
+      may still answer that the devices changed), `conflict` (this
+      device's own earlier copy is still queued under the send id, and goes
+      out), `rateLimited`, and a batch that didn't go all leave the leg
+      waiting. It goes again under the same send id (the server answers
+      from its row) after a wait that doubles each pass, from 10 seconds to
+      15 minutes.
+
+    A leg not taken within the send log's week fails. A sender key only
+    `pending` is not entered in the book, so the next message hands it out
+    again. An error on one leg (its devices can't be read, its envelopes
+    can't be sealed) leaves that leg waiting; every pass saves what it
+    learned. The message shows how many member accounts it never reached.
   - This is the multi-recipient route's outer shape without libsignal's
     format, so slice 2 replaces the body, not the plumbing.
   - Raising the per-IP default instead would weaken the outer wall for direct

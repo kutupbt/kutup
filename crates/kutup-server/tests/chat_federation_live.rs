@@ -579,7 +579,7 @@ fn registration_payload(
         "accountIncarnationId": identity.incarnation_id(),
         "driveSigningPublicKey": b64(&identity.drive_signing_public_key()),
         "recoveryProof": b64(recovery_proof.as_slice()),
-        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &person).unwrap()),
+        "driveKeyBinding": b64(&kutup_crypto::drive_key_binding::sign(&identity, &person, 1).unwrap()),
     });
     if setup.is_none() {
         payload["accountId"] = json!(account_id);
@@ -805,7 +805,7 @@ fn publish_manifest(
         sequence,
         previous_hash,
         drive: AccountManifestDriveKeysV1 {
-            suite: AccountIdentitySuiteId::X25519Ed25519V1,
+            suite: AccountIdentitySuiteId::XWingEd25519V2,
             hpke_public_key: drive_public_key.into(),
             share_signing_public_key: b64(&identity.drive_signing_public_key()),
         },
