@@ -1,8 +1,8 @@
 # Mail: post-quantum OpenPGP, following Proton
 
-Status: the user's decisions are in (2026-10-18, below). Next: the spike
-(dependencies, deny, wasm32, interop), then the build after the shares work in
-[`pq-shares.md`](pq-shares.md). Rule ([`mail-address-keys.md`](mail-address-keys.md)):
+Status: **waiting on rPGP** (user, 2026-10-19). The spike (below) found
+rPGP's post-quantum support unusable as released; the build starts when an
+rPGP release meets the conditions in "Decision: wait for rPGP". Rule ([`mail-address-keys.md`](mail-address-keys.md)):
 copy Proton's answer where it has one; where its code doesn't show one, say so
 and propose ours.
 
@@ -234,6 +234,58 @@ implements RFC 9980, so no version bump is needed, only its `pqc` feature:
 - **Dependency checks in the spike:**
   - RustSec for `ml-dsa` 0.0.4 and `slh-dsa` 0.0.3;
   - the wasm size cost of `ml-kem` 0.2.1 beside 0.3.3.
+
+## Spike findings (2026-10-19)
+
+Step 1 of the order below, read and measured on master `82d9cdc9`; no code
+was kept. **rPGP's post-quantum support can't be used yet**, for two reasons
+upstream fixes:
+
+1. **It doesn't compile next to our X-Wing route.** rPGP 0.21.0 (the newest
+   release, and `main` as of 2026-10-19) pins `ml-kem` 0.2.1, whose `kem`
+   requirement (`^0.3.0-pre.0`) resolves to the released `kem` 0.3.0 that
+   `x-wing` 0.1.1 and `ml-kem` 0.3.3 already bring in. `ml-kem` 0.2.1 doesn't
+   build against it (`kem::Encapsulate` changed shape). One `kem` 0.3 sits in
+   the graph, so the two can't coexist.
+2. **Its ML-DSA has an advisory.** `pqc` pins `ml-dsa` 0.0.4, under
+   RUSTSEC-2025-0144, fixed in `ml-dsa` 0.1.0-rc.3 and later (0.1.1 is
+   current). `slh-dsa` is at 0.0.3 there, against 0.2.0-rc.5 upstream.
+
+The forwarding draft (`draft-wussler-openpgp-forwarding`) needs nothing new: it
+builds today (Curve25519 only).
+
+**What it takes.** rPGP's `pqc` must move to `ml-kem` 0.3, `ml-dsa` 0.1 and a
+current `slh-dsa`.
+
+### Decision: wait for rPGP (user, 2026-10-19)
+
+We wait. No upstream PR from us and no patched fork in `vendor/`. Mail PQ is
+built once rPGP itself makes the move, in a release.
+
+**Conditions for resuming**, all of them:
+- a **released** rPGP version (not a git dependency or a pre-release) whose
+  `pqc` feature depends on `kem` 0.3 and `ml-kem` 0.3, so it builds in one
+  graph with `x-wing` 0.1.1 and `ml-kem` 0.3.3;
+- the same release depends on `ml-dsa` 0.1.x or later (released, outside
+  RUSTSEC-2025-0144) and an `slh-dsa` without an open advisory;
+- `cargo deny check` is clean with `pqc` on, with no new ignore in
+  `deny.toml`, and `cargo metadata --locked` passes on all four Cargo roots.
+
+When those hold, the work resumes at step 1 of the order below (the wasm32
+size and interop parts of the spike), then steps 2–4. Whoever bumps rPGP
+checks this list; [`roadmap.md`](../roadmap.md) carries the blocker.
+
+**Forwarding is independent.** The end-to-end forwarding design (section
+"End-to-end forwarding") doesn't need `pqc`: it can be built on v4 keys with
+rPGP as it is. It isn't scheduled now.
+
+**Interop**, once rPGP builds:
+- OpenPGP.js 6 runs here (Node 22 is installed), so Proton's fork can be
+  exercised live.
+- Go isn't installed, so go-crypto's side uses its checked-in test vectors
+  (`openpgp/v2` PQC tests, in the Proton branch clone) rather than a live
+  build.
+- GnuPG 2.4.7 is here for the v4 side.
 
 ## Web, WASM and the server
 

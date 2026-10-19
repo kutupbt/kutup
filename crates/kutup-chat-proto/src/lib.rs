@@ -146,9 +146,12 @@ pub use profile::{
 };
 pub use sealed_sender::{
     capability_hash, constant_time_capability_hash_eq, derive_delivery_capability,
-    AnonymousPreKeyRequestV1, FederatedSealedTransactionV1, SealedDeliveryResponseV1,
-    SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SenderCertificateResponseV1,
-    DELIVERY_CAPABILITY_CONTEXT,
+    AnonymousPreKeyRequestV1, FederatedSealedBatchItemV1, FederatedSealedBatchResponseV1,
+    FederatedSealedBatchV1, FederatedSealedTransactionV1, SealedBatchOutcomeV1,
+    SealedBatchRecipientV1, SealedBatchResponseV1, SealedBatchResultV1, SealedBatchSubmissionV1,
+    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
+    SenderCertificateResponseV1, DELIVERY_CAPABILITY_CONTEXT, MAX_SEALED_BATCH_BYTES,
+    MAX_SEALED_BATCH_ITEMS, SEALED_FEDERATION_VERSION,
 };
 pub use security_policy::{
     SealedSenderRootV1, SealedSenderServerCertificateV1, SealedSenderServicePolicyV1,
