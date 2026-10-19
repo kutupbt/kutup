@@ -159,9 +159,9 @@ with the Axum router. An interactive Swagger UI is deferred (see `docs/roadmap.m
 one of its stages, so a stage that passes locally passes in CI:
 
 ```sh
-scripts/gate.sh static              # fmt (every Cargo root), workspace clippy, docs and Compose checks
+scripts/gate.sh static              # fmt and clippy (every Cargo root), docs and Compose checks
 scripts/gate.sh rust                # workspace tests; Chat core tests; FFI and fuzz lockfiles
-scripts/gate.sh web                 # install, WASM build, tsc, lint, vitest, WASM vectors, build
+scripts/gate.sh web                 # install, Chat WASM clippy, WASM build, tsc, lint, vitest, WASM vectors, build
 scripts/gate.sh browser mail pass   # browser specs of the named suites, against a running stack
 scripts/gate.sh live mail           # live gates: mail, backup, federation
 scripts/gate.sh all                 # static + rust + web

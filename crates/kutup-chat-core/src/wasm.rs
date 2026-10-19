@@ -860,7 +860,7 @@ impl WasmChatClient {
                 entry.apply_disappearing_deadline(&starts);
                 pending.push(entry);
             }
-            pending.sort_by(|left, right| right.timestamp_ms.cmp(&left.timestamp_ms));
+            pending.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp_ms));
             pending.extend(entries);
             entries = pending;
         }
@@ -2179,6 +2179,7 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = joinMlsFromWelcomeWithControlHistory)]
     pub async fn join_mls_from_welcome_with_control_history(
         &self,
@@ -2216,6 +2217,7 @@ impl WasmChatClient {
         to_output(&joined)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = joinMlsFromRecoveryWelcome)]
     pub async fn join_mls_from_recovery_welcome(
         &self,
@@ -2394,6 +2396,7 @@ impl WasmChatClient {
         to_output(&receipt)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = applyOrderedInboundMlsMembershipCommit)]
     pub async fn apply_ordered_inbound_mls_membership_commit(
         &self,
@@ -3065,6 +3068,7 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = sendText)]
     pub async fn send_text(
         &mut self,
@@ -3751,7 +3755,7 @@ impl WasmChatClient {
                 timer,
             });
         }
-        summaries.sort_by(|left, right| right.latest_ms.cmp(&left.latest_ms));
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.latest_ms));
         to_output(&summaries)
     }
 

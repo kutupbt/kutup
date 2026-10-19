@@ -21,6 +21,9 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 /// One authenticated HTTP seam implemented by URLSession or OkHttp. Rust keeps
 /// endpoint construction and every protocol DTO on its side of the boundary.
 #[uniffi::export(foreign)]
+// `async_trait` marks each method's boxed future `#[must_use]` without a
+// message, which clippy reads as a second `must_use` on a `Result`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ChatHttpClient: Send + Sync {
     async fn execute(&self, request: ChatHttpRequest) -> Result<ChatHttpResponse>;

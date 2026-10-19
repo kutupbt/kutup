@@ -652,6 +652,10 @@ fn encrypt_avatar<R: Rng + CryptoRng>(
     encrypt_b64(&plaintext, &profile_key(key)?, &context, rng).map(Some)
 }
 
+/// A profile's opened items: display name, avatar, avatar content type and
+/// about text.
+type ProfileItems = (String, Option<Vec<u8>>, Option<String>, Option<String>);
+
 #[allow(clippy::too_many_arguments)]
 fn decrypt_profile_items(
     encrypted_name: &str,
@@ -662,7 +666,7 @@ fn decrypt_profile_items(
     version: &str,
     revision: u64,
     source_device_id: u32,
-) -> Result<(String, Option<Vec<u8>>, Option<String>, Option<String>)> {
+) -> Result<ProfileItems> {
     let key = profile_key(key)?;
     let name_context = ProfileEnvelopeContextV1::new(
         ProfileEnvelopePurpose::DisplayName,

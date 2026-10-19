@@ -93,6 +93,9 @@ pub enum GroupRelayOutcome {
 /// REST endpoints of `docs/chat-protocol.md` §4 and map non-2xx to
 /// [`ChatError::Transport`](crate::ChatError::Transport) — except the 409 send
 /// response, which they surface as [`SendOutcome::Mismatch`].
+// `async_trait` marks each method's boxed future `#[must_use]` without a
+// message, which clippy reads as a second `must_use` on a `Result`.
+#[allow(clippy::double_must_use)]
 #[async_trait(?Send)]
 pub trait ChatTransport {
     /// `POST /api/chat/device` — returns the server-assigned device id.
