@@ -5779,9 +5779,8 @@ fn our_marker(forwarding: &str) -> String {
         .expect("the mail gate sets KUTUP_LIVE_FORWARDING_KEY");
     let key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key).unwrap();
     let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
-    mac.update(b"kutup/mail-forwarding/return-path/v1\0");
+    mac.update(b"kutup/mail-forwarding/marker/v1\0");
     mac.update(forwarding.as_bytes());
-    mac.update(&0i64.to_be_bytes());
     format!(
         "X-Kutup-Forwarded: {}-{}\r\n",
         forwarding.simple(),
@@ -6293,6 +6292,12 @@ fn outside_forwarding() {
                 })
                 .collect();
             let mut key_list = next_list(&eve, &list, flagged);
+            // The allowance is per clock hour: don't start the loop where the
+            // hour could turn in the middle of it.
+            let into_hour = now_secs() % 3600;
+            if into_hour > 3480 {
+                std::thread::sleep(Duration::from_secs(3600 - into_hour + 2));
+            }
             let mut refused = None;
             for n in 0..15 {
                 let r = eve_create(&format!("loop{n}@outside.test"), key_list.clone());

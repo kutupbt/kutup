@@ -257,6 +257,16 @@ pub async fn charge(
     Ok(charged.rows_affected() == 1)
 }
 const RETURN_PATH_DOMAIN: &[u8] = b"kutup/mail-forwarding/return-path/v1\0";
+const MARKER_DOMAIN: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
+
+/// The loop marker's MAC: its own label, over the forwarding alone.
+fn marker_mac(key: &[u8; 32], forwarding: Uuid) -> String {
+    use hmac::{Hmac, Mac as _};
+    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
+    mac.update(MARKER_DOMAIN);
+    mac.update(forwarding.as_bytes());
+    hex::encode(&mac.finalize().into_bytes()[..8])
+}
 
 fn return_path_mac(key: &[u8; 32], forwarding: Uuid, day: i64) -> String {
     use hmac::{Hmac, Mac as _};
@@ -436,7 +446,12 @@ pub async fn forwards(pool: &sqlx::PgPool, address: Uuid) -> bool {
     .bind(address)
     .fetch_one(pool)
     .await
-    .unwrap_or(false)
+    .unwrap_or_else(|error| {
+        // Not known: try, rather than drop it unseen; forward_copy finds out
+        // and logs what it can't do.
+        tracing::warn!(%address, error = %error, "mail: whether the address forwards is unknown");
+        true
+    })
 }
 
 /// Whether arriving mail may be forwarded: not when it carries a marker
@@ -478,7 +493,7 @@ fn ours(keys: &OpaqueSetupKeys, marker: &str) -> bool {
         return false;
     };
     keys.ids().filter_map(|id| keys.get(id)).any(|key| {
-        let expected = return_path_mac(key, forwarding, 0);
+        let expected = marker_mac(key, forwarding);
         expected.len() == mac.len()
             && expected
                 .bytes()
@@ -651,7 +666,7 @@ fn marker(keys: &OpaqueSetupKeys, forwarding: Uuid) -> Option<String> {
     Some(format!(
         "X-Kutup-Forwarded: {}-{}\r\n",
         forwarding.simple(),
-        return_path_mac(key, forwarding, 0)
+        marker_mac(key, forwarding)
     ))
 }
 

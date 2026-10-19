@@ -83,6 +83,7 @@ Specific codes, where an app does something particular (a test in
 | `keyListRequired` | 400 | The first outside forwarding of an address brings its next key list, with EMAIL_NO_ENCRYPT on every key |
 | `keyListMismatch` | 400 | That key list changes more than adding EMAIL_NO_ENCRYPT |
 | `forwardingKeepsNoEncrypt` | 409 | A key list clearing EMAIL_NO_ENCRYPT while the address forwards outside Kutup |
+| `internationalAddressUnsupported` | 400 | `POST /api/mail/forwardings` to an address with non-ASCII characters: not supported yet (an IDN domain works in its punycode `xn--` form) |
 | `linkExpired` | 410 | A forwarding confirmation link past its 7 days; a new one was sent |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |

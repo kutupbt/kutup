@@ -4551,7 +4551,7 @@ pub fn accept_mail_forwarding(
         kutup_crypto::mail_key::seal_address_key(&master_key[..], binding, forwardee_address, &key)
             .map_err(|error| js_error(&error.to_string()))?;
     let fingerprint =
-        kutup_crypto::mail_key::inspect_address_public_key(&public_key, forwardee_address)
+        kutup_crypto::mail_key::inspect_forwarding_public_key(&public_key, forwardee_address)
             .map_err(|error| js_error(&error.to_string()))?
             .fingerprint;
     let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
