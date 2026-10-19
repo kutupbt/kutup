@@ -6,7 +6,8 @@ CREATE TABLE chat_group_list (
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     id text NOT NULL CHECK (id ~ '^[A-Za-z0-9_-]{43}$'),
     revision bigint NOT NULL CHECK (revision > 0),
-    envelope bytea NOT NULL CHECK (octet_length(envelope) BETWEEN 1 AND 4096),
+    -- Every sealed entry is one size (kutup-crypto chat_group_list).
+    envelope bytea NOT NULL CHECK (octet_length(envelope) = 4032),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, id)

@@ -841,7 +841,7 @@ fn build_router(state: AppState) -> Router {
                 .delete(handlers::chat_group_list::delete)
                 // One sealed entry, base64, and the head.
                 .route_layer(DefaultBodyLimit::max(
-                    handlers::chat_group_list::MAX_ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
+                    handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
                 )),
         )
         .route(

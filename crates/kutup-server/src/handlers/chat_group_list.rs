@@ -7,14 +7,15 @@
 //! all (the `chatGroups` scope).
 //!
 //! Writes are compare-and-swap on the entry's revision: a write names the
-//! revision it started from (0 for a new entry) and carries the next one,
-//! which must be above it. `409 revision_conflict` with the current revision
-//! when another device wrote first.
+//! revision it started from (0 for a new entry), and the new revision is the
+//! one in the sealed entry's authenticated header, which must be above it.
+//! `409 revision_conflict` with the current revision when another device
+//! wrote first.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -27,10 +28,8 @@ use crate::{revisions, AppState};
 
 /// The most entries one account keeps.
 pub const MAX_ENTRIES: i64 = 1024;
-/// The largest sealed entry.
-pub const MAX_ENVELOPE_BYTES: usize = 4 * 1024;
-/// An entry id: 32 bytes, base64url without padding.
-const ID_LEN: usize = 43;
+/// Every sealed entry's size (`kutup_crypto::chat_group_list`).
+pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_group_list::SEALED_LEN;
 
 /// One sealed entry.
 #[derive(Debug, Serialize, ToSchema)]
@@ -55,9 +54,9 @@ pub struct GroupList {
 pub struct GroupListWrite {
     /// The revision the change started from; 0 for a new entry.
     pub base_revision: i64,
-    /// The new revision: above `baseRevision`.
-    pub revision: u64,
-    /// The sealed entry, canonical base64, at most 4 KiB.
+    /// The sealed entry (`GroupListEntryV1`), canonical base64, exactly 4032
+    /// bytes; the revision in its authenticated header must be above
+    /// `baseRevision`.
     pub envelope: String,
     /// The next sealed account head (base64), once the account keeps one.
     #[serde(default)]
@@ -83,26 +82,25 @@ fn enabled(state: &AppState) -> AppResult<()> {
     }
 }
 
+/// The route's id: an entry id (a keyed hash of the group id), canonical
+/// base64url; anything else is no such entry.
 fn entry_id(id: &str) -> AppResult<String> {
-    URL_SAFE_NO_PAD
-        .decode(id)
-        .ok()
-        .filter(|bytes| id.len() == ID_LEN && bytes.len() == 32)
-        .filter(|bytes| URL_SAFE_NO_PAD.encode(bytes) == id)
+    kutup_crypto::chat_group_list::decode_entry_id(id)
         .map(|_| id.to_owned())
-        .ok_or_else(|| AppError::not_found("not found"))
+        .map_err(|_| AppError::not_found("not found"))
 }
 
-fn envelope(value: &str) -> AppResult<Vec<u8>> {
+/// A sealed entry and the revision its authenticated header carries; the
+/// server reads nothing else of it.
+fn envelope(value: &str) -> AppResult<(Vec<u8>, u64)> {
     let bytes = STANDARD
         .decode(value)
         .ok()
         .filter(|bytes| STANDARD.encode(bytes) == value)
         .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    if bytes.is_empty() || bytes.len() > MAX_ENVELOPE_BYTES {
-        return Err(AppError::bad_request("an entry is 1 byte to 4 KiB sealed"));
-    }
-    Ok(bytes)
+    let revision = kutup_crypto::chat_group_list::inspect(&bytes)
+        .map_err(|_| AppError::bad_request("not a sealed group list entry"))?;
+    Ok((bytes, revision))
 }
 
 async fn current_revision(state: &AppState, user_id: uuid::Uuid, id: &str) -> AppResult<i64> {
@@ -169,8 +167,8 @@ pub async fn put(
     enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let id = entry_id(&id)?;
-    let sealed = envelope(&input.envelope)?;
-    let revision = revisions::check_follows(input.revision, input.base_revision)?;
+    let (sealed, revision) = envelope(&input.envelope)?;
+    let revision = revisions::check_follows(revision, input.base_revision)?;
     let head = NextHead::parse(input.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
@@ -274,25 +272,31 @@ pub async fn delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kutup_crypto::chat_group_list::{encode_entry_id, GroupListKey};
 
     #[test]
-    fn ids_are_canonical_32_byte_base64url() {
-        let id = URL_SAFE_NO_PAD.encode([7u8; 32]);
+    fn ids_are_entry_ids_and_nothing_else() {
+        let id = encode_entry_id(&[7u8; 32]);
         assert_eq!(entry_id(&id).unwrap(), id);
-        // Padded, standard alphabet, short, or not canonical: no such entry.
         assert!(entry_id(&format!("{id}=")).is_err());
         assert!(entry_id(&STANDARD.encode([0xfbu8; 32])).is_err());
-        assert!(entry_id(&URL_SAFE_NO_PAD.encode([7u8; 31])).is_err());
+        assert!(entry_id("short").is_err());
         // 32 zero bytes, with a spare bit set in the last character.
         assert!(entry_id(&format!("{}B", "A".repeat(42))).is_err());
-        assert!(entry_id(&"A".repeat(43)).is_ok());
     }
 
     #[test]
-    fn envelopes_are_canonical_and_bounded() {
-        assert_eq!(envelope(&STANDARD.encode([1u8; 10])).unwrap(), [1u8; 10]);
-        assert!(envelope(&STANDARD.encode([1u8; MAX_ENVELOPE_BYTES])).is_ok());
-        assert!(envelope(&STANDARD.encode(vec![1u8; MAX_ENVELOPE_BYTES + 1])).is_err());
+    fn an_envelope_is_a_sealed_entry_and_its_revision_comes_from_its_header() {
+        let key = GroupListKey::derive(&[3u8; 32]);
+        let id = key.entry_id(&[5u8; 32]);
+        let binding = "00000000-0000-4000-8000-000000000001";
+        let sealed = key.seal(binding, &id, 7, b"{}").unwrap();
+        assert_eq!(sealed.len(), ENVELOPE_BYTES);
+        let (bytes, revision) = envelope(&STANDARD.encode(&sealed)).unwrap();
+        assert_eq!((bytes, revision), (sealed.clone(), 7));
+        // Any other size, or not one at all, is refused.
+        assert!(envelope(&STANDARD.encode(&sealed[..sealed.len() - 1])).is_err());
+        assert!(envelope(&STANDARD.encode([1u8; 10])).is_err());
         assert!(envelope("").is_err());
         assert!(envelope("AQ").is_err());
     }

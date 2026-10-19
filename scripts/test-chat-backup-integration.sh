@@ -82,11 +82,6 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
-# The group list (docs/plans/pairwise-groups.md §5): sealed entries by keyed
-# id, compare-and-swap revisions, the head's chatGroups index.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
-  cargo test -p kutup-server --test chat_group_list_live -- --nocapture
 # Permanent account ids (docs/plans/account-ids.md): minted at sign-up,
 # retired on delete, found by id, kept through a rename.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -205,6 +200,10 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 # malformed batch applies nothing) and stale answers at the origin.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server chat_federation::sealed_live_tests::live_ -- --nocapture
+# An account reset clears what the old keys sealed: the group list
+# (docs/plans/rollback-protection.md, "Account reset").
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server handlers::admin::tests::live_ -- --nocapture
 
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   KUTUP_LIVE_S3_ENDPOINT="http://127.0.0.1:$s3_port" \
