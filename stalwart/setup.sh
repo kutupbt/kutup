@@ -70,13 +70,13 @@ apply < "$dir/reload.ndjson"
 # limited by Kutup itself (plan.ndjson upserts the two defaults by their
 # description). A throttle the upsert missed, a renamed default for one,
 # would hold all Kutup users together to its rate: refuse to go on.
-throttles="$(stalwart-cli query MtaInboundThrottle --json --no-color)"
-if ! printf '%s' "$throttles" | jq -e '
-    [.. | objects | select(has("rate") and has("key"))] as $all
-    | ($all | length) >= 2
-      and ([$all[] | select(.enable != false)
-            | select(.match | tostring | contains("listener != '"'"'submission'"'"'") | not)]
-           | length) == 0' >/dev/null; then
+# One JSON object per line; at least Stalwart's two defaults.
+throttles="$(stalwart-cli query MtaInboundThrottle --fields enable,description,match --json --no-color)"
+if ! printf '%s' "$throttles" | jq -s -e '
+    length >= 2
+    and ([.[] | select(.enable != false)
+          | select(.match | tostring | contains("listener != '"'"'submission'"'"'") | not)]
+         | length) == 0' >/dev/null; then
   echo "FATAL: a Stalwart inbound throttle applies to the submission port; Kutup's own mail would be throttled. Stalwart reports: $throttles" >&2
   exit 1
 fi
