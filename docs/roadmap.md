@@ -427,6 +427,16 @@ protocol state for new messages. The UI reports missing, invalid, offline, or
 quota-blocked backup state explicitly. Automated manual-fixture setup must not
 publish disposable headless devices unless it retains or revokes them.
 
+**Gap: contact states after total device loss.** Accepting and blocking
+someone reach the account's other devices only (contact controls over Note to
+Self). The history backup doesn't carry them, so a browser restored after
+every device was lost knows no accepted contacts: both people accept each
+other again, and a block is gone. Signal keeps these in its storage service;
+the fix is an account-synced, sealed contact list (an account-head scope, as
+the Chat group list), to be designed (`docs/plans/chat-contacts-sync.md`).
+Restoring "accepted" from history alone is not done, because it would undo
+blocks.
+
 #### Phase 6 attachment storage and download decision
 
 The normative protocol and threat model are
