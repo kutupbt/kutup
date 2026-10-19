@@ -3,7 +3,7 @@
 # verify-cli.sh — end-to-end differential check for the Rust kutup CLI against a
 # live kutup backend. Exercises the full encrypted round-trip:
 #
-#   login → whoami → mkdir → upload → ls → download → checksum-compare →
+#   (register →) login → whoami → mkdir → upload → ls → download → checksum-compare →
 #   unique names (the same file again is skipped, a different one under a
 #   taken name stops or is kept beside, a directory uploaded twice sends
 #   nothing new, a synced edit replaces its file) → rm → logout
@@ -12,19 +12,26 @@
 # rewrite). Run it on a VM/host that can reach a running stack.
 #
 # Required env:
-#   KUTUP_SERVER     e.g. https://localhost:38443
-#   KUTUP_EMAIL      an existing account (created via the web UI)
-#   KUTUP_PASSWORD   that account's password (used for non-interactive login)
+#   KUTUP_SERVER     e.g. https://drive.localhost:38443 or http://<backend>:3000
 #
 # Optional env:
+#   KUTUP_USERNAME   an existing account to use, with KUTUP_PASSWORD (its
+#                    password, for the non-interactive login); without it
+#                    the script registers a new account (`kutup register`),
+#                    so the server must take sign-ups
 #   KUTUP_INSECURE_TLS=1   accept a self-signed dev cert
 #   VERIFY_SIZE=6291456    test-file size in bytes (default 6 MiB → multi-chunk)
 #
 # Requires: cargo, jq, sha256sum (coreutils).
 set -euo pipefail
 
-: "${KUTUP_SERVER:?set KUTUP_SERVER (e.g. https://localhost:38443)}"
-: "${KUTUP_EMAIL:?set KUTUP_EMAIL}"
+: "${KUTUP_SERVER:?set KUTUP_SERVER (e.g. https://drive.localhost:38443)}"
+REGISTER=""
+if [ -z "${KUTUP_USERNAME:-}" ]; then
+  REGISTER=1
+  KUTUP_USERNAME="cli$(date +%s | tail -c 7)$((RANDOM % 100))"
+  KUTUP_PASSWORD="verify-cli-pw-$$-123456"
+fi
 : "${KUTUP_PASSWORD:?set KUTUP_PASSWORD (used for non-interactive login)}"
 export KUTUP_PASSWORD
 [ -n "${KUTUP_INSECURE_TLS:-}" ] && export KUTUP_INSECURE_TLS
@@ -32,19 +39,24 @@ export KUTUP_PASSWORD
 SIZE="${VERIFY_SIZE:-6291456}" # 6 MiB → spans the 5 MiB secretstream chunk
 PROFILE="verify-$$"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; [ -n "${BIN:-}" ] && "$BIN" --profile "$PROFILE" logout >/dev/null 2>&1; true' EXIT
 
 cd "$(dirname "$0")/.."
-echo "==> building kutup-cli (release)…"
-cargo build -q --release -p kutup-cli
-BIN="target/release/kutup"
+echo "==> building kutup-cli…"
+cargo build -q -p kutup-cli
+BIN="target/debug/kutup"
 run() { "$BIN" --profile "$PROFILE" "$@"; }
 
 pass() { printf '  \033[32mok\033[0m  %s\n' "$1"; }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; exit 1; }
 
-echo "==> login as $KUTUP_EMAIL @ $KUTUP_SERVER"
-run login --server "$KUTUP_SERVER" --email "$KUTUP_EMAIL" >/dev/null
+if [ -n "$REGISTER" ]; then
+  run register --server "$KUTUP_SERVER" --username "$KUTUP_USERNAME" >/dev/null
+  pass "register ($KUTUP_USERNAME)"
+fi
+
+echo "==> login as $KUTUP_USERNAME @ $KUTUP_SERVER"
+run login --server "$KUTUP_SERVER" --username "$KUTUP_USERNAME" >/dev/null
 pass "login"
 
 run whoami >/dev/null && pass "whoami"

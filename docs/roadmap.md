@@ -1215,6 +1215,14 @@ One failure of that day is not explained by the fix: in
 `34-chat-backup-two-server-recovery`, a group attachment did not appear in a
 restored clean browser within 45 seconds, once in three runs.
 
+### Security · TLS 1.2 still accepted by the bundled Nginx
+
+`nginx/nginx.conf` allows `TLSv1.2 TLSv1.3` on the web and TURN listeners.
+Kept for now (decided 2026-10-18, post-quantum audit) for older clients; the
+server's outbound TLS is rustls with aws-lc-rs and prefers X25519MLKEM768.
+Revisit together with the inbound key-exchange groups (Nginx's OpenSSL decides
+whether browsers get X25519MLKEM768 from it).
+
 ### Security · dependency advisories left open
 
 `deny.toml` ignores these, each with its reason; remove an entry as soon as
@@ -1227,9 +1235,18 @@ its fix is in the lockfile. Recorded 2026-10-17.
   affected. **Before the native apps:** bump libsignal to a release that pins
   `libcrux-secrets` 0.0.6 or later (chat-core).
 - **`libcrux-sha3` 0.0.8** (RUSTSEC-2026-0207 and -0208, SHAKE): neither
-  touches ML-KEM, and `hpke-rs` 0.6.1 uses it only for X-Wing and ML-KEM key
-  derivation, not Kutup's DHKEM(X25519) suite. Goes with the same libsignal
-  bump and a newer `hpke-rs`.
+  touches ML-KEM, and `hpke-rs` 0.6.1 uses it only in `derive_key_pair` for
+  X-Wing and ML-KEM, which Kutup never calls (the groups' X-Wing keys are their
+  seeds; X-Wing itself runs on RustCrypto). Goes with the same libsignal bump
+  and a newer `hpke-rs`.
+- **`hpke-rs` 0.8 waits on the same libsignal bump.** Every `hpke-rs` 0.8
+  backend needs `hax-lib` 0.3.7 or later through `libcrux-sha3` 0.0.11, and
+  libsignal 0.97.2 pins `hax-lib` 0.3.6 through `libcrux-ml-kem` 0.0.8. Until
+  then, the groups' X-Wing suite uses `hpke-rs-rust-crypto` 0.6.1's
+  post-quantum KEMs over the released `x-wing` 0.1.1 and `ml-kem` 0.3.3 (pinned
+  exactly). `hpke-rs-libcrux` 0.6.1 was not taken: its libcrux 0.0.7 crates
+  carry RUSTSEC-2026-0124 (in its ChaCha20-Poly1305), -0209/-0210/-0211 and
+  -0330/-0331.
 - **`rsa` 0.9.10** (RUSTSEC-2023-0071, Marvin; no fixed release): Kutup never
   decrypts or signs with an RSA private key.
 - **Unmaintained**, no replacement in their parents yet: `number_prefix`

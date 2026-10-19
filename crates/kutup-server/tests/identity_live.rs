@@ -30,7 +30,7 @@ fn drive_key_bindings() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     // A registration must carry its Drive key binding.
     assert_eq!(register_without_binding(&c, &base), StatusCode::BAD_REQUEST);
     let (alice, bob) = (register(&c, &base), register(&c, &base));
@@ -106,7 +106,7 @@ fn identity_pins_sync_by_revision() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let binding = owner.binding.clone();
     let key = identity_pins::derive_key(&owner.master_key).unwrap();

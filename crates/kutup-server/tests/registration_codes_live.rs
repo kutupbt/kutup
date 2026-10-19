@@ -111,7 +111,7 @@ fn registration_modes_and_codes() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::new();
+    let c = crate::common::client();
     let (name, password) = admin
         .split_once(':')
         .expect("KUTUP_LIVE_ADMIN is username:password");

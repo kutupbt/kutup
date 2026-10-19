@@ -49,7 +49,7 @@ fn live() -> Option<Live> {
         );
         return None;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let base = base.trim_end_matches('/').to_string();
     let (name, password) = admin.split_once(':').unwrap();
     let admin_token = admin_token(&c, &base, password, name);
@@ -505,7 +505,7 @@ fn a_rotation_waiting_on_a_removal_is_checked_against_who_stays() {
     });
     let (base, token, id2) = (live.base.clone(), alice.token.clone(), id.clone());
     let rotation = std::thread::spawn(move || {
-        let c = Client::new();
+        let c = crate::common::client();
         let r = bearer(c.post(format!("{base}/api/mail/groups/{id2}/keys")), &token)
             .json(&json!({ "key": body }))
             .send()

@@ -109,7 +109,7 @@ fn vault_secrets() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -345,7 +345,7 @@ fn reauth_checks_the_password_like_sign_in_with_its_lockout() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -414,7 +414,7 @@ fn pin_is_set_with_a_fresh_grant_and_three_misses_end_the_sign_in() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -497,7 +497,7 @@ fn pin_is_removed_only_with_a_grant_of_this_sign_in() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -557,7 +557,7 @@ fn pin_tries_are_counted_per_sign_in() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -606,7 +606,7 @@ fn site_icons_follow_the_account_setting() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
@@ -690,7 +690,7 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
         return;
     };
     let base = base.trim_end_matches('/').to_string();
-    let c = Client::builder()
+    let c = crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();

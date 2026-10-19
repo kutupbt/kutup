@@ -31,6 +31,8 @@ pub const KEY_OVERLAP_SECS: i64 = 24 * 60 * 60;
 const GROUP_ID_LEN: usize = 32;
 const NONCE_LEN: usize = 16;
 const KEY_LEN: usize = 32;
+/// A gateway's X-Wing encapsulation key.
+const GATEWAY_KEY_LEN: usize = kutup_crypto::oblivious::PUBLIC_KEY_LEN;
 const SIGNATURE_LEN: usize = 64;
 const HASH_LEN: usize = 32;
 /// The largest operation body a request carries: a change is capped at this
@@ -224,7 +226,7 @@ impl GroupGatewayKeyConfigV1 {
         document: &FederationIdentityDocumentV1,
         signing_key: &SigningKey,
         key_id: u8,
-        public_key: &[u8; KEY_LEN],
+        public_key: &[u8; GATEWAY_KEY_LEN],
         issued_at: i64,
         expires_at: i64,
     ) -> Result<Self, String> {
@@ -237,7 +239,7 @@ impl GroupGatewayKeyConfigV1 {
             version: GROUP_ROUTE_VERSION,
             server: document.server.clone(),
             key_id,
-            kem_id: kutup_crypto::oblivious::KEM_X25519_HKDF_SHA256,
+            kem_id: kutup_crypto::oblivious::KEM_XWING,
             kdf_id: kutup_crypto::oblivious::KDF_HKDF_SHA256,
             aead_id: kutup_crypto::oblivious::AEAD_CHACHA20_POLY1305,
             public_key: STANDARD.encode(public_key),
@@ -254,7 +256,7 @@ impl GroupGatewayKeyConfigV1 {
 
     fn validate_shape(&self) -> Result<(), String> {
         require_version(self.version)?;
-        if self.kem_id != kutup_crypto::oblivious::KEM_X25519_HKDF_SHA256
+        if self.kem_id != kutup_crypto::oblivious::KEM_XWING
             || self.kdf_id != kutup_crypto::oblivious::KDF_HKDF_SHA256
             || self.aead_id != kutup_crypto::oblivious::AEAD_CHACHA20_POLY1305
         {
@@ -264,7 +266,7 @@ impl GroupGatewayKeyConfigV1 {
             Some(lifetime) if lifetime > 0 && lifetime <= MAX_KEY_CONFIG_LIFETIME_SECS => {}
             _ => return Err("gateway key config lifetime is invalid".into()),
         }
-        decode_fixed::<KEY_LEN>("publicKey", &self.public_key)?;
+        decode_fixed::<GATEWAY_KEY_LEN>("publicKey", &self.public_key)?;
         Ok(())
     }
 
@@ -290,7 +292,7 @@ impl GroupGatewayKeyConfigV1 {
         &self,
         history: &[FederationIdentityDocumentV1],
         now: i64,
-    ) -> Result<(u8, [u8; KEY_LEN]), String> {
+    ) -> Result<(u8, [u8; GATEWAY_KEY_LEN]), String> {
         self.validate_shape()?;
         let (identity, successor) = signer_in(history, self.identity_sequence)?;
         if self.server != identity.server {
@@ -315,7 +317,7 @@ impl GroupGatewayKeyConfigV1 {
             .map_err(|_| "gateway key config signature is invalid".to_string())?;
         Ok((
             self.key_id,
-            decode_fixed::<KEY_LEN>("publicKey", &self.public_key)?,
+            decode_fixed::<GATEWAY_KEY_LEN>("publicKey", &self.public_key)?,
         ))
     }
 
@@ -925,7 +927,7 @@ mod tests {
             document,
             &key(signer),
             key_id,
-            &[key_id; 32],
+            &[key_id; GATEWAY_KEY_LEN],
             issued_at,
             issued_at + MAX_KEY_CONFIG_LIFETIME_SECS,
         )
@@ -938,7 +940,10 @@ mod tests {
         let history = [genesis()];
         pin.follow(&history).unwrap();
         let config = config(&genesis(), 1, 3, 100);
-        assert_eq!(config.verify(&history, 150).unwrap(), (3, [3; 32]));
+        assert_eq!(
+            config.verify(&history, 150).unwrap(),
+            (3, [3; GATEWAY_KEY_LEN])
+        );
         assert!(config
             .verify(&history, 100 + MAX_KEY_CONFIG_LIFETIME_SECS)
             .is_err());
@@ -946,11 +951,13 @@ mod tests {
         // A relay's own identity can't stand in for the pinned one.
         let other = FederationIdentityDocumentV1::genesis(HOME, 10, &key(9)).unwrap();
         assert!(pin.follow(std::slice::from_ref(&other)).is_err());
-        let forged = GroupGatewayKeyConfigV1::sign(&other, &key(9), 3, &[8; 32], 100, 200).unwrap();
+        let forged =
+            GroupGatewayKeyConfigV1::sign(&other, &key(9), 3, &[8; GATEWAY_KEY_LEN], 100, 200)
+                .unwrap();
         assert!(forged.verify(&history, 150).is_err());
 
         let mut swapped = config.clone();
-        swapped.public_key = STANDARD.encode([8u8; 32]);
+        swapped.public_key = STANDARD.encode([8u8; GATEWAY_KEY_LEN]);
         assert!(swapped.verify(&history, 150).is_err());
     }
 
@@ -1260,6 +1267,19 @@ mod tests {
         };
         let bytes = page.canonical_bytes().unwrap();
         assert_eq!(GroupLogPageV1::from_canonical_bytes(&bytes).unwrap(), page);
+    }
+
+    /// X-Wing only: a config naming the X25519-only KEM, or a key of its
+    /// size, is refused, never used as a fallback.
+    #[test]
+    fn a_key_config_for_any_kem_but_x_wing_is_refused() {
+        let mut classical = config(&genesis(), 1, 3, 100);
+        classical.kem_id = 0x0020;
+        assert!(classical.verify(&[genesis()], 150).is_err());
+        assert!(classical.hash().is_err());
+        let mut short = config(&genesis(), 1, 3, 100);
+        short.public_key = STANDARD.encode([3u8; 32]);
+        assert!(short.verify(&[genesis()], 150).is_err());
     }
 
     /// Fixed signing inputs and signatures: a change to any domain, field

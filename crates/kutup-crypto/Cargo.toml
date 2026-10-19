@@ -32,7 +32,15 @@ serde_json.workspace = true
 zeroize.workspace = true
 hex.workspace = true
 hpke-rs = { version = "=0.6.1" }
-hpke-rs-rust-crypto = { version = "=0.6.1" }
+# `experimental` is hpke-rs's name for its post-quantum KEMs: the groups'
+# anonymous route (`oblivious`) uses X-Wing (X25519 + ML-KEM-768,
+# draft-connolly-cfrg-xwing-kem-06, codepoint 0x647a) through RustCrypto's
+# released x-wing 0.1 and ml-kem 0.3.
+hpke-rs-rust-crypto = { version = "=0.6.1", features = ["experimental"] }
+# Pinned to the releases, so a later resolve can't pick up a release
+# candidate (hpke-rs-rust-crypto 0.6.1 asks for ^0.1.0-rc.0 / ^0.3.0-rc.0).
+x-wing = { version = "=0.1.1", features = ["zeroize"] }
+ml-kem = { version = "=0.3.3" }
 # OPAQUE sign-in (docs/plans/opaque.md): RFC 9807, ristretto255 + 3DH. The KSF
 # is ours (Argon2id at the V1 cost, through dryoc), so no `argon2` feature.
 opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristretto255"] }

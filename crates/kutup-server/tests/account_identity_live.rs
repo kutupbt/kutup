@@ -12,7 +12,7 @@ use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
 
 fn client() -> Client {
-    Client::builder()
+    crate::common::client_builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap()

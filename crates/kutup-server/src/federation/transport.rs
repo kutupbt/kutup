@@ -1050,7 +1050,7 @@ async fn bound_client(
     {
         anyhow::bail!("federation to private/internal addresses is not allowed");
     }
-    Ok(reqwest::Client::builder()
+    Ok(crate::tls::client_builder()
         // Environment-configured proxies would connect somewhere other than
         // the DNS answers validated above and invalidate the SSRF binding.
         .no_proxy()

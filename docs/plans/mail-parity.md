@@ -158,3 +158,9 @@ Each is its own plan and pull request, Proton first:
    forwarding, a bridge for desktop clients.
 9. **P8 organisation:** several addresses, custom domains, catch-all,
    categories, newsletter view, key transparency (Phase E for domains).
+10. **Post-quantum keys, then end-to-end forwarding**
+    ([`mail-pq-openpgp.md`](mail-pq-openpgp.md), decided 2026-10-18): a v6
+    ML-DSA-65+Ed25519 / ML-KEM-768+X25519 key beside each v4 key, on by
+    default; then Proton's end-to-end forwarding (draft-wussler-openpgp-forwarding,
+    v4 Curve25519 only), with the address on classic encryption while
+    forwarding is on and the person told so.

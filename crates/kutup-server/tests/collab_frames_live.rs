@@ -73,7 +73,7 @@ fn http_and_socket_refuse_the_same_frames() {
         eprintln!("KUTUP_LIVE_SERVER unset; skipping");
         return;
     };
-    let c = Client::new();
+    let c = crate::common::client();
     let owner = register(&c, &base);
     let viewer = register(&c, &base);
     let folder = create_folder(&c, &base, &owner);

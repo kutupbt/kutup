@@ -195,6 +195,11 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server chat_federation::tests::live_sealed_backlog_does_not_starve_other_destinations \
   -- --exact --nocapture
+# Sealed federation queues: a destination's batches below the signature
+# check (a mismatch holds nothing behind it, a repeat replays its answers, a
+# malformed batch applies nothing) and stale answers at the origin.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server chat_federation::sealed_live_tests::live_ -- --nocapture
 
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   KUTUP_LIVE_S3_ENDPOINT="http://127.0.0.1:$s3_port" \
@@ -234,3 +239,11 @@ if [[ "$backup_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]]; then
   echo "account purge left Chat backup object bytes" >&2
   exit 1
 fi
+
+# The kutup CLI end to end, as a person runs it: Drive (scripts/verify-cli.sh),
+# then Kutup Pass sync between two machines and its SSH agent. Each makes its
+# own account with `kutup register`. After the purge checks above, which
+# expect no account's bytes left.
+for check in verify-cli verify-pass-sync verify-pass-ssh; do
+  KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
+done

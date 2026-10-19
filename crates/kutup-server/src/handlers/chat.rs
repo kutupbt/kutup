@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -1902,6 +1902,10 @@ pub async fn send_sealed_messages(
             crate::chat_federation::FederatedSealedOutcome::Mismatch(mismatch) => {
                 Ok((StatusCode::CONFLICT, Json(mismatch)).into_response())
             }
+            crate::chat_federation::FederatedSealedOutcome::Unavailable => Err(unavailable()),
+            crate::chat_federation::FederatedSealedOutcome::Refused => {
+                Err(crate::chat_federation::peer_refused_error())
+            }
             crate::chat_federation::FederatedSealedOutcome::Pending => Err(AppError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "sealed federation delivery is durably queued",
@@ -1930,6 +1934,192 @@ pub async fn send_sealed_messages(
             push_sealed(&state, stored).await;
             Ok(Json(response).into_response())
         }
+    }
+}
+
+/// `POST /api/chat/anonymous/messages/batch?server=`: several sealed sends
+/// to accounts of one server in one cookie- and bearer-free request
+/// (docs/plans/pairwise-groups.md §1). Each recipient's capability is checked
+/// and counted on its own, and each gets its own result; for a remote server
+/// the sends are queued as single sends are and delivered in one federated
+/// batch.
+#[utoipa::path(
+    post,
+    path = "/api/chat/anonymous/messages/batch",
+    tag = "chat",
+    params(("server" = Option<String>, Query, description = "The recipients' server; this one when absent")),
+    request_body = kutup_chat_proto::SealedBatchSubmissionV1,
+    responses(
+        (status = 200, description = "One result per recipient, in order", body = kutup_chat_proto::SealedBatchResponseV1),
+        (status = 400, description = "Malformed batch"),
+        (status = 429, description = "Too many anonymous requests from this address"),
+    )
+)]
+pub async fn send_sealed_batch(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    Query(query): Query<AccountServerQuery>,
+    Json(batch): Json<kutup_chat_proto::SealedBatchSubmissionV1>,
+) -> AppResult<Json<kutup_chat_proto::SealedBatchResponseV1>> {
+    use kutup_chat_proto::{SealedBatchOutcomeV1 as Outcome, SealedBatchResultV1};
+    batch.validate().map_err(AppError::bad_request)?;
+    let local = state.config.chat_server_name.clone();
+    let server = query.server.clone().unwrap_or_else(|| local.clone());
+    let result = |account_id: &str, send_id: &str, outcome: Outcome| SealedBatchResultV1 {
+        account_id: account_id.to_owned(),
+        send_id: send_id.to_owned(),
+        outcome,
+    };
+    // The address's anonymous wall counts recipients, as single sends
+    // would: the middleware charged the first, each further one is charged
+    // here, and those over it are answered on their own.
+    let address =
+        crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
+    let mut within_wall = (0..batch.recipients.len()).map(|index| {
+        index == 0 || {
+            let allowed = crate::ratelimit::CHAT_ANONYMOUS_IP.allow(&address);
+            if !allowed {
+                crate::telemetry::rate_limit_rejection("anonymous_ip");
+            }
+            allowed
+        }
+    });
+    let mut results = Vec::with_capacity(batch.recipients.len());
+    if server == local {
+        for recipient in batch.recipients {
+            let send_id = recipient.submission.send_id.clone();
+            if within_wall.next() != Some(true) {
+                results.push(result(
+                    &recipient.account_id,
+                    &send_id,
+                    Outcome::RateLimited,
+                ));
+                continue;
+            }
+            // An account that isn't ours, or not active, is a wrong capability.
+            let outcome =
+                match crate::account_ids::named(&local, &recipient.account_id, Some(&local))
+                    .ok()
+                    .and_then(|account| Uuid::parse_str(&account.account_id).ok())
+                {
+                    None => Outcome::Unavailable,
+                    Some(id) => {
+                        let mut tx = state.pool.begin().await?;
+                        match store_sealed_messages(&mut tx, id, &recipient.submission, None).await
+                        {
+                            Ok(SealedStoreOutcome::Delivered { response, stored }) => {
+                                tx.commit().await?;
+                                push_sealed(&state, stored).await;
+                                Outcome::Delivered {
+                                    stored: response.stored,
+                                    deduplicated: response.deduplicated,
+                                }
+                            }
+                            Ok(SealedStoreOutcome::Mismatch(mismatch)) => {
+                                tx.rollback().await?;
+                                Outcome::DeviceMismatch { mismatch }
+                            }
+                            Err(error) if error.status == StatusCode::NOT_FOUND => {
+                                tx.rollback().await?;
+                                Outcome::Unavailable
+                            }
+                            // This capability's or recipient's limit: the
+                            // others in the batch still go.
+                            Err(error) if error.status == StatusCode::TOO_MANY_REQUESTS => {
+                                tx.rollback().await?;
+                                Outcome::RateLimited
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                };
+            results.push(result(&recipient.account_id, &send_id, outcome));
+        }
+        return Ok(Json(kutup_chat_proto::SealedBatchResponseV1 { results }));
+    }
+
+    // A remote server: queue each send as a single one, then deliver the
+    // destination's queue in one batch. Only a send that was queued reads
+    // as pending.
+    state
+        .federation
+        .as_ref()
+        .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    let mut queued = Vec::with_capacity(batch.recipients.len());
+    for recipient in batch.recipients {
+        let send_id = recipient.submission.send_id.clone();
+        let outcome = if within_wall.next() != Some(true) {
+            Err(Outcome::RateLimited)
+        } else {
+            match crate::account_ids::named(&local, &recipient.account_id, Some(&server)) {
+                Err(_) => Err(Outcome::Unavailable),
+                Ok(account) => match crate::chat_federation::enqueue_sealed_row(
+                    &state,
+                    &account,
+                    recipient.submission,
+                )
+                .await
+                {
+                    Ok(crate::chat_federation::Queued::Row(id)) => Ok(id),
+                    Ok(crate::chat_federation::Queued::Settled(outcome)) => {
+                        Err(batch_outcome(Ok(outcome)))
+                    }
+                    Err(error) => Err(not_queued_outcome(error)?),
+                },
+            }
+        };
+        queued.push((recipient.account_id, send_id, outcome));
+    }
+    let mut flush = if queued.iter().any(|(_, _, outcome)| outcome.is_ok()) {
+        Some(crate::chat_federation::flush_sealed_destination(&state, &server).await?)
+    } else {
+        None
+    };
+    for (account_id, send_id, outcome) in queued {
+        let outcome = match (outcome, flush.as_mut()) {
+            (Err(settled), _) => settled,
+            (Ok(id), Some(flush)) => batch_outcome(flush.outcome(&state.pool, id).await),
+            (Ok(_), None) => Outcome::Pending,
+        };
+        results.push(result(&account_id, &send_id, outcome));
+    }
+    Ok(Json(kutup_chat_proto::SealedBatchResponseV1 { results }))
+}
+
+/// A send that wasn't queued, as a batch result: this recipient's own
+/// answer, or the whole request's failure. A server error fails the request,
+/// which is safe to repeat: sendIds dedupe.
+fn not_queued_outcome(error: AppError) -> AppResult<kutup_chat_proto::SealedBatchOutcomeV1> {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    match error.status {
+        StatusCode::NOT_FOUND => Ok(Outcome::Unavailable),
+        // Too large for any federated transaction: it can never go.
+        StatusCode::PAYLOAD_TOO_LARGE => Ok(Outcome::Refused),
+        // Other content under this sendId is still queued.
+        StatusCode::CONFLICT => Ok(Outcome::Conflict),
+        StatusCode::TOO_MANY_REQUESTS => Ok(Outcome::RateLimited),
+        _ => Err(error),
+    }
+}
+
+/// A queued send's fate, as a batch result. A failure while delivering
+/// leaves it queued.
+fn batch_outcome(
+    outcome: AppResult<crate::chat_federation::FederatedSealedOutcome>,
+) -> kutup_chat_proto::SealedBatchOutcomeV1 {
+    use crate::chat_federation::FederatedSealedOutcome as Federated;
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    match outcome {
+        Ok(Federated::Delivered(response)) => Outcome::Delivered {
+            stored: response.stored,
+            deduplicated: response.deduplicated,
+        },
+        Ok(Federated::Mismatch(mismatch)) => Outcome::DeviceMismatch { mismatch },
+        Ok(Federated::Unavailable) => Outcome::Unavailable,
+        Ok(Federated::Refused) => Outcome::Refused,
+        Ok(Federated::Pending) | Err(_) => Outcome::Pending,
+        Ok(Federated::PeerUnsupported) => Outcome::PeerUnsupported,
     }
 }
 
@@ -2747,6 +2937,49 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a queued send reads as pending; a send that wasn't queued gets
+    /// its own answer, or fails the whole request.
+    #[test]
+    fn a_batch_says_pending_only_for_a_queued_send() {
+        use crate::chat_federation::FederatedSealedOutcome as Federated;
+        use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+        let not_queued = |status| not_queued_outcome(AppError::new(status, "x"));
+        assert_eq!(
+            not_queued(StatusCode::NOT_FOUND).unwrap(),
+            Outcome::Unavailable
+        );
+        assert_eq!(
+            not_queued(StatusCode::PAYLOAD_TOO_LARGE).unwrap(),
+            Outcome::Refused
+        );
+        assert_eq!(not_queued(StatusCode::CONFLICT).unwrap(), Outcome::Conflict);
+        assert_eq!(
+            not_queued(StatusCode::TOO_MANY_REQUESTS).unwrap(),
+            Outcome::RateLimited
+        );
+        for status in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::BAD_REQUEST,
+        ] {
+            assert_eq!(not_queued(status).unwrap_err().status, status);
+        }
+        // A queued send: its answer, or still queued after a failure.
+        assert_eq!(
+            batch_outcome(Ok(Federated::Unavailable)),
+            Outcome::Unavailable
+        );
+        assert_eq!(batch_outcome(Ok(Federated::Refused)), Outcome::Refused);
+        assert_eq!(
+            batch_outcome(Ok(Federated::PeerUnsupported)),
+            Outcome::PeerUnsupported
+        );
+        assert_eq!(
+            batch_outcome(Err(AppError::internal("x"))),
+            Outcome::Pending
+        );
+    }
 
     fn profile_test_account() -> AccountRef {
         crate::account_ids::local("example.test", Uuid::from_u128(7)).unwrap()
