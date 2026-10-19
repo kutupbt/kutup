@@ -4,7 +4,7 @@
 #   irm https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.ps1 | iex
 #
 # Settings, as environment variables (set them first in the same window):
-#   KUTUP_VERSION        a CLI release tag, e.g. v0.2.0 (default: the newest
+#   KUTUP_VERSION        a CLI release tag, e.g. v0.0.1 (default: the newest
 #                        published one; desktop-v... tags are not CLI releases)
 #   KUTUP_INSTALL_DIR    where kutup.exe goes (default %LOCALAPPDATA%\Programs\kutup)
 #   KUTUP_DOWNLOAD_BASE  a mirror laid out as <base>/<tag>/<asset>
@@ -48,7 +48,7 @@ function Install-KutupCli {
             $status = $null
             if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
             if ($status -eq 403 -or $status -eq 429) {
-                throw 'GitHub API rate limit reached for this address; wait an hour or set $env:KUTUP_VERSION (e.g. v0.2.0)'
+                throw 'GitHub API rate limit reached for this address; wait an hour or set $env:KUTUP_VERSION (e.g. v0.0.1)'
             }
             throw "could not list releases from the GitHub API: $($_.Exception.Message); set `$env:KUTUP_VERSION to skip it"
         }
@@ -57,7 +57,7 @@ function Install-KutupCli {
         $version = $latest.tag_name
     }
     if ($version -match '^[0-9]') { $version = "v$version" }
-    if ($version -notmatch '^v[0-9]') { throw "not a CLI release tag: $version (CLI tags look like v0.2.0)" }
+    if ($version -notmatch '^v[0-9]') { throw "not a CLI release tag: $version (CLI tags look like v0.0.1)" }
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("kutup-install-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -71,7 +71,7 @@ function Install-KutupCli {
         try {
             Invoke-WebRequest -UseBasicParsing -Uri "$base/$version/kutup_${version}_$target.sha256" -OutFile $sums
         } catch {
-            throw "release $version has no Rust CLI build for windows/$arch (CLI releases from v0.2.0 on have one; see https://github.com/$repo/releases)"
+            throw "release $version has no Rust CLI build for windows/$arch (see https://github.com/$repo/releases)"
         }
 
         Write-Host "kutup-install: downloading kutup $version for windows/$arch..."
