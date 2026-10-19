@@ -124,16 +124,22 @@ Everything is derived again from the master key.
 2. **Server: `POST /api/account/identity-suite`.** The body carries the new
    public key, the suite-2 binding and the new wrapped private key (the
    seed). The server checks that:
-   - the binding verifies under the account's current authority key;
+   - the binding verifies under the account's current authority key, at
+     epoch 1 (the first suite-2 binding; any other epoch is `400`);
    - the suite **strictly increases**;
-   - the key is 1216 bytes.
+   - the key is 1216 bytes;
+   - the account isn't in its first-login setup (that registers suite 2).
 
    It then replaces `public_key`, `drive_key_binding` and
    `drive_private_key_envelope` in one transaction under the account lock. A
    lower or equal suite is refused, so it can never go back.
 3. **Manifest.** The client publishes its next manifest (sequence + 1) with
    `XWingEd25519V2`. The server requires it to match the new `public_key` as
-   it does today.
+   it does today, and takes the Drive keys' change from the stored manifest
+   only as this rise: from suite 1 with a 32-byte key to X-Wing, the signing
+   key unchanged, linked to the stored manifest (the same rule as chat-core's).
+   A peer that sees the rise across a sequence gap treats it as a gap to
+   recover: the manifest history must show it in a linked step.
 4. **Chat-core's pin rule.** A Drive key change within one incarnation is
    accepted only when all of these hold:
    - the suite rises;

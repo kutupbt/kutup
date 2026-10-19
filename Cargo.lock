@@ -3388,6 +3388,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bcrypt",
+ "dryoc",
  "ed25519-dalek",
  "futures-util",
  "hex",

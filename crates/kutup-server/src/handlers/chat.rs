@@ -512,11 +512,6 @@ pub async fn register_device(
     .into_response())
 }
 
-/// `POST /api/chat/manifest` — publish the caller's signed current device set.
-/// Updates form a strict hash-linked sequence and cannot rotate the account
-/// authority key in v1. The declared devices must exactly match the server's
-/// registered devices, making an injected server-side device fail closed.
-
 /// Whether a manifest's Drive keys may follow the stored ones: unchanged, or
 /// raised once from a suite-1 (X25519) key to X-Wing with the same signing
 /// key (docs/plans/pq-shares.md). The new key is the account's registered
@@ -540,6 +535,10 @@ fn drive_keys_follow(
         && next.share_signing_public_key == current.share_signing_public_key
 }
 
+/// `POST /api/chat/manifest` — publish the caller's signed current device set.
+/// Updates form a strict hash-linked sequence and cannot rotate the account
+/// authority key in v1. The declared devices must exactly match the server's
+/// registered devices, making an injected server-side device fail closed.
 #[utoipa::path(
     post,
     path = "/api/chat/manifest",
