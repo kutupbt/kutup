@@ -8,7 +8,6 @@ vi.mock('@kutup/session/persist', () => ({ persistKeys: vi.fn() }))
 const crypto_ = vi.hoisted(() => ({
   toBase64: () => 'master',
   decryptPrivateKey: vi.fn(() => Promise.resolve(new Uint8Array(32))),
-  currentDriveKeys: vi.fn(() => Promise.resolve({ publicKey: 'xwing', privateKey: new Uint8Array(32).fill(7), drivePrivateKeyEnvelope: 'sealed-seed' })),
   generateAccountKeySet: vi.fn((binding: string) => Promise.resolve({ mnemonic: 'words', masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}` })),
   rebindAccountKeySet: vi.fn((keys: { mnemonic: string }, binding: string) =>
     Promise.resolve({ mnemonic: keys.mnemonic, masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}`, recoveryKeyEnvelope: `recovery-${binding}` }),
@@ -31,7 +30,8 @@ const opaque = vi.hoisted(() => ({
       : null,
 }))
 vi.mock('@kutup/session/opaque', () => opaque)
-const activateSession = vi.hoisted(() => vi.fn())
+// What it activated: the keys given (the session layer's upgrade is tested there).
+const activateSession = vi.hoisted(() => vi.fn((keys: unknown) => Promise.resolve(keys)))
 vi.mock('@kutup/session/profile', () => ({ activateSession }))
 
 import { abandonTotp, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
@@ -59,7 +59,7 @@ const keys = () =>
 
 beforeEach(() => {
   post.mockReset()
-  activateSession.mockReset()
+  activateSession.mockClear()
   registrar.close.mockClear()
   opaque.registerWith.mockReset()
   opaque.reregisterWith.mockReset()
@@ -113,48 +113,6 @@ describe('signIn', () => {
     if (result.kind !== 'totp') throw new Error('expected a code step')
     abandonTotp(result.challenge)
     expect(opened.close).toHaveBeenCalled()
-  })
-})
-
-describe('the identity suite upgrade at sign-in (docs/plans/pq-shares.md)', () => {
-  const activatedKeys = () => activateSession.mock.calls[0][0] as { privateKey: Uint8Array; publicKey: string }
-
-  it('an account still on suite 1 publishes its X-Wing keys once, then uses them', async () => {
-    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, identitySuite: 1 }, signIn: openSignIn() })
-    post.mockResolvedValue({ status: 204 })
-    await expect(signIn('alice', 'pw')).resolves.toEqual({ kind: 'signedIn' })
-    expect(signDriveKeyBinding).toHaveBeenLastCalledWith(expect.any(String), { server: 'kutup.dev', accountId: 'u' }, 1)
-    expect(post).toHaveBeenCalledWith(
-      '/account/identity-suite',
-      { publicKey: 'xwing', driveKeyBinding: 'binding', driveKeyBindingEpoch: 1, drivePrivateKeyEnvelope: 'sealed-seed' },
-      { headers: { Authorization: 'Bearer a' } },
-    )
-    // Sealed to the binding the master key opened under.
-    expect(crypto_.currentDriveKeys).toHaveBeenLastCalledWith(expect.any(Uint8Array), 'kb')
-    expect(activatedKeys().publicKey).toBe('xwing')
-    expect(activatedKeys().privateKey).toEqual(new Uint8Array(32).fill(7))
-  })
-
-  it('another device upgraded first: the same keys, nothing to publish', async () => {
-    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, identitySuite: 1 }, signIn: openSignIn() })
-    post.mockRejectedValue(refused(409, 'identitySuiteCurrent'))
-    await expect(signIn('alice', 'pw')).resolves.toEqual({ kind: 'signedIn' })
-    expect(activatedKeys().publicKey).toBe('xwing')
-  })
-
-  it('a failed upgrade signs in with the old keys; the next sign-in tries again', async () => {
-    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, identitySuite: 1 }, signIn: openSignIn() })
-    post.mockRejectedValue(refused(503))
-    await expect(signIn('alice', 'pw')).resolves.toEqual({ kind: 'signedIn' })
-    expect(activatedKeys().publicKey).toBe('p')
-    expect(activatedKeys().privateKey).toEqual(new Uint8Array(32))
-  })
-
-  it('an account on suite 2 publishes nothing', async () => {
-    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, identitySuite: 2 }, signIn: openSignIn() })
-    await expect(signIn('alice', 'pw')).resolves.toEqual({ kind: 'signedIn' })
-    expect(post).not.toHaveBeenCalled()
-    expect(activatedKeys().publicKey).toBe('p')
   })
 })
 

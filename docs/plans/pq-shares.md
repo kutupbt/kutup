@@ -179,13 +179,18 @@ manifest trust, and refuse a lower one as a rollback.
   keys and envelopes they carry change size. `sign/verifyDriveKeyBinding`
   take the binding epoch as their last argument
   (`FIRST_DRIVE_KEY_BINDING_EPOCH` = 1 at registration and at the upgrade).
-- **Sign-in upgrade** (`apps/account/src/features/auth/flows.ts`). A sign-in
-  answered with `identitySuite: 1` derives the keys again
-  (`currentDriveKeys`), signs their binding at epoch 1, seals the seed under
-  the account's key binding and sends `POST /account/identity-suite` with
-  the session's token, before the session is activated. `identitySuiteCurrent`
-  means another device did it first, with the same keys. A failure signs in
-  with the old keys, and the next sign-in tries again.
+- **The upgrade, where a session starts** (`packages/session/src/identitySuite.ts`,
+  called by `activateSession`: a sign-in, a session handed to another app,
+  and one restored from this browser). When the server still publishes
+  another Drive key than the X-Wing one the master key derives, the keys are
+  derived again (`currentDriveKeys`), their binding is signed at epoch 1,
+  the seed is sealed under the account's key binding, and
+  `POST /account/identity-suite` goes with the session's token before the
+  session is active; the activated (and persisted) keys are the new ones.
+  `identitySuiteCurrent` means another device did it first, with the same
+  keys. A failure keeps the old keys, and the next session start tries
+  again. So a failed upgrade at sign-in, or a session from before the
+  deploy, is upgraded before Chat starts.
 - **The manifest.** Chat-core's `sync_own_manifest` signs a next manifest
   whenever the published one carries other Drive keys than the account's
   (`AccountAuthority::drive_keys`), so Chat publishes the X-Wing key the next
@@ -219,10 +224,13 @@ manifest trust, and refuse a lower one as a rollback.
 - **Pins and the binding epoch.** Pins don't record the binding epoch yet:
   only epoch 1 exists, so there is nothing to roll back to. It goes into the
   pin format before a second epoch can be signed.
-- **Spec 162** (account suite; it needs `E2E_PSQL`, which CI's single-server
-  job sets) makes an account suite 1 as the backup gate does, checks that a
-  share to it is refused with the message, signs it in again, checks
-  `identity_suite = 2` with a 1216-byte key, and shares again.
+- **Spec 162** (account suite; it needs `E2E_PSQL` and `E2E_SUITE1_ACCOUNT`,
+  the dev tool that makes a real suite-1 account, Chat manifests included)
+  starts from an account that used Chat, turned suite 1. A share to it is
+  refused with the message; it signs in again; `identity_suite = 2` with a
+  1216-byte key, Chat starts and its current manifest is suite 2; then the
+  share goes through. CI's single-server job sets only `E2E_PSQL`, so there
+  it is skipped; the local account gate runs it.
 
 ## Details from review
 
