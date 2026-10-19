@@ -196,11 +196,23 @@ manifest trust, and refuse a lower one as a rollback.
 - **Messages.** `apiErrorMessage` says `keysPendingUpgrade` and
   `peerOutdated` in the user's language (`apiErrors.*` in the shared
   locales), from the server's answer or from the client's own refusal.
-- **Not yet.** A rotation while a remaining member is still on suite 1 is
-  refused, naming that member: removing someone waits for them (an open
-  decision). Pins don't record the binding epoch yet: only epoch 1 exists,
-  so there is nothing to roll back to; it goes into the pin format before a
-  second epoch can be signed.
+- **A removal and suite-1 members** (the user's decision, 2026-10-19). A
+  rotation (removing someone from a folder, file or album) can't seal the
+  new key to a remaining member still on suite 1. It stops first with
+  `MembersPendingUpgrade`, naming them; the owner confirms
+  (`PendingUpgradeConfirm`: "they haven't signed in since the security
+  upgrade; they lose access; share again after they sign in"), and the same
+  rotation removes them too, in its one request. The confirmation covers
+  exactly the people it named: anyone else who turns up meanwhile is asked
+  about again, and anyone who upgraded meanwhile stays. One dormant member
+  never blocks a removal.
+- **Catch-up re-seals** (a file's shares brought to its current key) leave
+  suite-1 members and federated recipients behind, the pending state the
+  server keeps, until they have signed in again; the next catch-up then
+  reseals them. Changing a suite-1 member's permissions says why it can't.
+- **Pins and the binding epoch.** Pins don't record the binding epoch yet:
+  only epoch 1 exists, so there is nothing to roll back to. It goes into the
+  pin format before a second epoch can be signed.
 - **Spec 162** (account suite; it needs `E2E_PSQL`, which CI's single-server
   job sets) makes an account suite 1 as the backup gate does, checks that a
   share to it is refused with the message, signs it in again, checks

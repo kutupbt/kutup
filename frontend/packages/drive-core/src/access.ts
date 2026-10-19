@@ -7,7 +7,7 @@ import { DRIVE_ENVELOPE_PURPOSE, sealDriveEnvelope } from '@kutup/crypto/driveEn
 import { openOwnerLinkKeyV1 } from '@kutup/crypto/publicLink'
 import api from '@kutup/session/client'
 import type { DriveIdentity } from './identity'
-import { sealableDriveKey } from './identityPins'
+import { pendingUpgradeRemoval, sealableDriveKey, type PendingUpgradeRemoval } from './identityPins'
 import { useDriveMutation } from './mutations'
 import type { Folder } from './model'
 
@@ -107,8 +107,37 @@ export class RecipientChanged extends Error {
   }
 }
 
+/** Someone on another server a folder stays shared with, as their server describes them now. */
+interface RemoteRecipient {
+  server: string
+  accountId: string
+  account: string
+  driveHpkePublicKey: string
+  accountIncarnationId: string
+  identitySuite?: number
+}
+
+/**
+ * Their Drive key, from their server by their account id; it must still
+ * belong to the account incarnation the folder was shared with.
+ */
+async function remoteRecipient(f: AccessFederated): Promise<RemoteRecipient> {
+  const { data: remote } = await api.get<RemoteRecipient>(`/users/by-id/${encodeURIComponent(f.recipientAccountId)}`, {
+    params: { server: f.recipientServer },
+  })
+  if (remote.server !== f.recipientServer || remote.accountId !== f.recipientAccountId) {
+    throw new Error('the lookup answered for another account')
+  }
+  if (remote.accountIncarnationId !== f.recipientIncarnationId) throw new RecipientChanged(remote.account)
+  return remote
+}
+
 /**
  * Move `folder` to a new key, keeping everyone in `access` except `removed`.
+ * People it keeps who are still on identity suite 1 can't get the new key:
+ * without `alsoRemove` naming them (the owner confirmed), it stops with
+ * `MembersPendingUpgrade`; with it, they are removed too
+ * (docs/plans/pq-shares.md).
  */
 export async function rotateFolder(
   folder: Folder,
@@ -117,11 +146,26 @@ export async function rotateFolder(
   removed: Removal,
   /** More of the request sealed under the new key (an album's photos). */
   sealMore?: (key: Uint8Array, epoch: number) => Promise<Record<string, unknown>>,
+  alsoRemove?: PendingUpgradeRemoval,
 ): Promise<void> {
   if (!folder.key || !folder.name || !folder.canManage) throw new Error('folder is not open')
   if (access.keyEpoch !== folder.keyEpoch || access.epochStatementHash !== folder.epochStatementHash) {
     throw new AccessChanged()
   }
+  // Who stays, and the keys of those on other servers.
+  const keptMembers = access.members.filter((m) => !removed.members.includes(m.userId))
+  const keptRemote = await Promise.all(
+    access.federatedShares
+      .filter((f) => !removed.federatedShares.includes(f.id))
+      .map(async (f) => ({ share: f, remote: await remoteRecipient(f) })),
+  )
+  const extra = pendingUpgradeRemoval(
+    {
+      members: keptMembers.map((m) => ({ id: m.userId, account: m.account, identitySuite: m.identitySuite })),
+      federatedShares: keptRemote.map(({ share, remote }) => ({ id: share.id, account: remote.account, identitySuite: remote.identitySuite })),
+    },
+    alsoRemove,
+  )
   const next = folder.keyEpoch + 1
   const key = await generateKey()
   const context = (purpose: (typeof DRIVE_ENVELOPE_PURPOSE)[keyof typeof DRIVE_ENVELOPE_PURPOSE], revision: number) => ({
@@ -154,8 +198,8 @@ export async function rotateFolder(
     })
 
   const members = await Promise.all(
-    access.members
-      .filter((m) => !removed.members.includes(m.userId))
+    keptMembers
+      .filter((m) => !extra.members.includes(m.userId))
       .map(async (m) => ({
         userId: m.userId,
         namedShareEnvelope: await seal(sealableDriveKey(m.account, m.drivePublicKey, m.identitySuite), memberRef(me, m), m.accountIncarnationId),
@@ -174,34 +218,16 @@ export async function rotateFolder(
       })),
   )
   const federatedShares = await Promise.all(
-    access.federatedShares
-      .filter((f) => !removed.federatedShares.includes(f.id))
-      .map(async (f) => {
-        // Their Drive key, from their server by their account id; it must
-        // still belong to the account incarnation the folder was shared with.
-        const to: AccountRef = { server: f.recipientServer, accountId: f.recipientAccountId }
-        const { data: remote } = await api.get<{
-          server: string
-          accountId: string
-          account: string
-          driveHpkePublicKey: string
-          accountIncarnationId: string
-          identitySuite?: number
-        }>(
-          `/users/by-id/${encodeURIComponent(to.accountId)}`,
-          { params: { server: to.server } },
-        )
-        if (remote.server !== to.server || remote.accountId !== to.accountId) throw new Error('the lookup answered for another account')
-        if (remote.accountIncarnationId !== f.recipientIncarnationId) throw new RecipientChanged(remote.account)
-        return {
-          id: f.id,
-          namedShareEnvelope: await seal(
-            sealableDriveKey(remote.account, remote.driveHpkePublicKey, remote.identitySuite),
-            to,
-            remote.accountIncarnationId,
-          ),
-        }
-      }),
+    keptRemote
+      .filter(({ share }) => !extra.federatedShares.includes(share.id))
+      .map(async ({ share, remote }) => ({
+        id: share.id,
+        namedShareEnvelope: await seal(
+          sealableDriveKey(remote.account, remote.driveHpkePublicKey, remote.identitySuite),
+          { server: remote.server, accountId: remote.accountId },
+          remote.accountIncarnationId,
+        ),
+      })),
   )
 
   const more = sealMore ? await sealMore(key, next) : {}
@@ -217,9 +243,9 @@ export async function rotateFolder(
       publicLinks,
       federatedShares,
       removed: {
-        members: removed.members,
+        members: [...removed.members, ...extra.members],
         publicLinks: [...removedLinks],
-        federatedShares: removed.federatedShares,
+        federatedShares: [...removed.federatedShares, ...extra.federatedShares],
       },
     })
   } catch (error) {
@@ -270,11 +296,14 @@ export function useSetFolderPermissions() {
 /** Remove people or links from a folder (a rotation). */
 export function useRemoveAccess() {
   const queryClient = useQueryClient()
-  return useDriveMutation(async ({ folder, removed }: { folder: Folder; removed: Removal }, me) => {
+  return useDriveMutation(async (
+    { folder, removed, alsoRemove }: { folder: Folder; removed: Removal; alsoRemove?: PendingUpgradeRemoval },
+    me,
+  ) => {
     try {
       // Built from access as it is now, not as the list showed it: anyone
       // added since stays (they were not chosen for removal).
-      await rotateFolder(folder, me, await loadAccess(folder.id), removed)
+      await rotateFolder(folder, me, await loadAccess(folder.id), removed, undefined, alsoRemove)
     } finally {
       await queryClient.invalidateQueries({ queryKey: accessKey(folder.id) })
     }

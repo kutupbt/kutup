@@ -3,7 +3,7 @@ import { Copy, Link2, Link2Off, UserMinus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { openLinkKey, useFolderAccess, type AccessLink } from '@kutup/drive-core/access'
+import { openLinkKey, useFolderAccess, type AccessLink, type Removal } from '@kutup/drive-core/access'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { publicLinkUrl, RecipientNotFound, useCreatePublicLink, useShareFolder } from '@kutup/drive-core/mutations'
 import { Button } from '@kutup/ui/components/button'
@@ -15,8 +15,9 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Spinner } from '@kutup/ui/components/states'
 import { useRemoveAlbumAccess, type Album } from './albums'
-import { IdentityNotConfirmed, RecipientRenamed } from '@kutup/drive-core/identityPins'
+import { IdentityNotConfirmed, MembersPendingUpgrade, RecipientRenamed } from '@kutup/drive-core/identityPins'
 import { IdentityShareWarning, RecipientRenamedNotice, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
+import { PendingUpgradeConfirm } from '@kutup/drive-ui/PendingUpgradeConfirm'
 
 /**
  * Share an album (docs/plans/photos.md): its key sealed to each person's
@@ -32,6 +33,28 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
   const identity = useDriveIdentity()
   const access = useFolderAccess(open ? album.folder : undefined)
   const removeAccess = useRemoveAlbumAccess()
+  // A removal that would also take people not yet upgraded: asked again.
+  const [upgrade, setUpgrade] = useState<{ removed: Removal; done: () => void; error: MembersPendingUpgrade } | null>(null)
+
+  function removeFromAlbum(removed: Removal, done: () => void, alsoRemove?: MembersPendingUpgrade) {
+    removeAccess.mutate(
+      { album, removed, alsoRemove: alsoRemove?.removal },
+      {
+        onSuccess: () => {
+          setUpgrade(null)
+          done()
+        },
+        onError: (error) => {
+          if (error instanceof MembersPendingUpgrade) {
+            setUpgrade({ removed, done, error })
+          } else {
+            setUpgrade(null)
+            toast.error(t('share.failed'))
+          }
+        },
+      },
+    )
+  }
   const [email, setEmail] = useState('')
   const [canAdd, setCanAdd] = useState(false)
   const createLink = useCreatePublicLink('photos')
@@ -156,13 +179,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                   disabled={removeAccess.isPending}
                   aria-label={t('share.remove', { account: m.account })}
                   onClick={() =>
-                    removeAccess.mutate(
-                      { album, removed: { members: [m.userId], publicLinks: [], federatedShares: [] } },
-                      {
-                        onSuccess: () => toast.success(t('share.removed', { account: m.account })),
-                        onError: () => toast.error(t('share.failed')),
-                      },
-                    )
+                    removeFromAlbum({ members: [m.userId], publicLinks: [], federatedShares: [] }, () => toast.success(t('share.removed', { account: m.account })))
                   }
                 >
                   <UserMinus />
@@ -183,13 +200,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                     disabled={removeAccess.isPending}
                     aria-label={t('share.remove', { account })}
                     onClick={() =>
-                      removeAccess.mutate(
-                        { album, removed: { members: [], publicLinks: [], federatedShares: [f.id] } },
-                        {
-                          onSuccess: () => toast.success(t('share.removed', { account })),
-                          onError: () => toast.error(t('share.failed')),
-                        },
-                      )
+                      removeFromAlbum({ members: [], publicLinks: [], federatedShares: [f.id] }, () => toast.success(t('share.removed', { account })))
                     }
                   >
                     <UserMinus />
@@ -198,6 +209,14 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
               )
             })}
           </ul>
+          {upgrade ? (
+            <PendingUpgradeConfirm
+              error={upgrade.error}
+              busy={removeAccess.isPending}
+              onConfirm={() => removeFromAlbum(upgrade.removed, upgrade.done, upgrade.error)}
+              onCancel={() => setUpgrade(null)}
+            />
+          ) : null}
           {invite ? (
             <Field label={t('share.inviteLink', { account: invite.account })} description={t('share.inviteHint')}>
               {(field) => (
@@ -253,16 +272,10 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                   disabled={removeAccess.isPending}
                   aria-label={t('share.removeLink')}
                   onClick={() =>
-                    removeAccess.mutate(
-                      { album, removed: { members: [], publicLinks: [link.id], federatedShares: [] } },
-                      {
-                        onSuccess: () => {
+                    removeFromAlbum({ members: [], publicLinks: [link.id], federatedShares: [] }, () => {
                           setCreated(null)
                           toast.success(t('share.linkRemoved'))
-                        },
-                        onError: () => toast.error(t('share.failed')),
-                      },
-                    )
+                        })
                   }
                 >
                   <Link2Off />

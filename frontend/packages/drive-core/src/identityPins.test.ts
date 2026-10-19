@@ -311,6 +311,8 @@ import {
   IdentityNotConfirmed,
   holdsAddress,
   KeysPendingUpgrade,
+  MembersPendingUpgrade,
+  pendingUpgradeRemoval,
   sealableDriveKey,
   followAccountRenames,
   type AccountAnswer,
@@ -958,5 +960,38 @@ describe('holdsAddress (a saved contact belongs to an account only when it holds
     await checkIdentity(me, 'ada@kutup.dev')
     expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-M' }, 'ada@kutup.dev')).toBe(false)
     expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toBe(false)
+  })
+})
+
+describe('a removal and the people not yet upgraded (docs/plans/pq-shares.md)', () => {
+  const kept = {
+    members: [
+      { id: 'u1', account: 'new@kutup.dev', identitySuite: 2 },
+      { id: 'u2', account: 'old@kutup.dev', identitySuite: 1 },
+    ],
+    federatedShares: [{ id: 'f1', account: 'far@other.example', identitySuite: 1 }],
+  }
+
+  it('names them before anything is removed', () => {
+    const error = (() => {
+      try {
+        pendingUpgradeRemoval(kept, undefined)
+      } catch (e) {
+        return e
+      }
+    })()
+    expect(error).toBeInstanceOf(MembersPendingUpgrade)
+    expect((error as MembersPendingUpgrade).accounts).toEqual(['old@kutup.dev', 'far@other.example'])
+    expect((error as MembersPendingUpgrade).removal).toEqual({ members: ['u2'], federatedShares: ['f1'] })
+  })
+
+  it('takes them along once the owner confirmed exactly them', () => {
+    expect(pendingUpgradeRemoval(kept, { members: ['u2'], federatedShares: ['f1'] })).toEqual({ members: ['u2'], federatedShares: ['f1'] })
+  })
+
+  it('asks again when someone else turned up since, and takes nobody who upgraded since', () => {
+    expect(() => pendingUpgradeRemoval(kept, { members: ['u2'], federatedShares: [] })).toThrow(MembersPendingUpgrade)
+    const upgraded = { members: kept.members.filter((m) => m.id !== 'u2'), federatedShares: [] }
+    expect(pendingUpgradeRemoval(upgraded, { members: ['u2'], federatedShares: ['f1'] })).toEqual({ members: [], federatedShares: [] })
   })
 })

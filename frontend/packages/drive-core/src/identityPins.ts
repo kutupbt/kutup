@@ -792,6 +792,47 @@ export class KeysPendingUpgrade extends Error {
   }
 }
 
+/** Who a removal also takes, beyond those chosen: by member user id and federated share id. */
+export interface PendingUpgradeRemoval {
+  members: string[]
+  federatedShares: string[]
+}
+
+/**
+ * A rotation (removing someone) would have to seal the new key to people
+ * still on identity suite 1, which it can't (docs/plans/pq-shares.md): they
+ * lose access too, if the owner says so. `accounts` names them; the removal
+ * is made again with `removal` confirmed.
+ */
+export class MembersPendingUpgrade extends Error {
+  constructor(
+    readonly accounts: string[],
+    readonly removal: PendingUpgradeRemoval,
+  ) {
+    super(`${accounts.length} people have not signed in since the security upgrade`)
+  }
+}
+
+/**
+ * Of the people a rotation keeps, those it can't seal to (still on identity
+ * suite 1): nothing when the owner already confirmed exactly them or more
+ * (`confirmed`); otherwise `MembersPendingUpgrade`, naming them. The ones to
+ * remove as well are returned.
+ */
+export function pendingUpgradeRemoval(
+  kept: { members: { id: string; account: string; identitySuite?: number }[]; federatedShares: { id: string; account: string; identitySuite?: number }[] },
+  confirmed: PendingUpgradeRemoval | undefined,
+): PendingUpgradeRemoval {
+  const members = kept.members.filter((m) => m.identitySuite === 1)
+  const federated = kept.federatedShares.filter((f) => f.identitySuite === 1)
+  const removal = { members: members.map((m) => m.id), federatedShares: federated.map((f) => f.id) }
+  const covered =
+    removal.members.every((id) => confirmed?.members.includes(id)) &&
+    removal.federatedShares.every((id) => confirmed?.federatedShares.includes(id))
+  if (!covered) throw new MembersPendingUpgrade([...members, ...federated].map((p) => p.account), removal)
+  return removal
+}
+
 /**
  * The Drive key to seal to for `account`, unless the account is still on
  * identity suite 1: then nothing is sealed to it (`KeysPendingUpgrade`).
