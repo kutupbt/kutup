@@ -46,7 +46,8 @@ test('three people on one server share a group, rename it, remove a member and l
   await expect(pageA.getByTestId(`chat-group-${groupId}`)).toContainText(`Local ${tag}`, { timeout: 90_000 })
   // The invitation names who sent it, and joining opens the group.
   await openGroup(pageB, groupId)
-  await expect(pageB.getByTestId('chat-group-invitation')).toContainText(`invited you to “Local ${tag}”`)
+  // The title someone else chose is its own direction-isolated run.
+  await expect(pageB.getByTestId('chat-group-invitation')).toContainText(`invited you to “\u2068Local ${tag}\u2069”`)
   await acceptGroup(pageB, groupId)
   await acceptGroup(pageC, groupId)
   await expect(pageB.getByTestId(`chat-group-${groupId}`)).toContainText(`Local ${tag}`)
@@ -140,7 +141,8 @@ test('an invitation from someone not in contacts is a request: decline one, bloc
   await openGroup(pageD, declined)
   const invitation = pageD.getByTestId('chat-group-invitation')
   await expect(invitation).toContainText("isn't in your contacts")
-  await expect(pageD.getByTestId('chat-group-inviter-address')).toContainText(alice.username)
+  // Her address is shown: as her name (no profile known here), or beside it.
+  await expect(invitation).toContainText(alice.username)
   await invitation.getByRole('button', { name: 'Decline' }).click()
   await expect(pageD.getByTestId(`chat-group-${declined}`)).toHaveCount(0, { timeout: 45_000 })
 
