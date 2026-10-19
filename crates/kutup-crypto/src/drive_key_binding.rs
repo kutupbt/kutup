@@ -16,10 +16,11 @@
 //! binding, for the same account id.
 //!
 //! Version 2 (docs/plans/pq-shares.md) binds an X-Wing Drive key (identity
-//! suite 2) and carries an `epoch`, which only grows for an incarnation:
-//! clients keep the highest (suite, epoch) they have seen for an account and
-//! refuse a lower one, so a server can't serve an older binding it still
-//! holds a valid signature for.
+//! suite 2) and carries an `epoch`, which only grows for an incarnation, so
+//! that clients can refuse an older binding a server still holds a valid
+//! signature for. Clients don't keep the highest (suite, epoch) per account
+//! yet: only epoch 1 exists, so there is nothing to roll back to. Pins must
+//! record it before any epoch 2 is signed (docs/roadmap.md).
 
 use ed25519_dalek::{Signature, Signer as _, VerifyingKey};
 
@@ -30,6 +31,9 @@ use crate::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV
 const DOMAIN: &[u8] = b"kutup/drive-key-binding/v2\0";
 /// The account identity suite of the bound keys (X-Wing + Ed25519).
 pub const SUITE: u16 = crate::identity::IDENTITY_SUITE;
+/// The epoch of an account's first suite-2 binding: at registration and at
+/// the suite upgrade.
+pub const FIRST_DRIVE_KEY_BINDING_EPOCH: u32 = 1;
 
 type HpkePublic = [u8; crate::hpke_xwing::PUBLIC_KEY_LEN];
 

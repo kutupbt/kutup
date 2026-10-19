@@ -33,7 +33,9 @@ use crate::middleware::AuthUser;
 use crate::models::FileRow;
 use crate::AppState;
 
-const MAX_ENVELOPE_CHARS: usize = 2048;
+/// An X-Wing envelope as text, as the column's CHECK allows (migration
+/// `20261018140000_identity_suite`).
+const MAX_ENVELOPE_CHARS: usize = 4096;
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

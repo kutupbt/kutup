@@ -211,11 +211,21 @@ pub async fn upgrade_identity_suite(
     Json(req): Json<IdentitySuiteUpgrade>,
 ) -> AppResult<StatusCode> {
     let id = trusted_uuid(&user.user_id)?;
+    // The upgrade signs the first suite-2 binding; later epochs come only
+    // with a key change of suite 2, which doesn't exist yet.
+    if req.drive_key_binding_epoch != kutup_crypto::drive_key_binding::FIRST_DRIVE_KEY_BINDING_EPOCH
+    {
+        return Err(AppError::bad_request(
+            "the upgrade's binding is the first suite-2 binding (epoch 1)",
+        ));
+    }
     let mut tx = state.pool.begin().await?;
+    // An account still in its first-login setup has no keys to upgrade:
+    // complete-setup registers suite-2 keys.
     let row: Option<(i16, String, String, String)> = sqlx::query_as(
         "SELECT identity_suite, account_authority_public_key, drive_signing_public_key,
                 COALESCE(key_binding, '')
-           FROM users WHERE id = $1 AND is_active FOR UPDATE",
+           FROM users WHERE id = $1 AND is_active AND NOT is_first_login FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -289,7 +299,8 @@ pub struct DriveIdentity {
     /// 2: an X-Wing Drive key. 1: an X25519 one, not yet upgraded; nothing is
     /// shared to it (`keysPendingUpgrade`; docs/plans/pq-shares.md).
     identity_suite: i16,
-    /// The binding's epoch; a client keeps the highest it saw per account.
+    /// The binding's epoch (1 today). Clients don't keep the highest per account
+    /// yet; pins must record it before any epoch 2 is signed.
     drive_key_binding_epoch: i32,
 }
 

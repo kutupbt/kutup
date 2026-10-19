@@ -36,7 +36,9 @@ use crate::AppState;
 
 const JSON_CONTENT_TYPE: &str = "application/json";
 const FED_PATH: &str = "/api/fed/drive/profile-keys";
-const MAX_ENVELOPE_CHARS: usize = 2048;
+/// An X-Wing envelope as text, as the column's CHECK allows (migration
+/// `20261018140000_identity_suite`).
+const MAX_ENVELOPE_CHARS: usize = 4096;
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

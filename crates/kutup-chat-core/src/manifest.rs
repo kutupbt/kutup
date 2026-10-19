@@ -293,13 +293,17 @@ fn verify_manifest_trust(
                         .into(),
                 ));
             }
-            // The Drive key changes only by the one-way suite upgrade: in the
-            // next manifest, linked to this one, from a suite-1 key to X-Wing,
-            // the authority (checked above) and signing key unchanged.
-            let linked = manifest.sequence == prior.highest_sequence.saturating_add(1)
+            // The Drive key changes only by the one-way suite upgrade: from a
+            // suite-1 key to X-Wing, the authority (checked above) and signing
+            // key unchanged, in a manifest linked to the one before it. Seen
+            // across a sequence gap, the rise is taken as part of the gap
+            // (`continuity_gap` below), and `verify_manifest_history` checks
+            // that it happened in a linked step before anything is committed.
+            let consecutive = manifest.sequence == prior.highest_sequence.saturating_add(1);
+            let linked = consecutive
                 && manifest.previous_hash.as_deref() == Some(prior.manifest_hash.as_str());
             let drive_key_ok = prior.drive_hpke_public_key == manifest.drive.hpke_public_key
-                || (linked
+                || ((linked || !consecutive)
                     && legacy_suite1_for_upgrade::drive_key_rises(
                         &prior.drive_hpke_public_key,
                         manifest,
@@ -519,15 +523,21 @@ mod tests {
         let next = sign(5, Some(pinned.manifest_hash.clone()));
         let risen = verify_manifest_trust(peer, &next, Some(&pinned)).unwrap();
         assert_eq!(risen.drive_hpke_public_key, next.drive.hpke_public_key);
-        // Across a gap: refused.
+        // Across a gap: a gap to recover, not a changed identity. The
+        // history then has to show the rise in a linked step.
         let later = sign(6, Some("33".repeat(32)));
-        assert!(verify_manifest_trust(peer, &later, Some(&pinned)).is_err());
+        let gapped = verify_manifest_trust(peer, &later, Some(&pinned)).unwrap();
+        assert!(gapped.continuity_gap);
+        assert_eq!(gapped.trust, pinned.trust);
         // From an X-Wing pin, another key: refused (no second change, never
         // back to suite 1).
         let mut xwing_pin = risen.clone();
         xwing_pin.drive_hpke_public_key = STANDARD.encode([9u8; 1216]);
         let after = sign(6, Some(risen.manifest_hash.clone()));
         assert!(verify_manifest_trust(peer, &after, Some(&xwing_pin)).is_err());
+        // Nor across a gap.
+        let much_later = sign(9, Some("44".repeat(32)));
+        assert!(verify_manifest_trust(peer, &much_later, Some(&xwing_pin)).is_err());
         // The same key at the next sequence stays fine.
         assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
     }
