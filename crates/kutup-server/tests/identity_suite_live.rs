@@ -348,7 +348,6 @@ fn xwing_manifest(
     previous_hash: Option<String>,
     devices: Vec<kutup_chat_proto::AccountManifestDeviceV1>,
 ) -> kutup_chat_proto::AccountManifestV1 {
-    use ed25519_dalek::Signer as _;
     let mut manifest = kutup_chat_proto::AccountManifestV1 {
         manifest_version: 1,
         account: user.person.clone(),
@@ -368,12 +367,18 @@ fn xwing_manifest(
         self_authority_key: b64(&user.identity.authority_public_key()),
         signature: String::new(),
     };
+    sign(user, &mut manifest);
+    manifest
+}
+
+/// Signs `manifest` with `user`'s authority.
+fn sign(user: &User, manifest: &mut kutup_chat_proto::AccountManifestV1) {
+    use ed25519_dalek::Signer as _;
     manifest.signature = b64(&user
         .identity
         .authority_signing_key()
         .sign(&manifest.signing_bytes().unwrap())
         .to_bytes());
-    manifest
 }
 
 /// An account from before X-Wing with Chat (a suite-1 Drive key and suite-1
@@ -478,6 +483,8 @@ fn a_suite_1_account_with_chat_manifests_publishes_its_next_one_after_the_upgrad
     );
     back.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
     back.drive.hpke_public_key = b64(&legacy_suite1::drive_keys(&bob.master_key).0);
+    sign(&bob, &mut back);
+    back.verify().unwrap();
     assert_eq!(publish(&back).status(), StatusCode::CONFLICT);
     let same = xwing_manifest(&bob, 4, Some(early.manifest_hash().unwrap()), vec![device]);
     assert_eq!(publish(&same).status(), StatusCode::OK);
