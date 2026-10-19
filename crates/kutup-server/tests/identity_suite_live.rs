@@ -104,11 +104,17 @@ fn a_suite_1_account_upgrades_once_and_is_shared_with_only_after() {
     assert_eq!(upgrade(&bob, binding).status(), StatusCode::NO_CONTENT);
     let again = upgrade(&bob, binding);
     assert_eq!(again.status(), StatusCode::CONFLICT);
-    assert_eq!(again.json::<Value>().unwrap()["code"], "identitySuiteCurrent");
+    assert_eq!(
+        again.json::<Value>().unwrap()["code"],
+        "identitySuiteCurrent"
+    );
     let found = identity_of(&c, &base, &alice, &bob);
     assert_eq!(found["identitySuite"], 2);
     assert_eq!(found["driveKeyBindingEpoch"], 1);
-    assert_eq!(found["driveHpkePublicKey"], b64(&bob.identity.drive_hpke_public_key()));
+    assert_eq!(
+        found["driveHpkePublicKey"],
+        b64(&bob.identity.drive_hpke_public_key())
+    );
 
     // Now shared with as anyone.
     share(&c, &base, &alice, &folder, &bob, false);

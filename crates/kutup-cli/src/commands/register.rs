@@ -111,7 +111,7 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     let person =
         kutup_crypto::account_ref::AccountRef::new(&settings.chat.server_name, &account_id)
             .context("the server's account id")?;
-    let drive_key_binding = kutup_crypto::drive_key_binding::sign(&account_identity, &person)
+    let drive_key_binding = kutup_crypto::drive_key_binding::sign(&account_identity, &person, 1)
         .context("sign the Drive key binding")?;
 
     let req = RegisterRequest {

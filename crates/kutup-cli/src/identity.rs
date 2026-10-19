@@ -92,6 +92,9 @@ pub struct Published {
     pub hpke: String,
     pub signing: String,
     pub binding: Option<String>,
+    /// 2: an X-Wing Drive key; 1: X25519, not yet upgraded (unbound here).
+    pub identity_suite: i16,
+    pub binding_epoch: u32,
 }
 
 /// This account, by its id, and its keys.
@@ -170,6 +173,8 @@ pub fn published(ctx: &Ctx, account: &str) -> Result<Published> {
         hpke: user.drive_hpke_public_key,
         signing: user.drive_signing_public_key,
         binding: user.drive_key_binding,
+        identity_suite: user.identity_suite,
+        binding_epoch: user.drive_key_binding_epoch,
     };
     if person.account != account {
         bail!("the lookup for {account} answered for {}", person.account);
@@ -190,10 +195,21 @@ fn key32(value: &str) -> Option<[u8; 32]> {
     bytes.try_into().ok()
 }
 
+fn hpke_key(value: &str) -> Option<[u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN]> {
+    let bytes = STANDARD.decode(value).ok()?;
+    (STANDARD.encode(&bytes) == value).then_some(())?;
+    bytes.try_into().ok()
+}
+
+/// The person's binding holds for their X-Wing Drive key (identity suite 2);
+/// a suite-1 account isn't bound until it upgrades.
 fn bound(person: &Published) -> bool {
+    if person.identity_suite < 2 || person.binding_epoch == 0 {
+        return false;
+    }
     let (Some(authority), Some(hpke), Some(signing), Some(binding)) = (
         key32(&person.authority),
-        key32(&person.hpke),
+        hpke_key(&person.hpke),
         key32(&person.signing),
         person
             .binding
@@ -202,7 +218,15 @@ fn bound(person: &Published) -> bool {
     ) else {
         return false;
     };
-    drive_key_binding::verify(&person.account_ref, &authority, &hpke, &signing, &binding).is_ok()
+    drive_key_binding::verify(
+        &person.account_ref,
+        &authority,
+        person.binding_epoch,
+        &hpke,
+        &signing,
+        &binding,
+    )
+    .is_ok()
 }
 
 // ------------------------------------------------------------------ pins
@@ -493,6 +517,8 @@ mod tests {
             hpke: String::new(),
             signing: String::new(),
             binding: None,
+            identity_suite: 2,
+            binding_epoch: 1,
         }
     }
 
