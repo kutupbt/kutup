@@ -686,11 +686,13 @@ different branches, or hold changes back. The defences:
   own revision with a different hash fetches again. If the difference persists,
   it shows a warning that the group's server is showing members different
   histories.
-- Each `chatGroups` entry (§5) keeps the last verified revision and chain hash,
-  protected by the account head. A rollback, or an older branch served to
-  another of this account's devices, is detected. The device refuses older
-  state, as `revisionGuard` does in
-  [`rollback-protection.md`](rollback-protection.md).
+- Each `chatGroups` entry (§5) keeps the revision and chain hash verified at
+  joining, protected by the account head, so another of this account's
+  devices refuses a history that doesn't extend it. Each device keeps its own
+  last verified revision and refuses older state, as `revisionGuard` does in
+  [`rollback-protection.md`](rollback-protection.md). The list is not written
+  for every new revision (§5): what one device saw later is not a floor for
+  the others.
 - One server orders, as in Signal; the signatures and these checks make that
   order verifiable.
 
@@ -846,13 +848,39 @@ them on pseudonyms (§3).
   - the joined revision;
   - my pseudonym key pair for the group (§3);
   - my current group capability;
-  - the last verified revision and chain hash.
+  - the revision and chain hash it verified when it joined.
 - Writes go through `listedWrite`, so the server can neither drop a group from
   the list nor bring back a group the person left without the devices noticing
   ([`rollback-protection.md`](rollback-protection.md)). The native clients
   write the head when they arrive, as for pins.
-- The last-seen revision is written at most once a minute per group, and on
-  every membership change, to keep head writes few.
+- The entry format (`kutup_crypto::chat_group_list`, vectors in
+  `chat-group-list-v1.json`), so that the account's server learns as little
+  as possible:
+  - Two keys from the account master key: HKDF-SHA256 with salt
+    `kutup/chat-group-list/v1\0`, infos `kutup/chat-group-list/id-key/v1\0`
+    and `kutup/chat-group-list/seal-key/v1\0`.
+  - The entry id is `HMAC-SHA256(id key, "kutup/chat-group-list/id/v1\0" ‖
+    group id)`, base64url without padding (43 characters). The server never
+    sees a group id, and two accounts in one group have unrelated ids.
+  - A sealed entry is `"KUTPGL1\0" ‖ suite u16 (1, XChaCha20-Poly1305) ‖
+    revision u64 ‖ nonce (24) ‖ ciphertext and tag`. The AAD is the header
+    (magic, suite, revision), the account's key binding (u16 length, then the
+    binding) and the 32-byte entry id, so an entry opens only under its own
+    id and revision, for this incarnation of the account.
+  - The plaintext is `u16 length ‖ GroupListEntryV1 JSON ‖ zeros`, so every
+    sealed entry is exactly 4032 bytes. The server reads the revision from
+    the header (`inspect`), orders writes by it, and refuses any other size.
+- Writes are rare and spread out, so the server can't line up co-members by
+  when they write:
+  - a device writes an entry only when the account joins a group and when it
+    leaves it (or the group ends, or it is removed), never for other changes;
+  - each write waits a random 0–10 minutes, and writes that are due together
+    go out together; a pending write is kept in the local store, so it
+    survives a reload;
+  - a device flushes its pending writes before it signs out or unlinks
+    itself. A device removed from elsewhere loses them; the account's other
+    devices learn of the group through their own sync and write any group
+    missing from the list.
 - The chat backup ([`chat-backup.md`](../chat-backup.md)) is unchanged: display
   records stay keyed by conversation. A group conversation's key changes from
   today's `Group{groupId: uuid}` to the 32-byte derived id, encoded as

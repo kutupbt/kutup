@@ -304,6 +304,8 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::chat_groups::routes::relay,
         crate::chat_groups::routes::fed_gateway,
         crate::chat_groups::routes::fed_gateway_key,
+        crate::handlers::chat::send_sealed_batch,
+        crate::chat_federation::deliver_sealed_batch,
         crate::remote_renames::publish,
         crate::remote_renames::announce,
         crate::drive_federation::get_invite,
@@ -867,6 +869,8 @@ mod tests {
             "/api/fed/chat/messages",
             "/api/chat/groups/relay/{server}",
             "/api/fed/chat/groups/gateway",
+            "/api/chat/anonymous/messages/batch",
+            "/api/fed/chat/sealed/batch",
         ] {
             assert!(paths.contains_key(path), "spec is missing path {path}");
         }

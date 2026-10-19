@@ -13,6 +13,8 @@ pub fn install_crypto_provider() {
 /// A reqwest client builder on that provider. reqwest is built without one
 /// of its own, so the provider is installed here too, wherever the client is
 /// built.
+// The one place a client is built (clippy.toml).
+#[allow(clippy::disallowed_methods)]
 pub fn client_builder() -> reqwest::blocking::ClientBuilder {
     install_crypto_provider();
     reqwest::blocking::Client::builder()

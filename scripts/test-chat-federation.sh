@@ -146,6 +146,19 @@ run_phase account-ids
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
   cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
 
+# Sealed batches: several sealed sends to one server's accounts in one
+# anonymous request; across servers, queued per recipient and delivered as
+# one federated batch (docs/chat-protocol.md §7).
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port_a" \
+KUTUP_FEDERATION_SERVER_A="http://127.0.0.1:$port_a" \
+KUTUP_FEDERATION_SERVER_B="http://127.0.0.1:$port_b" \
+  cargo test -p kutup-server --test chat_sealed_batch_live -- --test-threads=1 --nocapture
+# Those sends went to B in federated batches, not one by one.
+if ! compose logs --no-color backend-b | grep -q 'sealed federation batch'; then
+  echo "B received no federated sealed batch" >&2
+  exit 1
+fi
+
 # Destination Chat-media state may contain the authenticated origin domain and
 # its own local recipient, but never the remote sender account/device. Pending
 # reservations must also be empty after the durable retry finishes.
