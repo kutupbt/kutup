@@ -109,6 +109,10 @@ services:
       # Who may send mail to outside addresses: off, admins or on
       # (docs/self-hosting.md, "Mail").
       MAIL_OUTSIDE_SENDING: ${MAIL_OUTSIDE_SENDING:-off}
+      # Mail forwarding's sealing keys (docs/plans/mail-forwarding.md):
+      # `id:base64` of 32 random bytes, comma-separated; the highest id seals.
+      # Back it up with the database. Unset: no forwarding can be set up.
+      MAIL_FORWARDING_KEYS: ${MAIL_FORWARDING_KEYS:-}
       MAIL_BATCH_CHUNK: ${MAIL_BATCH_CHUNK:-}
       MAIL_DEFAULT_DELAY_SEND_SECONDS: ${MAIL_DEFAULT_DELAY_SEND_SECONDS:-}
       # The map relay's shared tile cache; its size is set on the admin Maps page.

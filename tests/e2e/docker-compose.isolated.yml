@@ -25,6 +25,9 @@ services:
       MAIL_OUTSIDE_SENDING: ${MAIL_OUTSIDE_SENDING:-on}
       # Sends go at once in the browser specs; spec 102 turns undo send on.
       MAIL_DEFAULT_DELAY_SEND_SECONDS: ${MAIL_DEFAULT_DELAY_SEND_SECONDS:-0}
+      # A fixed test key for mail forwarding's sealed proxy factors (the
+      # mail gate's, tests/mail/compose.yml).
+      MAIL_FORWARDING_KEYS: ${MAIL_FORWARDING_KEYS:-1:Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI=}
       # This stack runs as production, and RATE_LIMITS_RELAXED is for APP_ENV=test only.
       RATE_LIMIT_PREFLIGHT_PER_MIN: 1000
       RATE_LIMIT_REGISTER_PER_HOUR: 1000

@@ -424,7 +424,7 @@ async fn local_person(state: &AppState, email: &str) -> AppResult<Option<(Uuid, 
     responses(
         (status = 201, description = "Pending until the forwardee accepts", body = MailForwarding),
         (status = 400, description = "Not a valid forwarding (codes: forwardingMaterialMismatch, endToEndRequired)"),
-        (status = 409, description = "forwardingExists, forwardingLimit, forwardingUnavailable, outsideForwardingUnavailable"),
+        (status = 409, description = "forwardingExists, forwardingLimit, forwardingUnavailable"),
     )
 )]
 pub async fn create(
