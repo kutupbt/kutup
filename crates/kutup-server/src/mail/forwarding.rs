@@ -216,6 +216,8 @@ pub enum Charge {
     Creation,
     /// A confirmation email sent.
     Confirmation,
+    /// A message re-sent outside.
+    Forward,
 }
 
 /// Charges `charge` to the account's allowances (`mail_forwarding_quota`,
@@ -226,9 +228,10 @@ pub async fn charge(
     account: Uuid,
     charge: Charge,
 ) -> Result<bool, sqlx::Error> {
-    let (created, confirmations) = match charge {
-        Charge::Creation => (1, 0),
-        Charge::Confirmation => (0, 1),
+    let (created, confirmations, forwards) = match charge {
+        Charge::Creation => (1, 0, 0),
+        Charge::Confirmation => (0, 1, 0),
+        Charge::Forward => (0, 0, 1),
     };
     sqlx::query("INSERT INTO mail_forwarding_quota (user_id) VALUES ($1) ON CONFLICT DO NOTHING")
         .bind(account)
@@ -241,22 +244,66 @@ pub async fn charge(
                 hour = date_trunc('hour', now()),
                 confirmations_today = CASE WHEN day = current_date
                                            THEN confirmations_today ELSE 0 END + $3,
+                forwards_today = CASE WHEN day = current_date
+                                      THEN forwards_today ELSE 0 END + $4,
                 day = current_date
           WHERE user_id = $1
             AND (CASE WHEN hour = date_trunc('hour', now()) THEN created_this_hour ELSE 0 END)
-                + $2 <= $4
-            AND (CASE WHEN day = current_date THEN confirmations_today ELSE 0 END) + $3 <= $5",
+                + $2 <= $5
+            AND (CASE WHEN day = current_date THEN confirmations_today ELSE 0 END) + $3 <= $6
+            AND (CASE WHEN day = current_date THEN forwards_today ELSE 0 END) + $4 <= $7",
     )
     .bind(account)
     .bind(created)
     .bind(confirmations)
+    .bind(forwards)
     .bind(MAX_CREATED_PER_HOUR as i32)
     .bind(MAX_CONFIRMATIONS_PER_ACCOUNT_PER_DAY)
+    .bind(OUTSIDE_PER_ACCOUNT_PER_DAY as i32)
     .execute(&mut **tx)
     .await?;
     Ok(charged.rows_affected() == 1)
 }
+
+/// Why an account may not send outside now, under the same rules as Mail's
+/// own sending and auto-replies: the server's outside-sending policy
+/// (`off`, `admins`, `on`) and the account's sending standing (paused by an
+/// administrator, or for bounces or spam). `None` when it may.
+pub async fn outside_refusal(
+    state: &AppState,
+    account: Uuid,
+) -> Result<Option<&'static str>, crate::error::AppError> {
+    let is_admin: bool = sqlx::query_scalar("SELECT is_admin FROM users WHERE id = $1")
+        .bind(account)
+        .fetch_one(&state.pool)
+        .await?;
+    if !crate::site_settings::mail_outside_sending(&state.pool, state.config.mail_outside_sending)
+        .await?
+        .allows(is_admin)
+    {
+        return Ok(Some("outsideSendingOff"));
+    }
+    if super::safety::standing(state, account)
+        .await?
+        .paused
+        .is_some()
+    {
+        return Ok(Some("sendingPaused"));
+    }
+    Ok(None)
+}
+
 const RETURN_PATH_DOMAIN: &[u8] = b"kutup/mail-forwarding/return-path/v1\0";
+const MARKER_DOMAIN: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
+
+/// The loop marker's MAC: its own label, over the forwarding alone.
+fn marker_mac(key: &[u8; 32], forwarding: Uuid) -> String {
+    use hmac::{Hmac, Mac as _};
+    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
+    mac.update(MARKER_DOMAIN);
+    mac.update(forwarding.as_bytes());
+    hex::encode(&mac.finalize().into_bytes()[..8])
+}
 
 fn return_path_mac(key: &[u8; 32], forwarding: Uuid, day: i64) -> String {
     use hmac::{Hmac, Mac as _};
@@ -436,7 +483,12 @@ pub async fn forwards(pool: &sqlx::PgPool, address: Uuid) -> bool {
     .bind(address)
     .fetch_one(pool)
     .await
-    .unwrap_or(false)
+    .unwrap_or_else(|error| {
+        // Not known: try, rather than drop it unseen; forward_copy finds out
+        // and logs what it can't do.
+        tracing::warn!(%address, error = %error, "mail: whether the address forwards is unknown");
+        true
+    })
 }
 
 /// Whether arriving mail may be forwarded: not when it carries a marker
@@ -478,7 +530,7 @@ fn ours(keys: &OpaqueSetupKeys, marker: &str) -> bool {
         return false;
     };
     keys.ids().filter_map(|id| keys.get(id)).any(|key| {
-        let expected = return_path_mac(key, forwarding, 0);
+        let expected = marker_mac(key, forwarding);
         expected.len() == mac.len()
             && expected
                 .bytes()
@@ -651,7 +703,7 @@ fn marker(keys: &OpaqueSetupKeys, forwarding: Uuid) -> Option<String> {
     Some(format!(
         "X-Kutup-Forwarded: {}-{}\r\n",
         forwarding.simple(),
-        return_path_mac(key, forwarding, 0)
+        marker_mac(key, forwarding)
     ))
 }
 
@@ -684,14 +736,8 @@ async fn claim_budget(
     .await?
     .rows_affected()
         == 1;
-    let account_total: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(sent_today), 0) FROM mail_forwardings
-          WHERE user_id = $1 AND day = current_date",
-    )
-    .bind(account)
-    .fetch_one(&mut *tx)
-    .await?;
-    if !claimed || account_total > OUTSIDE_PER_ACCOUNT_PER_DAY {
+    let account_allows = claimed && charge(&mut tx, account, Charge::Forward).await?;
+    if !claimed || !account_allows {
         drop(tx);
         sqlx::query("UPDATE mail_forwardings SET notice = 'budget' WHERE id = $1")
             .bind(forwarding)
@@ -725,6 +771,11 @@ async fn forward_outside(
     ) else {
         return Ok(false);
     };
+    // Mail's own rules first: outside sending allowed for the account, and
+    // its sending not paused.
+    if outside_refusal(state, account).await?.is_some() {
+        return Ok(false);
+    }
     if !claim_budget(state, forwarding, account).await? {
         return Ok(false);
     }

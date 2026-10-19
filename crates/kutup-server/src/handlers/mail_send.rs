@@ -1610,10 +1610,10 @@ pub(crate) async fn deliver(
         for copy in delivered {
             crate::mail::auto_reply::spawn(&state, copy);
         }
+        // Only addresses that forward are in `forwards` (asked in the
+        // transaction above).
         for arrived in forwards {
-            if crate::mail::forwarding::forwards(&state.pool, arrived.address_id).await {
-                crate::mail::forwarding::spawn_forward(&state, arrived);
-            }
+            crate::mail::forwarding::spawn_forward(&state, arrived);
         }
         for (key, version) in &blocked {
             if let Err(error) = state.storage.delete_stored(key, version).await {

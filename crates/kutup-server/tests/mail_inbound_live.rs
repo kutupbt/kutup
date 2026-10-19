@@ -5779,9 +5779,8 @@ fn our_marker(forwarding: &str) -> String {
         .expect("the mail gate sets KUTUP_LIVE_FORWARDING_KEY");
     let key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key).unwrap();
     let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
-    mac.update(b"kutup/mail-forwarding/return-path/v1\0");
+    mac.update(b"kutup/mail-forwarding/marker/v1\0");
     mac.update(forwarding.as_bytes());
-    mac.update(&0i64.to_be_bytes());
     format!(
         "X-Kutup-Forwarded: {}-{}\r\n",
         forwarding.simple(),
@@ -6208,6 +6207,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
 /// What the phases of [`outside_forwarding`] hand on.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ForwardState {
+    user_id: String,
     username: String,
     password: String,
     master_key: String,
@@ -6254,8 +6254,66 @@ fn outside_forwarding() {
         .unwrap()
         .status()
     };
+    let admin = std::env::var("KUTUP_LIVE_ADMIN").expect("the mail gate sets KUTUP_LIVE_ADMIN");
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let admin = common::admin_token(&c, &base, admin_password, admin_name);
+    let outside_sending = |value: &str| {
+        let r = bearer(
+            c.put(format!("{base}/api/admin/mail/outside-sending")),
+            &admin,
+        )
+        .json(&json!({ "outsideSending": value }))
+        .send()
+        .unwrap();
+        assert!(
+            r.status().is_success(),
+            "outside sending {value}: {}",
+            r.status()
+        );
+    };
+    let paused = |user_id: &str, paused: bool| {
+        let r = bearer(
+            c.put(format!("{base}/api/admin/users/{user_id}/mail-sending")),
+            &admin,
+        )
+        .json(&json!({ "paused": paused }))
+        .send()
+        .unwrap();
+        assert_eq!(
+            r.status(),
+            reqwest::StatusCode::NO_CONTENT,
+            "pause {paused}"
+        );
+    };
     match phase.as_str() {
         "setup" => {
+            // Mail's own rules hold for forwarding outside: not while the
+            // server lets only administrators send outside, not while the
+            // account's sending is paused.
+            let dave = register(&c, &base);
+            set_up_address(&c, &base, &dave);
+            let dave_address_id = address_id(&c, &base, &dave);
+            let dave_create = || {
+                bearer(c.post(format!("{base}/api/mail/forwardings")), &dave.token)
+                    .json(&json!({
+                        "id": uuid::Uuid::new_v4().to_string(),
+                        "forwarderAddressId": dave_address_id, "forwardeeEmail": "dave@outside.test",
+                        "match": "all", "conditions": [],
+                    }))
+                    .send()
+                    .unwrap()
+            };
+            outside_sending("admins");
+            let r = dave_create();
+            assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
+            assert_eq!(r.json::<Value>().unwrap()["code"], "outsideSendingOff");
+            outside_sending("on");
+            paused(&dave.id, true);
+            let r = dave_create();
+            assert_eq!(r.status(), reqwest::StatusCode::FORBIDDEN);
+            assert_eq!(r.json::<Value>().unwrap()["code"], "sendingPaused");
+            paused(&dave.id, false);
+
             // Eve tries to smuggle SMTP commands in, and to send endless
             // confirmation mail by making and deleting forwardings.
             let eve = register(&c, &base);
@@ -6293,6 +6351,12 @@ fn outside_forwarding() {
                 })
                 .collect();
             let mut key_list = next_list(&eve, &list, flagged);
+            // The allowance is per clock hour: don't start the loop where the
+            // hour could turn in the middle of it.
+            let into_hour = now_secs() % 3600;
+            if into_hour > 3480 {
+                std::thread::sleep(Duration::from_secs(3600 - into_hour + 2));
+            }
             let mut refused = None;
             for n in 0..15 {
                 let r = eve_create(&format!("loop{n}@outside.test"), key_list.clone());
@@ -6397,6 +6461,7 @@ fn outside_forwarding() {
                 "forwardingKeepsNoEncrypt"
             );
             let state = ForwardState {
+                user_id: alice.id.clone(),
                 username: alice.username.clone(),
                 password: alice.password.clone(),
                 master_key: b64(&alice.master_key),
@@ -6495,6 +6560,34 @@ Message-ID: <oloop-{tag}@sender.test>\r\n\r\nround\r\n",
             let loop_id = format!("oloop-{tag}@sender.test");
             arrived(&loop_id);
             println!("FORWARD-NOT {loop_id}");
+            // While Alice's sending is paused, nothing of hers goes outside.
+            let alice_id = state.user_id.clone();
+            paused(&alice_id, true);
+            let while_paused = format!(
+                "From: writer@sender.test\r\nTo: {}\r\nSubject: while paused\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\r\n\r\nheld\r\n",
+                a.address
+            );
+            assert_eq!(
+                smtp_send(&smtp_address, &a.address, &while_paused),
+                (250, 250)
+            );
+            let paused_id = format!("opause-{tag}@sender.test");
+            arrived(&paused_id);
+            println!("FORWARD-NOT {paused_id}");
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while listed(&alice_token)["outgoing"][0]["skipped"]
+                .as_i64()
+                .unwrap()
+                < 1
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "the paused forward was not counted"
+                );
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            paused(&alice_id, false);
             // Readable Kutup mail: re-sent; end-to-end Kutup mail: skipped.
             let carol = register(&c, &base);
             let cc = set_up_address(&c, &base, &carol);
@@ -6507,7 +6600,8 @@ Message-ID: <oloop-{tag}@sender.test>\r\n\r\nround\r\n",
                 let skipped = listed(&alice_token)["outgoing"][0]["skipped"]
                     .as_i64()
                     .unwrap();
-                if skipped >= 1 {
+                // The paused one, then the sealed one.
+                if skipped >= 2 {
                     break;
                 }
                 assert!(

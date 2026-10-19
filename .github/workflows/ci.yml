@@ -296,6 +296,8 @@ jobs:
       E2E_PSQL: docker compose -f ${{ github.workspace }}/docker-compose.yml exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1
       # Sends go at once in the browser specs; spec 102 turns undo send on.
       MAIL_DEFAULT_DELAY_SEND_SECONDS: "0"
+      # Mail forwarding's sealing key, a fixed test value (tests/mail/compose.yml).
+      MAIL_FORWARDING_KEYS: "1:Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI="
       # One app per hostname; *.localhost resolves to this machine.
       KUTUP_ACCOUNT_URL: https://account.localhost:38443
       KUTUP_DRIVE_URL: https://drive.localhost:38443

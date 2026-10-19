@@ -49,6 +49,7 @@ and its [environment reference](https://ente.com/help/self-hosting/installation/
    | `JWT_SECRET` | Signs sessions | `openssl rand -hex 64` |
    | `OPAQUE_SETUP_KEYS` | The keys sign-in is sealed under; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `S3_SECRET_KEY` | The bundled object store's secret | `openssl rand -hex 32` |
+   | `MAIL_FORWARDING_KEYS` | Mail forwarding's keys; forwarding stays off until it's set; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `ADMIN_ACCOUNT` | The break-glass administrator, `username:password` | — |
 
    Everything below that block is optional and shows its default. Check the
@@ -896,7 +897,14 @@ has signed in to the Account app once, which creates its address key.
    from the `Authentication-Results` header Stalwart writes under that name
    (people's allow lists rely on it). `stalwart-setup` turns Stalwart's
    `addAuthResultsHeader` on for port 25 and stops with a `FATAL` line if
-   Stalwart reports it off.
+   Stalwart reports it off. Kutup sends through Stalwart's submission port
+   (2587), which is internal: only the backend reaches it, and Stalwart's
+   inbound throttles skip it (Kutup limits each account's sending itself;
+   port 25 keeps them). `stalwart-setup` stops with a `FATAL` line if a
+   throttle still covers it. To let people forward their mail (Mail →
+   Settings → Forwarding), also set `MAIL_FORWARDING_KEYS`
+   (`echo "1:$(openssl rand -base64 32)"`); without it no forwarding can be
+   set up.
 2. Open TCP port 25 inbound and outbound. Many hosting providers block
    outbound port 25 until asked; mail to people outside Kutup needs it.
 3. Start with the mail file added:

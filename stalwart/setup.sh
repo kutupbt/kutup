@@ -65,6 +65,22 @@ fi
 # removals.
 apply < "$dir/reload.ndjson"
 
+# Stalwart's inbound throttles must spare the submission port, which only
+# the backend reaches and which carries everything Kutup sends, each account
+# limited by Kutup itself (plan.ndjson upserts the two defaults by their
+# description). A throttle the upsert missed, a renamed default for one,
+# would hold all Kutup users together to its rate: refuse to go on.
+# One JSON object per line; at least Stalwart's two defaults.
+throttles="$(stalwart-cli query MtaInboundThrottle --fields enable,description,match --json --no-color)"
+if ! printf '%s' "$throttles" | jq -s -e '
+    length >= 2
+    and ([.[] | select(.enable != false)
+          | select(.match | tostring | contains("listener != '"'"'submission'"'"'") | not)]
+         | length) == 0' >/dev/null; then
+  echo "FATAL: a Stalwart inbound throttle applies to the submission port; Kutup's own mail would be throttled. Stalwart reports: $throttles" >&2
+  exit 1
+fi
+
 # The backend trusts DMARC only from the Authentication-Results header
 # Stalwart writes on port 25 (crates/kutup-server mail/headers.rs); were it
 # off, a sender's own forged header would be the topmost. Refuse to go on.
