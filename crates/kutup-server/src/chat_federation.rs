@@ -696,12 +696,12 @@ impl SealedFlushLocks {
     /// under way here (which then runs again for the send that asked) or on
     /// another backend, or no lock connection is free. Nobody waits for it;
     /// what is not flushed now the retry worker takes.
-    async fn try_lock(&self, destination: &str) -> AppResult<Option<FlushLock<'_>>> {
+    async fn try_lock(&self, destination: &str) -> Option<FlushLock<'_>> {
         {
             let mut flushing = self.flushing.lock().unwrap();
             if let Some(again) = flushing.get_mut(destination) {
                 *again = true;
-                return Ok(None);
+                return None;
             }
             flushing.insert(destination.to_owned(), false);
         }
@@ -711,22 +711,21 @@ impl SealedFlushLocks {
             connection: None,
             permit: None,
             listed: true,
+            locked: false,
         };
-        let Ok(permit) = self.permits.clone().try_acquire_owned() else {
-            return Ok(None);
-        };
+        let permit = self.permits.clone().try_acquire_owned().ok()?;
         lock.permit = Some(permit);
-        let mut connection = self.pool.acquire().await?;
-        let locked: bool =
-            sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 771944))")
-                .bind(destination)
-                .fetch_one(&mut *connection)
-                .await?;
-        if !locked {
-            return Ok(None);
-        }
+        // The client's rows are queued already: a lock that can't be had now
+        // (no connection, a failed query) only leaves them to the worker.
+        let connection = match self.pool.acquire().await {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(%destination, %error, "sealed flush lock: no connection; the retry worker sends");
+                return None;
+            }
+        };
         lock.connection = Some(connection);
-        Ok(Some(lock))
+        lock.relock().await.then_some(lock)
     }
 }
 
@@ -740,44 +739,91 @@ struct FlushLock<'a> {
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
     /// Still in this backend's set of destinations being flushed.
     listed: bool,
+    /// The database lock is held on `connection`.
+    locked: bool,
 }
 
 impl FlushLock<'_> {
-    /// Whether a send for this destination arrived during the flush: then it
-    /// runs again (true). Otherwise this backend stops listing the flush, in
-    /// the same step, so a send arriving from now on starts its own.
-    fn again(&mut self) -> bool {
+    /// Whether a send for this destination arrived during the flush (and
+    /// clears the mark): then the flush runs again.
+    fn take_again(&self) -> bool {
         let mut flushing = self.locks.flushing.lock().unwrap();
         match flushing.get_mut(&self.destination) {
             Some(again) if *again => {
                 *again = false;
                 true
             }
-            _ => {
-                flushing.remove(&self.destination);
-                self.listed = false;
+            _ => false,
+        }
+    }
+
+    /// Stops listing the flush in this backend: a send from now on starts
+    /// its own.
+    fn stop_listing(&mut self) {
+        if self.listed {
+            self.locks
+                .flushing
+                .lock()
+                .unwrap()
+                .remove(&self.destination);
+            self.listed = false;
+        }
+    }
+
+    /// Takes the database lock on the held connection, if no other backend
+    /// holds it. A failed query reads as not taken.
+    async fn relock(&mut self) -> bool {
+        let Some(connection) = self.connection.as_mut() else {
+            return false;
+        };
+        match sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 771944))")
+            .bind(&self.destination)
+            .fetch_one(&mut **connection)
+            .await
+        {
+            Ok(locked) => {
+                self.locked = locked;
+                locked
+            }
+            Err(error) => {
+                tracing::warn!(destination = %self.destination, %error, "sealed flush lock: the lock query failed; the retry worker sends");
                 false
             }
         }
     }
 
-    async fn release(mut self) {
-        if let Some(mut connection) = self.connection.take() {
+    /// Gives the database lock back, keeping the connection; one that can't
+    /// be unlocked is closed, which ends the lock with its session.
+    async fn unlock(&mut self) {
+        if !self.locked {
+            return;
+        }
+        self.locked = false;
+        if let Some(connection) = self.connection.as_mut() {
             let unlocked = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 771944))")
                 .bind(&self.destination)
-                .execute(&mut *connection)
+                .execute(&mut **connection)
                 .await;
             if unlocked.is_err() {
-                connection.close_on_drop();
+                if let Some(mut connection) = self.connection.take() {
+                    connection.close_on_drop();
+                }
             }
         }
+    }
+
+    async fn release(mut self) {
+        self.unlock().await;
+        self.stop_listing();
     }
 }
 
 impl Drop for FlushLock<'_> {
     fn drop(&mut self) {
         if let Some(mut connection) = self.connection.take() {
-            connection.close_on_drop();
+            if self.locked {
+                connection.close_on_drop();
+            }
         }
         if self.listed {
             self.locks
@@ -869,16 +915,29 @@ pub(crate) async fn flush_sealed_destination(
 
 async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFlush> {
     let mut flush = SealedFlush::new();
-    let Some(mut lock) = state.sealed_flush.try_lock(destination).await? else {
+    let Some(mut lock) = state.sealed_flush.try_lock(destination).await else {
         return Ok(flush);
     };
     // Again while sends arrive during the flush (each would otherwise wait
-    // for the retry worker), a few times at most.
-    for _ in 0..MAX_SEALED_FLUSH_PASSES {
+    // for the retry worker), a few times at most. At the end the database
+    // lock goes first and the listing last, with one more look between: a
+    // send that met the listing after the last look is flushed here, and
+    // one after the listing is gone takes the lock itself.
+    let mut passes = 0;
+    loop {
         flush_rounds(state, destination, &mut flush).await?;
-        if !lock.again() {
+        passes += 1;
+        if passes >= MAX_SEALED_FLUSH_PASSES {
             break;
         }
+        if lock.take_again() {
+            continue;
+        }
+        lock.unlock().await;
+        if lock.take_again() && lock.relock().await {
+            continue;
+        }
+        break;
     }
     lock.release().await;
     Ok(flush)
@@ -3333,20 +3392,20 @@ mod sealed_live_tests {
         };
         let locks = SealedFlushLocks::new(&pool, 4);
         let destination = origin();
-        let first = locks.try_lock(&destination).await.unwrap().expect("free");
-        assert!(locks.try_lock(&destination).await.unwrap().is_none());
-        assert!(locks.try_lock("other.test").await.unwrap().is_some());
+        let first = locks.try_lock(&destination).await.expect("free");
+        assert!(locks.try_lock(&destination).await.is_none());
+        assert!(locks.try_lock("other.test").await.is_some());
         first.release().await;
         // Held by another backend.
         let other = SealedFlushLocks::new(&pool, 4);
-        let elsewhere = other.try_lock(&destination).await.unwrap().expect("free");
-        assert!(locks.try_lock(&destination).await.unwrap().is_none());
+        let elsewhere = other.try_lock(&destination).await.expect("free");
+        assert!(locks.try_lock(&destination).await.is_none());
         // Dropped without its release: its connection closes, and with it
         // the lock.
         drop(elsewhere);
         let mut again = None;
         for _ in 0..50 {
-            again = locks.try_lock(&destination).await.unwrap();
+            again = locks.try_lock(&destination).await;
             if again.is_some() {
                 break;
             }
@@ -3567,25 +3626,104 @@ mod sealed_live_tests {
         };
         let locks = SealedFlushLocks::new(&pool, 1);
         let destination = origin();
-        let mut held = locks.try_lock(&destination).await.unwrap().expect("free");
+        let mut held = locks.try_lock(&destination).await.expect("free");
         // A send arrives: no lock for it, and the holder runs again.
-        assert!(locks.try_lock(&destination).await.unwrap().is_none());
-        assert!(held.again());
-        // Nothing arrived since: the holder stops listing the flush.
-        assert!(!held.again());
+        assert!(locks.try_lock(&destination).await.is_none());
+        assert!(held.take_again());
+        assert!(!held.take_again());
+        // At the end the database lock goes first, the listing stays: a send
+        // now still marks this flush (and doesn't take the lock itself),
+        // which takes the lock back and runs again.
+        held.unlock().await;
+        assert!(locks.try_lock(&destination).await.is_none());
+        assert!(held.take_again());
+        assert!(held.relock().await);
         // The one lock connection is taken: another destination skips at
         // once rather than waiting for it.
         let started = std::time::Instant::now();
-        assert!(locks.try_lock("other.test").await.unwrap().is_none());
+        assert!(locks.try_lock("other.test").await.is_none());
         assert!(started.elapsed() < Duration::from_millis(500));
         held.release().await;
         locks
             .try_lock("other.test")
             .await
-            .unwrap()
             .expect("free again")
             .release()
             .await;
+    }
+
+    /// The migration stamps queued, undelivered rows with version 2 (the
+    /// closing step's sends among them); delivered rows keep what they were.
+    #[tokio::test]
+    async fn live_the_migration_stamps_queued_rows_with_version_2() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let destination = origin();
+        let insert = |sequence: i64, state: &'static str| {
+            let pool = pool.clone();
+            let destination = destination.clone();
+            async move {
+                let mut queued = transaction(
+                    "origin.test",
+                    Uuid::new_v4(),
+                    sequence as u64,
+                    Uuid::new_v4(),
+                    [1; 16],
+                    77,
+                );
+                queued.version = 1;
+                let id = Uuid::new_v4();
+                sqlx::query(
+                    "INSERT INTO chat_sealed_federation_outbox
+                         (id, destination, sequence, recipient_account_id, send_id, transaction, state)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                )
+                .bind(id)
+                .bind(&destination)
+                .bind(sequence)
+                .bind(Uuid::new_v4())
+                .bind(Uuid::new_v4())
+                .bind(serde_json::to_value(&queued).unwrap())
+                .bind(state)
+                .execute(&pool)
+                .await
+                .unwrap();
+                id
+            }
+        };
+        let pending = insert(1, "pending").await;
+        let delivered = insert(2, "delivered").await;
+        let migration = include_str!("../migrations/20261018120000_sealed_sequences.up.sql");
+        let start = migration
+            .find("UPDATE chat_sealed_federation_outbox\n   SET transaction = jsonb_set")
+            .expect("the stamping step");
+        let stamp = &migration[start..start + migration[start..].find(';').unwrap()];
+        sqlx::query(&format!("{stamp} AND destination = $1"))
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let version = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT transaction->>'version' FROM chat_sealed_federation_outbox WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(version(pending).await, "2");
+        assert_eq!(version(delivered).await, "1");
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// A sealed single is named by its row and its bytes: a retry of the
