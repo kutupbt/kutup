@@ -736,6 +736,30 @@ const reopenedMail = openAs(joinPackets(sealedMail.keyPackets[0], sealedMail.dat
 assert.equal(new TextDecoder().decode(reopenedMail.data), 'hello bob')
 assert.equal(reopenedMail.verified, true)
 
+// End-to-end forwarding (docs/plans/mail-forwarding.md): the forwarder's
+// client makes the material with its key kept in WASM; the forwardee's
+// accepts only the activation made for this forwarding, signed by the
+// forwarder's key, and gets back a sealed key.
+const forwardee = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
+const forwardingId = '6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607'
+const made = crypto.makeMailForwarding(
+  mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
+  'carol@kutup.dev', forwardee.publicKey, forwardingId, 1_790_000_100, 1_790_604_900,
+)
+assert.deepEqual(Object.keys(made).sort(), ['activation', 'forwardeePublicKey', 'instances'])
+assert.equal(made.instances.length, 1)
+assert.equal(Buffer.from(made.instances[0].proxyParameter, 'base64').length, 32)
+const acceptAs = (id, forwarderKey, now) => crypto.acceptMailForwarding(
+  mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', forwardee.envelope, forwardee.fingerprint,
+  mailVectors.address, forwarderKey, id, now, made.activation,
+)
+const accepted = acceptAs(forwardingId, mailVectors.publicKey, 1_790_000_200)
+assert.deepEqual(Object.keys(accepted).sort(), ['fingerprint', 'privateKeyEnvelope', 'publicKey'])
+assert.equal(accepted.publicKey, made.forwardeePublicKey)
+assert.throws(() => acceptAs('0a1b2c3d-4e5f-4a6b-9c7d-8e9f0a1b2c3d', mailVectors.publicKey, 1_790_000_200))
+assert.throws(() => acceptAs(forwardingId, splitVectors.bobPublicKey, 1_790_000_200))
+assert.throws(() => acceptAs(forwardingId, mailVectors.publicKey, 1_790_604_901))
+
 // PGP with outside correspondents (docs/plans/mail.md, C3): Bob's key from
 // the split vectors stands in for an outside key.
 const bobKey = b64bytes(splitVectors.bobPublicKey)

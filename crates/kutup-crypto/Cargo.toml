@@ -45,14 +45,16 @@ ml-kem = { version = "=0.3.3" }
 # is ours (Argon2id at the V1 cost, through dryoc), so no `argon2` feature.
 opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristretto255"] }
 # OpenPGP for mail (docs/cryptographic-dependencies.md). No bzip2: it needs C.
-pgp = { version = "=0.21.0", default-features = false, optional = true }
+# `draft-wussler-openpgp-forwarding`: Proton-style end-to-end forwarding
+# (`mail_forwarding`); it adds no dependency.
+pgp = { version = "=0.21.0", default-features = false, features = ["draft-wussler-openpgp-forwarding"], optional = true }
 rand = { workspace = true, optional = true }
 # Only for an RSA key's size in the key table; the same version rPGP uses.
 rsa = { version = "=0.9.10", default-features = false, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser clock and randomness for rPGP's signature timestamps.
-pgp = { version = "=0.21.0", default-features = false, features = ["wasm"], optional = true }
+pgp = { version = "=0.21.0", default-features = false, features = ["wasm", "draft-wussler-openpgp-forwarding"], optional = true }
 
 [dev-dependencies]
 rand_chacha = "0.3"

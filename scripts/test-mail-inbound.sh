@@ -99,6 +99,7 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_SMTP="127.0.0.1:$smtp_port" \
+  KUTUP_LIVE_FORWARDING_KEY="Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI=" \
   KUTUP_LIVE_KEYS="http://127.0.0.1:$keys_port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_GPG_HOME="$gpg_home" \
@@ -169,4 +170,67 @@ plaintext="$(gpg_batch --status-file "$gpg_status" --decrypt <<<"$armored")"
 grep -qF "$pgp_marker" <<<"$plaintext" || { echo "GnuPG did not open the message to Dave" >&2; exit 1; }
 grep -q '^\[GNUPG:\] GOODSIG' "$gpg_status" || { echo "GnuPG did not verify Alice's signature" >&2; cat "$gpg_status" >&2; exit 1; }
 rm -f "$gpg_status"
+# Forwarding outside Kutup (docs/plans/mail-forwarding.md), in phases: the
+# confirmation link reaches the sink, its token goes back to the test, and
+# what the address receives afterwards reaches the sink carrying our marker
+# and DKIM; end-to-end Kutup mail doesn't.
+sink_message() {
+  compose logs --no-log-prefix mail-sink \
+    | awk -v needle="$1" '/^SINK-MESSAGE-BEGIN/ {m=""; next} /^SINK-MESSAGE-END/ {if (index(m, needle)) print m; next} {m = m $0 "\n"}'
+}
+wait_sink() {
+  local deadline=$((SECONDS + 60))
+  until [[ -n "$(sink_message "$1")" ]]; do
+    if (( SECONDS >= deadline )); then
+      echo "nothing reached the sink with $1" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+forward_state="$(mktemp)"
+forward_output="$(mktemp)"
+run_forward() {
+  KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+    KUTUP_LIVE_SMTP="127.0.0.1:$smtp_port" \
+  KUTUP_LIVE_FORWARDING_KEY="Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI=" \
+    KUTUP_LIVE_FORWARD_PHASE="$1" \
+    KUTUP_LIVE_FORWARD_STATE="$forward_state" \
+    KUTUP_LIVE_FORWARD_TOKEN="${2:-}" \
+    cargo test -p kutup-server --test mail_inbound_live outside_forwarding -- --exact --nocapture \
+    | tee -a "$forward_output"
+}
+run_forward setup
+forward_to="$(grep -o 'FORWARD-OUTSIDE-TO [^ ]*' "$forward_output" | cut -d' ' -f2)"
+[[ -n "$forward_to" ]] || { echo "the forwarding test did not report its forwardee" >&2; exit 1; }
+wait_sink "To: $forward_to"
+forward_token="$(sink_message "To: $forward_to" | grep -o '/email-forwarding#[A-Za-z0-9_-]*' | head -1 | cut -d'#' -f2)"
+[[ "$forward_token" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo "no confirmation link reached $forward_to" >&2; exit 1; }
+grep -q "^DKIM-Signature: v=1; a=ed25519-sha256" <<<"$(sink_message "To: $forward_to")" \
+  || { echo "the confirmation is not DKIM-signed" >&2; exit 1; }
+run_forward confirm "$forward_token"
+for expected in $(grep -o 'FORWARD-EXPECT [^ ]*' "$forward_output" | cut -d' ' -f2); do
+  wait_sink "Message-ID: <$expected>"
+  forwarded="$(sink_message "Message-ID: <$expected>")"
+  grep -q "^X-Kutup-Forwarded: [0-9a-f]\{16\}" <<<"$forwarded" \
+    || { echo "the forward of $expected carries no marker" >&2; exit 1; }
+  grep -q "^DKIM-Signature: v=1; a=ed25519-sha256" <<<"$forwarded" \
+    || { echo "the forward of $expected is not DKIM-signed" >&2; exit 1; }
+  # From our return path: fwd-<forwarding>-<day>-<hmac>@<server>.
+  grep -q "^X-Sink-Envelope-From: <fwd-[0-9a-f]\{32\}-[0-9]\+-[0-9a-f]\{16\}@" <<<"$forwarded" \
+    || { echo "the forward of $expected is not from our return path" >&2; exit 1; }
+done
+# Both: outside mail that arrived for the address, and readable Kutup mail.
+(( $(grep -c 'FORWARD-EXPECT ' "$forward_output") == 2 )) \
+  || { echo "the forwarding test did not report its two forwards" >&2; exit 1; }
+for unexpected in $(grep -o 'FORWARD-NOT [^ ]*' "$forward_output" | cut -d' ' -f2); do
+  if [[ -n "$(sink_message "Message-ID: <$unexpected>")" ]]; then
+    echo "$unexpected was forwarded outside (end-to-end, or a loop)" >&2
+    exit 1
+  fi
+done
+run_forward end
+rm -f "$forward_state" "$forward_output"
+echo "OUTSIDE FORWARDING VERIFIED"
+
 echo "mail gate passed"

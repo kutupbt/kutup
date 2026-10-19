@@ -181,7 +181,9 @@ without changing any key.
   - Deleting the last outside forwarding clears the flag again.
 - **Catch-all forwardees refused, as Proton.** No forwarding to an address
   of the same account. No forwarding to a list or shared mailbox (theirs
-  aren't person keys).
+  aren't person keys). A forwarding is of an address: mail a member gets
+  through a list or shared mailbox arrives at the list's address, so it
+  isn't forwarded by the member's.
 
 ### Crypto (kutup-crypto, the `mail` feature plus rPGP's forwarding feature)
 
@@ -282,7 +284,10 @@ without changing any key.
       sealed zero-access while the flag is set).
     - It submits the message unchanged to the forwardee through Stalwart,
       with the envelope sender rewritten by **SRS** (SRS0, HMAC under a
-      server secret; we do it, Stalwart doesn't).
+      server secret; we do it, Stalwart doesn't). As built, the return
+      path is SRS's purpose in a VERP form, `fwd-<forwarding>-<day>-<hmac>`
+      at our domain: bounces are counted per forwarding, not relayed, so it
+      names the forwarding rather than the original sender.
     - Stalwart DKIM-signs it as our domain. No ARC: Stalwart's sealing is
       off, and Proton's choice isn't visible.
     - **Bounces:** a bounce to an SRS address is checked at RCPT: its HMAC
@@ -308,15 +313,40 @@ without changing any key.
       that is an open question (below).
 - **Loops.** Mail forwarded by us carries a marker header
   (`X-Kutup-Forwarded`, an HMAC of the forwarding id under a server
-  secret) and, for outside forwards, our SRS envelope sender. Neither
-  breaks the original DKIM signature. Mail that arrives with our marker,
-  with an envelope sender in our SRS form, or with more than 20 `Received`
-  headers is delivered but never forwarded again. That covers loops through
-  outside providers (A → outside → A, or A → outside → B → …), which
-  arrive without our internal flag.
+  secret), which doesn't break the original DKIM signature. Mail that
+  arrives with our marker, or with more than 20 `Received` headers, is
+  delivered but never forwarded again. That covers loops through outside
+  providers (A → outside → A, or A → outside → B → …), which arrive without
+  our internal flag. As built, the envelope sender isn't part of it: a
+  message coming back through another provider has that provider's envelope
+  sender (rewritten again by its own SRS, if any), never ours, so ours
+  can't tell a loop. The marker is what does, with the hop cap for a
+  provider that strips unknown headers.
+- **The return path (as built).** SRS0 encodes the original sender so a
+  bounce can be relayed to them. Ours, `fwd-<forwarding>-<day>-<hmac>`,
+  names the forwarding instead, because bounces are counted and dropped,
+  never relayed: the original sender isn't told a forward failed (Proton's
+  behaviour isn't visible). SPF holds for our hop either way. The bounce
+  check at RCPT is an HMAC-SHA256 under `MAIL_FORWARDING_KEYS` (separated
+  from k's sealing by its own label), cut to 64 bits (SRS0's hash is 24 to
+  30), over the forwarding id and the day; any configured key is tried, and
+  a path older than 21 days is refused. Recipients of forwards see the
+  forwarding's id in the return path: a random UUID, which links forwards
+  of one forwarding to each other and nothing else.
 - **Primary key change** makes the address's end-to-end forwardings
   Outdated, as Proton, and deletes their k (above). The key-change dialogs
   warn first, with Proton's wording.
+- **The forwardee key never signs or verifies either** (as built, from
+  review): its forwarder made it and knows its secret, so a signature by it
+  would prove nothing about the forwardee whose address it names. Its
+  primary only certifies its subkeys, and kutup-crypto refuses it as a
+  signer, as a key to verify with and as a recipient.
+- **A forwarded copy is the forwardee's mail**: it goes through their
+  block, spam and allow lists and their filters like any arrival; one they
+  block isn't stored and counts as not forwarded.
+- **Abuse:** at most 5 forwardings pending to one address at a time. A
+  deactivated account's forwardings, either side, lose k and become
+  Outdated.
 - **The forwardee key is never an encryption target.** It stays out of the
   keys endpoint, WKD, the outside key lookups and the composer's choice of
   keys. At accept the server checks that the uploaded key's subkey
@@ -358,7 +388,13 @@ without changing any key.
   - `GET outgoing|incoming`;
   - `POST`, `PUT {id}` (new material), `DELETE {id}`;
   - `PUT {id}/pause|resume|reinvite|conditions`;
-  - accept = `POST /api/mail/addresses/{id}/keys` with `forwardingId`.
+  - `GET {id}/activation`, `POST {id}/accept` (the forwarding key as an
+    address key), `POST {id}/decline`;
+  - `DELETE /api/mail/addresses/{address}/forwarding-keys/{key}` (the
+    forwardee deletes the key; its forwarding ends);
+  - the forwarder's client chooses the forwarding's id (a UUID v4), so the
+    activation can bind it before anything is stored (as built; see
+    `docs/api.md`, "Mail forwarding").
   - The outside confirmation goes through `GET|PUT|DELETE
     /api/mail/forwardings/external/{token}`. That token is single-use and
     lives 7 days; an expired one sends a new link.

@@ -42,6 +42,10 @@ pub struct OwnMailKey {
     pub flags: i32,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// A forwarding key (docs/plans/mail-forwarding.md): it opens only mail
+    /// forwarded to this address, is never encrypted to and isn't in the
+    /// signed key list.
+    pub forwarding: bool,
 }
 
 /// A signed key list: canonical bytes and the authority's signature, base64.
@@ -64,6 +68,10 @@ pub struct OwnMailAddress {
     pub keys: Vec<OwnMailKey>,
     /// The current signed key list; null until the first key is added.
     pub key_list: Option<SignedKeyList>,
+    /// The address's last outside forwarding ended without its owner's
+    /// client: sign the next list without EMAIL_NO_ENCRYPT
+    /// (docs/plans/mail-forwarding.md).
+    pub key_list_owed: bool,
 }
 
 /// Gives a new account its address row, in the transaction that creates the
@@ -97,6 +105,7 @@ type KeyRow = (
     bool,
     i32,
     time::OffsetDateTime,
+    bool,
 );
 
 async fn own_address(
@@ -105,7 +114,8 @@ async fn own_address(
     address: String,
 ) -> AppResult<OwnMailAddress> {
     let keys: Vec<KeyRow> = sqlx::query_as(
-        "SELECT id, fingerprint, sha256_fingerprint, public_key, private_key_envelope, is_primary, flags, created_at
+        "SELECT id, fingerprint, sha256_fingerprint, public_key, private_key_envelope, is_primary, flags,
+                created_at, is_forwarding
            FROM mail_address_keys WHERE address_id = $1 ORDER BY created_at, fingerprint",
     )
     .bind(address_id)
@@ -117,8 +127,8 @@ async fn own_address(
     .bind(address_id)
     .fetch_optional(&state.pool)
     .await?;
-    let address_state: String =
-        sqlx::query_scalar("SELECT state FROM mail_addresses WHERE id = $1")
+    let (address_state, key_list_owed): (String, bool) =
+        sqlx::query_as("SELECT state, key_list_owed FROM mail_addresses WHERE id = $1")
             .bind(address_id)
             .fetch_one(&state.pool)
             .await?;
@@ -129,7 +139,17 @@ async fn own_address(
         keys: keys
             .into_iter()
             .map(
-                |(id, fingerprint, sha256, public_key, envelope, primary, flags, created_at)| {
+                |(
+                    id,
+                    fingerprint,
+                    sha256,
+                    public_key,
+                    envelope,
+                    primary,
+                    flags,
+                    created_at,
+                    forwarding,
+                )| {
                     OwnMailKey {
                         id: id.to_string(),
                         fingerprint,
@@ -139,6 +159,7 @@ async fn own_address(
                         primary,
                         flags,
                         created_at,
+                        forwarding,
                     }
                 },
             )
@@ -147,6 +168,7 @@ async fn own_address(
             data: STANDARD.encode(data),
             signature: STANDARD.encode(signature),
         }),
+        key_list_owed,
     })
 }
 
@@ -207,18 +229,18 @@ fn decode(value: &str, field: &str) -> AppResult<Vec<u8>> {
 
 /// A key list change in progress: the address locked, the new list checked
 /// as the direct successor of the current one.
-struct ListChange {
-    tx: sqlx::Transaction<'static, sqlx::Postgres>,
-    address_id: Uuid,
-    address: String,
-    signed: SignedMailKeyListV1,
+pub(crate) struct ListChange {
+    pub(crate) tx: sqlx::Transaction<'static, sqlx::Postgres>,
+    pub(crate) address_id: Uuid,
+    pub(crate) address: String,
+    pub(crate) signed: SignedMailKeyListV1,
 }
 
 /// Verifies `key_list` as the next signed list of the caller's address
 /// `id`, against the account authority, and locks the address. The address
 /// is the caller's by its row (`user_id`), current or kept receiving after a
 /// rename: an old address's keys stay the account's to manage.
-async fn begin_list_change(
+pub(crate) async fn begin_list_change(
     state: &AppState,
     user_id: Uuid,
     id: &str,
@@ -285,9 +307,15 @@ async fn begin_list_change(
 
 impl ListChange {
     /// The stored keys' fingerprints, with `extra`.
-    async fn check_lists_exactly(&mut self, extra: Option<(String, String)>) -> AppResult<()> {
+    pub(crate) async fn check_lists_exactly(
+        &mut self,
+        extra: Option<(String, String)>,
+    ) -> AppResult<()> {
         let stored: Vec<(String, String)> = sqlx::query_as(
-            "SELECT fingerprint, sha256_fingerprint FROM mail_address_keys WHERE address_id = $1",
+            // Forwarding keys are never listed (as Proton keeps them out of
+            // its signed key list).
+            "SELECT fingerprint, sha256_fingerprint FROM mail_address_keys
+              WHERE address_id = $1 AND NOT is_forwarding",
         )
         .bind(self.address_id)
         .fetch_all(&mut *self.tx)
@@ -316,7 +344,62 @@ impl ListChange {
     }
 
     /// Primary and flags follow the list; the list is recorded.
-    async fn finish(mut self, state: &AppState) -> AppResult<OwnMailAddress> {
+    pub(crate) async fn finish(mut self, state: &AppState) -> AppResult<OwnMailAddress> {
+        // While the address forwards outside, every key it lists keeps
+        // EMAIL_NO_ENCRYPT (docs/plans/mail-forwarding.md); once none does,
+        // a list without it settles what the address owed.
+        let forwards_outside: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM mail_forwardings
+                             WHERE forwarder_address_id = $1 AND kind = 'outside'
+                               AND state <> 'rejected')",
+        )
+        .bind(self.address_id)
+        .fetch_one(&mut *self.tx)
+        .await?;
+        let all_no_encrypt = self
+            .signed
+            .list
+            .keys
+            .iter()
+            .all(|key| key.flags & mail_key::FLAG_EMAIL_NO_ENCRYPT != 0);
+        if forwards_outside && !all_no_encrypt {
+            return Err(AppError::conflict(
+                "the address forwards outside Kutup: its keys stay without end-to-end encryption",
+            )
+            .with_details(serde_json::json!({ "code": "forwardingKeepsNoEncrypt" })));
+        }
+        if !forwards_outside {
+            let none_no_encrypt = self
+                .signed
+                .list
+                .keys
+                .iter()
+                .all(|key| key.flags & mail_key::FLAG_EMAIL_NO_ENCRYPT == 0);
+            if none_no_encrypt {
+                sqlx::query("UPDATE mail_addresses SET key_list_owed = false WHERE id = $1")
+                    .bind(self.address_id)
+                    .execute(&mut *self.tx)
+                    .await?;
+            }
+        }
+        let old_primary: Option<String> = sqlx::query_scalar(
+            "SELECT fingerprint FROM mail_address_keys WHERE address_id = $1 AND is_primary",
+        )
+        .bind(self.address_id)
+        .fetch_optional(&mut *self.tx)
+        .await?;
+        let new_primary = self
+            .signed
+            .list
+            .keys
+            .iter()
+            .find(|key| key.primary)
+            .map(|key| hex::encode(key.fingerprint));
+        if old_primary.is_some() && old_primary != new_primary {
+            // A new primary key: end-to-end forwardings made for the old one
+            // stop, and their proxy factors go (docs/plans/mail-forwarding.md).
+            crate::mail::forwarding::outdate(&mut self.tx, self.address_id).await?;
+        }
         sqlx::query("UPDATE mail_address_keys SET is_primary = false WHERE address_id = $1")
             .bind(self.address_id)
             .execute(&mut *self.tx)
@@ -635,7 +718,8 @@ async fn public_keys(
     };
     let keys: Vec<(String, String, Vec<u8>, bool, i32)> = sqlx::query_as(
         "SELECT fingerprint, sha256_fingerprint, public_key, is_primary, flags
-           FROM mail_address_keys WHERE address_id = $1 ORDER BY is_primary DESC, created_at DESC",
+           FROM mail_address_keys WHERE address_id = $1 AND NOT is_forwarding
+          ORDER BY is_primary DESC, created_at DESC",
     )
     .bind(address_id)
     .fetch_all(&state.pool)
@@ -793,10 +877,12 @@ pub async fn wkd_key(
     let mut body = Vec::new();
     match public_keys(&state, &address).await? {
         Some((_, _, keys)) => {
-            for key in keys
-                .iter()
-                .filter(|key| key.flags as u32 & FLAG_NOT_OBSOLETE != 0)
-            {
+            // A key not to encrypt to (the address forwards outside Kutup,
+            // docs/plans/mail-forwarding.md) isn't offered to outside senders.
+            for key in keys.iter().filter(|key| {
+                key.flags as u32 & FLAG_NOT_OBSOLETE != 0
+                    && key.flags as u32 & mail_key::FLAG_EMAIL_NO_ENCRYPT == 0
+            }) {
                 body.extend(
                     STANDARD
                         .decode(&key.public_key)
