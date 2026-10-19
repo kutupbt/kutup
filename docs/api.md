@@ -1640,7 +1640,9 @@ Pending forwardings past their expiry (7 days) lapse to `rejected` first.
 `201` with the forwarding, pending. The client chooses the id so the
 activation can bind it.
 
-**Outside Kutup** there is no `endToEnd`. The first outside forwarding of an
+**Outside Kutup** there is no `endToEnd`, and `forwardeeEmail` must be a plain mailbox (an RFC 5321
+dot-atom local part, a domain of two or more labels; no quoting, IP
+literals, control characters or whitespace). The first outside forwarding of an
 address brings `"keyList"`: its next signed key list, every key as it is
 plus `EMAIL_NO_ENCRYPT` (`400 keyListRequired` without it, `400
 keyListMismatch` for any other change). The forwardee is emailed a link to
@@ -1665,12 +1667,16 @@ material: `{ "endToEnd": {...} }` as above → pending again.
 ### PUT /api/mail/forwardings/:id/reinvite
 
 The forwarder sends an outside forwardee a fresh link (pending, or declined
-and asked again): `429 rateLimited` past 3 a day.
+and asked again): `429 rateLimited` past 3 a day for the forwarding, or 10 a
+day for the account (deleted forwardings' links included; making
+forwardings is likewise limited to 10 an hour per account, however many are
+deleted). A declined one whose address is end to end again is `400
+keyListRequired`: set it up anew.
 
 ### POST /api/mail/forwardings/external · /external/accept · /external/decline
 
 No account: the confirmation page, with `{ "token" }` from the link (in the
-body, never the URL). The first answers `{ "state", "forwarderEmail",
+body, never the URL); 30 requests a minute per client (`429 rateLimited`). The first answers `{ "state", "forwarderEmail",
 "forwardeeEmail" }`; accept makes it active, decline `rejected`; each spends
 the link. `404` for an unknown token; `410 linkExpired` for an expired one,
 and a new link is sent.
@@ -1715,8 +1721,9 @@ ends with it.
 its key packet transformed (the data packet unchanged) and carries
 `forwardedFrom: "<forwarder address>"` on its message row: open it with the
 forwarding key only. Spam, mail that itself came by forwarding, and mail
-that came back through a loop (our `X-Kutup-Forwarded` marker, more than 20
-`Received` headers) aren't forwarded. Outside, a forward goes out unchanged
+that came back through a loop (our `X-Kutup-Forwarded: <forwarding>-<hmac>`
+marker, its HMAC checked under `MAIL_FORWARDING_KEYS`, a forged one ignored;
+more than 20 `Received` header lines) aren't forwarded. Outside, a forward goes out unchanged
 but for the marker on top, from a return path of ours
 (`fwd-<forwarding>-<day>-<hmac>@<server>`) that a bounce comes back to: it is
 checked at RCPT (a forged or older-than-21-days one is refused there) and

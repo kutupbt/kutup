@@ -5768,6 +5768,27 @@ fn send_readable(
     message_id
 }
 
+/// The loop marker one of our forwardings sets: the forwarding id and an
+/// HMAC under the gate's `MAIL_FORWARDING_KEYS` key
+/// (`KUTUP_LIVE_FORWARDING_KEY`, its base64), as `mail::forwarding` makes
+/// it. Without the key, a forged one, which must not count.
+fn our_marker(forwarding: &str) -> String {
+    use hmac::Mac as _;
+    let forwarding = uuid::Uuid::parse_str(forwarding).unwrap();
+    let key = std::env::var("KUTUP_LIVE_FORWARDING_KEY")
+        .expect("the mail gate sets KUTUP_LIVE_FORWARDING_KEY");
+    let key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key).unwrap();
+    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
+    mac.update(b"kutup/mail-forwarding/return-path/v1\0");
+    mac.update(forwarding.as_bytes());
+    mac.update(&0i64.to_be_bytes());
+    format!(
+        "X-Kutup-Forwarded: {}-{}\r\n",
+        forwarding.simple(),
+        hex::encode(&mac.finalize().into_bytes()[..8])
+    )
+}
+
 /// Waits a moment, then checks that `message_id` never reached `user`.
 fn never_arrives(c: &Client, base: &str, user: &User, message_id: &str) {
     std::thread::sleep(Duration::from_secs(5));
@@ -5921,13 +5942,24 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <spam-{tag}@sender.test>\r\
     never_arrives(&c, &base, &bob, &spam_id);
 
     // A loop: mail that already went through one of our forwardings (our
-    // marker) or through too many hops is delivered but not forwarded.
+    // marker, its HMAC checked) or through too many hops is delivered but
+    // not forwarded. A forged marker counts for nothing.
     let looped = format!(
-        "X-Kutup-Forwarded: 0123456789abcdef\r\nFrom: writer@sender.test\r\nTo: {}\r\n\
+        "{}From: writer@sender.test\r\nTo: {}\r\n\
 Subject: forward me again\r\nDate: Mon, 19 Oct 2026 10:00:00 +0000\r\n\
 Message-ID: <loop-{tag}@sender.test>\r\n\r\nround and round\r\n",
+        our_marker(&id),
         a.address
     );
+    let forged = format!(
+        "X-Kutup-Forwarded: {}-0123456789abcdef\r\nFrom: writer@sender.test\r\nTo: {}\r\n\
+Subject: forward me, forged\r\nDate: Mon, 19 Oct 2026 10:00:00 +0000\r\n\
+Message-ID: <forged-{tag}@sender.test>\r\n\r\nnot a loop\r\n",
+        uuid::Uuid::parse_str(&id).unwrap().simple(),
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &forged), (250, 250));
+    wait_for(&c, &base, &bob, &format!("forged-{tag}@sender.test"));
     assert_eq!(smtp_send(&smtp_address, &a.address, &looped), (250, 250));
     let loop_id = format!("loop-{tag}@sender.test");
     wait_for(&c, &base, &alice, &loop_id);
@@ -6224,6 +6256,67 @@ fn outside_forwarding() {
     };
     match phase.as_str() {
         "setup" => {
+            // Eve tries to smuggle SMTP commands in, and to send endless
+            // confirmation mail by making and deleting forwardings.
+            let eve = register(&c, &base);
+            set_up_address(&c, &base, &eve);
+            let eve_address_id = address_id(&c, &base, &eve);
+            let eve_create = |to: &str, key_list: Value| {
+                bearer(c.post(format!("{base}/api/mail/forwardings")), &eve.token)
+                    .json(&json!({
+                        "id": uuid::Uuid::new_v4().to_string(),
+                        "forwarderAddressId": eve_address_id, "forwardeeEmail": to,
+                        "match": "all", "conditions": [], "keyList": key_list,
+                    }))
+                    .send()
+                    .unwrap()
+            };
+            for injected in [
+                "x@outside.test>\r\nRCPT TO:<victim@outside.test",
+                "x@outside.test\r\nBcc: victim@outside.test",
+                "x@outside.test> NOTIFY=NEVER",
+            ] {
+                assert_eq!(
+                    eve_create(injected, Value::Null).status(),
+                    reqwest::StatusCode::BAD_REQUEST,
+                    "{injected:?}"
+                );
+            }
+            let (_, list) = current_list(&c, &base, &eve);
+            let flagged: Vec<MailKeyEntryV1> = list
+                .list
+                .keys
+                .iter()
+                .map(|key| MailKeyEntryV1 {
+                    flags: key.flags | mail_key::FLAG_EMAIL_NO_ENCRYPT,
+                    ..key.clone()
+                })
+                .collect();
+            let mut key_list = next_list(&eve, &list, flagged);
+            let mut refused = None;
+            for n in 0..15 {
+                let r = eve_create(&format!("loop{n}@outside.test"), key_list.clone());
+                if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    refused = Some(n);
+                    break;
+                }
+                assert_eq!(r.status(), reqwest::StatusCode::CREATED);
+                let id = r.json::<Value>().unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                let r = bearer(
+                    c.delete(format!("{base}/api/mail/forwardings/{id}")),
+                    &eve.token,
+                )
+                .send()
+                .unwrap();
+                assert_eq!(r.status(), reqwest::StatusCode::NO_CONTENT);
+                // The flag stays until Eve's client settles it: no list now.
+                key_list = Value::Null;
+            }
+            assert_eq!(refused, Some(10), "deleting gives no allowance back");
+
             let alice = register(&c, &base);
             let a = set_up_address(&c, &base, &alice);
             let alice_address_id = address_id(&c, &base, &alice);
@@ -6392,9 +6485,10 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nto alice and
             println!("FORWARD-EXPECT {outside_id}");
             // One carrying our marker came back through a loop: it stays.
             let looped = format!(
-                "X-Kutup-Forwarded: 0123456789abcdef\r\nFrom: writer@sender.test\r\nTo: {}\r\n\
+                "{}From: writer@sender.test\r\nTo: {}\r\n\
 Subject: outside loop\r\nDate: Mon, 19 Oct 2026 10:00:00 +0000\r\n\
 Message-ID: <oloop-{tag}@sender.test>\r\n\r\nround\r\n",
+                our_marker(&state.forwarding_id),
                 a.address
             );
             assert_eq!(smtp_send(&smtp_address, &a.address, &looped), (250, 250));

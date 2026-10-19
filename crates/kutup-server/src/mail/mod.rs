@@ -318,7 +318,10 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                         object_key: key.clone(),
                         object_version: version.clone(),
                         readable: readable.clone(),
-                        may_forward: forwarding::may_forward(raw),
+                        may_forward: forwarding::may_forward(
+                            &state.config.mail_forwarding_keys,
+                            raw,
+                        ),
                         plaintext: Some(std::sync::Arc::new(raw.to_vec())),
                     },
                 );

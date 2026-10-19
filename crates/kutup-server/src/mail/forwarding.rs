@@ -162,6 +162,42 @@ pub async fn sweep_expired(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     tx.commit().await
 }
 
+/// An outside forwardee address as it may be used, or `None`: a plain
+/// RFC 5321 mailbox, lowercased: one `@`; a local part of atext and single
+/// dots (no quoting); a domain of at least two labels of letters, digits and
+/// inner hyphens. Nothing that could end an SMTP command or a header line
+/// gets through (`submit` refuses those again).
+pub fn outside_address(value: &str) -> Option<String> {
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    let value = value.trim_matches(' ').to_ascii_lowercase();
+    if value.len() > 254 || !value.is_ascii() {
+        return None;
+    }
+    let (local, domain) = value.split_once('@')?;
+    let atext = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+/=?^_`{|}~-".contains(c);
+    let local_ok = !local.is_empty()
+        && local.len() <= 64
+        && local
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(atext));
+    let labels: Vec<&str> = domain.split('.').collect();
+    let domain_ok = domain.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        && !labels
+            .last()
+            .is_some_and(|tld| tld.chars().all(|c| c.is_ascii_digit()));
+    (local_ok && domain_ok).then_some(value)
+}
+
 /// A return path lasts this many days (as SRS0's timestamp).
 const RETURN_PATH_DAYS: i64 = 21;
 /// Bounces in one day that pause an outside forwarding.
@@ -170,6 +206,56 @@ pub const MAX_BOUNCES_PER_DAY: i32 = 5;
 pub const MAX_CREATED_PER_HOUR: i64 = 10;
 /// Confirmation emails one outside forwarding may send in a day.
 pub const MAX_INVITES_PER_DAY: i32 = 3;
+/// Confirmation emails one account may cause in a day, across its
+/// forwardings, deleted ones included.
+pub const MAX_CONFIRMATIONS_PER_ACCOUNT_PER_DAY: i32 = 10;
+
+/// What an account spends of its forwarding allowances.
+pub enum Charge {
+    /// A forwarding made.
+    Creation,
+    /// A confirmation email sent.
+    Confirmation,
+}
+
+/// Charges `charge` to the account's allowances (`mail_forwarding_quota`,
+/// apart from the forwardings, so deleting one gives nothing back). `false`
+/// when it is spent; nothing is charged then.
+pub async fn charge(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account: Uuid,
+    charge: Charge,
+) -> Result<bool, sqlx::Error> {
+    let (created, confirmations) = match charge {
+        Charge::Creation => (1, 0),
+        Charge::Confirmation => (0, 1),
+    };
+    sqlx::query("INSERT INTO mail_forwarding_quota (user_id) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(account)
+        .execute(&mut **tx)
+        .await?;
+    let charged = sqlx::query(
+        "UPDATE mail_forwarding_quota SET
+                created_this_hour = CASE WHEN hour = date_trunc('hour', now())
+                                         THEN created_this_hour ELSE 0 END + $2,
+                hour = date_trunc('hour', now()),
+                confirmations_today = CASE WHEN day = current_date
+                                           THEN confirmations_today ELSE 0 END + $3,
+                day = current_date
+          WHERE user_id = $1
+            AND (CASE WHEN hour = date_trunc('hour', now()) THEN created_this_hour ELSE 0 END)
+                + $2 <= $4
+            AND (CASE WHEN day = current_date THEN confirmations_today ELSE 0 END) + $3 <= $5",
+    )
+    .bind(account)
+    .bind(created)
+    .bind(confirmations)
+    .bind(MAX_CREATED_PER_HOUR as i32)
+    .bind(MAX_CONFIRMATIONS_PER_ACCOUNT_PER_DAY)
+    .execute(&mut **tx)
+    .await?;
+    Ok(charged.rows_affected() == 1)
+}
 const RETURN_PATH_DOMAIN: &[u8] = b"kutup/mail-forwarding/return-path/v1\0";
 
 fn return_path_mac(key: &[u8; 32], forwarding: Uuid, day: i64) -> String {
@@ -353,9 +439,11 @@ pub async fn forwards(pool: &sqlx::PgPool, address: Uuid) -> bool {
     .unwrap_or(false)
 }
 
-/// Whether arriving mail may be forwarded: not when it carries our
-/// forwarding marker, or has come through more than [`MAX_HOPS`] hops.
-pub fn may_forward(raw: &[u8]) -> bool {
+/// Whether arriving mail may be forwarded: not when it carries a marker
+/// one of our forwardings set (its HMAC holds under a configured key), or has
+/// come through more than [`MAX_HOPS`] hops. A forged marker is ignored. Only
+/// header lines count: folded continuation lines are part of the one above.
+pub fn may_forward(keys: &OpaqueSetupKeys, raw: &[u8]) -> bool {
     let headers = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -364,14 +452,40 @@ pub fn may_forward(raw: &[u8]) -> bool {
     let text = String::from_utf8_lossy(headers);
     let mut received = 0usize;
     for line in text.lines() {
-        let name = line.split_once(':').map(|(name, _)| name.trim());
-        match name {
-            Some(name) if name.eq_ignore_ascii_case("x-kutup-forwarded") => return false,
-            Some(name) if name.eq_ignore_ascii_case("received") => received += 1,
-            _ => {}
+        if line.starts_with([' ', '\t']) {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.eq_ignore_ascii_case("x-kutup-forwarded") && ours(keys, value.trim()) {
+            return false;
+        }
+        if name.eq_ignore_ascii_case("received") {
+            received += 1;
         }
     }
     received <= MAX_HOPS
+}
+
+/// Whether a marker value is one of ours: `<forwarding>-<hmac>`.
+fn ours(keys: &OpaqueSetupKeys, marker: &str) -> bool {
+    let Some((id, mac)) = marker.split_once('-') else {
+        return false;
+    };
+    let Ok(forwarding) = Uuid::parse_str(id) else {
+        return false;
+    };
+    keys.ids().filter_map(|id| keys.get(id)).any(|key| {
+        let expected = return_path_mac(key, forwarding, 0);
+        expected.len() == mac.len()
+            && expected
+                .bytes()
+                .zip(mac.bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+    })
 }
 
 /// Forwards a copy just stored for an address to each of the address's
@@ -535,7 +649,8 @@ async fn count_skip(state: &AppState, forwarding: Uuid) -> Result<(), sqlx::Erro
 fn marker(keys: &OpaqueSetupKeys, forwarding: Uuid) -> Option<String> {
     let (_, key) = keys.current()?;
     Some(format!(
-        "X-Kutup-Forwarded: {}\r\n",
+        "X-Kutup-Forwarded: {}-{}\r\n",
+        forwarding.simple(),
         return_path_mac(key, forwarding, 0)
     ))
 }
@@ -818,5 +933,93 @@ mod tests {
         assert_eq!(bounce_forwarding(&keys(ONE), &old), None, "too old");
         assert_eq!(bounce_forwarding(&keys(ONE), "alice"), None);
         assert_eq!(bounce_forwarding(&keys(ONE), "fwd-x-1-y"), None);
+    }
+
+    /// Only plain mailboxes: nothing that could carry an SMTP command or a
+    /// header line.
+    #[test]
+    fn outside_addresses_are_plain_mailboxes() {
+        assert_eq!(
+            outside_address(" Bob.Smith+fwd@Outside.Test "),
+            Some("bob.smith+fwd@outside.test".into())
+        );
+        for bad in [
+            "bob@outside.test>\r\nRCPT TO:<eve@evil.test",
+            "bob@outside.test\r\nBcc: eve@evil.test",
+            "bob@outside.test\n",
+            "bob\0@outside.test",
+            "bob smith@outside.test",
+            "<bob@outside.test>",
+            "bob@outside.test>",
+            "bob@@outside.test",
+            "bob@a@outside.test",
+            "\"bob\"@outside.test",
+            ".bob@outside.test",
+            "bob..smith@outside.test",
+            "bob@outside",
+            "bob@-outside.test",
+            "bob@outside-.test",
+            "bob@outside..test",
+            "bob@[127.0.0.1]",
+            "bob@1.2.3.4",
+            "böb@outside.test",
+            "@outside.test",
+            "bob@",
+        ] {
+            assert_eq!(outside_address(bad), None, "{bad:?}");
+        }
+        assert_eq!(
+            outside_address(&format!("{}@outside.test", "a".repeat(65))),
+            None
+        );
+    }
+
+    /// Only our own marker stops a forward, and only a real header line
+    /// counts as one; hops beyond the cap do too.
+    #[test]
+    fn our_marker_and_too_many_hops_stop_a_forward() {
+        let one = keys(ONE);
+        let forwarding = Uuid::new_v4();
+        let header = marker(&one, forwarding).unwrap();
+        let mail = |headers: &str| format!("{headers}From: a@b.test\r\n\r\nbody\r\n");
+        assert!(may_forward(&one, mail("").as_bytes()));
+        assert!(!may_forward(&one, mail(&header).as_bytes()));
+        assert!(!may_forward(
+            &keys(&format!("{ONE},{TWO}")),
+            mail(&header).as_bytes()
+        ));
+        // Forged, for another forwarding, or under a key we don't hold.
+        assert!(may_forward(
+            &one,
+            mail("X-Kutup-Forwarded: 0123456789abcdef\r\n").as_bytes()
+        ));
+        let other = header.replace(
+            &forwarding.simple().to_string(),
+            &Uuid::new_v4().simple().to_string(),
+        );
+        assert!(may_forward(&one, mail(&other).as_bytes()));
+        assert!(may_forward(&keys(TWO), mail(&header).as_bytes()));
+        // A folded line isn't a header of its own.
+        let folded = format!("Subject: hi\r\n {}", header);
+        assert!(may_forward(&one, mail(&folded).as_bytes()));
+        // In the body, it is nothing.
+        assert!(may_forward(
+            &one,
+            format!("From: a@b.test\r\n\r\n{header}").as_bytes()
+        ));
+        let hops = |n: usize| {
+            (0..n)
+                .map(|i| format!("Received: from h{i}\r\n"))
+                .collect::<String>()
+        };
+        assert!(may_forward(&one, mail(&hops(MAX_HOPS)).as_bytes()));
+        assert!(!may_forward(&one, mail(&hops(MAX_HOPS + 1)).as_bytes()));
+        let folded_hops = (0..MAX_HOPS + 5)
+            .map(|_| " Received: folded\r\n")
+            .collect::<String>();
+        assert!(may_forward(
+            &one,
+            mail(&format!("X-Long: a\r\n{folded_hops}")).as_bytes()
+        ));
     }
 }
