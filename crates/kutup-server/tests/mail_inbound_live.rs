@@ -5750,6 +5750,7 @@ fn send_readable(
         "subject": subject,
         "messageId": message_id,
         "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": [to],
     });
     let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
         .multipart(form(vec![
