@@ -222,17 +222,23 @@ pub async fn upgrade_identity_suite(
     let mut tx = state.pool.begin().await?;
     // An account still in its first-login setup has no keys to upgrade:
     // complete-setup registers suite-2 keys.
-    let row: Option<(i16, String, String, String)> = sqlx::query_as(
+    let row: Option<(i16, String, String, String, bool)> = sqlx::query_as(
         "SELECT identity_suite, account_authority_public_key, drive_signing_public_key,
-                COALESCE(key_binding, '')
-           FROM users WHERE id = $1 AND is_active AND NOT is_first_login FOR UPDATE",
+                COALESCE(key_binding, ''), is_first_login
+           FROM users WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((suite, authority, signing, key_binding)) = row else {
+    let Some((suite, authority, signing, key_binding, first_login)) = row else {
         return Err(AppError::unauthorized("unauthorized"));
     };
+    // Not a reason to end the session: the setup that is pending registers
+    // suite-2 keys itself.
+    if first_login {
+        return Err(AppError::conflict("finish the account's setup first")
+            .with_details(serde_json::json!({ "code": "setupPending" })));
+    }
     if suite >= kutup_crypto::identity::IDENTITY_SUITE as i16 {
         return Err(
             AppError::conflict("this account's identity suite is current")

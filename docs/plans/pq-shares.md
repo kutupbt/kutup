@@ -128,7 +128,8 @@ Everything is derived again from the master key.
      epoch 1 (the first suite-2 binding; any other epoch is `400`);
    - the suite **strictly increases**;
    - the key is 1216 bytes;
-   - the account isn't in its first-login setup (that registers suite 2).
+   - the account isn't in its first-login setup (that registers suite 2;
+     `409 setupPending`, not a 401 that would end the session).
 
    It then replaces `public_key`, `drive_key_binding` and
    `drive_private_key_envelope` in one transaction under the account lock. A

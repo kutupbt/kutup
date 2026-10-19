@@ -532,6 +532,8 @@ fn drive_keys_follow(
             == Ok(legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN);
     current_is_suite_1
         && next.suite == AccountIdentitySuiteId::XWingEd25519V2
+        && STANDARD.decode(&next.hpke_public_key).map(|key| key.len())
+            == Ok(kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN)
         && next.share_signing_public_key == current.share_signing_public_key
 }
 
@@ -3001,6 +3003,10 @@ mod tests {
                 &new
             ),
             "only from a real suite-1 key"
+        );
+        assert!(
+            !drive_keys_follow(&old, &keys(AccountIdentitySuiteId::XWingEd25519V2, 32, 1)),
+            "only to a real X-Wing key"
         );
     }
 
