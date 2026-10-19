@@ -42,6 +42,10 @@ pub struct OwnMailKey {
     pub flags: i32,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    /// A forwarding key (docs/plans/mail-forwarding.md): it opens only mail
+    /// forwarded to this address, is never encrypted to and isn't in the
+    /// signed key list.
+    pub forwarding: bool,
 }
 
 /// A signed key list: canonical bytes and the authority's signature, base64.
@@ -97,6 +101,7 @@ type KeyRow = (
     bool,
     i32,
     time::OffsetDateTime,
+    bool,
 );
 
 async fn own_address(
@@ -105,7 +110,8 @@ async fn own_address(
     address: String,
 ) -> AppResult<OwnMailAddress> {
     let keys: Vec<KeyRow> = sqlx::query_as(
-        "SELECT id, fingerprint, sha256_fingerprint, public_key, private_key_envelope, is_primary, flags, created_at
+        "SELECT id, fingerprint, sha256_fingerprint, public_key, private_key_envelope, is_primary, flags,
+                created_at, is_forwarding
            FROM mail_address_keys WHERE address_id = $1 ORDER BY created_at, fingerprint",
     )
     .bind(address_id)
@@ -129,7 +135,17 @@ async fn own_address(
         keys: keys
             .into_iter()
             .map(
-                |(id, fingerprint, sha256, public_key, envelope, primary, flags, created_at)| {
+                |(
+                    id,
+                    fingerprint,
+                    sha256,
+                    public_key,
+                    envelope,
+                    primary,
+                    flags,
+                    created_at,
+                    forwarding,
+                )| {
                     OwnMailKey {
                         id: id.to_string(),
                         fingerprint,
@@ -139,6 +155,7 @@ async fn own_address(
                         primary,
                         flags,
                         created_at,
+                        forwarding,
                     }
                 },
             )
@@ -287,7 +304,10 @@ impl ListChange {
     /// The stored keys' fingerprints, with `extra`.
     async fn check_lists_exactly(&mut self, extra: Option<(String, String)>) -> AppResult<()> {
         let stored: Vec<(String, String)> = sqlx::query_as(
-            "SELECT fingerprint, sha256_fingerprint FROM mail_address_keys WHERE address_id = $1",
+            // Forwarding keys are never listed (as Proton keeps them out of
+            // its signed key list).
+            "SELECT fingerprint, sha256_fingerprint FROM mail_address_keys
+              WHERE address_id = $1 AND NOT is_forwarding",
         )
         .bind(self.address_id)
         .fetch_all(&mut *self.tx)
@@ -317,6 +337,24 @@ impl ListChange {
 
     /// Primary and flags follow the list; the list is recorded.
     async fn finish(mut self, state: &AppState) -> AppResult<OwnMailAddress> {
+        let old_primary: Option<String> = sqlx::query_scalar(
+            "SELECT fingerprint FROM mail_address_keys WHERE address_id = $1 AND is_primary",
+        )
+        .bind(self.address_id)
+        .fetch_optional(&mut *self.tx)
+        .await?;
+        let new_primary = self
+            .signed
+            .list
+            .keys
+            .iter()
+            .find(|key| key.primary)
+            .map(|key| hex::encode(key.fingerprint));
+        if old_primary.is_some() && old_primary != new_primary {
+            // A new primary key: end-to-end forwardings made for the old one
+            // stop, and their proxy factors go (docs/plans/mail-forwarding.md).
+            crate::mail::forwarding::outdate(&mut self.tx, self.address_id).await?;
+        }
         sqlx::query("UPDATE mail_address_keys SET is_primary = false WHERE address_id = $1")
             .bind(self.address_id)
             .execute(&mut *self.tx)
@@ -635,7 +673,8 @@ async fn public_keys(
     };
     let keys: Vec<(String, String, Vec<u8>, bool, i32)> = sqlx::query_as(
         "SELECT fingerprint, sha256_fingerprint, public_key, is_primary, flags
-           FROM mail_address_keys WHERE address_id = $1 ORDER BY is_primary DESC, created_at DESC",
+           FROM mail_address_keys WHERE address_id = $1 AND NOT is_forwarding
+          ORDER BY is_primary DESC, created_at DESC",
     )
     .bind(address_id)
     .fetch_all(&state.pool)

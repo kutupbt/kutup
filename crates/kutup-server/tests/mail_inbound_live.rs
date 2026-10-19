@@ -12,6 +12,7 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use common::{b64, bearer, register, User};
+use kutup_crypto::mail_forwarding;
 use kutup_crypto::mail_key::{self, MailKeyEntryV1, MailKeyListV1, DEFAULT_FLAGS};
 use reqwest::blocking::Client;
 use serde_json::{json, Value};
@@ -5549,4 +5550,625 @@ fn a_send_held_from_before_a_rename_fails_as_receive_only() {
         "the draft is back in Drafts"
     );
     common::purge_accounts(&c, &base, &[&user]);
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// What a forwarder's client sends to set a forwarding up, and the key it
+/// made for the forwardee.
+fn forwarding_request(
+    forwarder: &Address,
+    forwarder_address_id: &str,
+    forwardee: &Address,
+    rule: &str,
+    conditions: Value,
+) -> (String, Value, mail_forwarding::ActivationTerms) {
+    let id = uuid::Uuid::new_v4().to_string();
+    let material = mail_forwarding::generate_material(
+        &forwarder.secret_key,
+        &forwardee.address,
+        now_secs() as u32,
+    )
+    .unwrap();
+    let terms = mail_forwarding::ActivationTerms {
+        forwarding_id: id.clone(),
+        forwarder_address: forwarder.address.clone(),
+        forwardee_address: forwardee.address.clone(),
+        expires_at_secs: now_secs() + 7 * 86_400,
+    };
+    let activation = mail_forwarding::seal_activation(
+        &forwardee.public_key,
+        &forwarder.secret_key,
+        &terms,
+        &material,
+    )
+    .unwrap();
+    let instances: Vec<Value> = material
+        .instances
+        .iter()
+        .map(|instance| {
+            json!({
+                "forwarderFingerprint": hex::encode(instance.forwarder_fingerprint),
+                "forwardeeFingerprint": hex::encode(instance.forwardee_fingerprint),
+                "proxyParameter": b64(instance.proxy_parameter.as_slice()),
+            })
+        })
+        .collect();
+    let body = json!({
+        "id": id,
+        "forwarderAddressId": forwarder_address_id,
+        "forwardeeEmail": forwardee.address,
+        "match": rule,
+        "conditions": conditions,
+        "endToEnd": {
+            "forwardeePublicKey": b64(&material.forwardee_public_key),
+            "instances": instances,
+            "activation": activation,
+        },
+    });
+    (id, body, terms)
+}
+
+/// The forwardee's client accepts: opens and checks the activation, keeps
+/// the key as an address key of theirs. The forwarding key, unlocked.
+fn accept_forwarding(
+    c: &Client,
+    base: &str,
+    forwardee: &User,
+    forwardee_address: &Address,
+    forwarder_public_key: &[u8],
+    terms: &mail_forwarding::ActivationTerms,
+) -> Vec<u8> {
+    let id = &terms.forwarding_id;
+    let found: Value = bearer(
+        c.get(format!("{base}/api/mail/forwardings/{id}/activation")),
+        &forwardee.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let key = mail_forwarding::open_activation(
+        &forwardee_address.secret_key,
+        forwarder_public_key,
+        terms,
+        now_secs(),
+        found["activation"].as_str().unwrap().as_bytes(),
+    )
+    .unwrap();
+    let public = mail_forwarding::forwardee_fingerprints(&key).unwrap();
+    assert!(!public.is_empty());
+    let public_key = mail_forwarding::forwarding_public_key(&key).unwrap();
+    let envelope = mail_key::seal_address_key(
+        &forwardee.master_key,
+        &forwardee.binding,
+        &forwardee_address.address,
+        &key,
+    )
+    .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/mail/forwardings/{id}/accept")),
+        &forwardee.token,
+    )
+    .json(&json!({ "publicKey": b64(&public_key), "privateKeyEnvelope": b64(&envelope) }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "accept: {}", r.text().unwrap());
+    key.to_vec()
+}
+
+fn address_id(c: &Client, base: &str, user: &User) -> String {
+    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    addresses[0]["id"].as_str().unwrap().to_string()
+}
+
+fn content(c: &Client, base: &str, user: &User, row: &Value) -> Vec<u8> {
+    bearer(
+        c.get(format!(
+            "{base}/api/mail/messages/{}/content",
+            row["id"].as_str().unwrap()
+        )),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .bytes()
+    .unwrap()
+    .to_vec()
+}
+
+/// Kutup mail from `from` to `to`, end to end.
+fn send_between(
+    c: &Client,
+    base: &str,
+    sender: &User,
+    from: &Address,
+    to: &Address,
+    subject: &str,
+) -> String {
+    let domain = from.address.split_once('@').unwrap().1;
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nfrom {}\r\n",
+        from.address, to.address, from.address
+    );
+    let split = mail_key::encrypt_split(
+        &[&from.public_key, &to.public_key],
+        &from.secret_key,
+        mime.as_bytes(),
+    )
+    .unwrap();
+    let meta = json!({
+        "to": [{ "address": to.address }],
+        "subject": subject,
+        "messageId": message_id,
+        "keyPackets": {
+            "self": b64(&split.key_packets[0]),
+            to.address.clone(): b64(&split.key_packets[1]),
+        },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+        ]))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "send: {}", r.status());
+    message_id
+}
+
+/// Kutup mail sent readable (Encrypt off for the recipient, as the
+/// composer does for an address that forwards outside Kutup).
+fn send_readable(
+    c: &Client,
+    base: &str,
+    sender: &User,
+    from: &Address,
+    to: &str,
+    subject: &str,
+) -> String {
+    let domain = from.address.split_once('@').unwrap().1;
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {to}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nreadable for {to}\r\n",
+        from.address
+    );
+    let split =
+        mail_key::encrypt_split(&[&from.public_key], &from.secret_key, mime.as_bytes()).unwrap();
+    let meta = json!({
+        "to": [{ "address": to }],
+        "subject": subject,
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": [to],
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(
+        r.status().is_success(),
+        "send readable: {}",
+        r.text().unwrap()
+    );
+    message_id
+}
+
+/// Waits a moment, then checks that `message_id` never reached `user`.
+fn never_arrives(c: &Client, base: &str, user: &User, message_id: &str) {
+    std::thread::sleep(Duration::from_secs(5));
+    assert!(
+        !messages(c, base, &user.token)
+            .iter()
+            .any(|m| m["messageId"] == message_id),
+        "{message_id} was forwarded"
+    );
+}
+
+/// End-to-end forwarding (docs/plans/mail-forwarding.md): Alice forwards to
+/// Bob, who accepts. Mail from outside and Carol's end-to-end mail both reach
+/// Bob, opened only with his forwarding key; Carol's copy is the same data
+/// packet with a transformed key packet. Pause, conditions, no chains, and a
+/// new primary key all stop it; the proxy factor is never returned.
+#[test]
+fn end_to_end_forwarding() {
+    let (Ok(base), Ok(smtp_address)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_SMTP not set; skipping");
+        return;
+    };
+    let c = client();
+    let (alice, bob, carol) = (
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+    );
+    let (a, b, cc) = (
+        set_up_address(&c, &base, &alice),
+        set_up_address(&c, &base, &bob),
+        set_up_address(&c, &base, &carol),
+    );
+    let alice_address_id = address_id(&c, &base, &alice);
+
+    // Set up: pending until Bob accepts; no answer carries k.
+    let (id, request, terms) = forwarding_request(&a, &alice_address_id, &b, "all", json!([]));
+    let create = |user: &User, body: &Value| {
+        bearer(c.post(format!("{base}/api/mail/forwardings")), &user.token)
+            .json(body)
+            .send()
+            .unwrap()
+    };
+    let r = create(&alice, &request);
+    assert_eq!(r.status(), reqwest::StatusCode::CREATED);
+    let created = r.text().unwrap();
+    let k = request["endToEnd"]["instances"][0]["proxyParameter"]
+        .as_str()
+        .unwrap();
+    assert!(!created.contains(k));
+    assert_eq!(
+        serde_json::from_str::<Value>(&created).unwrap()["state"],
+        "pending"
+    );
+    // The same forwarding again, or to oneself: refused.
+    assert_eq!(
+        create(&alice, &request).status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let (_, to_self, _) = forwarding_request(&a, &alice_address_id, &a, "all", json!([]));
+    assert_eq!(
+        create(&alice, &to_self).status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    // Material for another key: refused.
+    let (_, mut wrong, _) = forwarding_request(&a, &alice_address_id, &cc, "all", json!([]));
+    wrong["endToEnd"]["instances"][0]["forwarderFingerprint"] = json!("0".repeat(40));
+    assert_eq!(
+        create(&alice, &wrong).status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+
+    let listed = |user: &User| -> Value {
+        bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    let bob_sees = listed(&bob);
+    assert_eq!(bob_sees["incoming"][0]["id"], id);
+    assert!(!bob_sees.to_string().contains(k));
+    // Not Carol's to fetch.
+    assert_eq!(
+        bearer(
+            c.get(format!("{base}/api/mail/forwardings/{id}/activation")),
+            &carol.token
+        )
+        .send()
+        .unwrap()
+        .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    let forwarding_key = accept_forwarding(&c, &base, &bob, &b, &a.public_key, &terms);
+    assert_eq!(listed(&alice)["outgoing"][0]["state"], "active");
+
+    // Mail from outside to Alice reaches Bob, opened only as forwarded.
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let outside = format!(
+        "From: writer@sender.test\r\nTo: {}\r\nSubject: forward me\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <fw-{tag}@sender.test>\r\n\
+MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nfor alice and bob\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &outside), (250, 250));
+    let message_id = format!("fw-{tag}@sender.test");
+    let alice_copy = wait_for(&c, &base, &alice, &message_id);
+    // The gate's Stalwart takes test mail as ham (tests/mail/plan.ndjson).
+    assert_eq!(alice_copy["folder"], "inbox");
+    let forwarded = wait_for(&c, &base, &bob, &message_id);
+    assert_eq!(forwarded["forwardedFrom"], json!(a.address));
+    // Sealed once on arrival for Alice; Bob's copy is the same data packet
+    // under a transformed key packet: the server didn't seal it again.
+    let (alice_stored, bob_stored) = (
+        content(&c, &base, &alice, &alice_copy),
+        content(&c, &base, &bob, &forwarded),
+    );
+    let split_first = |message: &[u8]| -> usize {
+        assert_eq!(message[0], 0xc1, "a new-format key packet");
+        2 + message[1] as usize
+    };
+    assert_eq!(
+        alice_stored[split_first(&alice_stored)..],
+        bob_stored[split_first(&bob_stored)..],
+        "the data packet is Alice's, byte for byte"
+    );
+    let opened = mail_forwarding::decrypt_forwarded(&forwarding_key, &bob_stored, None).unwrap();
+    assert!(String::from_utf8_lossy(&opened.data).contains("for alice and bob"));
+    assert!(mail_key::decrypt(&b.secret_key, &bob_stored, None).is_err());
+
+    // Spam isn't forwarded: Alice files this sender's mail as spam.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/sender-rules")),
+        &alice.token,
+    )
+    .json(&json!({ "patterns": ["spammer@sender.test"], "kind": "spam" }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "spam rule: {}", r.status());
+    let spam = format!(
+        "From: spammer@sender.test\r\nTo: {}\r\nSubject: forward me too\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <spam-{tag}@sender.test>\r\n\r\nno\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &spam), (250, 250));
+    let spam_id = format!("spam-{tag}@sender.test");
+    assert_eq!(wait_for(&c, &base, &alice, &spam_id)["folder"], "spam");
+    never_arrives(&c, &base, &bob, &spam_id);
+
+    // A loop: mail that already went through one of our forwardings (our
+    // marker) or through too many hops is delivered but not forwarded.
+    let looped = format!(
+        "X-Kutup-Forwarded: 0123456789abcdef\r\nFrom: writer@sender.test\r\nTo: {}\r\n\
+Subject: forward me again\r\nDate: Mon, 19 Oct 2026 10:00:00 +0000\r\n\
+Message-ID: <loop-{tag}@sender.test>\r\n\r\nround and round\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &looped), (250, 250));
+    let loop_id = format!("loop-{tag}@sender.test");
+    wait_for(&c, &base, &alice, &loop_id);
+    never_arrives(&c, &base, &bob, &loop_id);
+    let hops: String = (0..21)
+        .map(|n| format!("Received: from hop{n}.test by hop{}.test\r\n", n + 1))
+        .collect();
+    let far = format!(
+        "{hops}From: writer@sender.test\r\nTo: {}\r\nSubject: forward me from afar\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <far-{tag}@sender.test>\r\n\r\nfar\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &far), (250, 250));
+    let far_id = format!("far-{tag}@sender.test");
+    wait_for(&c, &base, &alice, &far_id);
+    never_arrives(&c, &base, &bob, &far_id);
+
+    // The forwarded copy goes through Bob's own rules: a sender he blocks
+    // isn't stored for him, and Alice sees it counted as not forwarded.
+    let r = bearer(c.post(format!("{base}/api/mail/sender-rules")), &bob.token)
+        .json(&json!({ "patterns": ["blocked@sender.test"], "kind": "block" }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "block rule: {}", r.status());
+    let blocked = format!(
+        "From: blocked@sender.test\r\nTo: {}\r\nSubject: forward me\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>\r\n\r\nno\r\n",
+        a.address
+    );
+    assert_eq!(smtp_send(&smtp_address, &a.address, &blocked), (250, 250));
+    let blocked_id = format!("blocked-{tag}@sender.test");
+    assert_eq!(wait_for(&c, &base, &alice, &blocked_id)["folder"], "inbox");
+    never_arrives(&c, &base, &bob, &blocked_id);
+    let skipped: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &alice.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert_eq!(skipped["outgoing"][0]["skipped"], 1);
+
+    // Sealed on arrival by the server (Kutup mail sent readable, sealed as
+    // mail from outside is): always reaches Bob, opened only as forwarded.
+    let readable = send_readable(&c, &base, &carol, &cc, &a.address, "readable for alice");
+    wait_for(&c, &base, &alice, &readable);
+    let forwarded = wait_for(&c, &base, &bob, &readable);
+    assert_eq!(forwarded["forwardedFrom"], json!(a.address));
+    let stored = content(&c, &base, &bob, &forwarded);
+    let opened = mail_forwarding::decrypt_forwarded(&forwarding_key, &stored, None).unwrap();
+    assert!(String::from_utf8_lossy(&opened.data).contains("readable for"));
+    assert!(mail_key::decrypt(&b.secret_key, &stored, None).is_err());
+
+    // Carol's end-to-end mail: the same data packet, a transformed key packet.
+    let from_carol = send_between(&c, &base, &carol, &cc, &a, "hello alice");
+    let alice_row = wait_for(&c, &base, &alice, &from_carol);
+    let bob_row = wait_for(&c, &base, &bob, &from_carol);
+    let (alice_copy, bob_copy) = (
+        content(&c, &base, &alice, &alice_row),
+        content(&c, &base, &bob, &bob_row),
+    );
+    let key_packet_len = |message: &[u8]| {
+        // A new-format v3 PKESK for X25519: one length octet.
+        assert_eq!(message[0], 0xc1);
+        2 + message[1] as usize
+    };
+    let (alice_key, alice_data) = alice_copy.split_at(key_packet_len(&alice_copy));
+    let (bob_key, bob_data) = bob_copy.split_at(key_packet_len(&bob_copy));
+    assert_eq!(alice_data, bob_data, "the data packet is left as it is");
+    assert_ne!(alice_key, bob_key);
+    let opened =
+        mail_forwarding::decrypt_forwarded(&forwarding_key, &bob_copy, Some(&cc.public_key))
+            .unwrap();
+    assert!(opened.verified);
+
+    // Paused: nothing reaches Bob; resumed, it does again.
+    let act = |action: &str| {
+        bearer(
+            c.put(format!("{base}/api/mail/forwardings/{id}/{action}")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+        .status()
+    };
+    assert!(act("pause").is_success());
+    let while_paused = send_between(&c, &base, &carol, &cc, &a, "while paused");
+    wait_for(&c, &base, &alice, &while_paused);
+    never_arrives(&c, &base, &bob, &while_paused);
+    assert!(act("resume").is_success());
+
+    // Conditions: only what they match.
+    let r = bearer(
+        c.put(format!("{base}/api/mail/forwardings/{id}/conditions")),
+        &alice.token,
+    )
+    .json(&json!({ "match": "all", "conditions": [
+            { "field": "subject", "op": "contains", "value": "forward me" }
+        ] }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success());
+    let unmatched = send_between(&c, &base, &carol, &cc, &a, "not this one");
+    wait_for(&c, &base, &alice, &unmatched);
+    never_arrives(&c, &base, &bob, &unmatched);
+    let matched = send_between(&c, &base, &carol, &cc, &a, "please forward me");
+    wait_for(&c, &base, &bob, &matched);
+
+    // No chains: Bob forwards to Carol, and what Alice's forwarding brought
+    // him goes no further.
+    let bob_address_id = address_id(&c, &base, &bob);
+    let (onward, onward_request, onward_terms) =
+        forwarding_request(&b, &bob_address_id, &cc, "all", json!([]));
+    assert_eq!(
+        create(&bob, &onward_request).status(),
+        reqwest::StatusCode::CREATED
+    );
+    accept_forwarding(&c, &base, &carol, &cc, &b.public_key, &onward_terms);
+    let chained = send_between(&c, &base, &carol, &cc, &a, "forward me twice");
+    wait_for(&c, &base, &bob, &chained);
+    never_arrives(&c, &base, &carol, &chained);
+    // Bob's own mail does go on to Carol.
+    let bobs_own = send_between(&c, &base, &alice, &a, &b, "forward me, bob");
+    let carols = wait_for(&c, &base, &carol, &bobs_own);
+    assert_eq!(carols["forwardedFrom"], json!(b.address));
+
+    // A new primary key for Alice: Outdated, and nothing reaches Bob.
+    let (_, list) = current_list(&c, &base, &alice);
+    let old = list.list.keys[0].clone();
+    let new = mail_key::generate_address_key(&a.address, now_secs() as u32).unwrap();
+    let envelope = mail_key::seal_address_key(
+        &alice.master_key,
+        &alice.binding,
+        &a.address,
+        &new.secret_key,
+    )
+    .unwrap();
+    let rotated = next_list(
+        &alice,
+        &list,
+        vec![
+            MailKeyEntryV1 {
+                primary: false,
+                ..old
+            },
+            MailKeyEntryV1 {
+                fingerprint: new.fingerprint,
+                sha256_fingerprint: new.sha256_fingerprint,
+                primary: true,
+                flags: DEFAULT_FLAGS,
+            },
+        ],
+    );
+    let r = bearer(
+        c.post(format!("{base}/api/mail/addresses/{alice_address_id}/keys")),
+        &alice.token,
+    )
+    .json(&json!({
+        "publicKey": b64(&new.public_key),
+        "privateKeyEnvelope": b64(&envelope),
+        "keyList": rotated,
+    }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "rotate: {}", r.status());
+    let outgoing = listed(&alice)["outgoing"].clone();
+    let state = outgoing
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == id)
+        .unwrap()["state"]
+        .clone();
+    assert_eq!(state, "outdated");
+    let new_a = Address {
+        address: a.address.clone(),
+        secret_key: new.secret_key.to_vec(),
+        public_key: new.public_key.clone(),
+    };
+    let after_rotation = send_between(
+        &c,
+        &base,
+        &carol,
+        &cc,
+        &new_a,
+        "forward me after the change",
+    );
+    wait_for(&c, &base, &alice, &after_rotation);
+    never_arrives(&c, &base, &bob, &after_rotation);
+
+    // Bob deletes his forwarding key for Carol's forwarding: it ends.
+    let keys: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &carol.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let carol_key = keys[0]["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|key| key["forwarding"] == true)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let carol_address_id = keys[0]["id"].as_str().unwrap();
+    let r = bearer(
+        c.delete(format!(
+            "{base}/api/mail/addresses/{carol_address_id}/forwarding-keys/{carol_key}"
+        )),
+        &carol.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::NO_CONTENT);
+    assert!(listed(&bob)["outgoing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|f| f["id"] != onward));
+
+    // Declining: a new forwarding to Carol, declined, is rejected for Alice.
+    let (declined, declined_request, _) =
+        forwarding_request(&new_a, &alice_address_id, &cc, "all", json!([]));
+    assert_eq!(
+        create(&alice, &declined_request).status(),
+        reqwest::StatusCode::CREATED
+    );
+    let r = bearer(
+        c.post(format!("{base}/api/mail/forwardings/{declined}/decline")),
+        &carol.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::NO_CONTENT);
+    assert!(listed(&alice)["outgoing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f["id"] == declined && f["state"] == "rejected"));
+    assert!(listed(&carol)["incoming"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|f| f["id"] != declined));
 }

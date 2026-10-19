@@ -137,7 +137,7 @@ pub fn generate_address_key(address: &str, created_at_secs: u32) -> Result<Gener
     })
 }
 
-fn user_id(address: &str) -> String {
+pub(crate) fn user_id(address: &str) -> String {
     let local = address.split_once('@').map_or(address, |(local, _)| local);
     format!("{local} <{address}>")
 }
@@ -580,10 +580,7 @@ pub fn encrypt(
         .encrypt_to_key(rand::rngs::OsRng, subkey)
         .map_err(backend)?;
     let signer = match signer_secret_key {
-        Some(secret) => Some(
-            SignedSecretKey::from_bytes(secret)
-                .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?,
-        ),
+        Some(secret) => Some(signing_key(secret)?),
         None => None,
     };
     if let Some(signer) = &signer {
@@ -630,13 +627,40 @@ const MAX_EXTERNAL_KEY_LEN: usize = 256 * 1024;
 
 fn parse_public_key(bytes: &[u8]) -> Result<SignedPublicKey> {
     let invalid = || CryptoError::InvalidInput("public key does not parse".into());
-    if bytes.starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+    let key = if bytes.starts_with(b"-----BEGIN PGP PUBLIC KEY BLOCK-----") {
         SignedPublicKey::from_armor_single(bytes)
             .map(|(key, _)| key)
             .map_err(|_| invalid())
     } else {
         SignedPublicKey::from_bytes(bytes).map_err(|_| invalid())
+    }?;
+    refuse_forwarding(&key)?;
+    Ok(key)
+}
+
+/// A forwarding key (docs/plans/mail-forwarding.md) only opens mail
+/// forwarded to its holder. It is never encrypted to and never signs or
+/// verifies: its forwarder made it and knows its secret, so a signature by
+/// it proves nothing about the forwardee whose address it names.
+fn refuse_forwarding(key: &SignedPublicKey) -> Result<()> {
+    if key
+        .public_subkeys
+        .iter()
+        .any(|subkey| subkey.key.is_forwardee_key())
+    {
+        return Err(CryptoError::InvalidInput(
+            "a forwarding key never signs, verifies or is encrypted to".into(),
+        ));
     }
+    Ok(())
+}
+
+/// A key to sign with: never a forwarding key.
+fn signing_key(secret_key: &[u8]) -> Result<SignedSecretKey> {
+    let key = SignedSecretKey::from_bytes(secret_key)
+        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    refuse_forwarding(&SignedPublicKey::from(key.clone()))?;
+    Ok(key)
 }
 
 /// When a key or subkey stops being valid: its creation plus the
@@ -1003,12 +1027,7 @@ pub fn encrypt_armored(
         .iter()
         .map(|key| parse_public_key(key))
         .collect::<Result<Vec<_>>>()?;
-    let signer = signer_secret_key
-        .map(|secret| {
-            SignedSecretKey::from_bytes(secret)
-                .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))
-        })
-        .transpose()?;
+    let signer = signer_secret_key.map(signing_key).transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     for key in &keys {
@@ -1037,8 +1056,7 @@ pub fn encrypt_armored(
 /// message, which Proton, Thunderbird and GnuPG check. `content` is the
 /// signed MIME part exactly as sent, CRLF line endings included.
 pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String> {
-    let signer = SignedSecretKey::from_bytes(signer_secret_key)
-        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let signer = signing_key(signer_secret_key)?;
     pgp::composed::DetachedSignature::sign_binary_data(
         rand::rngs::OsRng,
         &signer.primary_key,
@@ -1056,8 +1074,7 @@ pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String>
 /// that is signed but not encrypted (Proton's "Inline" scheme), which GnuPG,
 /// Thunderbird and Proton check.
 pub fn sign_cleartext(signer_secret_key: &[u8], text: &str) -> Result<String> {
-    let signer = SignedSecretKey::from_bytes(signer_secret_key)
-        .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
+    let signer = signing_key(signer_secret_key)?;
     pgp::composed::CleartextSignedMessage::sign(
         rand::rngs::OsRng,
         text,
@@ -1153,12 +1170,7 @@ fn split(
         .iter()
         .map(|key| parse_recipient(key))
         .collect::<Result<Vec<_>>>()?;
-    let signer = signer_secret_key
-        .map(|key| {
-            SignedSecretKey::from_bytes(key)
-                .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))
-        })
-        .transpose()?;
+    let signer = signer_secret_key.map(signing_key).transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     for recipient in &recipients {
@@ -1279,7 +1291,7 @@ const MAX_SPLIT_RECIPIENTS: usize = 100;
 /// Key packets one split message may carry: every member of a distribution
 /// list (at most 1000, docs/plans/mail-groups.md) and the sender's own.
 const MAX_LIST_RECIPIENTS: usize = 1001;
-const TAG_PKESK: u8 = 1;
+pub(crate) const TAG_PKESK: u8 = 1;
 const TAG_SEIPD: u8 = 18;
 const TAG_AEAD: u8 = 20;
 
@@ -1293,7 +1305,7 @@ fn packet_tag(first: u8) -> Option<u8> {
 
 /// A packet's tag, header length and whole length (header and body), for
 /// packets with a definite length; key packets always have one.
-fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
+pub(crate) fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
     let invalid = || CryptoError::InvalidInput("malformed OpenPGP packet".into());
     let first = *bytes.first().ok_or_else(invalid)?;
     let tag = packet_tag(first).ok_or_else(invalid)?;
@@ -1332,8 +1344,10 @@ fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
 }
 
 fn parse_recipient(public_key: &[u8]) -> Result<SignedPublicKey> {
-    SignedPublicKey::from_bytes(public_key)
-        .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))
+    let key = SignedPublicKey::from_bytes(public_key)
+        .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))?;
+    refuse_forwarding(&key)?;
+    Ok(key)
 }
 
 fn encryption_subkey(recipient: &SignedPublicKey) -> Result<&SignedPublicSubKey> {
@@ -1368,9 +1382,18 @@ pub fn decrypt(
         Message::from_bytes(message)
     }
     .map_err(|_| CryptoError::InvalidInput("message does not parse".into()))?;
-    let mut decrypted = parsed
+    let decrypted = parsed
         .decrypt(&Password::empty(), &key)
         .map_err(|_| CryptoError::AuthFailed)?;
+    read_decrypted(decrypted, signer_public_key)
+}
+
+/// The plaintext of a decrypted message, and whether its signature verifies
+/// for `signer_public_key` when given.
+pub(crate) fn read_decrypted(
+    mut decrypted: Message<'_>,
+    signer_public_key: Option<&[u8]>,
+) -> Result<DecryptedMessage> {
     if decrypted.is_compressed() {
         decrypted = decrypted
             .decompress()
@@ -1386,6 +1409,7 @@ pub fn decrypt(
         Some(public) => {
             let signer = SignedPublicKey::from_bytes(public)
                 .map_err(|_| CryptoError::InvalidInput("signer key does not parse".into()))?;
+            refuse_forwarding(&signer)?;
             decrypted.verify(&signer.primary_key).is_ok()
         }
         None => false,
@@ -1659,7 +1683,7 @@ fn take_str<'a>(rest: &mut &'a [u8]) -> Result<&'a str> {
         .map_err(|_| CryptoError::InvalidInput("string is not UTF-8".into()))
 }
 
-fn backend(error: impl std::fmt::Display) -> CryptoError {
+pub(crate) fn backend(error: impl std::fmt::Display) -> CryptoError {
     CryptoError::Backend(error.to_string())
 }
 

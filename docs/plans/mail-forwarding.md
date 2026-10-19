@@ -181,7 +181,9 @@ without changing any key.
   - Deleting the last outside forwarding clears the flag again.
 - **Catch-all forwardees refused, as Proton.** No forwarding to an address
   of the same account. No forwarding to a list or shared mailbox (theirs
-  aren't person keys).
+  aren't person keys). A forwarding is of an address: mail a member gets
+  through a list or shared mailbox arrives at the list's address, so it
+  isn't forwarded by the member's.
 
 ### Crypto (kutup-crypto, the `mail` feature plus rPGP's forwarding feature)
 
@@ -317,6 +319,17 @@ without changing any key.
 - **Primary key change** makes the address's end-to-end forwardings
   Outdated, as Proton, and deletes their k (above). The key-change dialogs
   warn first, with Proton's wording.
+- **The forwardee key never signs or verifies either** (as built, from
+  review): its forwarder made it and knows its secret, so a signature by it
+  would prove nothing about the forwardee whose address it names. Its
+  primary only certifies its subkeys, and kutup-crypto refuses it as a
+  signer, as a key to verify with and as a recipient.
+- **A forwarded copy is the forwardee's mail**: it goes through their
+  block, spam and allow lists and their filters like any arrival; one they
+  block isn't stored and counts as not forwarded.
+- **Abuse:** at most 5 forwardings pending to one address at a time. A
+  deactivated account's forwardings, either side, lose k and become
+  Outdated.
 - **The forwardee key is never an encryption target.** It stays out of the
   keys endpoint, WKD, the outside key lookups and the composer's choice of
   keys. At accept the server checks that the uploaded key's subkey
@@ -358,7 +371,13 @@ without changing any key.
   - `GET outgoing|incoming`;
   - `POST`, `PUT {id}` (new material), `DELETE {id}`;
   - `PUT {id}/pause|resume|reinvite|conditions`;
-  - accept = `POST /api/mail/addresses/{id}/keys` with `forwardingId`.
+  - `GET {id}/activation`, `POST {id}/accept` (the forwarding key as an
+    address key), `POST {id}/decline`;
+  - `DELETE /api/mail/addresses/{address}/forwarding-keys/{key}` (the
+    forwardee deletes the key; its forwarding ends);
+  - the forwarder's client chooses the forwarding's id (a UUID v4), so the
+    activation can bind it before anything is stored (as built; see
+    `docs/api.md`, "Mail forwarding").
   - The outside confirmation goes through `GET|PUT|DELETE
     /api/mail/forwardings/external/{token}`. That token is single-use and
     lives 7 days; an expired one sends a new link.

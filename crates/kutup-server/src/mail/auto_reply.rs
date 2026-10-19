@@ -504,6 +504,7 @@ async fn keep_in_sent(
                 group_id: None,
                 key_packet: None,
                 sent_by: None,
+                forwarded_from: None,
             },
         )
         .await?;

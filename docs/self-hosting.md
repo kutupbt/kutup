@@ -640,6 +640,12 @@ The database backups below do not hold `OPAQUE_SETUP_KEYS` (it is in `.env`),
 and must not: back that key up on its own, somewhere else. A database restored
 without it signs no one in (see the security notes).
 
+The same goes for `MAIL_FORWARDING_KEYS`, when Mail's end-to-end forwarding
+is on (docs/plans/mail-forwarding.md): the proxy factors in the database are
+sealed under it, so a dump alone doesn't hold them. A database restored
+without it keeps every message; its end-to-end forwardings stop (Outdated)
+until their owners re-enable them. Mail keeps arriving either way.
+
 `scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
 machine, and stores it in the object store Kutup already uses (`S3_*` in
 `.env`), under `database-backups/`. It works with the bundled SeaweedFS and

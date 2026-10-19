@@ -33,6 +33,7 @@
 //! - [`mail_names`] — sealed names of mail folders, labels and filters.
 //! - [`mail_search`] — the browser's Mail search index at rest.
 //! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
+//! - [`mail_forwarding`] — end-to-end mail forwarding (proxy re-encryption).
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
 pub mod account_envelope;
@@ -65,6 +66,8 @@ pub mod kdf;
 pub mod key_binding;
 pub mod live_location;
 pub mod local_state;
+#[cfg(feature = "mail")]
+pub mod mail_forwarding;
 #[cfg(feature = "mail")]
 pub mod mail_group;
 #[cfg(feature = "mail")]

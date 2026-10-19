@@ -102,6 +102,10 @@ pub struct MailMessage {
     pub group_address: Option<String>,
     /// A shared mailbox's sent mail: the member who sent it.
     pub sent_by: Option<String>,
+    /// Forwarded here from this address (docs/plans/mail-forwarding.md):
+    /// open it with the address's forwarding key (Proton's
+    /// `FLAG_AUTO_FORWARDEE`), never with another.
+    pub forwarded_from: Option<String>,
     /// Listed by conversation: the thread this message is the newest of, in
     /// the place listed (Proton's conversation grouping).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -280,6 +284,7 @@ pub(crate) struct Row {
     expires_at: Option<OffsetDateTime>,
     group_address: Option<String>,
     sent_by_name: Option<String>,
+    forwarded_from: Option<String>,
 }
 
 /// The columns a [`Row`] reads.
@@ -295,7 +300,8 @@ pub(crate) const ROW_COLUMNS: &str = "id, thread_id, direction, folder, custom_f
         AND o.state = 'pending') AS outbox_id,
     snoozed_until, expires_at,
     (SELECT g.address FROM mail_groups g WHERE g.id = mail_messages.group_id) AS group_address,
-    (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name";
+    (SELECT u.username FROM users u WHERE u.id = mail_messages.sent_by) AS sent_by_name,
+    forwarded_from";
 
 impl From<Row> for MailMessage {
     fn from(row: Row) -> Self {
@@ -335,6 +341,7 @@ impl From<Row> for MailMessage {
             expires_at: row.expires_at,
             group_address: row.group_address,
             sent_by: row.sent_by_name,
+            forwarded_from: row.forwarded_from,
             conversation: None,
         }
     }

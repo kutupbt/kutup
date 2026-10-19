@@ -2422,6 +2422,10 @@ async fn clear_account_values(
         "DELETE FROM identity_pins WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
+        // Forwardings both ways end with their proxy factors: they were
+        // made for the old incarnation's keys (docs/plans/mail-forwarding.md).
+        "DELETE FROM mail_forwardings WHERE user_id = $1
+            OR forwardee_address_id IN (SELECT id FROM mail_addresses WHERE user_id = $1)",
         "DELETE FROM mail_labels WHERE user_id = $1",
         "DELETE FROM mail_filters WHERE user_id = $1",
         "DELETE FROM pass_vault_secrets WHERE user_id = $1",
