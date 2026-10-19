@@ -17,7 +17,6 @@ use kutup_chat_proto::group_route::{
     GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1,
 };
 use kutup_crypto::account_ref::AccountRef;
-use libsignal_protocol::PublicKey;
 
 use crate::db::Pending;
 use crate::engine::Engine;
@@ -254,15 +253,11 @@ impl Engine {
         let profile_key = &profile_key;
         let (pin, cache) = self.own_home_pin().await?;
         let me = self.session.account_ref().clone();
-        let device_id = self.session.device_id();
-        let session = &self.session;
-        let sign = |bytes: &[u8]| session.sign_with_identity(bytes).map_err(|e| e.to_string());
         let (mut record, genesis) = group::create_group(NewGroup {
             home: pin,
             me: &me,
-            device_id,
             profile_key,
-            sign_binding: &sign,
+            keys: self.group_keys()?,
         })
         .map_err(group_error)?;
         record.gateway = cache;
@@ -379,22 +374,25 @@ impl Engine {
         };
         let me = self.session.account_ref().clone();
         let profile_key = self.own_profile_key().await?;
-        let device_listed = self
-            .session
-            .manifest_identity_key(&me.to_string(), entry.device_id)
-            .await?
-            .is_some();
+        let keys = self.group_keys()?;
+        // Bound by this account's authority (a reset authority binds anew).
+        let bound = group::members(&record, &|account: &AccountRef| {
+            (*account == me).then(|| keys.authority.public_key())
+        })
+        .map_err(group_error)?
+        .iter()
+        .any(|member| {
+            member
+                .verified
+                .as_ref()
+                .is_some_and(|verified| verified.account == me)
+        });
         let key_current = entry.profile_key == kutup_chat_proto::group::encode(&profile_key);
-        if device_listed && key_current {
+        if bound && key_current {
             return Ok(false);
         }
-        let device_id = self.session.device_id();
-        let action = {
-            let session = &self.session;
-            let sign = |bytes: &[u8]| session.sign_with_identity(bytes).map_err(|e| e.to_string());
-            group::renewed_own_entry(&record, &me, device_id, &profile_key, &sign)
-                .map_err(group_error)?
-        };
+        let action = group::renewed_own_entry(&record, &me, &profile_key, &keys.authority)
+            .map_err(group_error)?;
         self.submit_group_change(&mut record, vec![action]).await?;
         self.announce_group_change(group_id, rng).await;
         Ok(true)
@@ -615,15 +613,28 @@ impl Engine {
         &mut self,
         record: &mut GroupRecordV1,
     ) -> Result<GroupSync> {
+        match self.probe_whole_state(record).await? {
+            Some(sync) => Ok(sync),
+            None => self.not_found(record).await,
+        }
+    }
+
+    /// [`Self::take_whole_state`], but `None` (nothing saved) when the home
+    /// answers that `record`'s pseudonym isn't a member: what a device asks
+    /// with a pseudonym it isn't sure of yet.
+    pub(crate) async fn probe_whole_state(
+        &mut self,
+        record: &mut GroupRecordV1,
+    ) -> Result<Option<GroupSync>> {
         let response = match self
             .group_request(record, GroupOperationV1::GetState, b"")
             .await?
         {
             Ok(response) => response,
-            Err(failure) => return Ok(GroupSync::Unreachable(failure)),
+            Err(failure) => return Ok(Some(GroupSync::Unreachable(failure))),
         };
         if response.status == GroupResponseStatusV1::NotFound {
-            return self.not_found(record).await;
+            return Ok(None);
         }
         let answer: GroupStateAnswerV1 = serde_json::from_slice(&accepted_body(response)?)
             .map_err(|_| ChatError::Invalid("the group home's state doesn't read".into()))?;
@@ -645,22 +656,22 @@ impl Engine {
         record.synced_at_ms = Some(crate::clock::unix_millis());
         self.save_group(record).await?;
         let key_confirmed = record.gateway.check(&answer.notary) != ConfigCheck::Unknown;
-        Ok(GroupSync::Current {
+        Ok(Some(GroupSync::Current {
             revision: state.revision,
             key_confirmed,
-        })
+        }))
     }
 
-    /// The group's members, each binding checked against its account's
-    /// current verified manifest. A member whose device left the manifest
-    /// shows unverified until they sign their binding again.
+    /// The group's members, each binding checked against the self-authority
+    /// of its account's verified manifest: devices coming and going (a
+    /// revoked or repaired one) never make a member unverified.
     pub async fn group_members(&mut self, group_id: &str) -> Result<Vec<GroupMemberView>> {
         Ok(self.group_members_checked(group_id).await?.0)
     }
 
     /// [`Self::group_members`], and the member accounts whose manifest
     /// couldn't be fetched now (their membership is unconfirmed, not
-    /// refused). A verified manifest's device keys are kept for the
+    /// refused). A verified manifest's self-authority key is kept for the
     /// known-devices interval.
     pub(crate) async fn group_members_checked(
         &mut self,
@@ -669,8 +680,8 @@ impl Engine {
         let record = self.load_group_record(group_id).await?;
         let accounts = group::member_accounts(&record).map_err(group_error)?;
         let (members, unconfirmed, cached) = self.check_members(&record, &accounts, &[]).await?;
-        // A binding that fails against kept keys may be a new device's: those
-        // accounts' manifests are fetched afresh, once.
+        // A binding that fails against a kept key may follow an authority
+        // reset: those accounts' manifests are fetched afresh, once.
         let verified: Vec<AccountRef> = members
             .iter()
             .filter_map(|member| member.verified.as_ref().map(|v| v.account.clone()))
@@ -688,9 +699,9 @@ impl Engine {
     }
 
     /// The members with their bindings checked against their accounts'
-    /// manifest keys (kept ones, except for `fresh` accounts), the accounts
-    /// whose manifest couldn't be fetched, and those checked against kept
-    /// keys.
+    /// self-authority keys from their verified manifests (kept ones, except
+    /// for `fresh` accounts), the accounts whose manifest couldn't be
+    /// fetched, and those checked against kept keys.
     async fn check_members(
         &mut self,
         record: &GroupRecordV1,
@@ -698,15 +709,15 @@ impl Engine {
         fresh: &[AccountRef],
     ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>, Vec<AccountRef>)> {
         let now = crate::clock::unix_millis();
-        let mut keys: BTreeMap<AccountRef, Vec<(u32, PublicKey)>> = BTreeMap::new();
+        let mut keys: BTreeMap<AccountRef, [u8; 32]> = BTreeMap::new();
         let mut unconfirmed = Vec::new();
         let mut cached = Vec::new();
         for account in accounts.iter().cloned() {
             let account_text = account.to_string();
             if !fresh.contains(&account) {
-                if let Some((at, devices)) = self.manifest_keys_seen.get(&account_text) {
+                if let Some((at, authority)) = self.manifest_keys_seen.get(&account_text) {
                     if now.saturating_sub(*at) < crate::engine::KNOWN_DEVICES_TTL_MS {
-                        keys.insert(account.clone(), devices.clone());
+                        keys.insert(account.clone(), *authority);
                         cached.push(account);
                         continue;
                     }
@@ -737,26 +748,20 @@ impl Engine {
                 // A manifest that doesn't verify: unverified.
                 Err(_) => continue,
             };
-            let devices: Vec<(u32, PublicKey)> = manifest
-                .devices
-                .iter()
-                .filter_map(|device| {
-                    let bytes = STANDARD.decode(&device.identity_key).ok()?;
-                    Some((device.device_id, PublicKey::deserialize(&bytes).ok()?))
-                })
-                .collect();
+            // The manifest verified, so its self-authority is the account's.
+            let Some(authority) = STANDARD
+                .decode(&manifest.self_authority_key)
+                .ok()
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            else {
+                continue;
+            };
             self.manifest_keys_seen
-                .insert(account_text, (now, devices.clone()));
-            keys.insert(account, devices);
+                .insert(account_text, (now, authority));
+            keys.insert(account, authority);
         }
-        let verify = |account: &AccountRef, device_id: u32, bytes: &[u8], signature: &[u8]| {
-            keys.get(account).is_some_and(|devices| {
-                devices
-                    .iter()
-                    .any(|(id, key)| *id == device_id && key.verify_signature(bytes, signature))
-            })
-        };
-        let members = group::members(record, &verify).map_err(group_error)?;
+        let authority_of = |account: &AccountRef| keys.get(account).copied();
+        let members = group::members(record, &authority_of).map_err(group_error)?;
         Ok((members, unconfirmed, cached))
     }
 
@@ -796,7 +801,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     use async_trait::async_trait;
-    use ed25519_dalek::{Signer as _, SigningKey};
+    use ed25519_dalek::SigningKey;
     use futures_executor::block_on;
     use kutup_chat_proto::group::{check_change, check_genesis, decode_group_id, GroupLimits};
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupNotaryV1, GroupRequestV1};
@@ -991,14 +996,12 @@ mod tests {
         ))
         .unwrap();
         let account = engine.session.account_ref().clone();
-        let device = SigningKey::from_bytes(&[3u8; 32]);
-        let sign = |bytes: &[u8]| Ok(device.sign(bytes).to_bytes().to_vec());
+        let keys = crate::group::GroupAccountKeys::derive(&[3u8; 32]).unwrap();
         let (mut record, genesis) = group::create_group(NewGroup {
             home: GroupHomePinV1::of(&home.identity).unwrap(),
             me: &account,
-            device_id: 1,
             profile_key: &[4u8; 32],
-            sign_binding: &sign,
+            keys: &keys,
         })
         .unwrap();
         record.gateway.identity_history = vec![home.identity.clone()];

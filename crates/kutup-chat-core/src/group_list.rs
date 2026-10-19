@@ -44,6 +44,7 @@ const READ_EVERY_MS: i64 = 10 * 60 * 1000;
 struct Listed {
     revision: u64,
     status: GroupListStatus,
+    join_epoch: u32,
 }
 
 /// The list's keys and what this device knows of it.
@@ -73,10 +74,12 @@ fn list_status(status: &GroupStatus) -> Option<GroupListStatus> {
 
 impl Engine {
     /// Keeps this account's groups in its group list, under keys from its
-    /// `master_key`, bound to its key `binding`.
+    /// `master_key`, bound to its key `binding`; and takes the account's
+    /// group keys (its self-authority, its pseudonyms) from the same key.
     pub fn enable_group_list(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
         kutup_crypto::key_binding::check(binding)
             .map_err(|_| ChatError::Invalid("the account's key binding is invalid".into()))?;
+        self.group_keys = Some(crate::group::GroupAccountKeys::derive(master_key)?);
         self.group_list = Some(GroupListSync {
             key: GroupListKey::derive(master_key),
             binding: binding.to_string(),
@@ -103,11 +106,21 @@ impl Engine {
             group_id: record.group_id.clone(),
             master_key: record.master_key.0.clone(),
             home: record.home.clone(),
-            pseudonym_seed: record.pseudonym_seed.0.clone(),
+            join_epoch: record.join_epoch,
             status,
             verified_revision: state.revision,
             chain_hash: encode(&head),
         }))
+    }
+
+    /// What the list last said of `group_id` (as this device read or wrote
+    /// it): its status and the join epoch, which a new join goes past.
+    pub(crate) fn listed_join(&self, group_id: &str) -> Option<(GroupListStatus, u32)> {
+        let list = self.group_list.as_ref()?;
+        let id = list.entry_id(group_id).ok()?;
+        list.listed
+            .get(&id)
+            .map(|listed| (listed.status, listed.join_epoch))
     }
 
     /// Makes `group_id`'s entry due when the list doesn't say what the group
@@ -196,6 +209,7 @@ impl Engine {
                     Listed {
                         revision,
                         status: entry.status,
+                        join_epoch: entry.join_epoch,
                     },
                 );
                 return Ok(());
@@ -241,6 +255,7 @@ impl Engine {
                 Listed {
                     revision: opened.revision,
                     status: entry.status,
+                    join_epoch: entry.join_epoch,
                 },
             );
             entries.push(entry);
@@ -268,12 +283,17 @@ impl Engine {
             listed_groups.insert(entry.group_id.clone());
             match self.session.db().load_group(&entry.group_id).await? {
                 None if entry.status == GroupListStatus::Member => {
+                    let group = decode_group_id(&entry.group_id).map_err(ChatError::Invalid)?;
+                    let pseudonym = self
+                        .group_keys()?
+                        .pseudonyms
+                        .pseudonym(&group, entry.join_epoch);
                     let record = GroupRecordV1 {
                         version: kutup_chat_proto::group::GROUP_FORMAT_VERSION,
                         group_id: entry.group_id.clone(),
                         master_key: SecretText(entry.master_key.clone()),
                         home: entry.home.clone(),
-                        pseudonym_seed: SecretText(entry.pseudonym_seed.clone()),
+                        pseudonym_seed: SecretText(encode(pseudonym.seed())),
                         status: GroupStatus::Member,
                         min_revision: entry.verified_revision,
                         state: None,
@@ -288,6 +308,7 @@ impl Engine {
                         known_since_ms: Some(self.now_ms()),
                         listed_status: Some(GroupListStatus::Member),
                         list_due_at_ms: None,
+                        join_epoch: entry.join_epoch,
                     };
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a

@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signer as _, SigningKey, Verifier as _};
+use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group::{
     check_change, check_genesis, GroupActionV1, GroupAttribute, GroupChangeV1, GroupLimits,
     GroupRole, GroupStateV1,
@@ -91,11 +91,11 @@ impl Home {
     }
 }
 
-/// A person with one device whose Ed25519 key stands in for the libsignal
-/// identity key (the binding's signature scheme is the session's).
+/// A person: their account, the group keys its master key gives (the
+/// self-authority that binds, the pseudonyms) and their profile key.
 struct Person {
     account: AccountRef,
-    device: SigningKey,
+    keys: GroupAccountKeys,
     profile_key: [u8; 32],
 }
 
@@ -107,41 +107,28 @@ impl Person {
                 &format!("00000000-0000-4000-8000-0000000000{n:02}"),
             )
             .unwrap(),
-            device: SigningKey::from_bytes(&[n; 32]),
+            keys: GroupAccountKeys::derive(&[n; 32]).unwrap(),
             profile_key: [n; 32],
         }
     }
-
-    fn sign(&self) -> impl Fn(&[u8]) -> Result<Vec<u8>, String> + '_ {
-        move |bytes| Ok(self.device.sign(bytes).to_bytes().to_vec())
-    }
 }
 
-fn verifier<'a>(people: &'a [&'a Person]) -> impl Fn(&AccountRef, u32, &[u8], &[u8]) -> bool + 'a {
-    move |account, device_id, bytes, signature| {
-        let Some(person) = people.iter().find(|p| &p.account == account) else {
-            return false;
-        };
-        let Ok(signature) = ed25519_dalek::Signature::from_slice(signature) else {
-            return false;
-        };
-        device_id == 1
-            && person
-                .device
-                .verifying_key()
-                .verify(bytes, &signature)
-                .is_ok()
+/// The self-authority of each of `people`'s verified manifests.
+fn verifier<'a>(people: &'a [&'a Person]) -> impl Fn(&AccountRef) -> Option<[u8; 32]> + 'a {
+    move |account| {
+        people
+            .iter()
+            .find(|p| &p.account == account)
+            .map(|person| person.keys.authority.public_key())
     }
 }
 
 fn created(home: &mut Home, alice: &Person) -> GroupRecordV1 {
-    let sign = alice.sign();
     let (mut record, genesis) = create_group(NewGroup {
         home: home.pin(),
         me: &alice.account,
-        device_id: 1,
         profile_key: &alice.profile_key,
-        sign_binding: &sign,
+        keys: &alice.keys,
     })
     .unwrap();
     record.gateway.identity_history = home.history();
@@ -166,17 +153,15 @@ fn invited(
     let add = author_change(alice, vec![action]).unwrap();
     apply_at(home, alice, &add);
 
-    let sign = bob.sign();
-    let mut record = record_from_invite(invitation, INVITER, None).unwrap();
+    let mut record = record_from_invite(invitation, INVITER, None, None, &bob.keys).unwrap();
     record.gateway.identity_history = home.history();
     assert!(matches!(record.status, GroupStatus::Invited { .. }));
     let claim_change = claim(
         &mut record,
         &home.join_basis(),
         &bob.account,
-        1,
         &bob.profile_key,
-        &sign,
+        &bob.keys.authority,
     )
     .unwrap();
     let notary = home.accept(&claim_change).unwrap();
@@ -225,6 +210,70 @@ fn a_binding_that_doesnt_verify_makes_the_member_unverified() {
         .find(|m| m.verified.as_ref().map(|v| &v.account) != Some(&alice.account))
         .unwrap();
     assert!(bob_view.verified.is_none());
+}
+
+#[test]
+fn a_binding_counts_only_under_the_accounts_own_authority() {
+    let mut home = Home::new();
+    let (alice, bob, mallory) = (Person::new(1), Person::new(2), Person::new(3));
+    let mut alice_record = created(&mut home, &alice);
+    let _ = invited(&mut home, &mut alice_record, &bob, GroupRole::Member);
+    // Bob's manifest names his authority: verified, whatever his devices.
+    let bobs = |record: &GroupRecordV1, authority: [u8; 32]| {
+        let alices = alice.keys.authority.public_key();
+        members(record, &|account: &AccountRef| {
+            if *account == alice.account {
+                Some(alices)
+            } else if *account == bob.account {
+                Some(authority)
+            } else {
+                None
+            }
+        })
+        .unwrap()
+        .into_iter()
+        .filter(|member| member.verified.is_some())
+        .count()
+    };
+    assert_eq!(bobs(&alice_record, bob.keys.authority.public_key()), 2);
+    // Checked against any other key (another account's authority, or a
+    // device's), his binding doesn't count.
+    assert_eq!(bobs(&alice_record, mallory.keys.authority.public_key()), 1);
+    let device = SigningKey::from_bytes(&[2u8; 32])
+        .verifying_key()
+        .to_bytes();
+    assert_eq!(bobs(&alice_record, device), 1);
+}
+
+#[test]
+fn a_rejoin_takes_the_next_join_epoch() {
+    let mut home = Home::new();
+    let (alice, bob) = (Person::new(1), Person::new(2));
+    let alice_record = created(&mut home, &alice);
+    let (_, invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
+    let first = record_from_invite(invitation.clone(), INVITER, None, None, &bob.keys).unwrap();
+    assert_eq!(first.join_epoch, 0);
+    // An older invitation, never claimed: the same epoch.
+    let mut newer = invitation.clone();
+    newer.slot_revision += 1;
+    let again = record_from_invite(newer.clone(), INVITER, Some(&first), None, &bob.keys).unwrap();
+    assert_eq!(again.join_epoch, 0);
+    assert_eq!(again.pseudonym_seed, first.pseudonym_seed);
+    // After a membership ended, here or in the list: the next.
+    let mut ended = first.clone();
+    ended.status = GroupStatus::Gone;
+    let rejoin = record_from_invite(newer.clone(), INVITER, Some(&ended), None, &bob.keys).unwrap();
+    assert_eq!(rejoin.join_epoch, 1);
+    assert_ne!(rejoin.pseudonym_seed, first.pseudonym_seed);
+    let listed = record_from_invite(
+        newer,
+        INVITER,
+        None,
+        Some((GroupListStatus::Gone, 4)),
+        &bob.keys,
+    )
+    .unwrap();
+    assert_eq!(listed.join_epoch, 5);
 }
 
 fn titled(record: &GroupRecordV1) -> GroupChangeV1 {
@@ -293,15 +342,14 @@ fn a_joiner_takes_no_snapshot_older_than_its_claim_or_without_it() {
     apply_at(&mut home, &mut alice_record, &add);
     let before_claim = home.states.last().unwrap().clone();
 
-    let mut record = record_from_invite(invitation, INVITER, None).unwrap();
+    let mut record = record_from_invite(invitation, INVITER, None, None, &bob.keys).unwrap();
     record.gateway.identity_history = home.history();
     let claim_change = claim(
         &mut record,
         &home.join_basis(),
         &bob.account,
-        1,
         &bob.profile_key,
-        &bob.sign(),
+        &bob.keys.authority,
     )
     .unwrap();
     home.accept(&claim_change).unwrap();
@@ -332,21 +380,18 @@ fn a_member_never_takes_a_whole_state_over_the_log() {
 fn a_genesis_of_another_group_cant_start_this_one() {
     let mut home = Home::new();
     let alice = Person::new(1);
-    let sign = alice.sign();
     let (_, theirs) = create_group(NewGroup {
         home: home.pin(),
         me: &alice.account,
-        device_id: 1,
         profile_key: &alice.profile_key,
-        sign_binding: &sign,
+        keys: &alice.keys,
     })
     .unwrap();
     let (mut mine, _) = create_group(NewGroup {
         home: home.pin(),
         me: &alice.account,
-        device_id: 1,
         profile_key: &alice.profile_key,
-        sign_binding: &sign,
+        keys: &alice.keys,
     })
     .unwrap();
     mine.gateway.identity_history = home.history();
@@ -361,7 +406,7 @@ fn an_invitation_whose_key_isnt_its_groups_is_refused() {
     let alice_record = created(&mut home, &alice);
     let (_, mut invitation, _) = invite(&alice_record, &bob.account, GroupRole::Member).unwrap();
     invitation.master_key = encode(&[9u8; 32]);
-    assert!(record_from_invite(invitation, INVITER, None).is_err());
+    assert!(record_from_invite(invitation, INVITER, None, None, &bob.keys).is_err());
 }
 
 #[test]

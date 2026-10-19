@@ -14,16 +14,15 @@ pub const PROFILE_KEY_LEN: usize = 32;
 pub const BINDING_SIGNATURE_LEN: usize = 64;
 
 /// A member's sealed entry (subject: their pseudonym): who they are, their
-/// profile key, and the binding one of their devices signed.
+/// profile key, and the binding their account's self-authority signed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupMemberEntryV1 {
     pub version: u16,
     pub account: AccountRef,
-    /// The device whose identity key signed the binding.
-    pub device_id: u32,
     pub profile_key: String,
-    /// The device's signature over `chat_group::binding_signed_bytes`.
+    /// The account self-authority's signature over
+    /// `chat_group::binding_signed_bytes`.
     pub binding_signature: String,
 }
 
@@ -120,8 +119,8 @@ impl Drop for GroupInviteV1 {
 
 /// One group in the account's group list (docs/plans/pairwise-groups.md
 /// §5), sealed under the account's list key: what another of this account's
-/// devices needs to take the group up (its key, its home, this account's
-/// pseudonym) and the newest state it may take.
+/// devices needs to take the group up (its key, its home, the join epoch its
+/// pseudonym is derived at) and the newest state it may take.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupListEntryV1 {
@@ -129,8 +128,10 @@ pub struct GroupListEntryV1 {
     pub group_id: String,
     pub master_key: String,
     pub home: GroupHomePinV1,
-    /// This account's pseudonym in the group (its seed).
-    pub pseudonym_seed: String,
+    /// Which of this account's joins of the group this is (0 for the first):
+    /// its pseudonym is derived from the account key at this epoch
+    /// (`kutup_crypto::chat_group::GroupPseudonymKey`).
+    pub join_epoch: u32,
     /// `member`, or `gone` (left or removed: its history stays).
     pub status: GroupListStatus,
     /// The last revision this account verified, and its chain head: no
@@ -151,13 +152,12 @@ impl GroupListEntryV1 {
         require_version(self.version)?;
         decode_group_id(&self.group_id)?;
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
-        decode_exact::<32>("pseudonymSeed", &self.pseudonym_seed)?;
         decode_exact::<32>("chainHash", &self.chain_hash)?;
         Ok(())
     }
 }
 
-/// Never prints the master key or the pseudonym seed.
+/// Never prints the master key.
 impl std::fmt::Debug for GroupListEntryV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GroupListEntryV1")
@@ -171,7 +171,6 @@ impl std::fmt::Debug for GroupListEntryV1 {
 impl Drop for GroupListEntryV1 {
     fn drop(&mut self) {
         zeroize::Zeroize::zeroize(&mut self.master_key);
-        zeroize::Zeroize::zeroize(&mut self.pseudonym_seed);
     }
 }
 
@@ -210,9 +209,6 @@ fn require_version(version: u16) -> Result<(), String> {
 impl GroupMemberEntryV1 {
     pub fn validate(&self) -> Result<(), String> {
         require_version(self.version)?;
-        if self.device_id == 0 {
-            return Err("deviceId must be positive".into());
-        }
         decode_exact::<PROFILE_KEY_LEN>("profileKey", &self.profile_key)?;
         decode_exact::<BINDING_SIGNATURE_LEN>("bindingSignature", &self.binding_signature)?;
         Ok(())

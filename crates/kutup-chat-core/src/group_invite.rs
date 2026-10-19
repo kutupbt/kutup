@@ -4,7 +4,7 @@
 //! built from the join info the slot's claim key may read, then the state.
 
 use kutup_chat_proto::group::{decode_exact, GroupActionV1, GroupRole};
-use kutup_chat_proto::group_route::{GroupJoinInfoV1, GroupOperationV1};
+use kutup_chat_proto::group_route::{GroupJoinInfoV1, GroupOperationV1, GroupResponseStatusV1};
 use kutup_chat_proto::ChatContent;
 use kutup_crypto::account_ref::AccountRef;
 use rand::{CryptoRng, Rng};
@@ -12,7 +12,7 @@ use rand::{CryptoRng, Rng};
 use crate::clock::{rfc3339, unix_millis};
 use crate::engine::Engine;
 use crate::error::{ChatError, Result};
-use crate::group::{self, ClaimBasis, GroupStatus};
+use crate::group::{self, ClaimBasis, GroupRecordV1, GroupStatus};
 use crate::group_engine::{accepted_body, group_error, GroupSync};
 
 impl Engine {
@@ -112,6 +112,11 @@ impl Engine {
             .group_request_signed(&mut record, GroupOperationV1::GetJoinInfo, b"", &claim_key)
             .await?
         {
+            // The slot is gone: perhaps another device of this account
+            // claimed it, under the same pseudonym.
+            Ok(response) if response.status == GroupResponseStatusV1::NotFound => {
+                return self.claimed_elsewhere(&mut record).await;
+            }
             Ok(response) => accepted_body(response)?,
             Err(failure) => return Ok(GroupSync::Unreachable(failure)),
         };
@@ -121,26 +126,49 @@ impl Engine {
             head: decode_exact::<32>("head", &info.head).map_err(ChatError::Invalid)?,
         };
         let me = self.session.account_ref().clone();
-        let device_id = self.session.device_id();
         let profile_key = self.own_profile_key().await?;
-        let session = &self.session;
-        let sign = |bytes: &[u8]| session.sign_with_identity(bytes).map_err(|e| e.to_string());
-        let change = group::claim(&mut record, &basis, &me, device_id, &profile_key, &sign)
-            .map_err(group_error)?;
+        let change = group::claim(
+            &mut record,
+            &basis,
+            &me,
+            &profile_key,
+            &self.group_keys()?.authority,
+        )
+        .map_err(group_error)?;
         let body = change.canonical_bytes().map_err(ChatError::Invalid)?;
         match self
             .group_request(&mut record, GroupOperationV1::SubmitChange, &body)
             .await?
         {
-            Ok(response) => {
-                accepted_body(response)?;
+            Ok(response) if response.status != GroupResponseStatusV1::Ok => {
+                // Refused: perhaps another device of this account claimed
+                // the slot first.
+                let refused = accepted_body(response).err();
+                let sync = self.claimed_elsewhere(&mut record).await;
+                return match (sync, refused) {
+                    (Err(_), Some(refused)) => Err(refused),
+                    (sync, _) => sync,
+                };
             }
+            Ok(_) => {}
             Err(failure) => return Ok(GroupSync::Unreachable(failure)),
         }
         // Saved with the claim's revision as the lowest state to take; the
         // claim key goes once the state shows this account a member.
         self.save_group(&record).await?;
         self.take_whole_state(&mut record).await
+    }
+
+    /// Whether this account is in the group already under the invitation's
+    /// pseudonym: another of its devices claimed the slot at the same time,
+    /// and pseudonyms are derived, so it's this device's too.
+    async fn claimed_elsewhere(&mut self, record: &mut GroupRecordV1) -> Result<GroupSync> {
+        match self.probe_whole_state(record).await? {
+            Some(sync) => Ok(sync),
+            None => Err(ChatError::Invalid(
+                "the invitation was taken back or has expired".into(),
+            )),
+        }
     }
 
     /// Declines an invitation: the record is kept as gone, without its

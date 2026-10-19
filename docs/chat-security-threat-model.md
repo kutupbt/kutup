@@ -35,6 +35,15 @@ anonymity relays, and traffic-shape protection are separate milestones.
   16-byte delivery capability. Servers store only its SHA-256 verifier.
 - A private group chooses 1-64 ordering authorities. They see participant
   domains and group-scoped pseudonyms, not the encrypted account roster.
+- In a pairwise group (`docs/plans/pairwise-groups.md`, not yet on), a
+  member's per-group pseudonym is derived from the account master key, the
+  group id and a join epoch, and the binding of pseudonym to account is
+  signed by the account self-authority. A revoked or lost device can't forge
+  a binding and never makes its account unverified. The account master key
+  now also yields every group signing key and binding: the same blast radius
+  as the manifests and the group list it already protects. The group's home
+  answers a pseudonym that isn't a member exactly as an unknown group, so it
+  can't tell a device looking for its account's place from a stranger.
 
 Kutup V1 deliberately has no global key-transparency log, sparse map,
 checkpoint monitor, witness, or auditor. The self-hosted deployment model does

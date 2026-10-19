@@ -6,9 +6,12 @@ const PASSWORD = 'Deneme123*GroupDevicePassword'
 
 // A member whose only Chat device is replaced (a new browser, the old one
 // revoked; "Repair this browser" ends in the same state) is still a member of
-// their groups (docs/plans/pairwise-groups.md §5): the new device learns them
-// from the account's group list, signs the member's entry again, the others
-// catch up from its change notice, and messages flow both ways again.
+// their groups (docs/plans/pairwise-groups.md §5). Here the old device goes
+// within minutes of joining, before its group-list entry was written: the
+// member's binding is their account's, so the others still send to them; the
+// next message gives the new device the group's key with its sender's, and
+// the device finds the account's place again (its pseudonym is derived from
+// the account key), so messages flow both ways.
 test('a group member keeps the group after replacing their only device', async ({ browser }) => {
   test.slow()
   const tag = Date.now().toString(36)
@@ -38,12 +41,12 @@ test('a group member keeps the group after replacing their only device', async (
   const pageB2 = await openChat(contextB2)
   await revokeOtherDevices(pageB2, 1)
 
-  // The group is still his, and it works in both directions.
-  await openGroup(pageB2, conversationId)
-  // The new device knows the group from the account's list.
-  await expect(composer(pageB2)).toBeVisible({ timeout: 120_000 })
+  // Alice writes; the new device takes the group up from her message and
+  // reads it.
   const toNewDevice = `to-new-device-${tag}`
   await send(pageA, toNewDevice)
+  await openGroup(pageB2, conversationId)
+  await expect(composer(pageB2)).toBeVisible({ timeout: 120_000 })
   await expect(message(pageB2, toNewDevice)).toBeVisible({ timeout: 90_000 })
   const fromNewDevice = `from-new-device-${tag}`
   await send(pageB2, fromNewDevice)
@@ -55,9 +58,8 @@ test('a group member keeps the group after replacing their only device', async (
 
 // The same through "Repair this browser", which Chat offers when it cannot
 // open: the browser's device state is discarded and a fresh device
-// registered. The old device is revoked without being asked for, Chat keeps
-// opening while a group message it cannot read is waiting, and the group
-// takes the new device in once it signs the member's entry again.
+// registered. The old device is revoked without being asked for, and the
+// next group message gives the new device the group again, as above.
 test('a group member keeps the group after repairing their browser', async ({ browser }) => {
   test.slow()
   const tag = Date.now().toString(36)
@@ -95,8 +97,8 @@ test('a group member keeps the group after repairing their browser', async ({ br
   await expect(pageB.locator('[data-testid^="chat-device-revoke-"]')).toHaveCount(0, { timeout: 60_000 })
   await openChats(pageB)
 
-  // A message sent before the group has the new device cannot be read by
-  // it, and must not stop Chat from opening again.
+  // Alice's next message brings the group back to the new device, and must
+  // not stop Chat from opening again whatever happens to it.
   const whileOutside = `while-outside-${tag}`
   await send(pageA, whileOutside)
   await expect(message(pageA, whileOutside)).toBeVisible({ timeout: 45_000 })
@@ -104,6 +106,7 @@ test('a group member keeps the group after repairing their browser', async ({ br
   await openGroup(pageB, conversationId)
 
   await expect(composer(pageB)).toBeVisible({ timeout: 120_000 })
+  await expect(message(pageB, whileOutside)).toBeVisible({ timeout: 90_000 })
   const toNewDevice = `to-new-device-${tag}`
   await send(pageA, toNewDevice)
   await expect(message(pageB, toNewDevice)).toBeVisible({ timeout: 90_000 })

@@ -39,6 +39,7 @@ mod group_heal;
 mod group_invite;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_list;
+mod group_recover;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_send;
 mod invite_link;
