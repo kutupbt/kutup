@@ -74,6 +74,12 @@ Specific codes, where an app does something particular (a test in
 | `addressReceiveOnly` | 403 | An account's old address receives only; mail is sent from its current one |
 | `notHeld` | 409 | Not a name the account (or, for an admin, anyone) holds |
 | `breakGlassAccount` | 403 | The break-glass account keeps its name |
+| `forwardingMaterialMismatch` | 400 | `POST /api/mail/forwardings`: the proxy factors aren't for the address's current key, or don't name the forwardee key's subkeys |
+| `endToEndRequired` | 400 | `POST /api/mail/forwardings` to a Kutup address without `endToEnd` material |
+| `forwardingExists` | 409 | The address already forwards there |
+| `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
+| `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
+| `forwardingState` | 409 | A forwarding action from the wrong state (pause an active one, accept a pending one, …) |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
