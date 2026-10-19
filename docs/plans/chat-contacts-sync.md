@@ -1,9 +1,8 @@
 # Chat contacts that survive device loss
 
-Status: second draft (2026-10-19), after the main session's review of the
-first. Third session (client and chat-core). The server half reuses the group
-list's routes; the second session owns it. The user's answers on the open
-choices are pending. No code before the main session's review and the user's go.
+Status: decided (2026-10-19): the main session's review, and the user's
+answers (see Decisions). Third session (client and chat-core). The server half
+reuses the group list's routes; the second session owns it.
 
 - Gap: [`roadmap.md`](../roadmap.md), "contact states after total device
   loss"; found by spec 34 on #247.
@@ -159,9 +158,14 @@ sender hides exactly that. So, as for the group list:
 - the device-to-device contact control stays as it is, so the account's own
   devices still agree within seconds.
 
-**A block is written at once.** A blocked person must stay blocked if the
-device is lost a minute later. It leaks less: blocking is one-sided, so
-nothing on the other side lines up with it.
+**A block's timing is a platform policy, one setting** (the user's decision).
+On the web, a block is written at once: a blocked person must stay blocked
+if the browser's data is lost a minute later, and a block leaks less, since
+it is one-sided and nothing on the other side lines up with it. The future
+native apps follow Signal's storage-sync timing for it (the upload debounce
+above). chat-core takes the policy as one setting
+(`ContactListTiming { block: Immediate | Debounced }`), chosen by each
+platform's client, not scattered through the code.
 
 **The pin list follows the same rule.** Today `identity_sync::record` writes
 the pin list at once on first contact, with a millisecond timestamp as its
@@ -205,6 +209,26 @@ oldest `rejected` entries go first, then the oldest `pendingOutgoing`. A
 `blocked` entry is never evicted. Deletion happens only on eviction, and is
 delayed like a write.
 
+### Keeping the list in step: one standing rule
+
+There is no separate migration. Every device runs the same rule, all the time:
+any contact whose local state is missing from the list, or newer than the
+list's entry by the control order, is due for a write, with the delay above.
+That also covers the rollout: on the first start after the update, each
+device finds its contacts missing from the list and writes them over the
+following minutes; kutup.dev's accounts keep their contacts, with no wipe.
+
+The rule is the references' own:
+- **Signal** marks a record `needsStorageServiceSync` when it changes locally,
+  and each upload writes every record that is flagged or has no storage id
+  yet (`storage.preload.ts`, `storageNeedsSync`, around lines 226–240 and
+  297).
+- **Proton** clients reconcile through the server's event stream, from the
+  last event id each has seen, with local changes pushed as they come
+  (Proton Pass Android `SyncUserEventsImpl`, `lastEventId` and
+  `eventsPending`); a new client version catches up the same way, with no
+  separate migration step.
+
 ### The server
 
 The group list's server half with a second scope and its own routes,
@@ -214,19 +238,18 @@ following the main session's review of #252:
 - writes are listed by the account head;
 - account reset clears it.
 
-## Choices for the user
+## Decisions
 
-The main session is relaying the user's answers:
-1. **Entry ids**: stable HMAC ids (proposed), or a random id per version.
-   Given the correction above, random ids don't hide linkage on Kutup either;
-   stable ids keep the conflict rule simple.
-2. **Profile keys in the entry** (proposed: yes, as Signal). Without them, a
-   restored device shows contacts by address only, and can't send them a
-   sealed message until they write first.
-3. **Writing a block at once** (proposed: yes).
-4. **Rollout.** Every existing device uploads its contacts once, at random
-   moments over the first hour after the update. kutup.dev's accounts keep
-   their contacts, with no wipe.
+The user's answers (2026-10-19, relayed by the main session):
+1. **Profile keys in the entry: yes**, as Signal.
+2. **A block's write timing**: immediate on the web; Signal's storage-sync
+   timing in the future native apps; one platform setting (see "When it is
+   written").
+3. **Rollout**: the standing sync rule above, as Signal's `storageNeedsSync`
+   and Proton's event-based catch-up; no wipe, no one-off migration.
+4. **Entry ids**: fixed HMAC ids for now. The user asked why Signal rotates
+   its ids if not for privacy; the main session is answering, and a change
+   here would move the group list's ids too.
 
 ## Tests
 
@@ -254,6 +277,7 @@ The main session is relaying the user's answers:
 2. The server scope and routes (second session).
 3. chat-core:
    - the one order function, used by the contact control too;
+   - the standing sync rule and the block-timing setting;
    - entries, implicit writes and their delay;
    - delayed pin writes;
    - the held mailbox and the read before it;
