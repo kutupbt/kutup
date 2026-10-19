@@ -47,6 +47,9 @@ pub struct MailForwarding {
     pub conditions: Vec<Condition>,
     /// Messages that couldn't be forwarded.
     pub skipped: i64,
+    /// Why an outside forwarding stopped on its own: `bounces` (paused) or
+    /// `budget` (today's is spent; it goes on tomorrow).
+    pub notice: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     /// When a pending forwarding lapses.
@@ -316,15 +319,28 @@ type Row = (
     i64,
     OffsetDateTime,
     Option<OffsetDateTime>,
+    Option<String>,
 );
 
 const SELECT: &str = "SELECT f.id, f.kind, f.state, a.address, f.forwardee_email, f.match,
-                             f.conditions, f.skipped, f.created_at, f.expires_at
+                             f.conditions, f.skipped, f.created_at, f.expires_at,
+                             f.notice
                         FROM mail_forwardings f JOIN mail_addresses a ON a.id = f.forwarder_address_id";
 
 fn view(row: Row) -> MailForwarding {
-    let (id, kind, state, forwarder, forwardee, rule, conditions, skipped, created_at, expires_at) =
-        row;
+    let (
+        id,
+        kind,
+        state,
+        forwarder,
+        forwardee,
+        rule,
+        conditions,
+        skipped,
+        created_at,
+        expires_at,
+        notice,
+    ) = row;
     MailForwarding {
         id: id.to_string(),
         kind,
@@ -338,6 +354,7 @@ fn view(row: Row) -> MailForwarding {
         },
         conditions: serde_json::from_value(conditions).unwrap_or_default(),
         skipped,
+        notice,
         created_at,
         expires_at,
     }

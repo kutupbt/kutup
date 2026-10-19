@@ -6094,3 +6094,332 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nfor alice an
         .iter()
         .all(|f| f["id"] != declined));
 }
+
+/// Kutup mail sent readable (Encrypt off for the recipient, as the
+/// composer does for an address that forwards outside Kutup).
+fn send_readable(
+    c: &Client,
+    base: &str,
+    sender: &User,
+    from: &Address,
+    to: &str,
+    subject: &str,
+) -> String {
+    let domain = from.address.split_once('@').unwrap().1;
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {to}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nreadable for {to}\r\n",
+        from.address
+    );
+    let split =
+        mail_key::encrypt_split(&[&from.public_key], &from.secret_key, mime.as_bytes()).unwrap();
+    let meta = json!({
+        "to": [{ "address": to }],
+        "subject": subject,
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(
+        r.status().is_success(),
+        "send readable: {}",
+        r.text().unwrap()
+    );
+    message_id
+}
+
+/// What the phases of [`outside_forwarding`] hand on.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ForwardState {
+    username: String,
+    password: String,
+    master_key: String,
+    binding: String,
+    address: String,
+    address_id: String,
+    forwarding_id: String,
+    secret_key: String,
+    public_key: String,
+}
+
+/// Forwarding outside Kutup (docs/plans/mail-forwarding.md), in phases the
+/// mail gate drives (`KUTUP_LIVE_FORWARD_PHASE`): the confirmation link
+/// reaches the sink, whose token the gate hands back.
+/// - `setup`: the first outside forwarding needs the next key list with
+///   EMAIL_NO_ENCRYPT on every key; WKD stops offering the key; a list
+///   clearing the flag is refused while it lasts.
+/// - `confirm`: the link confirms; mail from outside and readable Kutup
+///   mail go out (the gate checks the sink), end-to-end Kutup mail is
+///   skipped and counted.
+/// - `end`: deleting it leaves the address owing a list without the flag,
+///   which settles it, and WKD offers the key again.
+#[test]
+fn outside_forwarding() {
+    let (Ok(phase), Ok(base), Ok(state_path)) = (
+        std::env::var("KUTUP_LIVE_FORWARD_PHASE"),
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_FORWARD_STATE"),
+    ) else {
+        eprintln!("KUTUP_LIVE_FORWARD_PHASE not set; skipping");
+        return;
+    };
+    let c = client();
+    let decode = |value: &str| -> Vec<u8> {
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value).unwrap()
+    };
+    let wkd_status = |address: &str| {
+        let local = address.split_once('@').unwrap().0;
+        c.get(format!(
+            "{base}/.well-known/openpgpkey/hu/{}?l={local}",
+            wkd_hash(local)
+        ))
+        .send()
+        .unwrap()
+        .status()
+    };
+    match phase.as_str() {
+        "setup" => {
+            let alice = register(&c, &base);
+            let a = set_up_address(&c, &base, &alice);
+            let alice_address_id = address_id(&c, &base, &alice);
+            assert!(wkd_status(&a.address).is_success());
+            let tag = uuid::Uuid::new_v4().simple().to_string();
+            let to = format!("fwd-{}@outside.test", &tag[..12]);
+            let id = uuid::Uuid::new_v4().to_string();
+            let create = |body: Value| {
+                bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+                    .json(&body)
+                    .send()
+                    .unwrap()
+            };
+            let body = |key_list: Value| {
+                json!({
+                    "id": id, "forwarderAddressId": alice_address_id, "forwardeeEmail": to,
+                    "match": "all", "conditions": [], "keyList": key_list,
+                })
+            };
+            // The first outside forwarding brings the key list, and only one
+            // that adds EMAIL_NO_ENCRYPT to every key.
+            let r = create(body(Value::Null));
+            assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
+            assert_eq!(r.json::<Value>().unwrap()["code"], "keyListRequired");
+            let (_, list) = current_list(&c, &base, &alice);
+            let unchanged = next_list(&alice, &list, list.list.keys.clone());
+            let r = create(body(unchanged));
+            assert_eq!(r.json::<Value>().unwrap()["code"], "keyListMismatch");
+            let (_, list) = current_list(&c, &base, &alice);
+            let flagged: Vec<MailKeyEntryV1> = list
+                .list
+                .keys
+                .iter()
+                .map(|key| MailKeyEntryV1 {
+                    flags: key.flags | mail_key::FLAG_EMAIL_NO_ENCRYPT,
+                    ..key.clone()
+                })
+                .collect();
+            let r = create(body(next_list(&alice, &list, flagged)));
+            assert_eq!(
+                r.status(),
+                reqwest::StatusCode::CREATED,
+                "{}",
+                r.text().unwrap()
+            );
+            let listed: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &alice.token)
+                .send()
+                .unwrap()
+                .json()
+                .unwrap();
+            assert_eq!(listed["outgoing"][0]["kind"], "outside");
+            assert_eq!(listed["outgoing"][0]["state"], "pending");
+            // Outside senders find no key to encrypt to now.
+            assert_eq!(wkd_status(&a.address), reqwest::StatusCode::NOT_FOUND);
+            // And the flag can't go while the forwarding lasts.
+            let (_, list) = current_list(&c, &base, &alice);
+            let cleared: Vec<MailKeyEntryV1> = list
+                .list
+                .keys
+                .iter()
+                .map(|key| MailKeyEntryV1 {
+                    flags: key.flags & !mail_key::FLAG_EMAIL_NO_ENCRYPT,
+                    ..key.clone()
+                })
+                .collect();
+            let r = bearer(
+                c.put(format!(
+                    "{base}/api/mail/addresses/{alice_address_id}/key-list"
+                )),
+                &alice.token,
+            )
+            .json(&json!({ "keyList": next_list(&alice, &list, cleared) }))
+            .send()
+            .unwrap();
+            assert_eq!(r.status(), reqwest::StatusCode::CONFLICT);
+            assert_eq!(
+                r.json::<Value>().unwrap()["code"],
+                "forwardingKeepsNoEncrypt"
+            );
+            let state = ForwardState {
+                username: alice.username.clone(),
+                password: alice.password.clone(),
+                master_key: b64(&alice.master_key),
+                binding: alice.binding.clone(),
+                address: a.address.clone(),
+                address_id: alice_address_id,
+                forwarding_id: id,
+                secret_key: b64(&a.secret_key),
+                public_key: b64(&a.public_key),
+            };
+            std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+            println!("FORWARD-OUTSIDE-TO {to}");
+        }
+        "confirm" => {
+            let token = std::env::var("KUTUP_LIVE_FORWARD_TOKEN").unwrap();
+            let smtp_address = std::env::var("KUTUP_LIVE_SMTP").unwrap();
+            let state: ForwardState =
+                serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+            let external = |path: &str, token: &str| {
+                c.post(format!("{base}/api/mail/forwardings/external{path}"))
+                    .json(&json!({ "token": token }))
+                    .send()
+                    .unwrap()
+            };
+            assert_eq!(
+                external("", "AAAA").status(),
+                reqwest::StatusCode::NOT_FOUND
+            );
+            let found: Value = external("", &token).json().unwrap();
+            assert_eq!(found["state"], "pending");
+            assert_eq!(found["forwarderEmail"], json!(state.address));
+            assert_eq!(
+                external("/accept", &token).status(),
+                reqwest::StatusCode::NO_CONTENT
+            );
+            // The link is spent.
+            assert_eq!(
+                external("/accept", &token).status(),
+                reqwest::StatusCode::NOT_FOUND
+            );
+            let token_of = |user: &str, password: &str| {
+                common::sign_in(&c, &base, user, password)["accessToken"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            };
+            let alice_token = token_of(&state.username, &state.password);
+            let listed = |token: &str| -> Value {
+                bearer(c.get(format!("{base}/api/mail/forwardings")), token)
+                    .send()
+                    .unwrap()
+                    .json()
+                    .unwrap()
+            };
+            assert_eq!(listed(&alice_token)["outgoing"][0]["state"], "active");
+            let a = Address {
+                address: state.address.clone(),
+                secret_key: decode(&state.secret_key),
+                public_key: decode(&state.public_key),
+            };
+            // From outside: re-sent.
+            let tag = uuid::Uuid::new_v4().simple().to_string();
+            let outside = format!(
+                "From: writer@sender.test\r\nTo: {}\r\nSubject: outside forward\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <ofw-{tag}@sender.test>\r\n\
+MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nto alice and onward\r\n",
+                a.address
+            );
+            assert_eq!(smtp_send(&smtp_address, &a.address, &outside), (250, 250));
+            println!("FORWARD-EXPECT ofw-{tag}@sender.test");
+            // Readable Kutup mail: re-sent; end-to-end Kutup mail: skipped.
+            let carol = register(&c, &base);
+            let cc = set_up_address(&c, &base, &carol);
+            let readable = send_readable(&c, &base, &carol, &cc, &a.address, "readable onward");
+            println!("FORWARD-EXPECT {readable}");
+            let sealed = send_between(&c, &base, &carol, &cc, &a, "sealed, not onward");
+            println!("FORWARD-NOT {sealed}");
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                let skipped = listed(&alice_token)["outgoing"][0]["skipped"]
+                    .as_i64()
+                    .unwrap();
+                if skipped >= 1 {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the sealed message was not counted"
+                );
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+        "end" => {
+            let state: ForwardState =
+                serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+            let token = common::sign_in(&c, &base, &state.username, &state.password)["accessToken"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let r = bearer(
+                c.delete(format!(
+                    "{base}/api/mail/forwardings/{}",
+                    state.forwarding_id
+                )),
+                &token,
+            )
+            .send()
+            .unwrap();
+            assert_eq!(r.status(), reqwest::StatusCode::NO_CONTENT);
+            let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &token)
+                .send()
+                .unwrap()
+                .json()
+                .unwrap();
+            assert_eq!(addresses[0]["keyListOwed"], true);
+            // The owner's client settles it: the next list without the flag.
+            let master: [u8; 32] = decode(&state.master_key).try_into().unwrap();
+            let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+            let signed = mail_key::SignedMailKeyListV1::verify(
+                &decode(addresses[0]["keyList"]["data"].as_str().unwrap()),
+                &decode(addresses[0]["keyList"]["signature"].as_str().unwrap()),
+                &identity.authority_public_key(),
+            )
+            .unwrap();
+            let mut keys = signed.list.keys.clone();
+            for key in &mut keys {
+                key.flags &= !mail_key::FLAG_EMAIL_NO_ENCRYPT;
+            }
+            keys.sort_by_key(|key| key.fingerprint);
+            let list = MailKeyListV1 {
+                sequence: signed.list.sequence + 1,
+                previous_hash: Some(signed.hash()),
+                issued_at: "2026-10-19T13:00:00Z".into(),
+                keys,
+                ..signed.list.clone()
+            }
+            .sign(identity.authority_signing_key())
+            .unwrap();
+            let r = bearer(
+                c.put(format!("{base}/api/mail/addresses/{}/key-list", state.address_id)),
+                &token,
+            )
+            .json(&json!({ "keyList": { "data": b64(&list.data), "signature": b64(&list.signature) } }))
+            .send()
+            .unwrap();
+            assert!(r.status().is_success(), "settle: {}", r.status());
+            let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &token)
+                .send()
+                .unwrap()
+                .json()
+                .unwrap();
+            assert_eq!(addresses[0]["keyListOwed"], false);
+            assert!(wkd_status(&state.address).is_success());
+        }
+        other => panic!("unknown phase {other}"),
+    }
+}
