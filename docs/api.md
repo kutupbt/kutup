@@ -1602,15 +1602,20 @@ name (served on `openpgpkey.<server name>`); any other domain is `404`.
 Proton's forwarding ([`plans/mail-forwarding.md`](plans/mail-forwarding.md)).
 To a Kutup address on this server it is end to end: the server turns each
 arriving key packet into one for the forwardee with a proxy factor k, and
-reads no message. Forwarding outside Kutup is refused for now
-(`409 outsideForwardingUnavailable`). k is sealed at once under
-`MAIL_FORWARDING_KEYS` and no answer carries it. **Auth:** Bearer JWT for all.
+reads no message. To anything else it is outside: the server re-sends the
+mail it can read, and the address's end-to-end encryption is off while any
+outside forwarding lasts (as Proton's). k is sealed at once under
+`MAIL_FORWARDING_KEYS` and no answer carries it. **Auth:** Bearer JWT, but
+for the three `external` endpoints.
 
 A forwarding: `{ "id", "kind": "end_to_end"|"outside", "state":
 "pending"|"active"|"outdated"|"paused"|"rejected", "forwarderAddress",
 "forwardeeEmail", "match": "all"|"any", "conditions": [filter conditions on
 sender, subject, attachments], "skipped": <messages that couldn't be
-forwarded>, "createdAt", "expiresAt" | null }`.
+forwarded>, "notice": null|"bounces"|"budget", "createdAt", "expiresAt" |
+null }`. `notice` says why an outside forwarding stopped on its own: paused
+after 5 bounces in a day, or today's budget (200 per forwarding, 500 per
+account) spent; it goes on tomorrow.
 
 ### GET /api/mail/forwardings
 
@@ -1625,7 +1630,17 @@ Pending forwardings past their expiry (7 days) lapse to `rejected` first.
 "instances": [{ "forwarderFingerprint", "forwardeeFingerprint",
 "proxyParameter": "<base64, 32 bytes>" }], "activation": "<armored>" } }` →
 `201` with the forwarding, pending. The client chooses the id so the
-activation can bind it. The forwarder address must be the caller's current
+activation can bind it.
+
+**Outside Kutup** there is no `endToEnd`. The first outside forwarding of an
+address brings `"keyList"`: its next signed key list, every key as it is
+plus `EMAIL_NO_ENCRYPT` (`400 keyListRequired` without it, `400
+keyListMismatch` for any other change). The forwardee is emailed a link to
+confirm or decline (7 days; 3 a day). While the address forwards outside,
+WKD offers none of its keys, and a key list clearing the flag is `409
+forwardingKeepsNoEncrypt`. When the last one ends without the owner's client
+(declined, or deleted), `GET /api/mail/addresses` says `keyListOwed: true`
+until the client signs a list without the flag. The forwarder address must be the caller's current
 one; the forwardee a Kutup person address of someone else on this server.
 The instances must cover exactly the forwarder primary key's encryption
 subkeys and name exactly the forwardee key's subkeys
@@ -1638,6 +1653,19 @@ server has no `MAIL_FORWARDING_KEYS`.
 
 The forwarder renews an `outdated` or `rejected` forwarding with new
 material: `{ "endToEnd": {...} }` as above → pending again.
+
+### PUT /api/mail/forwardings/:id/reinvite
+
+The forwarder sends an outside forwardee a fresh link (pending, or declined
+and asked again): `429 rateLimited` past 3 a day.
+
+### POST /api/mail/forwardings/external · /external/accept · /external/decline
+
+No account: the confirmation page, with `{ "token" }` from the link (in the
+body, never the URL). The first answers `{ "state", "forwarderEmail",
+"forwardeeEmail" }`; accept makes it active, decline `rejected`; each spends
+the link. `404` for an unknown token; `410 linkExpired` for an expired one,
+and a new link is sent.
 
 ### PUT /api/mail/forwardings/:id/pause · /resume · /conditions
 
@@ -1680,7 +1708,12 @@ its key packet transformed (the data packet unchanged) and carries
 `forwardedFrom: "<forwarder address>"` on its message row: open it with the
 forwarding key only. Spam, mail that itself came by forwarding, and mail
 that came back through a loop (our `X-Kutup-Forwarded` marker, more than 20
-`Received` headers) aren't forwarded. A forwarder's new primary key makes
+`Received` headers) aren't forwarded. Outside, a forward goes out unchanged
+but for the marker on top, from a return path of ours
+(`fwd-<forwarding>-<day>-<hmac>@<server>`) that a bounce comes back to: it is
+checked at RCPT (a forged or older-than-21-days one is refused there) and
+counted. Mail that arrived PGP-encrypted, and end-to-end Kutup mail, can't
+be re-sent: skipped and counted. A forwarder's new primary key makes
 its end-to-end forwardings `outdated` and deletes their k.
 
 ## Mail

@@ -284,7 +284,10 @@ without changing any key.
       sealed zero-access while the flag is set).
     - It submits the message unchanged to the forwardee through Stalwart,
       with the envelope sender rewritten by **SRS** (SRS0, HMAC under a
-      server secret; we do it, Stalwart doesn't).
+      server secret; we do it, Stalwart doesn't). As built, the return
+      path is SRS's purpose in a VERP form, `fwd-<forwarding>-<day>-<hmac>`
+      at our domain: bounces are counted per forwarding, not relayed, so it
+      names the forwarding rather than the original sender.
     - Stalwart DKIM-signs it as our domain. No ARC: Stalwart's sealing is
       off, and Proton's choice isn't visible.
     - **Bounces:** a bounce to an SRS address is checked at RCPT: its HMAC
