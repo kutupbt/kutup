@@ -266,7 +266,9 @@
       "settingDescription": "When this is on, people you chat with can see when you have read their messages. Delivery receipts in direct chats are always sent, encrypted.",
       "sending": "Sending…",
       "notSent": "Not sent",
-      "retryHint": "Try sending again now"
+      "retryHint": "Try sending again now",
+      "notDeliveredTo_one": "Not delivered to {{count}} member",
+      "notDeliveredTo_other": "Not delivered to {{count}} members"
     },
     "replies": {
       "reply": "Reply to message",

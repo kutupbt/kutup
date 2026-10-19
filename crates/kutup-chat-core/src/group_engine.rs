@@ -26,7 +26,7 @@ use crate::group::{self, GroupError, GroupMemberView, GroupRecordV1, GroupStatus
 use crate::group_client::{self, ConfigCheck, RequestSigner, RouteFailure};
 
 /// How many changes one log request asks for.
-const LOG_PAGE: u16 = 64;
+const LOG_PAGE: u16 = if cfg!(test) { 2 } else { 64 };
 
 /// What a group's view shows: its id, title and this device's standing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +99,7 @@ pub enum GroupSync {
 pub const NOT_FOUND_CONFIRM_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// The most log pages one catch-up reads.
-const MAX_PAGES_PER_SYNC: usize = 256;
+const MAX_PAGES_PER_SYNC: usize = if cfg!(test) { 8 } else { 256 };
 
 pub(crate) fn group_error(error: GroupError) -> ChatError {
     match error {
