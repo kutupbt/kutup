@@ -162,7 +162,7 @@ impl Purpose {
             Self::Message => {
                 let padded = sealed.saturating_sub(NONCE_BYTES + TAG_BYTES);
                 padded >= MESSAGE_PADDING
-                    && padded % MESSAGE_PADDING == 0
+                    && padded.is_multiple_of(MESSAGE_PADDING)
                     && sealed <= MAX_MESSAGE_SEALED_BYTES
             }
         }

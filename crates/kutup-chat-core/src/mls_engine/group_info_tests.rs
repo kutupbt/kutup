@@ -671,7 +671,7 @@ fn a_member_leaves_and_an_administrator_commits_the_removal() {
                     .ok()?
                     .as_group_update()
             })
-            .last()
+            .next_back()
             .unwrap();
         assert_eq!(
             left.changes,

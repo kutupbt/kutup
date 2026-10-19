@@ -49,7 +49,7 @@ thread_local! {
     /// Every sender device a test made, by account: the mock server publishes
     /// them in each account's signed manifest, as the real one would.
     static DEVICES: RefCell<std::collections::BTreeMap<String, Vec<DevicePreKeyBundle>>> =
-        RefCell::new(std::collections::BTreeMap::new());
+        const { RefCell::new(std::collections::BTreeMap::new()) };
 }
 
 fn publish_device(user: &str, bundle: DevicePreKeyBundle) {

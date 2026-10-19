@@ -480,14 +480,25 @@ fn a_sender_key_rotates_on_a_removal_a_departed_device_a_new_registration_or_age
     let mut book = SenderBook::new(now);
     let current = vec![device("a", 1, 10), device("b", 1, 20), device("b", 2, 21)];
     // A new key reaches every current device.
-    assert_eq!(book.missing(&current), current);
+    assert_eq!(book.missing(&current, now), current);
     book.devices = current.clone();
-    assert!(book.missing(&current).is_empty());
+    assert!(book.missing(&current, now).is_empty());
     assert!(!book.must_rotate(now + 1, &current));
     // A member's new device only needs the key; nothing rotates.
     let grown = [current.clone(), vec![device("c", 1, 30)]].concat();
     assert!(!book.must_rotate(now, &grown));
-    assert_eq!(book.missing(&grown), vec![device("c", 1, 30)]);
+    assert_eq!(book.missing(&grown, now), vec![device("c", 1, 30)]);
+    // Its key queued for its server: not handed out again within the hour.
+    book.queued.push(QueuedKey {
+        device: device("c", 1, 30),
+        at_ms: now,
+    });
+    assert!(book.missing(&grown, now + 1).is_empty());
+    assert_eq!(
+        book.missing(&grown, now + QUEUED_KEY_WAIT_MS),
+        vec![device("c", 1, 30)]
+    );
+    book.queued.clear();
     // A removed member, a device gone from a manifest, a reinstalled device.
     assert!(book.must_rotate(now, &[device("a", 1, 10)]));
     assert!(book.must_rotate(now, &[device("a", 1, 10), device("b", 1, 20)]));

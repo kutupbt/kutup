@@ -132,6 +132,8 @@ export interface KutupChatHistoryEntry {
   deduplicated: boolean;
   /** A group message: how many member accounts it never reached. */
   failedRecipients?: number;
+  /** A pairwise group message sent from here: how many member accounts this account's server hasn't taken it for yet. */
+  waitingRecipients?: number;
   content: KutupChatContentView;
 }
 
@@ -913,7 +915,7 @@ impl WasmChatClient {
                 entry.apply_disappearing_deadline(&starts);
                 pending.push(entry);
             }
-            pending.sort_by(|left, right| right.timestamp_ms.cmp(&left.timestamp_ms));
+            pending.sort_by_key(|entry| std::cmp::Reverse(entry.timestamp_ms));
             pending.extend(entries);
             entries = pending;
         }
@@ -951,6 +953,15 @@ struct GroupSendView {
     pending: usize,
     /// Member accounts whose server refused it for good.
     failed: usize,
+    /// Why this pass couldn't try it (it waits for the next).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = warn)]
+    fn console_warn(message: &str);
 }
 
 impl From<crate::group_send::GroupSendSummary> for GroupSendView {
@@ -960,6 +971,7 @@ impl From<crate::group_send::GroupSendSummary> for GroupSendView {
             delivered: summary.delivered,
             pending: summary.pending,
             failed: summary.failed,
+            error: summary.error,
         }
     }
 }
@@ -2249,6 +2261,7 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = joinMlsFromWelcomeWithControlHistory)]
     pub async fn join_mls_from_welcome_with_control_history(
         &self,
@@ -2286,6 +2299,7 @@ impl WasmChatClient {
         to_output(&joined)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = joinMlsFromRecoveryWelcome)]
     pub async fn join_mls_from_recovery_welcome(
         &self,
@@ -2464,6 +2478,7 @@ impl WasmChatClient {
         to_output(&receipt)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = applyOrderedInboundMlsMembershipCommit)]
     pub async fn apply_ordered_inbound_mls_membership_commit(
         &self,
@@ -3135,6 +3150,7 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = sendText)]
     pub async fn send_text(
         &mut self,
@@ -3605,7 +3621,18 @@ impl WasmChatClient {
             .flush_profile(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
             .await;
         // Group messages still on their way: best effort, retried each pass.
-        let _ = self.engine.flush_group_outbox(&mut rng).await;
+        if let Ok(summaries) = self.engine.flush_group_outbox(&mut rng).await {
+            // A message that couldn't be tried this pass waits for the next;
+            // why is worth seeing in the console.
+            for error in summaries
+                .iter()
+                .filter_map(|summary| summary.error.as_deref())
+            {
+                console_warn(&format!(
+                    "chat: a group message waits for the next pass: {error}"
+                ));
+            }
+        }
         // The account's group list, every so often: groups another device
         // joined or left (best effort).
         let _ = self.engine.sync_group_list_if_due(&mut rng).await;
@@ -3824,7 +3851,7 @@ impl WasmChatClient {
                 timer,
             });
         }
-        summaries.sort_by(|left, right| right.latest_ms.cmp(&left.latest_ms));
+        summaries.sort_by_key(|summary| std::cmp::Reverse(summary.latest_ms));
         to_output(&summaries)
     }
 
@@ -4579,6 +4606,10 @@ struct HistoryEntry {
     /// A group message: how many member accounts it never reached.
     #[serde(skip_serializing_if = "is_zero")]
     failed_recipients: u32,
+    /// A pairwise group message this account sent: how many member accounts
+    /// this account's server hasn't taken it for yet (0: sent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waiting_recipients: Option<u32>,
     content: ContentView,
 }
 
@@ -4622,6 +4653,7 @@ impl HistoryEntry {
             delivered: true,
             deduplicated: false,
             failed_recipients: 0,
+            waiting_recipients: None,
             content: content.into(),
         })
     }
@@ -4644,6 +4676,7 @@ impl HistoryEntry {
             delivered: message.delivered,
             deduplicated: message.deduplicated,
             failed_recipients: message.failed_recipients,
+            waiting_recipients: message.waiting_recipients,
             content: content.into(),
         })
     }
@@ -4664,6 +4697,7 @@ impl HistoryEntry {
             delivered: false,
             deduplicated: false,
             failed_recipients: 0,
+            waiting_recipients: None,
             content: content.into(),
         })
     }
@@ -4694,6 +4728,7 @@ impl HistoryEntry {
             delivered: message.delivered,
             deduplicated: message.deduplicated,
             failed_recipients: 0,
+            waiting_recipients: None,
             content: content.into(),
         })
     }

@@ -69,6 +69,8 @@ pub struct GroupSendSummary {
     pub pending: usize,
     /// Member accounts whose server refused it for good.
     pub failed: usize,
+    /// Why this pass couldn't try it at all (its legs wait for the next).
+    pub error: Option<String>,
 }
 
 /// A member account a group message goes to, with its devices and the
@@ -81,6 +83,14 @@ struct Recipient {
 
 fn group_err(error: group::GroupError) -> ChatError {
     ChatError::Invalid(error.to_string())
+}
+
+/// What a message pass learned for the sender-key book.
+enum BookNews {
+    /// A message leg was stored for these devices of `account`.
+    Delivered { account: String, devices: Vec<u32> },
+    /// `account`'s devices changed.
+    Mismatch { account: String },
 }
 
 /// A leg that waits: tried again after a wait that doubles each pass it
@@ -231,7 +241,7 @@ impl Engine {
         let book = record.sender_book.clone().expect("set above");
         let distribution_id = uuid::Uuid::parse_str(&book.distribution_id)
             .map_err(|_| ChatError::Invalid("the sender book's id isn't a UUID".into()))?;
-        let missing = book.missing(&current);
+        let missing = book.missing(&current, now);
         if missing.is_empty() {
             return Ok(distribution_id);
         }
@@ -291,7 +301,21 @@ impl Engine {
             match outcome {
                 // Only a key the recipient's server stored is in the book: one
                 // queued for another server may yet be refused there (a
-                // device mismatch), and is sent again with the next message.
+                // device mismatch). It is noted as queued, and handed out
+                // again only if it hasn't arrived within the hour.
+                Some(SealedBatchOutcomeV1::Pending) => {
+                    let book = record.sender_book.as_mut().expect("set above");
+                    for device in &devices {
+                        let device = BookDevice {
+                            account: account.clone(),
+                            device_id: device.device_id,
+                            registration_id: device.registration_id,
+                        };
+                        book.queued.retain(|queued| queued.device != device);
+                        book.queued
+                            .push(crate::group::QueuedKey { device, at_ms: now });
+                    }
+                }
                 Some(SealedBatchOutcomeV1::Delivered { .. }) => {
                     let book = record.sender_book.as_mut().expect("set above");
                     for device in &devices {
@@ -302,10 +326,16 @@ impl Engine {
                         });
                     }
                     book.devices.sort();
+                    let held = book.devices.clone();
+                    book.queued.retain(|queued| !held.contains(&queued.device));
                 }
-                // The device set moved on: the next send fetches it again.
+                // The device set moved on: the next send fetches it again,
+                // and hands the key out at once (nothing of it is queued).
                 Some(SealedBatchOutcomeV1::DeviceMismatch { .. }) => {
                     self.forget_known_devices_of(account);
+                    let book = record.sender_book.as_mut().expect("set above");
+                    book.queued
+                        .retain(|queued| &queued.device.account != account);
                 }
                 // Not taken now (a refused capability, a limit, a network
                 // failure): the device stays out of the book and gets the
@@ -364,6 +394,7 @@ impl Engine {
                 delivered: 0,
                 pending: 0,
                 failed: 0,
+                error: None,
             });
         }
         let mut record = self.load_group_record(group_id).await?;
@@ -476,6 +507,7 @@ impl Engine {
                 mismatches: 0,
                 waits: 0,
                 retry_at_ms: None,
+                queued: false,
             });
         }
         let created_at = unix_millis();
@@ -493,6 +525,7 @@ impl Engine {
                     delivered: legs.is_empty(),
                     deduplicated: false,
                     failed_recipients: 0,
+                    waiting_recipients: Some(u32::try_from(legs.len()).unwrap_or(u32::MAX)),
                 },
             );
         }
@@ -540,8 +573,10 @@ impl Engine {
                 delivered: 0,
                 pending: 0,
                 failed: 0,
+                error: None,
             });
         };
+        let original = entry.clone();
         let now = unix_millis();
         let capabilities = self.group_capabilities(&entry.group_id).await?;
         let content: Option<ChatContent> = serde_json::from_slice(&entry.content).ok();
@@ -564,30 +599,42 @@ impl Engine {
                 retry.push(index);
             }
         }
+        let mut book_news = Vec::new();
         if let Some(content) = content {
             let mut round = 0;
             while !retry.is_empty() && round < MAX_ROUNDS_PER_PASS {
                 round += 1;
-                retry = self
+                let news;
+                (retry, news) = self
                     .deliver_round(&mut entry, &retry, &capabilities, &content, now, rng)
                     .await;
+                book_news.extend(news);
             }
         }
-        self.save_group_entry(&entry).await?;
+        // A pass that changed nothing (every leg still waiting its turn)
+        // writes nothing.
+        if entry != original {
+            self.save_group_entry(&entry).await?;
+        }
         let failed = entry.legs.iter().filter(|leg| leg.failed).count();
         let delivered = entry.legs.iter().filter(|leg| leg.delivered).count();
+        // What a delivered message leg tells the sender-key book, and what a
+        // device mismatch does to it (see `settle_queued_keys`).
+        self.settle_queued_keys(&entry.group_id, &book_news).await?;
         Ok(GroupSendSummary {
             send_id: send_id.to_string(),
             delivered: delivered - failed,
             pending: entry.legs.len() - delivered,
             failed,
+            error: None,
         })
     }
 
     /// One batch round over the legs `retry`: their outcomes applied to
     /// `entry`, and the legs amended after a device mismatch returned for
-    /// the next round. An error on one leg leaves it waiting; it never
-    /// loses what the round learned of the others.
+    /// the next round, with what the round tells the sender-key book. An
+    /// error on one leg leaves it waiting; it never loses what the round
+    /// learned of the others.
     async fn deliver_round<R: Rng + CryptoRng>(
         &mut self,
         entry: &mut GroupOutboxEntry,
@@ -596,7 +643,7 @@ impl Engine {
         content: &ChatContent,
         now: i64,
         rng: &mut R,
-    ) -> Vec<usize> {
+    ) -> (Vec<usize>, Vec<BookNews>) {
         let mut sends = Vec::with_capacity(retry.len());
         let mut places = Vec::with_capacity(retry.len());
         for &index in retry {
@@ -621,6 +668,7 @@ impl Engine {
         }
         let outcomes = self.send_sealed_batches(&sends).await;
         let mut again = Vec::new();
+        let mut book_news = Vec::new();
         for ((index, (account, submission)), outcome) in places.into_iter().zip(sends).zip(outcomes)
         {
             match outcome {
@@ -629,13 +677,22 @@ impl Engine {
                     let leg = &mut entry.legs[index];
                     leg.delivered = true;
                     leg.retry_at_ms = None;
+                    // A key queued for these devices went ahead of it in the
+                    // same queue: they hold it now.
+                    book_news.push(BookNews::Delivered {
+                        account: account.clone(),
+                        devices: leg.devices.clone(),
+                    });
                 }
                 // A capability the member no longer takes (they blocked this
                 // account, or rotated their key), or a server that takes no
-                // sealed mail: the leg is done, as a refused direct send is;
-                // the group refresh brings the new key.
+                // sealed mail: the leg is done, as a refused direct send is
+                // (the group refresh brings the new key), and the message
+                // says it didn't reach them.
                 Some(SealedBatchOutcomeV1::Unavailable | SealedBatchOutcomeV1::PeerUnsupported) => {
-                    entry.legs[index].delivered = true;
+                    let leg = &mut entry.legs[index];
+                    leg.delivered = true;
+                    leg.failed = true;
                 }
                 // Refused for good (too large to queue, or by the recipient's
                 // server): the leg failed, and says so.
@@ -645,7 +702,13 @@ impl Engine {
                     leg.failed = true;
                 }
                 Some(SealedBatchOutcomeV1::DeviceMismatch { .. }) => {
+                    // What this account's server held is refused there; the
+                    // amended copy is not with it yet.
+                    book_news.push(BookNews::Mismatch {
+                        account: account.clone(),
+                    });
                     let leg = &mut entry.legs[index];
+                    leg.queued = false;
                     leg.mismatches = leg.mismatches.saturating_add(1);
                     if leg.mismatches >= MAX_LEG_MISMATCHES {
                         leg.delivered = true;
@@ -674,20 +737,73 @@ impl Engine {
                     }
                 }
                 // Queued at this account's server for the recipient's (which
-                // may still answer that the devices changed), our own earlier
-                // copy still queued under this send id (it will go out), a
-                // limit, or no answer: the leg waits and goes again later;
-                // the same send id is safe to repeat, the server answers from
-                // its row.
-                Some(
-                    SealedBatchOutcomeV1::Pending
-                    | SealedBatchOutcomeV1::Conflict
-                    | SealedBatchOutcomeV1::RateLimited,
-                )
-                | None => wait(&mut entry.legs[index], now),
+                // may still answer that the devices changed), or our own
+                // earlier copy still queued under this send id (it will go
+                // out; a conflict is counted as taken because this server
+                // holds that older copy, and a later device mismatch clears
+                // `queued` again): this account's server has it, so the
+                // message shows as sent, and the leg is still followed. It
+                // waits and goes again later; the same send id is safe to
+                // repeat, the server answers from its row.
+                Some(SealedBatchOutcomeV1::Pending | SealedBatchOutcomeV1::Conflict) => {
+                    let leg = &mut entry.legs[index];
+                    leg.queued = true;
+                    wait(leg, now);
+                }
+                // A limit, or no answer: it waits, still sending.
+                Some(SealedBatchOutcomeV1::RateLimited) | None => wait(&mut entry.legs[index], now),
             }
         }
-        again
+        (again, book_news)
+    }
+
+    /// The sender-key book after a message pass: a key queued for devices
+    /// whose message leg was then stored went ahead of it in the same queue,
+    /// so they hold it; a device mismatch means what was queued may be
+    /// refused, so the key goes out again at once. The hour in
+    /// [`crate::group::QUEUED_KEY_WAIT_MS`] stays only as the fallback.
+    async fn settle_queued_keys(&mut self, group_id: &str, news: &[BookNews]) -> Result<()> {
+        if news.is_empty() {
+            return Ok(());
+        }
+        let Ok(mut record) = self.load_group_record(group_id).await else {
+            return Ok(());
+        };
+        let Some(book) = record.sender_book.as_mut() else {
+            return Ok(());
+        };
+        let before = book.clone();
+        for item in news {
+            match item {
+                BookNews::Delivered { account, devices } => {
+                    let arrived: Vec<_> = book
+                        .queued
+                        .iter()
+                        .filter(|queued| {
+                            &queued.device.account == account
+                                && devices.contains(&queued.device.device_id)
+                        })
+                        .map(|queued| queued.device.clone())
+                        .collect();
+                    for device in arrived {
+                        if !book.devices.contains(&device) {
+                            book.devices.push(device);
+                        }
+                    }
+                    book.devices.sort();
+                    let held = book.devices.clone();
+                    book.queued.retain(|queued| !held.contains(&queued.device));
+                }
+                BookNews::Mismatch { account } => {
+                    book.queued
+                        .retain(|queued| &queued.device.account != account);
+                }
+            }
+        }
+        if *book != before {
+            self.save_group(&record).await?;
+        }
+        Ok(())
     }
 
     /// A leg's envelopes after its recipient's devices changed: the
@@ -744,16 +860,29 @@ impl Engine {
     async fn save_group_entry(&mut self, entry: &GroupOutboxEntry) -> Result<()> {
         let mut entry = entry.clone();
         let mut pending = Pending::default();
-        if entry.legs.iter().all(|leg| leg.delivered) {
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        let done = entry.legs.iter().all(|leg| leg.delivered);
+        if done {
             for leg in &mut entry.legs {
                 leg.envelopes.clear();
             }
-            if let Some(mut sent) = self.session.db().load_sent_message(&entry.send_id).await? {
+        }
+        if let Some(mut sent) = self.session.db().load_sent_message(&entry.send_id).await? {
+            let before = sent.clone();
+            // How many accounts this account's server hasn't taken it for yet.
+            let waiting = entry
+                .legs
+                .iter()
+                .filter(|leg| !leg.delivered && !leg.queued)
+                .count();
+            sent.waiting_recipients = Some(count(waiting));
+            // Shown as soon as it is known, while other legs still wait.
+            sent.failed_recipients = count(entry.legs.iter().filter(|leg| leg.failed).count());
+            if done {
                 sent.delivered = true;
                 sent.delivered_at = Some(unix_millis());
-                sent.failed_recipients =
-                    u32::try_from(entry.legs.iter().filter(|leg| leg.failed).count())
-                        .unwrap_or(u32::MAX);
+            }
+            if sent != before {
                 pending.sent_messages.insert(entry.send_id.clone(), sent);
             }
         }
@@ -806,7 +935,22 @@ impl Engine {
         let mut summaries = Vec::new();
         for entry in self.session.db().list_group_outbox().await? {
             if entry.legs.iter().any(|leg| !leg.delivered) {
-                summaries.push(self.deliver_group_entry(&entry.send_id, rng).await?);
+                // One message that can't go now never holds up the others; it
+                // is reported with why, and its legs wait for the next pass.
+                match self.deliver_group_entry(&entry.send_id, rng).await {
+                    Ok(summary) => summaries.push(summary),
+                    Err(error) => summaries.push(GroupSendSummary {
+                        send_id: entry.send_id.clone(),
+                        delivered: entry
+                            .legs
+                            .iter()
+                            .filter(|leg| leg.delivered && !leg.failed)
+                            .count(),
+                        pending: entry.legs.iter().filter(|leg| !leg.delivered).count(),
+                        failed: entry.legs.iter().filter(|leg| leg.failed).count(),
+                        error: Some(error.to_string()),
+                    }),
+                }
             }
         }
         Ok(summaries)

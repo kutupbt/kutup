@@ -239,7 +239,7 @@ function Countdown({ expiresAt }: { expiresAt: number }) {
   )
 }
 
-function DeliveryStatus({ view }: { view: MessageView }) {
+export function DeliveryStatus({ view }: { view: MessageView }) {
   const { t } = useTranslation()
   const { receipt, entry } = view
   // A group message some members never got: said, whatever else reached.
@@ -267,10 +267,21 @@ function DeliveryStatus({ view }: { view: MessageView }) {
       </span>
     )
   }
-  if (entry.delivered) {
+  // A group message is sent once this account's server has it for every
+  // member (Signal's "sent"), even while a member's own server is slow or
+  // down; until then it is sending to the rest, never "not sent".
+  if (entry.delivered || entry.waitingRecipients === 0) {
     return (
-      <span className="flex items-center opacity-80" title={t('chat.receipts.sent')} aria-label={t('chat.receipts.sent')}>
+      <span className="flex items-center opacity-80" title={t('chat.receipts.sent')} aria-label={t('chat.receipts.sent')} data-testid="chat-receipt-sent">
         <Check className="size-3.5" />
+      </span>
+    )
+  }
+  if (entry.waitingRecipients !== undefined) {
+    const label = t('chat.receipts.sendingTo', { count: entry.waitingRecipients })
+    return (
+      <span className="flex items-center opacity-80" title={label} aria-label={label} data-testid="chat-receipt-sending">
+        <Clock className="size-3.5" />
       </span>
     )
   }

@@ -268,7 +268,9 @@
       "notSent": "Not sent",
       "retryHint": "Try sending again now",
       "notDeliveredTo_one": "Not delivered to {{count}} member",
-      "notDeliveredTo_other": "Not delivered to {{count}} members"
+      "notDeliveredTo_other": "Not delivered to {{count}} members",
+      "sendingTo_one": "Sending to {{count}} member",
+      "sendingTo_other": "Sending to {{count}} members"
     },
     "replies": {
       "reply": "Reply to message",

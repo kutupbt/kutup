@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
@@ -143,7 +143,8 @@ CREATE TABLE IF NOT EXISTS sent_messages (
     delivered_at   INTEGER,
     delivered      INTEGER NOT NULL,
     deduplicated   INTEGER NOT NULL,
-    failed_recipients INTEGER NOT NULL DEFAULT 0
+    failed_recipients INTEGER NOT NULL DEFAULT 0,
+    waiting_recipients INTEGER
 );
 CREATE INDEX IF NOT EXISTS sent_messages_by_created_at
     ON sent_messages (created_at, send_id);
@@ -294,7 +295,7 @@ impl SqliteChatDb {
         // (development builds only; no native app has shipped) is refused
         // rather than upgraded.
         let foreign: i64 = db(conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 1",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 2",
             [],
             |row| row.get(0),
         ))?;
@@ -551,7 +552,8 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated, failed_recipients
+                "SELECT send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated, failed_recipients,
+                        waiting_recipients
                  FROM sent_messages WHERE send_id = ?1",
                 [send_id],
                 sent_message_row,
@@ -562,7 +564,8 @@ impl ChatDb for SqliteChatDb {
     async fn list_sent_messages(&self) -> Result<Vec<SentMessage>> {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
-            "SELECT send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated, failed_recipients
+            "SELECT send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated, failed_recipients,
+                        waiting_recipients
              FROM sent_messages ORDER BY created_at, send_id",
         ))?;
         let rows = db(stmt.query_map([], sent_message_row))?;
@@ -1049,15 +1052,16 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO sent_messages
                      (send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated,
-                      failed_recipients)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                      failed_recipients, waiting_recipients)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(send_id) DO UPDATE SET
                      peer = excluded.peer, sender_device_id = excluded.sender_device_id,
                      content = excluded.content,
                      delivered_at = excluded.delivered_at,
                      delivered = excluded.delivered,
                      deduplicated = excluded.deduplicated,
-                     failed_recipients = excluded.failed_recipients",
+                     failed_recipients = excluded.failed_recipients,
+                     waiting_recipients = excluded.waiting_recipients",
                 rusqlite::params![
                     send_id,
                     message.peer,
@@ -1068,6 +1072,7 @@ impl ChatDb for SqliteChatDb {
                     i64::from(message.delivered),
                     i64::from(message.deduplicated),
                     message.failed_recipients,
+                    message.waiting_recipients,
                 ],
             ))?;
         }
@@ -1572,6 +1577,7 @@ fn sent_message_row(row: &rusqlite::Row) -> rusqlite::Result<SentMessage> {
         delivered: row.get::<_, i64>(6)? != 0,
         deduplicated: row.get::<_, i64>(7)? != 0,
         failed_recipients: row.get(8)?,
+        waiting_recipients: row.get(9)?,
     })
 }
 
