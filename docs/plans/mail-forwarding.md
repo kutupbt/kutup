@@ -1,6 +1,7 @@
 # Mail: forwarding, following Proton
 
-Status: plan, for review (2026-10-19). The user decided on 2026-10-19 to build
+Status: decided (2026-10-19; the user's answers are under "Decisions").
+The user decided on 2026-10-19 to build
 Proton's forwarding now, on the current v4 address keys, independent of
 post-quantum mail ([`mail-pq-openpgp.md`](mail-pq-openpgp.md), which waits for
 rPGP). Rule ([`mail-address-keys.md`](mail-address-keys.md)): copy Proton's
@@ -247,7 +248,7 @@ without changing any key.
 - **Primary key change** makes the address's end-to-end forwardings
   Outdated, as Proton. The key-change dialogs warn first, with Proton's
   wording.
-- **Limits** (proposal; Proton's are not visible):
+- **Limits** (decided; Proton's are not visible):
   - at most 10 forwardings per address and 25 per account;
   - outside forwarding re-sends counted against the account's sending
     limits, so it can't be used to bypass them;
@@ -333,12 +334,12 @@ session).
 4. WASM exports, then the web UI (third session).
 5. Gates: mail, backup, browser.
 
-## Open for the user
+## Decisions (user, 2026-10-19)
 
-- **Limits:** 10 per address and 25 per account? Proton shows none in its
-  client.
-- **Outside forwarding:** Proton turns end-to-end encryption off for the
-  whole address while any outside forwarding exists. We copy that unless
-  you want outside forwarding limited to mail that arrived from outside,
-  which would keep the address end-to-end. That isn't Proton's
-  behaviour, and it would silently skip Kutup mail.
+- **Limits:** at most 10 forwardings per address and 25 per account.
+- **Outside forwarding copies Proton:**
+  - While any outside forwarding of an address is on, the address's signed
+    key list carries `FLAG_EMAIL_NO_ENCRYPT` (Proton's `encryptionDisabled`).
+  - The settings page says so plainly, when the forwarding is set up and
+    for as long as it lasts.
+  - Deleting the last outside forwarding restores end-to-end encryption.
