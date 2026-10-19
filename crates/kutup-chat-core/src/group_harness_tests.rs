@@ -2674,17 +2674,18 @@ fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
 }
 
 #[test]
-fn group_batches_a_queued_sender_key_is_not_in_the_book() {
+fn group_batches_a_queued_sender_key_is_not_in_the_book_nor_queued_again_within_the_hour() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
-    // The first send hands out the key: queued for Bob's server, not stored.
-    world
-        .batch_answers
-        .borrow_mut()
-        .push((bob.account.clone(), Outcome::Pending));
+    // The first send hands out the key: queued for Bob's server, not stored,
+    // and the message behind it waits there too.
+    world.batch_answers.borrow_mut().extend([
+        (bob.account.clone(), Outcome::Pending),
+        (bob.account.clone(), Outcome::Pending),
+    ]);
     alice_sends(&mut alice, &group_id, "first");
     let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
     let book = record.sender_book.expect("a key");
@@ -2695,12 +2696,193 @@ fn group_batches_a_queued_sender_key_is_not_in_the_book() {
             .any(|device| device.account == bob.account),
         "a key only queued is handed out again"
     );
-    // The next send hands it out again, and Bob reads both.
-    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    assert!(book
+        .queued
+        .iter()
+        .any(|queued| queued.device.account == bob.account));
+    // A send within the hour doesn't queue it again for a server that is down.
+    let batches = world.batches.get();
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::Pending));
     alice_sends(&mut alice, &group_id, "second");
+    assert_eq!(world.batches.get(), batches + 1, "only the message, no key");
+    // An hour on, the key is handed out again, and Bob reads what follows.
+    let mut record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    for queued in &mut record.sender_book.as_mut().unwrap().queued {
+        queued.at_ms -= crate::group::QUEUED_KEY_WAIT_MS;
+    }
+    block_on(alice.engine.save_group(&record)).unwrap();
+    alice_sends(&mut alice, &group_id, "third");
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
     block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
     bob.receive();
-    assert!(bob.group_texts(&group_id).contains(&"second".to_string()));
+    assert!(bob.group_texts(&group_id).contains(&"third".to_string()));
+}
+
+#[test]
+fn group_batches_a_message_is_sent_once_its_server_has_every_leg() {
+    use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let mut dave = world.person(0xd4);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol, &mut dave]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    let sent = |alice: &Person, send_id: &str| {
+        block_on(alice.engine.session().db().load_sent_message(send_id))
+            .unwrap()
+            .unwrap()
+    };
+    // Bob's server is down (queued at ours), Carol's is over a limit, Dave
+    // takes no sealed mail.
+    world.batch_answers.borrow_mut().extend([
+        (bob.account.clone(), Outcome::Pending),
+        (carol.account.clone(), Outcome::RateLimited),
+        (dave.account.clone(), Outcome::PeerUnsupported),
+    ]);
+    let send_id = alice_sends(&mut alice, &group_id, "slow");
+    // Still sending to Carol; Bob's is with our server.
+    let first = sent(&alice, &send_id);
+    assert_eq!(
+        (first.delivered, first.waiting_recipients),
+        (false, Some(1))
+    );
+    // Dave's is known not to arrive while the others still wait.
+    assert_eq!(first.failed_recipients, 1);
+    // Carol's goes; Bob's server is still down: sent, not yet delivered.
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::Pending));
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    let second = sent(&alice, &send_id);
+    assert_eq!(
+        (second.delivered, second.waiting_recipients),
+        (false, Some(0))
+    );
+    // Bob's server comes back: done, and Dave's server never took it.
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    let done = sent(&alice, &send_id);
+    assert_eq!(
+        (
+            done.delivered,
+            done.waiting_recipients,
+            done.failed_recipients
+        ),
+        (true, Some(0), 1)
+    );
+    // A direct message carries no such count.
+    let direct_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(&direct_id, ISSUED_AT, seq, "direct");
+    block_on(
+        alice
+            .engine
+            .send(&direct_id, &bob.account, &content, &mut rng()),
+    )
+    .unwrap();
+    assert_eq!(sent(&alice, &direct_id).waiting_recipients, None);
+}
+
+#[test]
+fn group_batches_a_leg_whose_devices_changed_after_queueing_is_sending_again() {
+    use kutup_chat_proto::{DeviceListMismatch, SealedBatchOutcomeV1 as Outcome};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "with the key");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    world
+        .batch_answers
+        .borrow_mut()
+        .push((bob.account.clone(), Outcome::Pending));
+    let send_id = alice_sends(&mut alice, &group_id, "queued then refused");
+    let waiting = |alice: &Person| {
+        block_on(alice.engine.session().db().load_sent_message(&send_id))
+            .unwrap()
+            .unwrap()
+            .waiting_recipients
+    };
+    assert_eq!(waiting(&alice), Some(0), "with our server: sent");
+    // Bob's server answers that his devices changed; the amended copy is
+    // then limited: our server doesn't hold it, so it is sending again.
+    world.batch_answers.borrow_mut().extend([
+        (
+            bob.account.clone(),
+            Outcome::DeviceMismatch {
+                mismatch: DeviceListMismatch {
+                    missing_devices: Vec::new(),
+                    stale_devices: Vec::new(),
+                    extra_devices: Vec::new(),
+                },
+            },
+        ),
+        (bob.account.clone(), Outcome::RateLimited),
+    ]);
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    assert_eq!(waiting(&alice), Some(1));
+}
+
+#[test]
+fn group_batches_a_queued_key_is_held_once_a_message_after_it_arrives() {
+    use kutup_chat_proto::{DeviceListMismatch, SealedBatchOutcomeV1 as Outcome};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    // Both keys and the messages behind them wait at the members' servers.
+    world.batch_answers.borrow_mut().extend([
+        (bob.account.clone(), Outcome::Pending),
+        (carol.account.clone(), Outcome::Pending),
+        (bob.account.clone(), Outcome::Pending),
+        (carol.account.clone(), Outcome::Pending),
+    ]);
+    alice_sends(&mut alice, &group_id, "first");
+    let book = |alice: &Person| {
+        block_on(alice.engine.load_group_record(&group_id))
+            .unwrap()
+            .sender_book
+            .unwrap()
+    };
+    let holds = |book: &crate::group::SenderBook, account: &str| {
+        book.devices.iter().any(|device| device.account == account)
+    };
+    let queued = book(&alice);
+    assert!(!holds(&queued, &bob.account) && !holds(&queued, &carol.account));
+    assert_eq!(queued.queued.len(), 2);
+    // Bob's message is then stored: the key ahead of it went first, so his
+    // device holds it. Carol's devices changed: her queued key is dropped
+    // and a fresh one goes to her current devices.
+    world.batch_answers.borrow_mut().push((
+        carol.account.clone(),
+        Outcome::DeviceMismatch {
+            mismatch: DeviceListMismatch {
+                missing_devices: Vec::new(),
+                stale_devices: Vec::new(),
+                extra_devices: Vec::new(),
+            },
+        },
+    ));
+    block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
+    block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
+    let settled = book(&alice);
+    assert!(holds(&settled, &bob.account), "{settled:?}");
+    assert!(
+        settled
+            .queued
+            .iter()
+            .all(|queued| queued.device.account != carol.account),
+        "{settled:?}"
+    );
 }
 
 /// Alice sends `text` to the group; its send id.

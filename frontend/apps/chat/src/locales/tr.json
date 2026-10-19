@@ -268,7 +268,9 @@
       "notSent": "Gönderilemedi",
       "retryHint": "Şimdi yeniden göndermeyi dene",
       "notDeliveredTo_one": "{{count}} üyeye iletilemedi",
-      "notDeliveredTo_other": "{{count}} üyeye iletilemedi"
+      "notDeliveredTo_other": "{{count}} üyeye iletilemedi",
+      "sendingTo_one": "{{count}} üyeye gönderiliyor",
+      "sendingTo_other": "{{count}} üyeye gönderiliyor"
     },
     "replies": {
       "reply": "Mesajı yanıtla",

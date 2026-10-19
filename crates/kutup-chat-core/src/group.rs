@@ -116,7 +116,23 @@ pub struct SenderBook {
     pub distribution_id: String,
     pub created_at_ms: i64,
     pub devices: Vec<BookDevice>,
+    /// Devices whose key this account's server queued for theirs (not yet
+    /// stored there): not handed out again with each message to a server
+    /// that is down, until [`QUEUED_KEY_WAIT_MS`] has passed.
+    #[serde(default)]
+    pub queued: Vec<QueuedKey>,
 }
+
+/// A key handed to a device's server only as far as this account's server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueuedKey {
+    pub device: BookDevice,
+    pub at_ms: i64,
+}
+
+/// How long a queued key is left to arrive before it is handed out again.
+pub const QUEUED_KEY_WAIT_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -136,6 +152,7 @@ impl SenderBook {
             distribution_id: uuid::Uuid::new_v4().to_string(),
             created_at_ms: now_ms,
             devices: Vec::new(),
+            queued: Vec::new(),
         }
     }
 
@@ -149,11 +166,18 @@ impl SenderBook {
             || self.devices.iter().any(|held| !current.contains(held))
     }
 
-    /// The current devices that don't hold the key yet.
-    pub fn missing(&self, current: &[BookDevice]) -> Vec<BookDevice> {
+    /// The current devices that don't hold the key yet, and whose server
+    /// wasn't handed it within the last [`QUEUED_KEY_WAIT_MS`].
+    pub fn missing(&self, current: &[BookDevice], now_ms: i64) -> Vec<BookDevice> {
         current
             .iter()
             .filter(|device| !self.devices.contains(device))
+            .filter(|device| {
+                !self.queued.iter().any(|queued| {
+                    &queued.device == *device
+                        && now_ms.saturating_sub(queued.at_ms) < QUEUED_KEY_WAIT_MS
+                })
+            })
             .cloned()
             .collect()
     }

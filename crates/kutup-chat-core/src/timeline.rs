@@ -980,6 +980,7 @@ mod tests {
             delivered: false,
             deduplicated: false,
             failed_recipients: 0,
+            waiting_recipients: None,
         }
     }
 
