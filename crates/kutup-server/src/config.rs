@@ -8,6 +8,11 @@ pub struct Config {
     /// The keys the OPAQUE server setups are sealed under
     /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
     pub opaque_setup_keys: crate::opaque_setup::OpaqueSetupKeys,
+    /// The keys end-to-end mail forwarding's proxy factors are sealed under
+    /// (`MAIL_FORWARDING_KEYS`, `id:base64,…` like `OPAQUE_SETUP_KEYS`;
+    /// docs/plans/mail-forwarding.md). Optional: without them, end-to-end
+    /// forwarding can't be set up. Never logged.
+    pub mail_forwarding_keys: crate::opaque_setup::OpaqueSetupKeys,
     pub s3_endpoint: String,
     pub s3_access_key: String,
     pub s3_secret_key: String,
@@ -426,6 +431,15 @@ impl Config {
                 } else {
                     crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
                         env.error(format!("OPAQUE_SETUP_KEYS: {error}"));
+                        Default::default()
+                    })
+                }
+            },
+            mail_forwarding_keys: match env.set("MAIL_FORWARDING_KEYS") {
+                None => Default::default(),
+                Some(value) => {
+                    crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
+                        env.error(format!("MAIL_FORWARDING_KEYS: {error}"));
                         Default::default()
                     })
                 }

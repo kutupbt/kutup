@@ -8,6 +8,7 @@
 pub mod auto_reply;
 pub mod expiry;
 pub mod filters;
+pub mod forwarding;
 pub mod group_keys;
 pub mod groups;
 pub mod headers;

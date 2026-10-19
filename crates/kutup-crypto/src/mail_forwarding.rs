@@ -476,6 +476,97 @@ pub fn decrypt_forwarded(
     mail_key::read_decrypted(decrypted, signer_public_key)
 }
 
+const SEAL_DOMAIN: &[u8] = b"kutup/mail-forwarding/proxy-parameter/v1\0";
+const SEAL_NONCE_LEN: usize = 24;
+
+fn seal_aad(
+    key_id: u16,
+    forwarding_id: &[u8; 16],
+    forwarder_fingerprint: &[u8; FINGERPRINT_LEN],
+    forwardee_fingerprint: &[u8; FINGERPRINT_LEN],
+) -> Vec<u8> {
+    [
+        SEAL_DOMAIN,
+        &key_id.to_be_bytes(),
+        forwarding_id,
+        forwarder_fingerprint,
+        forwardee_fingerprint,
+    ]
+    .concat()
+}
+
+/// The server's sealing of k at rest, under a server key (`key_id` names
+/// it): XChaCha20-Poly1305, the AAD binding the key id, the forwarding and
+/// both fingerprints, so a sealed k moved to another row doesn't open.
+/// Returns `nonce ‖ ciphertext`.
+pub fn seal_proxy_parameter(
+    server_key: &[u8; 32],
+    key_id: u16,
+    forwarding_id: &[u8; 16],
+    instance: &ProxyInstance,
+) -> Result<Vec<u8>> {
+    use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
+    let mut nonce = [0u8; SEAL_NONCE_LEN];
+    dryoc::rng::copy_randombytes(&mut nonce);
+    let sealed = chacha20poly1305::XChaCha20Poly1305::new(server_key.into())
+        .encrypt(
+            chacha20poly1305::XNonce::from_slice(&nonce),
+            Payload {
+                msg: instance.proxy_parameter.as_slice(),
+                aad: &seal_aad(
+                    key_id,
+                    forwarding_id,
+                    &instance.forwarder_fingerprint,
+                    &instance.forwardee_fingerprint,
+                ),
+            },
+        )
+        .map_err(|_| CryptoError::Backend("seal the proxy parameter".into()))?;
+    Ok([nonce.as_slice(), &sealed].concat())
+}
+
+/// Opens what [`seal_proxy_parameter`] sealed, into the instance it stands
+/// for. Fails for another key, forwarding or subkey.
+pub fn open_proxy_parameter(
+    server_key: &[u8; 32],
+    key_id: u16,
+    forwarding_id: &[u8; 16],
+    forwarder_fingerprint: [u8; FINGERPRINT_LEN],
+    forwardee_fingerprint: [u8; FINGERPRINT_LEN],
+    sealed: &[u8],
+) -> Result<ProxyInstance> {
+    use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
+    if sealed.len() <= SEAL_NONCE_LEN {
+        return Err(CryptoError::AuthFailed);
+    }
+    let (nonce, ciphertext) = sealed.split_at(SEAL_NONCE_LEN);
+    let opened = Zeroizing::new(
+        chacha20poly1305::XChaCha20Poly1305::new(server_key.into())
+            .decrypt(
+                chacha20poly1305::XNonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: &seal_aad(
+                        key_id,
+                        forwarding_id,
+                        &forwarder_fingerprint,
+                        &forwardee_fingerprint,
+                    ),
+                },
+            )
+            .map_err(|_| CryptoError::AuthFailed)?,
+    );
+    let proxy_parameter: [u8; 32] = opened
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::AuthFailed)?;
+    Ok(ProxyInstance {
+        forwarder_fingerprint,
+        forwardee_fingerprint,
+        proxy_parameter: Zeroizing::new(proxy_parameter),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,5 +946,32 @@ P0GnopWOyFNNFWK77LQN
             assert!(parse_activation(&plain[..len]).is_err(), "{len}");
         }
         assert!(parse_activation(&[plain.as_slice(), b"x"].concat()).is_err());
+    }
+
+    /// k at rest opens only under its server key, for its forwarding and
+    /// subkeys.
+    #[test]
+    fn a_sealed_proxy_parameter_opens_only_where_it_was_sealed() {
+        let instance = ProxyInstance {
+            forwarder_fingerprint: [1u8; FINGERPRINT_LEN],
+            forwardee_fingerprint: [2u8; FINGERPRINT_LEN],
+            proxy_parameter: Zeroizing::new([7u8; 32]),
+        };
+        let (key, other_key) = ([9u8; 32], [8u8; 32]);
+        let forwarding = [3u8; 16];
+        let sealed = seal_proxy_parameter(&key, 1, &forwarding, &instance).unwrap();
+        let open = |key: &[u8; 32], id: u16, forwarding: &[u8; 16], fpr, fpe| {
+            open_proxy_parameter(key, id, forwarding, fpr, fpe, &sealed)
+        };
+        let opened = open(&key, 1, &forwarding, [1u8; 20], [2u8; 20]).unwrap();
+        assert_eq!(*opened.proxy_parameter, [7u8; 32]);
+        assert!(open(&other_key, 1, &forwarding, [1u8; 20], [2u8; 20]).is_err());
+        assert!(open(&key, 2, &forwarding, [1u8; 20], [2u8; 20]).is_err());
+        assert!(open(&key, 1, &[4u8; 16], [1u8; 20], [2u8; 20]).is_err());
+        assert!(open(&key, 1, &forwarding, [2u8; 20], [1u8; 20]).is_err());
+        assert!(
+            open_proxy_parameter(&key, 1, &forwarding, [1u8; 20], [2u8; 20], &sealed[..24])
+                .is_err()
+        );
     }
 }
