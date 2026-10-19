@@ -103,6 +103,12 @@ impl GroupListKey {
         self.seal_with_nonce(binding, entry_id, revision, plain, nonce)
     }
 
+    /// The id key and the seal key, for the checked-in vector only.
+    #[cfg(any(test, feature = "test-vectors"))]
+    pub fn vector_keys(&self) -> ([u8; 32], [u8; 32]) {
+        (*self.id_key, *self.seal_key)
+    }
+
     fn seal_with_nonce(
         &self,
         binding: &str,
@@ -213,6 +219,13 @@ pub fn decode_entry_id(id: &str) -> Result<[u8; ENTRY_ID_LEN]> {
     Ok(bytes)
 }
 
+/// An entry's AAD, for the checked-in vector only.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn vector_aad(revision: u64, binding: &str, entry_id: &[u8; ENTRY_ID_LEN]) -> Result<Vec<u8>> {
+    let header = [&MAGIC[..], &SUITE_V1.to_be_bytes(), &revision.to_be_bytes()].concat();
+    aad(&header, binding, entry_id)
+}
+
 /// header (magic ‖ suite ‖ revision) ‖ u16 binding length ‖ binding ‖ entry id.
 fn aad(header: &[u8], binding: &str, entry_id: &[u8; ENTRY_ID_LEN]) -> Result<Vec<u8>> {
     let binding = crate::key_binding::check(binding)
@@ -270,6 +283,64 @@ mod tests {
         moved[17] ^= 1;
         assert_eq!(inspect(&moved).unwrap(), 2);
         assert!(key.open(BINDING, &id, &moved).is_err(), "another revision");
+    }
+
+    /// Seals `padded` as it stands, so a test can make what `seal` never
+    /// would: an entry that authenticates but whose padding is wrong.
+    fn seal_padded(key: &GroupListKey, id: &[u8; ENTRY_ID_LEN], padded: &[u8]) -> Vec<u8> {
+        let nonce = [5u8; NONCE_LEN];
+        let mut sealed = [
+            &MAGIC[..],
+            &SUITE_V1.to_be_bytes(),
+            &1u64.to_be_bytes(),
+            &nonce,
+        ]
+        .concat();
+        let ciphertext = XChaCha20Poly1305::new(key.seal_key.as_slice().into())
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: padded,
+                    aad: &aad(&sealed[..MAGIC.len() + 10], BINDING, id).unwrap(),
+                },
+            )
+            .unwrap();
+        sealed.extend_from_slice(&ciphertext);
+        assert_eq!(sealed.len(), SEALED_LEN);
+        sealed
+    }
+
+    #[test]
+    fn an_entry_with_a_bad_length_or_padding_does_not_open() {
+        let key = GroupListKey::derive(&[1u8; 32]);
+        let id = key.entry_id(&[7u8; GROUP_ID_LEN]);
+        let mut padded = vec![0u8; PADDED_LEN];
+        padded[..2].copy_from_slice(&5u16.to_be_bytes());
+        padded[2..7].copy_from_slice(b"entry");
+        // Sealed the way `seal` does it: opens.
+        let good = seal_padded(&key, &id, &padded);
+        assert_eq!(&key.open(BINDING, &id, &good).unwrap().plain[..], b"entry");
+        // A length past the longest plaintext.
+        let mut long = padded.clone();
+        long[..2].copy_from_slice(&((MAX_PLAIN_LEN + 1) as u16).to_be_bytes());
+        assert!(key
+            .open(BINDING, &id, &seal_padded(&key, &id, &long))
+            .is_err());
+        let mut longest = padded.clone();
+        longest[..2].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert!(key
+            .open(BINDING, &id, &seal_padded(&key, &id, &longest))
+            .is_err());
+        // A non-zero byte in the padding, at its start and at its end.
+        for at in [7, PADDED_LEN - 1] {
+            let mut dirty = padded.clone();
+            dirty[at] = 1;
+            assert!(
+                key.open(BINDING, &id, &seal_padded(&key, &id, &dirty))
+                    .is_err(),
+                "padding byte {at}"
+            );
+        }
     }
 
     #[test]

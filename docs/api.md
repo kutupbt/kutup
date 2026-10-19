@@ -1136,9 +1136,9 @@ chain start names. **Auth:** Bearer JWT. Scopes and their ids:
   the sealed name's header (a folder without a name, kept through an account
   reset, is left out until it is named again);
 - `pins`: one value, `pins`;
-- `chatGroups`: the group list's entry ids (`GET /api/chat/group-list`; only
-  when pairwise groups are on), with the revision in each sealed entry's
-  header;
+- `chatGroups`: the group list's entry ids (`GET /api/chat/group-list`), with
+  the revision in each sealed entry's header. Readable whether or not pairwise
+  groups are on (empty when they are off, since nothing can be written);
 - `passSecrets`: the vault's file id, for every secret the account keeps, the
   vault trashed, purged or out of reach included ("unreachable but listed":
   the secret stays until its owner forgets it, `POST
