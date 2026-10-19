@@ -59,6 +59,16 @@ pub async fn submit(
     .await
 }
 
+/// An address that can sit inside `<…>` of an SMTP command: no control
+/// characters, whitespace or angle brackets, and not empty or overlong.
+fn envelope_safe(address: &str) -> bool {
+    !address.is_empty()
+        && address.len() <= 320
+        && !address
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '<' || c == '>')
+}
+
 async fn converse<S>(
     mut stream: S,
     username: &str,
@@ -68,6 +78,20 @@ async fn converse<S>(
 where
     S: AsyncBufRead + AsyncWrite + Unpin,
 {
+    // Addresses go into SMTP commands as they are: one that could end a
+    // command or open another is refused before anything is sent, whoever
+    // checked it upstream.
+    for address in
+        std::iter::once(envelope.from).chain(envelope.recipients.iter().map(String::as_str))
+    {
+        if !envelope_safe(address) {
+            return Err(SubmitError::Refused {
+                code: 553,
+                text: "not a mailbox address".into(),
+                recipient: Some(address.escape_debug().to_string()),
+            });
+        }
+    }
     expect(&mut stream, 220, None).await?;
     command(&mut stream, "EHLO kutup", 250, None).await?;
     let credentials = STANDARD.encode(format!("\0{username}\0{password}"));
@@ -168,6 +192,23 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// No address can end an SMTP command or open another.
+    #[test]
+    fn envelope_addresses_cannot_inject_commands() {
+        assert!(super::envelope_safe("bob@outside.test"));
+        for bad in [
+            "bob@outside.test>\r\nRCPT TO:<eve@evil.test",
+            "bob@outside.test\r\nDATA",
+            "bob@outside.test\n",
+            "bob@outside.test\0",
+            "bob @outside.test",
+            "<bob@outside.test>",
+            "",
+        ] {
+            assert!(!super::envelope_safe(bad), "{bad:?}");
+        }
+    }
+
     use super::*;
     use tokio::io::BufReader;
 

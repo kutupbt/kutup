@@ -1011,6 +1011,22 @@ fn build_router(state: AppState) -> Router {
             put(handlers::mail_forwardings::renew).delete(handlers::mail_forwardings::delete),
         )
         .route(
+            "/api/mail/forwardings/external",
+            post(handlers::mail_forwardings::external),
+        )
+        .route(
+            "/api/mail/forwardings/external/accept",
+            post(handlers::mail_forwardings::external_accept),
+        )
+        .route(
+            "/api/mail/forwardings/external/decline",
+            post(handlers::mail_forwardings::external_decline),
+        )
+        .route(
+            "/api/mail/forwardings/:id/reinvite",
+            put(handlers::mail_forwardings::reinvite),
+        )
+        .route(
             "/api/mail/forwardings/:id/pause",
             put(handlers::mail_forwardings::pause),
         )

@@ -47,6 +47,9 @@ pub struct MailForwarding {
     pub conditions: Vec<Condition>,
     /// Messages that couldn't be forwarded.
     pub skipped: i64,
+    /// Why an outside forwarding stopped on its own: `bounces` (paused) or
+    /// `budget` (today's is spent; it goes on tomorrow).
+    pub notice: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     /// When a pending forwarding lapses.
@@ -99,6 +102,9 @@ pub struct CreateMailForwarding {
     pub conditions: Vec<Condition>,
     /// Required for a Kutup address on this server.
     pub end_to_end: Option<EndToEndMaterial>,
+    /// Outside Kutup, while the address has no other outside forwarding:
+    /// its next signed key list, every key as it is plus EMAIL_NO_ENCRYPT.
+    pub key_list: Option<crate::handlers::mail_keys::SignedKeyList>,
 }
 
 fn all() -> Match {
@@ -313,15 +319,28 @@ type Row = (
     i64,
     OffsetDateTime,
     Option<OffsetDateTime>,
+    Option<String>,
 );
 
 const SELECT: &str = "SELECT f.id, f.kind, f.state, a.address, f.forwardee_email, f.match,
-                             f.conditions, f.skipped, f.created_at, f.expires_at
+                             f.conditions, f.skipped, f.created_at, f.expires_at,
+                             f.notice
                         FROM mail_forwardings f JOIN mail_addresses a ON a.id = f.forwarder_address_id";
 
 fn view(row: Row) -> MailForwarding {
-    let (id, kind, state, forwarder, forwardee, rule, conditions, skipped, created_at, expires_at) =
-        row;
+    let (
+        id,
+        kind,
+        state,
+        forwarder,
+        forwardee,
+        rule,
+        conditions,
+        skipped,
+        created_at,
+        expires_at,
+        notice,
+    ) = row;
     MailForwarding {
         id: id.to_string(),
         kind,
@@ -335,6 +354,7 @@ fn view(row: Row) -> MailForwarding {
         },
         conditions: serde_json::from_value(conditions).unwrap_or_default(),
         skipped,
+        notice,
         created_at,
         expires_at,
     }
@@ -425,48 +445,13 @@ pub async fn create(
         return Err(AppError::bad_request("forwardeeEmail is not an address"));
     }
 
-    let mut tx = state.pool.begin().await?;
-    // The account's forwardings are counted under its lock.
-    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-    // The caller's current address (not one in a rename hold).
-    let forwarder_key: Option<Vec<u8>> = sqlx::query_scalar(
-        "SELECT k.public_key FROM mail_addresses a
-           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active' AND a.group_id IS NULL",
-    )
-    .bind(address_id)
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(forwarder_key) = forwarder_key else {
-        return Err(AppError::not_found("not found"));
-    };
-    let (per_address, per_account): (i64, i64) = sqlx::query_as(
-        "SELECT COUNT(*) FILTER (WHERE forwarder_address_id = $2), COUNT(*)
-           FROM mail_forwardings WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .bind(address_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if per_address >= MAX_PER_ADDRESS || per_account >= MAX_PER_ACCOUNT {
-        return Err(code(
-            AppError::conflict("too many forwardings"),
-            "forwardingLimit",
-        ));
-    }
-
     let Some((forwardee_address_id, forwardee_user, forwardee_address)) =
         local_person(&state, &forwardee_email).await?
     else {
-        return Err(code(
-            AppError::conflict("forwarding outside Kutup is not available yet"),
-            "outsideForwardingUnavailable",
-        ));
+        return create_outside(&state, user_id, address_id, id, &req, &forwardee_email).await;
     };
+    let mut tx = state.pool.begin().await?;
+    let forwarder_key = prepare(&mut tx, user_id, address_id).await?;
     if forwardee_user == user_id {
         return Err(AppError::bad_request("forward to someone else's address"));
     }
@@ -524,6 +509,571 @@ pub async fn create(
     store_material(&state, &mut tx, id, &material).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(one(&state, id).await?)))
+}
+
+/// Locks the account (its forwardings are counted under the lock), checks
+/// the forwarder address is the caller's current one, and the limits.
+/// Returns the address's primary public key.
+async fn prepare(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    address_id: Uuid,
+) -> AppResult<Vec<u8>> {
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    // The caller's current address (not one in a rename hold).
+    let forwarder_key: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT k.public_key FROM mail_addresses a
+           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active' AND a.group_id IS NULL",
+    )
+    .bind(address_id)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(forwarder_key) = forwarder_key else {
+        return Err(AppError::not_found("not found"));
+    };
+    let (per_address, per_account): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE forwarder_address_id = $2), COUNT(*)
+           FROM mail_forwardings WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .bind(address_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if per_address >= MAX_PER_ADDRESS || per_account >= MAX_PER_ACCOUNT {
+        return Err(code(
+            AppError::conflict("too many forwardings"),
+            "forwardingLimit",
+        ));
+    }
+    if !forwarding::charge(tx, user_id, forwarding::Charge::Creation).await? {
+        return Err(code(
+            AppError::too_many_requests("too many forwardings made in the last hour"),
+            "rateLimited",
+        ));
+    }
+    Ok(forwarder_key)
+}
+
+/// A new confirmation link's token (sent) and its hash (kept).
+fn confirmation_token() -> (String, Vec<u8>) {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use sha2::Digest as _;
+    let mut token = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut token);
+    let text = URL_SAFE_NO_PAD.encode(token);
+    (text, sha2::Sha256::digest(token).to_vec())
+}
+
+/// The hash a confirmation token is kept under; `None` for anything that
+/// isn't one.
+fn token_hash(token: &str) -> Option<Vec<u8>> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use sha2::Digest as _;
+    let bytes = URL_SAFE_NO_PAD.decode(token).ok()?;
+    (bytes.len() == 32).then(|| sha2::Sha256::digest(bytes).to_vec())
+}
+
+/// Sends an outside forwardee the link to confirm or decline, from the
+/// forwarder's address (bounces come back to the forwarding's return path).
+async fn send_confirmation(
+    state: &AppState,
+    forwarding: Uuid,
+    forwarder_address: &str,
+    forwardee_email: &str,
+    token: &str,
+) -> anyhow::Result<()> {
+    let from = forwarding::return_path(
+        &state.config.mail_forwarding_keys,
+        &state.config.chat_server_name,
+        forwarding,
+    )
+    .ok_or_else(|| anyhow::anyhow!("no MAIL_FORWARDING_KEYS"))?;
+    let link = format!("{}/email-forwarding#{token}", state.config.apps.account);
+    let date = OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc2822)
+        .unwrap_or_default();
+    let message = format!(
+        "From: {forwarder_address}\r\nTo: {forwardee_email}\r\n\
+Subject: Confirm forwarding from {forwarder_address}\r\nDate: {date}\r\n\
+Message-ID: <{}@{}>\r\nAuto-Submitted: auto-generated\r\nMIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\r\n\
+{forwarder_address} wants to forward their email to this address.\r\n\r\n\
+To confirm or decline, open:\r\n{link}\r\n\r\n\
+The link works for {} days. If you don't know who this is, decline or ignore this email.\r\n",
+        Uuid::new_v4(),
+        state.config.chat_server_name,
+        PENDING_DAYS,
+    );
+    crate::mail::submit::submit(
+        &state.config.mail_submission_addr,
+        &format!("kutup@{}", state.config.chat_server_name),
+        &state.config.mail_inbound_token,
+        crate::mail::submit::Envelope {
+            from: &from,
+            recipients: &[forwardee_email.to_owned()],
+            message: message.as_bytes(),
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// A fresh link for a pending (or declined) outside forwarding, at most
+/// [`forwarding::MAX_INVITES_PER_DAY`] a day. Its token, to send.
+async fn reinvite_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    forwarding_id: Uuid,
+) -> AppResult<String> {
+    // Both allowances or neither: a refused link charges nothing.
+    let mut savepoint = sqlx::Acquire::begin(&mut **tx).await?;
+    let account: Uuid = sqlx::query_scalar("SELECT user_id FROM mail_forwardings WHERE id = $1")
+        .bind(forwarding_id)
+        .fetch_one(&mut *savepoint)
+        .await?;
+    if !forwarding::charge(&mut savepoint, account, forwarding::Charge::Confirmation).await? {
+        return Err(code(
+            AppError::too_many_requests("enough confirmation emails for today"),
+            "rateLimited",
+        ));
+    }
+    let (token, hash) = confirmation_token();
+    let renewed = sqlx::query(
+        "UPDATE mail_forwardings SET
+                invites_today = CASE WHEN day = current_date THEN invites_today + 1 ELSE 1 END,
+                sent_today = CASE WHEN day = current_date THEN sent_today ELSE 0 END,
+                bounces_today = CASE WHEN day = current_date THEN bounces_today ELSE 0 END,
+                day = current_date, state = 'pending', confirmation_hash = $2,
+                expires_at = now() + ($3 * interval '1 day'), updated_at = now()
+          WHERE id = $1 AND (day <> current_date OR invites_today < $4)",
+    )
+    .bind(forwarding_id)
+    .bind(&hash)
+    .bind(PENDING_DAYS)
+    .bind(forwarding::MAX_INVITES_PER_DAY)
+    .execute(&mut *savepoint)
+    .await?;
+    if renewed.rows_affected() != 1 {
+        return Err(code(
+            AppError::too_many_requests("enough confirmation emails for today"),
+            "rateLimited",
+        ));
+    }
+    savepoint.commit().await?;
+    Ok(token)
+}
+
+/// Sets a forwarding outside Kutup up: pending until the forwardee confirms
+/// through the emailed link. The address's end-to-end encryption goes off
+/// with it, as Proton's does: the first outside forwarding brings the
+/// address's next signed key list, every key unchanged but for
+/// EMAIL_NO_ENCRYPT.
+async fn create_outside(
+    state: &AppState,
+    user_id: Uuid,
+    address_id: Uuid,
+    id: Uuid,
+    req: &CreateMailForwarding,
+    forwardee_email: &str,
+) -> AppResult<(StatusCode, Json<MailForwarding>)> {
+    let Some(forwardee_email) = forwarding::outside_address(forwardee_email) else {
+        return Err(AppError::bad_request(
+            "forwardeeEmail is not a plain mailbox address",
+        ));
+    };
+    let forwardee_email = forwardee_email.as_str();
+    let (_, domain) = forwardee_email.rsplit_once('@').expect("checked");
+    if domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
+        return Err(AppError::bad_request(
+            "not a Kutup person's address that receives",
+        ));
+    }
+    if req.end_to_end.is_some() {
+        return Err(AppError::bad_request(
+            "forwarding outside Kutup isn't end to end",
+        ));
+    }
+    if state.config.mail_forwarding_keys.current().is_none() {
+        return Err(unavailable());
+    }
+    let mut change = match &req.key_list {
+        Some(list) => Some(
+            crate::handlers::mail_keys::begin_list_change(
+                state,
+                user_id,
+                &address_id.to_string(),
+                list,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let mut own_tx = match change {
+        Some(_) => None,
+        None => Some(state.pool.begin().await?),
+    };
+    let tx = match (&mut change, &mut own_tx) {
+        (Some(change), _) => &mut change.tx,
+        (None, Some(tx)) => tx,
+        (None, None) => unreachable!("one of the two"),
+    };
+    prepare(tx, user_id, address_id).await?;
+    // The address's keys as stored: the list must keep each as it is, with
+    // EMAIL_NO_ENCRYPT added; without a list they must carry it already.
+    let stored: Vec<(String, bool, i32)> = sqlx::query_as(
+        "SELECT fingerprint, is_primary, flags FROM mail_address_keys
+          WHERE address_id = $1 AND NOT is_forwarding",
+    )
+    .bind(address_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let no_encrypt = mail_key::FLAG_EMAIL_NO_ENCRYPT as i32;
+    match &mut change {
+        None if stored.iter().all(|(_, _, flags)| flags & no_encrypt != 0) => {}
+        None => {
+            return Err(code(
+                AppError::bad_request("the first outside forwarding brings the next key list"),
+                "keyListRequired",
+            ))
+        }
+        Some(change) => {
+            change.check_lists_exactly(None).await?;
+            let follows = change.signed.list.keys.iter().all(|key| {
+                stored.iter().any(|(fingerprint, primary, flags)| {
+                    *fingerprint == hex::encode(key.fingerprint)
+                        && *primary == key.primary
+                        && key.flags as i32 == (flags | no_encrypt)
+                })
+            });
+            if !follows {
+                return Err(code(
+                    AppError::bad_request(
+                        "the key list must keep every key as it is, with EMAIL_NO_ENCRYPT",
+                    ),
+                    "keyListMismatch",
+                ));
+            }
+        }
+    }
+    let tx = match (&mut change, &mut own_tx) {
+        (Some(change), _) => &mut change.tx,
+        (None, Some(tx)) => tx,
+        (None, None) => unreachable!("one of the two"),
+    };
+    let inserted = sqlx::query(
+        "INSERT INTO mail_forwardings
+           (id, user_id, forwarder_address_id, forwardee_email, kind, state, match, conditions)
+         VALUES ($1, $2, $3, $4, 'outside', 'pending', $5, $6)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(address_id)
+    .bind(forwardee_email)
+    .bind(match req.rule {
+        Match::All => "all",
+        Match::Any => "any",
+    })
+    .bind(serde_json::to_value(&req.conditions).expect("conditions serialize"))
+    .execute(&mut **tx)
+    .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(code(
+            AppError::conflict("this address already forwards there"),
+            "forwardingExists",
+        ));
+    }
+    let token = reinvite_in(tx, id).await?;
+    let forwarder_address: String =
+        sqlx::query_scalar("SELECT address FROM mail_addresses WHERE id = $1")
+            .bind(address_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    match (change, own_tx) {
+        (Some(change), _) => {
+            change.finish(state).await?;
+        }
+        (None, Some(tx)) => tx.commit().await?,
+        (None, None) => unreachable!("one of the two"),
+    }
+    if let Err(error) =
+        send_confirmation(state, id, &forwarder_address, forwardee_email, &token).await
+    {
+        // Still pending: the forwarder can send the link again.
+        tracing::warn!(%id, error = %error, "mail: a forwarding confirmation was not sent");
+    }
+    Ok((StatusCode::CREATED, Json(one(state, id).await?)))
+}
+
+/// `PUT /api/mail/forwardings/{id}/reinvite` — the forwarder sends an
+/// outside forwardee a fresh link (a pending forwarding, or a declined one
+/// asked again), at most 3 a day.
+#[utoipa::path(
+    put,
+    path = "/api/mail/forwardings/{id}/reinvite",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path, description = "Forwarding id")),
+    responses((status = 200, description = "Pending, link sent", body = MailForwarding), (status = 409, description = "forwardingState"), (status = 429, description = "rateLimited"))
+)]
+pub async fn reinvite(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<MailForwarding>> {
+    let user_id = trusted_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    let (id, side, current, _) = lock(&mut tx, user_id, &id).await?;
+    let (kind, forwarder_address, forwardee_email): (String, String, String) = sqlx::query_as(
+        "SELECT f.kind, a.address, f.forwardee_email FROM mail_forwardings f
+           JOIN mail_addresses a ON a.id = f.forwarder_address_id WHERE f.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if side != Side::Forwarder || kind != "outside" {
+        return Err(AppError::not_found("not found"));
+    }
+    if current != "pending" && current != "rejected" {
+        return Err(code(
+            AppError::conflict(format!("the forwarding is {current}")),
+            "forwardingState",
+        ));
+    }
+    // Asked again after a decline, the address may have gone back to end to
+    // end meanwhile: the forwarding then needs setting up anew, key list and
+    // all.
+    let still_open: bool = sqlx::query_scalar(
+        "SELECT COALESCE(bool_and(k.flags & 4 <> 0), false)
+           FROM mail_forwardings f
+           JOIN mail_address_keys k ON k.address_id = f.forwarder_address_id
+          WHERE f.id = $1 AND NOT k.is_forwarding",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !still_open {
+        return Err(code(
+            AppError::bad_request("the address is end to end again: set the forwarding up anew"),
+            "keyListRequired",
+        ));
+    }
+    let token = reinvite_in(&mut tx, id).await?;
+    tx.commit().await?;
+    if let Err(error) =
+        send_confirmation(&state, id, &forwarder_address, &forwardee_email, &token).await
+    {
+        tracing::warn!(%id, error = %error, "mail: a forwarding confirmation was not sent");
+    }
+    Ok(Json(one(&state, id).await?))
+}
+
+/// A confirmation link's token, as the public page sends it.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ForwardingToken {
+    pub token: String,
+}
+
+/// What the public page shows about a forwarding.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalForwarding {
+    pub state: String,
+    pub forwarder_email: String,
+    pub forwardee_email: String,
+}
+
+/// Confirmation-page requests one client may make in a minute.
+static EXTERNAL_LIMIT: std::sync::LazyLock<crate::ratelimit::RateLimiter> =
+    std::sync::LazyLock::new(|| {
+        crate::ratelimit::RateLimiter::new(30, std::time::Duration::from_secs(60))
+    });
+
+/// The confirmation page is public: limited per client address.
+fn limit_external(headers: &axum::http::HeaderMap) -> AppResult<()> {
+    let client = crate::middleware::client_ip_from_headers(headers).unwrap_or_default();
+    if EXTERNAL_LIMIT.allow(&format!("forwarding-external:{client}")) {
+        Ok(())
+    } else {
+        Err(code(
+            AppError::too_many_requests("too many requests"),
+            "rateLimited",
+        ))
+    }
+}
+
+/// A fresh link to send once the transaction that made it has committed.
+struct Resend {
+    id: Uuid,
+    forwarder: String,
+    forwardee: String,
+    token: String,
+}
+
+enum Looked {
+    Found(Uuid, String, String, String),
+    /// The link expired; a new one is made when the day's allowances allow.
+    Expired(Option<Resend>),
+}
+
+/// The outside forwarding a token names, locked.
+async fn by_token(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    token: &str,
+) -> AppResult<Looked> {
+    let hash = token_hash(token).ok_or_else(|| AppError::not_found("not found"))?;
+    let row: Option<(Uuid, String, String, String, bool)> = sqlx::query_as(
+        "SELECT f.id, f.state, a.address, f.forwardee_email, f.expires_at > now()
+           FROM mail_forwardings f JOIN mail_addresses a ON a.id = f.forwarder_address_id
+          WHERE f.kind = 'outside' AND f.confirmation_hash = $1 FOR UPDATE OF f",
+    )
+    .bind(&hash)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((id, current, forwarder, forwardee, fresh)) = row else {
+        return Err(AppError::not_found("not found"));
+    };
+    if fresh {
+        return Ok(Looked::Found(id, current, forwarder, forwardee));
+    }
+    let resend = reinvite_in(tx, id).await.ok().map(|token| Resend {
+        id,
+        forwarder,
+        forwardee,
+        token,
+    });
+    Ok(Looked::Expired(resend))
+}
+
+/// Commits what an expired link's lookup made, then sends the new link
+/// (Proton's "We just sent you a new link"): `410 linkExpired`.
+async fn expired(
+    state: &AppState,
+    tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    resend: Option<Resend>,
+) -> AppError {
+    match tx.commit().await {
+        Ok(()) => {
+            if let Some(Resend {
+                id,
+                forwarder,
+                forwardee,
+                token,
+            }) = resend
+            {
+                let state = state.clone();
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        send_confirmation(&state, id, &forwarder, &forwardee, &token).await
+                    {
+                        tracing::warn!(%id, error = %error, "mail: a forwarding confirmation was not sent");
+                    }
+                });
+            }
+            code(
+                AppError::new(StatusCode::GONE, "this link has expired"),
+                "linkExpired",
+            )
+        }
+        Err(error) => error.into(),
+    }
+}
+
+/// `POST /api/mail/forwardings/external` — the public confirmation page
+/// reads what a link is for (no account needed).
+#[utoipa::path(
+    post,
+    path = "/api/mail/forwardings/external",
+    tag = "mail",
+    request_body = ForwardingToken,
+    responses((status = 200, description = "The forwarding", body = ExternalForwarding), (status = 404, description = "No such link"), (status = 410, description = "linkExpired (a new one was sent)"), (status = 429, description = "rateLimited"))
+)]
+pub async fn external(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ForwardingToken>,
+) -> AppResult<Json<ExternalForwarding>> {
+    limit_external(&headers)?;
+    let mut tx = state.pool.begin().await?;
+    match by_token(&mut tx, &req.token).await? {
+        Looked::Found(_, current, forwarder, forwardee) => {
+            tx.commit().await?;
+            Ok(Json(ExternalForwarding {
+                state: current,
+                forwarder_email: forwarder,
+                forwardee_email: forwardee,
+            }))
+        }
+        Looked::Expired(resend) => Err(expired(&state, tx, resend).await),
+    }
+}
+
+/// `POST /api/mail/forwardings/external/accept` — the outside forwardee
+/// confirms: the forwarding is active and the link spent.
+#[utoipa::path(
+    post,
+    path = "/api/mail/forwardings/external/accept",
+    tag = "mail",
+    request_body = ForwardingToken,
+    responses((status = 204, description = "Active"), (status = 404, description = "No such link"), (status = 410, description = "linkExpired"), (status = 429, description = "rateLimited"))
+)]
+pub async fn external_accept(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ForwardingToken>,
+) -> AppResult<StatusCode> {
+    limit_external(&headers)?;
+    let mut tx = state.pool.begin().await?;
+    let (id, current) = match by_token(&mut tx, &req.token).await? {
+        Looked::Found(id, current, _, _) => (id, current),
+        Looked::Expired(resend) => return Err(expired(&state, tx, resend).await),
+    };
+    if current != "pending" {
+        return Err(code(
+            AppError::conflict(format!("the forwarding is {current}")),
+            "forwardingState",
+        ));
+    }
+    sqlx::query(
+        "UPDATE mail_forwardings SET state = 'active', confirmation_hash = NULL,
+                expires_at = NULL, notice = NULL, updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/mail/forwardings/external/decline` — the outside forwardee
+/// declines: it is `rejected` for the forwarder, and the link spent.
+#[utoipa::path(
+    post,
+    path = "/api/mail/forwardings/external/decline",
+    tag = "mail",
+    request_body = ForwardingToken,
+    responses((status = 204, description = "Declined"), (status = 404, description = "No such link"), (status = 410, description = "linkExpired"), (status = 429, description = "rateLimited"))
+)]
+pub async fn external_decline(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ForwardingToken>,
+) -> AppResult<StatusCode> {
+    limit_external(&headers)?;
+    let mut tx = state.pool.begin().await?;
+    let id = match by_token(&mut tx, &req.token).await? {
+        Looked::Found(id, _, _, _) => id,
+        Looked::Expired(resend) => return Err(expired(&state, tx, resend).await),
+    };
+    forwarding::reject(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn one(state: &AppState, id: Uuid) -> AppResult<MailForwarding> {
@@ -588,10 +1138,13 @@ pub async fn delete(
     let user_id = trusted_uuid(&user.user_id)?;
     let mut tx = state.pool.begin().await?;
     let (id, _, _, _) = lock(&mut tx, user_id, &id).await?;
-    sqlx::query("DELETE FROM mail_forwardings WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let address: Uuid = sqlx::query_scalar(
+        "DELETE FROM mail_forwardings WHERE id = $1 RETURNING forwarder_address_id",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    forwarding::settle_outside(&mut tx, address).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -616,11 +1169,18 @@ async fn forwarder_moves(
             "forwardingState",
         ));
     }
-    sqlx::query("UPDATE mail_forwardings SET state = $2, updated_at = now() WHERE id = $1")
-        .bind(id)
-        .bind(to)
-        .execute(&mut *tx)
-        .await?;
+    // Resuming starts the day's bounce count afresh and clears the notice
+    // a bounce pause left.
+    sqlx::query(
+        "UPDATE mail_forwardings SET state = $2, updated_at = now(),
+                notice = CASE WHEN $2 = 'active' THEN NULL ELSE notice END,
+                bounces_today = CASE WHEN $2 = 'active' THEN 0 ELSE bounces_today END
+          WHERE id = $1",
+    )
+    .bind(id)
+    .bind(to)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(Json(one(state, id).await?))
 }
