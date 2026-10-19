@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createOwnedCollectionV1, openFileMetadataV1, renameOwnedCollectionV1 } from '@kutup/crypto'
 import { openAlbumFileKeyV1, sealAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { rotateFolder, type FolderAccess, type Removal } from '@kutup/drive-core/access'
+import type { PendingUpgradeRemoval } from '@kutup/drive-core/identityPins'
 import { toDriveFile } from '@kutup/drive-core/files'
 import { openRemote, openRow, type CollectionRowWithTimes, type FolderIndex, type IncomingShare } from '@kutup/drive-core/folders'
 import { useDriveIdentity, type DriveIdentity } from '@kutup/drive-core/identity'
@@ -252,7 +253,13 @@ export async function addToAlbum(album: Album, photos: readonly Photo[]): Promis
  * Take people or links away from an album: a rotation, as for a folder, with
  * every photo's key re-sealed under the new album key in the same request.
  */
-export async function rotateAlbum(album: Album, me: DriveIdentity, access: FolderAccess, removed: Removal): Promise<void> {
+export async function rotateAlbum(
+  album: Album,
+  me: DriveIdentity,
+  access: FolderAccess,
+  removed: Removal,
+  alsoRemove?: PendingUpgradeRemoval,
+): Promise<void> {
   const { data: keys } = await api.get<AlbumKeyWire[]>(`/albums/${album.id}/keys`)
   const fileKeys = await Promise.all(
     keys.map(async (k) => ({
@@ -277,7 +284,7 @@ export async function rotateAlbum(album: Album, me: DriveIdentity, access: Folde
         }),
       })),
     ),
-  }))
+  }), alsoRemove)
 }
 
 /** A new album, empty. */
@@ -371,9 +378,12 @@ export function useLeaveAlbum() {
 }
 
 export function useRemoveAlbumAccess() {
-  return useAlbumMutation(async ({ album, removed }: { album: Album; removed: Removal }, me) => {
+  return useAlbumMutation(async (
+    { album, removed, alsoRemove }: { album: Album; removed: Removal; alsoRemove?: PendingUpgradeRemoval },
+    me,
+  ) => {
     // Built from access as it is now: anyone added since stays.
     const { data: access } = await api.get<FolderAccess>(`/collections/${album.id}/access`)
-    await rotateAlbum(album, me, access, removed)
+    await rotateAlbum(album, me, access, removed, alsoRemove)
   })
 }

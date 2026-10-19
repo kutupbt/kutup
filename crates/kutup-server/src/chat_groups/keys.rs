@@ -17,7 +17,8 @@ use crate::error::{AppError, AppResult};
 /// seven days).
 pub(crate) const EPOCH_SECS: i64 = 7 * 24 * 60 * 60;
 
-const KEY_INFO: &[u8] = b"kutup/chat-group/gateway-key/v1\0";
+/// The KEM is in the label: the derived seed is an X-Wing seed.
+const KEY_INFO: &[u8] = b"kutup/chat-group/gateway-key/v2-xwing\0";
 
 fn epoch_of(now: i64) -> i64 {
     now.div_euclid(EPOCH_SECS)
@@ -26,6 +27,25 @@ fn epoch_of(now: i64) -> i64 {
 /// One byte, different for consecutive weeks, never zero.
 fn key_id(epoch: i64) -> u8 {
     u8::try_from(epoch.rem_euclid(255) + 1).expect("1..=255")
+}
+
+/// Each week's key, derived once per process: an X-Wing key pair costs an
+/// ML-KEM key generation, which a request shouldn't pay again. Keyed by the
+/// identity and the week; weeks before last are dropped.
+type KeyCache = std::collections::HashMap<([u8; 32], i64), std::sync::Arc<GatewayKey>>;
+static KEYS: std::sync::LazyLock<std::sync::Mutex<KeyCache>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn cached(identity: &SigningKey, epoch: i64) -> AppResult<std::sync::Arc<GatewayKey>> {
+    let id = identity.verifying_key().to_bytes();
+    if let Some(key) = KEYS.lock().unwrap().get(&(id, epoch)) {
+        return Ok(key.clone());
+    }
+    let key = std::sync::Arc::new(derive(identity, epoch)?);
+    let mut keys = KEYS.lock().unwrap();
+    keys.retain(|(_, kept), _| *kept >= epoch - 1);
+    keys.insert((id, epoch), key.clone());
+    Ok(key)
 }
 
 fn derive(identity: &SigningKey, epoch: i64) -> AppResult<GatewayKey> {
@@ -47,7 +67,7 @@ pub(crate) fn current_config(
     now: i64,
 ) -> AppResult<GroupGatewayKeyConfigV1> {
     let epoch = epoch_of(now);
-    let key = derive(identity, epoch)?;
+    let key = cached(identity, epoch)?;
     let issued_at = epoch * EPOCH_SECS;
     GroupGatewayKeyConfigV1::sign(
         document,
@@ -62,11 +82,14 @@ pub(crate) fn current_config(
 
 /// The keys a request may be sealed to now: this week's, and last week's
 /// during the overlap after the change.
-pub(crate) fn accepted_keys(identity: &SigningKey, now: i64) -> AppResult<Vec<GatewayKey>> {
+pub(crate) fn accepted_keys(
+    identity: &SigningKey,
+    now: i64,
+) -> AppResult<Vec<std::sync::Arc<GatewayKey>>> {
     let epoch = epoch_of(now);
-    let mut keys = vec![derive(identity, epoch)?];
+    let mut keys = vec![cached(identity, epoch)?];
     if now - epoch * EPOCH_SECS < KEY_OVERLAP_SECS {
-        keys.push(derive(identity, epoch - 1)?);
+        keys.push(cached(identity, epoch - 1)?);
     }
     Ok(keys)
 }

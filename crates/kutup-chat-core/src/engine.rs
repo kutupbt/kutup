@@ -1057,10 +1057,14 @@ impl Engine {
                 }
                 let mut devices = current.devices.clone();
                 match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
+                    // Unchanged, unless the account's Drive keys moved on (an
+                    // upgrade to X-Wing, docs/plans/pq-shares.md): then the
+                    // next manifest carries them.
                     Ok(index)
                         if devices[index].identity_key == local.identity_key
                             && devices[index].registration_id == local.registration_id
-                            && devices[index].mls == local.mls =>
+                            && devices[index].mls == local.mls
+                            && current.drive == authority.drive_keys() =>
                     {
                         current
                     }

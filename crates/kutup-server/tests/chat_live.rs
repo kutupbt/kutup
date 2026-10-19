@@ -302,7 +302,7 @@ fn signed_manifest(
         sequence,
         previous_hash,
         drive: AccountManifestDriveKeysV1 {
-            suite: AccountIdentitySuiteId::X25519Ed25519V1,
+            suite: AccountIdentitySuiteId::XWingEd25519V2,
             hpke_public_key: drive_public_key.into(),
             share_signing_public_key: drive_signing_public_key.into(),
         },

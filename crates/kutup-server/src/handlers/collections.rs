@@ -804,6 +804,7 @@ pub async fn share_collection(
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| AppError::bad_request("invalid recipient"))?;
+    crate::handlers::identity::require_sealable(&state.pool, recipient_id).await?;
     let domain = state.config.chat_server_name.as_str();
     let sender_account = crate::account_ids::local(domain, sharer_id)?;
     let recipient_account = crate::account_ids::local(domain, recipient_id)?;

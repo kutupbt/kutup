@@ -22,8 +22,9 @@ import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { RecipientNotFound } from '@kutup/drive-core/mutations'
 import { personOf, usePeople } from '@kutup/drive-core/people'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { IdentityNotConfirmed, RecipientRenamed } from '@kutup/drive-core/identityPins'
+import { IdentityNotConfirmed, KeysPendingUpgrade, MembersPendingUpgrade, RecipientRenamed } from '@kutup/drive-core/identityPins'
 import { IdentityShareWarning, RecipientRenamedNotice, VerifyPersonButton } from './IdentityWarning'
+import { PendingUpgradeConfirm } from './PendingUpgradeConfirm'
 
 export type FileShareTarget = { folder: Folder; file: DriveFile; role: ShareRole }
 
@@ -162,6 +163,13 @@ export function FileShareDialog({ target, onClose }: { target: FileShareTarget |
 }
 
 /** Who the file itself is shared with; removing someone moves it to a new key. */
+/** Who one removal takes from a file. */
+interface Removal {
+  removed: string[]
+  removedLinks: string[]
+  removedFederated: string[]
+}
+
 function FileAccessList({ target }: { target: FileShareTarget }) {
   const { t } = useTranslation()
   const access = useFileAccess(target.file, target.role)
@@ -172,6 +180,8 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const people = usePeople()
   // Someone, or a link, about to be removed (either moves the file to a new key).
   const [pending, setPending] = useState<{ userId?: string; linkId?: string; federatedId?: string; name: string } | null>(null)
+  // A removal that would also take people not yet upgraded: asked again.
+  const [upgrade, setUpgrade] = useState<{ removal: Removal; error: MembersPendingUpgrade } | null>(null)
   const createLink = useCreateFileLink()
   const identity = useDriveIdentity()
   const [newLink, setNewLink] = useState<string | null>(null)
@@ -189,23 +199,32 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
     }
   }
 
-  function confirm() {
-    if (!pending) return
+  function removeNow(removal: Removal, alsoRemove?: MembersPendingUpgrade) {
     remove.mutate(
-      {
-        ...target,
-        removed: pending.userId ? [pending.userId] : [],
-        removedLinks: pending.linkId ? [pending.linkId] : [],
-        removedFederated: pending.federatedId ? [pending.federatedId] : [],
-      },
+      { ...target, ...removal, alsoRemove: alsoRemove?.removal },
       {
         onSuccess: () => {
           setPending(null)
+          setUpgrade(null)
           toast.success(t('fileShare.removed'))
         },
-        onError: () => setPending(null),
+        // People not yet upgraded would lose access too: asked first (again,
+        // naming them all, when more turned up meanwhile).
+        onError: (error) => {
+          setPending(null)
+          setUpgrade(error instanceof MembersPendingUpgrade ? { removal, error } : null)
+        },
       },
     )
+  }
+
+  function confirm() {
+    if (!pending) return
+    removeNow({
+      removed: pending.userId ? [pending.userId] : [],
+      removedLinks: pending.linkId ? [pending.linkId] : [],
+      removedFederated: pending.federatedId ? [pending.federatedId] : [],
+    })
   }
 
   function changeRole(member: FileAccessMember, name: string, canEdit: boolean) {
@@ -220,8 +239,10 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
   const error = setRole.error
     ? setRole.error instanceof AccessChanged
       ? t('fileShare.changed')
-      : t('fileShare.roleFailed')
-    : remove.error
+      : setRole.error instanceof KeysPendingUpgrade
+        ? t('apiErrors.keysPendingUpgrade')
+        : t('fileShare.roleFailed')
+    : remove.error && !(remove.error instanceof MembersPendingUpgrade)
     ? remove.error instanceof AccessChanged
       ? t('fileShare.changed')
       : remove.error instanceof RecipientChanged
@@ -369,6 +390,17 @@ function FileAccessList({ target }: { target: FileShareTarget }) {
           )}
           {createLink.error ? <Alert variant="error">{t('fileShare.linkFailed')}</Alert> : null}
         </div>
+      ) : null}
+      {upgrade ? (
+        <PendingUpgradeConfirm
+          error={upgrade.error}
+          busy={remove.isPending}
+          onConfirm={() => removeNow(upgrade.removal, upgrade.error)}
+          onCancel={() => {
+            setUpgrade(null)
+            remove.reset()
+          }}
+        />
       ) : null}
       {error ? <Alert variant="error">{error}</Alert> : null}
       {owner ? (

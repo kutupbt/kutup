@@ -4,7 +4,7 @@
 # release, checking the archive's SHA-256 against the release's checksums.
 #
 #   curl -fsSL https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.sh | sh
-#   curl -fsSL …/install-cli.sh | sh -s -- --version v0.2.0 --dir ~/bin
+#   curl -fsSL …/install-cli.sh | sh -s -- --version v0.0.1 --dir ~/bin
 #
 # Options (or the environment variable beside each):
 #   --version vX.Y.Z   KUTUP_VERSION      a CLI release tag (default: the newest
@@ -46,7 +46,7 @@ EOF
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version)
-      [ "$#" -ge 2 ] || die "--version needs a value (e.g. --version v0.2.0)"
+      [ "$#" -ge 2 ] || die "--version needs a value (e.g. --version v0.0.1)"
       VERSION="$2"
       shift 2
       ;;
@@ -165,7 +165,7 @@ latest_version() {
       200) ;;
       403 | 429)
         if grep -qi 'rate limit' "$TMP/releases.json"; then
-          die "GitHub API rate limit reached for this address; wait an hour or set KUTUP_VERSION (e.g. KUTUP_VERSION=v0.2.0)"
+          die "GitHub API rate limit reached for this address; wait an hour or set KUTUP_VERSION (e.g. KUTUP_VERSION=v0.0.1)"
         fi
         die "the GitHub API answered $status; set KUTUP_VERSION to skip it"
         ;;
@@ -195,7 +195,7 @@ fi
 case "$VERSION" in
   v[0-9]*) ;;
   [0-9]*) VERSION="v$VERSION" ;;
-  *) die "not a CLI release tag: $VERSION (CLI tags look like v0.2.0)" ;;
+  *) die "not a CLI release tag: $VERSION (CLI tags look like v0.0.1)" ;;
 esac
 
 # --- download and check --------------------------------------------------
@@ -204,7 +204,7 @@ esac
 # target, with a .sha256 file beside it.
 ARCHIVE="kutup_${VERSION}_${TARGET}.tar.gz"
 download "$BASE/$VERSION/kutup_${VERSION}_${TARGET}.sha256" "$TMP/sums" 2>/dev/null ||
-  die "release $VERSION has no Rust CLI build for $OS/$ARCH (CLI releases from v0.2.0 on have one; see https://github.com/$REPO/releases)"
+  die "release $VERSION has no Rust CLI build for $OS/$ARCH (see https://github.com/$REPO/releases)"
 
 say "downloading kutup $VERSION for $OS/$ARCH…"
 download "$BASE/$VERSION/$ARCHIVE" "$TMP/$ARCHIVE" ||

@@ -70,7 +70,7 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
-  signDriveKeyBinding(masterKeyBase64: string, account: { server: string; accountId: string }): string
+  signDriveKeyBinding(masterKeyBase64: string, account: { server: string; accountId: string }, bindingEpoch: number): string
   signDeviceRegistration(
     masterKeyBase64: string,
     server: string,
@@ -134,6 +134,7 @@ export interface CryptoWasmModule {
     driveHpkePublicKeyBase64: string,
     driveSigningPublicKeyBase64: string,
     bindingBase64: string,
+    bindingEpoch: number,
   ): boolean
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
   sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pinsJson: string): string

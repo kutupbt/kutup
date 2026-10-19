@@ -242,6 +242,26 @@ async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint
   }
 }
 
+/**
+ * The account's current Drive keys (X-Wing, docs/plans/pq-shares.md), derived
+ * again from its master key, with the private key sealed to `binding`: what
+ * an account from before them publishes once (`POST /account/identity-suite`).
+ */
+export async function currentDriveKeys(
+  masterKey: Uint8Array,
+  binding: string,
+): Promise<{ publicKey: string; privateKey: Uint8Array; drivePrivateKeyEnvelope: string }> {
+  const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
+  const privateKey = fromBase64(identity.driveHpkePrivateKey)
+  const drivePrivateKeyEnvelope = await sealAccountEnvelope(
+    privateKey,
+    masterKey,
+    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
+    binding,
+  )
+  return { publicKey: identity.driveHpkePublicKey, privateKey, drivePrivateKeyEnvelope }
+}
+
 export interface LoginResult {
   masterKey: Uint8Array
   privateKey: Uint8Array

@@ -52,8 +52,8 @@ assert.deepEqual(
     authorityPublicKey: 'eYfen0GgcbJ7PEdEgpsPFRSB9Mi55ZfV+O7e6/P1Kfw=',
     authorityKeyId: '19c53cf8e1cf6790e78bd859ad391db080cc5b3fec885eb345e76b664ce694d3',
     incarnationId: '3a6ef6bc771054da75a5c5dd018bcfdbc1ed1fcc5126af4248a005b7a95cf895',
-    driveHpkePublicKey: 'XWVa5lRpqR/0hLnBSe3MoSY9Bj1LVUcHuSa7kylCpyY=',
-    driveHpkePrivateKey: '9XjSilnTBqLghIX2V5ZpFVHHfv/hnBAX/MNvekiHD/A=',
+    driveHpkePublicKey: '+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==',
+    driveHpkePrivateKey: '3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=',
     driveSigningPublicKey: 'q7EjHuex0qgzED93MUSVrAKqBU7mfJY48zjVt8xsp1c=',
   },
 )
@@ -904,15 +904,18 @@ const identityVectors = JSON.parse(
 )
 const iv = identityVectors
 const ivAccount = crypto.parseAccountRef(iv.account)
-assert.equal(crypto.signDriveKeyBinding(iv.masterKey, ivAccount), iv.driveKeyBinding)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), true)
+assert.equal(crypto.signDriveKeyBinding(iv.masterKey, ivAccount, 1), iv.driveKeyBinding)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), true)
+// The epoch is signed: the same binding at another epoch fails, and epochs start at 1.
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 2), false)
+assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, ivAccount, 0), /epoch/)
 // Another account, a swapped recipient key or signer, another authority: refused.
-assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding), false)
-assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64'), false)
+assert.equal(crypto.verifyDriveKeyBinding({ ...ivAccount, accountId: '00000000-0000-4000-8000-000000000000' }, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveSigningPublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.driveSigningPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, iv.driveKeyBinding, 1), false)
+assert.equal(crypto.verifyDriveKeyBinding(ivAccount, iv.authorityPublicKey, iv.driveHpkePublicKey, iv.driveSigningPublicKey, 'not base64', 1), false)
 // An address in place of an account is refused outright.
-assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, 'alice@kutup.dev'))
+assert.throws(() => crypto.signDriveKeyBinding(iv.masterKey, 'alice@kutup.dev', 1))
 assert.deepEqual(crypto.openIdentityPins(iv.masterKey, iv.binding, iv.sealed), { value: iv.pins, revision: iv.revision })
 for (const refused of iv.refused) {
   assert.throws(() => crypto.openIdentityPins(iv.masterKey, refused.binding, refused.sealed), undefined, refused.case)

@@ -290,6 +290,10 @@ jobs:
       # off in Administration and back on (tests/e2e/README.md).
       ADMIN_ACCOUNT: "admin:Bootstrap*Temporary123"
       MAIL_OUTSIDE_SENDING: "on"
+      # SQL against the stack's database, for the specs that need the stack's
+      # owner: 157 (a rolled-back account head) and 162 (an account from
+      # before X-Wing keys). tests/e2e/README.md.
+      E2E_PSQL: docker compose -f ${{ github.workspace }}/docker-compose.yml exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1
       # Sends go at once in the browser specs; spec 102 turns undo send on.
       MAIL_DEFAULT_DELAY_SEND_SECONDS: "0"
       # One app per hostname; *.localhost resolves to this machine.

@@ -91,8 +91,9 @@ vi.mock('@kutup/crypto/accountRename', () => ({
 vi.mock('@kutup/crypto/accountRef', () => ({ sameAccount: (a: Ref, b: Ref) => sameRef(a, b) }))
 
 vi.mock('@kutup/crypto/identityPins', () => ({
-  verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string) =>
-    Promise.resolve(binding === `bound-by-${authority}`),
+  // Every binding here is the first, at epoch 1.
+  verifyDriveKeyBinding: vi.fn((_account: string, authority: string, _h: string, _s: string, binding: string, epoch: number) =>
+    Promise.resolve(binding === `bound-by-${authority}` && epoch === 1),
   ),
   incarnationIdOfAuthority: vi.fn((authority: string) => Promise.resolve(`inc-${authority}`)),
   // The number names both accounts' authorities; each side's code names its own first.
@@ -309,6 +310,10 @@ import {
   currentAddressOf,
   IdentityNotConfirmed,
   holdsAddress,
+  KeysPendingUpgrade,
+  MembersPendingUpgrade,
+  pendingUpgradeRemoval,
+  sealableDriveKey,
   followAccountRenames,
   type AccountAnswer,
   personSafetyNumber,
@@ -340,7 +345,7 @@ const me: DriveIdentity = {
 function publish(
   address: string,
   authority: string,
-  { bound = true, hpke = `${authority}-hpke`, signing = `${authority}-sign`, id = `acct-${authority}` } = {},
+  { bound = true, hpke = `${authority}-hpke`, signing = `${authority}-sign`, id = `acct-${authority}`, suite = 2 } = {},
 ) {
   server.people.set(address, {
     account: address,
@@ -350,6 +355,8 @@ function publish(
     driveHpkePublicKey: hpke,
     driveSigningPublicKey: signing,
     driveKeyBinding: bound ? `bound-by-${authority}` : undefined,
+    identitySuite: suite,
+    driveKeyBindingEpoch: 1,
   })
 }
 
@@ -401,7 +408,7 @@ describe('checkIdentity', () => {
     // A recipient key that is not Bob's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { driveHpkePublicKey: 'EVIL-hpke' })).toEqual({ kind: 'invalid' })
     // A binding by another authority than the one published.
-    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B' })
+    server.people.set('eve@kutup.dev', { account: 'eve@kutup.dev', server: 'kutup.dev', accountId: 'acct-E', accountAuthorityPublicKey: 'E', driveHpkePublicKey: 'x', driveSigningPublicKey: 'y', driveKeyBinding: 'bound-by-B', identitySuite: 2, driveKeyBindingEpoch: 1 })
     expect(await checkIdentity(me, 'eve@kutup.dev')).toEqual({ kind: 'invalid' })
     // An incarnation that is not this authority's.
     expect(await checkIdentity(me, 'bob@kutup.dev', { incarnationId: 'inc-OTHER' })).toEqual({ kind: 'invalid' })
@@ -430,6 +437,18 @@ describe('checkIdentity', () => {
     publish('old@kutup.dev', 'O', { bound: false })
     expect(await checkIdentity(me, 'old@kutup.dev')).toEqual({ kind: 'unproven' })
     expect(server.pins).toBeNull()
+  })
+
+  it('says an account not on X-Wing keys yet is unproven, even one pinned before, and pins nothing', async () => {
+    publish('old@kutup.dev', 'O', { suite: 1 })
+    expect(await checkIdentity(me, 'old@kutup.dev')).toEqual({ kind: 'unproven' })
+    expect(server.pins).toBeNull()
+  })
+
+  it('takes a binding only at the epoch it was signed at', async () => {
+    publish('bob@kutup.dev', 'B')
+    server.people.set('bob@kutup.dev', { ...server.people.get('bob@kutup.dev')!, driveKeyBindingEpoch: 2 })
+    expect(await checkIdentity(me, 'bob@kutup.dev')).toEqual({ kind: 'invalid' })
   })
 
   it('does not let a server drop the binding of an account already pinned', async () => {
@@ -551,6 +570,8 @@ function answer(address: string, authority: string, label = address): AccountAns
     driveHpkePublicKey: `${authority}-hpke`,
     driveSigningPublicKey: `${authority}-sign`,
     driveKeyBinding: `bound-by-${authority}`,
+    identitySuite: 2,
+    driveKeyBindingEpoch: 1,
   }
 }
 
@@ -565,6 +586,14 @@ describe('a share is checked by the address typed, against the one answer it sea
     expect(error).toBeInstanceOf(IdentityNotConfirmed)
     expect((error as IdentityNotConfirmed).status.kind).toBe('someoneElse')
     expect(server.puts).toBe(puts)
+  })
+
+  it('seals nothing to an account not on X-Wing keys yet: it signs in again first', async () => {
+    const error = await confirmRecipient(me, 'old@kutup.dev', { ...answer('old@kutup.dev', 'O'), identitySuite: 1 }).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(KeysPendingUpgrade)
+    expect((error as KeysPendingUpgrade).code).toBe('keysPendingUpgrade')
+    expect(() => sealableDriveKey('old@kutup.dev', 'key', 1)).toThrow(KeysPendingUpgrade)
+    expect(sealableDriveKey('new@kutup.dev', 'key', 2)).toBe('key')
   })
 
   it('refuses an answer whose incarnation its authority does not name, or on another server', async () => {
@@ -931,5 +960,38 @@ describe('holdsAddress (a saved contact belongs to an account only when it holds
     await checkIdentity(me, 'ada@kutup.dev')
     expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-M' }, 'ada@kutup.dev')).toBe(false)
     expect(await holdsAddress(me, { server: 'kutup.dev', accountId: 'acct-Z' }, 'zed@kutup.dev')).toBe(false)
+  })
+})
+
+describe('a removal and the people not yet upgraded (docs/plans/pq-shares.md)', () => {
+  const kept = {
+    members: [
+      { id: 'u1', account: 'new@kutup.dev', identitySuite: 2 },
+      { id: 'u2', account: 'old@kutup.dev', identitySuite: 1 },
+    ],
+    federatedShares: [{ id: 'f1', account: 'far@other.example', identitySuite: 1 }],
+  }
+
+  it('names them before anything is removed', () => {
+    const error = (() => {
+      try {
+        pendingUpgradeRemoval(kept, undefined)
+      } catch (e) {
+        return e
+      }
+    })()
+    expect(error).toBeInstanceOf(MembersPendingUpgrade)
+    expect((error as MembersPendingUpgrade).accounts).toEqual(['old@kutup.dev', 'far@other.example'])
+    expect((error as MembersPendingUpgrade).removal).toEqual({ members: ['u2'], federatedShares: ['f1'] })
+  })
+
+  it('takes them along once the owner confirmed exactly them', () => {
+    expect(pendingUpgradeRemoval(kept, { members: ['u2'], federatedShares: ['f1'] })).toEqual({ members: ['u2'], federatedShares: ['f1'] })
+  })
+
+  it('asks again when someone else turned up since, and takes nobody who upgraded since', () => {
+    expect(() => pendingUpgradeRemoval(kept, { members: ['u2'], federatedShares: [] })).toThrow(MembersPendingUpgrade)
+    const upgraded = { members: kept.members.filter((m) => m.id !== 'u2'), federatedShares: [] }
+    expect(pendingUpgradeRemoval(upgraded, { members: ['u2'], federatedShares: ['f1'] })).toEqual({ members: [], federatedShares: [] })
   })
 })

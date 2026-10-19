@@ -2149,7 +2149,7 @@ fn seal_shares(
     members
         .iter()
         .map(|member| {
-            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
             kutup_crypto::mail_key::seal_group_key_share(
                 group_secret,
                 group_id,
@@ -2836,7 +2836,7 @@ pub fn reshare_mail_group_signer(
     members
         .iter()
         .map(|member| {
-            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
             kutup_crypto::mail_group::seal_group_signing_share(
                 &signer,
                 &group_id,
@@ -2892,7 +2892,7 @@ pub fn new_mail_group_signer(
     let shares = members
         .iter()
         .map(|member| {
-            let key = public_key_32(&member.hpke_public_key, "member HPKE public key")?;
+            let key = drive_hpke_key(&member.hpke_public_key, "member HPKE public key")?;
             seal_group_signing_share(
                 &signer,
                 group_id,
@@ -2946,24 +2946,46 @@ fn public_key_32(value: &str, what: &str) -> Result<[u8; 32], JsValue> {
         .map_err(|_| js_error(&format!("{what} must be 32 bytes")))
 }
 
-/// The account's Drive key binding: its authority vouching for its Drive keys
-/// as `account`'s (`{ server, accountId }`).
+/// A Drive HPKE public key: X-Wing's 1216 bytes (identity suite 2,
+/// docs/plans/pq-shares.md).
+fn drive_hpke_key(
+    value: &str,
+    what: &str,
+) -> Result<[u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN], JsValue> {
+    decode_canonical_base64(value, what)?
+        .try_into()
+        .map_err(|_| {
+            js_error(&format!(
+                "{what} must be {} bytes",
+                kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN
+            ))
+        })
+}
+
+/// The account's Drive key binding at `binding_epoch` (1 for a first one):
+/// its authority vouching for its Drive keys as `account`'s
+/// (`{ server, accountId }`).
 #[wasm_bindgen(js_name = signDriveKeyBinding)]
 pub fn sign_drive_key_binding(
     master_key_base64: &str,
     account: JsValue,
+    binding_epoch: u32,
 ) -> Result<String, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
         .map_err(|error| js_error(&error.to_string()))?;
-    let signature =
-        kutup_crypto::drive_key_binding::sign(&identity, &account_arg(account, "account account")?)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let signature = kutup_crypto::drive_key_binding::sign(
+        &identity,
+        &account_arg(account, "account account")?,
+        binding_epoch,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(signature))
 }
 
 /// Whether `authority` vouches for these Drive keys of `account`
-/// (`{ server, accountId }`).
+/// (`{ server, accountId }`) at `binding_epoch`. A caller that saw a higher
+/// epoch for this account before refuses this one itself.
 #[wasm_bindgen(js_name = verifyDriveKeyBinding)]
 pub fn verify_drive_key_binding(
     account: JsValue,
@@ -2971,13 +2993,15 @@ pub fn verify_drive_key_binding(
     drive_hpke_public_key_base64: &str,
     drive_signing_public_key_base64: &str,
     binding_base64: &str,
+    binding_epoch: u32,
 ) -> bool {
     let check = || -> Result<(), JsValue> {
         let signature = decode_canonical_base64(binding_base64, "binding")?;
         kutup_crypto::drive_key_binding::verify(
             &account_arg(account, "account account")?,
             &public_key_32(authority_public_key_base64, "authority key")?,
-            &public_key_32(drive_hpke_public_key_base64, "Drive HPKE key")?,
+            binding_epoch,
+            &drive_hpke_key(drive_hpke_public_key_base64, "Drive HPKE key")?,
             &public_key_32(drive_signing_public_key_base64, "Drive signing key")?,
             &signature,
         )

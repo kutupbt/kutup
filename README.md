@@ -148,9 +148,6 @@ Scripting-friendly: every command honors a global `--json` flag (stdout is exact
 
 ### Install the CLI
 
-The one-line install works from the v0.2.0 release on (published soon); until
-then, install from source as below.
-
 On Linux or macOS (x86-64 or ARM64), into `~/.local/bin`:
 
 ```sh
@@ -169,8 +166,8 @@ mismatch or a missing entry stops the install. Neither needs root or
 administrator rights. To pick a release or a directory:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.sh | sh -s -- --version v0.2.0 --dir ~/bin
-# or KUTUP_VERSION=v0.2.0 KUTUP_INSTALL_DIR=~/bin, also for install-cli.ps1
+curl -fsSL https://raw.githubusercontent.com/kutupbt/kutup/master/scripts/install-cli.sh | sh -s -- --version v0.0.1 --dir ~/bin
+# or KUTUP_VERSION=v0.0.1 KUTUP_INSTALL_DIR=~/bin, also for install-cli.ps1
 ```
 
 Read the scripts first if you like: [`scripts/install-cli.sh`](scripts/install-cli.sh)

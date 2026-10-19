@@ -1,7 +1,7 @@
 [package]
 name = "kutup-cli"
 description = "kutup CLI — E2E encrypted file storage client."
-version = "0.2.0"
+version = "0.0.1"
 publish = false
 edition.workspace = true
 license.workspace = true
