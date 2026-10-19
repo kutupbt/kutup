@@ -5727,6 +5727,46 @@ fn send_between(
     message_id
 }
 
+/// Kutup mail sent readable (Encrypt off for the recipient, as the
+/// composer does for an address that forwards outside Kutup).
+fn send_readable(
+    c: &Client,
+    base: &str,
+    sender: &User,
+    from: &Address,
+    to: &str,
+    subject: &str,
+) -> String {
+    let domain = from.address.split_once('@').unwrap().1;
+    let message_id = format!("{}@{domain}", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: {}\r\nTo: {to}\r\nSubject: {subject}\r\nMessage-ID: <{message_id}>\r\n\r\nreadable for {to}\r\n",
+        from.address
+    );
+    let split =
+        mail_key::encrypt_split(&[&from.public_key], &from.secret_key, mime.as_bytes()).unwrap();
+    let meta = json!({
+        "to": [{ "address": to }],
+        "subject": subject,
+        "messageId": message_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &sender.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(
+        r.status().is_success(),
+        "send readable: {}",
+        r.text().unwrap()
+    );
+    message_id
+}
+
 /// Waits a moment, then checks that `message_id` never reached `user`.
 fn never_arrives(c: &Client, base: &str, user: &User, message_id: &str) {
     std::thread::sleep(Duration::from_secs(5));
@@ -5837,16 +5877,27 @@ MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nfor alice an
     assert_eq!(smtp_send(&smtp_address, &a.address, &outside), (250, 250));
     let message_id = format!("fw-{tag}@sender.test");
     let alice_copy = wait_for(&c, &base, &alice, &message_id);
-    // Spam is never forwarded: the test needs Stalwart to take this as ham.
-    assert_eq!(
-        alice_copy["folder"], "inbox",
-        "Stalwart filed the test mail as spam"
-    );
-    let forwarded = wait_for(&c, &base, &bob, &message_id);
+    // Spam is never forwarded. The gate's Stalwart may score a test sender
+    // as spam (no SPF), so either way is checked.
+    if alice_copy["folder"] == "spam" {
+        never_arrives(&c, &base, &bob, &message_id);
+    } else {
+        let forwarded = wait_for(&c, &base, &bob, &message_id);
+        assert_eq!(forwarded["forwardedFrom"], json!(a.address));
+        let stored = content(&c, &base, &bob, &forwarded);
+        let opened = mail_forwarding::decrypt_forwarded(&forwarding_key, &stored, None).unwrap();
+        assert!(String::from_utf8_lossy(&opened.data).contains("for alice and bob"));
+        assert!(mail_key::decrypt(&b.secret_key, &stored, None).is_err());
+    }
+    // Sealed on arrival by the server (Kutup mail sent readable, sealed as
+    // mail from outside is): always reaches Bob, opened only as forwarded.
+    let readable = send_readable(&c, &base, &carol, &cc, &a.address, "readable for alice");
+    wait_for(&c, &base, &alice, &readable);
+    let forwarded = wait_for(&c, &base, &bob, &readable);
     assert_eq!(forwarded["forwardedFrom"], json!(a.address));
     let stored = content(&c, &base, &bob, &forwarded);
     let opened = mail_forwarding::decrypt_forwarded(&forwarding_key, &stored, None).unwrap();
-    assert!(String::from_utf8_lossy(&opened.data).contains("for alice and bob"));
+    assert!(String::from_utf8_lossy(&opened.data).contains("readable for"));
     assert!(mail_key::decrypt(&b.secret_key, &stored, None).is_err());
 
     // Carol's end-to-end mail: the same data packet, a transformed key packet.
