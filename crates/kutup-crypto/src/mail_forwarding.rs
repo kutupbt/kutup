@@ -1086,6 +1086,13 @@ P0GnopWOyFNNFWK77LQN
         let signed =
             mail_key::encrypt(&forwarder.public_key, Some(&forwarder.secret_key), b"x").unwrap();
         assert!(mail_key::decrypt(&forwarder.secret_key, signed.as_bytes(), Some(public)).is_err());
+        // Not an address key, and an address key isn't a forwarding key.
+        assert!(mail_key::inspect_address_public_key(public, "bob@kutup.test").is_err());
+        assert!(mail_key::inspect_forwarding_public_key(public, "bob@kutup.test").is_ok());
+        assert!(
+            mail_key::inspect_forwarding_public_key(&forwarder.public_key, "alice@kutup.test")
+                .is_err()
+        );
         // Its primary certifies its subkeys and nothing more.
         let key = SignedSecretKey::from_bytes(secret).unwrap();
         let flags = key.details.users[0].signatures[0].key_flags();

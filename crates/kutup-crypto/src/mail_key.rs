@@ -158,6 +158,20 @@ pub fn inspect_address_public_key(
     public_key: &[u8],
     address: &str,
 ) -> Result<AddressPublicKeyInfo> {
+    inspect_key(public_key, address, false)
+}
+
+/// [`inspect_address_public_key`] for a forwarding key
+/// (docs/plans/mail-forwarding.md): the same shape, but its subkey must be a
+/// forwardee key. Neither takes the other's kind.
+pub fn inspect_forwarding_public_key(
+    public_key: &[u8],
+    address: &str,
+) -> Result<AddressPublicKeyInfo> {
+    inspect_key(public_key, address, true)
+}
+
+fn inspect_key(public_key: &[u8], address: &str, forwarding: bool) -> Result<AddressPublicKeyInfo> {
     let address = canonical_address(address)?;
     if public_key.is_empty() || public_key.len() > MAX_PUBLIC_KEY_LEN {
         return Err(CryptoError::InvalidInput(
@@ -187,6 +201,13 @@ pub fn inspect_address_public_key(
         return Err(CryptoError::InvalidInput(
             "address public key is for another address".into(),
         ));
+    }
+    if key.public_subkeys[0].key.is_forwardee_key() != forwarding {
+        return Err(CryptoError::InvalidInput(if forwarding {
+            "not a forwarding key".into()
+        } else {
+            "a forwarding key isn't an address key".into()
+        }));
     }
     Ok(AddressPublicKeyInfo {
         fingerprint: fingerprint_of(&key)?,

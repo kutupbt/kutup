@@ -379,6 +379,12 @@ without changing any key.
   - creating forwardings: 10 an hour per account; outside confirmations
     and re-invites: 3 a day per forwarding;
   - a forwardee address can't forward on what it got by forwarding.
+- **Mail's own sending rules hold** (as built, from review): an outside
+  forwarding can't be set up, nor its confirmation sent, nor a message
+  re-sent, while the server's outside-sending policy (`off`, `admins`, `on`)
+  doesn't allow the account or its sending is paused; such messages are
+  skipped and counted. The per-account daily forward budget is counted with
+  the account's other forwarding allowances, so deletes don't refund it.
 - **Submission.** The server submits to Stalwart as its one relay account,
   so Stalwart can't tell which From an account owns. Kutup checks it: user
   sends from `mail_send` must come from the sender's own addresses (checked
