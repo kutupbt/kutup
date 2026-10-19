@@ -8,6 +8,7 @@
 // vault's key and its decrypted database stay here; locking frees them.
 
 import { freshUrl, retryLoad } from '@kutup/crypto/retry'
+import { exactBytes } from '@kutup/crypto/bytes'
 import type { Request, Response } from './protocol'
 
 declare const __KUTUP_PASS_WASM__: string | undefined
@@ -116,8 +117,10 @@ self.onmessage = (event: MessageEvent<Request>) => {
   const request = event.data
   run(request).then(
     (result) => {
-      const response: Response = { id: request.id, ok: true, result }
-      self.postMessage(response, result instanceof Uint8Array ? [result.buffer] : [])
+      // A result may view a larger buffer (WASM memory): post and transfer only its own bytes.
+      const exact = result instanceof Uint8Array ? exactBytes(result) : null
+      const response: Response = { id: request.id, ok: true, result: exact ? new Uint8Array(exact) : result }
+      self.postMessage(response, exact ? [exact] : [])
     },
     (error: unknown) => {
       const response: Response = { id: request.id, ok: false, message: error instanceof Error ? error.message : String(error) }

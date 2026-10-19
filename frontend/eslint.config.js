@@ -43,6 +43,32 @@ const restricted = [
   },
 ]
 
+/*
+ * A typed array's `.buffer` is its whole backing buffer, not the view: for a
+ * view WASM hands back, the module's whole memory (keys, plaintext). It must
+ * never reach the network, storage, a Blob or a transfer list: those take
+ * `exactBytes(view)` from @kutup/crypto/bytes.
+ */
+const BUFFER_MESSAGE =
+  "A view's .buffer is its whole backing buffer (all of WASM memory for a view into it). Pass exactBytes(view) from @kutup/crypto/bytes."
+const bufferSinks = [
+  {
+    selector:
+      "CallExpression[callee.property.name=/^(post|put|patch|request|send|postMessage|add|append)$/] MemberExpression[property.name='buffer']",
+    message: BUFFER_MESSAGE,
+  },
+  {
+    selector: "CallExpression[callee.name=/^(fetch|postMessage)$/] MemberExpression[property.name='buffer']",
+    message: BUFFER_MESSAGE,
+  },
+  {
+    selector: "NewExpression[callee.name=/^(Blob|File|Response|Request)$/] MemberExpression[property.name='buffer']",
+    message: BUFFER_MESSAGE,
+  },
+]
+
+restricted.push(...bufferSinks)
+
 const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map,drive-core,drive-ui,editors,contacts-core,mail-core}/**/*.{ts,tsx}']
 const LOGIC_CODE = ['packages/{crypto,session,files,collab,chat-core}/src/**/*.ts']
 
@@ -71,6 +97,7 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-restricted-syntax': ['error', ...bufferSinks],
     },
   },
   {
