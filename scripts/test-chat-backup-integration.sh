@@ -207,6 +207,10 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 # malformed batch applies nothing) and stale answers at the origin.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server chat_federation::sealed_live_tests::live_ -- --nocapture
+# An account reset clears what the old keys sealed: the group list
+# (docs/plans/rollback-protection.md, "Account reset").
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server handlers::admin::tests::live_ -- --nocapture
 
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   KUTUP_LIVE_S3_ENDPOINT="http://127.0.0.1:$s3_port" \

@@ -1139,6 +1139,9 @@ chain start names. **Auth:** Bearer JWT. Scopes and their ids:
   the sealed name's header (a folder without a name, kept through an account
   reset, is left out until it is named again);
 - `pins`: one value, `pins`;
+- `chatGroups`: the group list's entry ids (`GET /api/chat/group-list`), with
+  the revision in each sealed entry's header. Readable whether or not pairwise
+  groups are on (empty when they are off, since nothing can be written);
 - `passSecrets`: the vault's file id, for every secret the account keeps, the
   vault trashed, purged or out of reach included ("unreachable but listed":
   the secret stays until its owner forgets it, `POST
@@ -1149,7 +1152,7 @@ Any other scope is `404`: a client treats it as one with no index yet
 
 **An account reset** (an administrator's wipe) deletes the head chain with the
 old incarnation, and every listed value sealed under the old keys: contacts,
-labels, filters and Pass secrets. Custom folders keep their mail and lose their
+the group list, labels, filters and Pass secrets. Custom folders keep their mail and lose their
 names (`name: null` in `GET /api/mail/places`; "Unnamed folder" until renamed
 with `baseNameRevision: 0`). The new incarnation's first write makes its first
 head.
@@ -3228,6 +3231,37 @@ valid changes and proven link requests; failed requests spend a separate
 budget per relaying server (600/min). A stranger, a removed member, or a
 newcomer whose claim, link password or request doesn't hold gets the same
 `notFound` as an unknown group, never a conflict or a refusal code.
+
+### GET /api/chat/group-list
+
+The account's group list ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §5;
+`404` unless `CHAT_GROUPS=true` and federation is on): one sealed entry per
+pairwise group the account is in, so its other devices find its groups.
+`{ "entries": [{ "id", "revision", "envelope" }] }`. `id` is a keyed hash of
+the group id under a key derived from the account's master key (43
+characters of base64url without padding), so lists can't be matched across
+members; `envelope` is the sealed entry (standard base64, always 4032 bytes),
+whose authenticated header carries its revision. The server never opens it.
+The account head's `chatGroups` scope lists every entry. **Auth:** Bearer JWT.
+
+### PUT /api/chat/group-list/{id}
+
+`{ "baseRevision": <n>, "envelope": "<base64>", "head"?: "<base64>" }` →
+`200` with the stored entry. `baseRevision` is the revision the write started
+from (0 for a new entry); the new revision is read from the envelope's header
+and must be above it (`400` otherwise; a body carrying its own `revision` is
+`422`). `409 revision_conflict` with `revision`, the current one, when another
+device wrote first. Once the account keeps a head, `head` must be the next
+one, covering the new revision (`409 head_required` / `head_conflict`).
+`400` for an envelope that isn't 4032 bytes of canonical base64 or doesn't
+parse, and for a new entry past 1024; `404` for an id that isn't one.
+
+### DELETE /api/chat/group-list/{id}
+
+`{ "baseRevision": <n>, "head"?: "<base64>" }` → `204`: removes the entry if
+it is still at `baseRevision` (an ended group whose chat its person deleted).
+`409 revision_conflict` with the current revision when it moved, `404` when
+there is no such entry; `head` as for `PUT`.
 
 ### POST /api/chat/call-links
 

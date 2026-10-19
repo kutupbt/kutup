@@ -441,7 +441,7 @@ pub async fn enqueue_sealed_send(
     match enqueue_sealed_row(state, recipient, request).await? {
         Queued::Settled(outcome) => Ok(outcome),
         Queued::Row(id) => {
-            flush_sealed_destination(state, &recipient.server)
+            flush_sealed_destination(state, &recipient.server, FlushTrigger::Client)
                 .await?
                 .outcome(&state.pool, id)
                 .await
@@ -896,24 +896,43 @@ impl SealedFlush {
     }
 }
 
+/// Who asks for a flush: a client's send, or the retry worker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlushTrigger {
+    Client,
+    Worker,
+}
+
+/// How often a client's send may try a destination whose queue is backing
+/// off: with the queue's head alone, so a server that is back is noticed at
+/// once rather than after the backoff, and one that isn't costs one request
+/// per this many seconds.
+const SEALED_PROBE_SECONDS: i64 = 5;
+
 /// Delivers a destination's queued sealed sends, under its flush lock: the
 /// run of pending rows from its head, if the head is due (not backing off,
 /// not parked for an upgrade), in federated batches (at most
 /// [`MAX_SEALED_BATCH_ITEMS`] and [`MAX_SEALED_BATCH_BYTES`] each). Nothing
 /// is sent without the lock or a due head; sends it doesn't reach wait, and
-/// with the lock taken elsewhere this flush sends nothing. The flush runs in
-/// its own task, so a client that goes away doesn't cut it short.
+/// with the lock taken elsewhere this flush sends nothing. A client's send
+/// may also try a backing-off head alone ([`claim_sealed_probe`]). The flush
+/// runs in its own task, so a client that goes away doesn't cut it short.
 pub(crate) async fn flush_sealed_destination(
     state: &AppState,
     destination: &str,
+    trigger: FlushTrigger,
 ) -> AppResult<SealedFlush> {
     let (state, destination) = (state.clone(), destination.to_owned());
-    tokio::spawn(async move { flush_locked(&state, &destination).await })
+    tokio::spawn(async move { flush_locked(&state, &destination, trigger).await })
         .await
         .map_err(|error| AppError::internal(format!("sealed flush task: {error}")))?
 }
 
-async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFlush> {
+async fn flush_locked(
+    state: &AppState,
+    destination: &str,
+    trigger: FlushTrigger,
+) -> AppResult<SealedFlush> {
     let mut flush = SealedFlush::new();
     let Some(mut lock) = state.sealed_flush.try_lock(destination).await else {
         return Ok(flush);
@@ -925,7 +944,7 @@ async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFl
     // one after the listing is gone takes the lock itself.
     let mut passes = 0;
     loop {
-        flush_rounds(state, destination, &mut flush).await?;
+        flush_rounds(state, destination, trigger, &mut flush).await?;
         passes += 1;
         if passes >= MAX_SEALED_FLUSH_PASSES {
             break;
@@ -947,6 +966,7 @@ async fn flush_locked(state: &AppState, destination: &str) -> AppResult<SealedFl
 async fn flush_rounds(
     state: &AppState,
     destination: &str,
+    trigger: FlushTrigger,
     flush: &mut SealedFlush,
 ) -> AppResult<()> {
     for _ in 0..MAX_SEALED_FLUSH_ROUNDS {
@@ -962,10 +982,15 @@ async fn flush_rounds(
         .bind(MAX_SEALED_BATCH_ITEMS as i64)
         .fetch_all(&state.pool)
         .await?;
-        let Some((_, _, _, due, class)) = queued.first() else {
+        let Some((head, _, _, due, class)) = queued.first() else {
             break;
         };
-        if !due {
+        // A head backing off waits for the worker, but a client's send may
+        // try it alone now and then.
+        let probe = !due
+            && trigger == FlushTrigger::Client
+            && claim_sealed_probe(&state.pool, *head).await?;
+        if !due && !probe {
             flush.parked = class.as_deref() == Some("peer_unsupported");
             break;
         }
@@ -973,7 +998,7 @@ async fn flush_rounds(
         // settled ends this run, and the next round starts after it.
         let mut run = Vec::new();
         let mut size = 0usize;
-        for (id, sequence, weight, _, _) in &queued {
+        for (id, sequence, weight, _, _) in queued.iter().take(if probe { 1 } else { usize::MAX }) {
             let weight = usize::try_from(*weight).unwrap_or(usize::MAX);
             if let Some(&(_, last)) = run.last() {
                 if last + 1 != *sequence
@@ -1001,6 +1026,25 @@ async fn flush_rounds(
         }
     }
     Ok(())
+}
+
+/// Claims a try of a backing-off queue head: at most one per
+/// [`SEALED_PROBE_SECONDS`] per head, whichever backend asks, and never for a
+/// head parked for an upgrade or one already due. The claim stamps the row,
+/// so the limit holds whatever the try then answers.
+async fn claim_sealed_probe(pool: &sqlx::PgPool, head: Uuid) -> AppResult<bool> {
+    Ok(sqlx::query(
+        "UPDATE chat_sealed_federation_outbox SET updated_at = now()
+         WHERE id = $1 AND state = 'pending' AND next_attempt_at > now()
+           AND last_error_class IS DISTINCT FROM 'peer_unsupported'
+           AND updated_at <= now() - ($2 * interval '1 second')",
+    )
+    .bind(head)
+    .bind(SEALED_PROBE_SECONDS)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
 }
 
 /// Sends one run of a destination's queued rows: as a batch, or one by one
@@ -1813,7 +1857,7 @@ async fn due_sealed_destinations(pool: &sqlx::PgPool) -> AppResult<Vec<String>> 
 
 async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
     for destination in due_sealed_destinations(&state.pool).await? {
-        match flush_sealed_destination(state, &destination).await {
+        match flush_sealed_destination(state, &destination, FlushTrigger::Worker).await {
             Ok(flush) => {
                 for (id, outcome) in flush.outcomes {
                     if let Err(error) = outcome {
@@ -3650,6 +3694,107 @@ mod sealed_live_tests {
             .expect("free again")
             .release()
             .await;
+    }
+
+    /// A backing-off head is tried once per [`SEALED_PROBE_SECONDS`]: 100
+    /// sends at once through two backends' flush locks claim one try between
+    /// them; a head parked for an upgrade or already due is never claimed,
+    /// and once the interval has passed the next send may try again.
+    #[tokio::test]
+    async fn live_a_backing_off_head_is_probed_once_per_interval() {
+        let Some(pool) = pool().await else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let destination = origin();
+        let head: Uuid = sqlx::query_scalar(
+            "INSERT INTO chat_sealed_federation_outbox
+                 (destination, sequence, recipient_account_id, send_id, transaction,
+                  attempts, next_attempt_at, last_error_class, updated_at)
+             VALUES ($1, 1, gen_random_uuid(), gen_random_uuid(), '{}'::jsonb,
+                     3, now() + interval '5 minutes', 'transport', now() - interval '1 minute')
+             RETURNING id",
+        )
+        .bind(&destination)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let backends = [
+            std::sync::Arc::new(SealedFlushLocks::new(&pool, 4)),
+            std::sync::Arc::new(SealedFlushLocks::new(&pool, 4)),
+        ];
+        let sends = |pool: sqlx::PgPool| {
+            let backends = backends.clone();
+            let destination = destination.clone();
+            async move {
+                let tries = (0..100).map(|n| {
+                    let (locks, pool, destination) =
+                        (backends[n % 2].clone(), pool.clone(), destination.clone());
+                    tokio::spawn(async move {
+                        let Some(lock) = locks.try_lock(&destination).await else {
+                            return false;
+                        };
+                        let claimed = claim_sealed_probe(&pool, head).await.unwrap();
+                        lock.release().await;
+                        claimed
+                    })
+                });
+                let mut claimed = 0;
+                for done in futures_util::future::join_all(tries).await {
+                    claimed += usize::from(done.unwrap());
+                }
+                claimed
+            }
+        };
+        assert_eq!(sends(pool.clone()).await, 1, "one try per interval");
+        assert_eq!(sends(pool.clone()).await, 0, "still inside the interval");
+
+        let age = |interval: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(&format!(
+                    "UPDATE chat_sealed_federation_outbox
+                        SET updated_at = now() - interval '{interval}' WHERE id = $1"
+                ))
+                .bind(head)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        };
+        age("6 seconds").await;
+        assert_eq!(sends(pool.clone()).await, 1, "the next interval");
+
+        // Parked for an upgrade: never tried before its hour.
+        age("1 minute").await;
+        sqlx::query(
+            "UPDATE chat_sealed_federation_outbox
+                SET last_error_class = 'peer_unsupported' WHERE id = $1",
+        )
+        .bind(head)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sends(pool.clone()).await, 0, "a parked head");
+        // Due: a flush sends it in full, not as a probe.
+        sqlx::query(
+            "UPDATE chat_sealed_federation_outbox
+                SET last_error_class = 'transport', next_attempt_at = now() WHERE id = $1",
+        )
+        .bind(head)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !claim_sealed_probe(&pool, head).await.unwrap(),
+            "a due head"
+        );
+
+        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 
     /// The migration stamps queued, undelivered rows with version 2 (the

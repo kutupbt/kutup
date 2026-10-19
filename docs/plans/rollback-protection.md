@@ -52,7 +52,8 @@ AccountHeadV1 {
 ```
 
 - **What a scope is:** one kind of value: `pins`, `contacts`, `mailNames`,
-  `passSecrets`, `settings`, and later ones.
+  `passSecrets`, `chatGroups` (the account's group list,
+  [`pairwise-groups.md`](pairwise-groups.md) §5), `settings`, and later ones.
 - **What a scope's digest covers:** `digest = SHA-256` over the sorted list of
   `(HMAC(head key, value id), revision)` pairs of every value of the scope. A
   deleted value leaves the list. Value ids are HMAC'd, as RevisionGuard already
@@ -221,9 +222,10 @@ Every write of a listed value also writes the next head, in the same request:
 | Mail folder parent, colour, position, folding; label colour, position; filter on/off, match, conditions, actions | no: not sealed, not rollback-protected; a head sent with one is `400` |
 | Identity pin list put | yes |
 | Pass vault secret keep, forget, forget many | yes |
+| Group list entry put, delete (`chatGroups`) | yes |
 | A vault's file purged | nothing: the secret is no longer deleted with it (its foreign key to `files` is gone); it stays listed, "unreachable but listed", until the owner's client forgets it, which it does on its next Pass write or unlock, all such under one head |
 | Account deletion | everything goes, heads included |
-| Account reset (an administrator's wipe) | the chain and every listed value sealed under the old keys go in the reset transaction: contacts, labels, filters, Pass secrets, identity pins. Custom folders keep their mail and lose their names (`name_sealed` null), left out of the index until their owner names them again from revision 0, under the new incarnation's first heads. So no verified head ever lists a value no key opens. |
+| Account reset (an administrator's wipe) | the chain and every listed value sealed under the old keys go in the reset transaction: contacts, labels, filters, Pass secrets, identity pins, the group list. Custom folders keep their mail and lose their names (`name_sealed` null), left out of the index until their owner names them again from revision 0, under the new incarnation's first heads. So no verified head ever lists a value no key opens. |
 
 **Not covered yet:** `settings` (with #179); Drive metadata (decided out of
 this round).

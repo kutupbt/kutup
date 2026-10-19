@@ -834,6 +834,16 @@ fn build_router(state: AppState) -> Router {
                 // A message of 5000 characters and a few details.
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
+        .route("/api/chat/group-list", get(handlers::chat_group_list::list))
+        .route(
+            "/api/chat/group-list/:id",
+            put(handlers::chat_group_list::put)
+                .delete(handlers::chat_group_list::delete)
+                // One sealed entry, base64, and the head.
+                .route_layer(DefaultBodyLimit::max(
+                    handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
+                )),
+        )
         .route(
             "/api/account/identity-suite",
             post(identity::upgrade_identity_suite),
