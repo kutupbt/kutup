@@ -137,7 +137,7 @@ pub fn generate_address_key(address: &str, created_at_secs: u32) -> Result<Gener
     })
 }
 
-fn user_id(address: &str) -> String {
+pub(crate) fn user_id(address: &str) -> String {
     let local = address.split_once('@').map_or(address, |(local, _)| local);
     format!("{local} <{address}>")
 }
@@ -1366,9 +1366,18 @@ pub fn decrypt(
         Message::from_bytes(message)
     }
     .map_err(|_| CryptoError::InvalidInput("message does not parse".into()))?;
-    let mut decrypted = parsed
+    let decrypted = parsed
         .decrypt(&Password::empty(), &key)
         .map_err(|_| CryptoError::AuthFailed)?;
+    read_decrypted(decrypted, signer_public_key)
+}
+
+/// The plaintext of a decrypted message, and whether its signature verifies
+/// for `signer_public_key` when given.
+pub(crate) fn read_decrypted(
+    mut decrypted: Message<'_>,
+    signer_public_key: Option<&[u8]>,
+) -> Result<DecryptedMessage> {
     if decrypted.is_compressed() {
         decrypted = decrypted
             .decompress()
@@ -1657,7 +1666,7 @@ fn take_str<'a>(rest: &mut &'a [u8]) -> Result<&'a str> {
         .map_err(|_| CryptoError::InvalidInput("string is not UTF-8".into()))
 }
 
-fn backend(error: impl std::fmt::Display) -> CryptoError {
+pub(crate) fn backend(error: impl std::fmt::Display) -> CryptoError {
     CryptoError::Backend(error.to_string())
 }
 
