@@ -1318,6 +1318,25 @@ implemented; these are product-lifecycle improvements above it.
 - Responsive web has an automated phone/desktop axe and state-transition gate;
   physical-device browser coverage and dedicated native-app flows remain open
 
+### Responsive web · skeleton loading everywhere
+
+Make loading feel fast: show the page's shape at once, then fill it in.
+The shared `Skeleton` (`frontend/packages/ui/src/components/skeleton.tsx`)
+exists, but only Account uses it widely (Drive, Chat, Contacts one place
+each; Mail three; Pass, Photos and Office none). Wanted (user, 2026-10-20):
+- an app-shell skeleton in each app's `index.html` (sidebar, header, list
+  rows), painted before the JavaScript and WebAssembly load, so the first
+  paint is the layout, not a blank page or a spinner;
+- list and detail skeletons in every app while data loads (Drive's file
+  list, Chat's conversation list and thread, Mail's list and reading pane,
+  Pass's vault list and entries, Photos' grid, Office's home), matching the
+  real layout so nothing jumps when content arrives (the component's rule:
+  a skeleton that guesses wrong is worse than none);
+- skeletons only for waits; errors and empty states keep their own words;
+  respect reduced motion (no shimmer then); en/tr labels for screen readers.
+Measure with the performance baselines below (first contentful paint, layout
+shift) before and after.
+
 ### Performance baselines
 
 `docs/research/perf-baseline-2026-05-06.md` is a single point. Continuous benchmarking (or even a manual quarterly pass) would catch regressions.
