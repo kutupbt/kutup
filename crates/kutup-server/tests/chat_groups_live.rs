@@ -21,7 +21,7 @@ use kutup_chat_proto::group::{
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
     GroupLogQueryV1, GroupOperationV1, GroupRequestV1, GroupResponseStatusV1, GroupResponseV1,
-    GroupStateAnswerV1,
+    GroupStateAnswerV1, PSEUDONYM_USED,
 };
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
@@ -683,6 +683,103 @@ fn removed_members_and_strangers_learn_nothing() {
 }
 
 #[test]
+fn a_former_members_pseudonym_never_joins_again() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let bob_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    join(&c, &alice, &bob, &home, &mut group, &alice_key, &bob_key);
+    let remove = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::RemoveMember {
+            pseudonym: b64(&bob_key.public_key()),
+        }],
+    );
+    let removed = accepted(&submit(&c, &alice, &home, &group, &remove, &alice_key));
+    apply(&mut group, &home, &removed);
+
+    // Alice invites Bob again. A claim by a key that isn't the slot's meets
+    // an unknown group, before any word on the pseudonym.
+    let (slot_id, claim_key) = add_slot(&c, &alice, &home, &mut group, &alice_key);
+    let forged = claim(&group, &slot_id, &GroupKeyPair::generate(), &bob_key);
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &forged, &bob_key).status,
+        GroupResponseStatusV1::NotFound
+    );
+    // With the slot's own signature, his old pseudonym is refused as used.
+    let again = claim(&group, &slot_id, &claim_key, &bob_key);
+    let answer = submit(&c, &bob, &home, &group, &again, &bob_key);
+    assert_eq!(answer.status, GroupResponseStatusV1::Refused, "{answer:?}");
+    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED));
+
+    // The link refuses it the same way once its password holds.
+    let password = random::<16>();
+    let mut access = group.state.access;
+    access.add_from_invite_link = kutup_chat_proto::group::AccessRequired::Any;
+    let link = author(
+        &group,
+        &alice_key,
+        vec![
+            GroupActionV1::ModifyInviteLink {
+                password: Some(b64(&password)),
+            },
+            GroupActionV1::ModifyAccess { access },
+        ],
+    );
+    let linked = accepted(&submit(&c, &alice, &home, &group, &link, &alice_key));
+    apply(&mut group, &home, &linked);
+    let from_link = author(
+        &group,
+        &bob_key,
+        vec![GroupActionV1::JoinFromLink {
+            password: b64(&password),
+            entry: entry(&group.master, &bob_key.public_key()),
+        }],
+    );
+    let answer = submit(&c, &bob, &home, &group, &from_link, &bob_key);
+    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED), "{answer:?}");
+
+    // The next epoch's pseudonym claims the same slot, which is still open.
+    let bob_next = GroupKeyPair::generate();
+    let next = claim(&group, &slot_id, &claim_key, &bob_next);
+    let claimed = accepted(&submit(&c, &bob, &home, &group, &next, &bob_next));
+    apply(&mut group, &home, &claimed);
+    assert!(group.state.member(&b64(&bob_next.public_key())).is_some());
+
+    // The creator's pseudonym counts from genesis on: after leaving, it
+    // can't come back through the link either.
+    let promote = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyRole {
+            pseudonym: b64(&bob_next.public_key()),
+            role: GroupRole::Administrator,
+        }],
+    );
+    let promoted = accepted(&submit(&c, &alice, &home, &group, &promote, &alice_key));
+    apply(&mut group, &home, &promoted);
+    let leave = author(&group, &alice_key, vec![GroupActionV1::Leave]);
+    let left = accepted(&submit(&c, &alice, &home, &group, &leave, &alice_key));
+    apply(&mut group, &home, &left);
+    let back = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::JoinFromLink {
+            password: b64(&password),
+            entry: entry(&group.master, &alice_key.public_key()),
+        }],
+    );
+    let answer = submit(&c, &alice, &home, &group, &back, &alice_key);
+    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED), "{answer:?}");
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+#[test]
 fn link_join_info_needs_the_link_on_and_its_password() {
     let Some(base) = live() else { return };
     let c = crate::common::client();
@@ -755,16 +852,14 @@ fn the_relay_needs_a_signed_in_account() {
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
 }
 
-/// Adds `member` (signed in as `user`) through a slot `adder` makes.
-fn join(
+/// A slot `adder` adds; returns its id and claim key.
+fn add_slot(
     c: &Client,
     adder_user: &User,
-    user: &User,
     home: &Home,
     group: &mut Group,
     adder: &GroupKeyPair,
-    member: &GroupKeyPair,
-) {
+) -> ([u8; 16], GroupKeyPair) {
     let claim_key = GroupKeyPair::generate();
     let slot_id = random::<16>();
     let add = author(
@@ -779,24 +874,48 @@ fn join(
     );
     let added = accepted(&submit(c, adder_user, home, group, &add, adder));
     apply(group, home, &added);
+    (slot_id, claim_key)
+}
+
+/// `member`'s claim of the slot, signed by `claim_key`.
+fn claim(
+    group: &Group,
+    slot_id: &[u8; 16],
+    claim_key: &GroupKeyPair,
+    member: &GroupKeyPair,
+) -> GroupChangeV1 {
     let slot_revision = group
         .state
         .slots
         .iter()
-        .find(|slot| slot.slot_id == b64(&slot_id))
+        .find(|slot| slot.slot_id == b64(slot_id))
         .unwrap()
         .created_at_revision;
     let claim_signature =
-        claim_key.sign_claim(&group.id, &slot_id, slot_revision, &member.public_key());
-    let claim = author(
+        claim_key.sign_claim(&group.id, slot_id, slot_revision, &member.public_key());
+    author(
         group,
         member,
         vec![GroupActionV1::Claim {
-            slot_id: b64(&slot_id),
+            slot_id: b64(slot_id),
             claim_signature: b64(&claim_signature),
             entry: entry(&group.master, &member.public_key()),
         }],
-    );
-    let claimed = accepted(&submit(c, user, home, group, &claim, member));
+    )
+}
+
+/// Adds `member` (signed in as `user`) through a slot `adder` makes.
+fn join(
+    c: &Client,
+    adder_user: &User,
+    user: &User,
+    home: &Home,
+    group: &mut Group,
+    adder: &GroupKeyPair,
+    member: &GroupKeyPair,
+) {
+    let (slot_id, claim_key) = add_slot(c, adder_user, home, group, adder);
+    let change = claim(group, &slot_id, &claim_key, member);
+    let claimed = accepted(&submit(c, user, home, group, &change, member));
     apply(group, home, &claimed);
 }

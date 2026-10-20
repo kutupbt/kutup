@@ -506,6 +506,18 @@ to see members").**
 - **Requests from non-members** (a link's join info, a join request) carry a
   proof of the link password instead of a member signature. They are limited
   per group and per relay server, so a link holder can't flood the group.
+- **A pseudonym comes back only once.** The home keeps a hash of every
+  pseudonym that was ever a member of the group (the log is pruned and the
+  state forgets who left, so neither can answer it). A claim, a join from the
+  link or a request to join whose pseudonym is among them is refused with
+  `pseudonymUsed` (`group_route::PSEUDONYM_USED`), so the members never see a
+  pseudonym they knew come back after a device lost its join epoch.
+  - The home answers it only once the claim's or the link's proof holds and
+    the change passes every other check; the request is signed by that
+    pseudonym, so only its own holder hears it, and it is no membership oracle.
+  - The client derives the next join epoch's pseudonym and tries again, up to
+    64 epochs (recovery searches as many). The refusal spends neither the
+    relay's failure budget nor the group's change budget.
 - **Abuse limits without identity:**
   - **The relay** knows its signed-in user and limits how many requests each
     user may relay per minute, without seeing their contents.
