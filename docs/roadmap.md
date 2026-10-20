@@ -117,6 +117,12 @@ Left before the tag:
   Slice 1 (state engine, sender keys, sealed batches, basic UI) is built,
   and a new device of a member keeps their groups (the account's
   `chatGroups` group list, `specs/38-chat-group-device-replaced.spec.ts`).
+  Slice 3 (links, requests, settings, bans, ending a group, removal notices,
+  timeline lines; `specs/165-chat-group-link.spec.ts` and the second test of
+  `specs/161-chat-groups-two-server.spec.ts`) is built, apart from cancelling
+  a request and the avatar, which wait for the server's `GetRequestStatus`
+  and avatar storage. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
+  follow; groups stay off until all are done.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
