@@ -6,6 +6,7 @@
 //! account's one storage pool.
 
 pub mod auto_reply;
+pub mod domains;
 pub mod expiry;
 pub mod filters;
 pub mod forwarding;

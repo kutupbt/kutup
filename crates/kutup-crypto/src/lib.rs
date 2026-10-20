@@ -66,6 +66,7 @@ pub mod kdf;
 pub mod key_binding;
 pub mod live_location;
 pub mod local_state;
+pub mod mail_address;
 #[cfg(feature = "mail")]
 pub mod mail_forwarding;
 #[cfg(feature = "mail")]
