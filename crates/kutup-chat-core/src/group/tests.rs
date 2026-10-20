@@ -335,6 +335,7 @@ fn titled(record: &GroupRecordV1) -> GroupChangeV1 {
         vec![GroupActionV1::ModifyAttribute {
             attribute: GroupAttribute::Title,
             value: Some(title),
+            avatar_hash: None,
         }],
     )
     .unwrap()

@@ -293,6 +293,7 @@ impl Engine {
                         vec![GroupActionV1::ModifyAttribute {
                             attribute: GroupAttribute::Title,
                             value: Some(value),
+                            avatar_hash: None,
                         }],
                     )
                     .await
@@ -479,6 +480,7 @@ impl Engine {
             vec![GroupActionV1::ModifyAttribute {
                 attribute: GroupAttribute::Title,
                 value,
+                avatar_hash: None,
             }],
         )
         .await?;
@@ -1019,6 +1021,7 @@ mod tests {
             vec![GroupActionV1::ModifyAttribute {
                 attribute: GroupAttribute::Title,
                 value: Some(title),
+                avatar_hash: None,
             }],
         )
         .unwrap();

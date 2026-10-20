@@ -129,6 +129,14 @@ pub struct GroupAttributesV1 {
     pub description: Option<String>,
     pub timer: Option<String>,
     pub avatar: Option<String>,
+    /// The SHA-256 (base64) of the avatar blob **as the home stores it**:
+    /// sealed and padded, never the plaintext image, which would let the
+    /// home recognise a known picture across groups. In the clear beside the
+    /// sealed avatar (its key and type), so the home serves the blob and
+    /// drops the ones no state names (docs/plans/pairwise-groups.md §11).
+    /// Present exactly when `avatar` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,6 +386,11 @@ pub enum GroupActionV1 {
     ModifyAttribute {
         attribute: GroupAttribute,
         value: Option<String>,
+        /// The SHA-256 (base64) of the avatar blob as the home stores it
+        /// (sealed and padded, never the plaintext image): only with
+        /// `Avatar`, and exactly when `value` is set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar_hash: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     ModifyAccess {
@@ -585,5 +598,29 @@ fn validate_attributes(attributes: &GroupAttributesV1) -> Result<(), String> {
             decode_sealed("attribute", value, attribute.max_sealed_bytes())?;
         }
     }
+    check_avatar_hash(
+        GroupAttribute::Avatar,
+        &attributes.avatar,
+        &attributes.avatar_hash,
+    )?;
     Ok(())
+}
+
+/// The avatar's clear hash: 32 bytes, present exactly when the avatar is;
+/// never on another attribute.
+pub(crate) fn check_avatar_hash(
+    attribute: GroupAttribute,
+    value: &Option<String>,
+    hash: &Option<String>,
+) -> Result<(), String> {
+    match (attribute, value, hash) {
+        (GroupAttribute::Avatar, Some(_), Some(hash)) => {
+            decode_exact::<32>("avatarHash", hash)?;
+            Ok(())
+        }
+        (GroupAttribute::Avatar, None, None) => Ok(()),
+        (GroupAttribute::Avatar, _, _) => Err("an avatar and its hash come together".into()),
+        (_, _, None) => Ok(()),
+        (_, _, Some(_)) => Err("only the avatar has a hash".into()),
+    }
 }
