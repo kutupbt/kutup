@@ -1549,10 +1549,12 @@ impl Session {
                     ));
                 }
                 let current = self.contact(&control.peer.to_string()).await?;
-                let incoming_order = (control.revision, control.source_device_id);
-                let current_order = current
-                    .as_ref()
-                    .map(|contact| (contact.revision, contact.source_device_id));
+                let incoming_order = crate::contact_list::contact_order(
+                    control.revision,
+                    control.state,
+                    control.source_device_id,
+                );
+                let current_order = current.as_ref().map(crate::contact_list::order_of);
                 if current_order.is_none_or(|order| incoming_order > order) {
                     self.store.stage_contact(ContactRecord {
                         peer: control.peer.to_string(),

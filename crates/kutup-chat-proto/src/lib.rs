@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 mod backup;
 mod calls;
+pub mod contact_list;
 pub mod content;
 mod extras;
 pub mod federation;

@@ -16,6 +16,7 @@
 mod address;
 mod call_link;
 mod clock;
+mod contact_list;
 mod db;
 mod engine;
 mod error;
