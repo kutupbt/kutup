@@ -384,7 +384,9 @@ export class AccountHeadClient {
   /**
    * A scope's index checked against the head it was read with (one
    * snapshot), and that verified head (the caller owns it). A scope the
-   * server keeps no index of yet (404) is uncovered.
+   * server keeps no index of (404) is read as an empty index and checked like
+   * any other: uncovered only when the verified head doesn't cover the scope
+   * either, so a server can't hide a scope the head commits to.
    */
   private async readIndex(scope: HeadScopeName): Promise<{ index: VerifiedIndex; verified: VerifiedHeadLike | null }> {
     type Snapshot = { values: [string, number][]; basis: string | null; known: boolean }
@@ -400,8 +402,7 @@ export class AccountHeadClient {
         return { current: data.head, data: { values: [], basis: null, known: false } }
       }
     })
-    if (!data.known) return { index: new VerifiedIndex(scope, false, [], null), verified }
-    if (!verified) return { index: new VerifiedIndex(scope, false, data.values, data.basis), verified }
+    if (!verified) return { index: new VerifiedIndex(scope, false, data.values, data.known ? data.basis : null), verified }
     let covered: boolean
     try {
       covered = this.engine.checkIndex(verified, scope, data.values) === 'matches'

@@ -587,7 +587,11 @@ fn apply(
             Ok(())
         }
 
-        A::ModifyAttribute { attribute, value } => {
+        A::ModifyAttribute {
+            attribute,
+            value,
+            avatar_hash,
+        } => {
             require(
                 allowed(before.access.attributes, actor_is_admin),
                 GroupChangeError::NotAllowed,
@@ -595,6 +599,10 @@ fn apply(
             if let Some(value) = value {
                 decode_sealed("attribute", value, attribute.max_sealed_bytes())
                     .map_err(malformed)?;
+            }
+            super::check_avatar_hash(*attribute, value, avatar_hash).map_err(malformed)?;
+            if *attribute == GroupAttribute::Avatar {
+                next.attributes.avatar_hash = avatar_hash.clone();
             }
             let slot = match attribute {
                 GroupAttribute::Title => &mut next.attributes.title,
