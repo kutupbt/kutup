@@ -14,7 +14,10 @@ const KNOWN_SHARED: &[(&str, &[&str])] = &[(
     // A Drive collection epoch statement is a fixed-length signed record
     // read only from the collection epoch routes; a Chat attachment ledger
     // entry lives only inside the sealed ledger. Neither parser ever sees
-    // the other's bytes. To be split in the next format change of either.
+    // the other's bytes. Both are live, so splitting them now would need
+    // reading the old format as well, a shim: if the ledger entry format
+    // ever gets a new version for other reasons, it moves to its own magic
+    // then.
     &[
         "kutup-chat-proto/src/media.rs",
         "kutup-crypto/src/collection_epoch.rs",
