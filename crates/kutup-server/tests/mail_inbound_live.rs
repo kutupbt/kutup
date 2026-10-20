@@ -6715,6 +6715,33 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
         mail_key::seal_address_key(&user.master_key, &user.binding, address, &key.secret_key)
             .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
+    // The address's keys already there (an address reopened after an
+    // account reset keeps its old, obsolete ones), listed as they are, as a
+    // client lists them; the new key first.
+    let listed: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let mut keys = vec![MailKeyEntryV1 {
+        fingerprint: key.fingerprint,
+        sha256_fingerprint: key.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    }];
+    if let Some(row) = listed.as_array().unwrap().iter().find(|a| a["id"] == id) {
+        for old in row["keys"].as_array().unwrap() {
+            keys.push(MailKeyEntryV1 {
+                fingerprint: hex::decode(old["fingerprint"].as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                sha256_fingerprint: hex32(old["sha256Fingerprint"].as_str().unwrap().to_owned()),
+                primary: false,
+                flags: old["flags"].as_u64().unwrap() as u32,
+            });
+        }
+    }
     let list = MailKeyListV1 {
         incarnation_id: hex32(user.identity.incarnation_id()),
         authority_key_id: hex32(user.identity.authority_key_id()),
@@ -6722,12 +6749,7 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
         sequence: 1,
         previous_hash: None,
         issued_at: "2026-10-10T12:00:00Z".into(),
-        keys: vec![MailKeyEntryV1 {
-            fingerprint: key.fingerprint,
-            sha256_fingerprint: key.sha256_fingerprint,
-            primary: true,
-            flags: DEFAULT_FLAGS,
-        }],
+        keys,
     }
     .sign(user.identity.authority_signing_key())
     .unwrap();
