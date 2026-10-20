@@ -539,7 +539,10 @@ impl World {
     /// only, with the link on and its password proven; anything else is
     /// "not found".
     fn answer_link(&self, request: &GroupRequestV1, group_id: &[u8; 32]) -> GroupResponseV1 {
-        if request.operation != GroupOperationV1::GetJoinInfo {
+        if !matches!(
+            request.operation,
+            GroupOperationV1::GetJoinInfo | GroupOperationV1::GetAvatar
+        ) {
             return Self::status(GroupResponseStatusV1::NotFound);
         }
         let groups = self.groups.borrow();
@@ -563,6 +566,9 @@ impl World {
         if !self.nonces.borrow_mut().insert(request.nonce.clone()) {
             return Self::status(GroupResponseStatusV1::Replayed);
         }
+        if request.operation == GroupOperationV1::GetAvatar {
+            return Self::current_avatar(group);
+        }
         Self::ok(
             GroupJoinInfoV1 {
                 revision: group.state.revision,
@@ -570,12 +576,25 @@ impl World {
                 member_count: group.state.members.len() as u16,
                 title: group.state.attributes.title.clone(),
                 description: group.state.attributes.description.clone(),
-                avatar: None,
+                avatar: group.state.attributes.avatar.clone(),
                 requires_approval: Some(access == AccessRequired::Administrator),
             }
             .canonical_bytes()
             .unwrap(),
         )
+    }
+
+    fn current_avatar(group: &HostedGroup) -> GroupResponseV1 {
+        match group
+            .state
+            .attributes
+            .avatar_hash
+            .as_ref()
+            .and_then(|hash| group.avatars.get(hash))
+        {
+            Some(blob) => Self::ok(kutup_chat_proto::group_route::pad_group_avatar(blob).unwrap()),
+            None => GroupResponseV1::refused("avatarMissing", now()),
+        }
     }
 
     /// What the home answers, as `chat_groups/gateway.rs` does.
@@ -745,7 +764,11 @@ impl World {
                 if group.state.member(pseudonym).is_none() {
                     return Self::status(GroupResponseStatusV1::NotFound);
                 }
-                let Ok(blob) = request.body() else {
+                let Some(blob) = request
+                    .body()
+                    .ok()
+                    .and_then(|body| kutup_chat_proto::group_route::unpad_group_avatar(&body).ok())
+                else {
                     return GroupResponseV1::refused("malformed", now());
                 };
                 if !kutup_crypto::chat_group::AVATAR_BUCKETS
@@ -757,6 +780,16 @@ impl World {
                 let hash = STANDARD.encode(kutup_crypto::chat_group::avatar_blob_hash(&blob));
                 group.avatars.insert(hash, blob.to_vec());
                 Self::ok(Vec::new())
+            }
+            // As the gateway: the current blob, padded, to a member.
+            GroupOperationV1::GetAvatar => {
+                let Some(group) = groups.get(&group_id) else {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                };
+                if group.state.member(pseudonym).is_none() {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                }
+                Self::current_avatar(group)
             }
             GroupOperationV1::SubmitChange => {
                 let Some(change) = change() else {
@@ -5159,4 +5192,50 @@ fn group_request_the_first_messages_after_an_approval_are_kept() {
     deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
     assert_eq!(dave.status(&group_id), GroupStatus::Member);
     assert_eq!(dave.group_texts(&group_id), vec!["right after".to_string()]);
+}
+
+#[test]
+fn group_avatar_is_read_back_by_members_and_shown_before_joining() {
+    use crate::group_link::GroupLinkMode;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+    assert_eq!(
+        block_on(bob.engine.group_avatar(&group_id)).unwrap(),
+        Ok(None)
+    );
+    let image = b"RIFF....WEBPVP8 a picture".to_vec();
+    block_on(
+        alice
+            .engine
+            .set_group_avatar(&group_id, &image, "image/webp", &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    bob.sync(&group_id);
+    let seen = block_on(bob.engine.group_avatar(&group_id))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(seen.data, image);
+    assert_eq!(seen.content_type, "image/webp");
+    // The link shows it before joining.
+    let preview = block_on(dave.engine.preview_group_link(&fragment))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(preview.avatar.unwrap().data, image);
+
+    // A home serving another blob than the one the state names is caught.
+    let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
+    {
+        let mut groups = world.groups.borrow_mut();
+        let hosted = groups.get_mut(&group).unwrap();
+        let hash = hosted.state.attributes.avatar_hash.clone().unwrap();
+        let (other, _) = kutup_crypto::chat_group::seal_group_avatar(b"another").unwrap();
+        hosted.avatars.insert(hash, other);
+    }
+    assert!(block_on(bob.engine.group_avatar(&group_id)).is_err());
 }

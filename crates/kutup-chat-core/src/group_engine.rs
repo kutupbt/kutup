@@ -49,6 +49,9 @@ pub struct GroupSummary {
     pub terminated: bool,
     /// The disappearing-messages timer in seconds; 0 is off.
     pub timer_seconds: u32,
+    /// The SHA-256 of the avatar blob the verified state names (base64): a
+    /// new one means a new picture.
+    pub avatar_hash: Option<String>,
 }
 
 /// What group content that came pairwise did.
@@ -1015,6 +1018,7 @@ impl Engine {
                     announcements_only,
                     terminated,
                     timer_seconds: crate::group_settings::timer_seconds(&record),
+                    avatar_hash: state.and_then(|state| state.attributes.avatar_hash.clone()),
                     group_id: record.group_id.clone(),
                     title,
                     status: record.status.clone(),

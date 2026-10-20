@@ -122,7 +122,7 @@ export function ChatGroupJoinDialog({ fragment }: { fragment: string }) {
 
         {preview ? (
           <div className="flex flex-col items-center gap-2 py-2 text-center" data-testid="chat-group-join-preview">
-            <Avatar name={title} group size={80} />
+            <Avatar name={title} image={preview.avatar?.data} contentType={preview.avatar?.contentType} group size={80} />
             <h3 className="mt-1 text-lg font-semibold" dir="auto">{title}</h3>
             <p className="flex items-center gap-1 text-sm text-muted-foreground">
               <Users className="size-4" aria-hidden />

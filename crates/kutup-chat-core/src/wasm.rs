@@ -1111,6 +1111,7 @@ enum GroupLinkPreviewView {
         /// This account's place in it already: `invited`, `requesting`,
         /// `member`, `gone`, or absent.
         status: Option<&'static str>,
+        avatar: Option<GroupAvatarWasmView>,
     },
     Invalid,
     Unreachable {
@@ -1126,6 +1127,39 @@ fn status_name(status: &crate::group::GroupStatus) -> &'static str {
         GroupStatus::Member => "member",
         GroupStatus::Gone => "gone",
     }
+}
+
+/// A group's picture: standard base64 and its type.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupAvatarWasmView {
+    data: String,
+    content_type: String,
+}
+
+impl From<crate::group_avatar::GroupAvatarImage> for GroupAvatarWasmView {
+    fn from(image: crate::group_avatar::GroupAvatarImage) -> Self {
+        Self {
+            data: STANDARD.encode(&image.data),
+            content_type: image.content_type,
+        }
+    }
+}
+
+/// A group's picture as fetched: `{kind: "image", data, contentType}`,
+/// `{kind: "none"}` or `{kind: "unreachable", reason}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupAvatarFetchView {
+    #[serde(rename_all = "camelCase")]
+    Image {
+        data: String,
+        content_type: String,
+    },
+    None,
+    Unreachable {
+        reason: &'static str,
+    },
 }
 
 /// A join through a link: `{kind: "joined", sync}`, `{kind: "requested"}`,
@@ -1358,6 +1392,8 @@ struct GroupSummaryView {
     announcements_only: bool,
     terminated: bool,
     timer_seconds: u32,
+    /// The avatar blob's hash, when the group has one.
+    avatar_hash: Option<String>,
 }
 
 impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
@@ -1385,6 +1421,7 @@ impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
             announcements_only: summary.announcements_only,
             terminated: summary.terminated,
             timer_seconds: summary.timer_seconds,
+            avatar_hash: summary.avatar_hash,
         }
     }
 }
@@ -1679,6 +1716,7 @@ impl WasmChatClient {
                 member_count: preview.member_count,
                 requires_approval: preview.requires_approval,
                 status: preview.status.as_ref().map(status_name),
+                avatar: preview.avatar.map(GroupAvatarWasmView::from),
             },
             Ok(None) => GroupLinkPreviewView::Invalid,
             Err(failure) => GroupLinkPreviewView::Unreachable {
@@ -1913,6 +1951,26 @@ impl WasmChatClient {
             .set_group_avatar(&group_id, &image, &content_type, &mut rng)
             .await
             .map_err(chat_error)
+    }
+
+    /// The group's picture, checked against the hash its state names.
+    #[wasm_bindgen(js_name = groupAvatar)]
+    pub async fn group_avatar(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
+        let fetched = self
+            .engine
+            .group_avatar(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&match fetched {
+            Ok(Some(image)) => GroupAvatarFetchView::Image {
+                data: STANDARD.encode(&image.data),
+                content_type: image.content_type,
+            },
+            Ok(None) => GroupAvatarFetchView::None,
+            Err(failure) => GroupAvatarFetchView::Unreachable {
+                reason: route_reason(failure),
+            },
+        })
     }
 
     #[wasm_bindgen(js_name = removeGroupAvatar)]

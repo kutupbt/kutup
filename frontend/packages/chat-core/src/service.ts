@@ -47,6 +47,7 @@ import { isChatGroupId } from './types'
 import type {
   ChatGroupMember,
   ChatGroupSend,
+  ChatGroupAvatarFetch,
   ChatGroupBan,
   ChatGroupDetails,
   ChatGroupLinkJoin,
@@ -1738,7 +1739,7 @@ export class ChatService {
     | 'setGroupDescription' | 'setGroupTimer' | 'setGroupAccess' | 'setGroupAnnouncementsOnly'
     | 'approveGroupRequest' | 'denyGroupRequest' | 'banGroupMember' | 'unbanGroup' | 'endGroup'
     | 'removeUnverifiedGroupMembers' | 'checkGroupRequest' | 'cancelGroupRequest'
-    | 'setGroupAvatar' | 'removeGroupAvatar'>> {
+    | 'setGroupAvatar' | 'removeGroupAvatar' | 'groupAvatar'>> {
     this.groupClient()
     const client = this.client
     if (!client.previewGroupLink || !client.joinGroupByLink || !client.groupDetails
@@ -1747,7 +1748,7 @@ export class ChatService {
       || !client.approveGroupRequest || !client.denyGroupRequest || !client.banGroupMember
       || !client.unbanGroup || !client.endGroup || !client.removeUnverifiedGroupMembers
       || !client.checkGroupRequest || !client.cancelGroupRequest
-      || !client.setGroupAvatar || !client.removeGroupAvatar) {
+      || !client.setGroupAvatar || !client.removeGroupAvatar || !client.groupAvatar) {
       throw new ChatServiceError('serverUnsupported')
     }
     return client as never
@@ -1837,6 +1838,12 @@ export class ChatService {
   /** Sets the group's picture: `image` already scaled down on this device. */
   async setChatGroupAvatar(groupId: string, image: Uint8Array, contentType: string): Promise<void> {
     await this.groupSettingsChange((client) => client.setGroupAvatar(groupId, image, contentType))
+  }
+
+  /** The group's picture, checked against the hash its state names. */
+  async chatGroupAvatar(groupId: string): Promise<ChatGroupAvatarFetch> {
+    const client = this.groupSettingsClient()
+    return this.withLock(() => client.groupAvatar(groupId))
   }
 
   async removeChatGroupAvatar(groupId: string): Promise<void> {

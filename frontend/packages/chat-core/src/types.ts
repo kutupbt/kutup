@@ -365,7 +365,20 @@ export interface ChatGroupSummary {
   terminated: boolean
   /** The group's disappearing-messages timer in seconds; 0 is off. */
   timerSeconds: number
+  /** The avatar blob's hash, when the group has a picture: a new one means a new picture. */
+  avatarHash?: string | null
 }
+
+/** A pairwise group's picture: standard base64 and its type. */
+export interface ChatGroupAvatar {
+  data: string
+  contentType: string
+}
+
+export type ChatGroupAvatarFetch =
+  | ({ kind: 'image' } & ChatGroupAvatar)
+  | { kind: 'none' }
+  | { kind: 'unreachable'; reason: string }
 
 /** Who may do something in a group (Signal's `AccessControl.AccessRequired`). */
 export type ChatGroupAccessRequired = 'any' | 'member' | 'administrator' | 'unsatisfiable'
@@ -391,6 +404,7 @@ export type ChatGroupLinkPreview =
       requiresApproval: boolean
       /** This account's place in it already. */
       status?: ChatGroupSummary['status'] | null
+      avatar?: ChatGroupAvatar | null
     }
   /** Reset, turned off, or the group gone. */
   | { kind: 'invalid' }
@@ -2098,6 +2112,7 @@ export interface WasmChatClientHandle {
   groupDetails?(groupId: string): Promise<ChatGroupDetails>
   setGroupAvatar?(groupId: string, image: Uint8Array, contentType: string): Promise<void>
   removeGroupAvatar?(groupId: string): Promise<void>
+  groupAvatar?(groupId: string): Promise<ChatGroupAvatarFetch>
   checkGroupRequest?(groupId: string): Promise<ChatGroupRequestOutcome>
   cancelGroupRequest?(groupId: string): Promise<ChatGroupRequestOutcome>
   setGroupLink?(groupId: string, mode: ChatGroupLinkMode): Promise<void>

@@ -36,6 +36,8 @@ pub struct GroupLinkPreview {
     pub requires_approval: bool,
     /// This account's place in the group already, if it has one here.
     pub status: Option<GroupStatus>,
+    /// The group's avatar, when it has one and it could be fetched.
+    pub avatar: Option<crate::group_avatar::GroupAvatarImage>,
 }
 
 /// Where this account's request to join stands.
@@ -272,7 +274,12 @@ impl Engine {
             Ok(None) => return Ok(Ok(None)),
             Err(failure) => return Ok(Err(failure)),
         };
+        let avatar = match &info.avatar {
+            Some(sealed) => self.link_avatar(&mut record, &link.password, sealed).await,
+            None => None,
+        };
         Ok(Ok(Some(GroupLinkPreview {
+            avatar,
             group_id: record.group_id.clone(),
             title: opened_text(&record, SealedField::Title, &info.title),
             description: opened_text(&record, SealedField::Description, &info.description),
