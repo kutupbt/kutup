@@ -6742,6 +6742,8 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
             });
         }
     }
+    // The format orders a list's keys by fingerprint.
+    keys.sort_by_key(|key| key.fingerprint);
     let list = MailKeyListV1 {
         incarnation_id: hex32(user.identity.incarnation_id()),
         authority_key_id: hex32(user.identity.authority_key_id()),
