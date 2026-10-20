@@ -12,4 +12,5 @@ pub mod dns;
 pub mod name;
 pub mod policy;
 pub mod reconcile;
+pub mod stalwart;
 pub mod records;
