@@ -42,13 +42,24 @@ pub struct Recorded {
     pub key_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Signature {
     pub selector: String,
     /// The active key, as Stalwart takes it (PKCS#8 PEM).
     pub private_key_pem: String,
     /// Which key it is, so a rotation replaces the signature.
     pub key_id: String,
+}
+
+/// Never the private key in a log line.
+impl std::fmt::Debug for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Signature")
+            .field("selector", &self.selector)
+            .field("private_key_pem", &"<redacted>")
+            .field("key_id", &self.key_id)
+            .finish()
+    }
 }
 
 /// An object of Stalwart's, as listed.
@@ -86,10 +97,12 @@ pub enum Step {
     },
 }
 
-/// The steps that make Stalwart's tagged objects match `wanted`. Deletes go
-/// first (signatures before their domains), then creates (domains before
-/// their signatures). A signature is kept only when the row records it
-/// with the wanted key, so a new key replaces it.
+/// The steps that make Stalwart's tagged objects match `wanted`. Domains no
+/// longer wanted go first (their signatures before them), then creates
+/// (domains before their signatures), and last the signatures a new key
+/// replaced under a kept domain, so a rotation never leaves a domain
+/// unsigned. A signature is kept only when the row records it with the
+/// wanted key, so a new key replaces it.
 pub fn plan(
     wanted: &[Wanted],
     domains: &[StalwartDomain],
@@ -101,6 +114,7 @@ pub fn plan(
         .collect();
     let mut deletes = Vec::new();
     let mut creates = Vec::new();
+    let mut replaced = Vec::new();
     let mut kept_domains = Vec::new();
     for (domain, id) in &ours {
         match wanted.iter().find(|w| w.id == *id && w.name == domain.name) {
@@ -146,7 +160,7 @@ pub fn plan(
         };
         for signature in current {
             if Some(&signature.object_id) != keep.as_ref() {
-                deletes.push(Step::DeleteSignature {
+                replaced.push(Step::DeleteSignature {
                     object_id: signature.object_id.clone(),
                 });
             }
@@ -161,7 +175,39 @@ pub fn plan(
     // Signatures' deletes before domains', whatever order they were found in.
     deletes.sort_by_key(|step| matches!(step, Step::DeleteDomain { .. }));
     creates.sort_by_key(|step| matches!(step, Step::CreateSignature { .. }));
-    deletes.into_iter().chain(creates).collect()
+    deletes.into_iter().chain(creates).chain(replaced).collect()
+}
+
+/// A fingerprint of the objects outside Kutup's tag (`MAIL_DOMAIN`'s own
+/// domain and signatures, or anything else an operator made): the reconcile
+/// never touches them, so a change to them is drift to alert on
+/// (docs/plans/mail-custom-domains.md §10).
+pub fn untagged_fingerprint(
+    domains: &[StalwartDomain],
+    signatures: &[StalwartSignature],
+) -> String {
+    use sha2::Digest as _;
+    let untagged: Vec<&StalwartDomain> = domains
+        .iter()
+        .filter(|d| tagged_id(&d.description).is_none())
+        .collect();
+    let mut lines: Vec<String> = untagged
+        .iter()
+        .map(|d| format!("domain\0{}\0{}\0{}", d.object_id, d.name, d.description))
+        .chain(
+            signatures
+                .iter()
+                .filter(|s| untagged.iter().any(|d| d.object_id == s.domain_object_id))
+                .map(|s| {
+                    format!(
+                        "signature\0{}\0{}\0{}",
+                        s.object_id, s.domain_object_id, s.selector
+                    )
+                }),
+        )
+        .collect();
+    lines.sort();
+    hex::encode(sha2::Sha256::digest(lines.join("\n").as_bytes()))
 }
 
 /// Stalwart's management API, as the reconcile needs it.
@@ -189,6 +235,8 @@ pub trait Stalwart: Send + Sync {
 pub struct Applied {
     pub steps: usize,
     pub recorded: Vec<(uuid::Uuid, Option<Recorded>)>,
+    /// [`untagged_fingerprint`] of what was there.
+    pub untagged: String,
 }
 
 /// Lists what is there, plans, and runs the plan. Stops at the first error:
@@ -198,6 +246,7 @@ pub async fn apply(stalwart: &dyn Stalwart, wanted: &[Wanted]) -> anyhow::Result
     let domains = stalwart.domains().await?;
     let signatures = stalwart.signatures().await?;
     let steps = plan(wanted, &domains, &signatures);
+    let untagged = untagged_fingerprint(&domains, &signatures);
     let mut created: Vec<(uuid::Uuid, String)> = Vec::new();
     let mut recorded: Vec<(uuid::Uuid, Option<Recorded>)> = Vec::new();
     let object_of = |id: &uuid::Uuid, created: &[(uuid::Uuid, String)]| {
@@ -245,6 +294,7 @@ pub async fn apply(stalwart: &dyn Stalwart, wanted: &[Wanted]) -> anyhow::Result
     Ok(Applied {
         steps: steps.len(),
         recorded,
+        untagged,
     })
 }
 
@@ -446,6 +496,78 @@ mod tests {
             selector: "202601e".into(),
         };
         assert!(plan(&[], &[server_domain()], &[signature]).is_empty());
+    }
+
+    #[test]
+    fn a_rotation_creates_the_new_signature_before_deleting_the_old() {
+        let id = uuid::Uuid::new_v4();
+        let domain = StalwartDomain {
+            object_id: "d".into(),
+            name: "example.com".into(),
+            description: tag(&id),
+        };
+        let old = StalwartSignature {
+            object_id: "old".into(),
+            domain_object_id: "d".into(),
+            selector: "kutup1".into(),
+        };
+        let want = Wanted {
+            id,
+            name: "example.com".into(),
+            signature: Some(Signature {
+                selector: "kutup2".into(),
+                private_key_pem: "pem".into(),
+                key_id: "new".into(),
+            }),
+            recorded: Some(Recorded {
+                object_id: "old".into(),
+                key_id: "previous".into(),
+            }),
+        };
+        let steps = plan(&[want], &[domain], &[old]);
+        assert!(
+            matches!(steps[0], Step::CreateSignature { .. }),
+            "{steps:?}"
+        );
+        assert_eq!(
+            steps[1],
+            Step::DeleteSignature {
+                object_id: "old".into()
+            }
+        );
+        assert!(
+            !format!("{steps:?}").contains("pem\""),
+            "the key never shows"
+        );
+    }
+
+    #[test]
+    fn the_untagged_fingerprint_follows_only_untagged_objects() {
+        let server = server_domain();
+        let ours = StalwartDomain {
+            object_id: "k".into(),
+            name: "customer.test".into(),
+            description: tag(&uuid::Uuid::new_v4()),
+        };
+        let base = untagged_fingerprint(std::slice::from_ref(&server), &[]);
+        assert_eq!(
+            untagged_fingerprint(&[server.clone(), ours.clone()], &[]),
+            base
+        );
+        let server_signature = StalwartSignature {
+            object_id: "s".into(),
+            domain_object_id: server.object_id.clone(),
+            selector: "202601e".into(),
+        };
+        assert_ne!(
+            untagged_fingerprint(std::slice::from_ref(&server), &[server_signature]),
+            base
+        );
+        let renamed = StalwartDomain {
+            name: "elsewhere.test".into(),
+            ..server
+        };
+        assert_ne!(untagged_fingerprint(&[renamed], &[]), base);
     }
 
     #[test]

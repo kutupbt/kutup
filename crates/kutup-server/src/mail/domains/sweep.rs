@@ -233,7 +233,54 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
     for (id, recorded) in applied.recorded {
         record_signature(&mut tx, id, recorded).await?;
     }
+    watch_untagged(&mut tx, &applied.untagged).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// The site setting holding the last fingerprint of Stalwart's objects
+/// outside Kutup's tag, and the one holding when it last changed.
+pub const UNTAGGED_FINGERPRINT: &str = "mail_domains_untagged_fingerprint";
+pub const UNTAGGED_CHANGED_AT: &str = "mail_domains_untagged_changed_at";
+
+/// Alerts when `MAIL_DOMAIN`'s objects in Stalwart (anything outside Kutup's
+/// tag) change: the reconcile never touches them, so a change means someone
+/// else did (docs/plans/mail-custom-domains.md §10). The first run records
+/// the baseline; a change logs an error and shows in the admin console.
+async fn watch_untagged(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    fingerprint: &str,
+) -> AppResult<()> {
+    let known: Option<String> =
+        sqlx::query_scalar("SELECT value FROM site_settings WHERE key = $1")
+            .bind(UNTAGGED_FINGERPRINT)
+            .fetch_optional(&mut **tx)
+            .await?;
+    if known.as_deref() == Some(fingerprint) {
+        return Ok(());
+    }
+    if known.is_some() {
+        tracing::error!(
+            "mail: Stalwart's domains or DKIM signatures outside Kutup's custom domains \
+             changed (MAIL_DOMAIN's own, or an operator's): check Stalwart's settings"
+        );
+        sqlx::query(
+            "INSERT INTO site_settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        )
+        .bind(UNTAGGED_CHANGED_AT)
+        .bind(time::OffsetDateTime::now_utc().unix_timestamp().to_string())
+        .execute(&mut **tx)
+        .await?;
+    }
+    sqlx::query(
+        "INSERT INTO site_settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(UNTAGGED_FINGERPRINT)
+    .bind(fingerprint)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

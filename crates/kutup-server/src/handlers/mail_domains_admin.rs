@@ -59,6 +59,10 @@ pub struct AdminDomain {
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AdminDomains {
+    /// When Stalwart's objects outside Kutup's custom domains (`MAIL_DOMAIN`'s
+    /// own) last changed, as the reconcile saw it: something to look into.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub stalwart_drift_at: Option<OffsetDateTime>,
     /// Stalwart's management key and MAIL_DKIM_KEYS are set: custom domains
     /// can work here at all.
     pub configured: bool,
@@ -144,8 +148,16 @@ pub async fn list(
     )
     .fetch_all(&state.pool)
     .await?;
+    let untagged_changed_at: Option<i64> =
+        sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key = $1")
+            .bind(crate::mail::domains::sweep::UNTAGGED_CHANGED_AT)
+            .fetch_optional(&state.pool)
+            .await?
+            .and_then(|value| value.parse().ok());
     Ok(Json(AdminDomains {
         configured: crate::mail::domains::sweep::configured(&state),
+        stalwart_drift_at: untagged_changed_at
+            .and_then(|secs| OffsetDateTime::from_unix_timestamp(secs).ok()),
         settings: effective(&settings),
         spf: DkimKeyView {
             selector: String::new(),
