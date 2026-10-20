@@ -11,6 +11,8 @@
   },
   "account": {
     "noKeyTitle": "Posta adresiniz henüz hazır değil",
+    "unverifiedTitle": "Anahtarlarınıza güvenilemiyor",
+    "unverified": "Sunucunun adresiniz için listelediği anahtarlar, hesabınızın imzaladığı anahtar listesiyle eşleşmiyor; bu yüzden Mail onlara hiçbir şey şifrelemez. Anahtarlarınızı kontrol edin ve yöneticinize başvurun.",
     "noKey": "Adres anahtarınız, hesabınızı bir kez açtığınızda oluşturulur.",
     "openAccount": "Hesabı aç"
   },

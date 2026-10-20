@@ -474,6 +474,7 @@
       "signedByAccount": "Hesabınız tarafından imzalandı (anahtar listesi {{sequence}})",
       "notInList": "Anahtar listenizde yok",
       "notInListHint": "Sunucu bu anahtarı listeliyor, ancak hesabınızın imzaladığı anahtar listesinde yok. Sonraki anahtar listenize asla eklenmez. Yöneticinize başvurun.",
+      "missing": "Anahtar listeniz, sunucunun artık doğru tutmadığı bir anahtarı içeriyor: {{fingerprint}}. Yöneticinize başvurun.",
       "notSigned": "Bu anahtar listesi hesabınız tarafından imzalanmamış. Bu anahtarlara güvenmeyin ve yöneticinize başvurun.",
       "algorithm": "Curve25519 (Ed25519 ve X25519)",
       "primary": "Birincil",

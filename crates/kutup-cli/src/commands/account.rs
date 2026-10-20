@@ -198,8 +198,10 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
         kutup_crypto::account_rename::sign(&identity, sequence, &address, &current, now_ms)
             .context("sign the rename")?;
     // The new address's key comes with the rename, unless the name is one
-    // taken back whose address kept its keys (the check says).
-    let mail_address = if check["needsKey"] == false {
+    // taken back whose address kept its keys: the check says so, and so do
+    // the account's own addresses (a key or key list there means none is
+    // made over it, whatever the check said).
+    let mail_address = if check["needsKey"] == false || own_address_keyed(&ctx, &current)? {
         Value::Null
     } else {
         let issued_at = time::OffsetDateTime::now_utc()
@@ -287,4 +289,20 @@ fn drop_name(profile: &str, json: bool, name: &str) -> Result<()> {
         println!("{name} receives no more mail; it stays held until its date.");
     }
     Ok(())
+}
+
+/// Whether one of the account's own addresses is `address` (folded) with a
+/// key or a key list already.
+fn own_address_keyed(ctx: &crate::context::Ctx, address: &str) -> Result<bool> {
+    let folded = kutup_crypto::names::fold_address(address);
+    let rows: Value = decode_json(ctx.client.request(Method::GET, "/mail/addresses").send()?)?;
+    Ok(rows.as_array().into_iter().flatten().any(|row| {
+        let same = row["address"]
+            .as_str()
+            .and_then(kutup_crypto::names::fold_address)
+            .is_some_and(|row_address| Some(row_address) == folded);
+        let keyed = row["keys"].as_array().is_some_and(|keys| !keys.is_empty())
+            || !row["keyList"].is_null();
+        same && keyed
+    }))
 }

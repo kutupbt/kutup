@@ -20,6 +20,7 @@ import {
   verifyMailDetachedSignature,
   type GroupMailKey,
   type SealedMailKey,
+  type SignedMailKeyList,
 } from '@kutup/crypto'
 import { addressFolder, foldAddress } from '@kutup/crypto/accountRename'
 import type { AccountRef } from '@kutup/crypto/accountRef'
@@ -29,6 +30,7 @@ import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
+import { checkedAddresses, type CheckedKey } from './keyList'
 import { sanitizeSignature } from './sanitize'
 import { searchText } from './searchText'
 import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
@@ -232,22 +234,42 @@ export class NoAddressKey extends Error {
   }
 }
 
+/** The current address's keys don't match the key list this account signed (or that list is missing, for another address, or older than one seen here). */
+export class UnverifiedOwnKeys extends Error {
+  constructor(readonly address: string) {
+    super(`the keys of ${address} do not match the key list this account signed`)
+  }
+}
+
 /** One of the account's addresses, as `GET /api/mail/addresses` lists them. */
 export interface OwnAddressRow {
   id: string
   address: string
   state: 'active' | 'receiving' | 'closed' | 'freed'
-  keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean }[]
+  keys: { fingerprint: string; sha256Fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean; flags: number }[]
+  keyList: { data: string; signature: string } | null
+}
+
+/** An own address checked against the account's authority (`checkedAddresses`). */
+export type CheckedOwnAddress = Omit<OwnAddressRow, 'keys'> & {
+  keys: CheckedKey<OwnAddressRow['keys'][number]>[]
+  verifiedList: SignedMailKeyList | null
 }
 
 /**
- * The account as Mail uses it, from its addresses: the current (`active`)
- * one sends; the earlier ones (docs/plans/username-renames.md) keep the keys
- * that open the mail sent to them, each sealed for its own address. `fold`
- * is `foldAddress`: the account's own addresses are known in any spelling.
+ * The account as Mail uses it, from its addresses checked against its own
+ * authority: the current (`active`) one sends, with the primary key its
+ * signed key list names, whose public key (inspected) has that entry's
+ * fingerprints: drafts and Sent copies are sealed to it, so a key row the
+ * server swapped in is never used. The earlier ones
+ * (docs/plans/username-renames.md) keep the keys that open the mail sent to
+ * them, each sealed for its own address (a key that isn't the account's
+ * opens nothing). Only listed keys check the account's own signatures.
+ * `fold` is `foldAddress`: the account's own addresses are known in any
+ * spelling.
  */
 export function mailAccountOf(
-  rows: readonly OwnAddressRow[],
+  rows: readonly CheckedOwnAddress[],
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
   session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
@@ -255,15 +277,17 @@ export function mailAccountOf(
   self: AccountRef,
 ): MailAccount {
   const current = rows.find((row) => row.state === 'active')
-  const primary = current?.keys.find((k) => k.primary)
-  if (!current || !primary) throw new NoAddressKey()
+  if (!current || current.keys.length === 0) throw new NoAddressKey()
+  const signedPrimary = current.verifiedList?.keys.find((entry) => entry.primary)
+  const primary = signedPrimary && current.keys.find((k) => k.listed && k.fingerprint === signedPrimary.fingerprint)
+  if (!primary) throw new UnverifiedOwnKeys(current.address)
   const earlier = rows.filter((row) => row !== current)
   // A freed name may be someone else's now: its keys only open the mail it
   // received while it was this account's, and it is never "me". Receiving
   // and closed names stay the account's own (it holds them).
   const held = rows.filter((row) => row.state !== 'freed')
   const own = new Set(held.map((row) => fold(row.address)).filter((folded) => folded !== null))
-  const sealed = (row: OwnAddressRow) => (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
+  const sealed = (row: CheckedOwnAddress) => (key: { privateKeyEnvelope: string; fingerprint: string }): SealedMailKey => ({
     masterKeyBase64: toBase64(session.masterKey),
     binding: session.envelopeBinding,
     address: row.address,
@@ -282,7 +306,7 @@ export function mailAccountOf(
       ...earlier.flatMap((row) => row.keys.map(sealed(row))),
     ],
     addresses: [current.address, ...earlier.filter((row) => row.state !== 'freed').map((row) => row.address)],
-    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => row.keys.filter((k) => k !== primary).map((k) => k.publicKey))],
+    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => row.keys.filter((k) => k !== primary && k.listed).map((k) => k.publicKey))],
     isOwnAddress: (candidate) => {
       if (!candidate) return false
       const folded = fold(candidate)
@@ -308,7 +332,9 @@ export function useMailAccount() {
       // keep the keys their mail opens with.
       let { data } = await api.get<OwnAddressRow[]>('/mail/addresses')
       const active = data.find((row) => row.state === 'active')
-      if (active && active.keys.length === 0) {
+      // Only an address with no key and no key list: a server that drops the
+      // rows of a keyed address can't have a fresh first list signed.
+      if (active && active.keys.length === 0 && active.keyList === null) {
         // Not made at sign-in yet (or that failed): make it now.
         await addFirstAddressKey(session, active).catch(() => undefined)
         data = (await api.get<OwnAddressRow[]>('/mail/addresses')).data
@@ -319,7 +345,9 @@ export function useMailAccount() {
         .catch(() => null)
       // The account as shares name it: by `/user/me`, never by a mail domain.
       const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
-      return mailAccountOf(data, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
+      // Strict: a list older than one this device has seen stops Mail.
+      const checked = await checkedAddresses(session, data, { strict: true })
+      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
     },
   })
 }

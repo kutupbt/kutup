@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../testI18n'
 
 const get = vi.hoisted(() => vi.fn())
+const ownAddressKeyed = vi.hoisted(() => vi.fn(() => Promise.resolve(false)))
 const post = vi.hoisted(() => vi.fn())
 const del = vi.hoisted(() => vi.fn())
 const accountGrant = vi.hoisted(() => vi.fn())
@@ -26,7 +27,7 @@ vi.mock('@kutup/crypto/accountRename', () => ({
   },
   signAccountRename,
 }))
-vi.mock('@kutup/mail-core/addressKey', () => ({ firstAddressKey }))
+vi.mock('@kutup/mail-core/addressKey', () => ({ firstAddressKey, ownAddressKeyed }))
 const session = { address: 'ada.l@kutup.test', username: 'ada.l', masterKey: new Uint8Array(32), envelopeBinding: 'b' }
 vi.mock('@kutup/session/store', () => ({ useRequiredSession: () => session, getSession: () => session }))
 
@@ -120,6 +121,22 @@ describe('the rename dialog', () => {
     expect(body).not.toHaveProperty('driveKeyBinding')
     await waitFor(() => expect(recheckAccount).toHaveBeenCalled())
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('makes no first key over an own address that has keys, whatever the check says', async () => {
+    // The server says a key is needed for a name whose address still holds its keys.
+    check = { available: true, takeBack: true, needsKey: true, spelling: 'a-da' }
+    ownAddressKeyed.mockResolvedValueOnce(true)
+    post.mockResolvedValue({ data: { username: 'a-da', address: 'a-da@kutup.test', sequence: 2, oldAddressReceivesUntil: '', oldNameFreeAt: '' } })
+    show()
+    const dialog = await openAndType('ada')
+    await said(dialog, 'One of your earlier names: you can take it back.')
+    fireEvent.change(within(dialog).getByLabelText(/Current password/), { target: { value: 'pw' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change username' }))
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+    expect(ownAddressKeyed).toHaveBeenCalledWith('a-da@kutup.test')
+    expect(firstAddressKey).not.toHaveBeenCalled()
+    expect((post.mock.calls[0] as [string, object])[1]).not.toHaveProperty('mailAddress')
   })
 
   it('takes a held name back as it was spelled, with no key when its address kept its keys', async () => {

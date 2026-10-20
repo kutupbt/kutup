@@ -16,7 +16,9 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { ExportKeyDialog, ImportKeyDialog, NewKeyDialog } from './KeyDialogs'
+import { missingKeys } from '@kutup/mail-core/keyList'
 import { asSigned, createMailKeyMutation, useChangeKey, useMailAddresses, type CheckedMailAddress, type KeyChange, type MailKey } from './mailKeys'
+import type { CheckedKey } from '@kutup/mail-core/keyList'
 
 /**
  * Your email addresses and their encryption keys, as Proton's Settings →
@@ -81,6 +83,11 @@ function AddressKeys({ address, creating, failed }: { address: CheckedMailAddres
               </>
             )}
           </p>
+          {missingKeys(address).map((entry) => (
+            <Alert key={entry.fingerprint} variant="error" data-testid="mail-key-missing">
+              {t('settings.keys.missing', { fingerprint: fingerprintGroups(entry.fingerprint).join(' ') })}
+            </Alert>
+          ))}
           <Card>
             <CardContent className="divide-y divide-border p-0">
               {address.keys.map((key) => (
@@ -118,7 +125,7 @@ function fingerprintGroups(fingerprint: string): string[] {
  * the server lists but the list lacks is shown as such, and can't be changed
  * (a change would sign it into the next list).
  */
-function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; listed: MailKey }) {
+function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; listed: CheckedKey<MailKey> }) {
   const { t, i18n } = useTranslation()
   const address = owner.address
   const [busy, setBusy] = useState(false)
@@ -194,10 +201,13 @@ function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; liste
           {canEncrypt ? t('settings.keys.usage') : t('settings.keys.usageDecryptOnly')}
         </span>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void download()} loading={busy}>
-            <Download />
-            {t('settings.keys.download')}
-          </Button>
+          {/* Only a key whose public key has the fingerprints the signed list names. */}
+          {signed ? (
+            <Button variant="outline" size="sm" onClick={() => void download()} loading={busy}>
+              <Download />
+              {t('settings.keys.download')}
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label={t('settings.keys.more')} disabled={change.isPending}>
