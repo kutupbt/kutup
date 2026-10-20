@@ -275,7 +275,7 @@ The server checks records in Proton's order and keeps every record's state.
     DKIM's own lifecycle (§4).
 - **SPF** needs a new record from the operator: `_spf.<server>` TXT with the
   server's outbound addresses (`ip4:`/`ip6:`). `self-hosting.md` gets it, and
-  `scripts/check-mail-dns.sh` checks it.
+  `scripts/check-mail-ready.sh` learns to check it.
 - **No MTA-STS and no BIMI,** as Proton. Our MX is our own host name, so
   receiving needs no certificate per domain.
 
@@ -555,6 +555,6 @@ targets).
    sweep, grace, transfer, removal and the address lifecycle (§1–3, 7–9).
 3. Stalwart's reconcile loop, the scoped credential, DKIM with rotation, the
    RCPT hook, the send checks and the catch-all (§4–6, 10).
-4. Self-hosting docs and `check-mail-dns.sh`.
+4. Self-hosting docs and `scripts/check-mail-ready.sh` (the `_spf` record and the DKIM wildcards).
 5. Gates: mail with the test DNS server, then browser once the web UI exists.
 6. Web UI (third session).
