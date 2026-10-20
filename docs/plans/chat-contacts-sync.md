@@ -239,6 +239,44 @@ following the main session's review of #252:
 - writes are listed by the account head;
 - account reset clears it.
 
+## As built (third session)
+
+- `kutup_chat_proto::contact_list::ChatContactEntryV1`: unknown fields kept in
+  a flattened map and written back; read from any valid JSON spelling (the
+  seal vouches for the bytes), written canonically. `previousState` may be
+  `pendingIncoming` (an unblock returns to the request), never `blocked`.
+- chat-core `contact_list`:
+  - `contact_order` is the one order (`(revision, blocked, sourceDeviceId)`),
+    used by the Note-to-Self contact control and the list alike.
+  - A contact record carries `list_due_at_ms` (SQLite column, IndexedDB
+    field): set at a random moment within ten minutes by every explicit and
+    implicit change except an incoming request; a profile-key-only change
+    within the hour (`lazy_due`).
+  - `flush_contact_list` reads the list, then per due contact takes the
+    list's newer entry, writes this device's newer one over the stored write
+    revision (a conflict reads again and merges once more), or clears the due
+    mark. A new entry on a full list evicts the oldest rejected, then the
+    oldest asked; never a block. With nothing to evict the entry stays due,
+    `contact_list_full()` turns on, and Chat shows a banner (en, tr).
+  - Every read checks that an entry's account re-derives its id.
+  - `sync_contact_list` takes what is newer in the list and applies the
+    standing rule; a running web device runs it every five minutes with its
+    due writes (`sync_contact_list_if_due`).
+  - `ContactListTiming { block: Immediate | Debounced }`: the web passes
+    `Immediate`, so a block is written before `block_contact` returns.
+  - `receive` on a device with no contacts reads the list first; if it
+    can't, the mailbox waits. `bootstrap_contacts` is gone.
+  - First-seen identity pins are queued (`pins_due`) and written later and
+    together (`flush_identity_pins`, on the same tick and at sign-out); an
+    in-person verification is written at once. A queued pin lost to a reload
+    is queued again at the next contact.
+- Web: `ApiChatTransport.fetchContactList / storeContactEntry /
+  deleteContactEntry` under the account head's `chatContacts` scope; `full`
+  is the server's `contactListFull` code. Signing out flushes the contact
+  list (and the queued pins) with the group list.
+- Not yet: the native transport has no list routes, so `kutup-client-ffi`
+  doesn't enable the list.
+
 ## Decisions
 
 The user's answers (2026-10-19, relayed by the main session):
