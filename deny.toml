@@ -41,6 +41,12 @@ ignore = [
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: a build-time macro of hax-lib under libsignal's ML-KEM" },
     { id = "RUSTSEC-2026-0215", reason = "smallstr: inside yrs (Yjs) in kutup-collab" },
     { id = "RUSTSEC-2024-0384", reason = "instant: OpenMLS's timer in chat-core, removed with MLS (docs/roadmap.md)" },
+    # basic-toml 0.1.10: read by askama_derive 0.16 (a compile-time template
+    # macro) under uniffi_bindgen, only with kutup-client-ffi's `bindgen`
+    # feature, the tool that writes the Swift/Kotlin sources. Nothing shipped
+    # links it (not in `cargo tree -e normal` of the default build). uniffi
+    # 0.32.2 still takes askama 0.16; revisit at the next uniffi release.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time template config of uniffi's bindings generator, in no shipped binary" },
 ]
 
 [licenses]
