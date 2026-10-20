@@ -6731,14 +6731,17 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
     }
     .sign(user.identity.authority_signing_key())
     .unwrap();
-    let r = bearer(c.post(format!("{base}/api/mail/addresses/{id}/keys")), &user.token)
-        .json(&json!({
-            "publicKey": b64(&key.public_key),
-            "privateKeyEnvelope": b64(&envelope),
-            "keyList": { "data": b64(&list.data), "signature": b64(&list.signature) },
-        }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/mail/addresses/{id}/keys")),
+        &user.token,
+    )
+    .json(&json!({
+        "publicKey": b64(&key.public_key),
+        "privateKeyEnvelope": b64(&envelope),
+        "keyList": { "data": b64(&list.data), "signature": b64(&list.signature) },
+    }))
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "add key: {}", r.status());
     Address {
         address: address.to_owned(),
@@ -6757,15 +6760,23 @@ fn admin_token(c: &Client, base: &str, admin: &str) -> String {
 
 fn domain(c: &Client, base: &str, user: &User, id: &str, refresh: bool) -> Value {
     let query = if refresh { "?refresh=1" } else { "" };
-    let r = bearer(c.get(format!("{base}/api/mail/domains/{id}{query}")), &user.token)
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.get(format!("{base}/api/mail/domains/{id}{query}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
     assert!(r.status().is_success(), "domain: {}", r.status());
     r.json().unwrap()
 }
 
 /// Waits until `check` holds for what `read` gives, or fails with `what`.
-fn eventually<T>(what: &str, seconds: u64, mut read: impl FnMut() -> T, check: impl Fn(&T) -> bool) -> T {
+fn eventually<T>(
+    what: &str,
+    seconds: u64,
+    mut read: impl FnMut() -> T,
+    check: impl Fn(&T) -> bool,
+) -> T {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     loop {
         let value = read();
@@ -6804,15 +6815,25 @@ fn custom_domains() {
     // The shared key: made pending, published by "the operator", active.
     let admin_token = admin_token(&c, &base, &admin);
     let admin_view = |c: &Client| -> Value {
-        bearer(c.get(format!("{base}/api/admin/mail/domains")), &admin_token)
-            .send()
-            .unwrap()
-            .json()
-            .unwrap()
+        bearer(
+            c.get(format!("{base}/api/admin/mail/domains")),
+            &admin_token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
     };
-    let view = eventually("no DKIM key was made", 60, || admin_view(&c), |v| {
-        v["dkimKeys"].as_array().is_some_and(|keys| !keys.is_empty())
-    });
+    let view = eventually(
+        "no DKIM key was made",
+        60,
+        || admin_view(&c),
+        |v| {
+            v["dkimKeys"]
+                .as_array()
+                .is_some_and(|keys| !keys.is_empty())
+        },
+    );
     assert_eq!(view["configured"], true);
     let key = &view["dkimKeys"][0];
     let selector = key["selector"].as_str().unwrap().to_owned();
@@ -6821,12 +6842,18 @@ fn custom_domains() {
         server,
         &[
             spf.clone(),
-            format!("*.{selector}._dk IN TXT {}", txt(key["txt"].as_str().unwrap())),
+            format!(
+                "*.{selector}._dk IN TXT {}",
+                txt(key["txt"].as_str().unwrap())
+            ),
         ],
     );
-    eventually("the DKIM key never became active", 120, || admin_view(&c), |v| {
-        v["dkimKeys"][0]["state"] == "active"
-    });
+    eventually(
+        "the DKIM key never became active",
+        120,
+        || admin_view(&c),
+        |v| v["dkimKeys"][0]["state"] == "active",
+    );
 
     // Alice adds the domain and publishes what it lists.
     let alice = register(&c, &base);
@@ -6842,9 +6869,18 @@ fn custom_domains() {
     let zone_for = |code: &str| -> Vec<String> {
         let mut zone = vec![
             format!("@ IN TXT {}", txt(code)),
-            format!("@ IN MX 10 {}.", records["mx"][0]["value"].as_str().unwrap()),
-            format!("@ IN TXT {}", txt(records["spf"]["value"].as_str().unwrap())),
-            format!("_dmarc IN TXT {}", txt(records["dmarc"]["value"].as_str().unwrap())),
+            format!(
+                "@ IN MX 10 {}.",
+                records["mx"][0]["value"].as_str().unwrap()
+            ),
+            format!(
+                "@ IN TXT {}",
+                txt(records["spf"]["value"].as_str().unwrap())
+            ),
+            format!(
+                "_dmarc IN TXT {}",
+                txt(records["dmarc"]["value"].as_str().unwrap())
+            ),
         ];
         for cname in records["dkim"].as_array().unwrap() {
             zone.push(format!(
@@ -6855,21 +6891,37 @@ fn custom_domains() {
         }
         zone
     };
-    write_zone(&zones, customer, &zone_for(records["verify"]["value"].as_str().unwrap()));
-    let checked = eventually("the domain never verified", 30, || domain(&c, &base, &alice, &id, true), |d| {
-        d["state"] == 1
-    });
+    write_zone(
+        &zones,
+        customer,
+        &zone_for(records["verify"]["value"].as_str().unwrap()),
+    );
+    let checked = eventually(
+        "the domain never verified",
+        30,
+        || domain(&c, &base, &alice, &id, true),
+        |d| d["state"] == 1,
+    );
     assert_eq!(
-        [&checked["verifyState"], &checked["mxState"], &checked["spfState"], &checked["dkimState"], &checked["dmarcState"]],
+        [
+            &checked["verifyState"],
+            &checked["mxState"],
+            &checked["spfState"],
+            &checked["dkimState"],
+            &checked["dmarcState"]
+        ],
         [&json!(2), &json!(3), &json!(3), &json!(4), &json!(4)],
         "{checked}"
     );
 
     // An address on it, with its key; mail to it arrives through Stalwart.
-    let r = bearer(c.post(format!("{base}/api/mail/domains/addresses")), &alice.token)
-        .json(&json!({ "local": "Info", "domainId": id }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &alice.token,
+    )
+    .json(&json!({ "local": "Info", "domainId": id }))
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
     let created: Value = r.json().unwrap();
     assert_eq!(created["address"], "info@customer.test");
@@ -6881,20 +6933,36 @@ fn custom_domains() {
         )
     };
     let first = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
-    eventually("Stalwart never took mail for the domain", 60, || {
-        smtp_send(&smtp, "info@customer.test", &message("info@customer.test", &first))
-    }, |(rcpt, data)| *rcpt == 250 && *data == 250);
+    eventually(
+        "Stalwart never took mail for the domain",
+        60,
+        || {
+            smtp_send(
+                &smtp,
+                "info@customer.test",
+                &message("info@customer.test", &first),
+            )
+        },
+        |(rcpt, data)| *rcpt == 250 && *data == 250,
+    );
     let row = wait_for(&c, &base, &alice, &first);
     assert!(open_row(&c, &base, &alice, &info, &row).contains("for info@customer.test"));
 
     // The catch-all takes unknown names on the domain, tags stripped.
-    let r = bearer(c.put(format!("{base}/api/mail/domains/{id}/catch-all")), &alice.token)
-        .json(&json!({ "addressId": address_id }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.put(format!("{base}/api/mail/domains/{id}/catch-all")),
+        &alice.token,
+    )
+    .json(&json!({ "addressId": address_id }))
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 204);
     let caught = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
-    let (rcpt, data) = smtp_send(&smtp, "nobody+tag@customer.test", &message("nobody+tag@customer.test", &caught));
+    let (rcpt, data) = smtp_send(
+        &smtp,
+        "nobody+tag@customer.test",
+        &message("nobody+tag@customer.test", &caught),
+    );
     assert_eq!((rcpt, data), (250, 250));
     wait_for(&c, &base, &alice, &caught);
 
@@ -6904,7 +6972,8 @@ fn custom_domains() {
     let mime = format!(
         "From: info@customer.test\r\nTo: dave@outside.test\r\nSubject: from the domain\r\nMessage-ID: <{outside_id}>\r\n\r\nhello\r\n"
     );
-    let split = mail_key::encrypt_split(&[&info.public_key], &info.secret_key, mime.as_bytes()).unwrap();
+    let split =
+        mail_key::encrypt_split(&[&info.public_key], &info.secret_key, mime.as_bytes()).unwrap();
     let meta = json!({
         "to": [{ "address": "dave@outside.test" }],
         "subject": "from the domain",
@@ -6921,7 +6990,11 @@ fn custom_domains() {
         ]))
         .send()
         .unwrap();
-    assert!(r.status().is_success(), "send from the domain: {}", r.text().unwrap_or_default());
+    assert!(
+        r.status().is_success(),
+        "send from the domain: {}",
+        r.text().unwrap_or_default()
+    );
     println!("DOMAIN-OUTSIDE-ID {outside_id}");
 
     // Bob proves the domain too: refused while Alice holds it, then, once
@@ -6934,13 +7007,27 @@ fn custom_domains() {
     assert_eq!(r.status().as_u16(), 201);
     let bobs: Value = r.json().unwrap();
     let bob_id = bobs["id"].as_str().unwrap().to_owned();
-    let bob_code = bobs["records"]["verify"]["value"].as_str().unwrap().to_owned();
-    assert_eq!(domain(&c, &base, &bob, &bob_id, true)["state"], 0, "Alice holds it");
+    let bob_code = bobs["records"]["verify"]["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "Alice holds it"
+    );
     write_zone(&zones, customer, &zone_for(&bob_code));
-    eventually("the domain never moved to Bob", 60, || domain(&c, &base, &bob, &bob_id, true), |d| {
-        d["state"] == 1
-    });
-    assert_eq!(domain(&c, &base, &alice, &id, false)["state"], 0, "Alice lost it");
+    eventually(
+        "the domain never moved to Bob",
+        60,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 1,
+    );
+    assert_eq!(
+        domain(&c, &base, &alice, &id, false)["state"],
+        0,
+        "Alice lost it"
+    );
     let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
         .send()
         .unwrap()
@@ -6954,16 +7041,22 @@ fn custom_domains() {
             .any(|a| a["address"] == "info@customer.test" && a["state"] == "active"),
         "Alice's address on the domain is freed: {addresses}"
     );
-    let events: Value = bearer(c.get(format!("{base}/api/user/security-events")), &alice.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
+    let events: Value = bearer(
+        c.get(format!("{base}/api/user/security-events")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
     assert!(events.to_string().contains("domainLost"), "{events}");
     // Bob can make the same name now.
-    let r = bearer(c.post(format!("{base}/api/mail/domains/addresses")), &bob.token)
-        .json(&json!({ "local": "info", "domainId": bob_id }))
-        .send()
-        .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &bob.token,
+    )
+    .json(&json!({ "local": "info", "domainId": bob_id }))
+    .send()
+    .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
 }
