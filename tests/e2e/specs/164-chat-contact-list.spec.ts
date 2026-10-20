@@ -45,7 +45,9 @@ test('a block made before the only browser was lost still holds on a new one', a
   // takes and discards it. Either way it never shows.
   const second = `second-${tag}`
   await send(pageC, second)
-  await openDirectChat(pageA2, carol.username)
+  // The conversation is back with the history; a blocked one has no composer.
+  await openConversationWith(pageA2, carol.username)
+  await expect(pageA2.getByRole('link', { name: new RegExp(carol.username) }).first()).toContainText('Blocked')
   await expect(pageA2.getByRole('button', { name: 'Unblock', exact: true }).first()).toBeVisible({ timeout: 45_000 })
   await expect(pageA2.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(0)
   // Time for anything still on its way to arrive (and be discarded).
