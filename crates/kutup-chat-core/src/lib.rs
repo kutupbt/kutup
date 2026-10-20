@@ -29,6 +29,8 @@ mod contact_list_harness_tests;
 #[allow(dead_code)]
 mod group;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+mod group_avatar;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_client;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;

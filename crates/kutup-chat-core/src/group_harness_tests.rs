@@ -102,13 +102,15 @@ struct HostedAccount {
 }
 
 /// A group as its home holds it: the state, its head, and the log.
-struct HostedGroup {
+pub(crate) struct HostedGroup {
     state: GroupStateV1,
     head: [u8; 32],
     log: Vec<(GroupChangeV1, GroupNotaryV1)>,
     /// Every pseudonym that was ever a member or a requester (the server
     /// keeps hashes).
     seen: HashSet<String>,
+    /// Avatar blobs by their SHA-256 (base64): the current one and uploads.
+    avatars: BTreeMap<String, Vec<u8>>,
 }
 
 /// The one server of these tests.
@@ -121,7 +123,7 @@ pub(crate) struct World {
     key: SigningKey,
     gateway: GatewayKey,
     config: GroupGatewayKeyConfigV1,
-    groups: RefCell<BTreeMap<[u8; 32], HostedGroup>>,
+    pub(crate) groups: RefCell<BTreeMap<[u8; 32], HostedGroup>>,
     nonces: RefCell<HashSet<String>>,
     server_key: KeyPair,
     server_certificate: ServerCertificate,
@@ -668,6 +670,7 @@ impl World {
                             .iter()
                             .map(|member| member.pseudonym.clone())
                             .collect(),
+                        avatars: BTreeMap::new(),
                     },
                 );
                 Self::ok(
@@ -733,6 +736,28 @@ impl World {
                 };
                 Self::ok(page.canonical_bytes().unwrap())
             }
+            // As the gateway: a member's upload, by the blob's own hash, of a
+            // length the format allows.
+            GroupOperationV1::PutAvatar => {
+                let Some(group) = groups.get_mut(&group_id) else {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                };
+                if group.state.member(pseudonym).is_none() {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                }
+                let Ok(blob) = request.body() else {
+                    return GroupResponseV1::refused("malformed", now());
+                };
+                if !kutup_crypto::chat_group::AVATAR_BUCKETS
+                    .iter()
+                    .any(|bucket| kutup_crypto::chat_group::avatar_blob_len(*bucket) == blob.len())
+                {
+                    return GroupResponseV1::refused("malformed", now());
+                }
+                let hash = STANDARD.encode(kutup_crypto::chat_group::avatar_blob_hash(&blob));
+                group.avatars.insert(hash, blob.to_vec());
+                Self::ok(Vec::new())
+            }
             GroupOperationV1::SubmitChange => {
                 let Some(change) = change() else {
                     return GroupResponseV1::refused("malformed", now());
@@ -751,6 +776,14 @@ impl World {
                     Ok(next) => next,
                     Err(error) => return Self::refused(&error),
                 };
+                // As the gateway: an avatar named must have been uploaded.
+                if let Some(hash) = &next.attributes.avatar_hash {
+                    if next.attributes.avatar_hash != group.state.attributes.avatar_hash
+                        && !group.avatars.contains_key(hash)
+                    {
+                        return GroupResponseV1::refused("avatarMissing", now());
+                    }
+                }
                 // As the server: valid in every way, but this pseudonym was
                 // a member before.
                 // As the gateway's `joins`: a claim, a link join or a request.
@@ -5028,4 +5061,75 @@ fn group_request_status_settles_an_approval_a_denial_and_a_withdrawal() {
     assert!(details(&mut alice, &group_id).requests.is_empty());
     let last = group_lines(&alice, &group_id).pop().unwrap();
     assert_eq!(last.changes, vec![C::JoinRequestCanceled]);
+}
+
+#[test]
+fn group_avatar_names_the_hash_of_the_blob_as_stored_never_the_image() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let image = b"\x89PNG\r\n\x1a\nthe picture".to_vec();
+    block_on(
+        alice
+            .engine
+            .set_group_avatar(&group_id, &image, "image/png", &mut rng()),
+    )
+    .unwrap();
+    let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
+    let (hash, blob) = {
+        let groups = world.groups.borrow();
+        let hosted = &groups[&group];
+        let hash = hosted.state.attributes.avatar_hash.clone().unwrap();
+        (hash.clone(), hosted.avatars[&hash].clone())
+    };
+    // The hash in the clear is the stored blob's SHA-256: not the image's.
+    use sha2::Digest as _;
+    assert_eq!(STANDARD.encode(sha2::Sha256::digest(&blob)), hash);
+    assert_ne!(STANDARD.encode(sha2::Sha256::digest(&image)), hash);
+    assert_eq!(blob.len(), 8_233);
+    // Bob opens it with the key in the sealed attribute.
+    bob.receive();
+    bob.sync(&group_id);
+    let record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let plain = crate::group::attribute(&record, kutup_chat_proto::group::GroupAttribute::Avatar)
+        .unwrap()
+        .unwrap();
+    let avatar = kutup_chat_proto::group::GroupAvatarV1::from_canonical_bytes(&plain).unwrap();
+    assert_eq!(avatar.content_type, "image/png");
+    let key: [u8; 32] = STANDARD.decode(&avatar.key).unwrap().try_into().unwrap();
+    assert_eq!(
+        &kutup_crypto::chat_group::open_group_avatar(&blob, &key).unwrap()[..],
+        &image[..]
+    );
+    let last = group_lines(&bob, &group_id).pop().unwrap();
+    assert_eq!(
+        last.changes,
+        vec![kutup_chat_proto::GroupUpdateChange::PictureChanged { removed: false }]
+    );
+
+    // A change naming a blob never uploaded is refused.
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    let sealed = crate::group::seal_attribute(
+        &record,
+        kutup_chat_proto::group::GroupAttribute::Avatar,
+        &plain,
+    )
+    .unwrap();
+    let missing = block_on(alice.engine.change_group(
+        &group_id,
+        vec![kutup_chat_proto::group::GroupActionV1::ModifyAttribute {
+            attribute: kutup_chat_proto::group::GroupAttribute::Avatar,
+            value: Some(sealed),
+            avatar_hash: Some(STANDARD.encode([7u8; 32])),
+        }],
+        &mut rng(),
+    ));
+    assert!(missing.is_err());
+    block_on(alice.engine.remove_group_avatar(&group_id, &mut rng())).unwrap();
+    assert!(world.groups.borrow()[&group]
+        .state
+        .attributes
+        .avatar
+        .is_none());
 }
