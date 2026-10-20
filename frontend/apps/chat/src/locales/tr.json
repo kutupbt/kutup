@@ -221,6 +221,8 @@
       "defaultDescription": "Yeni sohbetler ve gruplar, ilk mesaj gönderildiğinde bu kaybolan mesaj süresiyle başlar. Var olan sohbetlerinizi değiştirmez."
     },
     "errors": {
+      "contactListUnconfirmed": "Kişi listeniz henüz doğrulanamıyor; bu yüzden yeni mesajlarınız doğrulanana kadar sunucuda bekliyor. Hiçbir şey kaybolmaz. Biraz sonra yeniden deneyin.",
+      "contactListIntegrity": "Sunucudaki kişi listesi kopyası, hesabınızın en son doğruladığıyla eşleşmiyor. Mesajlarınız sunucuda bekliyor ve hiçbir şey kaybolmaz, ancak bu çözülene kadar Chat onları açmaz. Yöneticinize başvurun.",
       "browserUnsupported": "Bu tarayıcı, şifreli sohbeti sekmeler arasında güvenli biçimde koordine edemiyor.",
       "serverUnsupported": "Bu sunucu gereken güvenli sohbet protokolünü desteklemiyor.",
       "capabilities": "Kutup bu sunucunun güvenli sohbet desteğini kontrol edemedi.",

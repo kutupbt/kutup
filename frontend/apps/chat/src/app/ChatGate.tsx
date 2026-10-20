@@ -60,7 +60,7 @@ export function ChatGate({ children }: { children: ReactNode }) {
               {t('chat.deviceRecovery.action')}
             </Button>
           </>
-        ) : failure === 'capabilities' ? (
+        ) : failure === 'capabilities' || failure === 'contactListUnconfirmed' || failure === 'contactListIntegrity' ? (
           <Button onClick={() => window.location.reload()}>{t('common.retry')}</Button>
         ) : (
           <Button variant="outline" asChild>

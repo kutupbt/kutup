@@ -150,7 +150,33 @@ const DELETE_FOR_ME_BATCH = 64
 const PING_INTERVAL_MS = 25_000
 const PONG_TIMEOUT_MS = 10_000
 
-export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
+export type ChatServiceErrorCode =
+  | 'browserUnsupported'
+  | 'serverUnsupported'
+  /** The account's contact list couldn't be read yet: the mailbox waits. */
+  | 'contactListUnconfirmed'
+  /** The server's contact list contradicts the account's verified state. */
+  | 'contactListIntegrity'
+
+/** What the account-head checks say when the server shows another history or list than the verified one. */
+const INTEGRITY_MARKERS = [
+  'not the verified',
+  "does not match the account's verified state",
+  'history on the server is not',
+  'contact list: an entry',
+] as const
+
+/**
+ * A failed open because the account's contact list couldn't be followed:
+ * its own code, so Chat says the messages are waiting rather than that it is
+ * broken, and a list that contradicts the account's verified state is said
+ * as such. Null for any other failure.
+ */
+export function contactListFailure(error: unknown): ChatServiceError | null {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!message.includes('contact list unconfirmed')) return null
+  return new ChatServiceError(INTEGRITY_MARKERS.some((marker) => message.includes(marker)) ? 'contactListIntegrity' : 'contactListUnconfirmed')
+}
 
 export class ChatServiceError extends Error {
   constructor(readonly code: ChatServiceErrorCode) {
@@ -440,7 +466,7 @@ export class ChatService {
       return service
     } catch (error) {
       service.dispose()
-      throw error
+      throw contactListFailure(error) ?? error
     }
   }
 

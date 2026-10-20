@@ -38,7 +38,14 @@ import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
  * `unreachable`: the server could not be reached; Chat opens again by itself.
  * `unavailable`: this browser's own Chat state would not open.
  */
-export type ChatFailure = 'capabilities' | 'serverUnsupported' | 'browserUnsupported' | 'unreachable' | 'unavailable'
+export type ChatFailure =
+  | 'capabilities'
+  | 'serverUnsupported'
+  | 'browserUnsupported'
+  | 'unreachable'
+  | 'unavailable'
+  | 'contactListUnconfirmed'
+  | 'contactListIntegrity'
 
 export interface ChatSelf {
   /** This account: its server and permanent id. */

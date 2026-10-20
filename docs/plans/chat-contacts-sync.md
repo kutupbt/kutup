@@ -291,6 +291,18 @@ following the main session's review of #252:
 - The account's lists also sync on a timer of their own (about a minute, five
   in a hidden tab, give or take a fifth), not only when something arrives:
   a quiet device still writes what is due.
+- An entry a later version wrote is kept as it is. So a block made on an
+  older device, for someone whose entry a later version wrote, isn't written
+  to the list: it reaches the account's other devices by the contact
+  control, and the later version writes it.
+- While the list is full, its due entries other than blocks are tried again
+  at most every 30 minutes; a block every pass.
+- First-seen pins waiting for their write are kept with the device; two tabs
+  each keep the earlier due moment of a pin they both queued, which at worst
+  writes it once more.
+- A pin list that can't be fetched leaves Chat's own pins in charge: a
+  contact the account quarantined in another app is then trusted on first use
+  here until the list is read (fail-open, as before the list existed).
 - Not yet: the native transport has no list routes, so `kutup-client-ffi`
   doesn't enable the list.
 

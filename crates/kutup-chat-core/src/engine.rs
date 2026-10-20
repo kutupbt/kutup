@@ -1999,7 +1999,7 @@ impl Engine {
         if self.contact_list.is_some() && !self.session.contact_list_followed().await? {
             if let Err(error) = self.sync_contact_list().await {
                 self.set_state(EngineState::Degraded);
-                return Err(error);
+                return Err(ChatError::ContactListUnconfirmed(error.to_string()));
             }
             self.session.mark_contact_list_followed().await?;
         }

@@ -55,6 +55,11 @@ impl From<ChatError> for KutupChatError {
             ChatError::Db(message) => Self::Storage { message },
             ChatError::Transport(message) => Self::Transport { message },
             ChatError::Trust(message) => Self::Trust { message },
+            // Native clients don't keep the contact list yet; should one
+            // reach here, it is a trust question with its own words.
+            ChatError::ContactListUnconfirmed(message) => Self::Trust {
+                message: format!("contact list unconfirmed: {message}"),
+            },
             ChatError::SendNotConverged(attempts) => Self::SendNotConverged { attempts },
             ChatError::MissingBundle(device_id) => Self::MissingBundle { device_id },
         }

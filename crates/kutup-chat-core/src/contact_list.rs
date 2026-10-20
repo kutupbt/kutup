@@ -20,6 +20,10 @@ use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::transport::ContactListWrite;
 
+/// While the list is full, its other due entries are tried again at most
+/// this often (a block always is).
+const FULL_RETRY_MS: i64 = 30 * 60 * 1000;
+
 /// The list is read again at most this often by a running device.
 const READ_EVERY_MS: i64 = 5 * 60 * 1000;
 
@@ -85,6 +89,8 @@ pub(crate) struct ContactListSync {
     read_at_ms: i64,
     /// The last write found the list full, with nothing it may evict.
     full: bool,
+    /// When a pass last tried the entries a full list refused.
+    full_tried_at_ms: i64,
 }
 
 /// What a flush did.
@@ -223,6 +229,7 @@ impl Engine {
             listed: BTreeMap::new(),
             read_at_ms: 0,
             full: false,
+            full_tried_at_ms: 0,
         });
         Ok(())
     }
@@ -357,6 +364,12 @@ impl Engine {
             .contact_list
             .as_ref()
             .is_some_and(|list| list.timing.block == BlockTiming::Immediate);
+        // A full list isn't asked again on every pass: only blocks, and the
+        // rest once in a while (or when everything is flushed).
+        let backing_off = self
+            .contact_list
+            .as_ref()
+            .is_some_and(|list| list.full && !all && now - list.full_tried_at_ms < FULL_RETRY_MS);
         let due: Vec<ContactRecord> = self
             .session
             .contacts()
@@ -365,7 +378,8 @@ impl Engine {
             .filter(|contact| match only {
                 Some(peer) => contact.peer == peer,
                 None => contact.list_due_at_ms.is_some_and(|at| {
-                    all || at <= now || (immediate && contact.state == ContactState::Blocked)
+                    let blocked = contact.state == ContactState::Blocked;
+                    (all || at <= now || (immediate && blocked)) && (blocked || !backing_off)
                 }),
             })
             .collect();
@@ -389,6 +403,9 @@ impl Engine {
             // no longer is: only a pass over everything due knows that.
             if only.is_none() || full {
                 list.full = full;
+            }
+            if full && !backing_off {
+                list.full_tried_at_ms = now;
             }
         }
         Ok(report)

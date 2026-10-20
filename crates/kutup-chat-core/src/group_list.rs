@@ -275,6 +275,9 @@ impl Engine {
             return Ok(Vec::new());
         };
         let mut entries = Vec::new();
+        // Built apart and taken whole: a read that fails leaves what was
+        // known before, never half a list.
+        let mut listed = BTreeMap::new();
         for item in items {
             let id = chat_group_list::decode_entry_id(&item.id)
                 .map_err(|_| unreadable("an entry id is malformed"))?;
@@ -291,7 +294,7 @@ impl Engine {
                 return Err(unreadable("an entry is not the revision listed"));
             }
             if later_version(&opened.plain) {
-                list.listed.insert(
+                listed.insert(
                     item.id,
                     Listed {
                         revision: opened.revision,
@@ -305,7 +308,7 @@ impl Engine {
             if list.entry_id(&entry.group_id).ok().as_deref() != Some(item.id.as_str()) {
                 return Err(unreadable("an entry is filed under another id"));
             }
-            list.listed.insert(
+            listed.insert(
                 item.id,
                 Listed {
                     revision: opened.revision,
@@ -314,6 +317,7 @@ impl Engine {
             );
             entries.push(entry);
         }
+        list.listed = listed;
         list.read_at_ms = now;
         Ok(entries)
     }

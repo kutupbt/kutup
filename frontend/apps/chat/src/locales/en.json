@@ -221,6 +221,8 @@
       "defaultDescription": "New chats and groups start with this disappearing-message timer when the first message is sent. It doesn't change chats you already have."
     },
     "errors": {
+      "contactListUnconfirmed": "Your contact list can't be confirmed yet, so your new messages are waiting on the server until it can. Nothing is lost. Try again in a moment.",
+      "contactListIntegrity": "The server's copy of your contact list doesn't match what your account last confirmed. Your messages are waiting on the server and nothing is lost, but Chat won't open them until this is resolved. Contact your administrator.",
       "browserUnsupported": "This browser cannot safely coordinate encrypted chat across tabs.",
       "serverUnsupported": "This server does not support the required secure chat protocol.",
       "capabilities": "Kutup could not check whether this server supports secure chat.",
