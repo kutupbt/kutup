@@ -459,6 +459,7 @@ to see members").**
     writes lost within their random delay) would rejoin at an epoch it used
     before, and the home would see a pseudonym it knew come back. So the
     home keeps a hash of every pseudonym that was ever a member of the group
+    or asked to join it
     and refuses a newcomer's claim, link join or join request under one with
     `pseudonymUsed`, only once the change holds in every other way (its
     claim signature or link proof, and the acceptance checks): only that

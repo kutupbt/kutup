@@ -106,7 +106,8 @@ struct HostedGroup {
     state: GroupStateV1,
     head: [u8; 32],
     log: Vec<(GroupChangeV1, GroupNotaryV1)>,
-    /// Every pseudonym that was ever a member (the server keeps hashes).
+    /// Every pseudonym that was ever a member or a requester (the server
+    /// keeps hashes).
     seen: HashSet<String>,
 }
 
@@ -657,9 +658,15 @@ impl World {
                     );
                 }
                 let notary = self.notarise(&group_id, &change, &next);
+                // Ever a member, or a requester (as the server).
                 group
                     .seen
                     .extend(next.members.iter().map(|member| member.pseudonym.clone()));
+                group.seen.extend(
+                    next.requesting
+                        .iter()
+                        .map(|request| request.pseudonym.clone()),
+                );
                 group.state = next;
                 group.head = change.hash().unwrap();
                 group.log.push((change.clone(), notary.clone()));
