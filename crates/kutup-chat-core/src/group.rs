@@ -628,7 +628,7 @@ pub fn record_from_invite(
     let join_epoch = previous
         .map(|previous| after(&previous.status, previous.join_epoch))
         .into_iter()
-        .chain(rejoin_epoch(listed))
+        .chain(listed_join_epoch(listed))
         .max()
         .unwrap_or(0);
     let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
@@ -689,10 +689,25 @@ pub fn record_from_invite(
     Ok(record)
 }
 
-/// The join epoch after the one the account's group list names for a group
-/// (a membership there, ended or not, is past).
-pub fn rejoin_epoch(listed: Option<(GroupListStatus, u32)>) -> Option<u32> {
-    listed.map(|(_, epoch)| epoch.saturating_add(1))
+/// How many join epochs an account looks through for its place in a group:
+/// a claim the home refuses as a used pseudonym is made again at the next
+/// epoch at most this many times in all, and a device without the group list
+/// matches a pseudonym named to it against epochs 0 to this − 1. Matching is
+/// local (one derivation per epoch), so the bound only keeps both finite.
+pub const MAX_JOIN_EPOCHS: u32 = 64;
+
+/// The lowest join epoch an invitation may take by the account's group
+/// list: past an ended membership there, but a current one's own epoch,
+/// since another device of the account is in the group under it (a claim
+/// made there finds the account in; one past it would find it out and take
+/// the group as gone). A current entry whose leave was never written is
+/// caught by the home instead: it refuses the claim as `pseudonymUsed`, and
+/// the claim moves on.
+pub fn listed_join_epoch(listed: Option<(GroupListStatus, u32)>) -> Option<u32> {
+    listed.map(|(status, epoch)| match status {
+        GroupListStatus::Member => epoch,
+        GroupListStatus::Gone => epoch.saturating_add(1),
+    })
 }
 
 /// The claim key of an invited record: what signs the join-info request a

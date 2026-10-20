@@ -4,7 +4,9 @@
 //! built from the join info the slot's claim key may read, then the state.
 
 use kutup_chat_proto::group::{decode_exact, GroupActionV1, GroupRole};
-use kutup_chat_proto::group_route::{GroupJoinInfoV1, GroupOperationV1, GroupResponseStatusV1};
+use kutup_chat_proto::group_route::{
+    GroupJoinInfoV1, GroupOperationV1, GroupResponseStatusV1, GroupResponseV1,
+};
 use kutup_chat_proto::ChatContent;
 use kutup_crypto::account_ref::AccountRef;
 use rand::{CryptoRng, Rng};
@@ -106,19 +108,14 @@ impl Engine {
             return Err(ChatError::Invalid("no invitation to this group".into()));
         }
         // The list may say more now than when the invitation came (another
-        // device left the group meanwhile, or this one reloaded): it is read
-        // again, and the claim goes past its epoch, so a rejoin is never an
-        // old pseudonym.
+        // device joined or left the group meanwhile, or this one reloaded):
+        // it is read again. The claim goes past an ended membership's epoch,
+        // so a rejoin is never an old pseudonym, and takes a current one's,
+        // where another device is in already.
         self.reread_group_list().await;
-        if let Some(epoch) = group::rejoin_epoch(self.listed_join(group_id)) {
+        if let Some(epoch) = group::listed_join_epoch(self.listed_join(group_id)) {
             if epoch > record.join_epoch {
-                let group = kutup_chat_proto::group::decode_group_id(group_id)
-                    .map_err(ChatError::Invalid)?;
-                let pseudonym = self.group_keys()?.pseudonyms.pseudonym(&group, epoch);
-                record.join_epoch = epoch;
-                record.pseudonym_seed =
-                    group::SecretText(kutup_chat_proto::group::encode(pseudonym.seed()));
-                self.save_group(&record).await?;
+                self.move_join_epoch(&mut record, epoch).await?;
             }
         }
         let claim_key =
@@ -143,36 +140,68 @@ impl Engine {
         };
         let me = self.session.account_ref().clone();
         let profile_key = self.own_profile_key().await?;
-        let change = group::claim(
-            &mut record,
-            &basis,
-            &me,
-            &profile_key,
-            &self.group_keys()?.authority,
-        )
-        .map_err(group_error)?;
-        let body = change.canonical_bytes().map_err(ChatError::Invalid)?;
-        match self
-            .group_request(&mut record, GroupOperationV1::SubmitChange, &body)
-            .await?
-        {
-            Ok(response) if response.status != GroupResponseStatusV1::Ok => {
-                // Refused: perhaps another device of this account claimed
-                // the slot first.
-                let refused = accepted_body(response).err();
-                let sync = self.claimed_elsewhere(&mut record).await;
-                return match (sync, refused) {
-                    (Err(_), Some(refused)) => Err(refused),
-                    (sync, _) => sync,
-                };
+        let mut tries = 1;
+        loop {
+            let change = group::claim(
+                &mut record,
+                &basis,
+                &me,
+                &profile_key,
+                &self.group_keys()?.authority,
+            )
+            .map_err(group_error)?;
+            let body = change.canonical_bytes().map_err(ChatError::Invalid)?;
+            match self
+                .group_request(&mut record, GroupOperationV1::SubmitChange, &body)
+                .await?
+            {
+                // The pseudonym was a member before (this account joined at
+                // this epoch and lost every record of it): the claim holds
+                // otherwise, so it is made again at the next epoch, with the
+                // same slot and revision. Saved first, so a reload never
+                // goes back to a used one.
+                Ok(response) if used_pseudonym(&response) => {
+                    if tries >= group::MAX_JOIN_EPOCHS {
+                        return Err(ChatError::Invalid(
+                            "no unused pseudonym is left for this group".into(),
+                        ));
+                    }
+                    tries += 1;
+                    let next = record.join_epoch.checked_add(1).ok_or_else(|| {
+                        ChatError::Invalid("no unused pseudonym is left for this group".into())
+                    })?;
+                    self.move_join_epoch(&mut record, next).await?;
+                }
+                Ok(response) if response.status != GroupResponseStatusV1::Ok => {
+                    // Refused: perhaps another device of this account claimed
+                    // the slot first.
+                    let refused = accepted_body(response).err();
+                    let sync = self.claimed_elsewhere(&mut record).await;
+                    return match (sync, refused) {
+                        (Err(_), Some(refused)) => Err(refused),
+                        (sync, _) => sync,
+                    };
+                }
+                Ok(_) => break,
+                Err(failure) => return Ok(GroupSync::Unreachable(failure)),
             }
-            Ok(_) => {}
-            Err(failure) => return Ok(GroupSync::Unreachable(failure)),
         }
         // Saved with the claim's revision as the lowest state to take; the
         // claim key goes once the state shows this account a member.
         self.save_group(&record).await?;
         self.take_whole_state(&mut record).await
+    }
+
+    /// Moves an invited record to `epoch`: its pseudonym is the one the
+    /// account key gives there.
+    async fn move_join_epoch(&mut self, record: &mut GroupRecordV1, epoch: u32) -> Result<()> {
+        let group = kutup_chat_proto::group::decode_group_id(&record.group_id)
+            .map_err(ChatError::Invalid)?;
+        let pseudonym = self.group_keys()?.pseudonyms.pseudonym(&group, epoch);
+        record.join_epoch = epoch;
+        record.pseudonym_seed =
+            group::SecretText(kutup_chat_proto::group::encode(pseudonym.seed()));
+        self.save_group(record).await
     }
 
     /// Whether this account is in the group already under the invitation's
@@ -226,4 +255,11 @@ impl Engine {
         }
         self.session.db().apply(&pending).await
     }
+}
+
+/// Whether the home refused a newcomer's claim only because its pseudonym
+/// was a member before.
+fn used_pseudonym(response: &GroupResponseV1) -> bool {
+    response.status == GroupResponseStatusV1::Refused
+        && response.code.as_deref() == Some(kutup_chat_proto::group_route::PSEUDONYM_USED)
 }

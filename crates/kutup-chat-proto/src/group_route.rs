@@ -28,6 +28,11 @@ pub const MAX_KEY_CONFIG_LIFETIME_SECS: i64 = 7 * 24 * 60 * 60;
 /// How long the home keeps accepting a key after rotating to the next.
 pub const KEY_OVERLAP_SECS: i64 = 24 * 60 * 60;
 
+/// The refusal code of a newcomer's change that holds in every way but one:
+/// its pseudonym was a member of the group before. Only that pseudonym hears
+/// it; the client joins again at its next join epoch.
+pub const PSEUDONYM_USED: &str = "pseudonymUsed";
+
 const GROUP_ID_LEN: usize = 32;
 const NONCE_LEN: usize = 16;
 const KEY_LEN: usize = 32;

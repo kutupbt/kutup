@@ -301,15 +301,17 @@ group again from the next member's send, built in `group_recover.rs`:
    pairwise to one account it names that account's pseudonym in the group
    (`recipientPseudonym`). The member sends to it because bindings are the
    account's (§3), not a device's.
-2. The list comes first: the device reads it if it hasn't this run. A group
-   it says the account left is never taken up this way; one it holds is taken
-   up from the list (its home, epoch and verified revision).
-3. The context's key must be its group's at the home it names (the id binds
+2. The context's key must be its group's at the home it names (the id binds
    the home), so nobody can name a home of their own. The named pseudonym
-   must be one the account key gives (join epochs 0 to 15). Only then does
-   the device ask the home, once, for that pseudonym. A stranger who doesn't
-   know it makes the device ask nothing. A list that can't be read stops it
-   (it may say the account left).
+   must be one the account key gives (join epochs 0 to 63,
+   `MAX_JOIN_EPOCHS`), found locally: a stranger who doesn't know it makes
+   the device ask nothing. The attempt then counts against the limits below,
+   before anything is asked of a server.
+3. The list: the device reads it if it hasn't this run. A group it says the
+   account left is never taken up this way; one it holds is taken up from
+   the list (its home, epoch and verified revision). A list that can't be
+   read stops it (it may say the account left). Only then does the device
+   ask the home, once, for that pseudonym.
 4. The state is kept only when it holds this account's own binding, verified
    under its own authority (no home can make one up), and the sender is a
    verified member of it. Nothing is kept on failure, and nothing is signed
@@ -395,7 +397,8 @@ revision (`SignalService.proto:947-951`).
 
 **What we copy from `Groups.proto:23-124` and `groups.preload.ts`:**
 - **Master key.** A random 32-byte group master key. From it, the group id and
-  the state key are derived. Signal derives `GroupSecretParams` the same way
+  the state key are derived (the id binds the home; the state key's info
+  carries the id, `kutup/chat-group/state-key/v2\0` ‖ group id). Signal derives `GroupSecretParams` the same way
   (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
   - **The id binds the home** (decided 2026-10-19, after the #268 review). A
@@ -444,19 +447,25 @@ to see members").**
   - The join epoch counts the account's joins of the group: 0 at the first,
     one more at each rejoin after leaving or removal (the device's record and
     the list entry carry it), so a rejoin is a new pseudonym.
-  - **Which epoch a join takes:** one past the highest the device's own
-    record or the account's group list names for the group (an unclaimed
-    older invitation keeps its epoch). The list is read before an
-    invitation's epoch is derived, and again before the claim, so another
-    device's join or leave meanwhile counts.
-  - **Residual:** an account that joined, left, and lost every record of it
-    (the only device gone, and both list writes lost within their random
-    delay) can rejoin at an epoch it used before. The group's home would then
-    see a pseudonym it knew come back, linking the two memberships.
-    Planned follow-up (not in this change): the home keeps hashes of every
-    pseudonym the group has seen and, once a claim's proof passes, answers
-    `pseudonymUsed`; the client then retries at the next epoch, up to a cap,
-    and recovery tries as many epochs. This note stays until that lands.
+  - **Which epoch a join takes:** one past an ended membership the device's
+    own record or the account's group list names for the group; a current
+    membership the list names is another device's, and its epoch is taken as
+    it is (a claim there finds the account in). An unclaimed older
+    invitation keeps its epoch. The list is read before an invitation's
+    epoch is derived, and again before the claim, so another device's join
+    or leave meanwhile counts.
+  - **A pseudonym used before (`pseudonymUsed`).** An account that joined,
+    left, and lost every record of it (the only device gone, and both list
+    writes lost within their random delay) would rejoin at an epoch it used
+    before, and the home would see a pseudonym it knew come back. So the
+    home keeps a hash of every pseudonym that was ever a member of the group
+    and refuses a newcomer's claim, link join or join request under one with
+    `pseudonymUsed`, only once the change holds in every other way (its
+    claim signature or link proof, and the acceptance checks): only that
+    pseudonym's owner hears it, and it costs no relay or change budget. The
+    client then moves to the next epoch, saves it, signs the claim again for
+    the new pseudonym and sends it at the same revision, for at most
+    `MAX_JOIN_EPOCHS` (64) claims; recovery matches the same 64 epochs.
   - Without the account key the pseudonyms of one account in different
     groups or epochs are unrelated, so they can't be linked across groups.
     This holds as long as the account key is safe; a leaked key exposes the

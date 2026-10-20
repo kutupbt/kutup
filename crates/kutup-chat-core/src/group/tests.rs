@@ -274,6 +274,16 @@ fn a_rejoin_takes_the_next_join_epoch() {
     )
     .unwrap();
     assert_eq!(listed.join_epoch, 5);
+    // A current membership there is another device's: its own epoch.
+    let current = record_from_invite(
+        invitation,
+        INVITER,
+        None,
+        Some((GroupListStatus::Member, 4)),
+        &bob.keys,
+    )
+    .unwrap();
+    assert_eq!(current.join_epoch, 4);
 }
 
 #[test]
