@@ -1495,6 +1495,98 @@ Questions for the server design (second session):
 - the destination split;
 - the `409`/`410`/`404` answers per account inside one request.
 
+### Slice 2: the server design (second session, 2026-10-20)
+
+Copied from Signal-Server (`MessageController` `PUT /v1/messages/multi_recipient`,
+`MessagesCache`'s shared payload), with two deviations that federation forces:
+capabilities instead of group send endorsements, and one request per
+destination server. Answers to §11's six questions:
+
+**1. The request.** `POST /api/chat/anonymous/messages/multi?server=<destination>`,
+anonymous (no bearer, no cookie), as today's sealed routes. Body
+`SealedMultiSubmissionV1`, canonical JSON:
+- `sendId` (as a sealed send: dedup and the client's retry key);
+- `payload`: base64 of libsignal's `SealedSenderMultiRecipientMessage`
+  (version `0x23`, 17-byte service ids = ACI of the account ids), made by
+  `sealed_sender_multi_recipient_encrypt`; no excluded recipients;
+- `capabilities`: `{ "<accountId>": "<16-byte capability, base64>" }`, one per
+  recipient account in the payload, exactly that set;
+- `urgent` (default true), as Signal's query parameter.
+
+Limits: the shared ciphertext at most 256 KiB, each recipient's assembled
+message at most 96 KiB (Signal's per-recipient cap), at most 256 accounts
+(the group size) and 4 MiB in all. The server parses with libsignal's own
+`SealedSenderMultiRecipientMessage::parse` (as Signal-Server); anything else
+is `400 malformed`: another version, excluded recipients, a recipient not in
+`capabilities` or the other way round, a device listed twice.
+
+**2. Capabilities.** A new table, because today's `chat_delivery_capabilities`
+holds one profile-derived capability per account: `chat_group_capabilities
+(user_id, capability_hash bytea(32), created_at)`, any number per account up
+to a cap (an account in 1024 groups), no group id. Published and replaced in
+one call, so a removal's swap is atomic, as §1 asks:
+`PUT /api/chat/group-capabilities { "add": [hash], "remove": [hash] }`
+(bearer, the owner). A recipient's capability is checked as today's
+(`SHA-256` against its account's set, constant time); the raw capability is
+never stored.
+
+**3. Units.** Each recipient account costs one sealed-send unit of the
+anonymous budget (`rate_limit_chat_anonymous`), so one request to 200 members
+spends 200, as 200 single sends would; plus the destination's inbound limits
+per recipient, as today.
+
+**4. The split.** The client sends one request per destination server. The
+origin forwards a request for another server over the existing durable sealed
+federation path (a new transaction kind, `FederatedSealedMultiV1`, the same
+body), never learning the sender; the destination refuses a recipient that
+isn't one of its accounts. A request naming accounts of two servers can't be
+expressed (one `server` per request).
+
+**5. Answers, per account in one answer** (Signal's, adapted):
+- devices first: any recipient with missing or extra devices → `409` with
+  `[{accountId, missingDevices, extraDevices}]`; else any with a changed
+  registration id → `410` with `[{accountId, staleDevices}]`. Nothing is
+  stored on either: the client refetches those accounts' manifests,
+  rearranges its book and retries the whole request (as Desktop);
+- then capabilities: a recipient whose capability doesn't hold is left out
+  and listed, the others delivered: `200 { "refused": [accountId] }`
+  (Signal's `uuids404`). §1's `404` handling then applies per member:
+  pairwise at once, refresh the group, back to multi-recipient once the new
+  capability arrives;
+- a remote destination: the origin waits for its answer as today's remote
+  sealed send does (delivered, the `409`/`410` relayed as they are, or
+  `202` "durably queued" when the peer is slow), so the client never needs
+  to know where its recipients live.
+
+**6. Storage once (Signal-Server's shared payload).**
+- `chat_shared_payloads (id uuid, payload bytea, created_at, expires_at)`:
+  `e_pub || ciphertext`, once per request and destination.
+- Each recipient device gets its ordinary `chat_mailbox` row, with its 48
+  bytes of key material (`C_i || AT_i`) as `content` and a new
+  `shared_payload_id` column; the payload row is written first, in the same
+  transaction.
+- A drain assembles `[0x22] || C_i || AT_i || e_pub || ciphertext`, the
+  device's ordinary sealed envelope, so clients see no new format.
+- An ack deletes the mailbox row as today; the payload goes with its last
+  reference (deleted in the ack's transaction when no row names it), and
+  mailbox retention is the backstop (`expires_at`), as Redis's TTL is
+  Signal's.
+- Pushes and the WebSocket nudge go per device, as for a single send.
+
+**Lifting the 64 cap.** `CHAT_GROUP_MAX_MEMBERS` (an admin site setting, per
+the standing rule) defaults to 256 (decision 5) once this route carries group
+messages; test stacks use it from the slice's PR on.
+
+**Tests.** Unit: the request's validation (each `400` above), the answer's
+order (`409` before `410` before `refused`), assembly equal to libsignal's
+`messageForRecipient`. Live, one server: a 3-member send stored once and
+drained by each device; a stale device; a refused capability; the payload
+gone after the last ack. Two servers: the federated split, a remote `409`
+relayed, the destination refusing a foreign account.
+
+Estimate as §10 (8–10 days), the federation transaction and the storage
+change being most of it.
+
 ## Decisions (the user, 2026-10-17)
 
 1. **Home.** The group lives on the server where it was created and never moves.
