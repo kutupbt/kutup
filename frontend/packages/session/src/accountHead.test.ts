@@ -370,6 +370,49 @@ describe('indexes', () => {
     expect(index.covered).toBe(false)
   })
 
+  it('a scope the head commits to is never uncovered because the server hides it', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatGroups', [['g1', 2]])] })
+    const { http } = server({
+      'GET /account/index/chatGroups': () => {
+        throw refused(404)
+      },
+      'GET /account/head': () => ({ head }),
+    })
+    // The head lists an entry the server now says doesn't exist: refused.
+    await expect(new AccountHeadClient(engine, store, http).verifiedIndex('chatGroups')).rejects.toEqual(new IndexMismatchError('chatGroups'))
+  })
+
+  it('a scope the head commits to as empty reads as covered and empty from a 404', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('chatContacts', [])] })
+    const { http } = server({
+      'GET /account/index/chatContacts': () => {
+        throw refused(404)
+      },
+      'GET /account/head': () => ({ head }),
+    })
+    const index = await new AccountHeadClient(engine, store, http).verifiedIndex('chatContacts')
+    expect(index.covered).toBe(true)
+    expect(index.values).toEqual([])
+  })
+
+  it('a scope the head does not cover is uncovered from a 404, as before', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const head = seal({ sequence: 1, previous: null, writer: 'w:other', scopes: [engine.scope('pins', [['pins', 5]])] })
+    const { http } = server({
+      'GET /account/index/settings': () => {
+        throw refused(404)
+      },
+      'GET /account/head': () => ({ head }),
+    })
+    const index = await new AccountHeadClient(engine, store, http).verifiedIndex('settings')
+    expect(index.covered).toBe(false)
+  })
+
   it('refuses a value or a listing the covered index does not vouch for', () => {
     const index = new VerifiedIndex('contacts', true, [['a', 1], ['b', 2]], null)
     index.expect('a', 1)
