@@ -69,7 +69,9 @@ function AddressKeys({ address, creating, failed }: { address: CheckedMailAddres
   const forwardsEndToEnd = (forwardings.data ?? []).some((forwarding) => forwarding.forwarderAddress === address.address)
   return (
     <Section title={address.address} description={t('settings.keys.addressHint')}>
-      {address.keys.length === 0 ? (
+      {/* No key yet only without a key list too: rows gone from under a
+          signed list are shown as missing, below. */}
+      {address.keys.length === 0 && address.keyList === null ? (
         failed ? (
           <Alert variant="error">{t('settings.keys.createFailed')}</Alert>
         ) : (

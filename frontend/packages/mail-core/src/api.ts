@@ -13,6 +13,7 @@ import {
   signMailDetached,
   signMailDetachedAsGroup,
   inspectExternalMailKey,
+  MAIL_KEY_FLAGS,
   openMailGroupMessage,
   openForwardedMailMessage,
   openMailMessage,
@@ -31,7 +32,7 @@ import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
 import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
-import { checkedAddresses, type CheckedKey } from './keyList'
+import { checkedAddresses, OwnKeyListRolledBack, type CheckedKey } from './keyList'
 import { sanitizeSignature } from './sanitize'
 import { searchText } from './searchText'
 import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
@@ -307,10 +308,18 @@ export function mailAccountOf(
   // the keys that open the account's own mail or vouch for its signatures.
   const ownKeys = (row: CheckedOwnAddress) => row.keys.filter((k) => !k.forwarding)
   const current = rows.find((row) => row.state === 'active')
-  if (!current || current.keys.length === 0) throw new NoAddressKey()
-  const signedPrimary = current.verifiedList?.keys.find((entry) => entry.primary)
+  // No key yet is only an address without a key list too: one with a list
+  // and no rows lost its keys on the server's side.
+  if (!current || (current.keys.length === 0 && current.keyList === null)) throw new NoAddressKey()
+  // The signed primary, usable (neither obsolete nor compromised), and its
+  // row's public key checked.
+  const usable = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
+  const signedPrimary = current.verifiedList?.keys.find((entry) => entry.primary && (entry.flags & usable) === usable)
   const primary = signedPrimary && ownKeys(current).find((k) => k.listed && k.fingerprint === signedPrimary.fingerprint)
   if (!primary) throw new UnverifiedOwnKeys(current.address)
+  // A key the account marked compromised vouches for nothing it signs.
+  const trusted = (row: CheckedOwnAddress, key: CheckedOwnAddress['keys'][number]) =>
+    key.listed && ((row.verifiedList?.keys.find((entry) => entry.fingerprint === key.fingerprint)?.flags ?? 0) & MAIL_KEY_FLAGS.notCompromised) !== 0
   const earlier = rows.filter((row) => row !== current)
   // A freed name may be someone else's now: its keys only open the mail it
   // received while it was this account's, and it is never "me". Receiving
@@ -337,7 +346,7 @@ export function mailAccountOf(
     ],
     forwardingKeys: held.flatMap((row) => row.keys.filter((k) => k.forwarding).map(sealed(row))),
     addresses: [current.address, ...earlier.filter((row) => row.state !== 'freed').map((row) => row.address)],
-    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => ownKeys(row).filter((k) => k !== primary && k.listed).map((k) => k.publicKey))],
+    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => ownKeys(row).filter((k) => k !== primary && trusted(row, k)).map((k) => k.publicKey))],
     isOwnAddress: (candidate) => {
       if (!candidate) return false
       const folded = fold(candidate)
@@ -357,7 +366,8 @@ export function useMailAccount() {
     // account is read again, with the new address first.
     queryKey: ['mail', 'account', session.sessionId, session.address],
     staleTime: Infinity,
-    retry: (count, error) => !(error instanceof NoAddressKey) && count < 1,
+    // Keys that can't be trusted aren't fixed by asking again.
+    retry: (count, error) => !(error instanceof NoAddressKey || error instanceof UnverifiedOwnKeys || error instanceof OwnKeyListRolledBack) && count < 1,
     queryFn: async (): Promise<MailAccount> => {
       // The current address sends; the earlier ones (after a rename) only
       // keep the keys their mail opens with.

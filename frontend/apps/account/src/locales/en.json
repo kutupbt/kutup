@@ -214,6 +214,7 @@
           "tooManyHeld": "You hold as many earlier names as an account can while they receive mail. Stop one of them from receiving below, then change your username.",
           "breakGlass": "This server's emergency administrator account keeps its name.",
           "setupRequired": "Finish setting up your account first.",
+          "ownFreedName": "This was your name before, and its old encryption keys must be carried over to take it back. That isn't possible yet; it will be soon.",
           "conflict": "Your username changed on another device meanwhile. Close this and try again."
         }
       },

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../crypto/src/rustWasm', async () => {
   const [{ readFile }, module] = await Promise.all([
     import('node:fs/promises'),
@@ -9,25 +9,10 @@ vi.mock('../../crypto/src/rustWasm', async () => {
   await module.default({ module_or_path: wasm })
   return { getCryptoWasm: () => Promise.resolve(module) }
 })
-// The device's revision guard, in memory.
-const seen = vi.hoisted(() => new Map<string, number>())
-vi.mock('@kutup/crypto/revisionGuard', async (importActual) => {
-  const actual = await importActual<typeof import('@kutup/crypto/revisionGuard')>()
-  return {
-    ...actual,
-    revisionGuard: () => ({
-      accept: (scope: string, id: string, revision: number) => {
-        const before = seen.get(`${scope}/${id}`) ?? 0
-        if (revision < before) return Promise.reject(new actual.OlderThanSeenError(scope, revision, before))
-        seen.set(`${scope}/${id}`, revision)
-        return Promise.resolve()
-      },
-    }),
-  }
-})
 vi.mock('@kutup/session/client', () => ({ default: {} }))
 
 import { generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
+import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import { checkedAddresses, missingKeys, OwnKeyListRolledBack } from './keyList'
 
 const both = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
@@ -56,6 +41,9 @@ async function ownRow(masterKey: Uint8Array, address: string, sequence = 1, list
     },
   }
 }
+
+// A fresh device for each test: no list seen yet.
+beforeEach(() => resetRevisionGuardsForTesting())
 
 describe('the account’s own addresses, checked against its own authority', () => {
   const masterKey = crypto.getRandomValues(new Uint8Array(32))
@@ -88,6 +76,20 @@ describe('the account’s own addresses, checked against its own authority', () 
     await checkedAddresses(session, [newer])
     const { row: older } = await ownRow(masterKey, 'lin@kutup.test', 2)
     expect((await checkedAddresses(session, [older]))[0].verifiedList).toBeNull()
+    await expect(checkedAddresses(session, [older], { strict: true })).rejects.toBeInstanceOf(OwnKeyListRolledBack)
+  })
+
+  it('counts each authority on its own: another incarnation starts its own count', async () => {
+    const { row: seen } = await ownRow(masterKey, 'max@kutup.test', 5)
+    await checkedAddresses(session, [seen])
+    // After a reset the account has another master key, so another authority: its
+    // first list at sequence 1 is no rollback of the old one's 5.
+    const reset = crypto.getRandomValues(new Uint8Array(32))
+    const { row: fresh } = await ownRow(reset, 'max@kutup.test', 1)
+    const [checked] = await checkedAddresses({ masterKey: reset, userId: 'me' }, [fresh], { strict: true })
+    expect(checked.verifiedList?.sequence).toBe(1)
+    // The old authority's count still stands.
+    const { row: older } = await ownRow(masterKey, 'max@kutup.test', 4)
     await expect(checkedAddresses(session, [older], { strict: true })).rejects.toBeInstanceOf(OwnKeyListRolledBack)
   })
 })

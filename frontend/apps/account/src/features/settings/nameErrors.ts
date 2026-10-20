@@ -26,6 +26,8 @@ export function nameErrorMessage(t: TFunction, error: unknown, locale: string, f
       return t('settings.account.rename.errors.breakGlass')
     case 'setupRequired':
       return t('settings.account.rename.errors.setupRequired')
+    case 'ownFreedName':
+      return t('settings.account.rename.errors.ownFreedName')
     case 'renameConflict':
       return t('settings.account.rename.errors.conflict')
     case 'notHeld':

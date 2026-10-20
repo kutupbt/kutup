@@ -233,9 +233,10 @@ export function plainGuardKeysForTesting(account: string): GuardKeys {
     entryId: (scope, id) => `${account}:${scope}:${id}`,
     sealSeen: (entry, revision) => `${entry}=${revision}`,
     openSeen: (entry, sealed) => {
-      const [name, revision] = sealed.split('=')
-      if (name !== entry) throw new Error('moved')
-      return Number(revision)
+      // The last '=': ids may hold base64 padding.
+      const at = sealed.lastIndexOf('=')
+      if (sealed.slice(0, at) !== entry) throw new Error('moved')
+      return Number(sealed.slice(at + 1))
     },
   }
 }
