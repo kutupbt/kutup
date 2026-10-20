@@ -42,6 +42,7 @@ describe('key list changes start from the signed list', () => {
   const address = {
     id: 'address',
     address: list.address,
+    state: 'active' as const,
     keys: [row({ ...a, primary: false }), row({ ...b, flags: 0 }), row(injected, false)],
     keyList: { data: 'data', signature: 'signature' },
     verifiedList: list,

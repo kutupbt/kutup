@@ -23,6 +23,16 @@ export function RecipientLock({ address, domain, pinned, encrypt = true }: { add
     )
   }
   const value = protection.data
+  // The address forwards outside Kutup: its owner turned end-to-end
+  // encryption off for it (Proton shows the same open lock).
+  if (value.kind === 'kutup' && value.encryptionDisabled) {
+    const label = t('compose.lock.encryptionDisabled')
+    return (
+      <Tooltip label={label}>
+        <LockKeyholeOpen className="size-3 text-status-warn" role="img" aria-label={label} data-testid="recipient-encryption-disabled" />
+      </Tooltip>
+    )
+  }
   // Encrypt off for this message: whoever could have had end-to-end mail now
   // gets it readable on the way (docs/plans/mail-encrypt-sign.md).
   if (!encrypt && value.kind !== 'none' && value.kind !== 'pinnedUnusable') {
