@@ -743,6 +743,41 @@ each gets its own result in order:
 A recipient over a limit doesn't stop the others. A server error fails the
 whole request, which is safe to repeat because `sendId`s dedupe.
 
+**Multi-recipient sends** (docs/plans/pairwise-groups.md, slice 2; Signal's
+`PUT /v1/messages/multi_recipient`). `POST
+/api/chat/anonymous/messages/multi?server=` carries one group message to
+member accounts of one server, sent once: `SealedMultiSubmissionV1` with
+`sendId`, `payload` (libsignal's sent sealed-sender v2 message, version
+`0x23`, recipients as 17-byte account service ids, no excluded recipients),
+`capabilities` (each recipient account's raw 16-byte group capability, exactly
+the payload's accounts) and `urgent` (default `true`). The checks, in order:
+1. the payload and its size: `400 malformed` for a payload that doesn't parse,
+   a device listed twice, a recipient with no devices or capabilities that
+   don't name exactly the payload's accounts; `413` past the recipient limit
+   (256), the request size (256 KiB plus 132 bytes per recipient) or one
+   recipient's message (96 KiB), each an administrators' setting;
+2. each account's capability against its published set
+   (`/api/chat/group-capabilities`): an account that isn't an active one here
+   and a capability that doesn't hold are one answer, `refused`;
+3. budgets: the address's anonymous limit counts the request once, and its
+   bytes a minute (`429` past them); each capability its sends a minute and a
+   day, `rateLimited` past them;
+4. devices, for the accounts that passed: missing or extra devices are `409`
+   (`devices`), else changed registrations `410` (`stale`); nothing is stored
+   on either, and both carry `refused` and `rateLimited` too.
+
+Otherwise the answer is `200 { "refused", "rateLimited" }` and the rest are
+stored: the shared part (`e_pub ‖ ciphertext`) once, and a mailbox row per
+device with its account's key material. A device drains each as its ordinary
+sealed envelope, `0x22 ‖ C_i ‖ AT_i ‖ e_pub ‖ ciphertext`; drain pages are
+capped at 4 MiB as well as by count. Connected devices are nudged
+(`drainMailbox`) rather than sent the message; an urgent send also wakes
+offline devices by web push. A `sendId` already stored for an account stores
+nothing again for it. The shared part goes once no row names it (after an ack,
+or the maintenance sweep). A destination on another server answers `503
+peerUnavailable` until the federated route exists: the client sends those
+members' copies one by one.
+
 For another server, the origin queues each send exactly as a single sealed
 send (same outbox, sequence and `sendId` dedup), then flushes the
 destination's queue. One flush per destination runs at a time: in each

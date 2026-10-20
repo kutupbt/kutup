@@ -1505,6 +1505,15 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
+            "/api/chat/anonymous/messages/multi",
+            post(handlers::chat_multi::send_multi)
+                // The largest payload the format takes, base64, and the rest.
+                .route_layer(DefaultBodyLimit::max(
+                    kutup_chat_proto::MAX_SEALED_MULTI_PAYLOAD_BYTES * 4 / 3 + 256 * 1024,
+                ))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
             "/api/chat/anonymous/messages/batch",
             post(chat::send_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(

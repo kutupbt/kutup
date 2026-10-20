@@ -150,9 +150,11 @@ pub use sealed_sender::{
     AnonymousPreKeyRequestV1, FederatedSealedBatchItemV1, FederatedSealedBatchResponseV1,
     FederatedSealedBatchV1, FederatedSealedTransactionV1, SealedBatchOutcomeV1,
     SealedBatchRecipientV1, SealedBatchResponseV1, SealedBatchResultV1, SealedBatchSubmissionV1,
-    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
+    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedMultiDevicesV1,
+    SealedMultiResponseV1, SealedMultiStaleV1, SealedMultiSubmissionV1, SealedOutgoingEnvelopeV1,
     SenderCertificateResponseV1, DELIVERY_CAPABILITY_CONTEXT, MAX_SEALED_BATCH_BYTES,
-    MAX_SEALED_BATCH_ITEMS, SEALED_FEDERATION_VERSION,
+    MAX_SEALED_BATCH_ITEMS, MAX_SEALED_MULTI_PAYLOAD_BYTES, MAX_SEALED_MULTI_RECIPIENTS,
+    SEALED_FEDERATION_VERSION,
 };
 pub use security_policy::{
     SealedSenderRootV1, SealedSenderServerCertificateV1, SealedSenderServicePolicyV1,

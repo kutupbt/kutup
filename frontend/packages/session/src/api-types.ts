@@ -196,6 +196,13 @@ export interface AdminSettings {
   chatGroupLinkJoinsPerRelayPerMin: number
   /** How many group delivery capabilities (one per group) an account may publish. */
   chatGroupCapabilitiesPerAccount: number
+  /** Multi-recipient group sends (each an administrator's setting). */
+  chatMultiMaxRecipients: number
+  chatMultiMaxMessageBytes: number
+  chatMultiBaseBytes: number
+  chatMultiIpBytesPerMin: number
+  chatGroupCapabilitySendsPerMin: number
+  chatGroupCapabilitySendsPerDay: number
   /** The largest group avatar blob hosted groups take (one of the avatar lengths). */
   chatGroupAvatarMaxBytes: number
   /** The most a hosted group's avatars may take, in bytes (at least twice the largest). */

@@ -1,0 +1,20 @@
+-- Multi-recipient sends stored once (docs/plans/pairwise-groups.md, slice 2
+-- §6; Signal-Server's shared payload): `e_pub ‖ ciphertext` once per send
+-- and destination, and each recipient device's mailbox row naming it, with
+-- its account's 48 bytes of key material as its content. A payload goes
+-- when no row names it any more (collected by reference).
+CREATE TABLE chat_shared_payloads (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    payload bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE chat_mailbox
+    ADD COLUMN shared_payload_id uuid REFERENCES chat_shared_payloads(id) ON DELETE RESTRICT;
+
+-- The multi-recipient route's budgets: per group capability, and an
+-- address's bytes a minute.
+ALTER TABLE chat_anonymous_rate_counters DROP CONSTRAINT chat_anonymous_rate_counters_scope_type_check;
+ALTER TABLE chat_anonymous_rate_counters ADD CONSTRAINT chat_anonymous_rate_counters_scope_type_check
+    CHECK (scope_type = ANY (ARRAY['capability_bundle', 'capability_minute', 'capability_day',
+        'recipient', 'federation_origin', 'group_capability_minute', 'group_capability_day',
+        'ip_bytes']));

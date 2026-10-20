@@ -288,6 +288,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::chat_contact_list::delete,
         crate::handlers::chat_group_capabilities::change,
         crate::handlers::chat_group_capabilities::set,
+        crate::handlers::chat_multi::send_multi,
         crate::handlers::chat_group_list::list,
         crate::handlers::chat_group_list::put,
         crate::handlers::chat_group_list::delete,

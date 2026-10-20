@@ -248,6 +248,122 @@ pub async fn chat_group_capabilities_per_account(pool: &PgPool) -> Result<i64, s
     )
 }
 
+/// A whole-number setting administrators set: its key, its field in
+/// `/api/admin/settings`, its first value and its range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NumericSetting {
+    pub key: &'static str,
+    pub field: &'static str,
+    pub default: i64,
+    pub min: i64,
+    pub max: i64,
+}
+
+impl NumericSetting {
+    pub fn validate(&self, value: i64) -> Result<i64, String> {
+        if (self.min..=self.max).contains(&value) {
+            Ok(value)
+        } else {
+            Err(format!(
+                "{} is between {} and {}",
+                self.field, self.min, self.max
+            ))
+        }
+    }
+
+    /// The stored value, else the first value.
+    pub async fn load(&self, pool: &PgPool) -> Result<i64, sqlx::Error> {
+        Ok(
+            sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+                .bind(self.key)
+                .fetch_optional(pool)
+                .await?
+                .and_then(|value| value.parse::<i64>().ok())
+                .and_then(|value| self.validate(value).ok())
+                .unwrap_or(self.default),
+        )
+    }
+}
+
+/// Multi-recipient sends (docs/plans/pairwise-groups.md, slice 2 §1 and §4),
+/// with Signal's values first: the largest message one recipient gets, the
+/// request's size before its per-recipient headers, how many accounts one
+/// request names, the bytes one address may send a minute, and the sends a
+/// group capability takes a minute and a day.
+pub const CHAT_MULTI_MAX_MESSAGE_BYTES: NumericSetting = NumericSetting {
+    key: "chat_multi_max_message_bytes",
+    field: "chatMultiMaxMessageBytes",
+    default: 96 * 1024,
+    min: 4 * 1024,
+    max: 1024 * 1024,
+};
+pub const CHAT_MULTI_BASE_BYTES: NumericSetting = NumericSetting {
+    key: "chat_multi_base_bytes",
+    field: "chatMultiBaseBytes",
+    default: 256 * 1024,
+    min: 4 * 1024,
+    max: 4 * 1024 * 1024,
+};
+pub const CHAT_MULTI_MAX_RECIPIENTS: NumericSetting = NumericSetting {
+    key: "chat_multi_max_recipients",
+    field: "chatMultiMaxRecipients",
+    default: 256,
+    min: 1,
+    max: kutup_chat_proto::MAX_SEALED_MULTI_RECIPIENTS as i64,
+};
+pub const CHAT_MULTI_IP_BYTES_PER_MIN: NumericSetting = NumericSetting {
+    key: "chat_multi_ip_bytes_per_min",
+    field: "chatMultiIpBytesPerMin",
+    default: 32 * 1024 * 1024,
+    min: 1024 * 1024,
+    max: 1024 * 1024 * 1024,
+};
+pub const CHAT_GROUP_CAPABILITY_SENDS_PER_MIN: NumericSetting = NumericSetting {
+    key: "chat_group_capability_sends_per_min",
+    field: "chatGroupCapabilitySendsPerMin",
+    default: 120,
+    min: 1,
+    max: 100_000,
+};
+pub const CHAT_GROUP_CAPABILITY_SENDS_PER_DAY: NumericSetting = NumericSetting {
+    key: "chat_group_capability_sends_per_day",
+    field: "chatGroupCapabilitySendsPerDay",
+    default: 10_000,
+    min: 1,
+    max: 10_000_000,
+};
+/// Every multi-recipient setting, as `/api/admin/settings` lists them.
+pub const CHAT_MULTI_SETTINGS: [NumericSetting; 6] = [
+    CHAT_MULTI_MAX_MESSAGE_BYTES,
+    CHAT_MULTI_BASE_BYTES,
+    CHAT_MULTI_MAX_RECIPIENTS,
+    CHAT_MULTI_IP_BYTES_PER_MIN,
+    CHAT_GROUP_CAPABILITY_SENDS_PER_MIN,
+    CHAT_GROUP_CAPABILITY_SENDS_PER_DAY,
+];
+
+/// The multi-recipient limits now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MultiLimits {
+    pub max_message_bytes: i64,
+    pub base_bytes: i64,
+    pub max_recipients: i64,
+    pub ip_bytes_per_min: i64,
+    pub capability_sends_per_min: i64,
+    pub capability_sends_per_day: i64,
+}
+
+pub async fn chat_multi_limits(pool: &PgPool) -> Result<MultiLimits, sqlx::Error> {
+    Ok(MultiLimits {
+        max_message_bytes: CHAT_MULTI_MAX_MESSAGE_BYTES.load(pool).await?,
+        base_bytes: CHAT_MULTI_BASE_BYTES.load(pool).await?,
+        max_recipients: CHAT_MULTI_MAX_RECIPIENTS.load(pool).await?,
+        ip_bytes_per_min: CHAT_MULTI_IP_BYTES_PER_MIN.load(pool).await?,
+        capability_sends_per_min: CHAT_GROUP_CAPABILITY_SENDS_PER_MIN.load(pool).await?,
+        capability_sends_per_day: CHAT_GROUP_CAPABILITY_SENDS_PER_DAY.load(pool).await?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +421,22 @@ mod tests {
         );
         assert!(validate_chat_group_capabilities_per_account(0).is_err());
         assert!(validate_chat_group_capabilities_per_account(100_001).is_err());
+    }
+
+    #[test]
+    fn multi_settings_hold_their_ranges_and_firsts() {
+        for setting in CHAT_MULTI_SETTINGS {
+            assert_eq!(
+                setting.validate(setting.default),
+                Ok(setting.default),
+                "{setting:?}"
+            );
+            assert!(setting.validate(setting.min - 1).is_err());
+            assert!(setting.validate(setting.max + 1).is_err());
+        }
+        let fields: std::collections::BTreeSet<_> =
+            CHAT_MULTI_SETTINGS.iter().map(|s| s.field).collect();
+        assert_eq!(fields.len(), CHAT_MULTI_SETTINGS.len(), "one field each");
     }
 
     #[test]

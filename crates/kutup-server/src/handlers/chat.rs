@@ -54,6 +54,8 @@ const MAX_DEVICE_ID: i32 = 127;
 const MAX_DEVICE_NAME_CHARS: usize = 64;
 /// Mailbox drain page cap.
 const MAX_DRAIN_LIMIT: i64 = 500;
+/// The most one drain page carries (at least one envelope, however large).
+const MAX_DRAIN_BYTES: usize = 4 * 1024 * 1024;
 
 /// Convert PostgreSQL's signed `SMALLINT` representation into the closed Direct
 /// Chat suite registry without wrapping negative values or applying a default.
@@ -1619,6 +1621,36 @@ pub async fn get_anonymous_bundles(
     Ok(Json(bundles).into_response())
 }
 
+/// Adds `amount` to the scope's count in the current window and returns the
+/// new count (shared by every backend, in the database).
+pub(crate) async fn anonymous_count(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope_type: &str,
+    scope_digest: &[u8; 32],
+    amount: i64,
+    window_seconds: i64,
+) -> AppResult<i64> {
+    Ok(sqlx::query_scalar(
+        "INSERT INTO chat_anonymous_rate_counters
+             (scope_type, scope_digest, window_start, count, expires_at)
+         VALUES (
+             $1, $2,
+             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
+             $4,
+             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3) + make_interval(secs => $3 * 2)
+         )
+         ON CONFLICT (scope_type, scope_digest, window_start)
+         DO UPDATE SET count = chat_anonymous_rate_counters.count + $4
+         RETURNING count",
+    )
+    .bind(scope_type)
+    .bind(scope_digest.as_slice())
+    .bind(window_seconds)
+    .bind(amount)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
 pub(crate) async fn consume_anonymous_rate(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     scope_type: &str,
@@ -1626,24 +1658,7 @@ pub(crate) async fn consume_anonymous_rate(
     limit: i64,
     window_seconds: i64,
 ) -> AppResult<()> {
-    let count: i64 = sqlx::query_scalar(
-        "INSERT INTO chat_anonymous_rate_counters
-             (scope_type, scope_digest, window_start, count, expires_at)
-         VALUES (
-             $1, $2,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3),
-             1,
-             to_timestamp(floor(extract(epoch FROM now()) / $3) * $3) + make_interval(secs => $3 * 2)
-         )
-         ON CONFLICT (scope_type, scope_digest, window_start)
-         DO UPDATE SET count = chat_anonymous_rate_counters.count + 1
-         RETURNING count",
-    )
-    .bind(scope_type)
-    .bind(scope_digest.as_slice())
-    .bind(window_seconds)
-    .fetch_one(&mut **tx)
-    .await?;
+    let count = anonymous_count(tx, scope_type, scope_digest, 1, window_seconds).await?;
     if count > limit {
         let metric_scope = match scope_type {
             "capability_bundle" => "capability_bundle",
@@ -2686,13 +2701,16 @@ pub async fn drain_mailbox(
         String,
         OffsetDateTime,
         Option<String>,
+        Option<Vec<u8>>,
     )> = sqlx::query_as(
-        "SELECT id, cursor, sender_server, sender_account_id, sealed_sender, sender_device_id,
-                envelope_type, suite, content, server_ts, send_id
-             FROM chat_mailbox
-             WHERE recipient_user_id = $1 AND recipient_device_id = $2
-               AND ($4::BIGINT IS NULL OR cursor > $4)
-             ORDER BY cursor
+        "SELECT m.id, m.cursor, m.sender_server, m.sender_account_id, m.sealed_sender,
+                m.sender_device_id, m.envelope_type, m.suite, m.content, m.server_ts, m.send_id,
+                p.payload
+             FROM chat_mailbox m
+             LEFT JOIN chat_shared_payloads p ON p.id = m.shared_payload_id
+             WHERE m.recipient_user_id = $1 AND m.recipient_device_id = $2
+               AND ($4::BIGINT IS NULL OR m.cursor > $4)
+             ORDER BY m.cursor
              LIMIT $3",
     )
     .bind(user_id)
@@ -2702,10 +2720,31 @@ pub async fn drain_mailbox(
     .fetch_all(&state.pool)
     .await?;
 
-    let more = rows.len() as i64 > limit;
+    let mut more = rows.len() as i64 > limit;
+    // A page is capped by bytes as well as count: a row naming a shared
+    // payload (a multi-recipient send) is assembled into the device's sealed
+    // envelope here, up to 96 KiB each.
+    let mut rows: Vec<_> = rows.into_iter().take(limit as usize).collect();
+    let mut bytes = 0usize;
+    let mut fits = 0usize;
+    for row in &rows {
+        let size = row.8.len()
+            + row
+                .11
+                .as_ref()
+                .map_or(0, |payload| payload.len() * 4 / 3 + 4);
+        if fits > 0 && bytes + size > MAX_DRAIN_BYTES {
+            break;
+        }
+        bytes += size;
+        fits += 1;
+    }
+    if fits < rows.len() {
+        rows.truncate(fits);
+        more = true;
+    }
     let envelopes: Vec<DeliveredEnvelope> = rows
         .into_iter()
-        .take(limit as usize)
         .map(
             |(
                 id,
@@ -2719,7 +2758,12 @@ pub async fn drain_mailbox(
                 content,
                 ts,
                 send_id,
+                shared,
             )| {
+                let content = match shared {
+                    Some(shared) => crate::handlers::chat_multi::assemble(&content, &shared)?,
+                    None => content,
+                };
                 let sender = match (sender_server, sender_account_id) {
                     (Some(server), Some(account_id)) => {
                         Some(crate::account_ids::stored(&server, account_id)?)
@@ -2775,16 +2819,25 @@ pub async fn ack_messages(
         .iter()
         .map(|s| Uuid::parse_str(s).map_err(|_| AppError::bad_request("invalid envelope id")))
         .collect::<AppResult<_>>()?;
-    let deleted = sqlx::query(
+    let deleted: Vec<Option<Uuid>> = sqlx::query_scalar(
         "DELETE FROM chat_mailbox
-         WHERE recipient_user_id = $1 AND recipient_device_id = $2 AND id = ANY($3)",
+         WHERE recipient_user_id = $1 AND recipient_device_id = $2 AND id = ANY($3)
+         RETURNING shared_payload_id",
     )
     .bind(user_id)
     .bind(q.device_id)
     .bind(&ids)
-    .execute(&state.pool)
-    .await?
-    .rows_affected();
+    .fetch_all(&state.pool)
+    .await?;
+    // The shared payloads the acked rows named, once no row names them; a
+    // failure leaves them to the sweep.
+    let mut shared: Vec<Uuid> = deleted.iter().flatten().copied().collect();
+    shared.sort();
+    shared.dedup();
+    if let Err(error) = crate::handlers::chat_multi::collect_payloads(&state.pool, &shared).await {
+        tracing::warn!(error = %error.message, "chat: shared payload collection after an ack failed");
+    }
+    let deleted = deleted.len() as u64;
     Ok(Json(json!({ "acked": deleted })).into_response())
 }
 

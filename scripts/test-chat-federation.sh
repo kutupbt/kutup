@@ -152,6 +152,17 @@ KUTUP_LIVE_ADMIN="admina:federation-live-password" \
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
 KUTUP_LIVE_ADMIN="admina:federation-live-password" \
   cargo test -p kutup-server --test chat_group_list_live -- --test-threads=1 --nocapture
+# Multi-recipient sends (docs/plans/pairwise-groups.md, slice 2): stored once,
+# drained by every device; every send acked, no shared payload is left.
+KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+KUTUP_LIVE_ADMIN="admina:federation-live-password" \
+  cargo test -p kutup-server --test chat_multi_live -- --test-threads=1 --nocapture
+left="$(compose exec -T postgres-a psql -U kutup -d kutup -Atc \
+  "SELECT count(*) FROM chat_shared_payloads")"
+if [[ "$left" != "0" ]]; then
+  echo "$left shared payloads were left after every row naming them was acked" >&2
+  exit 1
+fi
 # The account's Chat contact list (docs/plans/chat-contacts-sync.md): the same
 # shape under its own scope, chatContacts, wherever Chat is.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port_a" \

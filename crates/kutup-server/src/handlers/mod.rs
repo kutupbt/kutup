@@ -11,6 +11,7 @@ pub mod chat_group_capabilities;
 pub mod chat_group_list;
 pub mod chat_link_preview;
 pub mod chat_media;
+pub mod chat_multi;
 pub mod collab;
 pub mod collections;
 pub mod contacts;

@@ -161,6 +161,11 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
         }
     }
+    // Shared payloads no mailbox row names any more (retention above, deleted
+    // devices, acks whose collection failed).
+    if let Err(error) = crate::handlers::chat_multi::sweep_payloads(pool).await {
+        tracing::warn!(error = %error.message, "chat maintenance: shared payload sweep failed");
+    }
     if policy.send_retention_days > 0 {
         match sqlx::query(
             "DELETE FROM chat_sends

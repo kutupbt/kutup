@@ -357,6 +357,130 @@ pub struct SealedDeliveryResponseV1 {
     pub deduplicated: bool,
 }
 
+/// The most accounts one multi-recipient send may name, whatever a server's
+/// own limit (an administrator's setting, at most this).
+pub const MAX_SEALED_MULTI_RECIPIENTS: usize = 1000;
+/// The largest decoded multi-recipient payload the format takes; a server's
+/// own limit is lower (docs/plans/pairwise-groups.md, slice 2 §1).
+pub const MAX_SEALED_MULTI_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
+
+/// One group message to member accounts of one server, sent once
+/// (docs/plans/pairwise-groups.md, slice 2 §1; Signal's
+/// `PUT /v1/messages/multi_recipient`): libsignal's sent multi-recipient
+/// message, and each recipient account's group capability.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedMultiSubmissionV1 {
+    /// Dedup and the client's retry key, per recipient account.
+    pub send_id: String,
+    /// libsignal's sent sealed-sender v2 message (version `0x23`),
+    /// canonical padded base64.
+    pub payload: String,
+    /// Each recipient account's raw 16-byte group capability (canonical
+    /// padded base64), by account id: exactly the payload's recipients.
+    pub capabilities: std::collections::BTreeMap<String, String>,
+    /// `false` (receipts and the like) only nudges connected devices and
+    /// never wakes one by web push.
+    #[serde(default = "urgent_by_default")]
+    pub urgent: bool,
+}
+
+fn urgent_by_default() -> bool {
+    true
+}
+
+impl SealedMultiSubmissionV1 {
+    /// The payload's bytes.
+    pub fn payload_bytes(&self) -> Result<Vec<u8>, String> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.payload)
+            .map_err(|_| "payload must be canonical padded base64")?;
+        if base64::engine::general_purpose::STANDARD.encode(&bytes) != self.payload {
+            return Err("payload must be canonical padded base64".into());
+        }
+        if bytes.is_empty() || bytes.len() > MAX_SEALED_MULTI_PAYLOAD_BYTES {
+            return Err("payload is empty or too large".into());
+        }
+        Ok(bytes)
+    }
+
+    /// The raw capability given for `account_id`.
+    pub fn capability_for(&self, account_id: &str) -> Option<[u8; 16]> {
+        let value = self.capabilities.get(account_id)?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .ok()?;
+        if base64::engine::general_purpose::STANDARD.encode(&bytes) != *value {
+            return None;
+        }
+        bytes.try_into().ok()
+    }
+
+    /// Its shape: the sendId, 1 to [`MAX_SEALED_MULTI_RECIPIENTS`] accounts
+    /// by lowercase UUID, each with a 16-byte capability. The payload itself
+    /// is parsed by the server.
+    pub fn validate(&self) -> Result<(), String> {
+        if uuid_shape(&self.send_id).is_none() {
+            return Err("sendId must be a lowercase hyphenated UUID".into());
+        }
+        if self.capabilities.is_empty() || self.capabilities.len() > MAX_SEALED_MULTI_RECIPIENTS {
+            return Err(format!(
+                "a multi-recipient send names 1-{MAX_SEALED_MULTI_RECIPIENTS} accounts"
+            ));
+        }
+        for account in self.capabilities.keys() {
+            if uuid_shape(account).is_none() {
+                return Err("a recipient's accountId must be a lowercase UUID".into());
+            }
+            if self.capability_for(account).is_none() {
+                return Err("a group capability is 16 bytes, canonical padded base64".into());
+            }
+        }
+        self.payload_bytes().map(|_| ())
+    }
+}
+
+/// A recipient account whose device list the send got wrong (`409`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedMultiDevicesV1 {
+    pub account_id: String,
+    pub missing_devices: Vec<u32>,
+    pub extra_devices: Vec<u32>,
+}
+
+/// A recipient account with devices whose registration changed (`410`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedMultiStaleV1 {
+    pub account_id: String,
+    pub stale_devices: Vec<u32>,
+}
+
+/// The answer to a multi-recipient send: `200` with who was refused or over
+/// a budget (the rest delivered); `409` with `devices`, or `410` with
+/// `stale`, when nothing was stored, those lists carried as well so the
+/// client handles them in the same retry.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SealedMultiResponseV1 {
+    /// Accounts not delivered to: not an active account here, or a
+    /// capability that doesn't hold (one answer for all).
+    #[serde(default)]
+    pub refused: Vec<String>,
+    /// Accounts over their capability's budget: send them later.
+    #[serde(default)]
+    pub rate_limited: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<SealedMultiDevicesV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale: Vec<SealedMultiStaleV1>,
+}
+
 fn uuid_shape(value: &str) -> Option<()> {
     if value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| match index {
@@ -373,6 +497,53 @@ fn uuid_shape(value: &str) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn multi(capabilities: &[(&str, [u8; 16])]) -> SealedMultiSubmissionV1 {
+        SealedMultiSubmissionV1 {
+            send_id: "0a0a0a0a-0000-4000-8000-000000000001".into(),
+            payload: base64::engine::general_purpose::STANDARD.encode([0x23, 1, 2, 3]),
+            capabilities: capabilities
+                .iter()
+                .map(|(account, capability)| {
+                    (
+                        (*account).to_owned(),
+                        base64::engine::general_purpose::STANDARD.encode(capability),
+                    )
+                })
+                .collect(),
+            urgent: true,
+        }
+    }
+
+    #[test]
+    fn a_multi_recipient_send_is_checked_for_shape() {
+        let account = "6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b";
+        let ok = multi(&[(account, [7; 16])]);
+        assert!(ok.validate().is_ok());
+        assert_eq!(ok.capability_for(account), Some([7; 16]));
+        assert_eq!(ok.payload_bytes().unwrap(), vec![0x23, 1, 2, 3]);
+        assert!(multi(&[]).validate().is_err(), "no recipients");
+        assert!(multi(&[("Not-A-Uuid", [7; 16])]).validate().is_err());
+        let mut short = ok.clone();
+        short.capabilities.insert(
+            account.into(),
+            base64::engine::general_purpose::STANDARD.encode([7u8; 15]),
+        );
+        assert!(short.validate().is_err(), "a 15-byte capability");
+        let mut empty = ok.clone();
+        empty.payload = String::new();
+        assert!(empty.validate().is_err());
+        let mut send = ok.clone();
+        send.send_id = "nope".into();
+        assert!(send.validate().is_err());
+        // urgent defaults to true on the wire.
+        let parsed: SealedMultiSubmissionV1 = serde_json::from_str(&format!(
+            r#"{{"sendId":"{}","payload":"{}","capabilities":{{}}}}"#,
+            ok.send_id, ok.payload
+        ))
+        .unwrap();
+        assert!(parsed.urgent);
+    }
 
     #[test]
     fn capability_vector_is_domain_and_recipient_bound() {
