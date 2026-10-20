@@ -157,9 +157,9 @@ impl Settings {
 
     pub fn grace(&self) -> Grace {
         Grace {
-            warn_for: self.grace_warn_days * 24 * 3600,
-            stopped_for: self.grace_stopped_hours * 3600,
-            ..Grace::default()
+            confirm_after: super::scaled(Grace::default().confirm_after),
+            warn_for: super::scaled(self.grace_warn_days * 24 * 3600),
+            stopped_for: super::scaled(self.grace_stopped_hours * 3600),
         }
     }
 }

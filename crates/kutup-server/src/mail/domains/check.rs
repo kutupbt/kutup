@@ -100,7 +100,7 @@ fn apply_dkim(domain: &mut Domain, state: i16, now: i64) {
         }
         dkim::WARNING => {
             let since = *domain.dkim_warning_since.get_or_insert(now);
-            domain.dkim_state = if now - since >= DKIM_ERROR_AFTER {
+            domain.dkim_state = if now - since >= super::scaled(DKIM_ERROR_AFTER) {
                 dkim::ERROR
             } else {
                 dkim::WARNING

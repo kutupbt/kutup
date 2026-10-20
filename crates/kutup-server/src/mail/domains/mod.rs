@@ -21,7 +21,22 @@ pub mod store;
 pub mod sweep;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+static TIME_SCALE: AtomicI64 = AtomicI64::new(1);
+
+/// A test stack's clock for custom domains (`MAIL_DOMAINS_TIME_SCALE`,
+/// `APP_ENV=test` only): every period below is divided by it, so a live
+/// test sees a day's wait in seconds. 1 everywhere else.
+pub fn set_time_scale(scale: i64) {
+    TIME_SCALE.store(scale.max(1), Ordering::Relaxed);
+}
+
+/// `seconds` on this server's clock for custom domains.
+pub fn scaled(seconds: i64) -> i64 {
+    (seconds / TIME_SCALE.load(Ordering::Relaxed)).max(1)
+}
 
 /// Whether `domain` is a custom domain held here that takes mail now.
 pub async fn held_here(state: &crate::AppState, domain: &str) -> Result<bool, sqlx::Error> {

@@ -105,6 +105,9 @@ pub struct Config {
     pub mail_dns_insecure: bool,
     /// How often custom domains' sweep runs (`MAIL_DOMAINS_SWEEP_SECONDS`).
     pub mail_domains_sweep_seconds: u64,
+    /// `MAIL_DOMAINS_TIME_SCALE` (test stacks only): custom domains' periods
+    /// divided by it, for the live tests.
+    pub mail_domains_time_scale: i64,
     /// A backup MX the operator runs (`MAIL_BACKUP_MX`): a custom domain
     /// whose first MX is it counts as reaching us (Proton's `BACKUP`).
     pub mail_backup_mx: Option<String>,
@@ -376,6 +379,10 @@ impl Config {
             env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
         }
         crate::ratelimit::configure(env, rate_limits_relaxed);
+        let mail_domains_time_scale = get_env_i64("MAIL_DOMAINS_TIME_SCALE", 1).max(1);
+        if mail_domains_time_scale > 1 && app_env != "test" {
+            env.error("MAIL_DOMAINS_TIME_SCALE may only be set with APP_ENV=test");
+        }
         let mail_dns_insecure = env.bool("MAIL_DNS_INSECURE", false);
         if mail_dns_insecure && app_env != "test" {
             env.error("MAIL_DNS_INSECURE may only be enabled with APP_ENV=test");
@@ -549,6 +556,7 @@ impl Config {
                 }
             },
             mail_dns_insecure,
+            mail_domains_time_scale,
             mail_domains_sweep_seconds: (get_env_i64("MAIL_DOMAINS_SWEEP_SECONDS", 300)
                 .clamp(5, 3600)) as u64,
             mail_stalwart_url: get_env("MAIL_STALWART_URL", "http://stalwart:8080"),

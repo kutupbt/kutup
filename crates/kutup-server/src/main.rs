@@ -470,6 +470,7 @@ async fn main() -> anyhow::Result<()> {
     mail::outbox::spawn(state.clone());
     mail::snooze::spawn(state.clone());
     mail::forwarding::spawn(state.clone());
+    mail::domains::set_time_scale(state.config.mail_domains_time_scale);
     mail::domains::sweep::spawn(state.clone());
     mail::expiry::spawn(state.clone());
 

@@ -91,7 +91,10 @@ pub fn plan(keys: &[Key], now: i64) -> Vec<Step> {
     let mut steps = Vec::new();
     let live = |state| keys.iter().filter(move |k| k.state == state);
     for key in live(KeyState::Retiring) {
-        if key.retiring_at.is_some_and(|at| now - at >= RETIRING_FOR) {
+        if key
+            .retiring_at
+            .is_some_and(|at| now - at >= super::scaled(RETIRING_FOR))
+        {
             steps.push(Step::Retired { id: key.id });
         }
     }
@@ -100,7 +103,7 @@ pub fn plan(keys: &[Key], now: i64) -> Vec<Step> {
     if let Some(pending) = pending {
         if pending
             .published_since
-            .is_some_and(|since| now - since >= PUBLISHED_FOR)
+            .is_some_and(|since| now - since >= super::scaled(PUBLISHED_FOR))
         {
             steps.push(Step::Activate { id: pending.id });
             if let Some(active) = active {
@@ -113,7 +116,7 @@ pub fn plan(keys: &[Key], now: i64) -> Vec<Step> {
         None => true,
         Some(active) => active
             .activated_at
-            .is_some_and(|at| now - at >= ROTATE_AFTER),
+            .is_some_and(|at| now - at >= super::scaled(ROTATE_AFTER)),
     };
     if due {
         // With every selector busy (a retiring key still published), the

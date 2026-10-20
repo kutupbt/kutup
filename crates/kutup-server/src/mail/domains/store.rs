@@ -265,9 +265,9 @@ pub async fn check_and_save(
             let holder_gone = records::verify_state(&txt, &holder_code)
                 .is_some_and(|state| state != records::verify::GOOD);
             let confirmed = holder_gone
-                && current
-                    .transfer_seen_at
-                    .is_some_and(|seen| now - seen.unix_timestamp() >= TRANSFER_CONFIRM_SECS);
+                && current.transfer_seen_at.is_some_and(|seen| {
+                    now - seen.unix_timestamp() >= super::scaled(TRANSFER_CONFIRM_SECS)
+                });
             if confirmed {
                 lose(&mut tx, holder_id, holder_user, &row.name).await?;
                 transfer_seen = None;
