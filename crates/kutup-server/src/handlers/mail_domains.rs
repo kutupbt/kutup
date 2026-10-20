@@ -245,10 +245,14 @@ pub async fn add(
     let user_id = trusted_uuid(&user.user_id)?;
     let name = name::normalize(&input.name, &state.config.chat_server_name)
         .map_err(|refusal| AppError::bad_request(refusal.code()))?;
-    let settings = Settings::load(&state.pool)
+    let mut settings = Settings::load(&state.pool)
         .await?
         .for_user(&state.pool, user_id)
         .await?;
+    // Without Stalwart's management key, a domain could never take mail.
+    if !crate::mail::domains::sweep::configured(&state) {
+        settings.mode = Mode::Off;
+    }
     let row = match store::add(&state.pool, user_id, &name, &settings).await? {
         Ok(row) => row,
         Err(refusal @ store::AddRefusal::Off) => return Err(AppError::forbidden(refusal.code())),
