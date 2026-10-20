@@ -50,7 +50,7 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
-const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
+pub(crate) const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
 
 pub(crate) fn rng() -> impl Rng + CryptoRng {
     OsRng.unwrap_err()
@@ -133,6 +133,16 @@ pub(crate) struct World {
     pub(crate) sealed_sent: RefCell<Vec<(String, SealedMessageSubmissionV1)>>,
     /// Each account's group list: entry id → (revision, envelope).
     pub(crate) group_lists: RefCell<BTreeMap<String, GroupList>>,
+    /// Each account's Chat contact list: entry id → (revision, envelope).
+    pub(crate) contact_lists: RefCell<BTreeMap<String, GroupList>>,
+    /// The most entries a contact list holds (the server's is 10,000).
+    pub(crate) contact_list_cap: Cell<usize>,
+    /// The contact list can't be read (its server is down).
+    pub(crate) contact_list_down: Cell<bool>,
+    /// Each account's identity pin list: (revision, envelope).
+    pub(crate) identity_pins: RefCell<BTreeMap<String, (u64, String)>>,
+    /// How many pin lists were written.
+    pub(crate) pin_writes: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
     /// How many whole states the group home was asked for.
@@ -247,6 +257,11 @@ impl World {
             batch_failures: Cell::new(0),
             manifests_down: RefCell::new(HashSet::new()),
             group_lists: RefCell::new(BTreeMap::new()),
+            contact_lists: RefCell::new(BTreeMap::new()),
+            contact_list_cap: Cell::new(10_000),
+            contact_list_down: Cell::new(false),
+            identity_pins: RefCell::new(BTreeMap::new()),
+            pin_writes: Cell::new(0),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
         })
@@ -302,10 +317,18 @@ impl World {
             .unwrap();
         // The account's master key (its authority's, as above) and key
         // binding, as the app hands them over.
+        let binding = format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}");
         engine
-            .enable_group_list(
+            .enable_group_list(&[authority_seed; 32], &binding)
+            .unwrap();
+        // Timed as the web is: a block is written at once.
+        engine
+            .enable_contact_list(
                 &[authority_seed; 32],
-                &format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}"),
+                &binding,
+                crate::contact_list::ContactListTiming {
+                    block: crate::contact_list::BlockTiming::Immediate,
+                },
             )
             .unwrap();
         Person {
@@ -992,6 +1015,95 @@ impl ChatTransport for Client {
         Ok(true)
     }
 
+    async fn fetch_identity_pins(&self) -> Result<Option<crate::IdentityPinsRecord>> {
+        Ok(self
+            .world
+            .identity_pins
+            .borrow()
+            .get(&self.account)
+            .map(|(revision, envelope)| crate::IdentityPinsRecord {
+                revision: *revision,
+                envelope: envelope.clone(),
+            }))
+    }
+
+    async fn store_identity_pins(&self, write: &crate::IdentityPinsWrite) -> Result<bool> {
+        let mut pins = self.world.identity_pins.borrow_mut();
+        let listed = pins.get(&self.account).map_or(0, |(revision, _)| *revision);
+        if listed != write.base_revision {
+            return Ok(false);
+        }
+        pins.insert(
+            self.account.clone(),
+            (write.revision, write.envelope.clone()),
+        );
+        self.world.pin_writes.set(self.world.pin_writes.get() + 1);
+        Ok(true)
+    }
+
+    async fn fetch_contact_list(&self) -> Result<Vec<crate::transport::ContactListItem>> {
+        if self.world.contact_list_down.get() {
+            return Err(ChatError::Transport("the contact list is down".into()));
+        }
+        Ok(self
+            .world
+            .contact_lists
+            .borrow()
+            .get(&self.account)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, (revision, envelope))| crate::GroupListItem {
+                        id: id.clone(),
+                        revision: *revision,
+                        envelope: envelope.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn store_contact_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<crate::transport::ContactListWrite> {
+        use crate::transport::ContactListWrite;
+        if self.world.contact_list_down.get() {
+            return Err(ChatError::Transport("the contact list is down".into()));
+        }
+        // As the server: the revision from the sealed header, one size only.
+        let sealed = STANDARD
+            .decode(envelope)
+            .map_err(|_| ChatError::Transport("malformed envelope".into()))?;
+        let header = kutup_crypto::chat_contact_list::inspect(&sealed)
+            .map_err(|error| ChatError::Transport(error.to_string()))?;
+        assert_eq!(header, revision, "the head lists the sealed revision");
+        let mut lists = self.world.contact_lists.borrow_mut();
+        let entries = lists.entry(self.account.clone()).or_default();
+        let listed = entries.get(id).map_or(0, |(revision, _)| *revision);
+        if listed != base_revision || revision <= listed {
+            return Ok(ContactListWrite::Conflict);
+        }
+        if base_revision == 0 && entries.len() >= self.world.contact_list_cap.get() {
+            return Ok(ContactListWrite::Full);
+        }
+        entries.insert(id.to_string(), (revision, envelope.to_string()));
+        Ok(ContactListWrite::Stored)
+    }
+
+    async fn delete_contact_entry(&self, id: &str, revision: u64) -> Result<bool> {
+        let mut lists = self.world.contact_lists.borrow_mut();
+        let entries = lists.entry(self.account.clone()).or_default();
+        if entries.get(id).map(|(listed, _)| *listed) != Some(revision) {
+            return Ok(false);
+        }
+        entries.remove(id);
+        Ok(true)
+    }
+
     /// The batch route, recipient by recipient as the server applies it.
     async fn send_sealed_batch(
         &self,
@@ -1202,9 +1314,9 @@ pub(crate) struct Person {
     pub(crate) client: Rc<Client>,
     pub(crate) account: String,
     #[allow(dead_code)] // what linking another device needs
-    authority_seed: u8,
+    pub(crate) authority_seed: u8,
     #[allow(dead_code)]
-    wrapping_key: [u8; 32],
+    pub(crate) wrapping_key: [u8; 32],
 }
 
 impl Person {
@@ -3984,4 +4096,31 @@ fn group_list_a_rotated_profile_key_reaches_the_group() {
     assert!(bob
         .group_texts(&group_id)
         .contains(&"after the rotation".to_string()));
+}
+
+#[test]
+fn group_list_an_older_entry_served_under_the_listed_revision_is_refused() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    bob.flush_list();
+    let (id, member) = {
+        let lists = world.group_lists.borrow();
+        let (id, (_, envelope)) = lists[&bob.account].iter().next().unwrap();
+        (id.clone(), envelope.clone())
+    };
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    let (listed, _) = world.group_lists.borrow()[&bob.account][&id].clone();
+    // The "member" envelope under the "left" revision: refused, not followed.
+    world
+        .group_lists
+        .borrow_mut()
+        .get_mut(&bob.account)
+        .unwrap()
+        .insert(id, (listed, member));
+    let mut bob2 = world.link_device(&bob);
+    assert!(block_on(bob2.engine.sync_group_list(&mut rng())).is_err());
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
 }

@@ -184,17 +184,17 @@ export class ApiChatTransport implements ChatTransportPort {
   /**
    * Stores the engine's next list with the next account head. `false` when
    * another app stored a list first (the engine reads it again and redoes its
-   * change); sent again on a new head when only another value moved; a
-   * write whose answer was lost is found in the index and counts as stored.
+   * change, or a revision it lists already); sent again on a new head when
+   * only another value moved.
    */
   async storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean> {
     let stored = false
     await (await accountHead(signedIn())).listedWrite('pins', (index) => {
       const listed = index.revision('pins') ?? 0
-      if (listed === write.revision) {
-        stored = true
-        return Promise.resolve(null)
-      }
+      // Already at this revision: perhaps ours (an answer that was lost),
+      // perhaps another device's at the same number. Not "stored": the
+      // engine reads again and merges, which settles either case.
+      if (listed === write.revision) return Promise.resolve(null)
       if (listed !== write.baseRevision) return Promise.resolve(null)
       return Promise.resolve({
         changes: [['pins', write.revision]] as const,
@@ -234,17 +234,17 @@ export class ApiChatTransport implements ChatTransportPort {
   /**
    * Stores one entry of the group list with the next account head. `false`
    * when the index lists another revision than `baseRevision` (another device
-   * wrote first; the engine reads the list again); a write whose answer was
-   * lost is found in the index and counts as stored.
+   * wrote first, or a revision the index lists already: the engine reads the
+   * list again and merges).
    */
   async storeGroupEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<boolean> {
     let stored = false
     await (await accountHead(signedIn())).listedWrite('chatGroups', (index) => {
       const listed = index.revision(write.id) ?? 0
-      if (listed === write.revision) {
-        stored = true
-        return Promise.resolve(null)
-      }
+      // Already at this revision: perhaps ours (an answer that was lost),
+      // perhaps another device's at the same number. Not "stored": the
+      // engine reads again and merges, which settles either case.
+      if (listed === write.revision) return Promise.resolve(null)
       if (listed !== write.baseRevision) return Promise.resolve(null)
       return Promise.resolve({
         changes: [[write.id, write.revision]] as const,
@@ -260,6 +260,92 @@ export class ApiChatTransport implements ChatTransportPort {
       })
     })
     return stored
+  }
+
+  /**
+   * The account's Chat contact list (docs/plans/chat-contacts-sync.md), held
+   * to the account head like the group list, in its own scope.
+   */
+  async fetchContactList(): Promise<Array<{ id: string; revision: number; envelope: string }>> {
+    const head = await accountHead(signedIn())
+    // Two reads: a write landing between them is read again once.
+    for (let attempt = 0; ; attempt++) {
+      const index = await head.verifiedIndex('chatContacts')
+      const entries = await api
+        .get<{ entries: Array<{ id: string; revision: number; envelope: string }> }>('/chat/contact-list')
+        .then((response) => response.data.entries)
+      try {
+        index.expectListing(entries.map((entry) => entry.id))
+        for (const entry of entries) index.expect(entry.id, entry.revision)
+        return entries
+      } catch (error) {
+        if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
+      }
+    }
+  }
+
+  /**
+   * Stores one contact list entry with the next account head: `conflict`
+   * when the index lists another revision than `baseRevision` (another
+   * device wrote first), `full` when the list holds as many entries as it
+   * may (`contactListFull`). A revision the index lists already is a
+   * conflict too (the engine reads again and merges).
+   */
+  async storeContactEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<'stored' | 'conflict' | 'full'> {
+    let outcome: 'stored' | 'conflict' = 'conflict'
+    try {
+      await (await accountHead(signedIn())).listedWrite('chatContacts', (index) => {
+        const listed = index.revision(write.id) ?? 0
+        // Already at this revision: ours (a lost answer) or another
+        // device's. A conflict, so the engine reads again and merges.
+        if (listed === write.revision) return Promise.resolve(null)
+        if (listed !== write.baseRevision) return Promise.resolve(null)
+        return Promise.resolve({
+          changes: [[write.id, write.revision]] as const,
+          send: async (head: string) => {
+            // The server reads the revision from the entry's sealed header.
+            await api.put(`/chat/contact-list/${encodeURIComponent(write.id)}`, {
+              baseRevision: write.baseRevision,
+              envelope: write.envelope,
+              head,
+            })
+            outcome = 'stored'
+          },
+        })
+      })
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 400 && (error.response.data as { code?: string } | undefined)?.code === 'contactListFull') {
+        return 'full'
+      }
+      throw error
+    }
+    return outcome
+  }
+
+  /**
+   * Removes one contact list entry at `baseRevision` (an eviction) with the
+   * next account head; `false` when the index lists another revision.
+   */
+  async deleteContactEntry(write: { id: string; baseRevision: number }): Promise<boolean> {
+    let removed = false
+    await (await accountHead(signedIn())).listedWrite('chatContacts', (index) => {
+      const listed = index.revision(write.id)
+      if (listed === undefined) {
+        removed = true
+        return Promise.resolve(null)
+      }
+      if (listed !== write.baseRevision) return Promise.resolve(null)
+      return Promise.resolve({
+        changes: [[write.id, null]] as const,
+        send: async (head: string) => {
+          await api.delete(`/chat/contact-list/${encodeURIComponent(write.id)}`, {
+            data: { baseRevision: write.baseRevision, head },
+          })
+          removed = true
+        },
+      })
+    })
+    return removed
   }
 
   async fetchOwnProfile(): Promise<unknown | null> {
