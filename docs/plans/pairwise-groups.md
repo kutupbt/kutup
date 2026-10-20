@@ -1510,8 +1510,8 @@ sender's own server are the same request with `server=<own>`, delivered
 locally. Body `SealedMultiSubmissionV1`, canonical JSON:
 - `sendId`: dedup and the client's retry key. It counts as seen per
   recipient device only once something was stored for it: a retry after a
-  `409`/`410`, or after a `202`, with the same `sendId` is deduplicated per
-  device, never refused as a whole.
+  `409`/`410` with the same `sendId` is deduplicated per device, never
+  refused as a whole.
 - `payload`: base64 of libsignal's sent multi-recipient message (version
   `0x23`, 17-byte service ids = ACI of the account ids), parsed with the Rust
   `SealedSenderV2SentMessage::parse`; each recipient's message is assembled
@@ -1622,8 +1622,9 @@ per-recipient settlement). So:
   the one before. It can't tell which group, nor who sends.
 - An account's number of capabilities is its number of groups (the client
   may publish padding capabilities; open).
-- A request's size reveals its recipient count; the client pads the payload
-  to a bucket.
+- A request's size reveals its recipient count through the per-recipient
+  headers. The client pads the content (libsignal's plaintext padding, to a
+  bucket), which hides its length, not the count, as in Signal.
 
 **Questions answered.**
 - Dedup after a capability rotation: the server's dedup is per device and
