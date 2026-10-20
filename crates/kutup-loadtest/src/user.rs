@@ -190,10 +190,24 @@ async fn active_inner(run: &Run, index: usize) -> Result<()> {
         }
         None => None,
     };
+    // As two people start: one writes first (a message request), the other
+    // reads it and accepts.
     if let Some(partner) = &partner {
-        metrics
-            .time("chat.accept", chat.accept(&partner.chat_account))
-            .await?;
+        if index.is_multiple_of(2) {
+            metrics
+                .time("chat.text", chat.send_text(&partner.chat_account))
+                .await?;
+        } else {
+            metrics
+                .time(
+                    "chat.request_arrived",
+                    wait_for_request(&mut chat, &partner.chat_account),
+                )
+                .await?;
+            metrics
+                .time("chat.accept", chat.accept(&partner.chat_account))
+                .await?;
+        }
     }
 
     let arrived = Rc::new(Notify::new());
@@ -240,6 +254,19 @@ async fn active_inner(run: &Run, index: usize) -> Result<()> {
     stop.notify_one();
     let _ = socket.await;
     Ok(())
+}
+
+/// Reads the mailbox until `peer`'s first message is there.
+async fn wait_for_request(chat: &mut Chat, peer: &str) -> Result<()> {
+    let until = Instant::now() + Duration::from_secs(300);
+    while Instant::now() < until {
+        let messages = chat.reconcile().await?;
+        if messages.iter().any(|m| m.from.account.to_string() == peer) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    Err(anyhow!("the partner's first message never came"))
 }
 
 struct State {
