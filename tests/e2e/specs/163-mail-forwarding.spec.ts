@@ -133,6 +133,7 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   // Mail while paused reaches Alice alone.
   const whilePaused = `Duraklatılmış ${tag}`
   await write(carolMail, aliceAddress, whilePaused)
+  await mail.goto(appUrl('mail', '/inbox'))
   await openWhenArrived(mail, new RegExp(whilePaused))
   // A forward is sent right after the copy is stored: give it time to (not) come.
   await bobMail.waitForTimeout(5_000)
@@ -189,6 +190,7 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await write(carolMail, aliceAddress, readable, async (composer) => {
     await expect(composer.getByTestId('recipient-encryption-disabled')).toBeVisible({ timeout: 60_000 })
   })
+  await mail.goto(appUrl('mail', '/inbox'))
   await openWhenArrived(mail, new RegExp(readable))
   await openForwarding(mail)
   const outsideRow = mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')
