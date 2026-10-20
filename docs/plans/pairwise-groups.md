@@ -453,10 +453,11 @@ to see members").**
     (the only device gone, and both list writes lost within their random
     delay) can rejoin at an epoch it used before. The group's home would then
     see a pseudonym it knew come back, linking the two memberships.
-    Planned follow-up (not in this change): the home keeps hashes of every
-    pseudonym the group has seen and, once a claim's proof passes, answers
-    `pseudonymUsed`; the client then retries at the next epoch, up to a cap,
-    and recovery tries as many epochs. This note stays until that lands.
+    The home closes it on its side: it refuses such a claim or join with
+    `pseudonymUsed` (§3, "A pseudonym comes back only once"). The client's
+    retry at the next epoch (up to 64, with recovery searching as many) is
+    the third session's follow-up; until it lands, such a device gets the
+    refusal instead of rejoining.
   - Without the account key the pseudonyms of one account in different
     groups or epochs are unrelated, so they can't be linked across groups.
     This holds as long as the account key is safe; a leaked key exposes the
