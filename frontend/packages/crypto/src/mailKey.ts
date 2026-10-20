@@ -245,6 +245,97 @@ export async function openMailMessage(key: SealedMailKey, message: Uint8Array, s
   }
 }
 
+/**
+ * Opens a message forwarded to the address (its row's `forwardedFrom` is set)
+ * with one of the address's forwarding keys (docs/plans/mail-forwarding.md):
+ * no other key opens one, and a forwarding key opens nothing else.
+ */
+export async function openForwardedMailMessage(key: SealedMailKey, message: Uint8Array, senderPublicKey?: string): Promise<OpenedMail> {
+  const opened = (await getCryptoWasm()).openForwardedMailMessage(
+    key.masterKeyBase64,
+    key.binding,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    message,
+    senderPublicKey,
+  )
+  try {
+    return { data: opened.data, signed: opened.signed, verified: opened.verified }
+  } finally {
+    opened.free()
+  }
+}
+
+/** An end-to-end forwarding's material, the body of `POST /api/mail/forwardings`' `endToEnd`. */
+export interface MailForwardingMaterial {
+  /** The forwardee key's public part (base64). */
+  forwardeePublicKey: string
+  instances: { forwarderFingerprint: string; forwardeeFingerprint: string; proxyParameter: string }[]
+  /** The forwardee key, sealed to the forwardee and signed by the forwarder (armored). */
+  activation: string
+}
+
+/**
+ * The material for an end-to-end forwarding from the forwarder's primary key
+ * `key` to `forwardee` (whose primary public key, base64, comes from their
+ * verified key list), bound to `forwardingId` (a UUID v4 the client chose)
+ * and expiring at `expiresAt`. The forwarder's key never leaves WASM.
+ */
+export async function makeMailForwarding(
+  key: SealedMailKey,
+  forwardee: { address: string; publicKey: string },
+  forwardingId: string,
+  createdAt: Date,
+  expiresAt: Date,
+): Promise<MailForwardingMaterial> {
+  return (await getCryptoWasm()).makeMailForwarding(
+    key.masterKeyBase64,
+    key.binding,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    forwardee.address,
+    forwardee.publicKey,
+    forwardingId,
+    Math.floor(createdAt.getTime() / 1000),
+    Math.floor(expiresAt.getTime() / 1000),
+  )
+}
+
+/** The forwarding key as `POST /api/mail/forwardings/{id}/accept` takes it. */
+export interface AcceptedMailForwarding {
+  publicKey: string
+  privateKeyEnvelope: string
+  fingerprint: string
+}
+
+/**
+ * The forwardee's accept: opens `activation` with their address key `key`,
+ * checks it is signed by the forwarder's key (base64, from their verified
+ * key list), for this forwarding and these addresses, and unexpired; returns
+ * the forwarding key sealed like the address's other keys.
+ */
+export async function acceptMailForwarding(
+  key: SealedMailKey,
+  forwarder: { address: string; publicKey: string },
+  forwardingId: string,
+  activation: string,
+): Promise<AcceptedMailForwarding> {
+  return (await getCryptoWasm()).acceptMailForwarding(
+    key.masterKeyBase64,
+    key.binding,
+    key.address,
+    key.envelope,
+    key.fingerprint,
+    forwarder.address,
+    forwarder.publicKey,
+    forwardingId,
+    Date.now() / 1000,
+    activation,
+  )
+}
+
 export interface SealedMail {
   /** One base64 key packet per recipient key, in the order given. */
   keyPackets: string[]

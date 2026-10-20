@@ -1,4 +1,3 @@
-import { Plus, Trash2 } from 'lucide-react'
 import { useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -8,10 +7,8 @@ import {
   useCreateFilter,
   useFilters,
   useUpdateFilter,
-  type FilterCondition,
   type FilterDraft,
   type FilterField,
-  type FilterOp,
   type MailFilter,
 } from '@kutup/mail-core/filters'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
@@ -23,19 +20,16 @@ import { Input } from '@kutup/ui/components/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
+import { ConditionsEditor } from './ConditionsEditor'
+import { emptyCondition } from './conditions'
 import { describeFilter } from './filterText'
 
 const STEPS = ['name', 'conditions', 'actions', 'preview'] as const
 type Step = (typeof STEPS)[number]
 
 const FIELDS: FilterField[] = ['subject', 'sender', 'recipient', 'attachments']
-const OPS: FilterOp[] = ['contains', 'is', 'begins', 'ends', 'matches']
 /** "Do not move" in the folder picker (Radix Select takes no empty value). */
 const NO_MOVE = '__none__'
-
-function emptyCondition(): FilterCondition {
-  return { field: 'subject', op: 'contains', negate: false, value: '' }
-}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -77,10 +71,6 @@ export function FilterDialog({ filter, onClose }: { filter?: MailFilter; onClose
   const saving = useRef(false)
   const [newId] = useState(() => crypto.randomUUID())
 
-  function setCondition(i: number, change: Partial<FilterCondition>) {
-    setDraft((d) => ({ ...d, conditions: d.conditions.map((c, n) => (n === i ? { ...c, ...change } : c)) }))
-  }
-
   function next() {
     setError(undefined)
     if (step === 'name') {
@@ -113,8 +103,6 @@ export function FilterDialog({ filter, onClose }: { filter?: MailFilter; onClose
     if (filter) update.mutate({ id: filter.id, ...draft }, { onSuccess: () => saved(filter.id), onError: failed })
     else create.mutate({ ...draft, id: newId }, { onSuccess: saved, onError: failed })
   }
-
-  const opValue = (c: FilterCondition) => `${c.negate ? 'not-' : ''}${c.op}`
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -156,96 +144,12 @@ export function FilterDialog({ filter, onClose }: { filter?: MailFilter; onClose
         ) : null}
 
         {step === 'conditions' ? (
-          <div className="space-y-3">
-            <div role="radiogroup" aria-label={t('filters.match')} className="flex flex-wrap gap-4 text-sm">
-              {(['all', 'any'] as const).map((m) => (
-                <label key={m} className="flex items-center gap-2">
-                  <input type="radio" name="match" checked={draft.match === m} onChange={() => setDraft((d) => ({ ...d, match: m }))} />
-                  {t(`filters.match_${m}`)}
-                </label>
-              ))}
-            </div>
-            <ul className="space-y-2">
-              {draft.conditions.map((c, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-2 rounded-md border border-border p-2">
-                  <Select value={c.field} onValueChange={(field) => setCondition(i, { field: field as FilterField })}>
-                    <SelectTrigger className="w-40" aria-label={t('filters.field')}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {FIELDS.map((f) => (
-                        <SelectItem key={f} value={f}>
-                          {t(`filters.fields.${f}`)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {c.field === 'attachments' ? (
-                    <Select value={c.negate ? 'none' : 'has'} onValueChange={(v) => setCondition(i, { negate: v === 'none' })}>
-                      <SelectTrigger className="w-48" aria-label={t('filters.comparator')}>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="has">{t('filters.hasAttachments')}</SelectItem>
-                        <SelectItem value="none">{t('filters.noAttachments')}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <>
-                      <Select
-                        value={opValue(c)}
-                        onValueChange={(v) => setCondition(i, { negate: v.startsWith('not-'), op: v.replace(/^not-/, '') as FilterOp })}
-                      >
-                        <SelectTrigger className="w-44" aria-label={t('filters.comparator')}>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {OPS.map((op) => (
-                            <SelectItem key={op} value={op}>
-                              {t(`filters.ops.${op}`)}
-                            </SelectItem>
-                          ))}
-                          {OPS.map((op) => (
-                            <SelectItem key={`not-${op}`} value={`not-${op}`}>
-                              {t(`filters.notOps.${op}`)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Input
-                        className="min-w-40 flex-1"
-                        aria-label={t('filters.value')}
-                        placeholder={c.op === 'matches' ? t('filters.matchesHint') : t('filters.valuePlaceholder')}
-                        maxLength={200}
-                        value={c.value}
-                        onChange={(e) => setCondition(i, { value: e.target.value })}
-                      />
-                    </>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8"
-                    aria-label={t('filters.removeCondition')}
-                    disabled={draft.conditions.length === 1}
-                    onClick={() => setDraft((d) => ({ ...d, conditions: d.conditions.filter((_, n) => n !== i) }))}
-                  >
-                    <Trash2 />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={draft.conditions.length >= 20}
-              onClick={() => setDraft((d) => ({ ...d, conditions: [...d.conditions, emptyCondition()] }))}
-            >
-              <Plus />
-              {t('filters.addCondition')}
-            </Button>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          </div>
+          <ConditionsEditor
+            value={{ match: draft.match, conditions: draft.conditions }}
+            onChange={(conditions) => setDraft((d) => ({ ...d, ...conditions }))}
+            fields={FIELDS}
+            error={error}
+          />
         ) : null}
 
         {step === 'actions' ? (
