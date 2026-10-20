@@ -91,6 +91,13 @@ pub struct Config {
     /// Stalwart's host name (`MAIL_HOSTNAME`): the authserv-id of the
     /// Authentication-Results it writes, the only one trusted for DMARC.
     pub mail_hostname: String,
+    /// The nameserver custom domains' checks ask (`MAIL_DNS_RESOLVER`,
+    /// `ip:port`); the system's when unset. The server validates DNSSEC
+    /// itself either way.
+    pub mail_dns_resolver: Option<std::net::SocketAddr>,
+    /// A backup MX the operator runs (`MAIL_BACKUP_MX`): a custom domain
+    /// whose first MX is it counts as reaching us (Proton's `BACKUP`).
+    pub mail_backup_mx: Option<String>,
     pub mail_folders_per_account: i64,
     /// `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS`: the first values of
     /// the name holds administrators set (`site_settings::name_holds`).
@@ -498,6 +505,18 @@ impl Config {
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),
+            mail_dns_resolver: match get_env("MAIL_DNS_RESOLVER", "").trim() {
+                "" => None,
+                value => match value.parse() {
+                    Ok(address) => Some(address),
+                    Err(_) => {
+                        env.error("MAIL_DNS_RESOLVER must be an ip:port");
+                        None
+                    }
+                },
+            },
+            mail_backup_mx: Some(get_env("MAIL_BACKUP_MX", "").trim().to_ascii_lowercase())
+                .filter(|host| !host.is_empty()),
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
             name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
             old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),

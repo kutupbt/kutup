@@ -45,7 +45,8 @@ pub struct Row {
     pub stalwart_signature_key: Option<String>,
 }
 
-pub const COLUMNS: &str = "id, user_id, name, verify_code, state, verify_state, mx_state, spf_state,
+pub const COLUMNS: &str =
+    "id, user_id, name, verify_code, state, verify_state, mx_state, spf_state,
     dkim_state, dmarc_state, dkim_good_once, dkim_warning_since, approved_at, removed_at,
     catch_all_address_id, created_at, checked_at, verified_at, failing_since, warned_at,
     stopped_at, transfer_seen_at, stalwart_signature_id, stalwart_signature_key";
@@ -182,7 +183,8 @@ pub async fn add(
     }
     let row: Row = match existing {
         // Added again: the same row and code, its checks started over.
-        Some(row) => sqlx::query_as(&format!(
+        Some(row) => {
+            sqlx::query_as(&format!(
             "UPDATE mail_domains SET removed_at = NULL, state = 0, verify_state = 0, mx_state = 0,
                     spf_state = 0, dkim_state = 0, dmarc_state = 0, dkim_warning_since = NULL,
                     approved_at = NULL, catch_all_address_id = NULL, checked_at = NULL,
@@ -190,18 +192,21 @@ pub async fn add(
                     transfer_seen_at = NULL, created_at = now()
               WHERE id = $1 RETURNING {COLUMNS}"
         ))
-        .bind(row.id)
-        .fetch_one(&mut *tx)
-        .await?,
-        None => sqlx::query_as(&format!(
-            "INSERT INTO mail_domains (user_id, name, verify_code) VALUES ($1, $2, $3)
+            .bind(row.id)
+            .fetch_one(&mut *tx)
+            .await?
+        }
+        None => {
+            sqlx::query_as(&format!(
+                "INSERT INTO mail_domains (user_id, name, verify_code) VALUES ($1, $2, $3)
              RETURNING {COLUMNS}"
-        ))
-        .bind(user)
-        .bind(name)
-        .bind(records::new_verify_code())
-        .fetch_one(&mut *tx)
-        .await?,
+            ))
+            .bind(user)
+            .bind(name)
+            .bind(records::new_verify_code())
+            .fetch_one(&mut *tx)
+            .await?
+        }
     };
     tx.commit().await?;
     Ok(Ok(row))
@@ -236,7 +241,8 @@ pub async fn check_and_save(
     row: &Row,
 ) -> AppResult<(Row, Change)> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let (mut checked, mut change) = check::check(resolver, server, &row.domain(), settings.grace(), now).await;
+    let (mut checked, mut change) =
+        check::check(resolver, server, &row.domain(), settings.grace(), now).await;
     let mut tx = pool.begin().await?;
     // The row as it is now, locked: a removal or another check in between wins.
     let current: Option<Row> = sqlx::query_as(&format!(
@@ -252,7 +258,9 @@ pub async fn check_and_save(
     let becomes_held = matches!(change, Change::Verified | Change::Restored)
         && !matches!(current.state, state::VERIFIED | state::WARN);
     if becomes_held {
-        if let Some((holder_id, holder_user, holder_code)) = holder(&mut tx, &row.name, row.id).await? {
+        if let Some((holder_id, holder_user, holder_code)) =
+            holder(&mut tx, &row.name, row.id).await?
+        {
             let txt = resolver.txt(&row.name).await;
             let holder_gone = records::verify_state(&txt, &holder_code)
                 .is_some_and(|state| state != records::verify::GOOD);
@@ -278,8 +286,16 @@ pub async fn check_and_save(
     }
     if change == Change::Inactive {
         free_addresses(&mut tx, row.id).await?;
-        security_events::record_names(&mut tx, row.user_id, Kind::DomainLost, None, None, &row.name, None)
-            .await?;
+        security_events::record_names(
+            &mut tx,
+            row.user_id,
+            Kind::DomainLost,
+            None,
+            None,
+            &row.name,
+            None,
+        )
+        .await?;
     }
     let saved: Row = sqlx::query_as(&format!(
         "UPDATE mail_domains SET state = $2, verify_state = $3, mx_state = $4, spf_state = $5,
@@ -310,7 +326,12 @@ pub async fn check_and_save(
 
 /// The holder loses a domain another account proved: inactive, its
 /// addresses freed, and told.
-async fn lose(tx: &mut Transaction<'_, Postgres>, id: Uuid, user: Uuid, name: &str) -> AppResult<()> {
+async fn lose(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    user: Uuid,
+    name: &str,
+) -> AppResult<()> {
     sqlx::query(
         "UPDATE mail_domains SET state = 0, failing_since = NULL, warned_at = NULL,
                 stopped_at = NULL, catch_all_address_id = NULL
@@ -340,10 +361,12 @@ pub async fn free_addresses(tx: &mut Transaction<'_, Postgres>, domain: Uuid) ->
         .bind(domain)
         .execute(&mut **tx)
         .await?;
-    sqlx::query("UPDATE mail_addresses SET state = 'freed' WHERE domain_id = $1 AND state <> 'freed'")
-        .bind(domain)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "UPDATE mail_addresses SET state = 'freed' WHERE domain_id = $1 AND state <> 'freed'",
+    )
+    .bind(domain)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -403,7 +426,9 @@ pub async fn set_catch_all(
         .fetch_one(&mut *tx)
         .await?;
         if !fits {
-            return Err(AppError::bad_request("the catch-all is an active address on the domain"));
+            return Err(AppError::bad_request(
+                "the catch-all is an active address on the domain",
+            ));
         }
     }
     sqlx::query("UPDATE mail_domains SET catch_all_address_id = $2 WHERE id = $1")

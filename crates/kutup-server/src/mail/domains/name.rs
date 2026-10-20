@@ -45,7 +45,10 @@ pub fn normalize(input: &str, server_name: &str) -> Result<String, Refusal> {
     let name = idna::domain_to_ascii(trimmed).map_err(|_| Refusal::Invalid)?;
     kutup_crypto::mail_address::check_domain(&name).map_err(|_| Refusal::Invalid)?;
     // A name of digits and dots alone reads as an address to too much.
-    if name.split('.').all(|label| label.bytes().all(|b| b.is_ascii_digit())) {
+    if name
+        .split('.')
+        .all(|label| label.bytes().all(|b| b.is_ascii_digit()))
+    {
         return Err(Refusal::Address);
     }
     let server = server_name.to_ascii_lowercase();
@@ -77,12 +80,18 @@ mod tests {
     #[test]
     fn names_are_normalized() {
         assert_eq!(normalize("Example.COM.", SERVER).unwrap(), "example.com");
-        assert_eq!(normalize("  mail.example.org ", SERVER).unwrap(), "mail.example.org");
+        assert_eq!(
+            normalize("  mail.example.org ", SERVER).unwrap(),
+            "mail.example.org"
+        );
         assert_eq!(
             normalize("bücher.example.com", SERVER).unwrap(),
             "xn--bcher-kva.example.com"
         );
-        assert_eq!(normalize("my.github.io.example", SERVER).unwrap(), "my.github.io.example");
+        assert_eq!(
+            normalize("my.github.io.example", SERVER).unwrap(),
+            "my.github.io.example"
+        );
     }
 
     #[test]
@@ -110,7 +119,10 @@ mod tests {
 
     #[test]
     fn a_name_under_a_private_suffix_is_its_owners() {
-        assert_eq!(normalize("alice.github.io", SERVER).unwrap(), "alice.github.io");
+        assert_eq!(
+            normalize("alice.github.io", SERVER).unwrap(),
+            "alice.github.io"
+        );
         assert_eq!(normalize("example.co.uk", SERVER).unwrap(), "example.co.uk");
         // A lookalike of the server's name is someone else's.
         assert_eq!(normalize("notkutup.dev", SERVER).unwrap(), "notkutup.dev");

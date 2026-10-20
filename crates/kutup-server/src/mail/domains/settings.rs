@@ -173,7 +173,11 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.mode, Mode::Everyone);
         assert_eq!(
-            (settings.domains_per_account, settings.addresses_per_account, settings.domains_on_server),
+            (
+                settings.domains_per_account,
+                settings.addresses_per_account,
+                settings.domains_on_server
+            ),
             (3, 10, 1000)
         );
         assert_eq!(settings.grace().warn_for, 14 * 24 * 3600);
@@ -195,7 +199,10 @@ mod tests {
         let settings = Settings::from_stored(&stored);
         assert_eq!(settings.mode, Mode::AdminsApprove);
         assert_eq!(settings.domains_per_account, 5);
-        assert_eq!(settings.addresses_per_account, 10, "out of range keeps the default");
+        assert_eq!(
+            settings.addresses_per_account, 10,
+            "out of range keeps the default"
+        );
         assert!(!settings.catch_all);
         assert_eq!(settings.grace_warn_days, 14);
     }

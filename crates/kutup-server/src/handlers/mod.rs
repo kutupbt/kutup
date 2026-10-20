@@ -25,6 +25,7 @@ pub mod identity;
 pub mod link_reports;
 pub mod mail;
 pub mod mail_auto_reply;
+pub mod mail_domains;
 pub mod mail_filters;
 pub mod mail_folders;
 pub mod mail_forwardings;

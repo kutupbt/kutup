@@ -116,7 +116,8 @@ pub fn new_verify_code() -> String {
 }
 
 fn same_name(a: &str, b: &str) -> bool {
-    a.trim_end_matches('.').eq_ignore_ascii_case(b.trim_end_matches('.'))
+    a.trim_end_matches('.')
+        .eq_ignore_ascii_case(b.trim_end_matches('.'))
 }
 
 pub fn verify_state(txt: &Lookup<Vec<String>>, code: &str) -> Option<i16> {
@@ -134,7 +135,11 @@ pub fn verify_state(txt: &Lookup<Vec<String>>, code: &str) -> Option<i16> {
 }
 
 /// `ours` is the server's MX host; `backup` its backup MX, when it has one.
-pub fn mx_state(records: &Lookup<Vec<(u16, String)>>, ours: &str, backup: Option<&str>) -> Option<i16> {
+pub fn mx_state(
+    records: &Lookup<Vec<(u16, String)>>,
+    ours: &str,
+    backup: Option<&str>,
+) -> Option<i16> {
     let records = match records {
         Lookup::Unknown => return None,
         Lookup::None => return Some(mx::DEFAULT),
@@ -256,13 +261,19 @@ pub async fn dkim_state(
         let name = format!("{selector}._domainkey.{domain}");
         match resolver.cname(&name).await {
             Lookup::Unknown => return None,
-            Lookup::Found(target) if same_name(&target, &dkim_target(domain_id, selector, server_name)) => {
+            Lookup::Found(target)
+                if same_name(&target, &dkim_target(domain_id, selector, server_name)) =>
+            {
                 matching += 1
             }
             Lookup::Found(_) => wrong = true,
             Lookup::None => match resolver.txt(&name).await {
                 Lookup::Unknown => return None,
-                Lookup::Found(records) if records.iter().any(|r| r.contains("v=DKIM1") || r.contains("p=")) => {
+                Lookup::Found(records)
+                    if records
+                        .iter()
+                        .any(|r| r.contains("v=DKIM1") || r.contains("p=")) =>
+                {
                     own_keys += 1
                 }
                 _ => {}
@@ -301,7 +312,12 @@ pub fn dmarc_state(txt: &Lookup<Vec<String>>) -> Option<i16> {
         record
             .split(';')
             .map(str::trim)
-            .find_map(|part| part.strip_prefix(name)?.trim_start().strip_prefix('=').map(str::trim))
+            .find_map(|part| {
+                part.strip_prefix(name)?
+                    .trim_start()
+                    .strip_prefix('=')
+                    .map(str::trim)
+            })
             .map(str::to_owned)
     };
     match tag("p").as_deref() {
@@ -368,9 +384,18 @@ mod tests {
     #[test]
     fn ownership() {
         let code = "kutup-verification=abc";
-        assert_eq!(verify_state(&found(&["v=spf1 -all", code]), code), Some(verify::GOOD));
-        assert_eq!(verify_state(&found(&["kutup-verification=other"]), code), Some(verify::EXIST));
-        assert_eq!(verify_state(&found(&["google-site-verification=x"]), code), Some(verify::DEFAULT));
+        assert_eq!(
+            verify_state(&found(&["v=spf1 -all", code]), code),
+            Some(verify::GOOD)
+        );
+        assert_eq!(
+            verify_state(&found(&["kutup-verification=other"]), code),
+            Some(verify::EXIST)
+        );
+        assert_eq!(
+            verify_state(&found(&["google-site-verification=x"]), code),
+            Some(verify::DEFAULT)
+        );
         assert_eq!(verify_state(&Lookup::None, code), Some(verify::DEFAULT));
         assert_eq!(verify_state(&Lookup::Unknown, code), None);
     }
@@ -381,12 +406,32 @@ mod tests {
         let mx = |records: &[(u16, &str)]| {
             Lookup::Found(records.iter().map(|(p, h)| (*p, h.to_string())).collect())
         };
-        assert_eq!(mx_state(&mx(&[(10, "mail.kutup.dev")]), ours, None), Some(mx::GOOD));
-        assert_eq!(mx_state(&mx(&[(10, "MAIL.kutup.dev."), (20, "b.example")]), ours, None), Some(mx::GOOD));
-        assert_eq!(mx_state(&mx(&[(5, "a.example"), (10, "mail.kutup.dev")]), ours, None), Some(mx::INC_US));
-        assert_eq!(mx_state(&mx(&[(10, "a.example")]), ours, None), Some(mx::NO_US));
         assert_eq!(
-            mx_state(&mx(&[(5, "mx2.kutup.dev"), (10, "mail.kutup.dev")]), ours, Some("mx2.kutup.dev")),
+            mx_state(&mx(&[(10, "mail.kutup.dev")]), ours, None),
+            Some(mx::GOOD)
+        );
+        assert_eq!(
+            mx_state(
+                &mx(&[(10, "MAIL.kutup.dev."), (20, "b.example")]),
+                ours,
+                None
+            ),
+            Some(mx::GOOD)
+        );
+        assert_eq!(
+            mx_state(&mx(&[(5, "a.example"), (10, "mail.kutup.dev")]), ours, None),
+            Some(mx::INC_US)
+        );
+        assert_eq!(
+            mx_state(&mx(&[(10, "a.example")]), ours, None),
+            Some(mx::NO_US)
+        );
+        assert_eq!(
+            mx_state(
+                &mx(&[(5, "mx2.kutup.dev"), (10, "mail.kutup.dev")]),
+                ours,
+                Some("mx2.kutup.dev")
+            ),
             Some(mx::BACKUP)
         );
         assert_eq!(mx_state(&Lookup::None, ours, None), Some(mx::DEFAULT));
@@ -397,20 +442,42 @@ mod tests {
     async fn spf_follows_includes_within_the_limit() {
         let ours = "_spf.kutup.dev";
         let mut dns = FakeResolver::default();
-        dns.txt.insert("a.example".into(), found(&["v=spf1 include:_spf.kutup.dev ~all"]));
-        dns.txt.insert("b.example".into(), found(&["v=spf1 include:_spf.other.example -all"]));
-        dns.txt.insert("c.example".into(), found(&["v=spf1 a", "v=spf1 mx"]));
-        dns.txt.insert("d.example".into(), found(&["v=spf1 include:chain.example ~all"]));
-        dns.txt.insert("chain.example".into(), found(&["v=spf1 redirect=_spf.kutup.dev"]));
-        dns.txt.insert("e.example".into(), found(&["v=spf1 include:broken.example ~all"]));
+        dns.txt.insert(
+            "a.example".into(),
+            found(&["v=spf1 include:_spf.kutup.dev ~all"]),
+        );
+        dns.txt.insert(
+            "b.example".into(),
+            found(&["v=spf1 include:_spf.other.example -all"]),
+        );
+        dns.txt
+            .insert("c.example".into(), found(&["v=spf1 a", "v=spf1 mx"]));
+        dns.txt.insert(
+            "d.example".into(),
+            found(&["v=spf1 include:chain.example ~all"]),
+        );
+        dns.txt.insert(
+            "chain.example".into(),
+            found(&["v=spf1 redirect=_spf.kutup.dev"]),
+        );
+        dns.txt.insert(
+            "e.example".into(),
+            found(&["v=spf1 include:broken.example ~all"]),
+        );
         dns.txt.insert("broken.example".into(), Lookup::Unknown);
-        dns.txt.insert("loop.example".into(), found(&["v=spf1 include:loop.example ~all"]));
+        dns.txt.insert(
+            "loop.example".into(),
+            found(&["v=spf1 include:loop.example ~all"]),
+        );
         assert_eq!(spf_state(&dns, "a.example", ours).await, Some(spf::GOOD));
         assert_eq!(spf_state(&dns, "b.example", ours).await, Some(spf::ONE));
         assert_eq!(spf_state(&dns, "c.example", ours).await, Some(spf::MULT));
         assert_eq!(spf_state(&dns, "d.example", ours).await, Some(spf::GOOD));
         assert_eq!(spf_state(&dns, "e.example", ours).await, None);
-        assert_eq!(spf_state(&dns, "none.example", ours).await, Some(spf::DEFAULT));
+        assert_eq!(
+            spf_state(&dns, "none.example", ours).await,
+            Some(spf::DEFAULT)
+        );
         assert_eq!(spf_state(&dns, "loop.example", ours).await, Some(spf::ONE));
     }
 
@@ -421,20 +488,39 @@ mod tests {
         let mut dns = FakeResolver::default();
         let name = |s: &str| format!("{s}._domainkey.example.com");
         for selector in DKIM_SELECTORS {
-            dns.cname.insert(name(selector), Lookup::Found(dkim_target(&id, selector, server)));
+            dns.cname.insert(
+                name(selector),
+                Lookup::Found(dkim_target(&id, selector, server)),
+            );
         }
-        assert_eq!(dkim_state(&dns, "example.com", &id, server, false).await, Some(dkim::GOOD));
+        assert_eq!(
+            dkim_state(&dns, "example.com", &id, server, false).await,
+            Some(dkim::GOOD)
+        );
         dns.cname.remove(&name("kutup3"));
-        assert_eq!(dkim_state(&dns, "example.com", &id, server, false).await, Some(dkim::WRONG));
-        assert_eq!(dkim_state(&dns, "example.com", &id, server, true).await, Some(dkim::WARNING));
+        assert_eq!(
+            dkim_state(&dns, "example.com", &id, server, false).await,
+            Some(dkim::WRONG)
+        );
+        assert_eq!(
+            dkim_state(&dns, "example.com", &id, server, true).await,
+            Some(dkim::WARNING)
+        );
         dns.cname.insert(name("kutup3"), Lookup::Unknown);
-        assert_eq!(dkim_state(&dns, "example.com", &id, server, true).await, None);
+        assert_eq!(
+            dkim_state(&dns, "example.com", &id, server, true).await,
+            None
+        );
 
         let mut own = FakeResolver::default();
         for selector in DKIM_SELECTORS {
-            own.txt.insert(name(selector), found(&["v=DKIM1; k=rsa; p=MIIB"]));
+            own.txt
+                .insert(name(selector), found(&["v=DKIM1; k=rsa; p=MIIB"]));
         }
-        assert_eq!(dkim_state(&own, "example.com", &id, server, true).await, Some(dkim::DELEGATED));
+        assert_eq!(
+            dkim_state(&own, "example.com", &id, server, true).await,
+            Some(dkim::DELEGATED)
+        );
         assert_eq!(
             dkim_state(&FakeResolver::default(), "example.com", &id, server, false).await,
             Some(dkim::DEFAULT)
@@ -443,11 +529,26 @@ mod tests {
 
     #[test]
     fn dmarc() {
-        assert_eq!(dmarc_state(&found(&["v=DMARC1; p=quarantine; adkim=s"])), Some(dmarc::GOOD));
-        assert_eq!(dmarc_state(&found(&["v=DMARC1; p=quarantine"])), Some(dmarc::RELAXED));
-        assert_eq!(dmarc_state(&found(&["v=DMARC1; rua=mailto:x@y"])), Some(dmarc::ONE));
-        assert_eq!(dmarc_state(&found(&["v=DMARC1; p=none", "v=DMARC1; p=reject"])), Some(dmarc::MULT));
-        assert_eq!(dmarc_state(&found(&["something else"])), Some(dmarc::DEFAULT));
+        assert_eq!(
+            dmarc_state(&found(&["v=DMARC1; p=quarantine; adkim=s"])),
+            Some(dmarc::GOOD)
+        );
+        assert_eq!(
+            dmarc_state(&found(&["v=DMARC1; p=quarantine"])),
+            Some(dmarc::RELAXED)
+        );
+        assert_eq!(
+            dmarc_state(&found(&["v=DMARC1; rua=mailto:x@y"])),
+            Some(dmarc::ONE)
+        );
+        assert_eq!(
+            dmarc_state(&found(&["v=DMARC1; p=none", "v=DMARC1; p=reject"])),
+            Some(dmarc::MULT)
+        );
+        assert_eq!(
+            dmarc_state(&found(&["something else"])),
+            Some(dmarc::DEFAULT)
+        );
         assert_eq!(dmarc_state(&Lookup::Unknown), None);
     }
 }

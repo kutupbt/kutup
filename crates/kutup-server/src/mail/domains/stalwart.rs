@@ -85,7 +85,10 @@ impl StalwartApi {
 
     async fn create(&self, object: &str, value: Value) -> Result<String> {
         let answer = self
-            .call(&format!("x:{object}/set"), json!({ "create": { "new": value } }))
+            .call(
+                &format!("x:{object}/set"),
+                json!({ "create": { "new": value } }),
+            )
             .await?;
         if let Some(error) = answer["notCreated"].get("new") {
             bail!("Stalwart didn't create the {object}: {error}");

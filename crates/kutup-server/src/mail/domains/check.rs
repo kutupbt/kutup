@@ -67,8 +67,14 @@ pub async fn check(
     if let Some(state) = records::dmarc_state(&resolver.txt(&format!("_dmarc.{name}")).await) {
         next.dmarc_state = state;
     }
-    if let Some(state) =
-        records::dkim_state(resolver, name, &domain.id, &server.name, domain.dkim_good_once).await
+    if let Some(state) = records::dkim_state(
+        resolver,
+        name,
+        &domain.id,
+        &server.name,
+        domain.dkim_good_once,
+    )
+    .await
     {
         apply_dkim(&mut next, state, now);
     }
@@ -109,7 +115,9 @@ fn apply_dkim(domain: &mut Domain, state: i16, now: i64) {
 
 /// Whether Stalwart should sign for the domain now.
 pub fn signs(domain: &Domain) -> bool {
-    domain.status.usable() && domain.dkim_good_once && matches!(domain.dkim_state, dkim::GOOD | dkim::WARNING)
+    domain.status.usable()
+        && domain.dkim_good_once
+        && matches!(domain.dkim_state, dkim::GOOD | dkim::WARNING)
 }
 
 #[cfg(test)]
@@ -147,9 +155,15 @@ mod tests {
         let mut dns = FakeResolver::default();
         dns.txt.insert(
             domain.name.clone(),
-            Lookup::Found(vec![domain.verify_code.clone(), "v=spf1 include:_spf.kutup.dev ~all".into()]),
+            Lookup::Found(vec![
+                domain.verify_code.clone(),
+                "v=spf1 include:_spf.kutup.dev ~all".into(),
+            ]),
         );
-        dns.mx.insert(domain.name.clone(), Lookup::Found(vec![(10, "mail.kutup.dev".into())]));
+        dns.mx.insert(
+            domain.name.clone(),
+            Lookup::Found(vec![(10, "mail.kutup.dev".into())]),
+        );
         dns.txt.insert(
             format!("_dmarc.{}", domain.name),
             Lookup::Found(vec!["v=DMARC1; p=quarantine".into()]),
@@ -166,11 +180,24 @@ mod tests {
     #[tokio::test]
     async fn a_domain_set_up_as_asked_is_verified_and_signs() {
         let domain = domain();
-        let (checked, change) = check(&all_set(&domain), &server(), &domain, Grace::default(), 100).await;
+        let (checked, change) =
+            check(&all_set(&domain), &server(), &domain, Grace::default(), 100).await;
         assert_eq!(change, Change::Verified);
         assert_eq!(
-            (checked.verify_state, checked.mx_state, checked.spf_state, checked.dkim_state, checked.dmarc_state),
-            (verify::GOOD, mx::GOOD, records::spf::GOOD, dkim::GOOD, records::dmarc::RELAXED)
+            (
+                checked.verify_state,
+                checked.mx_state,
+                checked.spf_state,
+                checked.dkim_state,
+                checked.dmarc_state
+            ),
+            (
+                verify::GOOD,
+                mx::GOOD,
+                records::spf::GOOD,
+                dkim::GOOD,
+                records::dmarc::RELAXED
+            )
         );
         assert!(signs(&checked));
     }
@@ -180,16 +207,34 @@ mod tests {
         let domain = domain();
         let (good, _) = check(&all_set(&domain), &server(), &domain, Grace::default(), 0).await;
         let mut dns = all_set(&domain);
-        dns.cname.remove(&format!("kutup2._domainkey.{}", domain.name));
+        dns.cname
+            .remove(&format!("kutup2._domainkey.{}", domain.name));
         let (warned, _) = check(&dns, &server(), &good, Grace::default(), 10).await;
         assert_eq!(warned.dkim_state, dkim::WARNING);
         assert!(signs(&warned));
-        let (later, _) = check(&dns, &server(), &warned, Grace::default(), 10 + DKIM_ERROR_AFTER).await;
+        let (later, _) = check(
+            &dns,
+            &server(),
+            &warned,
+            Grace::default(),
+            10 + DKIM_ERROR_AFTER,
+        )
+        .await;
         assert_eq!(later.dkim_state, dkim::ERROR);
         assert!(!signs(&later));
         // Fixed again: good, the clock cleared.
-        let (fixed, _) = check(&all_set(&domain), &server(), &later, Grace::default(), 20 + DKIM_ERROR_AFTER).await;
-        assert_eq!((fixed.dkim_state, fixed.dkim_warning_since), (dkim::GOOD, None));
+        let (fixed, _) = check(
+            &all_set(&domain),
+            &server(),
+            &later,
+            Grace::default(),
+            20 + DKIM_ERROR_AFTER,
+        )
+        .await;
+        assert_eq!(
+            (fixed.dkim_state, fixed.dkim_warning_since),
+            (dkim::GOOD, None)
+        );
     }
 
     #[tokio::test]
@@ -199,9 +244,13 @@ mod tests {
         let mut dns = FakeResolver::default();
         dns.txt.insert(domain.name.clone(), Lookup::Unknown);
         dns.mx.insert(domain.name.clone(), Lookup::Unknown);
-        dns.txt.insert(format!("_dmarc.{}", domain.name), Lookup::Unknown);
+        dns.txt
+            .insert(format!("_dmarc.{}", domain.name), Lookup::Unknown);
         for selector in DKIM_SELECTORS {
-            dns.cname.insert(format!("{selector}._domainkey.{}", domain.name), Lookup::Unknown);
+            dns.cname.insert(
+                format!("{selector}._domainkey.{}", domain.name),
+                Lookup::Unknown,
+            );
         }
         let (after, change) = check(&dns, &server(), &good, Grace::default(), 99).await;
         assert_eq!(change, Change::None);
@@ -217,7 +266,8 @@ mod tests {
         let (first, change) = check(&empty, &server(), &good, grace, 100).await;
         assert_eq!(change, Change::None);
         assert!(first.status.usable());
-        let (second, change) = check(&empty, &server(), &first, grace, 100 + grace.confirm_after).await;
+        let (second, change) =
+            check(&empty, &server(), &first, grace, 100 + grace.confirm_after).await;
         assert_eq!(change, Change::Stopped);
         assert!(!second.status.usable() && !signs(&second));
     }

@@ -144,6 +144,9 @@ mod tests {
         assert!(
             matches!(dns.txt("gmail.com").await, Lookup::Found(txt) if txt.iter().any(|t| t.starts_with("v=spf1")))
         );
-        assert_eq!(dns.mx("nonexistent-kutup-check.example").await, Lookup::None);
+        assert_eq!(
+            dns.mx("nonexistent-kutup-check.example").await,
+            Lookup::None
+        );
     }
 }

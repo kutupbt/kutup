@@ -1003,6 +1003,18 @@ fn build_router(state: AppState) -> Router {
             patch(handlers::mail_filters::update).delete(handlers::mail_filters::delete),
         )
         .route(
+            "/api/mail/domains",
+            get(handlers::mail_domains::list).post(handlers::mail_domains::add),
+        )
+        .route(
+            "/api/mail/domains/:id",
+            get(handlers::mail_domains::get).delete(handlers::mail_domains::delete),
+        )
+        .route(
+            "/api/mail/domains/:id/catch-all",
+            put(handlers::mail_domains::catch_all),
+        )
+        .route(
             "/api/mail/forwardings",
             get(handlers::mail_forwardings::list).post(handlers::mail_forwardings::create),
         )

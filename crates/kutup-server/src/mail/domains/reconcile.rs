@@ -69,11 +69,21 @@ pub struct StalwartSignature {
 /// One step of a plan, in the order to run it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    DeleteSignature { object_id: String },
-    DeleteDomain { object_id: String },
-    CreateDomain { wanted: uuid::Uuid, name: String },
+    DeleteSignature {
+        object_id: String,
+    },
+    DeleteDomain {
+        object_id: String,
+    },
+    CreateDomain {
+        wanted: uuid::Uuid,
+        name: String,
+    },
     /// For a domain created in this plan or already there.
-    CreateSignature { wanted: uuid::Uuid, signature: Signature },
+    CreateSignature {
+        wanted: uuid::Uuid,
+        signature: Signature,
+    },
 }
 
 /// The steps that make Stalwart's tagged objects match `wanted`. Deletes go
@@ -281,7 +291,10 @@ mod tests {
                 "a domain with signatures can't go"
             );
             signatures.retain(|s| s.domain_object_id != object_id);
-            self.domains.lock().unwrap().retain(|d| d.object_id != object_id);
+            self.domains
+                .lock()
+                .unwrap()
+                .retain(|d| d.object_id != object_id);
             Ok(())
         }
         async fn create_signature(
@@ -291,7 +304,11 @@ mod tests {
             _private_key_pem: &str,
         ) -> anyhow::Result<String> {
             anyhow::ensure!(
-                self.domains.lock().unwrap().iter().any(|d| d.object_id == domain_object_id),
+                self.domains
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|d| d.object_id == domain_object_id),
                 "no such domain"
             );
             let object_id = self.id();
@@ -303,7 +320,10 @@ mod tests {
             Ok(object_id)
         }
         async fn delete_signature(&self, object_id: &str) -> anyhow::Result<()> {
-            self.signatures.lock().unwrap().retain(|s| s.object_id != object_id);
+            self.signatures
+                .lock()
+                .unwrap()
+                .retain(|s| s.object_id != object_id);
             Ok(())
         }
     }
@@ -315,7 +335,8 @@ mod tests {
     impl Rows {
         fn set(&mut self, id: uuid::Uuid, name: &str, key: Option<&str>) {
             let recorded = self.0.get(&id).and_then(|(_, _, r)| r.clone());
-            self.0.insert(id, (name.into(), key.map(str::to_owned), recorded));
+            self.0
+                .insert(id, (name.into(), key.map(str::to_owned), recorded));
         }
 
         fn wanted(&self) -> Vec<Wanted> {
@@ -398,8 +419,17 @@ mod tests {
         // domain is never touched.
         rows.0.remove(&b);
         assert_eq!(rows.run(&fake).await, 2);
-        let names: Vec<String> = fake.domains.lock().unwrap().iter().map(|d| d.name.clone()).collect();
-        assert_eq!(names, vec!["kutup.dev".to_string(), "a.example".to_string()]);
+        let names: Vec<String> = fake
+            .domains
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["kutup.dev".to_string(), "a.example".to_string()]
+        );
         rows.0.clear();
         assert_eq!(rows.run(&fake).await, 2);
         assert_eq!(*fake.domains.lock().unwrap(), vec![server_domain()]);
@@ -427,8 +457,13 @@ mod tests {
         assert_eq!(
             steps,
             vec![
-                Step::DeleteDomain { object_id: "o1".into() },
-                Step::CreateDomain { wanted: id, name: "new.example".into() },
+                Step::DeleteDomain {
+                    object_id: "o1".into()
+                },
+                Step::CreateDomain {
+                    wanted: id,
+                    name: "new.example".into()
+                },
             ]
         );
     }

@@ -183,7 +183,12 @@ mod tests {
         let mut current = held();
         current.failing_since = Some(5);
         assert_eq!(
-            next(current, check(None, Some(false)), 99 * DAY, Grace::default()),
+            next(
+                current,
+                check(None, Some(false)),
+                99 * DAY,
+                Grace::default()
+            ),
             (current, Change::None)
         );
     }
@@ -200,9 +205,19 @@ mod tests {
         let (s, c) = next(s, check(Some(false), Some(true)), 100 + 12 * HOUR, grace);
         assert_eq!((s.state, c), (state::WARN, Change::Warned));
         assert!(s.usable());
-        let (s, c) = next(s, check(Some(false), Some(true)), 100 + 12 * HOUR + 13 * DAY, grace);
+        let (s, c) = next(
+            s,
+            check(Some(false), Some(true)),
+            100 + 12 * HOUR + 13 * DAY,
+            grace,
+        );
         assert_eq!(c, Change::None);
-        let (s, c) = next(s, check(Some(false), Some(true)), 100 + 12 * HOUR + 14 * DAY, grace);
+        let (s, c) = next(
+            s,
+            check(Some(false), Some(true)),
+            100 + 12 * HOUR + 14 * DAY,
+            grace,
+        );
         assert_eq!(c, Change::Inactive);
         assert!(s.inactive() && !s.usable());
         // Proving it again restores it.
@@ -218,9 +233,19 @@ mod tests {
         let (s, c) = next(s, check(Some(false), Some(false)), 12 * HOUR, grace);
         assert_eq!(c, Change::Stopped);
         assert!(!s.usable() && !s.inactive());
-        let (s, c) = next(s, check(Some(false), Some(false)), 12 * HOUR + 71 * HOUR, grace);
+        let (s, c) = next(
+            s,
+            check(Some(false), Some(false)),
+            12 * HOUR + 71 * HOUR,
+            grace,
+        );
         assert_eq!(c, Change::None);
-        let (s, c) = next(s, check(Some(false), Some(true)), 12 * HOUR + 72 * HOUR, grace);
+        let (s, c) = next(
+            s,
+            check(Some(false), Some(true)),
+            12 * HOUR + 72 * HOUR,
+            grace,
+        );
         assert_eq!(c, Change::Inactive);
         assert!(s.inactive());
     }
