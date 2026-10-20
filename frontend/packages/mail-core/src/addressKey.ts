@@ -41,16 +41,23 @@ export async function addFirstAddressKey(session: Session, address: { id: string
 }
 
 /**
- * Whether one of the account's own addresses is `address` (folded) and has
- * a key or a key list already: then no first key is made for it, whatever a
- * check said, so a server can't have a fresh first list signed over a chain
- * the address has.
+ * What the account's own addresses say about `address` (folded), before a
+ * rename to it makes its first key:
+ * - `keyed`: a held (not freed) address of the account is it and has a key
+ *   or a key list: no first key is made over it, whatever a check said;
+ * - `freed`: the account's own freed row is it, with a key list: taking the
+ *   name back must continue that chain (docs/plans/mail-address-keys.md),
+ *   which isn't built yet, so the rename is refused for now;
+ * - `none`: a first key at sequence 1.
  */
-export async function ownAddressKeyed(address: string): Promise<boolean> {
+export async function ownAddressState(address: string): Promise<'keyed' | 'freed' | 'none'> {
   const folded = await foldAddress(address)
-  const { data } = await api.get<{ address: string; keys: unknown[]; keyList: unknown }[]>('/mail/addresses')
+  const { data } = await api.get<{ address: string; state: string; keys: unknown[]; keyList: unknown }[]>('/mail/addresses')
+  let state: 'keyed' | 'freed' | 'none' = 'none'
   for (const row of data) {
-    if ((await foldAddress(row.address)) === folded && (row.keys.length > 0 || row.keyList !== null)) return true
+    if ((await foldAddress(row.address)) !== folded) continue
+    if (row.state !== 'freed' && (row.keys.length > 0 || row.keyList !== null)) return 'keyed'
+    if (row.state === 'freed' && row.keyList !== null) state = 'freed'
   }
-  return false
+  return state
 }

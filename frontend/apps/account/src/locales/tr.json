@@ -214,6 +214,7 @@
           "tooManyHeld": "Bir hesabın posta alırken tutabileceği kadar önceki adınız var. Aşağıdan birinin posta alımını durdurun, ardından kullanıcı adınızı değiştirin.",
           "breakGlass": "Bu sunucunun acil durum yönetici hesabının adı değişmez.",
           "setupRequired": "Önce hesabınızın kurulumunu tamamlayın.",
+          "ownFreedName": "Bu daha önce sizin adınızdı; geri almak için eski şifreleme anahtarlarının devralınması gerekiyor. Bu henüz mümkün değil; yakında olacak.",
           "conflict": "Kullanıcı adınız bu arada başka bir cihazda değişti. Bunu kapatıp yeniden deneyin."
         }
       },

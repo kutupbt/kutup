@@ -168,14 +168,19 @@ manifest, signed with Ed25519 by the account authority:
   only when its public key, inspected here, has the fingerprints a signed
   entry names. Mail seals drafts and Sent copies only to that primary and
   stops with "your keys can't be trusted" when there is none (a list older
-  than one seen stops it too); only those keys check the account's own
-  signatures. The keys page shows a signed key the server no longer has
+  than one seen stops it too; so does a signed list whose key rows are gone,
+  and a signed primary marked obsolete or compromised); only those keys,
+  less any marked compromised, check the account's own signatures. The keys page shows a signed key the server no longer has
   right, and offers "Download public key" only for checked keys.
 - **A first key only over nothing:** Mail, the Account shell and both
   renames (web and CLI) make an address's first key only when the address
   has neither a key nor a key list, whatever the server's rows or rename
   check say, so a server can't have a fresh first list signed over a chain
-  the address has.
+  the address has. Freed rows don't count as keyed. Taking back one's own
+  freed name must continue that row's chain (sequence + 1 over its newest
+  list's hash), not restart at 1, which every device that saw the old list
+  (the account's and recipients') would refuse as a rollback; until the
+  server accepts such a first list, both renames refuse it with a message.
 - The fork list gains `mail`, `calendar` and `contacts` with their app
   origins when those apps exist, not before.
 

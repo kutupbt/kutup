@@ -80,7 +80,23 @@ describe('the mail account after a rename', () => {
 
   it('has no account without a current address and its primary key', () => {
     expect(() => mailAccountOf(rows.slice(1), null, session, fold, self)).toThrow(NoAddressKey)
-    expect(() => mailAccountOf([{ ...rows[0], keys: [] }], null, session, fold, self)).toThrow(NoAddressKey)
+    expect(() => mailAccountOf([{ ...rows[0], keys: [], keyList: null, verifiedList: null }], null, session, fold, self)).toThrow(NoAddressKey)
+    // A signed list whose key rows the server no longer lists: keys lost, not "none yet".
+    expect(() => mailAccountOf([{ ...rows[0], keys: [] }], null, session, fold, self)).toThrow(UnverifiedOwnKeys)
+  })
+
+  it('takes a signed primary only when it is usable, and drops compromised keys from its own signers', () => {
+    const flagged = (flags: Record<string, number>): CheckedOwnAddress => ({
+      ...rows[0],
+      verifiedList: { ...rows[0].verifiedList!, keys: rows[0].verifiedList!.keys.map((k) => ({ ...k, flags: flags[k.fingerprint] ?? k.flags })) },
+    })
+    // The signed primary marked obsolete or compromised: no account.
+    expect(() => mailAccountOf([flagged({ 'fp-new': 1 })], null, session, fold, self)).toThrow(UnverifiedOwnKeys)
+    expect(() => mailAccountOf([flagged({ 'fp-new': 2 })], null, session, fold, self)).toThrow(UnverifiedOwnKeys)
+    // Another key marked compromised still opens old mail, but vouches for nothing.
+    const account = mailAccountOf([flagged({ 'fp-new-old': 0 }), rows[1]], null, session, fold, self)
+    expect(account.ownPublicKeys).toEqual(['pk-new', 'pk-old'])
+    expect(account.olderKeys.map((k) => k.fingerprint)).toContain('fp-new-old')
   })
   it('seals drafts and Sent only to the primary the signed list names, never a key the server swapped in', () => {
     // The server marks a key of its own primary on the current address.
