@@ -108,33 +108,93 @@ pub async fn name_holds(
     Ok(validate_name_holds(hold, receive).unwrap_or((180, 90)))
 }
 
-/// Joins from a group link and requests to join, per minute per relay
-/// server (docs/plans/pairwise-groups.md, slice 3), set under
-/// Administration → Server settings;
-/// `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN` only seeds it.
+/// Joins from a group link and requests to join (docs/plans/pairwise-groups.md,
+/// slice 3), per minute per relay server and group, and per relay server in
+/// all, set under Administration → Server settings; the
+/// `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_*` variables only seed them.
+pub const CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP: &str =
+    "chat_group_link_joins_per_relay_group_per_min";
 pub const CHAT_GROUP_LINK_JOINS_PER_RELAY: &str = "chat_group_link_joins_per_relay_per_min";
+pub const MAX_LINK_JOINS_PER_MIN: i64 = 1_000_000;
 
-pub fn validate_chat_group_link_joins_per_relay(value: i64) -> Result<i64, &'static str> {
-    if (1..=1_000_000).contains(&value) {
+pub fn validate_chat_group_link_joins(value: i64) -> Result<i64, &'static str> {
+    if (1..=MAX_LINK_JOINS_PER_MIN).contains(&value) {
         Ok(value)
     } else {
-        Err("link joins per relay server must be between 1 and 1000000 a minute")
+        Err("link joins must be between 1 and 1000000 a minute")
     }
 }
 
-/// The link-join budget now: the stored one, else the configured first
-/// value. Read on every join, so a change applies at once.
-pub async fn chat_group_link_joins_per_relay(pool: &PgPool) -> Result<i64, sqlx::Error> {
-    let fallback = crate::ratelimit::chat_group_link_joins_relay_default();
-    Ok(
+/// The link-join budgets now, `(per relay and group, per relay)`: the
+/// stored ones, else the configured first values. Read on every join, so a
+/// change applies at once.
+pub async fn chat_group_link_joins(pool: &PgPool) -> Result<(i64, i64), sqlx::Error> {
+    let (group_fallback, relay_fallback) = crate::ratelimit::chat_group_link_joins_defaults();
+    let read = |key: &'static str, fallback: i64| async move {
+        Ok::<_, sqlx::Error>(
+            sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+                .bind(key)
+                .fetch_optional(pool)
+                .await?
+                .and_then(|value| value.parse::<i64>().ok())
+                .and_then(|value| validate_chat_group_link_joins(value).ok())
+                .unwrap_or(fallback),
+        )
+    };
+    Ok((
+        read(CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP, group_fallback).await?,
+        read(CHAT_GROUP_LINK_JOINS_PER_RELAY, relay_fallback).await?,
+    ))
+}
+
+/// Group avatars on this home (docs/plans/pairwise-groups.md, "Avatar"):
+/// the largest blob it takes (one of the avatar lengths) and the most its
+/// avatars may take per group (the current blob and a pending upload), set
+/// under Administration → Server settings.
+pub const CHAT_GROUP_AVATAR_MAX_BYTES: &str = "chat_group_avatar_max_bytes";
+pub const CHAT_GROUP_AVATAR_STORAGE_BYTES: &str = "chat_group_avatar_storage_per_group_bytes";
+/// The first values: the largest blob, and room for two of them.
+pub const DEFAULT_CHAT_GROUP_AVATAR_MAX_BYTES: i64 = 41_001;
+pub const DEFAULT_CHAT_GROUP_AVATAR_STORAGE_BYTES: i64 = 2 * 41_001;
+pub const MAX_CHAT_GROUP_AVATAR_STORAGE_BYTES: i64 = 10_000_000;
+
+pub fn validate_chat_group_avatar_max_bytes(value: i64) -> Result<i64, &'static str> {
+    if usize::try_from(value).is_ok_and(|value| {
+        kutup_chat_proto::group_route::GROUP_AVATAR_BLOB_LENGTHS.contains(&value)
+    }) {
+        Ok(value)
+    } else {
+        Err("the largest group avatar is 8233, 16425, 32809 or 41001 bytes")
+    }
+}
+
+pub fn validate_chat_group_avatar_storage_bytes(value: i64) -> Result<i64, &'static str> {
+    if (8_233..=MAX_CHAT_GROUP_AVATAR_STORAGE_BYTES).contains(&value) {
+        Ok(value)
+    } else {
+        Err("group avatar storage is 8233 to 10000000 bytes a group")
+    }
+}
+
+/// The avatar limits now, `(largest blob, storage per group)`: the stored
+/// ones, else the first values. Read on every upload.
+pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<(i64, i64), sqlx::Error> {
+    let read = |key: &'static str| async move {
         sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
-            .bind(CHAT_GROUP_LINK_JOINS_PER_RELAY)
+            .bind(key)
             .fetch_optional(pool)
-            .await?
-            .and_then(|value| value.parse::<i64>().ok())
-            .and_then(|value| validate_chat_group_link_joins_per_relay(value).ok())
-            .unwrap_or(fallback),
-    )
+            .await
+            .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
+    };
+    let largest = read(CHAT_GROUP_AVATAR_MAX_BYTES)
+        .await?
+        .and_then(|value| validate_chat_group_avatar_max_bytes(value).ok())
+        .unwrap_or(DEFAULT_CHAT_GROUP_AVATAR_MAX_BYTES);
+    let storage = read(CHAT_GROUP_AVATAR_STORAGE_BYTES)
+        .await?
+        .and_then(|value| validate_chat_group_avatar_storage_bytes(value).ok())
+        .unwrap_or(DEFAULT_CHAT_GROUP_AVATAR_STORAGE_BYTES);
+    Ok((largest, storage))
 }
 
 #[cfg(test)]
@@ -151,15 +211,33 @@ mod tests {
     }
 
     #[test]
-    fn link_joins_per_relay_are_positive() {
-        assert_eq!(validate_chat_group_link_joins_per_relay(1), Ok(1));
-        assert_eq!(validate_chat_group_link_joins_per_relay(120), Ok(120));
+    fn group_avatar_limits_are_avatar_lengths_and_bounded() {
+        for length in [8_233, 16_425, 32_809, 41_001] {
+            assert_eq!(validate_chat_group_avatar_max_bytes(length), Ok(length));
+        }
+        assert!(validate_chat_group_avatar_max_bytes(40_000).is_err());
+        assert!(validate_chat_group_avatar_max_bytes(0).is_err());
         assert_eq!(
-            validate_chat_group_link_joins_per_relay(1_000_000),
-            Ok(1_000_000)
+            validate_chat_group_avatar_storage_bytes(DEFAULT_CHAT_GROUP_AVATAR_STORAGE_BYTES),
+            Ok(82_002)
         );
-        assert!(validate_chat_group_link_joins_per_relay(0).is_err());
-        assert!(validate_chat_group_link_joins_per_relay(1_000_001).is_err());
+        assert!(validate_chat_group_avatar_storage_bytes(8_232).is_err());
+        assert!(
+            validate_chat_group_avatar_storage_bytes(MAX_CHAT_GROUP_AVATAR_STORAGE_BYTES + 1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn link_joins_are_positive_and_bounded() {
+        assert_eq!(validate_chat_group_link_joins(1), Ok(1));
+        assert_eq!(validate_chat_group_link_joins(120), Ok(120));
+        assert_eq!(
+            validate_chat_group_link_joins(MAX_LINK_JOINS_PER_MIN),
+            Ok(MAX_LINK_JOINS_PER_MIN)
+        );
+        assert!(validate_chat_group_link_joins(0).is_err());
+        assert!(validate_chat_group_link_joins(MAX_LINK_JOINS_PER_MIN + 1).is_err());
     }
 
     #[test]

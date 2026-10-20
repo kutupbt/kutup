@@ -815,8 +815,10 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let (name_hold_days, old_address_receive_days) =
         crate::site_settings::name_holds(&state.pool, &state.config).await?;
-    let chat_group_link_joins_per_relay_per_min =
-        crate::site_settings::chat_group_link_joins_per_relay(&state.pool).await?;
+    let (link_joins_per_relay_group, link_joins_per_relay) =
+        crate::site_settings::chat_group_link_joins(&state.pool).await?;
+    let (avatar_max_bytes, avatar_storage_bytes) =
+        crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
@@ -824,7 +826,10 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
         "nameHoldDays": name_hold_days,
         "oldAddressReceiveDays": old_address_receive_days,
-        "chatGroupLinkJoinsPerRelayPerMin": chat_group_link_joins_per_relay_per_min,
+        "chatGroupLinkJoinsPerRelayGroupPerMin": link_joins_per_relay_group,
+        "chatGroupLinkJoinsPerRelayPerMin": link_joins_per_relay,
+        "chatGroupAvatarMaxBytes": avatar_max_bytes,
+        "chatGroupAvatarStoragePerGroupBytes": avatar_storage_bytes,
     }))
     .into_response())
 }
@@ -838,7 +843,23 @@ pub struct UpdateSettingsRequest {
     chat_media_delivery_retention_days: Option<i64>,
     name_hold_days: Option<i64>,
     old_address_receive_days: Option<i64>,
-    chat_group_link_joins_per_relay_per_min: Option<i64>,
+    /// `null` resets to the configured first value (the stored one goes).
+    #[serde(deserialize_with = "present")]
+    chat_group_link_joins_per_relay_group_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_link_joins_per_relay_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_max_bytes: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_storage_per_group_bytes: Option<Option<i64>>,
+}
+
+/// A field that is present: `Some(None)` for `null`, so a missing field
+/// (`None`, the default) and a reset differ.
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<i64>>, D::Error> {
+    Option::<i64>::deserialize(deserializer).map(Some)
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -861,7 +882,10 @@ pub async fn update_settings(
         && req.chat_media_delivery_retention_days.is_none()
         && req.name_hold_days.is_none()
         && req.old_address_receive_days.is_none()
+        && req.chat_group_link_joins_per_relay_group_per_min.is_none()
         && req.chat_group_link_joins_per_relay_per_min.is_none()
+        && req.chat_group_avatar_max_bytes.is_none()
+        && req.chat_group_avatar_storage_per_group_bytes.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -884,8 +908,23 @@ pub async fn update_settings(
             .map_err(AppError::bad_request)?;
     }
 
-    if let Some(value) = req.chat_group_link_joins_per_relay_per_min {
-        crate::site_settings::validate_chat_group_link_joins_per_relay(value)
+    for value in [
+        req.chat_group_link_joins_per_relay_group_per_min,
+        req.chat_group_link_joins_per_relay_per_min,
+    ]
+    .into_iter()
+    .flatten()
+    .flatten()
+    {
+        crate::site_settings::validate_chat_group_link_joins(value)
+            .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_avatar_max_bytes {
+        crate::site_settings::validate_chat_group_avatar_max_bytes(value)
+            .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_avatar_storage_per_group_bytes {
+        crate::site_settings::validate_chat_group_avatar_storage_bytes(value)
             .map_err(AppError::bad_request)?;
     }
     // The two holds are checked together, each against the other's new or
@@ -920,10 +959,6 @@ pub async fn update_settings(
             crate::site_settings::OLD_ADDRESS_RECEIVE_DAYS,
             req.old_address_receive_days,
         ),
-        (
-            crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY,
-            req.chat_group_link_joins_per_relay_per_min,
-        ),
     ] {
         let Some(value) = value else { continue };
         sqlx::query(
@@ -935,6 +970,44 @@ pub async fn update_settings(
         .execute(&mut *transaction)
         .await
         .map_err(|_| AppError::internal("internal error"))?;
+    }
+    for (key, value) in [
+        (
+            crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP,
+            req.chat_group_link_joins_per_relay_group_per_min,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY,
+            req.chat_group_link_joins_per_relay_per_min,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_MAX_BYTES,
+            req.chat_group_avatar_max_bytes,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_STORAGE_BYTES,
+            req.chat_group_avatar_storage_per_group_bytes,
+        ),
+    ] {
+        match value {
+            None => {}
+            Some(Some(value)) => {
+                sqlx::query(
+                    "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                )
+                .bind(key)
+                .bind(value.to_string())
+                .execute(&mut *transaction)
+                .await?;
+            }
+            Some(None) => {
+                sqlx::query("DELETE FROM site_settings WHERE key = $1")
+                    .bind(key)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+        }
     }
     transaction.commit().await?;
     audit(
@@ -949,7 +1022,10 @@ pub async fn update_settings(
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
             "nameHoldDays": req.name_hold_days,
             "oldAddressReceiveDays": req.old_address_receive_days,
+            "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
+            "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
+            "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
         }),
     )
     .await;

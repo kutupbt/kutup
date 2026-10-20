@@ -8,7 +8,8 @@ use base64::Engine as _;
 use crate::ratelimit::{
     CHAT_GROUP_CHANGES_GROUP, CHAT_GROUP_CHANGES_PSEUDONYM, CHAT_GROUP_CREATES_RELAY,
     CHAT_GROUP_FAILURES_RELAY, CHAT_GROUP_GATEWAY_RELAY, CHAT_GROUP_LINK,
-    CHAT_GROUP_LINK_JOINS_RELAY, CHAT_GROUP_PSEUDONYM, CHAT_GROUP_RELAY,
+    CHAT_GROUP_LINK_JOINS_RELAY, CHAT_GROUP_LINK_JOINS_RELAY_GROUP, CHAT_GROUP_PSEUDONYM,
+    CHAT_GROUP_RELAY,
 };
 
 /// A signed-in account relaying a request.
@@ -41,12 +42,25 @@ pub(crate) fn link(group_id: &[u8; 32]) -> bool {
     CHAT_GROUP_LINK.allow(&STANDARD.encode(group_id))
 }
 
-/// A join from a link or a request to join through the relay server
-/// `relay`, under the administrators' budget `per_minute`: one server's
-/// users can't flood the groups here with newcomers.
-pub(crate) fn link_join(relay: &str, per_minute: i64) -> bool {
-    CHAT_GROUP_LINK_JOINS_RELAY
-        .allow_up_to(relay, usize::try_from(per_minute).unwrap_or(usize::MAX))
+/// A join from a link or a request to join, its link's proof passed,
+/// through the relay server `relay` to the group `group_id`, under the
+/// administrators' budgets `(per relay and group, per relay)`: a link
+/// holder can only crowd that one group, and one server's users can't flood
+/// every group here. Charged on both only when both have room.
+pub(crate) fn link_join(
+    relay: &str,
+    group_id: &[u8; 32],
+    (per_group, per_relay): (i64, i64),
+) -> bool {
+    let limit = |value: i64| usize::try_from(value).unwrap_or(usize::MAX);
+    let group_key = format!("{relay} {}", STANDARD.encode(group_id));
+    if !(CHAT_GROUP_LINK_JOINS_RELAY_GROUP.has_room_up_to(&group_key, limit(per_group))
+        && CHAT_GROUP_LINK_JOINS_RELAY.has_room_up_to(relay, limit(per_relay)))
+    {
+        return false;
+    }
+    CHAT_GROUP_LINK_JOINS_RELAY_GROUP.allow_up_to(&group_key, limit(per_group))
+        && CHAT_GROUP_LINK_JOINS_RELAY.allow_up_to(relay, limit(per_relay))
 }
 
 /// Whether the relay server `relay` may still fail: checked before a request

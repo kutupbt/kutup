@@ -190,8 +190,14 @@ export interface AdminSettings {
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number
   chatMediaDeliveryRetentionDays: number
-  /** Joins and requests through group links, per minute per relay server. */
+  /** Joins and requests through group links, per minute per relay server and group. */
+  chatGroupLinkJoinsPerRelayGroupPerMin: number
+  /** The same, per minute per relay server across all groups. */
   chatGroupLinkJoinsPerRelayPerMin: number
+  /** The largest group avatar blob hosted groups take (one of the avatar lengths). */
+  chatGroupAvatarMaxBytes: number
+  /** The most a hosted group's avatars may take, in bytes. */
+  chatGroupAvatarStoragePerGroupBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

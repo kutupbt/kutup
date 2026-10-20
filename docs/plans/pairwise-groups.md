@@ -1436,7 +1436,10 @@ title.
 **Server parts** (the second session, agreed 2026-10-20):
 - the avatar operations and their storage (above), at most two blobs of
   40 KiB per hosted group, so the existing setting for how many groups a home
-  hosts bounds the total;
+  hosts bounds the total (built: `PutAvatar` and `GetAvatar` bodies padded to
+  one size, 41,005 bytes, by `pad_group_avatar`, so the sealed sizes don't
+  show the relay the bucket; the largest blob and the storage per group are
+  site settings, first 41,001 and 82,002; a genesis can't name an avatar);
 - `GetAvatar` under the link proof;
 - a per-relay-server budget for link joins and requests (about 120 a minute,
   admin-settable), charged before the change is checked;
@@ -1447,11 +1450,18 @@ title.
   holds members and requesters alike, so a removed member asking gets
   `denied` too); it spends the per-pseudonym budget like any signed request,
   and is no oracle (the asker proves the pseudonym);
-- the per-relay budget (built: the site setting
-  `chat_group_link_joins_per_relay_per_min`, under Administration → Server
-  settings, first `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN`, 120) is
-  charged on `JoinFromLink` and `RequestToJoin` only, before the change is
-  checked; join info keeps its per-group limit.
+- the link-join budgets (built, after review: per relay server and group,
+  and per relay server, the site settings
+  `chat_group_link_joins_per_relay_group_per_min` and
+  `chat_group_link_joins_per_relay_per_min` under Administration → Server
+  settings, first 120 and 1200 from `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_*`) are
+  charged on `JoinFromLink` and `RequestToJoin` only, once the link's
+  password holds and before the rest of the change is checked, so junk
+  without the link spends nothing and one link's holders crowd only that
+  group; join info keeps its per-group limit;
+- `GetRequestStatus` takes the same reads for every answer (no timing
+  oracle for a group's existence), and `unknown` spends the relay's failure
+  budget.
 
 **Client parts** (the third session):
 - the link format, its parser and the link request signer;

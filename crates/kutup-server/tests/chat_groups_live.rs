@@ -15,13 +15,14 @@ use common::*;
 use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group::{
     check_change, check_genesis, encode_group_id, resulting_genesis_state, resulting_state,
-    GroupAccessV1, GroupActionV1, GroupChangeV1, GroupLimits, GroupRole, GroupStateV1,
-    GROUP_FORMAT_VERSION,
+    GroupAccessV1, GroupActionV1, GroupAttribute, GroupChangeV1, GroupLimits, GroupRole,
+    GroupStateV1, GROUP_FORMAT_VERSION,
 };
 use kutup_chat_proto::group_route::{
-    GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
-    GroupLogQueryV1, GroupOperationV1, GroupRequestStateV1, GroupRequestStatusV1, GroupRequestV1,
-    GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1, PSEUDONYM_USED,
+    pad_group_avatar, unpad_group_avatar, GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1,
+    GroupLogEntryV1, GroupLogPageV1, GroupLogQueryV1, GroupOperationV1, GroupRequestStateV1,
+    GroupRequestStatusV1, GroupRequestV1, GroupResponseStatusV1, GroupResponseV1,
+    GroupStateAnswerV1, PSEUDONYM_USED,
 };
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
@@ -1015,41 +1016,33 @@ fn a_requester_learns_where_its_request_stands() {
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
-/// Sets the link-join budget per relay server (an administrator's setting),
-/// returning the one it replaced; `None` without an administrator.
-fn set_link_joins_per_relay(c: &Client, base: &str, per_minute: i64) -> Option<i64> {
-    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
-        eprintln!("KUTUP_LIVE_ADMIN unset; skipping");
-        return None;
+/// A newcomer's cancel built from what `GetRequestStatus` answered alone:
+/// the revision and head it named, not a state the newcomer never sees.
+fn cancel_from(
+    group_id: &[u8; 32],
+    status: &GroupRequestStatusV1,
+    key: &GroupKeyPair,
+) -> GroupChangeV1 {
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: encode_group_id(group_id),
+        revision: status.revision.expect("pending names its revision") + 1,
+        previous_hash: status.head.clone().expect("pending names its head"),
+        actor: b64(&key.public_key()),
+        actions: vec![GroupActionV1::CancelRequest],
+        resulting_state_hash: None,
+        signature: String::new(),
     };
-    let (name, password) = admin.split_once(':').unwrap();
-    let token = admin_token(c, base, password, name);
-    let before: Value = bearer(c.get(format!("{base}/api/admin/settings")), &token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let r = bearer(c.put(format!("{base}/api/admin/settings")), &token)
-        .json(&serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": per_minute }))
-        .send()
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    let settings: Value = r.json().unwrap();
-    assert_eq!(settings["chatGroupLinkJoinsPerRelayPerMin"], per_minute);
-    let r = bearer(c.put(format!("{base}/api/admin/settings")), &token)
-        .json(&serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": 0 }))
-        .send()
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
-    before["chatGroupLinkJoinsPerRelayPerMin"].as_i64()
+    change.signature = b64(&key.sign_change(&change.signed_bytes().unwrap()));
+    change
 }
 
-/// Joins and requests through links are budgeted per relay server, as the
-/// administrators set it, before the change is checked; other changes
-/// aren't. (The gate runs these tests one at a time, so the budget is this
-/// test's alone while it runs.)
+/// A requester cancels from its status alone, after the link was reset
+/// (so it can't build anything from the link); the cancel is done once:
+/// sent again it meets an unknown group, and the status says denied. A
+/// client that lost the answer to its cancel asks the status the same way.
 #[test]
-fn link_joins_are_budgeted_per_relay_server() {
+fn a_requester_cancels_from_its_status_after_a_link_reset() {
     let Some(base) = live() else { return };
     let c = crate::common::client();
     let alice = register(&c, &base);
@@ -1065,38 +1058,442 @@ fn link_joins_are_budgeted_per_relay_server() {
         &alice_key,
         kutup_chat_proto::group::AccessRequired::Administrator,
     );
-    let Some(before) = set_link_joins_per_relay(&c, &base, 3) else {
-        purge_accounts(&c, &base, &[&alice, &bob]);
+    let carol_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &carol_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &carol_key));
+    apply(&mut group, &home, &asked);
+    // Alice resets the link: the old password no longer reads anything.
+    let reset = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyInviteLink {
+            password: Some(b64(&random::<16>())),
+        }],
+    );
+    let reset = accepted(&submit(&c, &alice, &home, &group, &reset, &alice_key));
+    apply(&mut group, &home, &reset);
+
+    let pending = request_status(&c, &bob, &home, &group.id, &carol_key);
+    assert_eq!(pending.status, GroupRequestStateV1::Pending);
+    assert_eq!(pending.revision, Some(group.state.revision));
+    let cancel = cancel_from(&group.id, &pending, &carol_key);
+    let cancelled = accepted(&submit(&c, &bob, &home, &group, &cancel, &carol_key));
+    apply(&mut group, &home, &cancelled);
+    assert!(group.state.requesting.is_empty());
+
+    let again = cancel_from(&group.id, &pending, &carol_key);
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &again, &carol_key).status,
+        GroupResponseStatusV1::NotFound
+    );
+    let after = request_status(&c, &bob, &home, &group.id, &carol_key);
+    assert_eq!(after.status, GroupRequestStateV1::Denied);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// An administrator's session, which puts the group settings (the link-join
+/// budgets, the avatar limits) back to their first values when dropped (a
+/// failing test too).
+struct LinkJoinBudgets {
+    c: Client,
+    base: String,
+    token: String,
+}
+
+impl LinkJoinBudgets {
+    /// `None` without an administrator (`KUTUP_LIVE_ADMIN`).
+    fn take(c: &Client, base: &str) -> Option<Self> {
+        let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+            eprintln!("KUTUP_LIVE_ADMIN unset; skipping");
+            return None;
+        };
+        let (name, password) = admin.split_once(':').unwrap();
+        Some(Self {
+            c: c.clone(),
+            base: base.to_owned(),
+            token: admin_token(c, base, password, name),
+        })
+    }
+
+    fn put(&self, body: Value) -> (StatusCode, Value) {
+        let r = bearer(
+            self.c.put(format!("{}/api/admin/settings", self.base)),
+            &self.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        let status = r.status();
+        (status, r.json().unwrap_or(Value::Null))
+    }
+
+    /// Sets the budgets: per relay server and group, and per relay server.
+    fn set(&self, per_group: i64, per_relay: i64) {
+        let (status, settings) = self.put(serde_json::json!({
+            "chatGroupLinkJoinsPerRelayGroupPerMin": per_group,
+            "chatGroupLinkJoinsPerRelayPerMin": per_relay,
+        }));
+        assert_eq!(status, StatusCode::OK, "{settings}");
+        assert_eq!(settings["chatGroupLinkJoinsPerRelayGroupPerMin"], per_group);
+        assert_eq!(settings["chatGroupLinkJoinsPerRelayPerMin"], per_relay);
+    }
+}
+
+impl Drop for LinkJoinBudgets {
+    fn drop(&mut self) {
+        let (status, _) = self.put(serde_json::json!({
+            "chatGroupLinkJoinsPerRelayGroupPerMin": null,
+            "chatGroupLinkJoinsPerRelayPerMin": null,
+            "chatGroupAvatarMaxBytes": null,
+            "chatGroupAvatarStoragePerGroupBytes": null,
+        }));
+        if status != StatusCode::OK && !std::thread::panicking() {
+            panic!("the link-join budgets were not reset: {status}");
+        }
+    }
+}
+
+/// Joins and requests through a link are budgeted per relay server and
+/// group, and per relay server, as administrators set them; charged once
+/// the link's password holds, so junk without it spends nothing, and one
+/// link's holders crowd only that group. (The gate runs these tests one at
+/// a time, so the budgets are this test's alone while it runs.)
+#[test]
+fn link_joins_are_budgeted_per_relay_server_and_group() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let Some(budgets) = LinkJoinBudgets::take(&c, &base) else {
         return;
     };
+    let (status, _) = budgets.put(serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": 0 }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut first = create(&c, &alice, &home, &alice_key);
+    let first_password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut first,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let mut second = create(&c, &alice, &home, &alice_key);
+    let second_password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut second,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    budgets.set(3, 5);
     // Past the window of the joins earlier tests made through this relay.
     std::thread::sleep(std::time::Duration::from_secs(61));
 
-    for _ in 0..3 {
+    let ask = |group: &mut Group, password: &[u8; 16]| {
         let key = GroupKeyPair::generate();
-        let asks = through_link(&group, &key, &password, true);
-        let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &key));
-        apply(&mut group, &home, &asked);
+        let change = through_link(group, &key, password, true);
+        let answer = submit(&c, &bob, &home, group, &change, &key);
+        if answer.status == GroupResponseStatusV1::Ok {
+            apply(group, &home, &accepted(&answer));
+        }
+        answer.status
+    };
+    for _ in 0..3 {
+        assert_eq!(ask(&mut first, &first_password), GroupResponseStatusV1::Ok);
     }
-    // The next one is refused before its change is checked: even a wrong
-    // password meets the budget, not an unknown group.
-    let key = GroupKeyPair::generate();
-    let wrong = through_link(&group, &key, &random::<16>(), false);
+    // The group's budget is spent: the right password meets it.
     assert_eq!(
-        submit(&c, &bob, &home, &group, &wrong, &key).status,
+        ask(&mut first, &first_password),
+        GroupResponseStatusV1::RateLimited
+    );
+    // A wrong password is an unknown group, as ever, and spends nothing.
+    assert_eq!(
+        ask(&mut first, &random::<16>()),
+        GroupResponseStatusV1::NotFound
+    );
+    // Another group has its own budget, under the relay's: 3 + 2 = 5.
+    for _ in 0..2 {
+        assert_eq!(
+            ask(&mut second, &second_password),
+            GroupResponseStatusV1::Ok
+        );
+    }
+    assert_eq!(
+        ask(&mut second, &second_password),
         GroupResponseStatusV1::RateLimited
     );
     // A member's own change isn't charged.
     let deny = author(
-        &group,
+        &first,
         &alice_key,
         vec![GroupActionV1::DenyRequest {
-            pseudonym: group.state.requesting[0].pseudonym.clone(),
+            pseudonym: first.state.requesting[0].pseudonym.clone(),
         }],
     );
-    accepted(&submit(&c, &alice, &home, &group, &deny, &alice_key));
+    accepted(&submit(&c, &alice, &home, &first, &deny, &alice_key));
+    drop(budgets);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
 
-    set_link_joins_per_relay(&c, &base, before);
+/// A sealed avatar blob of `length` bytes (the home sees only its length
+/// and hash).
+fn avatar_blob(length: usize) -> Vec<u8> {
+    let mut blob = vec![0u8; length];
+    rand::thread_rng().fill_bytes(&mut blob);
+    blob
+}
+
+fn put_avatar(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &Group,
+    key: &GroupKeyPair,
+    body: &[u8],
+) -> GroupResponseV1 {
+    let request = signed(home, &group.id, GroupOperationV1::PutAvatar, body, key);
+    exchange(c, user, home, &request)
+}
+
+fn get_avatar(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &Group,
+    key: &GroupKeyPair,
+) -> GroupResponseV1 {
+    let request = signed(home, &group.id, GroupOperationV1::GetAvatar, b"", key);
+    exchange(c, user, home, &request)
+}
+
+/// The blob a `GetAvatar` answer carries.
+fn avatar_of(answer: &GroupResponseV1) -> Vec<u8> {
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    unpad_group_avatar(&answer.body().unwrap()).unwrap()
+}
+
+fn assert_refused(answer: &GroupResponseV1, code: &str) {
+    assert_eq!(answer.status, GroupResponseStatusV1::Refused, "{answer:?}");
+    assert_eq!(answer.code.as_deref(), Some(code), "{answer:?}");
+}
+
+/// A change setting the avatar to the blob `hash` (or removing it).
+fn set_avatar(group: &Group, key: &GroupKeyPair, hash: Option<[u8; 32]>) -> GroupChangeV1 {
+    let value = hash.map(|_| {
+        b64(&group
+            .master
+            .state_key()
+            .seal(SealedField::Avatar, b"", b"key and type")
+            .unwrap())
+    });
+    author(
+        group,
+        key,
+        vec![GroupActionV1::ModifyAttribute {
+            attribute: GroupAttribute::Avatar,
+            value,
+            avatar_hash: hash.map(|hash| b64(&hash)),
+        }],
+    )
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// A member uploads an avatar, then names it in a change: the home refuses
+/// a change naming a blob it doesn't hold, swaps the named one in, serves
+/// it padded to one size to members and to the link's holders, and keeps at
+/// most the current blob and one pending upload, within its settings.
+#[test]
+fn a_groups_avatar_is_uploaded_named_and_served() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let bob_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Any,
+    );
+    let joins = through_link(&group, &bob_key, &password, false);
+    let joined = accepted(&submit(&c, &bob, &home, &group, &joins, &bob_key));
+    apply(&mut group, &home, &joined);
+
+    // Nothing yet; an upload not padded to the one size is malformed.
+    assert_refused(
+        &get_avatar(&c, &bob, &home, &group, &bob_key),
+        "avatarMissing",
+    );
+    let first = avatar_blob(8_233);
+    assert_refused(
+        &put_avatar(&c, &alice, &home, &group, &alice_key, &first),
+        "malformed",
+    );
+    // A stranger's upload meets an unknown group.
+    let stranger = GroupKeyPair::generate();
+    let body = pad_group_avatar(&first).unwrap();
+    assert_eq!(
+        put_avatar(&c, &bob, &home, &group, &stranger, &body).status,
+        GroupResponseStatusV1::NotFound
+    );
+    let uploaded = put_avatar(&c, &alice, &home, &group, &alice_key, &body);
+    assert_eq!(uploaded.status, GroupResponseStatusV1::Ok, "{uploaded:?}");
+    // Still not the avatar: no change named it.
+    assert_refused(
+        &get_avatar(&c, &bob, &home, &group, &bob_key),
+        "avatarMissing",
+    );
+
+    // A change naming a blob the home doesn't hold is refused.
+    let wrong = set_avatar(&group, &alice_key, Some(sha256(&avatar_blob(8_233))));
+    assert_refused(
+        &submit(&c, &alice, &home, &group, &wrong, &alice_key),
+        "avatarMissing",
+    );
+    let named = set_avatar(&group, &alice_key, Some(sha256(&first)));
+    let named = accepted(&submit(&c, &alice, &home, &group, &named, &alice_key));
+    apply(&mut group, &home, &named);
+    assert_eq!(
+        avatar_of(&get_avatar(&c, &bob, &home, &group, &bob_key)),
+        first
+    );
+
+    // The link's holders see it too (the link's preview), and a wrong
+    // password meets an unknown group.
+    let link_read = |password: &[u8]| {
+        let request = GroupRequestV1::with_link_password(
+            &home.name,
+            &group.id,
+            GroupOperationV1::GetAvatar,
+            now(),
+            &random::<16>(),
+            password,
+        )
+        .unwrap();
+        exchange(&c, &bob, &home, &request)
+    };
+    assert_eq!(avatar_of(&link_read(&password)), first);
+    assert_eq!(
+        link_read(&random::<16>()).status,
+        GroupResponseStatusV1::NotFound
+    );
+
+    // A second upload replaces nothing until named; then the old one goes.
+    let second = avatar_blob(16_425);
+    let uploaded = put_avatar(
+        &c,
+        &bob,
+        &home,
+        &group,
+        &bob_key,
+        &pad_group_avatar(&second).unwrap(),
+    );
+    assert_eq!(uploaded.status, GroupResponseStatusV1::Ok, "{uploaded:?}");
+    assert_eq!(
+        avatar_of(&get_avatar(&c, &bob, &home, &group, &bob_key)),
+        first
+    );
+    let renamed = set_avatar(&group, &bob_key, Some(sha256(&second)));
+    let renamed = accepted(&submit(&c, &bob, &home, &group, &renamed, &bob_key));
+    apply(&mut group, &home, &renamed);
+    assert_eq!(
+        avatar_of(&get_avatar(&c, &alice, &home, &group, &alice_key)),
+        second
+    );
+    // The first blob is gone: naming it again finds nothing.
+    let back = set_avatar(&group, &alice_key, Some(sha256(&first)));
+    assert_refused(
+        &submit(&c, &alice, &home, &group, &back, &alice_key),
+        "avatarMissing",
+    );
+
+    // Only administrators change attributes now: Bob's upload is refused.
+    let mut access = group.state.access;
+    access.attributes = kutup_chat_proto::group::AccessRequired::Administrator;
+    let restrict = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyAccess { access }],
+    );
+    let restricted = accepted(&submit(&c, &alice, &home, &group, &restrict, &alice_key));
+    apply(&mut group, &home, &restricted);
+    assert_refused(
+        &put_avatar(
+            &c,
+            &bob,
+            &home,
+            &group,
+            &bob_key,
+            &pad_group_avatar(&avatar_blob(8_233)).unwrap(),
+        ),
+        "notAllowed",
+    );
+
+    // The home's limits, as its administrators set them.
+    if let Some(settings) = LinkJoinBudgets::take(&c, &base) {
+        let (status, body) = settings.put(serde_json::json!({ "chatGroupAvatarMaxBytes": 40_000 }));
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let (status, body) = settings.put(serde_json::json!({
+            "chatGroupAvatarMaxBytes": 16_425,
+            "chatGroupAvatarStoragePerGroupBytes": 16_425 + 8_233,
+        }));
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_refused(
+            &put_avatar(
+                &c,
+                &alice,
+                &home,
+                &group,
+                &alice_key,
+                &pad_group_avatar(&avatar_blob(32_809)).unwrap(),
+            ),
+            "avatarTooLarge",
+        );
+        // 16,425 current + 16,425 pending is over 24,658.
+        assert_refused(
+            &put_avatar(
+                &c,
+                &alice,
+                &home,
+                &group,
+                &alice_key,
+                &pad_group_avatar(&avatar_blob(16_425)).unwrap(),
+            ),
+            "avatarStorageFull",
+        );
+        let fits = put_avatar(
+            &c,
+            &alice,
+            &home,
+            &group,
+            &alice_key,
+            &pad_group_avatar(&avatar_blob(8_233)).unwrap(),
+        );
+        assert_eq!(fits.status, GroupResponseStatusV1::Ok, "{fits:?}");
+        drop(settings);
+    }
+
+    // Removing the avatar drops its blob.
+    let removed = set_avatar(&group, &alice_key, None);
+    let removed = accepted(&submit(&c, &alice, &home, &group, &removed, &alice_key));
+    apply(&mut group, &home, &removed);
+    assert_refused(
+        &get_avatar(&c, &bob, &home, &group, &bob_key),
+        "avatarMissing",
+    );
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
