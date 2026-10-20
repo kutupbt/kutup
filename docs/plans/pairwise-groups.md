@@ -1495,6 +1495,158 @@ Questions for the server design (second session):
 - the destination split;
 - the `409`/`410`/`404` answers per account inside one request.
 
+### Slice 2: the server design (second session, 2026-10-20)
+
+Copied from Signal-Server (`MessageController` `PUT /v1/messages/multi_recipient`,
+`MessagesCache`'s shared payload, libsignal's `SealedSenderV2SentMessage`),
+with the deviations federation forces: capabilities instead of group send
+endorsements, one request per destination server, and remote delivery that
+is synchronous with the pairwise path as its durable fallback. Reviewed by
+the third session (client side) and the main session.
+
+**1. The request.** `POST /api/chat/anonymous/messages/multi?server=<destination>`,
+anonymous (no bearer, no cookie), as today's sealed routes. Recipients on the
+sender's own server are the same request with `server=<own>`, delivered
+locally. Body `SealedMultiSubmissionV1`, canonical JSON:
+- `sendId`: dedup and the client's retry key. It counts as seen per
+  recipient device only once something was stored for it: a retry after a
+  `409`/`410` with the same `sendId` is deduplicated per device, never
+  refused as a whole.
+- `payload`: base64 of libsignal's sent multi-recipient message (version
+  `0x23`, 17-byte service ids = ACI of the account ids), parsed with the Rust
+  `SealedSenderV2SentMessage::parse`; each recipient's message is assembled
+  with `received_message_parts_for_recipient` (key material
+  `range_for_recipient_key_material`). `C_i ‖ AT_i` is per account, not per
+  device. No excluded recipients.
+- `capabilities`: `{ "<accountId>": "<16-byte capability, base64>" }`, exactly
+  the payload's recipient accounts.
+- `urgent` (default true): `false` skips web push and only nudges connected
+  devices, as Signal's flag (receipts-like traffic never wakes a phone).
+
+Limits, each an admin-editable site setting with Signal's values as defaults:
+- the request at most `256 KiB + (32 + 100) × recipients` (about 282 KiB at
+  256), base64 aside; the real ceiling is each recipient's assembled message,
+  at most 96 KiB (Signal's per-recipient cap);
+- at most 256 accounts per request (the group size);
+- too large is `413`; a malformed payload, a device listed twice, a
+  recipient missing from `capabilities` or the other way round is `400`.
+
+**2. Capabilities.** A new table, because today's `chat_delivery_capabilities`
+holds one profile-derived capability per account: `chat_group_capabilities
+(user_id, capability_hash bytea(32), created_at)`, no group id.
+- `PUT /api/chat/group-capabilities { "add": [hash], "remove": [hash] }`
+  (bearer, the owner) adds and removes in one transaction, so a removal's swap
+  is atomic; `POST …/set { "hashes": [...] }` sets exactly these (a device
+  restoring from its group list).
+- At most 1024 per account (a site setting): a call that would pass it is
+  refused whole (`409 capabilityLimit`), never trimmed.
+- The raw capability is never stored; a recipient's is checked as today's
+  (`SHA-256`, constant time).
+
+**3. The order of checks** (Signal's: access before recipients).
+1. Parse and size (`400`/`413`).
+2. **Capabilities first**, per recipient account. A recipient that isn't a
+   local active account or whose capability doesn't hold is `refused`: one
+   outcome for all three, so the answer is no account-existence oracle.
+3. Budgets (§4), per request, then per recipient: a recipient over its
+   budget is `rateLimited`.
+4. Devices, only for the recipients that passed 2 and 3: any with missing or
+   extra devices → `409 [{accountId, missingDevices, extraDevices}]`; else any
+   with a changed registration id → `410 [{accountId, staleDevices}]`. Nothing
+   is stored on either, and the answer carries `refused` and `rateLimited` as
+   well, so the client handles them in the same retry.
+5. Store (§6) and answer `200 { "refused": [...], "rateLimited": [...] }`.
+   §1's `404` handling applies to `refused` per member: pairwise at once,
+   refresh the group, multi-recipient again once the new capability arrives;
+   `rateLimited` members go pairwise later, with back-off.
+
+Recipients are processed in account-id order, so concurrent requests lock
+mailboxes in one order.
+
+**4. Budgets: per request or per recipient, said for each.**
+- Per request: the anonymous route's per-IP budget, charged once per request
+  plus a bytes-per-minute budget per IP, so one message to 256 members costs
+  one request (today's batch route charges every recipient after the first,
+  which can't carry a 256-member group or CGNAT neighbours; it changes the
+  same way, and so do the pairwise SKDMs and the fallback over it).
+- Per recipient: a budget per group capability (keyed by its hash), not the
+  recipient's shared sealed budget, so one abusive member can only drain one
+  group's capability of each member, never their direct sealed route.
+- Per origin server and destination: per request and bytes, not per stored
+  recipient (today's per-recipient counting gives about two 256-member
+  messages a minute).
+- The 64-member cap is lifted only with these.
+
+**5. Remote destinations: synchronous, the pairwise path durable.** The
+durable sealed federation path doesn't fit a multi-recipient body (its 1 MiB
+transaction cap, one sequence per destination that a stuck row would block,
+per-recipient settlement). So:
+- the origin forwards the request at once to the destination's
+  `POST /api/fed/chat/sealed/multi` (signed federation, its own endpoint and
+  size cap from §1), waits up to the usual timeout, and relays the answer as
+  it is (`200` with `refused`/`rateLimited`, `409`, `410`);
+- a slow or unreachable destination is `503 peerUnavailable`: nothing is
+  queued, and the client sends those members' copies over the pairwise
+  path, which is durable. No late `409`/`410` can be lost, and no row waits
+  in a sequence;
+- the origin keeps nothing of the body once answered.
+
+**6. Storage once (Signal-Server's shared payload).**
+- `chat_shared_payloads (id uuid, payload bytea, created_at)`: `e_pub ‖
+  ciphertext`, once per request and destination, inserted only if at least
+  one recipient device is newly stored, in the same transaction as the rows.
+- Each recipient device gets its ordinary `chat_mailbox` row, its account's
+  48 bytes of key material as `content`, and `shared_payload_id` (a foreign
+  key, `ON DELETE RESTRICT`). The partial index on `shared_payload_id`
+  (`WHERE shared_payload_id IS NOT NULL`) is `CREATE INDEX CONCURRENTLY`, alone
+  in its own no-transaction migration.
+- A drain assembles `[0x22] ‖ C_i ‖ AT_i ‖ e_pub ‖ ciphertext`, the device's
+  ordinary sealed envelope; drain pages are capped by bytes as well as
+  count.
+- **Collection by reference**, not by a fixed expiry: the mailbox sweep
+  (retention, device deletion's cascade, acks) removes rows; then payloads no
+  row references are deleted (`NOT EXISTS`, using the index), every sweep and
+  best-effort after an ack. Concurrent acks, raised retention and deleted
+  devices then never leave or lose a payload.
+- Pushes and WebSocket nudges carry no payload: a connected device drains,
+  so nothing assembles 256 × 96 KiB in memory at once.
+
+**What a server learns.**
+- As Signal's: which of its users share one multi-recipient send.
+- The origin sees the raw capabilities for a remote destination, so a
+  malicious origin could sealed-send to those members within their group
+  budget: parity with today's profile capability on the direct route. A
+  member who fears it replaces its capability.
+- The destination sees capability hashes used together, so it can link a
+  group's members' capabilities, and an add/remove pair links a rotation to
+  the one before. It can't tell which group, nor who sends.
+- An account's number of capabilities is its number of groups (the client
+  may publish padding capabilities; open).
+- A request's size reveals its recipient count through the per-recipient
+  headers. The client pads the content (libsignal's plaintext padding, to a
+  bucket), which hides its length, not the count, as in Signal.
+
+**Questions answered.**
+- Dedup after a capability rotation: the server's dedup is per device and
+  `sendId`; a copy that arrives twice (multi, then pairwise after a refusal)
+  is dropped by the receiver's sender-key duplicate check.
+- Retry after `202`: there is no `202` now (§5); a retry after `503` uses the
+  pairwise path.
+- `urgent=false`: no web push (above).
+
+**Tests.** Unit: validation (`400`/`413`), the order (refused before devices,
+`409` before `410`, `refused`/`rateLimited` carried in each), assembly equal to
+libsignal's, collection by reference under concurrent acks. Live, one server:
+a 3-member send stored once and drained by each device; a stale device; a
+refused capability; the payload gone after the last ack and after a device
+is deleted. Two servers: the federated send, a remote `409` relayed, `503`
+when the peer is down, the destination refusing a foreign account.
+
+**Lifting the 64 cap.** `CHAT_GROUP_MAX_MEMBERS` (a site setting) defaults to
+256 (decision 5) once §4's budgets are in; test stacks first.
+
+Estimate as §10 (8–10 days), the budgets and the storage change being most of it.
+
 ## Decisions (the user, 2026-10-17)
 
 1. **Home.** The group lives on the server where it was created and never moves.
