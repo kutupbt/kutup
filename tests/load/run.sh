@@ -22,7 +22,7 @@ mkdir -p "$results"
 # Each run starts from an empty stack, its stored blobs in a directory of its
 # own, so no run inherits the last one's data or in-memory rate limits.
 export KUTUP_E2E_DATA_DIR="${KUTUP_E2E_DATA_DIR:?}/$label"
-mkdir -p "$KUTUP_E2E_DATA_DIR"
+mkdir -p "$KUTUP_E2E_DATA_DIR/seaweedfs-master" "$KUTUP_E2E_DATA_DIR/seaweedfs-volume"
 
 compose() { docker compose "$@"; }
 
