@@ -1095,7 +1095,7 @@ pub fn members(
         .collect())
 }
 
-fn open_member(
+pub(crate) fn open_member(
     key: &GroupStateKey,
     group_id: &[u8; 32],
     pseudonym_text: &str,

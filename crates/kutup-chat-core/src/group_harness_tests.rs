@@ -4560,3 +4560,105 @@ fn group_rules_the_timer_goes_on_every_message() {
         .collect();
     assert_eq!(timers, vec![Some(300)]);
 }
+
+/// The group's timeline lines on this device, oldest first.
+fn group_lines(person: &Person, group_id: &str) -> Vec<kutup_chat_proto::GroupUpdateBody> {
+    let mut rows = block_on(person.engine.session().sent_history()).unwrap();
+    rows.sort_by(|a, b| a.send_id.cmp(&b.send_id));
+    let mut lines: Vec<(u64, kutup_chat_proto::GroupUpdateBody)> = rows
+        .iter()
+        .filter_map(|row| {
+            let content = serde_json::from_slice::<ChatContent>(&row.content).ok()?;
+            (content.group_context()?.group_id == group_id).then_some(())?;
+            let revision = content.message_id.rsplit(':').next()?.parse().ok()?;
+            Some((revision, content.as_group_update()?))
+        })
+        .collect();
+    lines.sort_by_key(|(revision, _)| *revision);
+    lines.into_iter().map(|(_, body)| body).collect()
+}
+
+#[test]
+fn group_lines_each_verified_change_is_a_line_on_every_device() {
+    use crate::group_link::GroupLinkMode;
+    use kutup_chat_proto::GroupUpdateChange as C;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let r = &mut rng();
+    block_on(alice.engine.set_group_title(&group_id, "Hikers", r)).unwrap();
+    block_on(alice.engine.set_group_timer(&group_id, 60, r)).unwrap();
+    block_on(
+        alice
+            .engine
+            .set_group_link(&group_id, GroupLinkMode::Approve, r),
+    )
+    .unwrap();
+    let fragment = block_on(alice.engine.group_link(&group_id))
+        .unwrap()
+        .fragment
+        .unwrap();
+    block_on(dave.engine.join_group_by_link(&fragment, r)).unwrap();
+    alice.sync(&group_id);
+    let daves = details(&mut alice, &group_id).requests[0]
+        .requester
+        .pseudonym
+        .clone();
+    block_on(alice.engine.deny_group_request(&group_id, &daves, r)).unwrap();
+    bob.receive();
+    bob.sync(&group_id);
+
+    let account = |person: &Person| crate::address::parse_account(&person.account).unwrap();
+    let lines = group_lines(&bob, &group_id);
+    let seen: Vec<(kutup_crypto::account_ref::AccountRef, Vec<C>)> = lines
+        .into_iter()
+        .map(|line| (line.actor, line.changes))
+        .collect();
+    let tail = &seen[seen.len() - 5..];
+    assert_eq!(
+        tail,
+        &[
+            (
+                account(&alice),
+                vec![C::NameChanged {
+                    name: "Hikers".into()
+                }]
+            ),
+            (account(&alice), vec![C::TimerChanged { seconds: 60 }]),
+            (
+                account(&alice),
+                vec![C::InviteLinkEnabled {
+                    approval_required: true
+                }]
+            ),
+            (account(&dave), vec![C::JoinRequested]),
+            (
+                account(&alice),
+                vec![C::JoinRequestDenied {
+                    member: account(&dave)
+                }]
+            ),
+        ]
+    );
+    // Bob joined at his claim: Alice's device also has what came before.
+    let alices: Vec<_> = group_lines(&alice, &group_id)
+        .into_iter()
+        .map(|line| (line.actor, line.changes))
+        .collect();
+    assert_eq!(
+        alices[..3],
+        [
+            (
+                account(&alice),
+                vec![C::NameChanged {
+                    name: "Team".into()
+                }]
+            ),
+            (account(&alice), vec![C::MembersInvited { count: 1 }]),
+            (account(&bob), vec![C::JoinedByInvitation]),
+        ]
+    );
+    assert_eq!(alices[3..], seen[..]);
+}

@@ -23,6 +23,7 @@ use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::group::{self, GroupError, GroupMemberView, GroupRecordV1, GroupStatus, NewGroup};
 use crate::group_client::{self, ConfigCheck, RequestSigner, RouteFailure};
+use crate::group_lines::{self, Applied};
 
 /// How many changes one log request asks for.
 const LOG_PAGE: u16 = if cfg!(test) { 2 } else { 64 };
@@ -336,9 +337,56 @@ impl Engine {
                 "the group home returned another change".into(),
             ));
         }
+        let before = record
+            .verified()
+            .map_err(group_error)?
+            .map(|(state, _)| state);
         let next = group::accept_change(record, &change, &entry.notary).map_err(group_error)?;
         self.save_group(record).await?;
+        if let Some(before) = before {
+            let applied = Applied {
+                before,
+                change,
+                after: next.clone(),
+            };
+            self.write_group_lines(record, vec![applied]).await;
+        }
         Ok(next)
+    }
+
+    /// Writes the timeline lines of changes this device verified. Best
+    /// effort: a line that can't be written (its accounts not checkable
+    /// now) is left out, never the change.
+    pub(crate) async fn write_group_lines(
+        &mut self,
+        record: &GroupRecordV1,
+        applied: Vec<Applied>,
+    ) {
+        if applied.is_empty() {
+            return;
+        }
+        let Ok(accounts) = group_lines::named_accounts(record, &applied) else {
+            return;
+        };
+        let Ok((keys, _, _)) = self.authority_keys(&accounts, &[]).await else {
+            return;
+        };
+        let authority_of = |account: &AccountRef| keys.get(account).copied();
+        let Ok(context) = Self::group_context(record) else {
+            return;
+        };
+        let sent_at = crate::clock::rfc3339(crate::clock::unix_millis());
+        let lines = applied
+            .iter()
+            .filter_map(|one| {
+                let body = group_lines::update_body(record, one, &authority_of)?;
+                let id = format!("grp:{}:{}", record.group_id, one.change.revision);
+                kutup_chat_proto::ChatContent::group_update_with_id(id, sent_at.clone(), &body)
+                    .ok()
+                    .map(|content| content.with_group_context(&context))
+            })
+            .collect();
+        let _ = self.session.record_local_lines(lines).await;
     }
 
     /// Makes a change as this member, then tells the group (a change
@@ -500,6 +548,7 @@ impl Engine {
             return self.take_whole_state(&mut record).await;
         };
         let mut from = state.revision + 1;
+        let mut applied = Vec::new();
         let mut newest = None;
         let mut history_refreshed = false;
         let mut finished = false;
@@ -533,19 +582,30 @@ impl Engine {
             for entry in &page.entries {
                 let change = GroupChangeV1::from_canonical_bytes(&decode_b64(&entry.change)?)
                     .map_err(ChatError::Invalid)?;
-                match group::accept_change(&mut record, &change, &entry.notary) {
-                    Ok(_) => {}
+                let before = record
+                    .verified()
+                    .map_err(group_error)?
+                    .map(|(state, _)| state);
+                let next = match group::accept_change(&mut record, &change, &entry.notary) {
+                    Ok(next) => next,
                     // A notary by an identity this device doesn't hold yet (the
                     // home rotated it): fetch the history again, once, and retry.
                     Err(GroupError::Notary) if !history_refreshed => {
                         history_refreshed = true;
                         self.refresh_gateway(&mut record).await?;
                         group::accept_change(&mut record, &change, &entry.notary)
-                            .map_err(group_error)?;
+                            .map_err(group_error)?
                     }
                     Err(error) => return Err(group_error(error)),
-                }
+                };
                 from = change.revision + 1;
+                if let Some(before) = before {
+                    applied.push(Applied {
+                        before,
+                        change,
+                        after: next,
+                    });
+                }
             }
             if let Some(last) = page.entries.last() {
                 newest = Some(last.notary.clone());
@@ -553,6 +613,8 @@ impl Engine {
             record.not_found_since_ms = None;
             record.synced_at_ms = Some(crate::clock::unix_millis());
             self.save_group(&record).await?;
+            self.write_group_lines(&record, std::mem::take(&mut applied))
+                .await;
             if !page.more || record.status == GroupStatus::Gone {
                 finished = true;
                 break;

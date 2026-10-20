@@ -1561,8 +1561,9 @@ impl ReadPositionBody {
     }
 }
 
-/// One visible change an applied group Commit made. Members are accounts,
-/// never addresses.
+/// One visible change an applied group change made (an MLS Commit, or a
+/// pairwise group's change from its home's log). Members are accounts, never
+/// addresses or pseudonyms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
 pub enum GroupUpdateChange {
@@ -1628,6 +1629,49 @@ pub enum GroupUpdateChange {
         approval_required: bool,
     },
     Closed,
+    /// The group's disappearing-messages timer; 0 is off.
+    #[serde(rename_all = "camelCase")]
+    TimerChanged {
+        seconds: u32,
+    },
+    /// Who may add members.
+    #[serde(rename_all = "camelCase")]
+    AddersChanged {
+        administrators_only: bool,
+    },
+    /// The actor invited this many accounts (who, only the invitees learn).
+    #[serde(rename_all = "camelCase")]
+    MembersInvited {
+        count: u16,
+    },
+    #[serde(rename_all = "camelCase")]
+    InvitationsRevoked {
+        count: u16,
+    },
+    /// The actor took an invitation and joined.
+    JoinedByInvitation,
+    /// The actor joined through the group link.
+    JoinedFromLink,
+    /// The actor asked to join through the group link.
+    JoinRequested,
+    /// The actor withdrew their request.
+    JoinRequestCanceled,
+    #[serde(rename_all = "camelCase")]
+    JoinRequestApproved {
+        member: AccountRef,
+    },
+    #[serde(rename_all = "camelCase")]
+    JoinRequestDenied {
+        member: AccountRef,
+    },
+    #[serde(rename_all = "camelCase")]
+    MemberBanned {
+        member: AccountRef,
+    },
+    #[serde(rename_all = "camelCase")]
+    MemberUnbanned {
+        member: AccountRef,
+    },
 }
 
 /// Who made an applied group change, and what it changed.

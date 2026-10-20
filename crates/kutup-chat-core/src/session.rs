@@ -2527,6 +2527,37 @@ impl Session {
         Ok((trust, line))
     }
 
+    /// Lines this device writes for itself in its own timeline (a group's
+    /// change notices): kept as delivered sent rows under their own ids, so
+    /// writing one again replaces it. Never sent.
+    pub(crate) async fn record_local_lines(&mut self, lines: Vec<ChatContent>) -> Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let now = now_millis();
+        let me = self.account_ref().to_string();
+        for content in lines {
+            self.store.stage_sent_message(SentMessage {
+                send_id: content.message_id.clone(),
+                peer: me.clone(),
+                sender_device_id: self.device_id(),
+                content: serde_json::to_vec(&content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: now,
+                delivered_at: Some(now),
+                delivered: true,
+                deduplicated: false,
+                failed_recipients: 0,
+                waiting_recipients: None,
+            });
+        }
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn accept_authority_reset(&mut self, peer: &str) -> Result<ManifestTrust> {
         let mut retained = self
             .manifest_trust(peer)
