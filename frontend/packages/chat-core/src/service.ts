@@ -1169,6 +1169,17 @@ export class ChatService {
     return written
   }
 
+  /**
+   * The pin Chat keeps for `peer` and hasn't written to the account's list
+   * yet (a first meeting waits for a random moment), to follow their renames
+   * against meanwhile; null once written.
+   */
+  async pendingIdentityPin(peer: AccountRef): Promise<{ authorityPublicKey: string; since: string } | null> {
+    const client = this.client
+    if (!client.pendingIdentityPin) return null
+    return this.withLock(() => client.pendingIdentityPin!(accountKey(peer)))
+  }
+
   /** ICE servers for a call: STUN, and TURN with fresh credentials when the server has a relay. */
   async callServers(): Promise<ChatCallServers> {
     const cached = this.cachedCallServers

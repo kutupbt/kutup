@@ -336,17 +336,47 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
     assert_eq!(world.pin_writes.get(), 0);
     assert_eq!(alice.engine.pins_due.len(), 2);
     // Kept with the device, so a reload doesn't lose them.
-    let stored: std::collections::BTreeMap<String, i64> = serde_json::from_slice(
+    let stored: std::collections::BTreeMap<String, serde_json::Value> = serde_json::from_slice(
         &block_on(alice.engine.session().pins_due())
             .unwrap()
             .unwrap(),
     )
     .unwrap();
     assert_eq!(stored.len(), 2);
+    // Met an hour ago: the pin waiting for its write is dated by then, as
+    // offered to follow renames meanwhile, and as written later.
+    let hour_ago = crate::clock::unix_millis() - 3_600_000;
+    for due in alice.engine.pins_due.values_mut() {
+        due.seen_ms = hour_ago;
+    }
+    let since = kutup_crypto::identity_pins::since_from_unix((hour_ago / 1000) as u64);
+    let (authority, offered) = block_on(alice.engine.pending_identity_pin(&bob.account))
+        .unwrap()
+        .unwrap();
+    assert_eq!(offered, since);
     // Both in one write (as before signing out).
     assert_eq!(block_on(alice.engine.flush_identity_pins(true)).unwrap(), 2);
     assert_eq!(world.pin_writes.get(), 1);
     assert!(alice.engine.pins_due.is_empty());
+    assert!(block_on(alice.engine.pending_identity_pin(&bob.account))
+        .unwrap()
+        .is_none());
+    let envelope = world.identity_pins.borrow()[&alice.account].1.clone();
+    let key = kutup_crypto::identity_pins::derive_key(&[seed; 32]).unwrap();
+    let (list, _) = kutup_crypto::identity_pins::open(
+        &key,
+        &binding,
+        &base64::engine::general_purpose::STANDARD
+            .decode(envelope)
+            .unwrap(),
+    )
+    .unwrap();
+    let pinned = list
+        .pins
+        .iter()
+        .find(|pin| pin.authority_public_key == authority)
+        .unwrap();
+    assert_eq!(pinned.since, since);
 }
 
 #[test]

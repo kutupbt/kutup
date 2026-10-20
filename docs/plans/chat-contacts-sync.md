@@ -280,6 +280,13 @@ following the main session's review of #252:
     together (`flush_identity_pins`, on the same tick and at sign-out); an
     in-person verification is written at once. A queued pin lost to a reload
     is queued again at the next contact.
+  - A queued pin keeps when the account was first seen, and is written with
+    that as its `since`: a rename after the first meeting is still told,
+    however late the pin is written. Meanwhile Chat's rename watch follows
+    the peer's rename chain against the queued pin
+    (`pendingIdentityPin`, the chain verified against its authority; the
+    list is not touched), so a rename right after a first meeting is told
+    at once (spec 160; master CI on e43bb82c found it missed).
 - Web: `ApiChatTransport.fetchContactList / storeContactEntry /
   deleteContactEntry` under the account head's `chatContacts` scope; `full`
   is the server's `contactListFull` code. Signing out flushes the contact

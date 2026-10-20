@@ -51,7 +51,10 @@ export async function checkRenames(service: ChatService, peers: readonly string[
       try {
         const current = await serverAddressOf(account, true)
         if (!current) continue
-        const renames = await followAccountRenames(identity, account, current)
+        // A peer met lately may not be pinned in the account's list yet:
+        // Chat's own pin, waiting for its write, stands in meanwhile.
+        const pending = await service.pendingIdentityPin(account)
+        const renames = await followAccountRenames(identity, account, current, pending)
         for (const rename of renames) {
           if (await service.recordPeerRenamed(account, rename)) wrote = true
         }

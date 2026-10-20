@@ -2068,6 +2068,7 @@ export interface WasmChatClientHandle {
   recordCallLog(peer: string, body: ChatCallLog): Promise<void>
   /** The line saying `peer` changed their username (one step of their verified rename chain); once. True when written now. */
   recordPeerRenamed(peer: string, previous: string, current: string, sequence: number): Promise<boolean>
+  pendingIdentityPin?(peer: string): Promise<{ authorityPublicKey: string; since: string } | null>
   sendDisappearingTimer(
     sendId: string,
     peer: string,
