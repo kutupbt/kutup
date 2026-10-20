@@ -652,6 +652,11 @@ arrival, and direct sending. Phases, each with its own plan before code:
   upstream PR or fork from us. End-to-end forwarding is built on v4
   independently ([`plans/mail-forwarding.md`](plans/mail-forwarding.md),
   in progress).
+- **Mail: DKIM2 for outside forwards.** Stalwart 0.16 can't ARC-seal (removed
+  in 0.16.0; ARC is moving to Historic), so outside forwards rely on the
+  sender's own DKIM signature surviving. Stalwart's DKIM2 (0.16.12+) is the
+  successor; turn it on once a major receiver verifies DKIM2
+  ([`plans/mail-forwarding.md`](plans/mail-forwarding.md), "ARC").
 - **D. Calendar** (next, decided 2026-10-19): starts once the work in
   flight is done (Chat groups slice 1, Mail forwarding, Chat contacts sync).
   Proton Calendar is the reference: per-calendar keys, sharing, iTIP
