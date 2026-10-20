@@ -50,7 +50,7 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
-const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
+pub(crate) const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
 
 pub(crate) fn rng() -> impl Rng + CryptoRng {
     OsRng.unwrap_err()
@@ -1244,9 +1244,9 @@ pub(crate) struct Person {
     pub(crate) client: Rc<Client>,
     pub(crate) account: String,
     #[allow(dead_code)] // what linking another device needs
-    authority_seed: u8,
+    pub(crate) authority_seed: u8,
     #[allow(dead_code)]
-    wrapping_key: [u8; 32],
+    pub(crate) wrapping_key: [u8; 32],
 }
 
 impl Person {

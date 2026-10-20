@@ -167,7 +167,11 @@ fn entry_of(
         version: CONTACT_ENTRY_VERSION,
         account,
         state: contact.state,
-        previous_state: if blocked { contact.previous_state } else { None },
+        previous_state: if blocked {
+            contact.previous_state
+        } else {
+            None
+        },
         blocked_at_ms,
         profile_key: profile_key
             .map(|key| STANDARD.encode(key))
@@ -177,7 +181,9 @@ fn entry_of(
             source_device_id: contact.source_device_id,
             updated_at_ms: contact.updated_at_ms,
         },
-        unknown: listed.map(|listed| listed.entry.unknown.clone()).unwrap_or_default(),
+        unknown: listed
+            .map(|listed| listed.entry.unknown.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -385,7 +391,10 @@ impl Engine {
     /// Writes one entry over the revision the list has. A new entry on a
     /// full list evicts first (the oldest rejected, then the oldest asked;
     /// never a block), and says `Full` when nothing may go.
-    async fn write_contact_entry(&mut self, entry: &ChatContactEntryV1) -> Result<ContactListWrite> {
+    async fn write_contact_entry(
+        &mut self,
+        entry: &ChatContactEntryV1,
+    ) -> Result<ContactListWrite> {
         let plain = entry.canonical_bytes().map_err(invalid)?;
         let list = self.contact_list.as_ref().expect("enabled by the caller");
         let id = list.entry_id(&entry.account);
@@ -487,8 +496,11 @@ impl Engine {
                 continue;
             }
             let newer = local.get(&peer).is_none_or(|contact| {
-                contact_order(entry.control.revision, entry.state, entry.control.source_device_id)
-                    > order_of(contact)
+                contact_order(
+                    entry.control.revision,
+                    entry.state,
+                    entry.control.source_device_id,
+                ) > order_of(contact)
             });
             if newer {
                 let record = record_of(&peer, &entry);
@@ -544,12 +556,19 @@ impl Engine {
             .flatten()
             .is_some_and(|contact| contact.state == ContactState::Blocked);
         if blocked && list.timing.block == BlockTiming::Immediate {
-            if let Ok(report) = self.flush_contacts(true, Some(peer)).await {
-                if report.refused_full > 0 {
+            // Best effort: what fails stays due. An entry this device can't
+            // even make is a bug, never the network's doing.
+            match self.flush_contacts(true, Some(peer)).await {
+                Ok(report) if report.refused_full > 0 => {
                     if let Some(list) = self.contact_list.as_mut() {
                         list.full = true;
                     }
                 }
+                Ok(_) => {}
+                Err(error) => debug_assert!(
+                    !matches!(error, ChatError::Invalid(_)),
+                    "a contact entry that can't be made: {error}"
+                ),
             }
         }
     }

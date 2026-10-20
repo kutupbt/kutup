@@ -69,11 +69,10 @@ impl ChatContactEntryV1 {
         if self.blocked_at_ms.is_some() && !blocked {
             return Err("only a block has a time it was blocked".into());
         }
-        if matches!(
-            self.previous_state,
-            Some(ContactState::Blocked | ContactState::PendingIncoming)
-        ) {
-            return Err("an unblock returns to an accepted, asked or rejected state".into());
+        // An unblock returns to any state but a block (a request that was
+        // pending is pending again).
+        if self.previous_state == Some(ContactState::Blocked) {
+            return Err("an unblock never returns to a block".into());
         }
         if let Some(key) = &self.profile_key {
             let bytes = STANDARD
