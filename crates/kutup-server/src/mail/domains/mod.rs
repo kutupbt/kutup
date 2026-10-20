@@ -36,6 +36,24 @@ pub fn scaled(seconds: i64) -> i64 {
     (seconds / TIME_SCALE.load(Ordering::Relaxed)).max(1)
 }
 
+/// Whether the custom domain `id` takes and sends mail now (held, approved
+/// where approval is on, not turned off, the feature configured): the rule
+/// RCPT, sending and key lookups share.
+pub async fn usable_domain(state: &crate::AppState, id: uuid::Uuid) -> Result<bool, sqlx::Error> {
+    if !sweep::configured(state) {
+        return Ok(false);
+    }
+    let settings = settings::Settings::load(&state.pool).await?;
+    let row: Option<store::Row> = sqlx::query_as(&format!(
+        "SELECT {} FROM mail_domains WHERE id = $1",
+        store::COLUMNS
+    ))
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.is_some_and(|row| row.usable(&settings)))
+}
+
 /// Whether `domain` is a custom domain held here that takes mail now.
 pub async fn held_here(state: &crate::AppState, domain: &str) -> Result<bool, sqlx::Error> {
     if !sweep::configured(state) {

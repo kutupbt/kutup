@@ -704,8 +704,8 @@ async fn public_keys(
 ) -> AppResult<Option<(Uuid, String, Vec<PublicMailKey>)>> {
     // The address as stored (the spelling its key lists and keys name),
     // whatever spelling was asked.
-    let row: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT a.id, a.address FROM mail_addresses a JOIN users u ON u.id = a.user_id
+    let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT a.id, a.address, a.domain_id FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.folded = kutup_address_folded($1)
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
@@ -714,9 +714,17 @@ async fn public_keys(
     .bind(address)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((address_id, stored)) = row else {
+    let Some((address_id, stored, domain_id)) = row else {
         return Ok(None);
     };
+    // An address on a custom domain has keys only while its domain is
+    // usable, as RCPT takes its mail: a lapsed or moved domain's former
+    // holder isn't offered to senders.
+    if let Some(domain_id) = domain_id {
+        if !crate::mail::domains::usable_domain(state, domain_id).await? {
+            return Ok(None);
+        }
+    }
     let keys: Vec<(String, String, Vec<u8>, bool, i32)> = sqlx::query_as(
         "SELECT fingerprint, sha256_fingerprint, public_key, is_primary, flags
            FROM mail_address_keys WHERE address_id = $1 AND NOT is_forwarding

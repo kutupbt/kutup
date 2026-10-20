@@ -1591,8 +1591,8 @@ pub async fn resolve_account(
 ) -> AppResult<Json<MailAccountRef>> {
     let address = crate::mail::typed_address(&query.address)
         .ok_or_else(|| AppError::not_found("not found"))?;
-    sqlx::query_as(
-        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address
+    let row: Option<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address, a.domain_id
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
           WHERE a.folded = kutup_address_folded($1)
@@ -1601,9 +1601,22 @@ pub async fn resolve_account(
     )
     .bind(&address)
     .fetch_optional(&state.pool)
-    .await?
-    .map(Json)
-    .ok_or_else(|| AppError::not_found("not found"))
+    .await?;
+    let Some((user_id, username, address, domain_id)) = row else {
+        return Err(AppError::not_found("not found"));
+    };
+    let account = MailAccountRef {
+        user_id,
+        username,
+        address,
+    };
+    // As RCPT and key lookups: a custom domain's address only while usable.
+    if let Some(domain_id) = domain_id {
+        if !crate::mail::domains::usable_domain(&state, domain_id).await? {
+            return Err(AppError::not_found("not found"));
+        }
+    }
+    Ok(Json(account))
 }
 
 #[derive(Debug, Deserialize)]

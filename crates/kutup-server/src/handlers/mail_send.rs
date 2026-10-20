@@ -273,19 +273,7 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
             .with_details(json!({ "code": "notYourAddress" })));
     };
     if let Some(domain_id) = domain_id {
-        let settings = crate::mail::domains::settings::Settings::load(&state.pool).await?;
-        let usable = match sqlx::query_as::<_, crate::mail::domains::store::Row>(&format!(
-            "SELECT {} FROM mail_domains WHERE id = $1",
-            crate::mail::domains::store::COLUMNS
-        ))
-        .bind(domain_id)
-        .fetch_optional(&state.pool)
-        .await?
-        {
-            Some(row) => row.usable(&settings) && crate::mail::domains::sweep::configured(state),
-            None => false,
-        };
-        if !usable {
+        if !crate::mail::domains::usable_domain(state, domain_id).await? {
             return Err(
                 AppError::conflict("this address's domain isn't verified now")
                     .with_details(json!({ "code": "domainNotVerified" })),
