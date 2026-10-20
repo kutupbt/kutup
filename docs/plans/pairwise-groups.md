@@ -1408,7 +1408,16 @@ title.
     type.
   - The client pads the image to a size bucket (8, 16, 32 or 40 KiB) and seals
     it under a fresh random key, so the same picture in two groups gives
-    unrelated hashes. It uploads it with `PutAvatar`, then makes the change.
+    unrelated hashes: a version byte, a 24-byte nonce, the padded image and a
+    16-byte tag (XChaCha20-Poly1305), so exactly 8,233, 16,425, 32,809 or
+    41,001 bytes. The home refuses any other length as malformed. The client
+    uploads it with `PutAvatar`, then makes the change.
+  - `PutAvatar` is authorised as the avatar change is: the signer is a member
+    and passes `access.attributes`, checked against the state as it arrives.
+  - A change naming an avatar hash must find its blob: the home refuses a
+    `ModifyAttribute` for the avatar whose hash is neither the pending nor the
+    current blob (`avatarMissing`). Once the change is accepted, the pending
+    blob becomes the current one and the old one goes at once.
   - The home keeps the current blob and at most one pending upload per group
     (the pending one goes after 24 hours), counts them against its own limits
     for groups it hosts (not any account's pool, since the home doesn't know
@@ -1422,11 +1431,18 @@ title.
   storage per group, and the link-join and request budget per relay server.
 
 **Server parts** (the second session, agreed 2026-10-20):
-- the avatar operations and their storage (above);
+- the avatar operations and their storage (above), at most two blobs of
+  40 KiB per hosted group, so the existing setting for how many groups a home
+  hosts bounds the total;
 - `GetAvatar` under the link proof;
 - a per-relay-server budget for link joins and requests (about 120 a minute,
   admin-settable), charged before the change is checked;
-- `GetRequestStatus`.
+- `GetRequestStatus`: `unknown` (never `NotFound`) for a pseudonym the group
+  never saw, `denied` for a banned one or one seen as a requester that is now
+  neither requesting nor a member; it spends the per-pseudonym budget like
+  any signed request, and is no oracle (the asker proves the pseudonym);
+- the per-relay budget is charged on `JoinFromLink` and `RequestToJoin` only;
+  join info keeps its per-group limit.
 
 **Client parts** (the third session):
 - the link format, its parser and the link request signer;
