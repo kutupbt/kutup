@@ -34,6 +34,31 @@ pub struct GroupSlotEntryV1 {
     pub account: AccountRef,
 }
 
+/// The sealed avatar attribute (field `Avatar`, no subject): the key that
+/// opens the avatar blob, and what the image is. The blob's SHA-256 travels
+/// beside it in the clear (`ModifyAttribute.avatarHash`), so the home can
+/// serve and clean up blobs (docs/plans/pairwise-groups.md §11).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupAvatarV1 {
+    pub version: u16,
+    /// 32 bytes, standard base64.
+    pub key: String,
+    pub content_type: String,
+}
+
+/// Never prints the key.
+impl std::fmt::Debug for GroupAvatarV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupAvatarV1")
+            .field("content_type", &self.content_type)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The image types an avatar may be (Signal's, as the MLS groups took).
+pub const GROUP_AVATAR_CONTENT_TYPES: [&str; 3] = ["image/jpeg", "image/png", "image/webp"];
+
 /// The sealed ban list (field `BanList`, no subject): the banned accounts,
 /// each with the pseudonyms banned for it, so an unban lifts them too. The
 /// home sees and enforces only the pseudonyms (docs/plans/pairwise-groups.md
@@ -239,6 +264,7 @@ canonical_json!(GroupSlotEntryV1, "group slot entry");
 canonical_json!(GroupInviteV1, "group invite");
 canonical_json!(GroupListEntryV1, "group list entry");
 canonical_json!(GroupBanListV1, "group ban list");
+canonical_json!(GroupAvatarV1, "group avatar");
 
 fn require_version(version: u16) -> Result<(), String> {
     if version != GROUP_FORMAT_VERSION {
@@ -252,6 +278,17 @@ impl GroupMemberEntryV1 {
         require_version(self.version)?;
         decode_exact::<PROFILE_KEY_LEN>("profileKey", &self.profile_key)?;
         decode_exact::<BINDING_SIGNATURE_LEN>("bindingSignature", &self.binding_signature)?;
+        Ok(())
+    }
+}
+
+impl GroupAvatarV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        require_version(self.version)?;
+        decode_exact::<32>("key", &self.key)?;
+        if !GROUP_AVATAR_CONTENT_TYPES.contains(&self.content_type.as_str()) {
+            return Err("a group avatar is a JPEG, PNG or WebP image".into());
+        }
         Ok(())
     }
 }

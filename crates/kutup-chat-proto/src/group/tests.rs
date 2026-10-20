@@ -1070,3 +1070,22 @@ fn a_ban_list_stays_sorted_and_canonical() {
     unsorted.banned.swap(0, 1);
     assert!(unsorted.canonical_bytes().is_err());
 }
+
+#[test]
+fn an_avatar_attribute_fits_its_sealed_cap_and_names_an_image_type() {
+    use super::entry::GroupAvatarV1;
+    let avatar = GroupAvatarV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        key: super::encode(&[9u8; 32]),
+        content_type: "image/webp".into(),
+    };
+    let bytes = avatar.canonical_bytes().unwrap();
+    assert!(kutup_crypto::chat_group::sealed_len(bytes.len()) <= super::MAX_SEALED_AVATAR_BYTES);
+    assert_eq!(GroupAvatarV1::from_canonical_bytes(&bytes).unwrap(), avatar);
+    assert!(!format!("{avatar:?}").contains(&avatar.key));
+    let gif = GroupAvatarV1 {
+        content_type: "image/gif".into(),
+        ..avatar
+    };
+    assert!(gif.canonical_bytes().is_err());
+}
