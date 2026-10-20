@@ -1505,7 +1505,9 @@ destination server. Answers to §11's six questions:
 **1. The request.** `POST /api/chat/anonymous/messages/multi?server=<destination>`,
 anonymous (no bearer, no cookie), as today's sealed routes. Body
 `SealedMultiSubmissionV1`, canonical JSON:
-- `sendId` (as a sealed send: dedup and the client's retry key);
+- `sendId` (as a sealed send: dedup and the client's retry key). It counts
+  as seen only once something was stored: a retry after a `409` or `410`
+  with the same `sendId` is a new attempt, never taken for a duplicate;
 - `payload`: base64 of libsignal's `SealedSenderMultiRecipientMessage`
   (version `0x23`, 17-byte service ids = ACI of the account ids), made by
   `sealed_sender_multi_recipient_encrypt`; no excluded recipients;
@@ -1513,9 +1515,10 @@ anonymous (no bearer, no cookie), as today's sealed routes. Body
   recipient account in the payload, exactly that set;
 - `urgent` (default true), as Signal's query parameter.
 
-Limits: the shared ciphertext at most 256 KiB, each recipient's assembled
-message at most 96 KiB (Signal's per-recipient cap), at most 256 accounts
-(the group size) and 4 MiB in all. The server parses with libsignal's own
+Limits, each an admin-editable site setting (the standing rule), with
+Signal's values as defaults: the shared ciphertext at most 256 KiB, each
+recipient's assembled message at most 96 KiB (Signal's per-recipient cap), at
+most 256 accounts per request (the group size) and 4 MiB in all. The server parses with libsignal's own
 `SealedSenderMultiRecipientMessage::parse` (as Signal-Server); anything else
 is `400 malformed`: another version, excluded recipients, a recipient not in
 `capabilities` or the other way round, a device listed twice.
@@ -1523,7 +1526,7 @@ is `400 malformed`: another version, excluded recipients, a recipient not in
 **2. Capabilities.** A new table, because today's `chat_delivery_capabilities`
 holds one profile-derived capability per account: `chat_group_capabilities
 (user_id, capability_hash bytea(32), created_at)`, any number per account up
-to a cap (an account in 1024 groups), no group id. Published and replaced in
+to a cap (1024 per account by default, a site setting), no group id. Published and replaced in
 one call, so a removal's swap is atomic, as §1 asks:
 `PUT /api/chat/group-capabilities { "add": [hash], "remove": [hash] }`
 (bearer, the owner). A recipient's capability is checked as today's
@@ -1540,7 +1543,8 @@ origin forwards a request for another server over the existing durable sealed
 federation path (a new transaction kind, `FederatedSealedMultiV1`, the same
 body), never learning the sender; the destination refuses a recipient that
 isn't one of its accounts. A request naming accounts of two servers can't be
-expressed (one `server` per request).
+expressed (one `server` per request). Recipients on the sender's own server
+are the same request with `server=<own>`, delivered locally.
 
 **5. Answers, per account in one answer** (Signal's, adapted):
 - devices first: any recipient with missing or extra devices → `409` with
@@ -1553,10 +1557,20 @@ expressed (one `server` per request).
   (Signal's `uuids404`). §1's `404` handling then applies per member:
   pairwise at once, refresh the group, back to multi-recipient once the new
   capability arrives;
-- a remote destination: the origin waits for its answer as today's remote
-  sealed send does (delivered, the `409`/`410` relayed as they are, or
-  `202` "durably queued" when the peer is slow), so the client never needs
-  to know where its recipients live.
+- a remote destination: the origin waits for its answer up to the usual
+  timeout, as today's remote sealed send does, and relays it as it is
+  (delivered, `409`, `410`, `refused`). When the peer is slow it answers `202`
+  "durably queued": the client treats that as sent but unconfirmed, and its
+  next send to those members checks their devices again. A `409`/`410` the
+  destination gives a queued transaction later can't reach the anonymous
+  client: that copy is dropped with the member unreached, and the next send
+  repairs the devices. That is today's remote sealed send's behaviour too.
+
+**What a server learns.** The raw capabilities pass through the sender's own
+server for a remote destination, so a malicious origin learns them and could
+sealed-send to those members within their budgets. That is the same as
+today's profile-derived capability on the direct sealed route. A member who
+fears it replaces its capability (as at a removal).
 
 **6. Storage once (Signal-Server's shared payload).**
 - `chat_shared_payloads (id uuid, payload bytea, created_at, expires_at)`:
@@ -1573,8 +1587,8 @@ expressed (one `server` per request).
   Signal's.
 - Pushes and the WebSocket nudge go per device, as for a single send.
 
-**Lifting the 64 cap.** `CHAT_GROUP_MAX_MEMBERS` (an admin site setting, per
-the standing rule) defaults to 256 (decision 5) once this route carries group
+**Lifting the 64 cap.** `CHAT_GROUP_MAX_MEMBERS` (an admin site setting, as
+every limit above) defaults to 256 (decision 5) once this route carries group
 messages; test stacks use it from the slice's PR on.
 
 **Tests.** Unit: the request's validation (each `400` above), the answer's
