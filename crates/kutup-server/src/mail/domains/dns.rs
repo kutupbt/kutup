@@ -21,8 +21,17 @@ pub struct DnsResolver {
 }
 
 impl DnsResolver {
-    /// `nameserver`: the resolver to ask; the system's when `None`.
-    pub fn new(nameserver: Option<SocketAddr>) -> anyhow::Result<Self> {
+    /// `nameserver`: the resolver to ask (`host:port`); the system's when
+    /// `None`. `validate`: check DNSSEC (off only on a test stack).
+    pub fn new(nameserver: Option<&str>, validate: bool) -> anyhow::Result<Self> {
+        let nameserver: Option<SocketAddr> = match nameserver {
+            Some(name) => Some(
+                std::net::ToSocketAddrs::to_socket_addrs(name)?
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("{name} has no address"))?,
+            ),
+            None => None,
+        };
         let mut builder = match nameserver {
             Some(address) => {
                 let mut server = NameServerConfig::udp_and_tcp(address.ip());
@@ -39,7 +48,7 @@ impl DnsResolver {
         let options = builder.options_mut();
         // Every check sees the record as it is now.
         options.cache_size = 0;
-        options.validate = true;
+        options.validate = validate;
         options.timeout = Duration::from_secs(5);
         options.attempts = 2;
         Ok(DnsResolver {
@@ -139,7 +148,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network"]
     async fn the_system_resolver_answers() {
-        let dns = DnsResolver::new(None).unwrap();
+        let dns = DnsResolver::new(None, true).unwrap();
         assert!(matches!(dns.mx("gmail.com").await, Lookup::Found(mx) if !mx.is_empty()));
         assert!(
             matches!(dns.txt("gmail.com").await, Lookup::Found(txt) if txt.iter().any(|t| t.starts_with("v=spf1")))

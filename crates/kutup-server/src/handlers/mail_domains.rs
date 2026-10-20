@@ -136,8 +136,11 @@ pub fn resolver(state: &AppState) -> AppResult<&'static DnsResolver> {
     if let Some(resolver) = RESOLVER.get() {
         return Ok(resolver);
     }
-    let made = DnsResolver::new(state.config.mail_dns_resolver)
-        .map_err(|e| AppError::internal(format!("DNS resolver: {e}")))?;
+    let made = DnsResolver::new(
+        state.config.mail_dns_resolver.as_deref(),
+        !state.config.mail_dns_insecure,
+    )
+    .map_err(|e| AppError::internal(format!("DNS resolver: {e}")))?;
     Ok(RESOLVER.get_or_init(|| made))
 }
 
@@ -311,7 +314,7 @@ pub async fn get(
                 "too many checks; try again later",
             ));
         }
-        let (checked, _) = store::check_and_save(
+        let (checked, change) = store::check_and_save(
             &state.pool,
             resolver(&state)?,
             &server(&state),
@@ -319,6 +322,11 @@ pub async fn get(
             &row,
         )
         .await?;
+        // A domain that began or stopped taking mail: Stalwart follows now,
+        // not at the next sweep.
+        if change != crate::mail::domains::policy::Change::None {
+            crate::mail::domains::sweep::reconcile_soon(state.clone());
+        }
         row = checked;
     }
     Ok(Json(view(&state, &row, &settings).await?))

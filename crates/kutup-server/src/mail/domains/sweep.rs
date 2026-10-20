@@ -1,5 +1,5 @@
 //! Custom domains' background work (docs/plans/mail-custom-domains.md §3,
-//! §10), every [`TICK`]:
+//! §10), every `MAIL_DOMAINS_SWEEP_SECONDS` (5 minutes):
 //! - checks the domains that are due: held ones every 6 hours, new ones
 //!   every 15 minutes for their first 2 hours, others every 6 hours; each
 //!   with jitter, a few at a time;
@@ -23,7 +23,6 @@ use crate::error::AppResult;
 use crate::handlers::mail_domains::{resolver, server};
 use crate::AppState;
 
-pub const TICK: Duration = Duration::from_secs(5 * 60);
 /// At most this many checks a tick, and this many at once.
 const CHECKS_PER_TICK: i64 = 200;
 const CHECKS_AT_ONCE: usize = 8;
@@ -42,7 +41,8 @@ pub fn spawn(state: AppState) {
         return;
     }
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(TICK);
+        let mut tick =
+            tokio::time::interval(Duration::from_secs(state.config.mail_domains_sweep_seconds));
         loop {
             tick.tick().await;
             if let Err(error) = run(&state).await {
@@ -120,6 +120,20 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
     }
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+/// Reconciles Stalwart now, in the background (after a domain changed
+/// standing); a failure waits for the next sweep.
+pub fn reconcile_soon(state: AppState) {
+    tokio::spawn(async move {
+        let result = match Settings::load(&state.pool).await {
+            Ok(settings) => reconcile_stalwart(&state, &settings).await,
+            Err(error) => Err(error.into()),
+        };
+        if let Err(error) = result {
+            tracing::warn!(error = %error, "mail: reconciling Stalwart failed");
+        }
+    });
 }
 
 /// Stalwart's tagged objects follow the usable rows, under one lock.

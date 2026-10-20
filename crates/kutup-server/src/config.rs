@@ -97,9 +97,14 @@ pub struct Config {
     /// Authentication-Results it writes, the only one trusted for DMARC.
     pub mail_hostname: String,
     /// The nameserver custom domains' checks ask (`MAIL_DNS_RESOLVER`,
-    /// `ip:port`); the system's when unset. The server validates DNSSEC
-    /// itself either way.
-    pub mail_dns_resolver: Option<std::net::SocketAddr>,
+    /// `host:port`, looked up once); the system's when unset. The server
+    /// validates DNSSEC itself either way, but on a test stack
+    /// (`MAIL_DNS_INSECURE`, with `APP_ENV=test` only), whose zones no root
+    /// can vouch for.
+    pub mail_dns_resolver: Option<String>,
+    pub mail_dns_insecure: bool,
+    /// How often custom domains' sweep runs (`MAIL_DOMAINS_SWEEP_SECONDS`).
+    pub mail_domains_sweep_seconds: u64,
     /// A backup MX the operator runs (`MAIL_BACKUP_MX`): a custom domain
     /// whose first MX is it counts as reaching us (Proton's `BACKUP`).
     pub mail_backup_mx: Option<String>,
@@ -371,6 +376,10 @@ impl Config {
             env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
         }
         crate::ratelimit::configure(env, rate_limits_relaxed);
+        let mail_dns_insecure = env.bool("MAIL_DNS_INSECURE", false);
+        if mail_dns_insecure && app_env != "test" {
+            env.error("MAIL_DNS_INSECURE may only be enabled with APP_ENV=test");
+        }
         let registration_mode = crate::registration::RegistrationMode::parse(&env.choice(
             "REGISTRATION_MODE",
             "off",
@@ -527,14 +536,21 @@ impl Config {
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),
             mail_dns_resolver: match get_env("MAIL_DNS_RESOLVER", "").trim() {
                 "" => None,
-                value => match value.parse() {
-                    Ok(address) => Some(address),
-                    Err(_) => {
-                        env.error("MAIL_DNS_RESOLVER must be an ip:port");
-                        None
-                    }
-                },
+                value
+                    if value
+                        .rsplit_once(':')
+                        .is_some_and(|(_, port)| port.parse::<u16>().is_ok()) =>
+                {
+                    Some(value.to_owned())
+                }
+                _ => {
+                    env.error("MAIL_DNS_RESOLVER must be a host:port");
+                    None
+                }
             },
+            mail_dns_insecure,
+            mail_domains_sweep_seconds: (get_env_i64("MAIL_DOMAINS_SWEEP_SECONDS", 300)
+                .clamp(5, 3600)) as u64,
             mail_stalwart_url: get_env("MAIL_STALWART_URL", "http://stalwart:8080"),
             mail_stalwart_domains_token: get_env("MAIL_STALWART_DOMAINS_TOKEN", ""),
             mail_backup_mx: Some(get_env("MAIL_BACKUP_MX", "").trim().to_ascii_lowercase())
