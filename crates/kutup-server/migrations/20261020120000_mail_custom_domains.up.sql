@@ -70,3 +70,14 @@ ALTER TABLE mail_addresses ADD COLUMN folded text GENERATED ALWAYS AS (
     END
 ) STORED NOT NULL;
 CREATE UNIQUE INDEX mail_addresses_live ON mail_addresses (folded) WHERE state <> 'freed';
+
+-- A held domain lost (another account proved it, or its DNS stopped
+-- proving it): its owner sees it among the account's security events.
+ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_kind_check;
+ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_check CHECK (kind = ANY (ARRAY[
+    'passwordChange', 'recovery', 'rotate', 'adminReset', 'accountReset', 'rename',
+    'nameDropped', 'nameClosed', 'nameFreed', 'domainLost']));
+ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_names_check;
+ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_names_check CHECK (
+    (kind = ANY (ARRAY['rename', 'nameDropped', 'nameClosed', 'nameFreed', 'domainLost'])) = (old_name IS NOT NULL)
+    AND (kind = 'rename') = (new_name IS NOT NULL));

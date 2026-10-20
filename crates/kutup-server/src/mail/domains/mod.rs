@@ -14,5 +14,6 @@ pub mod name;
 pub mod policy;
 pub mod reconcile;
 pub mod stalwart;
+pub mod store;
 pub mod records;
 pub mod settings;
