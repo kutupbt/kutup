@@ -28,8 +28,15 @@ use crate::AppState;
 const CHECKS_PER_TICK: i64 = 200;
 const CHECKS_AT_ONCE: usize = 8;
 /// After Stalwart refuses the account, how long the reconcile waits.
-const REFUSED_BACKOFF_SECS: i64 = 30 * 60;
+/// After Stalwart refuses the account, the reconcile waits a minute, then
+/// twice as long after each further refusal, up to 30 minutes. A first
+/// refusal is often only a fresh deploy whose stalwart-setup hasn't made the
+/// account yet; repeated ones mean a wrong secret, and retrying fast would
+/// keep the backend's address banned.
+const REFUSED_FIRST_SECS: i64 = 60;
+const REFUSED_MAX_SECS: i64 = 30 * 60;
 static REFUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
+static REFUSALS: AtomicI64 = AtomicI64::new(0);
 
 fn now_secs() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
@@ -194,17 +201,21 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
         &state.config.mail_stalwart_domains_token,
     );
     let applied = match reconcile::apply(&api, &wanted).await {
-        Ok(applied) => applied,
+        Ok(applied) => {
+            REFUSALS.store(0, Ordering::Relaxed);
+            applied
+        }
         Err(error) => {
             if let Some(refused) = error.downcast_ref::<Refused>() {
                 // Wrong secret, or the address banned after failures:
                 // retrying each sweep would keep it banned.
-                let until = now_secs() + REFUSED_BACKOFF_SECS;
-                REFUSED_UNTIL.store(until, Ordering::Relaxed);
+                let refusals = REFUSALS.fetch_add(1, Ordering::Relaxed).min(10);
+                let wait = (REFUSED_FIRST_SECS << refusals).min(REFUSED_MAX_SECS);
+                REFUSED_UNTIL.store(now_secs() + wait, Ordering::Relaxed);
                 tracing::error!(
                     status = refused.0,
                     "mail: Stalwart refused the custom domains account \
-                     (MAIL_STALWART_DOMAINS_TOKEN, stalwart-setup); not retried for 30 minutes"
+                     (MAIL_STALWART_DOMAINS_TOKEN, stalwart-setup); retried later"
                 );
             }
             return Err(crate::error::AppError::internal(format!(

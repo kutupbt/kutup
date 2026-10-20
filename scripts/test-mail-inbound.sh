@@ -100,6 +100,12 @@ compose up --detach --wait \
   postgres seaweedfs-master seaweedfs-volume seaweedfs-filer seaweedfs-s3 seaweedfs-init \
   backend stalwart mail-sink mail-keys mail-dns
 compose run --rm stalwart-setup
+# The custom domains' account signs in (stalwart/plan-domains.ndjson), from
+# inside Stalwart's container: its management port is never published.
+compose exec -T stalwart curl -fsS -o /dev/null \
+  -u "kutup-domains@$CHAT_SERVER_NAME:$MAIL_STALWART_DOMAINS_TOKEN" \
+  http://127.0.0.1:8080/jmap/session \
+  || { echo "the custom domains account can't sign in to Stalwart" >&2; exit 1; }
 
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \
