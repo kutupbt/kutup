@@ -167,8 +167,9 @@ scripts/gate.sh live mail           # live gates: mail, backup, federation
 scripts/gate.sh all                 # static + rust + web
 ```
 
-Two crates stay outside the Cargo workspace with their own `Cargo.lock`:
-`crates/kutup-chat-core` and `crates/kutup-client-ffi`, as do the `fuzz` targets.
+Three crates stay outside the Cargo workspace with their own `Cargo.lock`:
+`crates/kutup-chat-core`, `crates/kutup-client-ffi` and `crates/kutup-loadtest`
+(the load generator, which links Chat core), as do the `fuzz` targets.
 Root-level `cargo fmt --all` and `cargo test --workspace` never see them; the gate
 does. Browser spec lists live in `tests/e2e/suites/<suite>.txt`, one path per
 line. Add a new spec there, not in the workflow; CI and the gate both read
@@ -339,7 +340,8 @@ kutup/
 │   │   └── vendor/keepass/  # Patched copy of the `keepass` crate (see its KUTUP.md)
 │   ├── kutup-pass-wasm/     # Browser bindings for Kutup Pass (frontend/wasm/pass-wasm)
 │   ├── kutup-chat-core/     # Standalone libsignal/OpenMLS engine; native + WASM
-│   └── kutup-client-ffi/    # Standalone UniFFI Swift/Kotlin boundary
+│   ├── kutup-client-ffi/    # Standalone UniFFI Swift/Kotlin boundary
+│   └── kutup-loadtest/      # Standalone load generator (tests/load, docs/research/21-load-test.md)
 ├── frontend/
 │   ├── src/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors

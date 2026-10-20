@@ -1,0 +1,40 @@
+[package]
+name = "kutup-loadtest"
+version = "0.1.0"
+publish = false
+edition = "2021"
+license = "AGPL-3.0-only"
+rust-version = "1.91.1"
+description = "Drives virtual users through Kutup's real client code against a test stack."
+
+# Its own Cargo root, as the native FFI: it links the standalone Chat core
+# (libsignal), which the server/CLI workspace never builds.
+[workspace]
+
+[[bin]]
+name = "kutup-loadtest"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+hdrhistogram = "7"
+kutup-chat-core = { path = "../kutup-chat-core" }
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+kutup-crypto = { path = "../kutup-crypto", features = ["mail"] }
+kutup-federation-proto = { path = "../kutup-federation-proto" }
+rand = "0.9"
+rand_08 = { package = "rand", version = "0.8" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-webpki-roots-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
+tokio-tungstenite = "0.24"
+toml = "0.8"
+urlencoding = "2"
+uuid = { version = "1", features = ["v4"] }

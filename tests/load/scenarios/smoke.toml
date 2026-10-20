@@ -1,0 +1,18 @@
+# A minute with a few users: checks every operation works end to end.
+users = 6
+ramp_secs = 10
+duration_secs = 60
+chat_threads = 2
+report_every_secs = 15
+
+[mix]
+refresh = 2
+sign_in = 1
+drive_upload = 3
+drive_download = 3
+drive_list = 3
+chat_text = 6
+chat_typing = 6
+mail_send = 3
+mail_list = 3
+mail_open = 3

@@ -93,6 +93,7 @@ jobs:
           workspaces: |
             crates/kutup-chat-core -> crates/kutup-chat-core/target
             crates/kutup-client-ffi -> crates/kutup-client-ffi/target
+            crates/kutup-loadtest -> crates/kutup-loadtest/target
             fuzz -> fuzz/target
       - name: Run the standalone crates (Chat core tests, FFI and fuzz lockfiles)
         run: scripts/gate.sh rust-standalone

@@ -1,0 +1,8 @@
+# Active users at a busy user's rates (scenario.rs's defaults), ramped in
+# over five minutes and held for ten: raise --users between runs until the
+# error rate or the p95s break.
+users = 200
+ramp_secs = 300
+duration_secs = 600
+chat_threads = 4
+report_every_secs = 30

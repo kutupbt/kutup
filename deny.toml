@@ -1,5 +1,5 @@
 # cargo-deny policy for every Cargo root: the workspace, fuzz/,
-# crates/kutup-chat-core and crates/kutup-client-ffi. `scripts/gate.sh deny`
+# crates/kutup-chat-core, crates/kutup-client-ffi and crates/kutup-loadtest. `scripts/gate.sh deny`
 # runs it from the repository root with --manifest-path for each (part of the
 # static gate; weekly in .github/workflows/advisories.yml).
 #

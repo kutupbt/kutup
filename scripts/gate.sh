@@ -15,8 +15,9 @@
 #                                       and KUTUP_LIVE_DATABASE_URL set)
 #   scripts/gate.sh all                 static, rust and web
 #
-# The Cargo roots: the workspace, plus three that stay outside it with their
-# own Cargo.lock (Chat core, the native client FFI and the fuzz targets). A
+# The Cargo roots: the workspace, plus four that stay outside it with their
+# own Cargo.lock (Chat core, the native client FFI, the load generator and
+# the fuzz targets). A
 # root-level `cargo fmt --all` or `cargo test --workspace` never sees those,
 # which once let a formatting error and a stale FFI lock reach master.
 
@@ -26,7 +27,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 # The Cargo roots outside the workspace, each with its own lockfile.
-standalone_crates=(crates/kutup-chat-core crates/kutup-client-ffi)
+standalone_crates=(crates/kutup-chat-core crates/kutup-client-ffi crates/kutup-loadtest)
 
 step() {
   printf '\n== %s\n' "$*"
@@ -84,6 +85,8 @@ rust_standalone() {
   cargo test --locked --manifest-path crates/kutup-chat-core/Cargo.toml --all-targets
   step "Native client FFI (lockfile current, compiles)"
   cargo check --locked --manifest-path crates/kutup-client-ffi/Cargo.toml --all-targets
+  step "Load generator tests"
+  cargo test --locked --manifest-path crates/kutup-loadtest/Cargo.toml --all-targets
   step "Fuzz targets (lockfile current, compile)"
   cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 }

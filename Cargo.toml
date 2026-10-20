@@ -18,7 +18,7 @@ members = ["crates/*"]
 # crates/kutup-pass/vendor/keepass is the patched KDBX library behind
 # kutup-pass (its KUTUP.md); it is upstream's code, so it stays out of the
 # workspace's lints.
-exclude = ["crates/kutup-chat-core", "crates/kutup-client-ffi", "fuzz", "crates/kutup-pass/vendor/keepass"]
+exclude = ["crates/kutup-chat-core", "crates/kutup-client-ffi", "crates/kutup-loadtest", "fuzz", "crates/kutup-pass/vendor/keepass"]
 
 [workspace.package]
 edition = "2021"

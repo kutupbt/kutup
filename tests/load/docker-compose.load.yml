@@ -1,0 +1,41 @@
+# The load test's stack (crates/kutup-loadtest, docs/research/21-load-test.md),
+# over docker-compose.yml and tests/e2e/docker-compose.isolated.yml.
+#
+# What runs on the production box shares its CPUs: every such container is
+# pinned to the same cores (KUTUP_LOAD_STACK_CPUS, "0,1" for the 2 vCPU box),
+# so they compete for exactly that much CPU, as on one VM. SeaweedFS stands in
+# for R2, which is off the box, so it gets cores of its own
+# (KUTUP_LOAD_STORE_CPUS) and never counts against the stack. The load
+# generator runs on the remaining cores (taskset).
+#
+# Memory isn't capped per container (a sum of caps would be stricter than
+# one shared 4 GB): the run records every container's memory and the note
+# compares their total with the box's.
+x-stack: &stack
+  cpuset: ${KUTUP_LOAD_STACK_CPUS:-0,1}
+x-store: &store
+  cpuset: ${KUTUP_LOAD_STORE_CPUS:-6,7}
+
+services:
+  postgres:
+    <<: *stack
+  backend:
+    <<: *stack
+    environment:
+      APP_ENV: test
+      RATE_LIMITS_RELAXED: "true"
+      MAIL_DEFAULT_DELAY_SEND_SECONDS: 0
+  frontend:
+    <<: *stack
+  nginx:
+    <<: *stack
+  seaweedfs-master:
+    <<: *store
+  seaweedfs-volume:
+    <<: *store
+  seaweedfs-filer:
+    <<: *store
+  seaweedfs-s3:
+    <<: *store
+  seaweedfs-init:
+    <<: *store

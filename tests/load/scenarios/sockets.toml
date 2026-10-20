@@ -1,0 +1,7 @@
+# Only connected, idle Chat clients: how many WebSockets the box holds.
+users = 0
+idle_sockets = 2000
+idle_ramp_secs = 300
+duration_secs = 300
+chat_threads = 4
+report_every_secs = 30
