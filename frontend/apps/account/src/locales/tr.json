@@ -472,6 +472,8 @@
       "none": "Henüz anahtar yok. Bir sonraki girişinizde oluşturulacak.",
       "createFailed": "Anahtarınız oluşturulamadı. Bir sonraki girişinizde yeniden denenecek.",
       "signedByAccount": "Hesabınız tarafından imzalandı (anahtar listesi {{sequence}})",
+      "notInList": "Anahtar listenizde yok",
+      "notInListHint": "Sunucu bu anahtarı listeliyor, ancak hesabınızın imzaladığı anahtar listesinde yok. Sonraki anahtar listenize asla eklenmez. Yöneticinize başvurun.",
       "notSigned": "Bu anahtar listesi hesabınız tarafından imzalanmamış. Bu anahtarlara güvenmeyin ve yöneticinize başvurun.",
       "algorithm": "Curve25519 (Ed25519 ve X25519)",
       "primary": "Birincil",
