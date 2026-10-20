@@ -85,8 +85,9 @@ test('a stranger asks through the group link, is approved, then banned; the old 
   await expect(message(pageC, hello)).toBeVisible({ timeout: 90_000 })
   await openGroup(pageB, groupId)
   await expect(message(pageB, hello)).toBeVisible({ timeout: 90_000 })
-  await expect(pageB.getByText(/asked to join through the group link/)).toBeVisible({ timeout: 90_000 })
-  await expect(pageB.getByText(/approved .* request to join/)).toBeVisible()
+  const notices = pageB.getByTestId('chat-group-notice')
+  await expect(notices.filter({ hasText: /asked to join through the group link/ })).toBeVisible({ timeout: 90_000 })
+  await expect(notices.filter({ hasText: /approved .* request to join/ })).toBeVisible()
 
   // Announcements only: Carol's composer goes; Alice still sends.
   await openDetails(pageA)

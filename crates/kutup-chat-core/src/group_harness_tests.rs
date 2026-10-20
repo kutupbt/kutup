@@ -604,6 +604,43 @@ impl World {
         };
         let mut groups = self.groups.borrow_mut();
         match request.operation {
+            // As the gateway: about the signing pseudonym only; never "not
+            // found".
+            GroupOperationV1::GetRequestStatus => {
+                use kutup_chat_proto::group_route::{GroupRequestStateV1, GroupRequestStatusV1};
+                let answer = match groups.get(&group_id) {
+                    Some(group)
+                        if group
+                            .state
+                            .requesting
+                            .iter()
+                            .any(|r| r.pseudonym == *pseudonym) =>
+                    {
+                        GroupRequestStatusV1 {
+                            status: GroupRequestStateV1::Pending,
+                            revision: Some(group.state.revision),
+                            head: Some(STANDARD.encode(group.head)),
+                        }
+                    }
+                    Some(group) => GroupRequestStatusV1 {
+                        status: if group.state.member(pseudonym).is_some() {
+                            GroupRequestStateV1::Member
+                        } else if group.seen.contains(pseudonym) {
+                            GroupRequestStateV1::Denied
+                        } else {
+                            GroupRequestStateV1::Unknown
+                        },
+                        revision: None,
+                        head: None,
+                    },
+                    None => GroupRequestStatusV1 {
+                        status: GroupRequestStateV1::Unknown,
+                        revision: None,
+                        head: None,
+                    },
+                };
+                Self::ok(answer.canonical_bytes().unwrap())
+            }
             GroupOperationV1::Create => {
                 let Some(change) = change() else {
                     return GroupResponseV1::refused("malformed", now());
@@ -716,7 +753,14 @@ impl World {
                 };
                 // As the server: valid in every way, but this pseudonym was
                 // a member before.
-                if change.is_newcomers_change()
+                // As the gateway's `joins`: a claim, a link join or a request.
+                let joins = matches!(
+                    change.actions.as_slice(),
+                    [GroupActionV1::Claim { .. }
+                        | GroupActionV1::JoinFromLink { .. }
+                        | GroupActionV1::RequestToJoin { .. }]
+                );
+                if joins
                     && (self.every_pseudonym_used.get()
                         || self.next_pseudonyms_used.get() > 0
                         || group.seen.contains(&change.actor))
@@ -4909,4 +4953,79 @@ fn group_removal_a_removed_member_learns_it_pairwise_without_the_home() {
     .unwrap();
     bob.receive();
     assert_eq!(bob.status(&group_id), GroupStatus::Gone);
+}
+
+#[test]
+fn group_request_status_settles_an_approval_a_denial_and_a_withdrawal() {
+    use crate::group_link::{GroupLinkMode, GroupRequestOutcome};
+    use kutup_chat_proto::GroupUpdateChange as C;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let mut erin = world.person(0xe5);
+    let mut fred = world.person(0xf6);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+    for asker in [&mut dave, &mut erin, &mut fred] {
+        block_on(asker.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+        assert_eq!(
+            block_on(asker.engine.check_group_request(&group_id)).unwrap(),
+            GroupRequestOutcome::Pending
+        );
+    }
+    alice.sync(&group_id);
+    let pseudonym_of_request = |alice: &mut Person, account: &str| {
+        details(alice, &group_id)
+            .requests
+            .into_iter()
+            .find(|request| {
+                request
+                    .requester
+                    .verified
+                    .as_ref()
+                    .is_some_and(|verified| verified.account.to_string() == account)
+            })
+            .unwrap()
+            .requester
+            .pseudonym
+    };
+    let daves = pseudonym_of_request(&mut alice, &dave.account);
+    let erins = pseudonym_of_request(&mut alice, &erin.account);
+    block_on(
+        alice
+            .engine
+            .approve_group_request(&group_id, &daves, &mut rng()),
+    )
+    .unwrap();
+    block_on(
+        alice
+            .engine
+            .deny_group_request(&group_id, &erins, &mut rng()),
+    )
+    .unwrap();
+
+    // Approved: the state is taken, a member now.
+    assert!(matches!(
+        block_on(dave.engine.check_group_request(&group_id)).unwrap(),
+        GroupRequestOutcome::Joined(GroupSync::Current { .. })
+    ));
+    assert_eq!(dave.status(&group_id), GroupStatus::Member);
+    // Denied: gone here.
+    assert_eq!(
+        block_on(erin.engine.check_group_request(&group_id)).unwrap(),
+        GroupRequestOutcome::Denied
+    );
+    assert_eq!(erin.status(&group_id), GroupStatus::Gone);
+
+    // Withdrawn after the link was reset (the status names the revision).
+    block_on(alice.engine.reset_group_link(&group_id, &mut rng())).unwrap();
+    assert_eq!(
+        block_on(fred.engine.cancel_group_request(&group_id)).unwrap(),
+        GroupRequestOutcome::Canceled
+    );
+    assert_eq!(fred.status(&group_id), GroupStatus::Gone);
+    alice.sync(&group_id);
+    assert!(details(&mut alice, &group_id).requests.is_empty());
+    let last = group_lines(&alice, &group_id).pop().unwrap();
+    assert_eq!(last.changes, vec![C::JoinRequestCanceled]);
 }

@@ -1,6 +1,7 @@
 import { CloudOff, ShieldAlert, UserX } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import type { ChatGroupSync } from '@kutup/chat-core/types'
 import { refreshChat, useChat } from '../../app/chatStore'
 import type { ConversationModel } from './useConversationModel'
@@ -17,6 +18,25 @@ export function ChatGroupStatus({ model }: { model: ConversationModel }) {
   const { service } = useChat()
   const [sync, setSync] = useState<ChatGroupSync | null>(null)
   const groupId = model.chatGroup?.status === 'member' ? model.chatGroup.groupId : null
+  const requesting = model.chatGroup?.status === 'requesting' ? model.chatGroup.groupId : null
+
+  // A request is settled when its group opens: approved ones join, denied
+  // ones end (the home tells nobody, so this device asks).
+  useEffect(() => {
+    if (!service || !requesting) return
+    let current = true
+    service
+      .checkChatGroupRequest(requesting)
+      .then((outcome) => {
+        if (!current) return
+        if (outcome.kind === 'denied') toast.message(t('chat.chatGroupLink.denied'))
+        if (outcome.kind !== 'pending' && outcome.kind !== 'unreachable') void refreshChat()
+      })
+      .catch((error: unknown) => console.warn('chat: the request to join could not be checked', error))
+    return () => {
+      current = false
+    }
+  }, [service, requesting, t])
 
   useEffect(() => {
     setSync(null)

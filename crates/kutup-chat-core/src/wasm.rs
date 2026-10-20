@@ -1139,6 +1139,34 @@ enum GroupLinkJoinView {
     Unreachable { reason: &'static str },
 }
 
+/// Where a request to join stands: `{kind: "pending"}`, `{kind: "joined",
+/// sync}`, `{kind: "denied"}`, `{kind: "canceled"}` or `{kind:
+/// "unreachable", reason}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupRequestView {
+    Pending,
+    Joined { sync: GroupSyncView },
+    Denied,
+    Canceled,
+    Unreachable { reason: &'static str },
+}
+
+impl From<crate::group_link::GroupRequestOutcome> for GroupRequestView {
+    fn from(outcome: crate::group_link::GroupRequestOutcome) -> Self {
+        use crate::group_link::GroupRequestOutcome;
+        match outcome {
+            GroupRequestOutcome::Pending => Self::Pending,
+            GroupRequestOutcome::Joined(sync) => Self::Joined { sync: sync.into() },
+            GroupRequestOutcome::Denied => Self::Denied,
+            GroupRequestOutcome::Canceled => Self::Canceled,
+            GroupRequestOutcome::Unreachable(failure) => Self::Unreachable {
+                reason: route_reason(failure),
+            },
+        }
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GroupLinkView {
@@ -1678,6 +1706,34 @@ impl WasmChatClient {
                 reason: route_reason(failure),
             },
         })
+    }
+
+    /// Where this account's request to join stands, settled here.
+    #[wasm_bindgen(js_name = checkGroupRequest)]
+    pub async fn check_group_request(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let outcome = self
+            .engine
+            .check_group_request(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupRequestView::from(outcome))
+    }
+
+    /// Withdraws this account's request to join.
+    #[wasm_bindgen(js_name = cancelGroupRequest)]
+    pub async fn cancel_group_request(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let outcome = self
+            .engine
+            .cancel_group_request(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupRequestView::from(outcome))
     }
 
     /// The group's settings, requests and bans, from its verified state.

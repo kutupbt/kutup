@@ -52,6 +52,7 @@ import type {
   ChatGroupLinkJoin,
   ChatGroupLinkMode,
   ChatGroupLinkPreview,
+  ChatGroupRequestOutcome,
   ChatGroupSummary,
   ChatGroupSync,
 } from './types'
@@ -1700,14 +1701,15 @@ export class ChatService {
     | 'previewGroupLink' | 'joinGroupByLink' | 'groupDetails' | 'setGroupLink' | 'resetGroupLink'
     | 'setGroupDescription' | 'setGroupTimer' | 'setGroupAccess' | 'setGroupAnnouncementsOnly'
     | 'approveGroupRequest' | 'denyGroupRequest' | 'banGroupMember' | 'unbanGroup' | 'endGroup'
-    | 'removeUnverifiedGroupMembers'>> {
+    | 'removeUnverifiedGroupMembers' | 'checkGroupRequest' | 'cancelGroupRequest'>> {
     this.groupClient()
     const client = this.client
     if (!client.previewGroupLink || !client.joinGroupByLink || !client.groupDetails
       || !client.setGroupLink || !client.resetGroupLink || !client.setGroupDescription
       || !client.setGroupTimer || !client.setGroupAccess || !client.setGroupAnnouncementsOnly
       || !client.approveGroupRequest || !client.denyGroupRequest || !client.banGroupMember
-      || !client.unbanGroup || !client.endGroup || !client.removeUnverifiedGroupMembers) {
+      || !client.unbanGroup || !client.endGroup || !client.removeUnverifiedGroupMembers
+      || !client.checkGroupRequest || !client.cancelGroupRequest) {
       throw new ChatServiceError('serverUnsupported')
     }
     return client as never
@@ -1725,6 +1727,22 @@ export class ChatService {
     const joined = await this.withLock(() => client.joinGroupByLink(fragment))
     this.notifyPeers()
     return joined
+  }
+
+  /** Where this account's request stands: approved ones join, denied ones end. */
+  async checkChatGroupRequest(groupId: string): Promise<ChatGroupRequestOutcome> {
+    const client = this.groupSettingsClient()
+    const outcome = await this.withLock(() => client.checkGroupRequest(groupId))
+    if (outcome.kind !== 'pending' && outcome.kind !== 'unreachable') this.notifyPeers()
+    return outcome
+  }
+
+  /** Withdraws this account's request to join. */
+  async cancelChatGroupRequest(groupId: string): Promise<ChatGroupRequestOutcome> {
+    const client = this.groupSettingsClient()
+    const outcome = await this.withLock(() => client.cancelGroupRequest(groupId))
+    this.notifyPeers()
+    return outcome
   }
 
   async chatGroupDetails(groupId: string): Promise<ChatGroupDetails> {
@@ -2093,13 +2111,20 @@ export class ChatService {
   private async syncMemberGroups(): Promise<void> {
     const client = this.groupClient()
     const groups = await this.withLock(() => client.listGroups())
+    const settings = this.client.checkGroupRequest ? this.groupSettingsClient() : null
     for (const group of groups) {
       if (this.disposed) return
-      if (group.status !== 'member') continue
       // One group failing (its home unreachable) never stops the others.
-      await this.withLock(() => client.syncGroup(group.groupId)).catch((error: unknown) =>
-        console.warn('chat: a group could not be caught up', error),
-      )
+      if (group.status === 'member') {
+        await this.withLock(() => client.syncGroup(group.groupId)).catch((error: unknown) =>
+          console.warn('chat: a group could not be caught up', error),
+        )
+      } else if (group.status === 'requesting' && settings) {
+        // An approval or a denial is learnt here: the home tells nobody.
+        await this.withLock(() => settings.checkGroupRequest(group.groupId)).catch((error: unknown) =>
+          console.warn('chat: a request to join could not be checked', error),
+        )
+      }
     }
     this.notifyPeers()
   }

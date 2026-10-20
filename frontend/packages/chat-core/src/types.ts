@@ -404,6 +404,14 @@ export type ChatGroupLinkJoin =
   | { kind: 'invalid' }
   | { kind: 'unreachable'; reason: string }
 
+/** Where this account's request to join a group stands. */
+export type ChatGroupRequestOutcome =
+  | { kind: 'pending' }
+  | { kind: 'joined'; sync: ChatGroupSync }
+  | { kind: 'denied' }
+  | { kind: 'canceled' }
+  | { kind: 'unreachable'; reason: string }
+
 /** What the group link does: anyone with it joins, asks, or it is off. */
 export type ChatGroupLinkMode = 'off' | 'join' | 'approve'
 
@@ -2087,6 +2095,8 @@ export interface WasmChatClientHandle {
   previewGroupLink?(fragment: string): Promise<ChatGroupLinkPreview>
   joinGroupByLink?(fragment: string): Promise<ChatGroupLinkJoin>
   groupDetails?(groupId: string): Promise<ChatGroupDetails>
+  checkGroupRequest?(groupId: string): Promise<ChatGroupRequestOutcome>
+  cancelGroupRequest?(groupId: string): Promise<ChatGroupRequestOutcome>
   setGroupLink?(groupId: string, mode: ChatGroupLinkMode): Promise<void>
   resetGroupLink?(groupId: string): Promise<void>
   setGroupDescription?(groupId: string, description: string): Promise<void>

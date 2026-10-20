@@ -152,7 +152,7 @@ test.describe('groups across two servers', () => {
     const back = `fed-link-back-${tag}`
     await send(pageD, back)
     await expect(message(pageA, back)).toBeVisible({ timeout: 90_000 })
-    await expect(pageA.getByText(/joined the group through the group link/)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId('chat-group-notice').filter({ hasText: /joined the group through the group link/ })).toBeVisible({ timeout: 90_000 })
 
     expect(toHome).toEqual([])
     await contextA.close()

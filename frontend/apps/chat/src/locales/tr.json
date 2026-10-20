@@ -1246,7 +1246,10 @@
       "requested": "İstek gönderildi. Bir yönetici, uygulaması grubu bir sonraki kontrol edişinde görür.",
       "requestPending": "Katılma isteğiniz bir yöneticiyi bekliyor.",
       "approvalNeeded": "Yeni üyeleri bir yönetici onaylar. İsteğinizi, uygulaması grubu bir sonraki kontrol edişinde görür.",
-      "untitled": "Grup"
+      "untitled": "Grup",
+      "withdraw": "İsteği geri çek",
+      "withdrawn": "İstek geri çekildi.",
+      "denied": "Katılma isteğiniz reddedildi."
     }
   },
   "boot": {

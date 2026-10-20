@@ -1246,7 +1246,10 @@
       "requested": "Request sent. An administrator sees it the next time their app checks the group.",
       "requestPending": "Your request to join is waiting for an administrator.",
       "approvalNeeded": "An administrator approves new members. They see your request the next time their app checks the group.",
-      "untitled": "Group"
+      "untitled": "Group",
+      "withdraw": "Withdraw request",
+      "withdrawn": "Request withdrawn.",
+      "denied": "Your request to join was declined."
     }
   },
   "boot": {

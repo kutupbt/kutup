@@ -77,6 +77,28 @@ export function ChatGroupJoinDialog({ fragment }: { fragment: string }) {
     }
   }
 
+  async function withdraw(preview: Found) {
+    if (!service || busy) return
+    setBusy(true)
+    try {
+      const outcome = await service.cancelChatGroupRequest(preview.groupId)
+      await refreshChat()
+      if (outcome.kind === 'joined') {
+        toast.success(t('chat.chatGroupLink.joined'))
+        openGroup(preview.groupId)
+        return
+      }
+      closeJoinLink()
+      if (outcome.kind === 'canceled') toast.success(t('chat.chatGroupLink.withdrawn'))
+      else if (outcome.kind === 'denied') toast.message(t('chat.chatGroupLink.denied'))
+      else toast.error(t('chat.chatGroupLink.unreachable'))
+    } catch (error) {
+      toast.error(chatErrorMessage(error, t))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const preview = view.kind === 'found' ? view.preview : null
   const title = preview?.title || t('chat.chatGroupLink.untitled')
   return (
@@ -125,7 +147,11 @@ export function ChatGroupJoinDialog({ fragment }: { fragment: string }) {
               <Button onClick={() => openGroup(preview.groupId)} data-testid="chat-group-join-open">
                 {t('chat.groupLink.openGroup')}
               </Button>
-            ) : preview.status === 'requesting' ? null : (
+            ) : preview.status === 'requesting' ? (
+              <Button variant="outline" disabled={busy} onClick={() => void withdraw(preview)} data-testid="chat-group-join-withdraw">
+                {t('chat.chatGroupLink.withdraw')}
+              </Button>
+            ) : (
               <Button disabled={busy} onClick={() => void join(preview)} data-testid="chat-group-join-submit">
                 {busy ? <Loader2 className="animate-spin" /> : null}
                 {preview.requiresApproval ? t('chat.groupLink.requestToJoin') : t('chat.groupLink.join')}

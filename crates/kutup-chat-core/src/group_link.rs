@@ -12,7 +12,8 @@ use kutup_chat_proto::group::{
     INVITE_LINK_PASSWORD_LEN,
 };
 use kutup_chat_proto::group_route::{
-    GroupJoinInfoV1, GroupOperationV1, GroupResponseStatusV1, GroupResponseV1, PSEUDONYM_USED,
+    GroupJoinInfoV1, GroupOperationV1, GroupRequestStateV1, GroupRequestStatusV1,
+    GroupResponseStatusV1, GroupResponseV1, PSEUDONYM_USED,
 };
 use kutup_crypto::chat_group::SealedField;
 use rand::{CryptoRng, Rng};
@@ -35,6 +36,21 @@ pub struct GroupLinkPreview {
     pub requires_approval: bool,
     /// This account's place in the group already, if it has one here.
     pub status: Option<GroupStatus>,
+}
+
+/// Where this account's request to join stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupRequestOutcome {
+    /// Still waiting for an administrator.
+    Pending,
+    /// Approved: in the group now.
+    Joined(GroupSync),
+    /// Turned down (or removed since): the group is `gone` here.
+    Denied,
+    /// Withdrawn: the group is `gone` here.
+    Canceled,
+    /// The home couldn't be asked now.
+    Unreachable(RouteFailure),
 }
 
 /// What a join through a link came to.
@@ -77,6 +93,109 @@ fn used_pseudonym(response: &GroupResponseV1) -> bool {
 }
 
 impl Engine {
+    /// The home's answer about this record's request, signed by its
+    /// pseudonym.
+    async fn request_status(
+        &mut self,
+        record: &mut GroupRecordV1,
+    ) -> Result<std::result::Result<GroupRequestStatusV1, RouteFailure>> {
+        match self
+            .group_request(record, GroupOperationV1::GetRequestStatus, b"")
+            .await?
+        {
+            Ok(response) => {
+                let body = accepted_body(response)?;
+                Ok(Ok(GroupRequestStatusV1::from_canonical_bytes(&body)
+                    .map_err(ChatError::Invalid)?))
+            }
+            Err(failure) => Ok(Err(failure)),
+        }
+    }
+
+    /// Where a request stands, settled here: an approved request takes the
+    /// group's state (a member now), a denied or unknown one ends as `gone`.
+    pub async fn check_group_request(&mut self, group_id: &str) -> Result<GroupRequestOutcome> {
+        let mut record = self.load_group_record(group_id).await?;
+        if record.status != GroupStatus::Requesting {
+            return Err(ChatError::Invalid("no request to join is waiting".into()));
+        }
+        let status = match self.request_status(&mut record).await? {
+            Ok(status) => status,
+            Err(failure) => return Ok(GroupRequestOutcome::Unreachable(failure)),
+        };
+        self.settle_request(&mut record, status).await
+    }
+
+    /// Withdraws a waiting request (a `CancelRequest` at the revision the
+    /// home's status names, so it works after a link reset too). Already
+    /// approved or denied: settled as [`Self::check_group_request`] does.
+    pub async fn cancel_group_request(&mut self, group_id: &str) -> Result<GroupRequestOutcome> {
+        let mut record = self.load_group_record(group_id).await?;
+        if record.status != GroupStatus::Requesting {
+            return Err(ChatError::Invalid("no request to join is waiting".into()));
+        }
+        // Raced by an approval or a denial meanwhile: asked once more.
+        for _ in 0..2 {
+            let status = match self.request_status(&mut record).await? {
+                Ok(status) => status,
+                Err(failure) => return Ok(GroupRequestOutcome::Unreachable(failure)),
+            };
+            let (GroupRequestStateV1::Pending, Some(revision), Some(head)) =
+                (status.status, status.revision, status.head.as_deref())
+            else {
+                return self.settle_request(&mut record, status).await;
+            };
+            let basis = ClaimBasis {
+                revision,
+                head: decode_exact::<32>("head", head).map_err(ChatError::Invalid)?,
+            };
+            let change = group::cancel_change(&record, &basis).map_err(group_error)?;
+            let body = change.canonical_bytes().map_err(ChatError::Invalid)?;
+            match self
+                .group_request(&mut record, GroupOperationV1::SubmitChange, &body)
+                .await?
+            {
+                Ok(response) if response.status == GroupResponseStatusV1::Ok => {
+                    record.status = GroupStatus::Gone;
+                    self.save_group(&record).await?;
+                    return Ok(GroupRequestOutcome::Canceled);
+                }
+                // The log moved on (another change came first): again.
+                Ok(response)
+                    if response.status == GroupResponseStatusV1::Conflict
+                        || response.code.as_deref() == Some("wrongRevision") =>
+                {
+                    continue
+                }
+                Ok(response) => {
+                    accepted_body(response)?;
+                }
+                Err(failure) => return Ok(GroupRequestOutcome::Unreachable(failure)),
+            }
+        }
+        Ok(GroupRequestOutcome::Pending)
+    }
+
+    async fn settle_request(
+        &mut self,
+        record: &mut GroupRecordV1,
+        status: GroupRequestStatusV1,
+    ) -> Result<GroupRequestOutcome> {
+        match status.status {
+            GroupRequestStateV1::Pending => Ok(GroupRequestOutcome::Pending),
+            GroupRequestStateV1::Member => {
+                let sync = self.take_whole_state(record).await?;
+                self.list_after(&record.group_id.clone(), &sync).await;
+                Ok(GroupRequestOutcome::Joined(sync))
+            }
+            GroupRequestStateV1::Denied | GroupRequestStateV1::Unknown => {
+                record.status = GroupStatus::Gone;
+                self.save_group(record).await?;
+                Ok(GroupRequestOutcome::Denied)
+            }
+        }
+    }
+
     /// The record a link would join with, and the link itself.
     async fn link_record(&mut self, fragment: &str) -> Result<(GroupInviteLinkV1, GroupRecordV1)> {
         let link = GroupInviteLinkV1::from_fragment(fragment).map_err(ChatError::Invalid)?;

@@ -84,7 +84,7 @@ test('three people on one server share a group, rename it, remove a member and l
   await openGroup(pageC, groupId)
   await expect(message(pageC, afterRemoval)).toHaveCount(0)
   await expect(pageC.getByText("You're no longer a member of this group.")).toBeVisible({ timeout: 90_000 })
-  await expect(pageC.getByText(/removed you/)).toBeVisible()
+  await expect(pageC.getByTestId('chat-group-notice').filter({ hasText: /removed you/ })).toBeVisible()
 
   // The group and its history survive a reload.
   await pageA.reload()

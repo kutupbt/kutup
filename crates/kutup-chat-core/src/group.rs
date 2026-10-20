@@ -903,6 +903,28 @@ pub fn link_change(
     Ok(change)
 }
 
+/// Withdrawing this record's request to join, signed by its pseudonym, at
+/// the revision and head the home's request status names.
+pub fn cancel_change(
+    record: &GroupRecordV1,
+    basis: &ClaimBasis,
+) -> Result<GroupChangeV1, GroupError> {
+    let pseudonym = record.pseudonym()?;
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: record.group_id.clone(),
+        revision: basis.revision + 1,
+        previous_hash: encode(&basis.head),
+        actor: encode(&pseudonym.public_key()),
+        actions: vec![GroupActionV1::CancelRequest],
+        resulting_state_hash: None,
+        signature: String::new(),
+    };
+    change.signature =
+        encode(&pseudonym.sign_change(&change.signed_bytes().map_err(record_error)?));
+    Ok(change)
+}
+
 /// Applies a change the home notarised: the same check it ran, then its
 /// signature over the change and the resulting state, by an identity in the
 /// history this record followed from its pin. A notary by a document that
