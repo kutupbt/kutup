@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from 'node:crypto'
+import { execSync } from 'node:child_process'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { openWhenArrived } from '../fixtures/mail'
@@ -13,10 +15,16 @@ import { openWhenArrived } from '../fixtures/mail'
 //   the address, the address's signed key list says so while it lasts (a
 //   sender's composer reads it from there), and deleting the forwarding
 //   turns it back on;
-// - the outside recipient's confirmation page needs no account, and drops
-//   the token from the address bar.
+// - the outside recipient confirms on the public page, with no account (the
+//   link's token is the one the spec puts in place of the emailed one:
+//   E2E_PSQL, tests/e2e/README.md), and the page drops the token from the
+//   address bar.
 
 const PASSWORD = 'Deneme123*MailForwardingPassword'
+
+function sql(statement: string): string {
+  return execSync(process.env.E2E_PSQL!, { input: `${statement}\n`, encoding: 'utf8' })
+}
 
 async function openMail(context: BrowserContext): Promise<Page> {
   const page = await context.newPage()
@@ -57,6 +65,7 @@ async function startForwarding(page: Page, to: string) {
 
 test('forwarding: end to end set up, accepted, received, paused and deleted; outside turns encryption off and back on', async ({ browser, request }) => {
   test.slow()
+  expect(process.env.E2E_PSQL, 'E2E_PSQL: a command that runs SQL from its stdin against the test stack database').toBeTruthy()
   const settings = (await (await request.get(apiUrl('/auth/settings'))).json()) as { chat: { serverName: string } }
   const domain = settings.chat.serverName
   const alice = newAccount('fwdalice', PASSWORD)
@@ -146,6 +155,30 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await outsideDialog.getByTestId('forwarding-submit').click()
   await expect(mail.getByTestId('forwarding-encryption-off')).toBeVisible({ timeout: 60_000 })
   await expect(mail.getByTestId('forwarding-list-outgoing').getByText(outside)).toBeVisible()
+  await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'pending')
+
+  // The recipient confirms through the link, with no account. The emailed
+  // token never reaches the test, so one of the spec's own takes its place
+  // (the server keeps only its hash).
+  const token = randomBytes(32)
+  const updated = sql(
+    `UPDATE mail_forwardings SET confirmation_hash = '\\x${createHash('sha256').update(token).digest('hex')}' WHERE forwardee_email = '${outside}' AND state = 'pending';`,
+  )
+  expect(updated).toContain('UPDATE 1')
+  const visitor = await browser.newContext()
+  const page = await visitor.newPage()
+  await page.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
+  await expect(page.getByTestId('email-forwarding-request')).toContainText(`${aliceAddress} wants to forward email to ${outside}`, { timeout: 60_000 })
+  expect(new URL(page.url()).hash).toBe('')
+  await page.getByTestId('email-forwarding-accept').click()
+  await expect(page.getByTestId('email-forwarding-done')).toContainText('Forwarding accepted', { timeout: 60_000 })
+  // Spent: the link answers no more.
+  await page.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
+  await expect(page.getByTestId('email-forwarding-problem')).toBeVisible({ timeout: 60_000 })
+  await expect(async () => {
+    await mail.reload()
+    await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'active', { timeout: 5_000 })
+  }).toPass({ timeout: 60_000 })
   const keys = await aliceContext.newPage()
   await keys.goto(appUrl('account', '/settings/keys'))
   await expect(keys.getByTestId('mail-keys-encryption-off')).toBeVisible({ timeout: 60_000 })
@@ -179,13 +212,9 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await expect(composer.getByRole('img', { name: 'End-to-end encrypted: a Kutup address' })).toBeVisible({ timeout: 60_000 })
   await expect(composer.getByTestId('recipient-encryption-disabled')).toHaveCount(0)
 
-  // The outside recipient's page: no account needed; a link that isn't
-  // valid says so, and the token leaves the address bar.
-  const visitor = await browser.newContext()
-  const page = await visitor.newPage()
+  // A link that isn't one says so.
   await page.goto(appUrl('account', `/email-forwarding#made-up-${tag}`))
   await expect(page.getByTestId('email-forwarding-problem')).toContainText("This link isn't valid", { timeout: 60_000 })
-  expect(new URL(page.url()).hash).toBe('')
   await visitor.close()
 
   await aliceContext.close()
