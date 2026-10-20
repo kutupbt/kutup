@@ -169,7 +169,10 @@ pub async fn put(
                 .fetch_one(&mut *tx)
                 .await?;
         if count >= MAX_ENTRIES {
-            return Err(AppError::bad_request("the contact list is full"));
+            // Its own code: the client keeps the write due and tells its
+            // person, never drops it (a block above all).
+            return Err(AppError::bad_request("the contact list is full")
+                .with_details(serde_json::json!({ "code": "contactListFull" })));
         }
         sqlx::query(
             "INSERT INTO chat_contact_list (user_id, id, revision, envelope)

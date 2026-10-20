@@ -63,6 +63,7 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -3439,9 +3440,9 @@ As `PUT /api/chat/group-list/{id}`: `{ "baseRevision", "envelope", "head"? }`
 → `200` with the stored entry; `409 revision_conflict` with the current
 `revision`, `head_required` / `head_conflict`. `400` for an envelope that
 isn't 2048 bytes of canonical base64 or isn't a contact list entry (a group
-list entry isn't one), and for a new entry past 10,000 (the client evicts
-before that: the oldest rejections, then the oldest pending requests, never a
-block); `404` for an id that isn't one.
+list entry isn't one), and `400 contactListFull` for a new entry past 10,000
+(the client evicts before that: the oldest rejections, then the oldest pending
+requests, never a block); `404` for an id that isn't one.
 
 ### DELETE /api/chat/contact-list/{id}
 

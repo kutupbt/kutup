@@ -281,5 +281,6 @@ fn a_contact_list_keeps_at_most_10000_entries() {
     let (id, sealed) = list.entry(10_000, 1);
     let r = list.put(&id, json!({"baseRevision": 0, "envelope": sealed}));
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "contactListFull");
     purge_accounts(&c, &base, &[&user]);
 }
