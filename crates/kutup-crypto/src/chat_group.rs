@@ -42,7 +42,9 @@ const KDF_SALT: &[u8] = b"kutup/chat-group/v1";
 /// group.
 const ID_INFO: &[u8] = b"kutup/chat-group/id/v2\0";
 const HOME_DOMAIN: &[u8] = b"kutup/chat-group/home/v1\0";
-const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v1";
+/// v2: the group id follows in the info, so a state key is its group's
+/// alone (each sealed field binds the id as well).
+const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v2\0";
 
 const SEAL_DOMAIN: &[u8] = b"kutup/chat-group/sealed-field/v1\0";
 const SEAL_VERSION: u8 = 1;
@@ -139,14 +141,13 @@ impl GroupMasterKey {
         id
     }
 
-    /// The key that seals the state's encrypted fields.
+    /// The key that seals the state's encrypted fields: the master key's,
+    /// for this group id.
     pub fn state_key(&self) -> GroupStateKey {
+        let group_id = self.group_id();
         let mut key = Zeroizing::new([0u8; 32]);
-        self.expand(STATE_KEY_INFO, key.as_mut());
-        GroupStateKey {
-            key,
-            group_id: self.group_id(),
-        }
+        self.expand(&[STATE_KEY_INFO, &group_id].concat(), key.as_mut());
+        GroupStateKey { key, group_id }
     }
 
     fn expand(&self, info: &[u8], out: &mut [u8]) {
@@ -488,6 +489,23 @@ mod tests {
         identity_sequence: 1,
         identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
     };
+
+    #[test]
+    fn a_state_key_opens_only_its_own_groups_fields() {
+        let master = |home: GroupHome<'_>| GroupMasterKey::from_bytes(&[7u8; 32], home).unwrap();
+        let here = master(HOME).state_key();
+        let sealed = here.seal(SealedField::Title, b"", b"Team").unwrap();
+        assert_eq!(
+            &*here.open(SealedField::Title, b"", &sealed).unwrap(),
+            b"Team"
+        );
+        let elsewhere = master(GroupHome {
+            server: "elsewhere.example",
+            ..HOME
+        })
+        .state_key();
+        assert!(elsewhere.open(SealedField::Title, b"", &sealed).is_err());
+    }
 
     #[test]
     fn the_same_key_at_another_home_is_another_group() {

@@ -53,7 +53,9 @@ AccountHeadV1 {
 
 - **What a scope is:** one kind of value: `pins`, `contacts`, `mailNames`,
   `passSecrets`, `chatGroups` (the account's group list,
-  [`pairwise-groups.md`](pairwise-groups.md) §5), `settings`, and later ones.
+  [`pairwise-groups.md`](pairwise-groups.md) §5), `chatContacts` (the
+  account's Chat contacts, [`chat-contacts-sync.md`](chat-contacts-sync.md)),
+  `settings`, and later ones.
 - **What a scope's digest covers:** `digest = SHA-256` over the sorted list of
   `(HMAC(head key, value id), revision)` pairs of every value of the scope. A
   deleted value leaves the list. Value ids are HMAC'd, as RevisionGuard already
