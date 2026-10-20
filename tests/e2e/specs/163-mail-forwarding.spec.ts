@@ -173,9 +173,11 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   expect(new URL(page.url()).hash).toBe('')
   await page.getByTestId('email-forwarding-accept').click()
   await expect(page.getByTestId('email-forwarding-done')).toContainText('Forwarding accepted', { timeout: 60_000 })
-  // Spent: the link answers no more.
-  await page.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
-  await expect(page.getByTestId('email-forwarding-problem')).toBeVisible({ timeout: 60_000 })
+  // Spent: the link answers no more (opened again, as from the email).
+  const again = await visitor.newPage()
+  await again.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
+  await expect(again.getByTestId('email-forwarding-problem')).toBeVisible({ timeout: 60_000 })
+  await again.close()
   await expect(async () => {
     await mail.reload()
     await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'active', { timeout: 5_000 })
@@ -215,8 +217,9 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await expect(composer.getByTestId('recipient-encryption-disabled')).toHaveCount(0)
 
   // A link that isn't one says so.
-  await page.goto(appUrl('account', `/email-forwarding#made-up-${tag}`))
-  await expect(page.getByTestId('email-forwarding-problem')).toContainText("This link isn't valid", { timeout: 60_000 })
+  const madeUp = await visitor.newPage()
+  await madeUp.goto(appUrl('account', `/email-forwarding#made-up-${tag}`))
+  await expect(madeUp.getByTestId('email-forwarding-problem')).toContainText("This link isn't valid", { timeout: 60_000 })
   await visitor.close()
 
   await aliceContext.close()
