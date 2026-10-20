@@ -1595,7 +1595,7 @@ pub async fn resolve_account(
         "SELECT u.id AS user_id, COALESCE(u.username, '') AS username, a.address
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
-          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+          WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active'
             AND EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id AND k.is_primary)",
     )

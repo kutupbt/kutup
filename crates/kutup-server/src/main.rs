@@ -1008,6 +1008,10 @@ fn build_router(state: AppState) -> Router {
             get(handlers::mail_domains::list).post(handlers::mail_domains::add),
         )
         .route(
+            "/api/mail/domains/addresses",
+            post(handlers::mail_domains::create_address),
+        )
+        .route(
             "/api/mail/domains/:id",
             get(handlers::mail_domains::get).delete(handlers::mail_domains::delete),
         )

@@ -705,7 +705,7 @@ async fn public_keys(
     // whatever spelling was asked.
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT a.id, a.address FROM mail_addresses a JOIN users u ON u.id = a.user_id
-          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+          WHERE a.folded = kutup_address_folded($1)
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
             AND u.is_active",

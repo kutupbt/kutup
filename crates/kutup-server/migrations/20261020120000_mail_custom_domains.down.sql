@@ -1,3 +1,4 @@
+DROP FUNCTION kutup_address_folded(text);
 DELETE FROM account_security_events WHERE kind = 'domainLost';
 ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_kind_check;
 ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_check CHECK (kind = ANY (ARRAY[

@@ -71,6 +71,20 @@ ALTER TABLE mail_addresses ADD COLUMN folded text GENERATED ALWAYS AS (
 ) STORED NOT NULL;
 CREATE UNIQUE INDEX mail_addresses_live ON mail_addresses (folded) WHERE state <> 'freed';
 
+-- An address as `mail_addresses.folded` keeps it, for lookups by any
+-- spelling: lowercased on a custom domain someone holds, folded on the
+-- server's own (which is never a custom domain).
+CREATE FUNCTION kutup_address_folded(address text) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT CASE
+        WHEN EXISTS (SELECT 1 FROM mail_domains
+                      WHERE name = lower(split_part(address, '@', 2)) AND state IN (1, 2))
+        THEN lower(address)
+        ELSE kutup_fold(split_part(address, '@', 1)) || '@' || lower(split_part(address, '@', 2))
+    END
+$$;
+
 -- A held domain lost (another account proved it, or its DNS stopped
 -- proving it): its owner sees it among the account's security events.
 ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_kind_check;

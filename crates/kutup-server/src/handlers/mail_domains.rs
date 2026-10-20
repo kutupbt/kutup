@@ -362,3 +362,100 @@ pub async fn catch_all(
     store::set_catch_all(&state.pool, user_id, id, address, &settings).await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NewAddress {
+    /// The part before the @: lowercase letters, digits, `.`, `_`, `-`.
+    pub local: String,
+    /// The custom domain it goes on.
+    pub domain_id: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedAddress {
+    pub id: String,
+    pub address: String,
+}
+
+/// `POST /api/mail/domains/addresses` — a new address on one of the
+/// caller's verified domains, within its address limit (every address
+/// counts, the username's included). It has no key yet: the client makes
+/// one and adds it (`POST /api/mail/addresses/{id}/keys`), as for any address.
+#[utoipa::path(
+    post,
+    path = "/api/mail/domains/addresses",
+    tag = "mail",
+    security(("BearerAuth" = [])),
+    request_body = NewAddress,
+    responses(
+        (status = 201, body = CreatedAddress),
+        (status = 400, description = "invalidAddress"),
+        (status = 404, description = "No such domain of the caller's"),
+        (status = 409, description = "addressLimit, addressTaken or domainNotVerified"),
+    )
+)]
+pub async fn create_address(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(input): Json<NewAddress>,
+) -> AppResult<(StatusCode, Json<CreatedAddress>)> {
+    enabled(&state)?;
+    let user_id = trusted_uuid(&user.user_id)?;
+    let domain_id =
+        Uuid::parse_str(&input.domain_id).map_err(|_| AppError::not_found("no such domain"))?;
+    let local = input.local.trim().to_lowercase();
+    kutup_crypto::mail_address::check_local(&local)
+        .map_err(|_| AppError::bad_request("invalidAddress"))?;
+    let settings = Settings::load(&state.pool)
+        .await?
+        .for_user(&state.pool, user_id)
+        .await?;
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let domain: Option<Row> = sqlx::query_as(&format!(
+        "SELECT {} FROM mail_domains WHERE id = $1 AND user_id = $2 AND removed_at IS NULL FOR SHARE",
+        store::COLUMNS
+    ))
+    .bind(domain_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let domain = domain.ok_or_else(|| AppError::not_found("no such domain"))?;
+    if !domain.usable(&settings) {
+        return Err(AppError::conflict("domainNotVerified"));
+    }
+    let address = kutup_crypto::mail_address::canonical(&format!("{local}@{}", domain.name))
+        .map_err(|_| AppError::bad_request("invalidAddress"))?;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mail_addresses WHERE user_id = $1 AND state IN ('active', 'receiving')",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if count >= settings.addresses_per_account {
+        return Err(AppError::conflict("addressLimit"));
+    }
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO mail_addresses (user_id, address, domain_id) VALUES ($1, $2, $3)
+         ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
+    )
+    .bind(user_id)
+    .bind(&address)
+    .bind(domain_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let id = id.ok_or_else(|| AppError::conflict("addressTaken"))?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedAddress {
+            id: id.to_string(),
+            address,
+        }),
+    ))
+}
