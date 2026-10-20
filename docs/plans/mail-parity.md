@@ -99,7 +99,7 @@ reference only where Proton has nothing.
 | Aliases (hide-my-email) | Pass aliases | 🔶 aliases plan (`feat/mail-aliases`) |
 | Dots, dashes, capitals and `+tags` ignored | `CANONICALIZE_SCHEME.PROTON` | 🔶 aliases A0 |
 | Several addresses per account, default address | `AddressesSection.tsx` | ❌ |
-| Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ❌ (Phase E, organisations) |
+| Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ❌ (moved up 2026-10-20; plan `mail-custom-domains.md`) |
 | Forwarding (with conditions, end to end to Kutup users) | `ForwardSection.tsx` | ❌ (with filters' actions) |
 | Auto-reply (vacation responder, schedules) | `AutoReplySection.tsx` | ✅ fixed, daily, weekly, monthly, permanent in a time zone; once per sender every 7 days; never to lists or automatic mail; kept in Sent; Proton's banner on received auto-replies |
 | Save contacts automatically | `AutomaticallySaveContacts.tsx` | ➖ Kutup asks first (contacts plan) |

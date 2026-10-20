@@ -688,8 +688,13 @@ arrival, and direct sending. Phases, each with its own plan before code:
     alias inside sign-up forms comes later.
   Built on the address records groups introduce (an address owned by an
   account or a group). Its own plan before code.
-- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, custom domains, organisations
-  (which then own groups' storage, see the groups plan).
+- **Custom domains** (moved up, decided 2026-10-20): your own domain for
+  Mail addresses, following Proton: add the domain, verify ownership and its
+  MX, SPF, DKIM and DMARC records, addresses on it with their own keys,
+  catch-all. Runs beside Chat groups and Calendar. A plan note settled from
+  Proton's code comes first (`plans/mail-custom-domains.md`, to be written).
+- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, organisations (which then own
+  groups' storage, see the groups plan).
 
 Sending is over IPv4 only (`95.217.238.230`, PTR `mail.kutup.dev`);
 outbound port 25 is open on the host (checked 2026-10-09).
