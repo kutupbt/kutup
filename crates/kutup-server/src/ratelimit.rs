@@ -57,6 +57,9 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN", 30),
     ("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN", 60),
     ("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN", 30),
+    // The first value of an administrator's setting
+    // (`site_settings::chat_group_link_joins_per_relay`).
+    ("RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN", 120),
     ("RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN", 600),
     ("RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR", 600),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
@@ -123,11 +126,17 @@ impl RateLimiter {
 
     /// Records an attempt for `key`, returning false when over the limit — mirrors `Allow`.
     pub fn allow(&self, key: &str) -> bool {
+        self.allow_up_to(key, self.limit)
+    }
+
+    /// [`allow`](Self::allow) under `limit` instead of the limiter's own: for
+    /// a limit administrators change while the server runs.
+    pub fn allow_up_to(&self, key: &str, limit: usize) -> bool {
         let now = Instant::now();
         let mut map = self.requests.lock().unwrap();
         let times = map.entry(key.to_string()).or_default();
         times.retain(|t| now.duration_since(*t) < self.window);
-        if times.len() >= self.limit {
+        if times.len() >= limit {
             return false;
         }
         times.push(now);
@@ -325,6 +334,21 @@ pub static CHAT_GROUP_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
+/// Joins from a link and requests to join: per minute per relay server, as
+/// administrators set it (`site_settings::chat_group_link_joins_per_relay`,
+/// 120 at first), charged before the change is checked.
+pub static CHAT_GROUP_LINK_JOINS_RELAY: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::new(0, Duration::from_secs(60)));
+
+/// The link-join budget's first value, before administrators set one
+/// (`RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN`).
+pub fn chat_group_link_joins_relay_default() -> i64 {
+    i64::try_from(env_limit(
+        "RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN",
+        120,
+    ))
+    .unwrap_or(i64::MAX)
+}
 /// Failed group requests: 600 / minute / relay server
 /// (`RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN`): charged only when a
 /// request fails (unknown group, stranger, refused change), so junk from one
@@ -757,6 +781,7 @@ pub fn spawn_cleanup() {
             CHAT_GROUP_CHANGES_PSEUDONYM.cleanup();
             CHAT_GROUP_CHANGES_GROUP.cleanup();
             CHAT_GROUP_LINK.cleanup();
+            CHAT_GROUP_LINK_JOINS_RELAY.cleanup();
             CHAT_GROUP_FAILURES_RELAY.cleanup();
             CHAT_GROUP_CREATES_RELAY.cleanup();
             cleanup_totp_tracker();

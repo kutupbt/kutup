@@ -14,8 +14,9 @@ use kutup_chat_proto::group::{
 };
 use kutup_chat_proto::group_route::{
     GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1, GroupLogQueryV1,
-    GroupNotaryV1, GroupOperationV1, GroupRequestAuthV1, GroupRequestV1, GroupResponseStatusV1,
-    GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS, PSEUDONYM_USED,
+    GroupNotaryV1, GroupOperationV1, GroupRequestAuthV1, GroupRequestStateV1, GroupRequestStatusV1,
+    GroupRequestV1, GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS,
+    PSEUDONYM_USED,
 };
 use kutup_crypto::oblivious::ResponseContext;
 use sha2::{Digest, Sha256};
@@ -161,11 +162,14 @@ async fn answer_checked(
         GroupOperationV1::GetLogs => get_logs(state, request, &group_id, &pseudonym, now).await,
         GroupOperationV1::SubmitChange => {
             submit(
-                state, federation, request, &group_id, &pseudonym, &limits, now,
+                state, federation, relay, request, &group_id, &pseudonym, &limits, now,
             )
             .await
         }
         GroupOperationV1::GetJoinInfo => claim_join_info(state, &group_id, &pseudonym, now).await,
+        GroupOperationV1::GetRequestStatus => {
+            request_status(state, &group_id, &pseudonym, now).await
+        }
         // Calls and avatars come with slices 3 and 4.
         GroupOperationV1::CallToken | GroupOperationV1::GetAvatar | GroupOperationV1::PutAvatar => {
             Ok(status(GroupResponseStatusV1::Unavailable, now))
@@ -254,6 +258,50 @@ async fn claim_join_info(
         },
         now,
     )
+}
+
+/// Where the signer's own request to join stands. Only its own pseudonym
+/// asks (the signature proves it), so this tells nobody anything about
+/// another; an unknown group and a pseudonym the group never saw get the
+/// same `unknown`, never `NotFound`, so a requester whose change was lost
+/// can tell it from a refusal. The per-pseudonym budget was spent above.
+async fn request_status(
+    state: &AppState,
+    group_id: &[u8; 32],
+    pseudonym: &str,
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    let answer = |status, revision, head: Option<[u8; 32]>| -> AppResult<GroupResponseV1> {
+        let body = GroupRequestStatusV1 {
+            status,
+            revision,
+            head: head.map(|head| STANDARD.encode(head)),
+        };
+        Ok(ok(now, body.canonical_bytes().map_err(AppError::internal)?))
+    };
+    let Some((group, head)) = load_state(&state.pool, group_id, false).await? else {
+        return answer(GroupRequestStateV1::Unknown, None, None);
+    };
+    if group.member(pseudonym).is_some() {
+        return answer(GroupRequestStateV1::Member, None, None);
+    }
+    if group.requesting.iter().any(|r| r.pseudonym == pseudonym) {
+        return answer(
+            GroupRequestStateV1::Pending,
+            Some(group.revision),
+            Some(head),
+        );
+    }
+    if group.banned.iter().any(|banned| banned == pseudonym) {
+        return answer(GroupRequestStateV1::Denied, None, None);
+    }
+    // Seen before (as a requester or a member) and neither now: denied, or
+    // once in and out again.
+    if was_member(&state.pool, group_id, pseudonym).await? {
+        answer(GroupRequestStateV1::Denied, None, None)
+    } else {
+        answer(GroupRequestStateV1::Unknown, None, None)
+    }
 }
 
 pub(crate) fn group_limits(state: &AppState) -> GroupLimits {
@@ -638,6 +686,14 @@ fn joins(change: &GroupChangeV1) -> bool {
     )
 }
 
+/// Whether `change` is a join from the link or a request to join.
+fn from_link(change: &GroupChangeV1) -> bool {
+    matches!(
+        change.actions.as_slice(),
+        [GroupActionV1::JoinFromLink { .. } | GroupActionV1::RequestToJoin { .. }]
+    )
+}
+
 fn seen_hash(pseudonym: &str) -> AppResult<[u8; 32]> {
     let key = decode_exact::<32>(pseudonym).ok_or_else(|| AppError::internal("pseudonym"))?;
     Ok(Sha256::new()
@@ -650,7 +706,7 @@ fn seen_hash(pseudonym: &str) -> AppResult<[u8; 32]> {
 /// Whether the group has seen `pseudonym`: [`remember_newcomers`] recorded
 /// it as a member or a requester.
 async fn was_member(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    executor: impl sqlx::PgExecutor<'_>,
     group_id: &[u8; 32],
     pseudonym: &str,
 ) -> AppResult<bool> {
@@ -660,7 +716,7 @@ async fn was_member(
     )
     .bind(&group_id[..])
     .bind(&seen_hash(pseudonym)?[..])
-    .fetch_one(&mut **tx)
+    .fetch_one(executor)
     .await?;
     Ok(seen)
 }
@@ -728,9 +784,11 @@ async fn prune_log(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn submit(
     state: &AppState,
     federation: &FederationStack,
+    relay: &str,
     request: &GroupRequestV1,
     group_id: &[u8; 32],
     pseudonym: &str,
@@ -744,6 +802,14 @@ async fn submit(
     // count the right one.
     if change.actor != pseudonym {
         return Ok(GroupResponseV1::refused("wrongActor", now));
+    }
+    // Newcomers from a link, per relay server, before the change is checked:
+    // a server's users can't flood groups here with joins or requests.
+    if from_link(&change) {
+        let per_minute = crate::site_settings::chat_group_link_joins_per_relay(&state.pool).await?;
+        if !limits::link_join(relay, per_minute) {
+            return Ok(status(GroupResponseStatusV1::RateLimited, now));
+        }
     }
     let mut tx = state.pool.begin().await?;
     let Some((current, head)) = load_state(&mut *tx, group_id, true).await? else {
@@ -763,7 +829,7 @@ async fn submit(
     // A newcomer under a pseudonym the group has had before would let the
     // members link the two memberships; its signer is told so, and only
     // now, with its claim or link proof and the change itself accepted.
-    if joins(&change) && was_member(&mut tx, group_id, pseudonym).await? {
+    if joins(&change) && was_member(&mut *tx, group_id, pseudonym).await? {
         return Ok(GroupResponseV1::refused(PSEUDONYM_USED, now));
     }
     // Charged only for a valid change, so nobody can spend a group's budget

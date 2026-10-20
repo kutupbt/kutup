@@ -815,6 +815,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let (name_hold_days, old_address_receive_days) =
         crate::site_settings::name_holds(&state.pool, &state.config).await?;
+    let chat_group_link_joins_per_relay_per_min =
+        crate::site_settings::chat_group_link_joins_per_relay(&state.pool).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
@@ -822,6 +824,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
         "nameHoldDays": name_hold_days,
         "oldAddressReceiveDays": old_address_receive_days,
+        "chatGroupLinkJoinsPerRelayPerMin": chat_group_link_joins_per_relay_per_min,
     }))
     .into_response())
 }
@@ -835,6 +838,7 @@ pub struct UpdateSettingsRequest {
     chat_media_delivery_retention_days: Option<i64>,
     name_hold_days: Option<i64>,
     old_address_receive_days: Option<i64>,
+    chat_group_link_joins_per_relay_per_min: Option<i64>,
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -857,6 +861,7 @@ pub async fn update_settings(
         && req.chat_media_delivery_retention_days.is_none()
         && req.name_hold_days.is_none()
         && req.old_address_receive_days.is_none()
+        && req.chat_group_link_joins_per_relay_per_min.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -879,6 +884,10 @@ pub async fn update_settings(
             .map_err(AppError::bad_request)?;
     }
 
+    if let Some(value) = req.chat_group_link_joins_per_relay_per_min {
+        crate::site_settings::validate_chat_group_link_joins_per_relay(value)
+            .map_err(AppError::bad_request)?;
+    }
     // The two holds are checked together, each against the other's new or
     // current value.
     if req.name_hold_days.is_some() || req.old_address_receive_days.is_some() {
@@ -911,6 +920,10 @@ pub async fn update_settings(
             crate::site_settings::OLD_ADDRESS_RECEIVE_DAYS,
             req.old_address_receive_days,
         ),
+        (
+            crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY,
+            req.chat_group_link_joins_per_relay_per_min,
+        ),
     ] {
         let Some(value) = value else { continue };
         sqlx::query(
@@ -936,6 +949,7 @@ pub async fn update_settings(
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
             "nameHoldDays": req.name_hold_days,
             "oldAddressReceiveDays": req.old_address_receive_days,
+            "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
         }),
     )
     .await;

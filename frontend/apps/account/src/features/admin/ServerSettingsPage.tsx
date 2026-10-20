@@ -21,6 +21,8 @@ const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
+/** The server's bounds (site_settings::validate_chat_group_link_joins_per_relay). */
+const MAX_LINK_JOINS = 1_000_000
 
 export function ServerSettingsPage() {
   const { t } = useTranslation()
@@ -33,6 +35,7 @@ export function ServerSettingsPage() {
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
+    linkJoins: z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange')),
   })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -44,6 +47,7 @@ export function ServerSettingsPage() {
       quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
+      linkJoins: settings.data.chatGroupLinkJoinsPerRelayPerMin,
     })
   }, [settings.data, reset])
 
@@ -59,6 +63,7 @@ export function ServerSettingsPage() {
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
+        chatGroupLinkJoinsPerRelayPerMin: v.linkJoins,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -100,6 +105,9 @@ export function ServerSettingsPage() {
               </Field>
               <Field label={t('admin.settings.mediaDays')} error={errors.mediaDays?.message} description={t('admin.settings.mediaDaysHint')} required>
                 {(field) => <Input {...field} {...register('mediaDays')} type="number" min={0} max={MAX_RETENTION_DAYS} step={1} inputMode="numeric" />}
+              </Field>
+              <Field label={t('admin.settings.groupLinkJoins')} error={errors.linkJoins?.message} description={t('admin.settings.groupLinkJoinsHint')} required>
+                {(field) => <Input {...field} {...register('linkJoins')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
               </Field>
             </CardContent>
           </Card>

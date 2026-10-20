@@ -86,6 +86,9 @@ pub struct AdminSettingsResponse {
     pub name_hold_days: i64,
     /// Days a renamed account's old address still receives (at most the hold).
     pub old_address_receive_days: i64,
+    /// Joins from a group link and requests to join, per minute per relay
+    /// server (1 to 1000000).
+    pub chat_group_link_joins_per_relay_per_min: i64,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -474,6 +477,7 @@ pub struct UpdateAdminSettingsRequest {
     pub chat_media_delivery_retention_days: Option<i64>,
     pub name_hold_days: Option<i64>,
     pub old_address_receive_days: Option<i64>,
+    pub chat_group_link_joins_per_relay_per_min: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
