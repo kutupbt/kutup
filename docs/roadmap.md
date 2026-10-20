@@ -677,9 +677,10 @@ arrival, and direct sending. Phases, each with its own plan before code:
   simpler cases:
   - an alias is a prefix the person picks plus a suffix the server offers
     and signs (`netflix.x7f2@<alias domain>`), so nobody can claim another's
-    suffix; random aliases too; ideally on a separate domain
-    (`relay.<domain>`, needing its own MX, SPF and DKIM) so aliases cannot
-    be guessed from usernames; later the person's custom domains;
+    suffix; random aliases too; on a separate alias domain, decided
+    2026-10-20: `relay.<domain>` (`relay.kutup.dev` on kutup.dev), with its
+    own MX, SPF and DKIM, so aliases cannot be guessed from usernames and
+    their sending reputation stays apart; later the person's custom domains;
   - each alias has a display name, a note, the site it was made for, an
     on/off switch (off refuses at RCPT) and counts of forwarded, replied and
     blocked mail;
