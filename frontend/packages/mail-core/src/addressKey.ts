@@ -1,4 +1,4 @@
-import { DEFAULT_MAIL_KEY_FLAGS, generateMailAddressKey, signMailKeyList, toBase64 } from '@kutup/crypto'
+import { DEFAULT_MAIL_KEY_FLAGS, foldAddress, generateMailAddressKey, signMailKeyList, toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { Session } from '@kutup/session/store'
 
@@ -38,4 +38,26 @@ export async function firstAddressKey(session: Pick<Session, 'masterKey' | 'enve
  */
 export async function addFirstAddressKey(session: Session, address: { id: string; address: string }) {
   await api.post(`/mail/addresses/${address.id}/keys`, await firstAddressKey(session, address.address))
+}
+
+/**
+ * What the account's own addresses say about `address` (folded), before a
+ * rename to it makes its first key:
+ * - `keyed`: a held (not freed) address of the account is it and has a key
+ *   or a key list: no first key is made over it, whatever a check said;
+ * - `freed`: the account's own freed row is it, with a key list: taking the
+ *   name back must continue that chain (docs/plans/mail-address-keys.md),
+ *   which isn't built yet, so the rename is refused for now;
+ * - `none`: a first key at sequence 1.
+ */
+export async function ownAddressState(address: string): Promise<'keyed' | 'freed' | 'none'> {
+  const folded = await foldAddress(address)
+  const { data } = await api.get<{ address: string; state: string; keys: unknown[]; keyList: unknown }[]>('/mail/addresses')
+  let state: 'keyed' | 'freed' | 'none' = 'none'
+  for (const row of data) {
+    if ((await foldAddress(row.address)) !== folded) continue
+    if (row.state !== 'freed' && (row.keys.length > 0 || row.keyList !== null)) return 'keyed'
+    if (row.state === 'freed' && row.keyList !== null) state = 'freed'
+  }
+  return state
 }

@@ -4,6 +4,7 @@ import type { AccountRef } from '@kutup/crypto/accountRef'
 import { acceptGroup, checkGroup, isGroupPinned, pinnedVerdict } from '@kutup/drive-core/identityPins'
 import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import api from '@kutup/session/client'
+import { KEY_LIST_GUARD_SCOPE } from './keyList'
 import { getSession } from '@kutup/session/store'
 
 // A Kutup address's public keys (docs/plans/mail-address-keys.md), checked
@@ -215,8 +216,8 @@ async function knownGroup(lookup: GroupKeyLookup): Promise<boolean> {
   return isGroupPinned(await driveIdentityOf(session), lookup.server, lookup.groupId).catch(() => false)
 }
 
-/** What the revision guard calls an address's key list. */
-export const KEY_LIST_GUARD_SCOPE = 'mail-key-list'
+/** What the revision guard calls an address's key list (one count for the account's own lists and recipients'). */
+export { KEY_LIST_GUARD_SCOPE }
 
 /**
  * Refuses a key list older than this device has seen for the same address

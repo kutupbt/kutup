@@ -943,3 +943,65 @@ fn distribution_and_invite_kinds_read_back_only_when_valid() {
     );
     assert!(content.as_sender_key_distribution().is_none());
 }
+
+#[test]
+fn an_invitation_a_context_and_a_list_entry_carry_only_a_canonical_home() {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    let b64 = |len: usize| STANDARD.encode(vec![7u8; len]);
+    let invite = |home: GroupHomePinV1| GroupInviteV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: crate::group_route::encode_group_id(&[7; 32]),
+        master_key: b64(kutup_crypto::chat_group::MASTER_KEY_LEN),
+        home,
+        slot_id: b64(kutup_crypto::chat_group::SLOT_ID_LEN),
+        slot_revision: 1,
+        claim_key_seed: b64(32),
+        title: None,
+    };
+    let context = |home: GroupHomePinV1| GroupContextV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: crate::group_route::encode_group_id(&[7; 32]),
+        master_key: b64(kutup_crypto::chat_group::MASTER_KEY_LEN),
+        home,
+        revision: 1,
+        chain_hash: b64(32),
+        recipient_pseudonym: None,
+    };
+    let entry = |home: GroupHomePinV1| GroupListEntryV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: crate::group_route::encode_group_id(&[7; 32]),
+        master_key: b64(kutup_crypto::chat_group::MASTER_KEY_LEN),
+        home,
+        join_epoch: 0,
+        status: GroupListStatus::Member,
+        verified_revision: 1,
+        chain_hash: b64(32),
+    };
+    assert!(invite(home_pin()).validate().is_ok());
+    assert!(context(home_pin()).validate().is_ok());
+    assert!(entry(home_pin()).validate().is_ok());
+    let other_spellings = [
+        GroupHomePinV1 {
+            server: "Home.Example".into(),
+            ..home_pin()
+        },
+        GroupHomePinV1 {
+            server: "home.example.".into(),
+            ..home_pin()
+        },
+        GroupHomePinV1 {
+            identity_document_hash: "A".repeat(64),
+            ..home_pin()
+        },
+        GroupHomePinV1 {
+            identity_document_hash: "9".repeat(63),
+            ..home_pin()
+        },
+    ];
+    for home in other_spellings {
+        assert!(invite(home.clone()).validate().is_err(), "{home:?}");
+        assert!(context(home.clone()).validate().is_err(), "{home:?}");
+        assert!(entry(home.clone()).validate().is_err(), "{home:?}");
+    }
+}

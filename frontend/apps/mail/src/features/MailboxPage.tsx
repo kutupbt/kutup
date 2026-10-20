@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useContactLookup } from '@kutup/contacts-core/api'
-import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, useBatchMessages, NoAddressKey, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
+import { OwnKeyListRolledBack } from '@kutup/mail-core/keyList'
+import { DEFAULT_PAGE_SIZE, FOLDERS, membersOf, useBatchMessages, NoAddressKey, UnverifiedOwnKeys, rowSeen, rowStarred, useDeleteMessages, useEmptyFolder, useFolder, useMailAccount, useMailSettings, useUpdateMailSettings, type FolderId, type ListFilter, type ListSort, type MailMessage, type PlaceKey } from '@kutup/mail-core/api'
 import { oneTimeCode } from '@kutup/mail-core/oneTimeCode'
 import { flattenFolders, usePlaces } from '@kutup/mail-core/places'
 import { isSearching, listCriteria, searchFromParams } from '@kutup/mail-core/search'
@@ -462,6 +463,13 @@ export function MailboxPage() {
         {account.error instanceof NoAddressKey ? (
           <Alert title={t('account.noKeyTitle')}>
             {t('account.noKey')}{' '}
+            <a className="underline" href={appUrl('account', '/settings/keys')}>
+              {t('account.openAccount')}
+            </a>
+          </Alert>
+        ) : account.error instanceof UnverifiedOwnKeys || account.error instanceof OwnKeyListRolledBack ? (
+          <Alert variant="error" title={t('account.unverifiedTitle')} data-testid="mail-own-keys-unverified">
+            {t('account.unverified')}{' '}
             <a className="underline" href={appUrl('account', '/settings/keys')}>
               {t('account.openAccount')}
             </a>

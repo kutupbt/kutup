@@ -555,7 +555,9 @@ pub fn decode_sealed(field: &str, value: &str, max: usize) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
-fn validate_home(home: &GroupHomePinV1) -> Result<(), String> {
+/// A home pin in its one canonical spelling (the group id binds it:
+/// `kutup_crypto::chat_group::GroupHome`), checked wherever one arrives.
+pub(crate) fn validate_home(home: &GroupHomePinV1) -> Result<(), String> {
     if !kutup_crypto::account_ref::valid_server(&home.server) {
         return Err("home server is not a valid server name".into());
     }
