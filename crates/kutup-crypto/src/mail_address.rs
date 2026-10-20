@@ -56,7 +56,9 @@ pub fn check_local(local: &str) -> Result<()> {
         ));
     }
     if local.starts_with('.') || local.ends_with('.') || local.contains("..") {
-        return Err(invalid("a dot at an end of the local part, or two in a row"));
+        return Err(invalid(
+            "a dot at an end of the local part, or two in a row",
+        ));
     }
     Ok(())
 }

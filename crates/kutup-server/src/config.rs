@@ -13,6 +13,11 @@ pub struct Config {
     /// docs/plans/mail-forwarding.md). Optional: without them, end-to-end
     /// forwarding can't be set up. Never logged.
     pub mail_forwarding_keys: crate::opaque_setup::OpaqueSetupKeys,
+    /// The keys custom domains' DKIM keys are sealed under
+    /// (`MAIL_DKIM_KEYS`, the same `id:base64,…` form;
+    /// docs/plans/mail-custom-domains.md §4). Without them, custom domains
+    /// are off. Never logged.
+    pub mail_dkim_keys: crate::opaque_setup::OpaqueSetupKeys,
     pub s3_endpoint: String,
     pub s3_access_key: String,
     pub s3_secret_key: String,
@@ -444,6 +449,15 @@ impl Config {
                 } else {
                     crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
                         env.error(format!("OPAQUE_SETUP_KEYS: {error}"));
+                        Default::default()
+                    })
+                }
+            },
+            mail_dkim_keys: match env.set("MAIL_DKIM_KEYS") {
+                None => Default::default(),
+                Some(value) => {
+                    crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
+                        env.error(format!("MAIL_DKIM_KEYS: {error}"));
                         Default::default()
                     })
                 }

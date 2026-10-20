@@ -165,6 +165,9 @@ pub fn plan(
 }
 
 /// Stalwart's management API, as the reconcile needs it.
+// `async_trait` marks each method's boxed future `#[must_use]` without a
+// message, which clippy reads as a second `must_use` on a `Result`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Stalwart: Send + Sync {
     async fn domains(&self) -> anyhow::Result<Vec<StalwartDomain>>;

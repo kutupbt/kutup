@@ -71,6 +71,8 @@ pub struct MailDomain {
     pub catch_all_address_id: Option<String>,
     pub address_count: i64,
     pub records: DomainRecords,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub checked_at: Option<OffsetDateTime>,
     /// When a domain in `warn` stops, unless its record returns.
@@ -188,6 +190,7 @@ async fn view(state: &AppState, row: &Row, settings: &Settings) -> AppResult<Mai
         catch_all_address_id: row.catch_all_address_id.map(|id| id.to_string()),
         address_count,
         records: records(row, &server(state)),
+        created_at: row.created_at,
         checked_at: row.checked_at,
         warned_at: row.warned_at,
     })

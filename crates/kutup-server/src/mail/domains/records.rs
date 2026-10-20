@@ -18,6 +18,9 @@ pub enum Lookup<T> {
 }
 
 /// The lookups the checks need, uncached for verification.
+// `async_trait` marks each method's boxed future `#[must_use]` without a
+// message, which clippy reads as a second `must_use` on a `Result`.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Resolver: Send + Sync {
     /// Every TXT record at `name`, each with its strings joined.

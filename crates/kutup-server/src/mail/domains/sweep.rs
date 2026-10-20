@@ -14,10 +14,11 @@ use rand::Rng as _;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
-use super::reconcile::{self, Recorded, Wanted};
+use super::reconcile::{self, Recorded, Signature, Wanted};
 use super::settings::{Mode, Settings};
 use super::stalwart::StalwartApi;
 use super::store::{self, Row, COLUMNS};
+use super::{check, dkim};
 use crate::error::AppResult;
 use crate::handlers::mail_domains::{resolver, server};
 use crate::AppState;
@@ -31,7 +32,9 @@ const RECONCILE_LOCK: i64 = 0x6b75_7470_646f_6d73;
 
 /// Whether this server can take custom domains at all.
 pub fn configured(state: &AppState) -> bool {
-    !state.config.mail_hostname.is_empty() && !state.config.mail_stalwart_domains_token.is_empty()
+    !state.config.mail_hostname.is_empty()
+        && !state.config.mail_stalwart_domains_token.is_empty()
+        && state.config.mail_dkim_keys.current().is_some()
 }
 
 pub fn spawn(state: AppState) {
@@ -54,6 +57,14 @@ pub async fn run(state: &AppState) -> AppResult<()> {
     let settings = Settings::load(&state.pool).await?;
     drop_stale(state, &settings).await?;
     check_due(state, &settings).await?;
+    dkim::rotate(
+        &state.pool,
+        resolver(state)?,
+        &state.config.chat_server_name,
+        &state.config.mail_dkim_keys,
+    )
+    .await
+    .map_err(|e| crate::error::AppError::internal(format!("DKIM rotation: {e}")))?;
     reconcile_stalwart(state, &settings).await
 }
 
@@ -126,14 +137,23 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
     ))
     .fetch_all(&mut *tx)
     .await?;
+    let active = dkim::active(&state.pool, &state.config.mail_dkim_keys)
+        .await
+        .map_err(|e| crate::error::AppError::internal(format!("DKIM key: {e}")))?;
     let wanted: Vec<Wanted> = rows
         .iter()
         .filter(|row| settings.mode != Mode::Off && row.usable(settings))
         .map(|row| Wanted {
             id: row.id,
             name: row.name.clone(),
-            // Signing comes with the DKIM keys.
-            signature: None,
+            // Signed once its DKIM was good, while it isn't in ERROR.
+            signature: active.as_ref().filter(|_| check::signs(&row.domain())).map(
+                |(selector, pem, key_id)| Signature {
+                    selector: selector.clone(),
+                    private_key_pem: pem.to_string(),
+                    key_id: key_id.clone(),
+                },
+            ),
             recorded: row
                 .stalwart_signature_id
                 .clone()

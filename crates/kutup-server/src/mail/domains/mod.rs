@@ -9,6 +9,7 @@
 //!   database.
 
 pub mod check;
+pub mod dkim;
 pub mod dns;
 pub mod name;
 pub mod policy;

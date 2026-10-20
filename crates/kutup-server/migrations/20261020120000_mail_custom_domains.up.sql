@@ -95,3 +95,21 @@ ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_name
 ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_names_check CHECK (
     (kind = ANY (ARRAY['rename', 'nameDropped', 'nameClosed', 'nameFreed', 'domainLost'])) = (old_name IS NOT NULL)
     AND (kind = 'rename') = (new_name IS NOT NULL));
+
+-- The shared DKIM keys custom domains sign with (docs/plans/mail-custom-
+-- domains.md §4): at most one live key per selector; the private key sealed
+-- under MAIL_DKIM_KEYS' entry server_key_id.
+CREATE TABLE mail_dkim_keys (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    selector text NOT NULL CHECK (selector IN ('kutup1', 'kutup2', 'kutup3')),
+    state text NOT NULL CHECK (state IN ('pending', 'active', 'retiring', 'retired')),
+    server_key_id integer NOT NULL,
+    private_sealed bytea NOT NULL,
+    public_spki bytea NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    published_since timestamptz,
+    activated_at timestamptz,
+    retiring_at timestamptz
+);
+CREATE UNIQUE INDEX mail_dkim_keys_selector ON mail_dkim_keys (selector) WHERE state <> 'retired';
+CREATE UNIQUE INDEX mail_dkim_keys_active ON mail_dkim_keys (state) WHERE state = 'active';
