@@ -12,7 +12,7 @@ import {
   type SignedMailKeyList,
 } from '@kutup/crypto'
 import { addFirstAddressKey } from '@kutup/mail-core/addressKey'
-import { checkedAddresses, nextKeyList, signedEntries, signedEntry, type CheckedKey } from '@kutup/mail-core/keyList'
+import { checkedAddresses, nextKeyList, settleOwedKeyLists, signedEntries, signedEntry, type CheckedKey } from '@kutup/mail-core/keyList'
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
@@ -29,13 +29,21 @@ export interface MailKey {
   primary: boolean
   flags: number
   createdAt: string
+  /**
+   * A forwarding key (docs/plans/mail-forwarding.md): it opens only mail
+   * forwarded to the address, is in no key list, and can only be deleted.
+   */
+  forwarding?: boolean
 }
 
 export interface MailAddress {
   id: string
   address: string
+  state: 'active' | 'receiving' | 'closed' | 'freed'
   keys: MailKey[]
   keyList: { data: string; signature: string } | null
+  /** The last outside forwarding ended without this account's client: a key list turning encryption back on is owed. */
+  keyListOwed?: boolean
 }
 
 export const mailAddressesKey = ['mail-addresses'] as const
@@ -46,13 +54,18 @@ export const createMailKeyMutation = ['mail-keys', 'create'] as const
  * (`checkedAddresses`): a list the account did not sign, one for another
  * address, or one older than this device has seen is reported, not trusted;
  * a key row is the account's only when its public key has the fingerprints
- * a signed entry names.
+ * a signed entry names. An address whose last outside forwarding ended
+ * elsewhere gets its end-to-end encryption back first (`keyListOwed`).
  */
 export function useMailAddresses() {
   const session = useRequiredSession()
   return useQuery({
     queryKey: mailAddressesKey,
-    queryFn: async (): Promise<CheckedMailAddress[]> => checkedAddresses(session, (await api.get<MailAddress[]>('/mail/addresses')).data),
+    queryFn: async (): Promise<CheckedMailAddress[]> => {
+      let { data } = await api.get<MailAddress[]>('/mail/addresses')
+      if (await settleOwedKeyLists(session, data)) data = (await api.get<MailAddress[]>('/mail/addresses')).data
+      return checkedAddresses(session, data)
+    },
   })
 }
 
@@ -197,4 +210,24 @@ export async function exportKey(session: Session, address: string, key: MailKey,
     { masterKeyBase64: toBase64(session.masterKey), binding: session.envelopeBinding, address, envelope: key.privateKeyEnvelope, fingerprint: key.fingerprint },
     passphrase,
   )
+}
+
+/**
+ * Deletes a forwarding key: the forwarding it serves ends with it
+ * (docs/plans/mail-forwarding.md).
+ */
+export function useDeleteForwardingKey() {
+  return useKeyMutation(async (input: { address: CheckedMailAddress; key: MailKey }) => {
+    await api.delete(`/mail/addresses/${input.address.id}/forwarding-keys/${input.key.id}`)
+  })
+}
+
+/** The forwardings of the caller's addresses, as far as this page needs them. */
+export function useEndToEndForwardings() {
+  return useQuery({
+    queryKey: ['mail-keys', 'end-to-end-forwardings'],
+    queryFn: async () =>
+      (await api.get<{ outgoing: { forwarderAddress: string; kind: string; state: string }[] }>('/mail/forwardings')).data.outgoing,
+    select: (outgoing) => outgoing.filter((forwarding) => forwarding.kind === 'end_to_end' && forwarding.state !== 'rejected'),
+  })
 }

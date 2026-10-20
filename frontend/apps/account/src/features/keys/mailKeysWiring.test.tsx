@@ -42,6 +42,7 @@ const row = (key: typeof a, listed = true) => ({ ...key, id: key.fingerprint, pu
 const address = {
   id: 'address',
   address: 'alice@kutup.test',
+  state: 'active' as const,
   keys: [row({ ...a, primary: false }), row({ ...b, flags: 0 }), row({ fingerprint: 'cc', sha256Fingerprint: '03', primary: true, flags: 3 }, false)],
   keyList: { data: 'data', signature: 'signature' },
   verifiedList: { address: 'alice@kutup.test', sequence: 4, issuedAt: '2026-10-20T00:00:00Z', keys: [a, b], data: 'data', signature: 'signature', hash: 'current' },

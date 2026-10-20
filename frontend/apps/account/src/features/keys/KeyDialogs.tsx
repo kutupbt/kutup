@@ -26,7 +26,16 @@ function save(name: string, text: string) {
 }
 
 /** A new key for new mail; the others stay to open older mail. */
-export function NewKeyDialog({ address, onClose }: { address: CheckedMailAddress; onClose: () => void }) {
+export function NewKeyDialog({
+  address,
+  forwardsEndToEnd = false,
+  onClose,
+}: {
+  address: CheckedMailAddress
+  /** The address forwards end to end: a new primary key outdates those forwardings. */
+  forwardsEndToEnd?: boolean
+  onClose: () => void
+}) {
   const { t } = useTranslation()
   const create = useNewKey()
   return (
@@ -36,6 +45,7 @@ export function NewKeyDialog({ address, onClose }: { address: CheckedMailAddress
           <DialogTitle>{t('settings.keys.newTitle')}</DialogTitle>
           <DialogDescription>{t('settings.keys.newDescription')}</DialogDescription>
         </DialogHeader>
+        {forwardsEndToEnd ? <Alert>{t('settings.keys.outdatesForwardings')}</Alert> : null}
         {create.isError ? <Alert variant="error">{apiErrorMessage(create.error, t('settings.keys.changeFailed'))}</Alert> : null}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
@@ -61,7 +71,16 @@ export function NewKeyDialog({ address, onClose }: { address: CheckedMailAddress
 }
 
 /** Imports a key from an OpenPGP secret key file (Kutup's export, Proton's or GnuPG's). */
-export function ImportKeyDialog({ address, onClose }: { address: CheckedMailAddress; onClose: () => void }) {
+export function ImportKeyDialog({
+  address,
+  forwardsEndToEnd = false,
+  onClose,
+}: {
+  address: CheckedMailAddress
+  /** The address forwards end to end: a new primary key outdates those forwardings. */
+  forwardsEndToEnd?: boolean
+  onClose: () => void
+}) {
   const { t } = useTranslation()
   const importKey = useImportKey()
   const [file, setFile] = useState<File | null>(null)
@@ -128,6 +147,7 @@ export function ImportKeyDialog({ address, onClose }: { address: CheckedMailAddr
             <Checkbox checked={primary} onCheckedChange={(on) => setPrimary(on === true)} className="mt-0.5" />
             <span>{t('settings.keys.importPrimary')}</span>
           </label>
+          {primary && forwardsEndToEnd ? <Alert>{t('settings.keys.outdatesForwardings')}</Alert> : null}
           {problem ? <Alert variant="error">{problem}</Alert> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>

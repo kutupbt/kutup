@@ -82,6 +82,13 @@ export interface AddressKeys {
   primary: string
   /** Every key the newest list trusts for signatures (not marked compromised), primary first. */
   all: string[]
+  /**
+   * The owner's newest list says not to encrypt to the address
+   * (`EMAIL_NO_ENCRYPT` on its primary: it forwards outside Kutup). Mail to
+   * it goes readable and is sealed zero-access when it arrives, so the
+   * server can forward it (Proton's `encryptionDisabled`).
+   */
+  encryptionDisabled: boolean
 }
 
 /** The address is not a Kutup address (or has no key yet). */
@@ -296,6 +303,7 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
     primary: primary.publicKey,
     // A key its owner marked compromised no longer vouches for anything.
     all: [primary, ...kept.filter((k) => k !== primary)].filter((k) => k.flags & MAIL_KEY_FLAGS.notCompromised).map((k) => k.publicKey),
+    encryptionDisabled: (primary.flags & MAIL_KEY_FLAGS.emailNoEncrypt) !== 0,
   }
 }
 
@@ -374,5 +382,8 @@ export async function groupMembers(address: string): Promise<AddressKeys[]> {
     if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
-  return Promise.all(members.map(async (member) => pinned(await verified(member.address, member))))
+  // Each held to what this device has seen, as a lookup is: a replayed older
+  // list (one without EMAIL_NO_ENCRYPT, or with it) never decides how a
+  // member's mail goes.
+  return Promise.all(members.map(async (member) => pinned(await notRolledBack(member.address, await verified(member.address, member)))))
 }
