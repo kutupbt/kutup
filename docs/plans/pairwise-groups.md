@@ -1417,6 +1417,10 @@ title.
 - Announcements-only: only administrators send; other members' messages are
   refused on receipt, as in Signal.
 
+- **Limits are site settings**, admin-editable as every Kutup limit (the
+  user's standing rule), never constants: the largest avatar, the avatar
+  storage per group, and the link-join and request budget per relay server.
+
 **Server parts** (the second session, agreed 2026-10-20):
 - the avatar operations and their storage (above);
 - `GetAvatar` under the link proof;
