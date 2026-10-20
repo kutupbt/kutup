@@ -62,6 +62,8 @@ export interface ChatSnapshot extends ChatData {
   /** This account's own requests through group links. */
   ownJoinRequests: OwnJoinRequest[]
   backup: ChatBackupView | null
+  /** The account's contact list is full: changes (a block too) wait to be written. */
+  contactListFull: boolean
 }
 
 export interface ChatState {
@@ -100,6 +102,7 @@ const emptySnapshot: ChatSnapshot = {
   joinRequests: [],
   ownJoinRequests: [],
   backup: null,
+  contactListFull: false,
 }
 
 const initial: ChatState = {
@@ -189,6 +192,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         mlsGroups ? orPrevious(service.pendingGroupOwnerApprovals(), previous.ownerApprovals) : Promise.resolve([]),
         pairwise ? orPrevious(service.chatGroups(), previous.chatGroups) : Promise.resolve([]),
       ])
+    const contactListFull = await service.contactListFull().catch(() => previous.contactListFull)
     if (mine !== generation || state.service !== service) return
     set({
       snapshot: {
@@ -205,6 +209,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         joinRequests: service.groupJoinRequests(),
         ownJoinRequests: service.ownJoinRequests(),
         backup: service.backupStatus(),
+        contactListFull,
       },
       loaded: true,
       stale: false,

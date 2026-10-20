@@ -7,6 +7,10 @@
     "description": "Adres yanlış yazılmış ya da sayfa taşınmış olabilir."
   },
   "chat": {
+    "contactListFull": {
+      "title": "Kişi listeniz dolu",
+      "body": "Bir engelleme dahil son değişiklikleriniz bu cihazda geçerli, ancak henüz hesabınıza kaydedilmedi; yeni bir cihazda olmazlar. Artık engellemeniz gerekmeyen kişilerin engelini kaldırmak yer açar."
+    },
     "attachments": {
       "unavailableUntilAccepted": "Dosya, sesli mesaj ve çıkartma, {{name}} mesaj isteğinizi kabul ettiğinde gönderilebilir.",
       "unavailableOnServer": "Bu sunucu mühürlü gönderim sunmuyor; dosya, sesli mesaj ve çıkartma yalnızca Kendime Not'a ve gruplara gönderilebilir.",

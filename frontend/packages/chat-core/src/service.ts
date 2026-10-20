@@ -1594,6 +1594,31 @@ export class ChatService {
     ])
   }
 
+  /**
+   * Before this browser signs out: the account's contact list gets the
+   * changes still waiting for their delayed write
+   * (docs/plans/chat-contacts-sync.md). Best effort, at most `waitMs`.
+   */
+  async flushContactList(waitMs = 3000): Promise<void> {
+    const client = this.client
+    if (!client.flushContactList) return
+    await Promise.race([
+      this.withLock(() => client.flushContactList!()).catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, waitMs)),
+    ])
+  }
+
+  /**
+   * Whether the account's contact list is full with nothing it may evict: a
+   * change (a block too) holds on this device but waits to be written, and
+   * the person is told.
+   */
+  async contactListFull(): Promise<boolean> {
+    const client = this.client
+    if (!client.contactListFull) return false
+    return await this.withLock(() => Promise.resolve(client.contactListFull!()))
+  }
+
   async leaveChatGroup(groupId: string): Promise<void> {
     await this.groupChange((client) => client.leaveGroup(groupId))
   }

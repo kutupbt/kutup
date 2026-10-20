@@ -364,6 +364,36 @@ extern "C" {
         this: &JsChatTransport,
         write: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
+
+    /// The account's Chat contact list, as the verified account head lists
+    /// it: `[{id, revision, envelope}]`.
+    #[wasm_bindgen(method, catch, js_name = fetchContactList)]
+    async fn js_fetch_contact_list(this: &JsChatTransport)
+        -> std::result::Result<JsValue, JsValue>;
+
+    /// One contact list entry with the next account head (`{id,
+    /// baseRevision, revision, envelope}`): `"stored"`, `"conflict"` or
+    /// `"full"`.
+    #[wasm_bindgen(method, catch, js_name = storeContactEntry)]
+    async fn js_store_contact_entry(
+        this: &JsChatTransport,
+        write: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// Removes one contact list entry (`{id, baseRevision}`): `false` when
+    /// another device changed it first.
+    #[wasm_bindgen(method, catch, js_name = deleteContactEntry)]
+    async fn js_delete_contact_entry(
+        this: &JsChatTransport,
+        write: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContactEntryDelete<'a> {
+    id: &'a str,
+    base_revision: u64,
 }
 
 #[derive(Serialize)]
@@ -467,6 +497,58 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_store_group_entry(to_transport(&write)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_contact_list(&self) -> Result<Vec<crate::transport::ContactListItem>> {
+        from_transport(
+            self.js
+                .js_fetch_contact_list()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn store_contact_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<crate::transport::ContactListWrite> {
+        use crate::transport::ContactListWrite;
+        let write = GroupEntryWrite {
+            id,
+            base_revision,
+            revision,
+            envelope,
+        };
+        let outcome: String = from_transport(
+            self.js
+                .js_store_contact_entry(to_transport(&write)?)
+                .await
+                .map_err(transport_error)?,
+        )?;
+        match outcome.as_str() {
+            "stored" => Ok(ContactListWrite::Stored),
+            "conflict" => Ok(ContactListWrite::Conflict),
+            "full" => Ok(ContactListWrite::Full),
+            other => Err(ChatError::Transport(format!(
+                "unknown contact list answer {other}"
+            ))),
+        }
+    }
+
+    async fn delete_contact_entry(&self, id: &str, revision: u64) -> Result<bool> {
+        let write = ContactEntryDelete {
+            id,
+            base_revision: revision,
+        };
+        from_transport(
+            self.js
+                .js_delete_contact_entry(to_transport(&write)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -1153,6 +1235,16 @@ impl WasmChatClient {
         engine
             .enable_group_list(&master_key, &binding)
             .map_err(chat_error)?;
+        // The web writes a block at once (docs/plans/chat-contacts-sync.md).
+        engine
+            .enable_contact_list(
+                &master_key,
+                &binding,
+                crate::contact_list::ContactListTiming {
+                    block: crate::contact_list::BlockTiming::Immediate,
+                },
+            )
+            .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
             .sync_own_manifest(&authority, now_rfc3339())
@@ -1367,6 +1459,25 @@ impl WasmChatClient {
             .leave_group(&group_id, &mut rng)
             .await
             .map_err(chat_error)
+    }
+
+    /// Writes this device's due contact list entries now: before it signs
+    /// out or unlinks itself (docs/plans/chat-contacts-sync.md).
+    #[wasm_bindgen(js_name = flushContactList)]
+    pub async fn flush_contact_list(&mut self) -> std::result::Result<u32, JsValue> {
+        let report = self
+            .engine
+            .flush_contact_list(true)
+            .await
+            .map_err(chat_error)?;
+        Ok(u32::try_from(report.written).unwrap_or(u32::MAX))
+    }
+
+    /// Whether the account's contact list is full with nothing it may evict:
+    /// a change (a block too) waits, and the person must be told.
+    #[wasm_bindgen(js_name = contactListFull)]
+    pub fn contact_list_full(&self) -> bool {
+        self.engine.contact_list_full()
     }
 
     /// Writes this device's due group list entries now: before it signs out
@@ -3636,6 +3747,9 @@ impl WasmChatClient {
         // The account's group list, every so often: groups another device
         // joined or left (best effort).
         let _ = self.engine.sync_group_list_if_due(&mut rng).await;
+        // The account's contact list too: what another device changed, and
+        // this device's due writes (best effort).
+        let _ = self.engine.sync_contact_list_if_due().await;
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after

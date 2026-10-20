@@ -7,6 +7,10 @@
     "description": "The address may be mistyped, or the page may have moved."
   },
   "chat": {
+    "contactListFull": {
+      "title": "Your contact list is full",
+      "body": "Your latest changes, a block among them, work on this device but aren't saved to your account yet, so a new device wouldn't have them. Unblocking people you no longer need to block makes room."
+    },
     "attachments": {
       "unavailableUntilAccepted": "Files, voice messages and stickers can be sent once {{name}} has accepted your message request.",
       "unavailableOnServer": "This server does not offer sealed delivery, so files, voice messages and stickers can be sent only to Note to Self and to groups.",
