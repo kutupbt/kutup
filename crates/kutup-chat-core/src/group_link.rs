@@ -298,6 +298,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<GroupLinkJoin> {
         let (link, mut record) = self.link_record(fragment).await?;
+        let previous = self.session.db().load_group(&record.group_id).await?;
         let info = match self.link_join_info(&mut record, &link).await? {
             Ok(Some(info)) => info,
             Ok(None) => return Ok(GroupLinkJoin::LinkInvalid),
@@ -310,9 +311,11 @@ impl Engine {
         };
         let me = self.session.account_ref().clone();
         let profile_key = self.own_profile_key().await?;
-        // Saved first, so a reload never goes back to an epoch it used.
+        // Saved first, so a reload never goes back to an epoch it used. Its
+        // status says "asking" until the home answers: when the answer
+        // never comes (unreachable), the request's status settles it.
         self.save_group(&record).await?;
-        loop {
+        let refused = loop {
             let change = group::link_change(
                 &mut record,
                 &basis,
@@ -336,14 +339,29 @@ impl Engine {
                 // The password no longer holds (reset meanwhile), or the
                 // access changed: the link is no longer this one.
                 Ok(response) if response.status == GroupResponseStatusV1::NotFound => {
-                    return Ok(GroupLinkJoin::LinkInvalid)
+                    break Some(Ok(GroupLinkJoin::LinkInvalid));
                 }
                 Ok(response) if response.status != GroupResponseStatusV1::Ok => {
-                    accepted_body(response)?;
+                    if let Err(error) = accepted_body(response) {
+                        break Some(Err(error));
+                    }
                 }
-                Ok(_) => break,
+                Ok(_) => break None,
                 Err(failure) => return Ok(GroupLinkJoin::Unreachable(failure)),
             }
+        };
+        // Refused for good: nothing was taken, so nothing is pending. What
+        // was here before comes back; without it, the record stays as
+        // `gone`, keeping the epoch it used.
+        if let Some(outcome) = refused {
+            match previous {
+                Some(previous) => self.save_group(&previous).await?,
+                None => {
+                    record.status = GroupStatus::Gone;
+                    self.save_group(&record).await?;
+                }
+            }
+            return outcome;
         }
         if approval {
             record.status = GroupStatus::Requesting;

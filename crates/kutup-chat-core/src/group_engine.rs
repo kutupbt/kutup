@@ -504,6 +504,9 @@ impl Engine {
             .map(|(state, _)| state);
         let next_revision = before.as_ref().map(|state| state.revision + 1);
         if next_revision != Some(change.revision) {
+            if !self.may_nudge(&removal.group_id) {
+                return Ok(());
+            }
             let sync = self.sync_group(&removal.group_id).await?;
             self.list_after(&removal.group_id, &sync).await;
             return Ok(());

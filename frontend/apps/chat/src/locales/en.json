@@ -652,7 +652,10 @@
       "removePicture": "Remove picture",
       "pictureSaved": "Group picture changed.",
       "pictureRemoved": "Group picture removed.",
-      "pictureUnreadable": "That picture couldn't be read. Try a PNG, JPEG or WebP image."
+      "pictureUnreadable": "That picture couldn't be read. Try a PNG, JPEG or WebP image.",
+      "claimsToBe": "Says they are {{name}} (unverified)",
+      "requestUnconfirmed": "Their account can't be checked right now. Try again later.",
+      "banListUnreadable": "This group's ban list can't be read on this device. Bans can't be shown or changed until it can; ask another administrator to check it."
     },
     "groupInvitations": {
       "title_one": "{{count}} group invitation",

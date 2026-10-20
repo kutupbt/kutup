@@ -95,16 +95,20 @@ impl GroupInviteLinkV1 {
             return Err("an invite link of another version".into());
         }
         let mut at = 1;
+        // Held wiped-on-drop until the link holds them (and wipes them in
+        // turn): no copy of the key or the password is left behind, also
+        // when the link turns out not to read.
+        let mut master_key = zeroize::Zeroizing::new([0u8; MASTER_KEY_LEN]);
+        master_key.copy_from_slice(&bytes[at..at + MASTER_KEY_LEN]);
+        at += MASTER_KEY_LEN;
+        let mut password = zeroize::Zeroizing::new([0u8; INVITE_LINK_PASSWORD_LEN]);
+        password.copy_from_slice(&bytes[at..at + INVITE_LINK_PASSWORD_LEN]);
+        at += INVITE_LINK_PASSWORD_LEN;
         let mut take = |len: usize| {
             let part = &bytes[at..at + len];
             at += len;
             part.to_vec()
         };
-        let master_key: [u8; MASTER_KEY_LEN] =
-            take(MASTER_KEY_LEN).try_into().map_err(|_| invalid())?;
-        let password: [u8; INVITE_LINK_PASSWORD_LEN] = take(INVITE_LINK_PASSWORD_LEN)
-            .try_into()
-            .map_err(|_| invalid())?;
         let identity_sequence = u64::from_be_bytes(take(8).try_into().map_err(|_| invalid())?);
         let identity_document_hash = bytes_to_hex(&take(HASH_LEN));
         let server = String::from_utf8(bytes[at..].to_vec()).map_err(|_| invalid())?;
@@ -116,8 +120,8 @@ impl GroupInviteLinkV1 {
         };
         validate_home(&home)?;
         Ok(Self {
-            master_key,
-            password,
+            master_key: *master_key,
+            password: *password,
             home,
         })
     }

@@ -1250,12 +1250,55 @@ pub struct GroupRequesterView {
     /// Who asks, when the entry opened and its binding verified; `None` for
     /// one that didn't (approving it gives an unverified member).
     pub verified: Option<VerifiedMember>,
+    /// The account the entry names, verified or not: what a ban is checked
+    /// against, since anyone can make their own binding fail.
+    pub claimed: Option<AccountRef>,
+    /// The claimed account's manifest couldn't be fetched now: whether its
+    /// binding holds isn't known yet.
+    pub unconfirmed: bool,
+}
+
+/// The account each member's and requester's entry names, by pseudonym,
+/// without checking bindings: what bans are checked against.
+pub fn claimed_accounts(
+    record: &GroupRecordV1,
+) -> Result<std::collections::BTreeMap<String, AccountRef>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(Default::default());
+    };
+    let key = record.master()?.state_key();
+    Ok(state
+        .members
+        .iter()
+        .map(|member| (&member.pseudonym, &member.entry))
+        .chain(state.requesting.iter().map(|r| (&r.pseudonym, &r.entry)))
+        .filter_map(|(pseudonym, entry)| {
+            claimed_account(&key, pseudonym, entry).map(|account| (pseudonym.clone(), account))
+        })
+        .collect())
+}
+
+/// The account a sealed entry names, without checking its binding.
+pub(crate) fn claimed_account(
+    key: &GroupStateKey,
+    pseudonym: &str,
+    entry: &str,
+) -> Option<AccountRef> {
+    let pseudonym = decode_exact::<32>("pseudonym", pseudonym).ok()?;
+    let sealed = base64_decode(entry).ok()?;
+    let plain = key
+        .open(SealedField::MemberEntry, &pseudonym, &sealed)
+        .ok()?;
+    GroupMemberEntryV1::from_canonical_bytes(&plain)
+        .ok()
+        .map(|entry| entry.account)
 }
 
 /// The requests to join, each binding checked as a member's is.
 pub fn requesters(
     record: &GroupRecordV1,
     authority_of: &AuthorityOf<'_>,
+    unconfirmed: &[AccountRef],
 ) -> Result<Vec<GroupRequesterView>, GroupError> {
     let Some((state, _)) = record.verified()? else {
         return Ok(Vec::new());
@@ -1265,18 +1308,61 @@ pub fn requesters(
     Ok(state
         .requesting
         .iter()
-        .map(|request| GroupRequesterView {
-            pseudonym: request.pseudonym.clone(),
-            requested_at_revision: request.requested_at_revision,
-            verified: open_member(
-                &key,
-                &group_id,
-                &request.pseudonym,
-                &request.entry,
-                authority_of,
-            ),
+        .map(|request| {
+            let claimed = claimed_account(&key, &request.pseudonym, &request.entry);
+            GroupRequesterView {
+                pseudonym: request.pseudonym.clone(),
+                requested_at_revision: request.requested_at_revision,
+                verified: open_member(
+                    &key,
+                    &group_id,
+                    &request.pseudonym,
+                    &request.entry,
+                    authority_of,
+                ),
+                unconfirmed: claimed
+                    .as_ref()
+                    .is_some_and(|account| unconfirmed.contains(account)),
+                claimed,
+            }
         })
         .collect())
+}
+
+/// The ban list's plaintext is padded before sealing (a 0x80 marker, then
+/// zeros) to one of these sizes, the last filling the sealed cap: what the
+/// home sees says roughly how long the list is, not how many are on it.
+fn ban_list_buckets() -> [usize; 4] {
+    let cap = kutup_chat_proto::group::MAX_SEALED_BAN_LIST_BYTES
+        - kutup_crypto::chat_group::sealed_len(0);
+    [1024, 4096, 12 * 1024, cap]
+}
+
+/// `plain` padded to its bucket; `None` when it doesn't fit the largest.
+fn pad_ban_list(plain: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    let bucket = ban_list_buckets()
+        .into_iter()
+        .find(|bucket| plain.len() < *bucket)?;
+    let mut padded = Zeroizing::new(Vec::with_capacity(bucket));
+    padded.extend_from_slice(plain);
+    padded.push(0x80);
+    padded.resize(bucket, 0);
+    Some(padded)
+}
+
+/// A ban list's opened plaintext, unpadded and read.
+pub(crate) fn read_ban_list(padded: &[u8]) -> Result<GroupBanListV1, GroupError> {
+    if !ban_list_buckets().contains(&padded.len()) {
+        return Err(GroupError::Sealed(
+            "a ban list is padded to a bucket".into(),
+        ));
+    }
+    let end = padded
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .filter(|at| padded[*at] == 0x80)
+        .ok_or_else(|| GroupError::Sealed("a ban list's padding is malformed".into()))?;
+    GroupBanListV1::from_canonical_bytes(&padded[..end]).map_err(GroupError::Sealed)
 }
 
 /// The sealed ban list of the last verified state, opened; empty when there
@@ -1297,7 +1383,7 @@ pub fn ban_list(record: &GroupRecordV1) -> Result<GroupBanListV1, GroupError> {
     let plain = key
         .open(SealedField::BanList, b"", &base64_decode(sealed)?)
         .map_err(|error| GroupError::Sealed(error.to_string()))?;
-    GroupBanListV1::from_canonical_bytes(&plain).map_err(GroupError::Sealed)
+    read_ban_list(&plain)
 }
 
 /// Whether `list` has no room for one more account (the longest an account
@@ -1321,10 +1407,8 @@ pub fn ban_list_full(list: &GroupBanListV1) -> bool {
         return false;
     }
     next.ban(&account, Some(&encode(&[0xff; 32])));
-    next.canonical_bytes().map_or(true, |bytes| {
-        kutup_crypto::chat_group::sealed_len(bytes.len())
-            > kutup_chat_proto::group::MAX_SEALED_BAN_LIST_BYTES
-    })
+    next.canonical_bytes()
+        .map_or(true, |bytes| pad_ban_list(&bytes).is_none())
 }
 
 /// Seals a ban list for a `ModifyBanList` action: `None` when it is empty.
@@ -1336,11 +1420,7 @@ pub fn seal_ban_list(
         return Ok(None);
     }
     let plain = Zeroizing::new(list.canonical_bytes().map_err(record_error)?);
-    if kutup_crypto::chat_group::sealed_len(plain.len())
-        > kutup_chat_proto::group::MAX_SEALED_BAN_LIST_BYTES
-    {
-        return Err(GroupError::Change(GroupChangeError::LimitReached));
-    }
+    let plain = pad_ban_list(&plain).ok_or(GroupError::Change(GroupChangeError::LimitReached))?;
     let key = record.master()?.state_key();
     Ok(Some(encode(
         &key.seal(SealedField::BanList, b"", &plain)

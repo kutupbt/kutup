@@ -58,6 +58,7 @@ function settings(over: Partial<Details> = {}): Details {
     bans: [],
     bannedMembers: [],
     banListFull: false,
+    banListUnreadable: false,
     hasAvatar: false,
     ...over,
   }
@@ -141,8 +142,8 @@ describe('a pairwise group’s members', () => {
     members = Promise.resolve([member(SELF, true, 'p-self'), member(BOB, false, 'p-bob')])
     details = settings({
       requests: [
-        { pseudonym: 'p-carol', requestedAtRevision: 4, account: CAROL, banned: false },
-        { pseudonym: 'p-dave', requestedAtRevision: 5, account: null, banned: true },
+        { pseudonym: 'p-carol', requestedAtRevision: 4, account: CAROL, banned: false, claimed: CAROL, unconfirmed: false },
+        { pseudonym: 'p-dave', requestedAtRevision: 5, account: null, banned: true, claimed: null, unconfirmed: false },
       ],
     })
     render(<ChatGroupDetails group={group()} />)

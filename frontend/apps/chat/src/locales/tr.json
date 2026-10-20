@@ -652,7 +652,10 @@
       "removePicture": "Resmi kaldır",
       "pictureSaved": "Grup resmi değiştirildi.",
       "pictureRemoved": "Grup resmi kaldırıldı.",
-      "pictureUnreadable": "Bu resim okunamadı. PNG, JPEG ya da WebP bir resim deneyin."
+      "pictureUnreadable": "Bu resim okunamadı. PNG, JPEG ya da WebP bir resim deneyin.",
+      "claimsToBe": "Kendini {{name}} olarak tanıtıyor (doğrulanmadı)",
+      "requestUnconfirmed": "Hesabı şu anda kontrol edilemiyor. Daha sonra yeniden deneyin.",
+      "banListUnreadable": "Bu grubun yasak listesi bu cihazda okunamıyor. Okunabilene kadar yasaklar gösterilemez ya da değiştirilemez; başka bir yöneticiden kontrol etmesini isteyin."
     },
     "groupInvitations": {
       "title_one": "{{count}} grup daveti",

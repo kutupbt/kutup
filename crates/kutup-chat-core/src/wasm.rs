@@ -1254,6 +1254,10 @@ struct GroupRequestWasmView {
     account: Option<String>,
     /// Its account is banned: it can't be approved.
     banned: bool,
+    /// The account the entry names, verified or not.
+    claimed: Option<String>,
+    /// That account can't be checked now: not approvable yet.
+    unconfirmed: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1281,6 +1285,7 @@ struct GroupDetailsView {
     banned_members: Vec<String>,
     /// No room on the ban list for another account: bans hold by pseudonym.
     ban_list_full: bool,
+    ban_list_unreadable: bool,
     has_avatar: bool,
 }
 
@@ -1307,6 +1312,8 @@ impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
                         .verified
                         .map(|verified| verified.account.to_string()),
                     banned: request.banned,
+                    claimed: request.requester.claimed.map(|account| account.to_string()),
+                    unconfirmed: request.requester.unconfirmed,
                 })
                 .collect(),
             bans: details
@@ -1319,6 +1326,7 @@ impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
                 .collect(),
             banned_members: details.banned_members,
             ban_list_full: details.ban_list_full,
+            ban_list_unreadable: details.ban_list_unreadable,
             has_avatar: details.has_avatar,
         }
     }

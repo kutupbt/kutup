@@ -542,8 +542,23 @@ impl Engine {
             .ok()
             .flatten()
             .is_some_and(|record| record.status == GroupStatus::Requesting);
-        if requesting {
+        if requesting && self.may_nudge(group_id) {
             let _ = self.check_group_request(group_id).await;
+        }
+    }
+
+    /// Whether arriving content may make this device ask the home about
+    /// `group_id` now: once a minute per group, so a stream of content (or
+    /// of forged removals) costs the home one request a minute at most.
+    pub(crate) fn may_nudge(&mut self, group_id: &str) -> bool {
+        const NUDGE_GAP_MS: i64 = 60_000;
+        let now = self.now_ms();
+        match self.group_nudges.get(group_id) {
+            Some(at) if now.saturating_sub(*at) < NUDGE_GAP_MS => false,
+            _ => {
+                self.group_nudges.insert(group_id.to_string(), now);
+                true
+            }
         }
     }
 
@@ -648,7 +663,10 @@ impl Engine {
             return self.take_group_invite(invite, &sender).await;
         }
         if let Some(removal) = content.as_group_removal() {
-            self.take_group_removal(removal).await?;
+            // Nothing from a blocked account is acted on, a removal neither.
+            if !self.is_blocked(&sender).await? {
+                self.take_group_removal(removal).await?;
+            }
             return Ok(GroupContentOutcome::Ignored);
         }
         if let Some(control) = content.as_session_control() {

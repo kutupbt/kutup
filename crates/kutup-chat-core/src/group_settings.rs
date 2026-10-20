@@ -56,6 +56,8 @@ pub struct GroupDetails {
     /// denial now holds for the person's pseudonym only, until a ban is
     /// lifted.
     pub ban_list_full: bool,
+    /// The sealed ban list doesn't open: bans can't be read or changed.
+    pub ban_list_unreadable: bool,
     /// The group has an avatar.
     pub has_avatar: bool,
 }
@@ -97,16 +99,29 @@ impl Engine {
         let record = self.load_group_record(group_id).await?;
         let state = verified_state(&record)?;
         let me = record.pseudonym_text().map_err(group_error)?;
-        let bans = group::ban_list(&record).map_err(group_error)?;
+        // A list that won't open is said, not passed over: bans, denials and
+        // unbans are refused meanwhile (writing it again would lift every
+        // ban), but the rest of the group's settings still show.
+        let (bans, ban_list_unreadable) = match group::ban_list(&record) {
+            Ok(bans) => (bans, false),
+            Err(_) => (
+                kutup_chat_proto::group::GroupBanListV1 {
+                    version: kutup_chat_proto::group::GROUP_FORMAT_VERSION,
+                    banned: Vec::new(),
+                },
+                true,
+            ),
+        };
         let requests = self.checked_requesters(&record).await?;
         let (members, _) = self.group_members_checked(group_id).await?;
+        // By the account each entry names, verified or not.
+        let claims = group::claimed_accounts(&record).map_err(group_error)?;
         let banned_members = members
             .iter()
             .filter(|member| {
-                member
-                    .verified
-                    .as_ref()
-                    .is_some_and(|verified| bans.get(&verified.account).is_some())
+                claims
+                    .get(&member.pseudonym)
+                    .is_some_and(|account| bans.get(account).is_some())
             })
             .map(|member| member.pseudonym.clone())
             .collect();
@@ -124,13 +139,14 @@ impl Engine {
                 .into_iter()
                 .map(|requester| GroupRequestView {
                     banned: requester
-                        .verified
+                        .claimed
                         .as_ref()
-                        .is_some_and(|verified| bans.get(&verified.account).is_some()),
+                        .is_some_and(|account| bans.get(account).is_some()),
                     requester,
                 })
                 .collect(),
-            ban_list_full: group::ban_list_full(&bans),
+            ban_list_full: !ban_list_unreadable && group::ban_list_full(&bans),
+            ban_list_unreadable,
             has_avatar: state.attributes.avatar.is_some(),
             bans: ban_views(&state, &bans),
             banned_members,
@@ -142,9 +158,13 @@ impl Engine {
         record: &GroupRecordV1,
     ) -> Result<Vec<GroupRequesterView>> {
         let accounts = group::request_accounts(record).map_err(group_error)?;
-        let (keys, _, _) = self.authority_keys(&accounts, &[]).await?;
-        group::requesters(record, &|account: &AccountRef| keys.get(account).copied())
-            .map_err(group_error)
+        let (keys, unconfirmed, _) = self.authority_keys(&accounts, &[]).await?;
+        group::requesters(
+            record,
+            &|account: &AccountRef| keys.get(account).copied(),
+            &unconfirmed,
+        )
+        .map_err(group_error)
     }
 
     async fn requester(&mut self, group_id: &str, pseudonym: &str) -> Result<GroupRequesterView> {
@@ -260,9 +280,11 @@ impl Engine {
         .await
     }
 
-    /// Lets a requester in. A request whose binding names a banned account
-    /// is refused here: the home can't know accounts, so this is where the
-    /// ban holds.
+    /// Lets a requester in. The home can't know accounts, so a ban holds
+    /// here: a request whose entry names a banned account is refused,
+    /// whether or not its binding verifies (anyone can make theirs fail).
+    /// So is one whose entry names nobody, and one whose account can't be
+    /// checked now (asked again later).
     pub async fn approve_group_request<R: Rng + CryptoRng>(
         &mut self,
         group_id: &str,
@@ -272,13 +294,19 @@ impl Engine {
         let requester = self.requester(group_id, pseudonym).await?;
         let record = self.load_group_record(group_id).await?;
         let bans = group::ban_list(&record).map_err(group_error)?;
-        if requester
-            .verified
-            .as_ref()
-            .is_some_and(|verified| bans.get(&verified.account).is_some())
-        {
+        let Some(claimed) = &requester.claimed else {
+            return Err(ChatError::Invalid(
+                "this request doesn't say who is asking".into(),
+            ));
+        };
+        if bans.get(claimed).is_some() {
             return Err(ChatError::Invalid(
                 "this account is banned from the group".into(),
+            ));
+        }
+        if requester.unconfirmed {
+            return Err(ChatError::Transport(
+                "the requester's account can't be checked now; try again later".into(),
             ));
         }
         self.change_group(
@@ -292,7 +320,8 @@ impl Engine {
     }
 
     /// Turns a request down and bans its pseudonym from the link, as Signal
-    /// does; its account goes on the ban list when its binding verified.
+    /// does; the account its entry names goes on the ban list, verified or
+    /// not, so the same account can't come back unverified.
     pub async fn deny_group_request<R: Rng + CryptoRng>(
         &mut self,
         group_id: &str,
@@ -309,8 +338,8 @@ impl Engine {
                 pseudonym: pseudonym.to_string(),
             },
         ];
-        if let Some(verified) = &requester.verified {
-            actions.extend(banned_list_action(&record, &verified.account, pseudonym)?);
+        if let Some(claimed) = &requester.claimed {
+            actions.extend(banned_list_action(&record, claimed, pseudonym)?);
         }
         self.change_group(group_id, actions, rng).await
     }
@@ -326,15 +355,14 @@ impl Engine {
         reset_link: bool,
         rng: &mut R,
     ) -> Result<()> {
-        let account = self
-            .group_members(group_id)
-            .await?
-            .into_iter()
-            .find(|member| member.pseudonym == pseudonym)
-            .ok_or_else(|| ChatError::Invalid("no such member".into()))?
-            .verified
-            .map(|verified| verified.account);
         let record = self.load_group_record(group_id).await?;
+        if verified_state(&record)?.member(pseudonym).is_none() {
+            return Err(ChatError::Invalid("no such member".into()));
+        }
+        // The account its entry names, verified or not.
+        let account = group::claimed_accounts(&record)
+            .map_err(group_error)?
+            .remove(pseudonym);
         let state = verified_state(&record)?;
         let mut actions = vec![GroupActionV1::Ban {
             pseudonym: pseudonym.to_string(),
@@ -415,14 +443,15 @@ impl Engine {
         let record = self.load_group_record(group_id).await?;
         let me = record.pseudonym_text().map_err(group_error)?;
         let bans = group::ban_list(&record).map_err(group_error)?;
+        let claims = group::claimed_accounts(&record).map_err(group_error)?;
         let gone: Vec<String> = members
             .into_iter()
             .filter(|member| member.pseudonym != me && member.role != GroupRole::Administrator)
             .filter(|member| {
-                member
-                    .verified
-                    .as_ref()
-                    .is_none_or(|verified| bans.get(&verified.account).is_some())
+                member.verified.is_none()
+                    || claims
+                        .get(&member.pseudonym)
+                        .is_some_and(|account| bans.get(account).is_some())
             })
             .map(|member| member.pseudonym)
             .collect();

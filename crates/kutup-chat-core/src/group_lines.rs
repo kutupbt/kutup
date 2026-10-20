@@ -9,8 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kutup_chat_proto::group::{
-    AccessRequired, GroupActionV1, GroupAttribute, GroupBanListV1, GroupChangeV1, GroupRole,
-    GroupStateV1,
+    AccessRequired, GroupActionV1, GroupAttribute, GroupChangeV1, GroupRole, GroupStateV1,
 };
 use kutup_chat_proto::{GroupUpdateBody, GroupUpdateChange};
 use kutup_crypto::account_ref::AccountRef;
@@ -73,17 +72,18 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(text).ok()
 }
 
-fn ban_accounts(key: &GroupStateKey, state: &GroupStateV1) -> BTreeSet<AccountRef> {
+/// The banned accounts, each with its banned pseudonyms.
+fn ban_accounts(key: &GroupStateKey, state: &GroupStateV1) -> BTreeMap<AccountRef, Vec<String>> {
     state
         .ban_list
         .as_deref()
         .and_then(base64_decode)
         .and_then(|sealed| key.open(SealedField::BanList, b"", &sealed).ok())
-        .and_then(|plain| GroupBanListV1::from_canonical_bytes(&plain).ok())
+        .and_then(|plain| group::read_ban_list(&plain).ok())
         .map(|list| {
             list.banned
                 .into_iter()
-                .map(|banned| banned.account)
+                .map(|banned| (banned.account, banned.pseudonyms))
                 .collect()
         })
         .unwrap_or_default()
@@ -256,19 +256,30 @@ pub(crate) fn update_body(
     if revoked > 0 {
         changes.push(GroupUpdateChange::InvitationsRevoked { count: revoked });
     }
+    // A ban names an account only when one of its banned pseudonyms
+    // verifies as that account here: an administrator's list alone could
+    // name anyone.
+    let named = |member: &AccountRef, pseudonyms: &[String]| {
+        pseudonyms
+            .iter()
+            .any(|pseudonym| account(pseudonym).as_ref() == Some(member))
+    };
     let (was_banned, now_banned) = (ban_accounts(&key, before), ban_accounts(&key, after));
-    for member in now_banned.difference(&was_banned) {
+    for (member, pseudonyms) in &now_banned {
         // A denial bans too, and says so already.
-        if !denied.contains(member) {
+        if !was_banned.contains_key(member) && !denied.contains(member) && named(member, pseudonyms)
+        {
             changes.push(GroupUpdateChange::MemberBanned {
                 member: member.clone(),
             });
         }
     }
-    for member in was_banned.difference(&now_banned) {
-        changes.push(GroupUpdateChange::MemberUnbanned {
-            member: member.clone(),
-        });
+    for (member, pseudonyms) in &was_banned {
+        if !now_banned.contains_key(member) && named(member, pseudonyms) {
+            changes.push(GroupUpdateChange::MemberUnbanned {
+                member: member.clone(),
+            });
+        }
     }
     (!changes.is_empty()).then_some(GroupUpdateBody { actor, changes })
 }

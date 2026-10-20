@@ -213,6 +213,10 @@ pub struct Engine {
     pub(crate) manifest_keys_seen: BTreeMap<String, (i64, [u8; 32])>,
     /// Each group's catch-ups for incoming content (`group_gate`).
     pub(crate) group_catch_ups: BTreeMap<String, crate::group_gate::CatchUps>,
+    /// When arriving content last made this device ask the home about a
+    /// group on its own (a request's status, a removal it couldn't place):
+    /// at most once a minute per group, whatever arrives.
+    pub(crate) group_nudges: BTreeMap<String, i64>,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
@@ -338,6 +342,7 @@ impl Engine {
             group_members_seen: BTreeMap::new(),
             manifest_keys_seen: BTreeMap::new(),
             group_catch_ups: BTreeMap::new(),
+            group_nudges: BTreeMap::new(),
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
             asked_again: BTreeMap::new(),

@@ -6,6 +6,8 @@ describe('groupFailure', () => {
     expect((groupFailure(new Error('the group home refused the change: avatarTooLarge')) as ChatServiceError).code).toBe('groupAvatarTooLarge')
     expect((groupFailure(new Error('group change refused: notAllowed')) as ChatServiceError).code).toBe('groupNotAllowed')
     expect((groupFailure(new Error('the group home refused the change: somethingNew')) as ChatServiceError).code).toBe('groupRefused')
+    // Not an object's own keys: a code like "constructor" is just unknown.
+    expect((groupFailure(new Error('the group home refused the change: constructor')) as ChatServiceError).code).toBe('groupRefused')
     expect((groupFailure(new Error("the group's server can't be reached: Unreachable")) as ChatServiceError).code).toBe('groupUnreachable')
   })
 

@@ -437,6 +437,10 @@ export interface ChatGroupRequest {
   account?: string | null
   /** Their account is banned: it can't be approved. */
   banned: boolean
+  /** The account their entry names, verified or not. */
+  claimed?: string | null
+  /** That account can't be checked now: not approvable yet. */
+  unconfirmed: boolean
 }
 
 /** A ban: an account with its banned pseudonyms, or a lone pseudonym nobody verified. */
@@ -462,6 +466,8 @@ export interface ChatGroupDetails {
   bannedMembers: string[]
   /** No room on the ban list for another account: a ban or denial holds for the pseudonym only. */
   banListFull: boolean
+  /** The ban list doesn't open: bans can't be read or changed until it does. */
+  banListUnreadable: boolean
   hasAvatar: boolean
 }
 

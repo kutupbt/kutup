@@ -276,18 +276,26 @@ export function GroupRequestsSection({
       <p className="mb-2 text-xs text-muted-foreground">{t('chat.chatGroup.requestsHint')}</p>
       <ul className="space-y-1">
         {details.requests.map((request) => {
-          const name = request.account ? nameOf(request.account) : t('chat.chatGroup.unverifiedRequester')
+          const name = request.account
+            ? nameOf(request.account)
+            : request.claimed
+              ? t('chat.chatGroup.claimsToBe', { name: nameOf(request.claimed) })
+              : t('chat.chatGroup.unverifiedRequester')
           return (
             <li key={request.pseudonym} className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted" data-testid={`chat-group-request-${request.account ?? request.pseudonym}`}>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-sm font-medium" dir="auto">{name}</span>
                 {request.banned ? <span className="text-xs text-status-warn">{t('chat.chatGroup.bannedAccount')}</span> : null}
-                {!request.account ? <span className="text-xs text-status-warn">{t('chat.chatGroup.unverifiedHint')}</span> : null}
+                {request.unconfirmed ? (
+                  <span className="block text-xs text-muted-foreground">{t('chat.chatGroup.requestUnconfirmed')}</span>
+                ) : !request.account ? (
+                  <span className="text-xs text-status-warn">{t('chat.chatGroup.unverifiedHint')}</span>
+                ) : null}
               </span>
               <Button
                 size="icon"
                 variant="ghost"
-                disabled={busy || request.banned}
+                disabled={busy || request.banned || request.unconfirmed || !request.claimed}
                 aria-label={t('chat.chatGroup.approve', { name })}
                 onClick={() => void run(() => onApprove(request.pseudonym), t('chat.chatGroup.approved'))}
                 data-testid="chat-group-request-approve"
@@ -414,6 +422,15 @@ export function GroupBansSection({
   onUnban: (ban: ChatGroupBan) => Promise<void>
 }) {
   const { t } = useTranslation()
+  if (details.banListUnreadable) {
+    return (
+      <Section title={t('chat.chatGroup.bans', { count: 0 })} testId="chat-group-bans">
+        <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" role="alert" data-testid="chat-group-ban-list-unreadable">
+          {t('chat.chatGroup.banListUnreadable')}
+        </p>
+      </Section>
+    )
+  }
   if (details.bans.length === 0) return null
   return (
     <Section title={t('chat.chatGroup.bans', { count: details.bans.length })} testId="chat-group-bans">

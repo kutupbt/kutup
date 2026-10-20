@@ -157,6 +157,9 @@ pub(crate) struct World {
     pub(crate) every_pseudonym_used: Cell<bool>,
     /// The home calls the next this many newcomers' pseudonyms used.
     pub(crate) next_pseudonyms_used: Cell<usize>,
+    /// The home answers the next change "not found" (a link reset between
+    /// the join info and the join).
+    pub(crate) refuse_next_change: Cell<bool>,
     /// How many claims the home refused as a used pseudonym.
     pub(crate) pseudonyms_used: Cell<usize>,
     /// How many times a group list was read.
@@ -256,6 +259,7 @@ impl World {
             group_list_down: Cell::new(false),
             every_pseudonym_used: Cell::new(false),
             next_pseudonyms_used: Cell::new(0),
+            refuse_next_change: Cell::new(false),
             pseudonyms_used: Cell::new(0),
             list_reads: Cell::new(0),
             batch_answers: RefCell::new(Vec::new()),
@@ -790,6 +794,9 @@ impl World {
                     return Self::status(GroupResponseStatusV1::NotFound);
                 }
                 Self::current_avatar(group)
+            }
+            GroupOperationV1::SubmitChange if self.refuse_next_change.replace(false) => {
+                Self::status(GroupResponseStatusV1::NotFound)
             }
             GroupOperationV1::SubmitChange => {
                 let Some(change) = change() else {
@@ -4412,6 +4419,10 @@ fn group_link_reset_or_off_stops_the_old_link() {
         GroupLinkJoin::LinkInvalid
     );
     assert_eq!(world.group_changes.get(), changes);
+    // Nothing pending is left behind.
+    assert!(block_on(dave.engine.session().db().load_group(&group_id))
+        .unwrap()
+        .is_none_or(|record| record.status != GroupStatus::Requesting));
     // The new link works.
     let joined = block_on(
         dave.engine
@@ -5238,4 +5249,211 @@ fn group_avatar_is_read_back_by_members_and_shown_before_joining() {
         hosted.avatars.insert(hash, other);
     }
     assert!(block_on(bob.engine.group_avatar(&group_id)).is_err());
+}
+
+#[test]
+fn group_settings_a_ban_holds_for_an_unverified_request_too() {
+    use crate::group_link::GroupLinkMode;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let mut erin = world.person(0xe5);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+    // Dave is denied, so his account is banned.
+    block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    alice.sync(&group_id);
+    let first = details(&mut alice, &group_id).requests[0]
+        .requester
+        .pseudonym
+        .clone();
+    block_on(
+        alice
+            .engine
+            .deny_group_request(&group_id, &first, &mut rng()),
+    )
+    .unwrap();
+
+    // He asks again, with his account out of reach (so unverified): his
+    // entry still names him, and the ban still holds.
+    let mut record = block_on(dave.engine.load_group_record(&group_id)).unwrap();
+    record.status = GroupStatus::Gone;
+    block_on(dave.engine.save_group(&record)).unwrap();
+    block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    block_on(erin.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    forget_member_caches(&mut alice);
+    world
+        .manifests_down
+        .borrow_mut()
+        .insert(dave.account.clone());
+    world
+        .manifests_down
+        .borrow_mut()
+        .insert(erin.account.clone());
+    alice.sync(&group_id);
+    let seen = details(&mut alice, &group_id);
+    let request_of = |account: &str| {
+        seen.requests
+            .iter()
+            .find(|request| {
+                request
+                    .requester
+                    .claimed
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref()
+                    == Some(account)
+            })
+            .unwrap()
+            .clone()
+    };
+    let daves = request_of(&dave.account);
+    assert!(daves.requester.verified.is_none());
+    assert!(daves.banned);
+    assert!(block_on(alice.engine.approve_group_request(
+        &group_id,
+        &daves.requester.pseudonym,
+        &mut rng()
+    ))
+    .is_err());
+    // Erin isn't banned, but her account can't be checked now: not yet.
+    let erins = request_of(&erin.account);
+    assert!(erins.requester.unconfirmed && !erins.banned);
+    assert!(block_on(alice.engine.approve_group_request(
+        &group_id,
+        &erins.requester.pseudonym,
+        &mut rng()
+    ))
+    .is_err());
+    world.manifests_down.borrow_mut().clear();
+    block_on(
+        alice
+            .engine
+            .approve_group_request(&group_id, &erins.requester.pseudonym, &mut rng()),
+    )
+    .unwrap();
+}
+
+#[test]
+fn group_link_a_refused_join_leaves_an_invitation_as_it_was() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+    befriend(&mut alice, &mut dave);
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[dave.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    dave.receive();
+    assert!(matches!(
+        dave.status(&group_id),
+        GroupStatus::Invited { .. }
+    ));
+    // The link stops working between its join info and the join: refused,
+    // and his invitation stays.
+    world.refuse_next_change.set(true);
+    assert_eq!(
+        block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap(),
+        GroupLinkJoin::LinkInvalid
+    );
+    assert!(matches!(
+        dave.status(&group_id),
+        GroupStatus::Invited { .. }
+    ));
+    let joined = block_on(dave.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    assert!(matches!(joined, GroupSync::Current { .. }), "{joined:?}");
+}
+
+#[test]
+fn group_link_a_refused_join_leaves_nothing_pending() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+    world.refuse_next_change.set(true);
+    assert_eq!(
+        block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap(),
+        GroupLinkJoin::LinkInvalid
+    );
+    assert_eq!(dave.status(&group_id), GroupStatus::Gone);
+    // And a later join goes past the epoch it used.
+    let joined = block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    assert!(matches!(joined, GroupLinkJoin::Joined(_)), "{joined:?}");
+    let record = block_on(dave.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, 1);
+}
+
+#[test]
+fn group_removal_a_forged_or_misplaced_removal_is_not_taken() {
+    use kutup_chat_proto::group::{GroupActionV1, GroupChangeV1};
+    use kutup_chat_proto::group_route::GroupLogEntryV1;
+    use kutup_chat_proto::GroupRemovalBody;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    let carols = pseudonym_of(&mut alice, &group_id, &carol);
+    block_on(
+        alice
+            .engine
+            .remove_group_member(&group_id, &carols, &mut rng()),
+    )
+    .unwrap();
+    // The removal as the home logged it, and the entry before it.
+    let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
+    let (real, notary, earlier_notary) = {
+        let groups = world.groups.borrow();
+        let log = &groups[&group].log;
+        let (change, notary) = log.last().unwrap().clone();
+        (change, notary, log[log.len() - 2].1.clone())
+    };
+    let deliver = |carol: &mut Person,
+                   change: &GroupChangeV1,
+                   notary: &kutup_chat_proto::group_route::GroupNotaryV1| {
+        let body = GroupRemovalBody {
+            group_id: group_id.clone(),
+            entry: GroupLogEntryV1 {
+                change: STANDARD.encode(change.canonical_bytes().unwrap()),
+                notary: notary.clone(),
+            },
+        };
+        block_on(carol.engine.take_group_removal(body)).unwrap();
+    };
+
+    // Bob, not an administrator, signs the same removal as his own.
+    let bobs_record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let mut forged = real.clone();
+    forged.actor = bobs_record.pseudonym_text().unwrap();
+    forged.signature = String::new();
+    forged.signature = STANDARD.encode(
+        bobs_record
+            .pseudonym()
+            .unwrap()
+            .sign_change(&forged.signed_bytes().unwrap()),
+    );
+    assert!(matches!(
+        forged.actions[..],
+        [GroupActionV1::RemoveMember { .. }]
+    ));
+    deliver(&mut carol, &forged, &notary);
+    assert_eq!(carol.status(&group_id), GroupStatus::Member);
+    // The real change under another entry's notary.
+    deliver(&mut carol, &real, &earlier_notary);
+    assert_eq!(carol.status(&group_id), GroupStatus::Member);
+    // A change that doesn't follow the chain Carol holds.
+    let mut elsewhere = real.clone();
+    elsewhere.previous_hash = STANDARD.encode([9u8; 32]);
+    deliver(&mut carol, &elsewhere, &notary);
+    assert_eq!(carol.status(&group_id), GroupStatus::Member);
+    // The real one is taken.
+    deliver(&mut carol, &real, &notary);
+    assert_eq!(carol.status(&group_id), GroupStatus::Gone);
 }

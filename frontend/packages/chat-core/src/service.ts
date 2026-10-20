@@ -188,16 +188,16 @@ export type ChatServiceErrorCode =
   /** The group's home couldn't be reached. */
   | 'groupUnreachable'
 
-const GROUP_REFUSALS: Record<string, ChatServiceErrorCode> = {
-  notAllowed: 'groupNotAllowed',
-  lastAdministrator: 'groupLastAdministrator',
-  limitReached: 'groupLimitReached',
-  terminated: 'groupEnded',
-  banned: 'groupBanned',
-  avatarTooLarge: 'groupAvatarTooLarge',
-  avatarStorageFull: 'groupAvatarStorageFull',
-  avatarMissing: 'groupAvatarMissing',
-}
+const GROUP_REFUSALS: ReadonlyMap<string, ChatServiceErrorCode> = new Map([
+  ['notAllowed', 'groupNotAllowed'],
+  ['lastAdministrator', 'groupLastAdministrator'],
+  ['limitReached', 'groupLimitReached'],
+  ['terminated', 'groupEnded'],
+  ['banned', 'groupBanned'],
+  ['avatarTooLarge', 'groupAvatarTooLarge'],
+  ['avatarStorageFull', 'groupAvatarStorageFull'],
+  ['avatarMissing', 'groupAvatarMissing'],
+])
 
 /**
  * A failed group action, said as what it was: a refusal by its code (the
@@ -207,7 +207,7 @@ const GROUP_REFUSALS: Record<string, ChatServiceErrorCode> = {
 export function groupFailure(error: unknown): unknown {
   const message = error instanceof Error ? error.message : String(error)
   const refused = /refused(?: the change)?: (\w+)/.exec(message)
-  if (refused) return new ChatServiceError(GROUP_REFUSALS[refused[1]!] ?? 'groupRefused')
+  if (refused) return new ChatServiceError(GROUP_REFUSALS.get(refused[1]!) ?? 'groupRefused')
   if (message.includes("group's server can't be reached")) return new ChatServiceError('groupUnreachable')
   return error
 }
