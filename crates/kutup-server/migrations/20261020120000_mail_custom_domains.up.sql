@@ -32,11 +32,26 @@ CREATE TABLE mail_domains (
     failing_since timestamptz,
     warned_at timestamptz,
     stopped_at timestamptz,
+    -- A challenger's first check that found its code and not the holder's:
+    -- a transfer needs a second one at least an hour later.
+    transfer_seen_at timestamptz,
+    -- The Stalwart signature this domain signs with, and its key.
+    stalwart_signature_id text,
+    stalwart_signature_key text,
     UNIQUE (user_id, name)
 );
 -- One holder of a name at a time.
 CREATE UNIQUE INDEX mail_domains_held ON mail_domains (name) WHERE state IN (1, 2);
 CREATE INDEX mail_domains_checked ON mail_domains (checked_at) WHERE removed_at IS NULL;
+
+-- An administrator's limits for one account over the site's
+-- (mail_domains.* site settings); null keeps the site's.
+CREATE TABLE mail_domain_overrides (
+    user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    max_domains integer CHECK (max_domains BETWEEN 0 AND 100),
+    max_addresses integer CHECK (max_addresses BETWEEN 1 AND 1000),
+    catch_all boolean
+);
 
 -- Which domain an address is on; null is the server's own domain.
 ALTER TABLE mail_addresses ADD COLUMN domain_id uuid REFERENCES mail_domains(id);

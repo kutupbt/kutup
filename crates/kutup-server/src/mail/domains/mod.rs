@@ -14,3 +14,4 @@ pub mod policy;
 pub mod reconcile;
 pub mod stalwart;
 pub mod records;
+pub mod settings;
