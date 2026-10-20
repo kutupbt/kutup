@@ -44,6 +44,7 @@ pub mod asset;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
 pub mod chat_backup_media;
+pub mod chat_contact_list;
 pub mod chat_group;
 pub mod chat_group_list;
 pub mod chat_media;
