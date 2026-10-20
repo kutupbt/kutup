@@ -2001,6 +2001,8 @@ export interface WasmChatClientHandle {
   leaveGroup?(groupId: string): Promise<void>
   /** Writes the due group list entries now (before signing out); how many. */
   flushGroupList?(): Promise<number>
+  /** Writes the due group and contact list entries and follows other devices' changes (a timer of its own). */
+  syncAccountLists?(): Promise<void>
   /** Writes the due contact list entries now (before signing out); how many. */
   flushContactList?(): Promise<number>
   /** The contact list is full with nothing it may evict: changes (a block too) wait. */

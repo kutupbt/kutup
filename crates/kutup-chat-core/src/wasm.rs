@@ -1463,6 +1463,17 @@ impl WasmChatClient {
 
     /// Writes this device's due contact list entries now: before it signs
     /// out or unlinks itself (docs/plans/chat-contacts-sync.md).
+    /// The account's lists, on a timer of their own: a device with nothing
+    /// arriving still writes its due group and contact list entries, and
+    /// follows what other devices changed (best effort).
+    #[wasm_bindgen(js_name = syncAccountLists)]
+    pub async fn sync_account_lists(&mut self) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let _ = self.engine.sync_group_list_if_due(&mut rng).await;
+        let _ = self.engine.sync_contact_list_if_due().await;
+        Ok(())
+    }
+
     #[wasm_bindgen(js_name = flushContactList)]
     pub async fn flush_contact_list(&mut self) -> std::result::Result<u32, JsValue> {
         let report = self

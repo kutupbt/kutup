@@ -107,6 +107,12 @@ const LINKED_DEVICE_CHECK_MS = 2 * 60_000
  * and one that only polls.
  */
 const PREKEY_CHECK_MS = 60 * 60_000
+/**
+ * How often the account's lists get their due writes when nothing arrives
+ * (reconcile does it too, but only when something does): the writes wait a
+ * random 0–10 minutes, and a quiet device must still make them.
+ */
+const ACCOUNT_LISTS_MS = 60_000
 
 /**
  * `polling`: the live socket cannot be opened (a gateway that blocks
@@ -236,6 +242,7 @@ export class ChatService {
   private inviteTimer: ReturnType<typeof setInterval> | null = null
   private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private prekeyTimer: ReturnType<typeof setInterval> | null = null
+  private accountListsTimer: ReturnType<typeof setInterval> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -424,6 +431,7 @@ export class ChatService {
       requestPersistentStorage()
       void service.maintainPrekeys()
       service.startPrekeyChecks()
+      service.startAccountListSync()
       void service.connectSocket()
       service.startInviteLinks()
       service.startLinkedDeviceChecks()
@@ -1889,6 +1897,16 @@ export class ChatService {
     }, LINKED_DEVICE_CHECK_MS)
   }
 
+  private startAccountListSync(): void {
+    const client = this.client
+    if (this.accountListsTimer || !client.syncAccountLists) return
+    this.accountListsTimer = setInterval(() => {
+      if (this.disposed) return
+      void this.withLock(() => client.syncAccountLists!()).catch((error: unknown) =>
+        console.warn('chat: the account lists could not be synced', error))
+    }, ACCOUNT_LISTS_MS)
+  }
+
   private startPrekeyChecks(): void {
     if (this.prekeyTimer) return
     this.prekeyTimer = setInterval(() => {
@@ -1994,6 +2012,7 @@ export class ChatService {
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
+    if (this.accountListsTimer) clearInterval(this.accountListsTimer)
     this.engineLock.close()
     this.stopHeartbeat()
     this.socket?.close()
