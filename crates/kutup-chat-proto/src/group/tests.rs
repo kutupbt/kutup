@@ -308,6 +308,7 @@ fn signals_access_rules_decide_who_edits_and_adds() {
         vec![GroupActionV1::ModifyAttribute {
             attribute: GroupAttribute::Title,
             value: Some(title.clone()),
+            avatar_hash: None,
         }],
     );
     apply(&mut group, &edit);
@@ -341,6 +342,7 @@ fn signals_access_rules_decide_who_edits_and_adds() {
         GroupActionV1::ModifyAttribute {
             attribute: GroupAttribute::Title,
             value: None,
+            avatar_hash: None,
         },
         GroupActionV1::ModifyAccess {
             access: GroupAccessV1::DEFAULT,
@@ -760,6 +762,7 @@ fn oversized_sealed_attributes_are_refused() {
             vec![GroupActionV1::ModifyAttribute {
                 attribute,
                 value: Some(value),
+                avatar_hash: None,
             }],
         );
         assert!(matches!(
@@ -1004,4 +1007,18 @@ fn an_invitation_a_context_and_a_list_entry_carry_only_a_canonical_home() {
         assert!(context(home.clone()).validate().is_err(), "{home:?}");
         assert!(entry(home.clone()).validate().is_err(), "{home:?}");
     }
+}
+
+#[test]
+fn an_avatar_and_its_clear_hash_come_together() {
+    let hash = Some(encode(&[9u8; 32]));
+    let sealed = Some(encode(&[1u8; 64]));
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &sealed, &hash).is_ok());
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &None, &None).is_ok());
+    // One without the other, a hash of another length, a hash on the title.
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &sealed, &None).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &None, &hash).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &sealed, &Some(encode(&[9u8; 31]))).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Title, &sealed, &hash).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Title, &sealed, &None).is_ok());
 }
