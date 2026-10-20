@@ -48,7 +48,16 @@ stats_pid=$!
   done
 ) > "$results/postgres.csv" &
 pg_pid=$!
-trap 'kill "$stats_pid" "$pg_pid" 2>/dev/null || true' EXIT
+# The generator itself, so a run can show it was never the bottleneck:
+# its CPU (percent of one core) and memory.
+(
+  while true; do
+    ps -C kutup-loadtest -o %cpu=,rss= | awk -v t="$(date +%s)" '{print t","$1","$2}'
+    sleep 5
+  done
+) > "$results/generator.csv" &
+gen_pid=$!
+trap 'kill "$stats_pid" "$pg_pid" "$gen_pid" 2>/dev/null || true' EXIT
 
 status=0
 taskset -c "$gen_cpus" "$root_dir/crates/kutup-loadtest/target/release/kutup-loadtest" \
