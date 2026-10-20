@@ -17,3 +17,4 @@ pub mod records;
 pub mod settings;
 pub mod stalwart;
 pub mod store;
+pub mod sweep;

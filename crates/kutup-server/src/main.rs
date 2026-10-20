@@ -470,6 +470,7 @@ async fn main() -> anyhow::Result<()> {
     mail::outbox::spawn(state.clone());
     mail::snooze::spawn(state.clone());
     mail::forwarding::spawn(state.clone());
+    mail::domains::sweep::spawn(state.clone());
     mail::expiry::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a

@@ -98,6 +98,12 @@ pub struct Config {
     /// A backup MX the operator runs (`MAIL_BACKUP_MX`): a custom domain
     /// whose first MX is it counts as reaching us (Proton's `BACKUP`).
     pub mail_backup_mx: Option<String>,
+    /// Stalwart's management API for custom domains (`MAIL_STALWART_URL`)
+    /// and the scoped API key that may manage only domains and DKIM
+    /// signatures (`MAIL_STALWART_DOMAINS_TOKEN`). Without the key, custom
+    /// domains are off: Stalwart couldn't take their mail.
+    pub mail_stalwart_url: String,
+    pub mail_stalwart_domains_token: String,
     pub mail_folders_per_account: i64,
     /// `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS`: the first values of
     /// the name holds administrators set (`site_settings::name_holds`).
@@ -515,6 +521,8 @@ impl Config {
                     }
                 },
             },
+            mail_stalwart_url: get_env("MAIL_STALWART_URL", "http://stalwart:8080"),
+            mail_stalwart_domains_token: get_env("MAIL_STALWART_DOMAINS_TOKEN", ""),
             mail_backup_mx: Some(get_env("MAIL_BACKUP_MX", "").trim().to_ascii_lowercase())
                 .filter(|host| !host.is_empty()),
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
