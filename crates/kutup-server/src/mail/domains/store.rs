@@ -414,7 +414,8 @@ pub async fn set_catch_all(
     let row = row.ok_or_else(|| AppError::not_found("no such domain"))?;
     if let Some(address) = address {
         if !row.usable(settings) {
-            return Err(AppError::conflict("the domain isn't verified"));
+            return Err(AppError::conflict("the domain isn't verified")
+                .with_details(serde_json::json!({ "code": "domainNotVerified" })));
         }
         let fits: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM mail_addresses

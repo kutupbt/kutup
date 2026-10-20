@@ -109,6 +109,10 @@ pub struct CatchAll {
     pub address_id: Option<String>,
 }
 
+fn coded(error: AppError, code: &str) -> AppError {
+    error.with_details(serde_json::json!({ "code": code }))
+}
+
 /// Mail must be on (a mail host), or there are no domains to have.
 fn enabled(state: &AppState) -> AppResult<()> {
     if state.config.mail_hostname.is_empty() {
@@ -247,7 +251,7 @@ pub async fn add(
     enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let name = name::normalize(&input.name, &state.config.chat_server_name)
-        .map_err(|refusal| AppError::bad_request(refusal.code()))?;
+        .map_err(|refusal| coded(AppError::bad_request("not a domain to add"), refusal.code()))?;
     let mut settings = Settings::load(&state.pool)
         .await?
         .for_user(&state.pool, user_id)
@@ -258,8 +262,18 @@ pub async fn add(
     }
     let row = match store::add(&state.pool, user_id, &name, &settings).await? {
         Ok(row) => row,
-        Err(refusal @ store::AddRefusal::Off) => return Err(AppError::forbidden(refusal.code())),
-        Err(refusal) => return Err(AppError::conflict(refusal.code())),
+        Err(refusal @ store::AddRefusal::Off) => {
+            return Err(coded(
+                AppError::forbidden("custom domains are off here"),
+                refusal.code(),
+            ))
+        }
+        Err(refusal) => {
+            return Err(coded(
+                AppError::conflict("over a domain limit"),
+                refusal.code(),
+            ))
+        }
     };
     Ok((
         StatusCode::CREATED,
@@ -410,7 +424,7 @@ pub async fn create_address(
         Uuid::parse_str(&input.domain_id).map_err(|_| AppError::not_found("no such domain"))?;
     let local = input.local.trim().to_lowercase();
     kutup_crypto::mail_address::check_local(&local)
-        .map_err(|_| AppError::bad_request("invalidAddress"))?;
+        .map_err(|_| coded(AppError::bad_request("not an address"), "invalidAddress"))?;
     let settings = Settings::load(&state.pool)
         .await?
         .for_user(&state.pool, user_id)
@@ -430,10 +444,13 @@ pub async fn create_address(
     .await?;
     let domain = domain.ok_or_else(|| AppError::not_found("no such domain"))?;
     if !domain.usable(&settings) {
-        return Err(AppError::conflict("domainNotVerified"));
+        return Err(coded(
+            AppError::conflict("the domain isn't verified"),
+            "domainNotVerified",
+        ));
     }
     let address = kutup_crypto::mail_address::canonical(&format!("{local}@{}", domain.name))
-        .map_err(|_| AppError::bad_request("invalidAddress"))?;
+        .map_err(|_| coded(AppError::bad_request("not an address"), "invalidAddress"))?;
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM mail_addresses WHERE user_id = $1 AND state IN ('active', 'receiving')",
     )
@@ -441,7 +458,10 @@ pub async fn create_address(
     .fetch_one(&mut *tx)
     .await?;
     if count >= settings.addresses_per_account {
-        return Err(AppError::conflict("addressLimit"));
+        return Err(coded(
+            AppError::conflict("the account has all its addresses"),
+            "addressLimit",
+        ));
     }
     let id: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO mail_addresses (user_id, address, domain_id) VALUES ($1, $2, $3)
@@ -452,7 +472,7 @@ pub async fn create_address(
     .bind(domain_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let id = id.ok_or_else(|| AppError::conflict("addressTaken"))?;
+    let id = id.ok_or_else(|| coded(AppError::conflict("the address is taken"), "addressTaken"))?;
     tx.commit().await?;
     Ok((
         StatusCode::CREATED,
