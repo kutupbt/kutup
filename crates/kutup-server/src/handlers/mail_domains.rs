@@ -472,15 +472,33 @@ pub async fn create_address(
             "addressLimit",
         ));
     }
-    let id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO mail_addresses (user_id, address, domain_id) VALUES ($1, $2, $3)
-         ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
+    // One of the account's own addresses closed by an account reset comes
+    // back as it is (its mail with it), to take a new first key; any other
+    // is a new row.
+    let reopened: Option<Uuid> = sqlx::query_scalar(
+        "UPDATE mail_addresses SET state = 'active'
+          WHERE user_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
+          RETURNING id",
     )
     .bind(user_id)
-    .bind(&address)
     .bind(domain_id)
+    .bind(&address)
     .fetch_optional(&mut *tx)
     .await?;
+    let id: Option<Uuid> = match reopened {
+        Some(id) => Some(id),
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO mail_addresses (user_id, address, domain_id) VALUES ($1, $2, $3)
+                 ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
+            )
+            .bind(user_id)
+            .bind(&address)
+            .bind(domain_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+    };
     let id = id.ok_or_else(|| coded(AppError::conflict("the address is taken"), "addressTaken"))?;
     tx.commit().await?;
     Ok((
