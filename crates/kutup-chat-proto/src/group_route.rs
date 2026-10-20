@@ -27,6 +27,12 @@ pub const NONCE_MEMORY_SECS: i64 = 2 * MAX_CLOCK_SKEW_SECS;
 pub const MAX_KEY_CONFIG_LIFETIME_SECS: i64 = 7 * 24 * 60 * 60;
 /// How long the home keeps accepting a key after rotating to the next.
 pub const KEY_OVERLAP_SECS: i64 = 24 * 60 * 60;
+/// The home's refusal of a newcomer's claim, join or request whose pseudonym
+/// the group has seen before (as a member or a requester): valid in every
+/// other way, so the client
+/// derives the pseudonym of the next join epoch and tries again. Only the
+/// pseudonym's own signer ever gets it.
+pub const PSEUDONYM_USED: &str = "pseudonymUsed";
 
 const GROUP_ID_LEN: usize = 32;
 const NONCE_LEN: usize = 16;

@@ -453,10 +453,11 @@ to see members").**
     (the only device gone, and both list writes lost within their random
     delay) can rejoin at an epoch it used before. The group's home would then
     see a pseudonym it knew come back, linking the two memberships.
-    Planned follow-up (not in this change): the home keeps hashes of every
-    pseudonym the group has seen and, once a claim's proof passes, answers
-    `pseudonymUsed`; the client then retries at the next epoch, up to a cap,
-    and recovery tries as many epochs. This note stays until that lands.
+    The home closes it on its side: it refuses such a claim or join with
+    `pseudonymUsed` (§3, "A pseudonym comes back only once"). The client's
+    retry at the next epoch (up to 64, with recovery searching as many) is
+    the third session's follow-up; until it lands, such a device gets the
+    refusal instead of rejoining.
   - Without the account key the pseudonyms of one account in different
     groups or epochs are unrelated, so they can't be linked across groups.
     This holds as long as the account key is safe; a leaked key exposes the
@@ -587,6 +588,18 @@ to see members").**
 - **Requests from non-members** (a link's join info, a join request) carry a
   proof of the link password instead of a member signature. They are limited
   per group and per relay server, so a link holder can't flood the group.
+- **A pseudonym comes back only once.** The home keeps a hash of every
+  pseudonym the group has seen, as a member or a requester (the log is
+  pruned and the state forgets who left, so neither can answer it). A claim, a join from the
+  link or a request to join whose pseudonym is among them is refused with
+  `pseudonymUsed` (`group_route::PSEUDONYM_USED`), so the members never see a
+  pseudonym they knew come back after a device lost its join epoch.
+  - The home answers it only once the claim's or the link's proof holds and
+    the change passes every other check; the request is signed by that
+    pseudonym, so only its own holder hears it, and it is no membership oracle.
+  - The client derives the next join epoch's pseudonym and tries again, up to
+    64 epochs (recovery searches as many). The refusal spends neither the
+    relay's failure budget nor the group's change budget.
 - **Abuse limits without identity:**
   - **The relay** knows its signed-in user and limits how many requests each
     user may relay per minute, without seeing their contents.
