@@ -3375,6 +3375,17 @@ valid changes and proven link requests; failed requests spend a separate
 budget per relaying server (600/min). A stranger, a removed member, or a
 newcomer whose claim, link password or request doesn't hold gets the same
 `notFound` as an unknown group, never a conflict or a refusal code.
+Refusal codes besides the group checks' own (`kutup_chat_proto::group`):
+`malformed` (a body that doesn't parse), `wrongActor` (a change whose actor
+isn't the request's signer), `wrongGroup` (a genesis for another group),
+`serverFull`, and `pseudonymUsed`: a newcomer's claim, join from the link or
+request to join under a pseudonym the group has had before, as a member or
+a requester. The home answers `pseudonymUsed` only once the claim's or the
+link's proof holds and the change passes every other check, and only its own
+key holder can sign a request as that pseudonym, so nobody else learns it.
+It is the one refusal that spends neither the relaying server's failure
+budget nor the group's change budget: the client retries at its next join
+epoch (up to 64).
 
 ### GET /api/chat/group-list
 

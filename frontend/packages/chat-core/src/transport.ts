@@ -207,6 +207,61 @@ export class ApiChatTransport implements ChatTransportPort {
     return stored
   }
 
+  /**
+   * The account's group list (docs/plans/pairwise-groups.md §5), held to the
+   * account head like the pins: exactly the entries the verified index lists,
+   * each at its listed revision (the engine checks the sealed one against
+   * it). A list the head does not vouch for throws.
+   */
+  async fetchGroupList(): Promise<Array<{ id: string; revision: number; envelope: string }>> {
+    const head = await accountHead(signedIn())
+    // Two reads: a write landing between them is read again once.
+    for (let attempt = 0; ; attempt++) {
+      const index = await head.verifiedIndex('chatGroups')
+      const entries = await api
+        .get<{ entries: Array<{ id: string; revision: number; envelope: string }> }>('/chat/group-list')
+        .then((response) => response.data.entries)
+      try {
+        index.expectListing(entries.map((entry) => entry.id))
+        for (const entry of entries) index.expect(entry.id, entry.revision)
+        return entries
+      } catch (error) {
+        if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
+      }
+    }
+  }
+
+  /**
+   * Stores one entry of the group list with the next account head. `false`
+   * when the index lists another revision than `baseRevision` (another device
+   * wrote first; the engine reads the list again); a write whose answer was
+   * lost is found in the index and counts as stored.
+   */
+  async storeGroupEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<boolean> {
+    let stored = false
+    await (await accountHead(signedIn())).listedWrite('chatGroups', (index) => {
+      const listed = index.revision(write.id) ?? 0
+      if (listed === write.revision) {
+        stored = true
+        return Promise.resolve(null)
+      }
+      if (listed !== write.baseRevision) return Promise.resolve(null)
+      return Promise.resolve({
+        changes: [[write.id, write.revision]] as const,
+        send: async (head: string) => {
+          // The server reads the revision from the entry's sealed header.
+          await api.put(`/chat/group-list/${encodeURIComponent(write.id)}`, {
+            baseRevision: write.baseRevision,
+            envelope: write.envelope,
+            head,
+          })
+          stored = true
+        },
+      })
+    })
+    return stored
+  }
+
   async fetchOwnProfile(): Promise<unknown | null> {
     try {
       return await api.get('/chat/profile').then((response) => response.data)

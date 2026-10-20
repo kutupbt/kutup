@@ -290,8 +290,7 @@ without changing any key.
       path is SRS's purpose in a VERP form, `fwd-<forwarding>-<day>-<hmac>`
       at our domain: bounces are counted per forwarding, not relayed, so it
       names the forwarding rather than the original sender.
-    - Stalwart DKIM-signs it as our domain. No ARC: Stalwart's sealing is
-      off, and Proton's choice isn't visible.
+    - Stalwart DKIM-signs it as our domain. No ARC (see "ARC" below).
     - **Bounces:** a bounce to an SRS address is checked at RCPT: its HMAC
       and timestamp (21 days, as SRS0) must hold, or it is refused there,
       so nothing becomes backscatter. A valid one is counted against the
@@ -310,9 +309,8 @@ without changing any key.
       day and the forwarder is told.
     - **DMARC:** the redirected message keeps its original From, and our
       DKIM signature (d= our domain) doesn't align with it. A receiver may
-      reject mail from domains with `p=reject` unless ARC vouches for our
-      hop. Stalwart's ARC sealing is commented out in this version, so
-      that is an open question (below).
+      reject mail from domains with `p=reject` when the original DKIM
+      signature doesn't survive; see "ARC" below for why we don't seal.
 - **Loops.** Mail forwarded by us carries a marker header
   (`X-Kutup-Forwarded`, an HMAC of the forwarding id under a server
   secret), which doesn't break the original DKIM signature. Mail that
@@ -550,12 +548,39 @@ session).
 4. WASM exports, then the web UI (third session).
 5. Gates: mail, backup, browser.
 
-## Open questions
+## ARC (researched 2026-10-20)
 
-- **ARC.** Without ARC sealing, outside forwards of mail from `p=reject`
-  domains may be rejected by the forwardee's provider. Turn on Stalwart's
-  ARC sealing if a later version supports it, seal ARC ourselves, or accept
-  the gap (it's Proton's choice that isn't visible).
+Not built, and nothing cheap to build. What was found:
+- **Stalwart can't seal.** 0.16.0 removed ARC sealing ("Removed support for
+  Authenticated Received Chain (ARC) sealing", CHANGELOG 0.16.0, citing the
+  IETF DMARC list); only ARC verification is left
+  (`crates/common/src/config/smtp/auth.rs`, the `seal` line commented out).
+  We run 0.16.23.
+- **ARC is being retired.** The IETF draft `draft-ietf-dmarc-arc-to-historic`
+  (April 2026, after `draft-adams-arc-experiment-conclusion`) moves RFC 8617
+  to Historic and says not to deploy or rely on it between unrelated senders
+  and receivers. Its successor is DKIM2. Large receivers still verify
+  existing chains, but each decides whom it trusts as a sealer (Microsoft 365
+  only lists configured by the tenant), so a new sealer like us gains little.
+- **Proton** says only how it treats inbound ARC (it accepts a DMARC failure
+  only from a few sealers it trusts, when the chain passes and shows DMARC
+  passing at the first hop). Whether it seals what it forwards isn't public.
+- **What our forwards already keep:** an outside forward is the original
+  message, unchanged, with only our marker header in front, so the sender's
+  own DKIM signature still verifies and DMARC passes on it wherever the
+  sender signs with an aligned key (every large provider does). What fails
+  is mail from a `p=reject` domain that relies on SPF alone, or whose
+  signature an earlier hop broke: the same gap every forwarder without ARC
+  has.
+- **Sealing ourselves** (the `mail-auth` crate Stalwart uses) would mean
+  taking Stalwart's inbound authentication results into Kutup, a sealing key
+  and DNS record, and a seal over a message Stalwart then DKIM-signs again,
+  for a protocol on its way out. Not worth it.
+- **DKIM2 later.** Stalwart 0.16.12 added DKIM2
+  (`draft-ietf-dkim-dkim2-spec`), signing outbound and verifying inbound,
+  and our version has it. It is the IETF's answer for forwarding. Turn it on
+  once a major receiver verifies it; until then it changes nothing for
+  delivery. Tracked as a roadmap item, not built now.
 
 ## Decisions (user, 2026-10-19)
 
