@@ -35,8 +35,6 @@ const MAX_LOG_PAGE_CHANGES: i64 = 256;
 const SEEN_PSEUDONYM_DOMAIN: &[u8] = b"kutup/chat-group/seen-pseudonym/v1\0";
 /// A change or a read naming an avatar blob the home doesn't hold.
 const AVATAR_MISSING: &str = "avatarMissing";
-/// How long an avatar upload waits for a change to name it.
-const PENDING_AVATAR_SECS: i64 = 24 * 60 * 60;
 
 /// What became of a sealed request.
 pub(crate) enum Opened {
@@ -143,7 +141,8 @@ async fn answer_checked(
             }
             pseudonym.clone()
         }
-        // Only join info takes a link's password (the format checks that).
+        // Only join info and the avatar take a link's password (the format
+        // checks that).
         GroupRequestAuthV1::LinkPassword { .. } => {
             return link_request(state, request, &group_id, now).await;
         }
@@ -174,7 +173,6 @@ async fn answer_checked(
         GroupOperationV1::GetRequestStatus => {
             request_status(state, relay, &group_id, &pseudonym, now).await
         }
-        // Calls and avatars come with slices 3 and 4.
         GroupOperationV1::GetAvatar => get_avatar(state, &group_id, &pseudonym, now).await,
         GroupOperationV1::PutAvatar => put_avatar(state, request, &group_id, &pseudonym, now).await,
         // Calls come with slice 4.
@@ -318,7 +316,8 @@ async fn put_avatar(
     else {
         return Ok(GroupResponseV1::refused("malformed", now));
     };
-    let (largest, storage) = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+    let limits = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+    let (largest, storage) = (limits.max_bytes, limits.storage_bytes);
     let mut tx = state.pool.begin().await?;
     // Locked, so an upload and a change naming it don't cross.
     let Some((group, _)) = load_state(&mut *tx, group_id, true).await? else {
@@ -360,8 +359,9 @@ async fn put_avatar(
     if !limits::change(pseudonym, group_id) {
         return Ok(status(GroupResponseStatusV1::RateLimited, now));
     }
-    let expires_at = OffsetDateTime::from_unix_timestamp(now.saturating_add(PENDING_AVATAR_SECS))
-        .map_err(|_| AppError::internal("avatar expiry"))?;
+    let expires_at =
+        OffsetDateTime::from_unix_timestamp(now.saturating_add(limits.pending_seconds))
+            .map_err(|_| AppError::internal("avatar expiry"))?;
     sqlx::query("DELETE FROM chat_group_avatars WHERE group_id = $1 AND expires_at IS NOT NULL")
         .bind(&group_id[..])
         .execute(&mut *tx)
@@ -397,19 +397,24 @@ fn avatar_change(
         .map(Some)
 }
 
-/// Whether the group holds the blob `hash` (pending or current).
+/// Whether the group holds the blob `hash`: current, or pending and not yet
+/// expired. Locked for the change's transaction, so the sweep can't take it
+/// between this check and the swap.
 async fn has_avatar(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     group_id: &[u8; 32],
     hash: &[u8; 32],
 ) -> AppResult<bool> {
-    Ok(sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM chat_group_avatars WHERE group_id = $1 AND hash = $2)",
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM chat_group_avatars
+          WHERE group_id = $1 AND hash = $2 AND (expires_at IS NULL OR expires_at > now())
+          FOR UPDATE",
     )
     .bind(&group_id[..])
     .bind(&hash[..])
-    .fetch_one(&mut **tx)
-    .await?)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(found.is_some())
 }
 
 /// Once a change naming a new avatar is accepted: its blob becomes the
@@ -427,14 +432,20 @@ async fn swap_avatar(
                 .bind(&hash[..])
                 .execute(&mut **tx)
                 .await?;
-            sqlx::query(
+            let made_current = sqlx::query(
                 "UPDATE chat_group_avatars SET expires_at = NULL
                  WHERE group_id = $1 AND hash = $2",
             )
             .bind(&group_id[..])
             .bind(&hash[..])
             .execute(&mut **tx)
-            .await?;
+            .await?
+            .rows_affected();
+            // The blob was locked by `has_avatar`; never commit a state
+            // naming a blob the home doesn't hold.
+            if made_current != 1 {
+                return Err(AppError::internal("the named avatar blob is gone"));
+            }
         }
         None => {
             sqlx::query(

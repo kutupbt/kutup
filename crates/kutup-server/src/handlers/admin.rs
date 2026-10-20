@@ -817,8 +817,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         crate::site_settings::name_holds(&state.pool, &state.config).await?;
     let (link_joins_per_relay_group, link_joins_per_relay) =
         crate::site_settings::chat_group_link_joins(&state.pool).await?;
-    let (avatar_max_bytes, avatar_storage_bytes) =
-        crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+    let avatar = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
@@ -828,8 +827,9 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "oldAddressReceiveDays": old_address_receive_days,
         "chatGroupLinkJoinsPerRelayGroupPerMin": link_joins_per_relay_group,
         "chatGroupLinkJoinsPerRelayPerMin": link_joins_per_relay,
-        "chatGroupAvatarMaxBytes": avatar_max_bytes,
-        "chatGroupAvatarStoragePerGroupBytes": avatar_storage_bytes,
+        "chatGroupAvatarMaxBytes": avatar.max_bytes,
+        "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
+        "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
     }))
     .into_response())
 }
@@ -852,6 +852,8 @@ pub struct UpdateSettingsRequest {
     chat_group_avatar_max_bytes: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_avatar_storage_per_group_bytes: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_pending_seconds: Option<Option<i64>>,
 }
 
 /// A field that is present: `Some(None)` for `null`, so a missing field
@@ -886,6 +888,7 @@ pub async fn update_settings(
         && req.chat_group_link_joins_per_relay_per_min.is_none()
         && req.chat_group_avatar_max_bytes.is_none()
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
+        && req.chat_group_avatar_pending_seconds.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -919,13 +922,38 @@ pub async fn update_settings(
         crate::site_settings::validate_chat_group_link_joins(value)
             .map_err(AppError::bad_request)?;
     }
-    if let Some(Some(value)) = req.chat_group_avatar_max_bytes {
-        crate::site_settings::validate_chat_group_avatar_max_bytes(value)
-            .map_err(AppError::bad_request)?;
-    }
-    if let Some(Some(value)) = req.chat_group_avatar_storage_per_group_bytes {
-        crate::site_settings::validate_chat_group_avatar_storage_bytes(value)
-            .map_err(AppError::bad_request)?;
+    // The avatar limits are checked together, each new value (or reset to
+    // its first value) beside the others as they stand.
+    if req.chat_group_avatar_max_bytes.is_some()
+        || req.chat_group_avatar_storage_per_group_bytes.is_some()
+        || req.chat_group_avatar_pending_seconds.is_some()
+    {
+        use crate::site_settings::AvatarLimits;
+        let current = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+        let pick = |new: Option<Option<i64>>, now: i64, first: i64| match new {
+            Some(Some(value)) => value,
+            Some(None) => first,
+            None => now,
+        };
+        AvatarLimits {
+            max_bytes: pick(
+                req.chat_group_avatar_max_bytes,
+                current.max_bytes,
+                AvatarLimits::DEFAULT.max_bytes,
+            ),
+            storage_bytes: pick(
+                req.chat_group_avatar_storage_per_group_bytes,
+                current.storage_bytes,
+                AvatarLimits::DEFAULT.storage_bytes,
+            ),
+            pending_seconds: pick(
+                req.chat_group_avatar_pending_seconds,
+                current.pending_seconds,
+                AvatarLimits::DEFAULT.pending_seconds,
+            ),
+        }
+        .validate()
+        .map_err(AppError::bad_request)?;
     }
     // The two holds are checked together, each against the other's new or
     // current value.
@@ -988,6 +1016,10 @@ pub async fn update_settings(
             crate::site_settings::CHAT_GROUP_AVATAR_STORAGE_BYTES,
             req.chat_group_avatar_storage_per_group_bytes,
         ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_PENDING_SECONDS,
+            req.chat_group_avatar_pending_seconds,
+        ),
     ] {
         match value {
             None => {}
@@ -1026,6 +1058,7 @@ pub async fn update_settings(
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
             "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
+            "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
         }),
     )
     .await;
