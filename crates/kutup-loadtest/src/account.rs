@@ -149,7 +149,7 @@ pub async fn sign_in(api: &Api, user: &mut User) -> Result<()> {
     )
     .await
     .context("login/finish")?;
-    let binding = text(&session, "envelopeBinding")?;
+    let binding = text(&session, "keyBinding")?;
     let master_key = signed_in
         .export_key
         .open_master_key(&text(&session, "masterKeyEnvelope")?, &binding)?;
