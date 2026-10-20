@@ -790,6 +790,119 @@ pub fn claim(
     Ok(change)
 }
 
+/// A record to join `link`'s group with (docs/plans/pairwise-groups.md §11):
+/// at the join epoch a claim would take (past an ended membership here or
+/// in the list, never past `MAX_JOIN_EPOCHS` − 1), `Requesting` until the
+/// home has the join. Only an ended membership's record (or none) is
+/// replaced; its verified state is kept, so no older one is taken later.
+pub fn record_from_link(
+    link: &kutup_chat_proto::group::link::GroupInviteLinkV1,
+    previous: Option<&GroupRecordV1>,
+    listed: Option<(GroupListStatus, u32)>,
+    keys: &GroupAccountKeys,
+) -> Result<GroupRecordV1, GroupError> {
+    let master = GroupMasterKey::from_bytes(&link.master_key, home_of(&link.home))
+        .map_err(|_| record_error("the link's group key and home don't make a group"))?;
+    let group_id = master.group_id();
+    let group_text = encode_group_id(&group_id);
+    let join_epoch = within_join_epochs(
+        previous
+            .map(|previous| match previous.status {
+                GroupStatus::Member | GroupStatus::Gone => previous.join_epoch.saturating_add(1),
+                GroupStatus::Invited { .. } | GroupStatus::Requesting => previous.join_epoch,
+            })
+            .into_iter()
+            .chain(listed_join_epoch(listed))
+            .max()
+            .unwrap_or(0),
+    )?;
+    if let Some(previous) = previous {
+        if previous.group_id != group_text || previous.home != link.home {
+            return Err(record_error("the link names another group"));
+        }
+        if previous.status == GroupStatus::Member {
+            return Err(record_error("this account is in the group already"));
+        }
+    }
+    let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
+    let mut record = GroupRecordV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: group_text,
+        master_key: SecretText(encode(master.as_bytes())),
+        home: link.home.clone(),
+        pseudonym_seed: SecretText(encode(pseudonym.seed())),
+        status: GroupStatus::Requesting,
+        min_revision: 0,
+        state: None,
+        head: None,
+        notary_sequence: None,
+        gateway: Default::default(),
+        not_found_since_ms: None,
+        sender_book: None,
+        synced_at_ms: None,
+        fork_at_revision: None,
+        fork_sender: None,
+        known_since_ms: None,
+        listed_status: None,
+        list_due_at_ms: None,
+        join_epoch,
+    };
+    if let Some(previous) = previous {
+        record.state = previous.state.clone();
+        record.head = previous.head.clone();
+        record.notary_sequence = previous.notary_sequence;
+        record.gateway = previous.gateway.clone();
+        record.min_revision = previous.min_revision;
+    }
+    Ok(record)
+}
+
+/// The change joining (`approval` false) or asking to join (`approval`
+/// true) through the link with `password`, signed by the record's
+/// pseudonym, built from the join info's revision and head; its member
+/// entry is sealed as `MemberEntry` (an approval moves it as it is).
+pub fn link_change(
+    record: &mut GroupRecordV1,
+    basis: &ClaimBasis,
+    password: &[u8; kutup_chat_proto::group::INVITE_LINK_PASSWORD_LEN],
+    approval: bool,
+    me: &AccountRef,
+    profile_key: &[u8; 32],
+    authority: &crate::manifest::AccountAuthority,
+) -> Result<GroupChangeV1, GroupError> {
+    let master = record.master()?;
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let pseudonym = record.pseudonym()?;
+    let entry = seal_member_entry(
+        &master.state_key(),
+        &group_id,
+        &pseudonym.public_key(),
+        me,
+        profile_key,
+        authority,
+    )?;
+    let password = encode(password);
+    let action = if approval {
+        GroupActionV1::RequestToJoin { password, entry }
+    } else {
+        GroupActionV1::JoinFromLink { password, entry }
+    };
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: record.group_id.clone(),
+        revision: basis.revision + 1,
+        previous_hash: encode(&basis.head),
+        actor: encode(&pseudonym.public_key()),
+        actions: vec![action],
+        resulting_state_hash: None,
+        signature: String::new(),
+    };
+    change.signature =
+        encode(&pseudonym.sign_change(&change.signed_bytes().map_err(record_error)?));
+    record.min_revision = record.min_revision.max(change.revision);
+    Ok(change)
+}
+
 /// Applies a change the home notarised: the same check it ran, then its
 /// signature over the change and the resulting state, by an identity in the
 /// history this record followed from its pin. A notary by a document that

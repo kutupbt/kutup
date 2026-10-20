@@ -1,0 +1,226 @@
+//! Joining a group through its invite link (docs/plans/pairwise-groups.md §4,
+//! "Invite link", and §11): the link holder reads the group's join info under
+//! the link's proof, then joins (`ANY`) or asks an administrator
+//! (`ADMINISTRATOR`) under a new pseudonym, at the join epoch a claim would
+//! take and with the same `pseudonymUsed` retry.
+
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use kutup_chat_proto::group::link::GroupInviteLinkV1;
+use kutup_chat_proto::group::{decode_exact, decode_group_id};
+use kutup_chat_proto::group_route::{
+    GroupJoinInfoV1, GroupOperationV1, GroupResponseStatusV1, GroupResponseV1, PSEUDONYM_USED,
+};
+use kutup_crypto::chat_group::SealedField;
+use rand::{CryptoRng, Rng};
+
+use crate::engine::Engine;
+use crate::error::{ChatError, Result};
+use crate::group::{self, ClaimBasis, GroupRecordV1, GroupStatus};
+use crate::group_client::{self, RequestSigner, RouteFailure};
+use crate::group_engine::{accepted_body, group_error, now_seconds, GroupSync};
+
+/// What a link holder sees before joining: the group's name and
+/// description as its members wrote them (opened with the link's key), how
+/// many are in it, and whether an administrator must approve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupLinkPreview {
+    pub group_id: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub member_count: u16,
+    pub requires_approval: bool,
+    /// This account's place in the group already, if it has one here.
+    pub status: Option<GroupStatus>,
+}
+
+/// What a join through a link came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupLinkJoin {
+    /// In the group.
+    Joined(GroupSync),
+    /// Asked; an administrator sees it at their next sync.
+    Requested,
+    /// The link no longer works (reset, or turned off), or the group is gone.
+    LinkInvalid,
+    /// The home couldn't be asked now.
+    Unreachable(RouteFailure),
+}
+
+fn opened_text(record: &GroupRecordV1, field: SealedField, value: &Option<String>) -> Option<String> {
+    let value = value.as_ref()?;
+    let key = record.master().ok()?.state_key();
+    let plain = key.open(field, b"", &STANDARD.decode(value).ok()?).ok()?;
+    String::from_utf8(plain.to_vec()).ok()
+}
+
+fn used_pseudonym(response: &GroupResponseV1) -> bool {
+    response.status == GroupResponseStatusV1::Refused
+        && response.code.as_deref() == Some(PSEUDONYM_USED)
+}
+
+impl Engine {
+    /// The record a link would join with, and the link itself.
+    async fn link_record(&mut self, fragment: &str) -> Result<(GroupInviteLinkV1, GroupRecordV1)> {
+        let link = GroupInviteLinkV1::from_fragment(fragment).map_err(ChatError::Invalid)?;
+        // The list says which epoch a join goes past, and whether another
+        // device is in already.
+        self.reread_group_list().await;
+        let group_id = {
+            let master = kutup_crypto::chat_group::GroupMasterKey::from_bytes(
+                &link.master_key,
+                group::home_of(&link.home),
+            )
+            .map_err(|error| ChatError::Invalid(error.to_string()))?;
+            kutup_chat_proto::group::encode_group_id(&master.group_id())
+        };
+        let previous = self.session.db().load_group(&group_id).await?;
+        let record = group::record_from_link(
+            &link,
+            previous.as_ref(),
+            self.listed_join(&group_id),
+            self.group_keys()?,
+        )
+        .map_err(group_error)?;
+        Ok((link, record))
+    }
+
+    /// The group's join info under the link's proof.
+    async fn link_join_info(
+        &mut self,
+        record: &mut GroupRecordV1,
+        link: &GroupInviteLinkV1,
+    ) -> Result<std::result::Result<Option<GroupJoinInfoV1>, RouteFailure>> {
+        let group_id = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
+        let home = record.home.clone();
+        let transport = std::rc::Rc::clone(&self.transport);
+        let answer = group_client::call(
+            transport.as_ref(),
+            &mut record.gateway,
+            &home,
+            &group_id,
+            GroupOperationV1::GetJoinInfo,
+            b"",
+            &RequestSigner::LinkPassword(&link.password),
+            now_seconds(),
+        )
+        .await?;
+        Ok(match answer {
+            // The link is off, its password reset, or the group gone: the
+            // home says the same for each.
+            Ok(response) if response.status == GroupResponseStatusV1::NotFound => Ok(None),
+            Ok(response) => {
+                let body = accepted_body(response)?;
+                Ok(Some(
+                    GroupJoinInfoV1::from_canonical_bytes(&body).map_err(ChatError::Invalid)?,
+                ))
+            }
+            Err(failure) => Err(failure),
+        })
+    }
+
+    /// What `fragment`'s link leads to, read before joining. `None`: the link
+    /// no longer works.
+    pub async fn preview_group_link(
+        &mut self,
+        fragment: &str,
+    ) -> Result<std::result::Result<Option<GroupLinkPreview>, RouteFailure>> {
+        let (link, mut record) = self.link_record(fragment).await?;
+        let existing = self.session.db().load_group(&record.group_id).await?;
+        let info = match self.link_join_info(&mut record, &link).await? {
+            Ok(Some(info)) => info,
+            Ok(None) => return Ok(Ok(None)),
+            Err(failure) => return Ok(Err(failure)),
+        };
+        Ok(Ok(Some(GroupLinkPreview {
+            group_id: record.group_id.clone(),
+            title: opened_text(&record, SealedField::Title, &info.title),
+            description: opened_text(&record, SealedField::Description, &info.description),
+            member_count: info.member_count,
+            requires_approval: info.requires_approval.unwrap_or(false),
+            status: existing.map(|existing| existing.status),
+        })))
+    }
+
+    /// Joins `fragment`'s group (or asks to, when an administrator must
+    /// approve): a new pseudonym at the next join epoch, moved on once more
+    /// for each `pseudonymUsed`, never past the last epoch.
+    pub async fn join_group_by_link<R: Rng + CryptoRng>(
+        &mut self,
+        fragment: &str,
+        rng: &mut R,
+    ) -> Result<GroupLinkJoin> {
+        let (link, mut record) = self.link_record(fragment).await?;
+        let info = match self.link_join_info(&mut record, &link).await? {
+            Ok(Some(info)) => info,
+            Ok(None) => return Ok(GroupLinkJoin::LinkInvalid),
+            Err(failure) => return Ok(GroupLinkJoin::Unreachable(failure)),
+        };
+        let approval = info.requires_approval.unwrap_or(false);
+        let basis = ClaimBasis {
+            revision: info.revision,
+            head: decode_exact::<32>("head", &info.head).map_err(ChatError::Invalid)?,
+        };
+        let me = self.session.account_ref().clone();
+        let profile_key = self.own_profile_key().await?;
+        // Saved first, so a reload never goes back to an epoch it used.
+        self.save_group(&record).await?;
+        loop {
+            let change = group::link_change(
+                &mut record,
+                &basis,
+                &link.password,
+                approval,
+                &me,
+                &profile_key,
+                &self.group_keys()?.authority,
+            )
+            .map_err(group_error)?;
+            let body = change.canonical_bytes().map_err(ChatError::Invalid)?;
+            match self
+                .group_request(&mut record, GroupOperationV1::SubmitChange, &body)
+                .await?
+            {
+                Ok(response) if used_pseudonym(&response) => {
+                    let next = group::within_join_epochs(record.join_epoch.saturating_add(1))
+                        .map_err(group_error)?;
+                    self.move_link_epoch(&mut record, next).await?;
+                }
+                // The password no longer holds (reset meanwhile), or the
+                // access changed: the link is no longer this one.
+                Ok(response) if response.status == GroupResponseStatusV1::NotFound => {
+                    return Ok(GroupLinkJoin::LinkInvalid)
+                }
+                Ok(response) if response.status != GroupResponseStatusV1::Ok => {
+                    accepted_body(response)?;
+                }
+                Ok(_) => break,
+                Err(failure) => return Ok(GroupLinkJoin::Unreachable(failure)),
+            }
+        }
+        if approval {
+            record.status = GroupStatus::Requesting;
+            self.save_group(&record).await?;
+            return Ok(GroupLinkJoin::Requested);
+        }
+        self.save_group(&record).await?;
+        let sync = self.take_whole_state(&mut record).await?;
+        if matches!(sync, GroupSync::Current { .. }) {
+            let group_id = record.group_id.clone();
+            self.announce_group_change(&group_id, rng).await;
+        }
+        self.list_after(&record.group_id.clone(), &sync).await;
+        Ok(GroupLinkJoin::Joined(sync))
+    }
+
+    /// Moves a link join to `epoch`: the pseudonym the account key gives
+    /// there.
+    async fn move_link_epoch(&mut self, record: &mut GroupRecordV1, epoch: u32) -> Result<()> {
+        let group = decode_group_id(&record.group_id).map_err(ChatError::Invalid)?;
+        let pseudonym = self.group_keys()?.pseudonyms.pseudonym(&group, epoch);
+        record.join_epoch = epoch;
+        record.pseudonym_seed =
+            group::SecretText(kutup_chat_proto::group::encode(pseudonym.seed()));
+        self.save_group(record).await
+    }
+}
