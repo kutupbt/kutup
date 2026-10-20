@@ -190,6 +190,10 @@ export interface AdminSettings {
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number
   chatMediaDeliveryRetentionDays: number
+  /** Joins and requests through group links, per minute per relay server and group. */
+  chatGroupLinkJoinsPerRelayGroupPerMin: number
+  /** The same, per minute per relay server across all groups. */
+  chatGroupLinkJoinsPerRelayPerMin: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

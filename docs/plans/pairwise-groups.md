@@ -1437,12 +1437,25 @@ title.
 - `GetAvatar` under the link proof;
 - a per-relay-server budget for link joins and requests (about 120 a minute,
   admin-settable), charged before the change is checked;
-- `GetRequestStatus`: `unknown` (never `NotFound`) for a pseudonym the group
-  never saw, `denied` for a banned one or one seen as a requester that is now
-  neither requesting nor a member; it spends the per-pseudonym budget like
-  any signed request, and is no oracle (the asker proves the pseudonym);
-- the per-relay budget is charged on `JoinFromLink` and `RequestToJoin` only;
-  join info keeps its per-group limit.
+- `GetRequestStatus` (built: operation tag 9, answer `GroupRequestStatusV1`):
+  `unknown` (never `NotFound`) for a pseudonym the group never saw or an
+  unknown group, `denied` for a banned one or one the group saw that is now
+  neither requesting nor a member (the home's record of seen pseudonyms
+  holds members and requesters alike, so a removed member asking gets
+  `denied` too); it spends the per-pseudonym budget like any signed request,
+  and is no oracle (the asker proves the pseudonym);
+- the link-join budgets (built, after review: per relay server and group,
+  and per relay server, the site settings
+  `chat_group_link_joins_per_relay_group_per_min` and
+  `chat_group_link_joins_per_relay_per_min` under Administration → Server
+  settings, first 120 and 1200 from `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_*`) are
+  charged on `JoinFromLink` and `RequestToJoin` only, once the link's
+  password holds and before the rest of the change is checked, so junk
+  without the link spends nothing and one link's holders crowd only that
+  group; join info keeps its per-group limit;
+- `GetRequestStatus` takes the same reads for every answer (no timing
+  oracle for a group's existence), and `unknown` spends the relay's failure
+  budget.
 
 **Client parts** (the third session):
 - the link format, its parser and the link request signer;

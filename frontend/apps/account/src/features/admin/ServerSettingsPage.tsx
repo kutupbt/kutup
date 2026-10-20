@@ -21,6 +21,8 @@ const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
+/** The server's bounds (site_settings::validate_chat_group_link_joins_per_relay). */
+const MAX_LINK_JOINS = 1_000_000
 
 export function ServerSettingsPage() {
   const { t } = useTranslation()
@@ -28,11 +30,14 @@ export function ServerSettingsPage() {
   const update = useUpdateAdminSettings()
 
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
+  const linkJoins = z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange'))
   const schema = z.object({
     registrationMode: z.enum(['on', 'code', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
+    linkJoinsGroup: linkJoins,
+    linkJoinsRelay: linkJoins,
   })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -44,6 +49,8 @@ export function ServerSettingsPage() {
       quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
+      linkJoinsGroup: settings.data.chatGroupLinkJoinsPerRelayGroupPerMin,
+      linkJoinsRelay: settings.data.chatGroupLinkJoinsPerRelayPerMin,
     })
   }, [settings.data, reset])
 
@@ -59,6 +66,8 @@ export function ServerSettingsPage() {
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
+        chatGroupLinkJoinsPerRelayGroupPerMin: v.linkJoinsGroup,
+        chatGroupLinkJoinsPerRelayPerMin: v.linkJoinsRelay,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -100,6 +109,12 @@ export function ServerSettingsPage() {
               </Field>
               <Field label={t('admin.settings.mediaDays')} error={errors.mediaDays?.message} description={t('admin.settings.mediaDaysHint')} required>
                 {(field) => <Input {...field} {...register('mediaDays')} type="number" min={0} max={MAX_RETENTION_DAYS} step={1} inputMode="numeric" />}
+              </Field>
+              <Field label={t('admin.settings.groupLinkJoinsGroup')} error={errors.linkJoinsGroup?.message} description={t('admin.settings.groupLinkJoinsGroupHint')} required>
+                {(field) => <Input {...field} {...register('linkJoinsGroup')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
+              </Field>
+              <Field label={t('admin.settings.groupLinkJoinsRelay')} error={errors.linkJoinsRelay?.message} description={t('admin.settings.groupLinkJoinsRelayHint')} required>
+                {(field) => <Input {...field} {...register('linkJoinsRelay')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
               </Field>
             </CardContent>
           </Card>

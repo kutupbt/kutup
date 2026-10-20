@@ -20,8 +20,8 @@ use kutup_chat_proto::group::{
 };
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
-    GroupLogQueryV1, GroupOperationV1, GroupRequestV1, GroupResponseStatusV1, GroupResponseV1,
-    GroupStateAnswerV1, PSEUDONYM_USED,
+    GroupLogQueryV1, GroupOperationV1, GroupRequestStateV1, GroupRequestStatusV1, GroupRequestV1,
+    GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1, PSEUDONYM_USED,
 };
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
@@ -917,6 +917,321 @@ fn requesters_and_approved_members_count_as_seen() {
     let (slot_id, claim_key) = add_slot(&c, &alice, &home, &mut group, &alice_key);
     let reclaim = claim(&group, &slot_id, &claim_key, &dave_key);
     assert_used(&submit(&c, &bob, &home, &group, &reclaim, &dave_key));
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// The signer's own request status, as the home answers it.
+fn request_status(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group_id: &[u8; 32],
+    key: &GroupKeyPair,
+) -> GroupRequestStatusV1 {
+    let request = signed(home, group_id, GroupOperationV1::GetRequestStatus, b"", key);
+    let answer = exchange(c, user, home, &request);
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    GroupRequestStatusV1::from_canonical_bytes(&answer.body().unwrap()).unwrap()
+}
+
+/// A requester follows its request: pending (with what a cancel names),
+/// member once approved, denied once denied or cancelled, and unknown for
+/// a pseudonym the group never saw or a group that doesn't exist.
+#[test]
+fn a_requester_learns_where_its_request_stands() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let group_id = group.id;
+    let status = |key: &GroupKeyPair| request_status(&c, &bob, &home, &group_id, key);
+
+    let stranger = GroupKeyPair::generate();
+    assert_eq!(status(&stranger).status, GroupRequestStateV1::Unknown);
+    let nowhere = request_status(&c, &bob, &home, &random::<32>(), &stranger);
+    assert_eq!(nowhere.status, GroupRequestStateV1::Unknown);
+    assert_eq!(nowhere.revision, None);
+
+    // Carol asks; she is pending at the group's revision and head.
+    let carol_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &carol_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &carol_key));
+    apply(&mut group, &home, &asked);
+    let pending = status(&carol_key);
+    assert_eq!(pending.status, GroupRequestStateV1::Pending);
+    assert_eq!(pending.revision, Some(group.state.revision));
+    assert_eq!(pending.head, Some(b64(&group.head)));
+
+    // Alice approves her: a member.
+    let approve = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ApproveRequest {
+            pseudonym: b64(&carol_key.public_key()),
+        }],
+    );
+    let approved = accepted(&submit(&c, &alice, &home, &group, &approve, &alice_key));
+    apply(&mut group, &home, &approved);
+    assert_eq!(status(&carol_key).status, GroupRequestStateV1::Member);
+
+    // Dave asks and is denied (and so banned).
+    let dave_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &dave_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &dave_key));
+    apply(&mut group, &home, &asked);
+    let deny = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::DenyRequest {
+            pseudonym: b64(&dave_key.public_key()),
+        }],
+    );
+    let denied = accepted(&submit(&c, &alice, &home, &group, &deny, &alice_key));
+    apply(&mut group, &home, &denied);
+    let answer = status(&dave_key);
+    assert_eq!(answer.status, GroupRequestStateV1::Denied);
+    assert_eq!((answer.revision, answer.head), (None, None));
+
+    // Erin asks and cancels: neither requesting nor a member any more.
+    let erin_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &erin_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &erin_key));
+    apply(&mut group, &home, &asked);
+    let cancel = author(&group, &erin_key, vec![GroupActionV1::CancelRequest]);
+    let cancelled = accepted(&submit(&c, &bob, &home, &group, &cancel, &erin_key));
+    apply(&mut group, &home, &cancelled);
+    assert_eq!(status(&erin_key).status, GroupRequestStateV1::Denied);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// A newcomer's cancel built from what `GetRequestStatus` answered alone:
+/// the revision and head it named, not a state the newcomer never sees.
+fn cancel_from(
+    group_id: &[u8; 32],
+    status: &GroupRequestStatusV1,
+    key: &GroupKeyPair,
+) -> GroupChangeV1 {
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: encode_group_id(group_id),
+        revision: status.revision.expect("pending names its revision") + 1,
+        previous_hash: status.head.clone().expect("pending names its head"),
+        actor: b64(&key.public_key()),
+        actions: vec![GroupActionV1::CancelRequest],
+        resulting_state_hash: None,
+        signature: String::new(),
+    };
+    change.signature = b64(&key.sign_change(&change.signed_bytes().unwrap()));
+    change
+}
+
+/// A requester cancels from its status alone, after the link was reset
+/// (so it can't build anything from the link); the cancel is done once:
+/// sent again it meets an unknown group, and the status says denied. A
+/// client that lost the answer to its cancel asks the status the same way.
+#[test]
+fn a_requester_cancels_from_its_status_after_a_link_reset() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let carol_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &carol_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &carol_key));
+    apply(&mut group, &home, &asked);
+    // Alice resets the link: the old password no longer reads anything.
+    let reset = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyInviteLink {
+            password: Some(b64(&random::<16>())),
+        }],
+    );
+    let reset = accepted(&submit(&c, &alice, &home, &group, &reset, &alice_key));
+    apply(&mut group, &home, &reset);
+
+    let pending = request_status(&c, &bob, &home, &group.id, &carol_key);
+    assert_eq!(pending.status, GroupRequestStateV1::Pending);
+    assert_eq!(pending.revision, Some(group.state.revision));
+    let cancel = cancel_from(&group.id, &pending, &carol_key);
+    let cancelled = accepted(&submit(&c, &bob, &home, &group, &cancel, &carol_key));
+    apply(&mut group, &home, &cancelled);
+    assert!(group.state.requesting.is_empty());
+
+    let again = cancel_from(&group.id, &pending, &carol_key);
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &again, &carol_key).status,
+        GroupResponseStatusV1::NotFound
+    );
+    let after = request_status(&c, &bob, &home, &group.id, &carol_key);
+    assert_eq!(after.status, GroupRequestStateV1::Denied);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// An administrator's session, which puts the link-join budgets back to
+/// their configured first values when dropped (a failing test too).
+struct LinkJoinBudgets {
+    c: Client,
+    base: String,
+    token: String,
+}
+
+impl LinkJoinBudgets {
+    /// `None` without an administrator (`KUTUP_LIVE_ADMIN`).
+    fn take(c: &Client, base: &str) -> Option<Self> {
+        let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+            eprintln!("KUTUP_LIVE_ADMIN unset; skipping");
+            return None;
+        };
+        let (name, password) = admin.split_once(':').unwrap();
+        Some(Self {
+            c: c.clone(),
+            base: base.to_owned(),
+            token: admin_token(c, base, password, name),
+        })
+    }
+
+    fn put(&self, body: Value) -> (StatusCode, Value) {
+        let r = bearer(
+            self.c.put(format!("{}/api/admin/settings", self.base)),
+            &self.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        let status = r.status();
+        (status, r.json().unwrap_or(Value::Null))
+    }
+
+    /// Sets the budgets: per relay server and group, and per relay server.
+    fn set(&self, per_group: i64, per_relay: i64) {
+        let (status, settings) = self.put(serde_json::json!({
+            "chatGroupLinkJoinsPerRelayGroupPerMin": per_group,
+            "chatGroupLinkJoinsPerRelayPerMin": per_relay,
+        }));
+        assert_eq!(status, StatusCode::OK, "{settings}");
+        assert_eq!(settings["chatGroupLinkJoinsPerRelayGroupPerMin"], per_group);
+        assert_eq!(settings["chatGroupLinkJoinsPerRelayPerMin"], per_relay);
+    }
+}
+
+impl Drop for LinkJoinBudgets {
+    fn drop(&mut self) {
+        let (status, _) = self.put(serde_json::json!({
+            "chatGroupLinkJoinsPerRelayGroupPerMin": null,
+            "chatGroupLinkJoinsPerRelayPerMin": null,
+        }));
+        if status != StatusCode::OK && !std::thread::panicking() {
+            panic!("the link-join budgets were not reset: {status}");
+        }
+    }
+}
+
+/// Joins and requests through a link are budgeted per relay server and
+/// group, and per relay server, as administrators set them; charged once
+/// the link's password holds, so junk without it spends nothing, and one
+/// link's holders crowd only that group. (The gate runs these tests one at
+/// a time, so the budgets are this test's alone while it runs.)
+#[test]
+fn link_joins_are_budgeted_per_relay_server_and_group() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let Some(budgets) = LinkJoinBudgets::take(&c, &base) else {
+        return;
+    };
+    let (status, _) = budgets.put(serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": 0 }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut first = create(&c, &alice, &home, &alice_key);
+    let first_password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut first,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let mut second = create(&c, &alice, &home, &alice_key);
+    let second_password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut second,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    budgets.set(3, 5);
+    // Past the window of the joins earlier tests made through this relay.
+    std::thread::sleep(std::time::Duration::from_secs(61));
+
+    let ask = |group: &mut Group, password: &[u8; 16]| {
+        let key = GroupKeyPair::generate();
+        let change = through_link(group, &key, password, true);
+        let answer = submit(&c, &bob, &home, group, &change, &key);
+        if answer.status == GroupResponseStatusV1::Ok {
+            apply(group, &home, &accepted(&answer));
+        }
+        answer.status
+    };
+    for _ in 0..3 {
+        assert_eq!(ask(&mut first, &first_password), GroupResponseStatusV1::Ok);
+    }
+    // The group's budget is spent: the right password meets it.
+    assert_eq!(
+        ask(&mut first, &first_password),
+        GroupResponseStatusV1::RateLimited
+    );
+    // A wrong password is an unknown group, as ever, and spends nothing.
+    assert_eq!(
+        ask(&mut first, &random::<16>()),
+        GroupResponseStatusV1::NotFound
+    );
+    // Another group has its own budget, under the relay's: 3 + 2 = 5.
+    for _ in 0..2 {
+        assert_eq!(
+            ask(&mut second, &second_password),
+            GroupResponseStatusV1::Ok
+        );
+    }
+    assert_eq!(
+        ask(&mut second, &second_password),
+        GroupResponseStatusV1::RateLimited
+    );
+    // A member's own change isn't charged.
+    let deny = author(
+        &first,
+        &alice_key,
+        vec![GroupActionV1::DenyRequest {
+            pseudonym: first.state.requesting[0].pseudonym.clone(),
+        }],
+    );
+    accepted(&submit(&c, &alice, &home, &first, &deny, &alice_key));
+    drop(budgets);
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 

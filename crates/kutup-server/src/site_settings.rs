@@ -108,6 +108,45 @@ pub async fn name_holds(
     Ok(validate_name_holds(hold, receive).unwrap_or((180, 90)))
 }
 
+/// Joins from a group link and requests to join (docs/plans/pairwise-groups.md,
+/// slice 3), per minute per relay server and group, and per relay server in
+/// all, set under Administration → Server settings; the
+/// `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_*` variables only seed them.
+pub const CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP: &str =
+    "chat_group_link_joins_per_relay_group_per_min";
+pub const CHAT_GROUP_LINK_JOINS_PER_RELAY: &str = "chat_group_link_joins_per_relay_per_min";
+pub const MAX_LINK_JOINS_PER_MIN: i64 = 1_000_000;
+
+pub fn validate_chat_group_link_joins(value: i64) -> Result<i64, &'static str> {
+    if (1..=MAX_LINK_JOINS_PER_MIN).contains(&value) {
+        Ok(value)
+    } else {
+        Err("link joins must be between 1 and 1000000 a minute")
+    }
+}
+
+/// The link-join budgets now, `(per relay and group, per relay)`: the
+/// stored ones, else the configured first values. Read on every join, so a
+/// change applies at once.
+pub async fn chat_group_link_joins(pool: &PgPool) -> Result<(i64, i64), sqlx::Error> {
+    let (group_fallback, relay_fallback) = crate::ratelimit::chat_group_link_joins_defaults();
+    let read = |key: &'static str, fallback: i64| async move {
+        Ok::<_, sqlx::Error>(
+            sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+                .bind(key)
+                .fetch_optional(pool)
+                .await?
+                .and_then(|value| value.parse::<i64>().ok())
+                .and_then(|value| validate_chat_group_link_joins(value).ok())
+                .unwrap_or(fallback),
+        )
+    };
+    Ok((
+        read(CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP, group_fallback).await?,
+        read(CHAT_GROUP_LINK_JOINS_PER_RELAY, relay_fallback).await?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +158,18 @@ mod tests {
         assert!(validate_name_holds(29, 0).is_err());
         assert!(validate_name_holds(180, 181).is_err());
         assert!(validate_name_holds(3651, 90).is_err());
+    }
+
+    #[test]
+    fn link_joins_are_positive_and_bounded() {
+        assert_eq!(validate_chat_group_link_joins(1), Ok(1));
+        assert_eq!(validate_chat_group_link_joins(120), Ok(120));
+        assert_eq!(
+            validate_chat_group_link_joins(MAX_LINK_JOINS_PER_MIN),
+            Ok(MAX_LINK_JOINS_PER_MIN)
+        );
+        assert!(validate_chat_group_link_joins(0).is_err());
+        assert!(validate_chat_group_link_joins(MAX_LINK_JOINS_PER_MIN + 1).is_err());
     }
 
     #[test]

@@ -383,6 +383,9 @@ pub enum GroupOperationV1 {
     GetAvatar,
     /// A new encrypted avatar: the body is the ciphertext.
     PutAvatar,
+    /// Where the signer's own request to join stands: no body, signed by
+    /// the requesting pseudonym; the answer is a [`GroupRequestStatusV1`].
+    GetRequestStatus,
 }
 
 impl GroupOperationV1 {
@@ -396,6 +399,7 @@ impl GroupOperationV1 {
             Self::CallToken => 6,
             Self::GetAvatar => 7,
             Self::PutAvatar => 8,
+            Self::GetRequestStatus => 9,
         }
     }
 
@@ -898,6 +902,66 @@ pub struct GroupJoinInfoV1 {
     pub requires_approval: Option<bool>,
 }
 
+/// Where a request to join stands, as its own pseudonym asks
+/// ([`GroupOperationV1::GetRequestStatus`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupRequestStateV1 {
+    /// Still requesting: the answer carries the revision and head a cancel
+    /// names.
+    Pending,
+    /// Banned, or no longer requesting nor a member (denied, or once in and
+    /// now out).
+    Denied,
+    /// A member now (approved).
+    Member,
+    /// A pseudonym the group never saw (or no such group): never `NotFound`,
+    /// so a requester whose change was lost can tell.
+    Unknown,
+}
+
+/// The answer to [`GroupOperationV1::GetRequestStatus`]: `revision` and
+/// `head` only when pending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupRequestStatusV1 {
+    pub status: GroupRequestStateV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+impl GroupRequestStatusV1 {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        canonical(self)
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let value: Self = from_canonical(
+            bytes,
+            kutup_crypto::oblivious::MAX_BODY,
+            "group request status",
+        )?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let pending = self.status == GroupRequestStateV1::Pending;
+        if pending != (self.revision.is_some() && self.head.is_some())
+            || pending != (self.revision.is_some() || self.head.is_some())
+        {
+            return Err("a request status names its revision and head only when pending".into());
+        }
+        if let Some(head) = &self.head {
+            decode_fixed::<HASH_LEN>("head", head)?;
+        }
+        Ok(())
+    }
+}
+
 canonical_answer!(GroupJoinInfoV1, "group join info");
 canonical_answer!(GroupStateAnswerV1, "group state answer");
 canonical_answer!(GroupLogPageV1, "group log page");
@@ -1351,5 +1415,101 @@ mod tests {
             GroupJoinInfoV1::from_canonical_bytes(&bytes).unwrap(),
             for_claim
         );
+    }
+
+    #[test]
+    fn a_request_status_names_revision_and_head_only_when_pending() {
+        let pending = GroupRequestStatusV1 {
+            status: GroupRequestStateV1::Pending,
+            revision: Some(4),
+            head: Some(STANDARD.encode([9u8; 32])),
+        };
+        let bytes = pending.canonical_bytes().unwrap();
+        assert_eq!(
+            String::from_utf8(bytes.clone()).unwrap(),
+            r#"{"status":"pending","revision":4,"head":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="}"#
+        );
+        assert_eq!(
+            GroupRequestStatusV1::from_canonical_bytes(&bytes).unwrap(),
+            pending
+        );
+        for status in [
+            GroupRequestStateV1::Denied,
+            GroupRequestStateV1::Member,
+            GroupRequestStateV1::Unknown,
+        ] {
+            let bare = GroupRequestStatusV1 {
+                status,
+                revision: None,
+                head: None,
+            };
+            let bytes = bare.canonical_bytes().unwrap();
+            assert_eq!(
+                GroupRequestStatusV1::from_canonical_bytes(&bytes).unwrap(),
+                bare
+            );
+            let with_revision = GroupRequestStatusV1 {
+                revision: Some(4),
+                ..bare.clone()
+            };
+            assert!(with_revision.canonical_bytes().is_err());
+        }
+        assert_eq!(
+            String::from_utf8(
+                GroupRequestStatusV1 {
+                    status: GroupRequestStateV1::Unknown,
+                    revision: None,
+                    head: None,
+                }
+                .canonical_bytes()
+                .unwrap()
+            )
+            .unwrap(),
+            r#"{"status":"unknown"}"#
+        );
+        let half = GroupRequestStatusV1 {
+            head: None,
+            ..pending.clone()
+        };
+        assert!(half.canonical_bytes().is_err());
+        assert!(
+            GroupRequestStatusV1::from_canonical_bytes(br#"{"status":"denied","revision":4}"#)
+                .is_err()
+        );
+        let short = GroupRequestStatusV1 {
+            head: Some(STANDARD.encode([9u8; 31])),
+            ..pending
+        };
+        assert!(short.canonical_bytes().is_err());
+    }
+
+    #[test]
+    fn a_request_status_request_has_no_body_and_a_pseudonym_signature() {
+        let request = GroupRequestV1::sign_with_pseudonym(
+            HOME,
+            &GROUP,
+            GroupOperationV1::GetRequestStatus,
+            1_700_000_000,
+            &NONCE,
+            b"",
+            &key(4),
+        )
+        .unwrap();
+        let bytes = request.canonical_bytes().unwrap();
+        assert!(String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains(r#""operation":"getRequestStatus""#));
+        let parsed = GroupRequestV1::from_canonical_bytes(&bytes).unwrap();
+        assert!(parsed.verify_pseudonym().is_ok());
+        assert!(GroupRequestV1::sign_with_pseudonym(
+            HOME,
+            &GROUP,
+            GroupOperationV1::GetRequestStatus,
+            1_700_000_000,
+            &NONCE,
+            b"body",
+            &key(4),
+        )
+        .is_err());
     }
 }

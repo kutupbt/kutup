@@ -57,6 +57,10 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_CHAT_GROUP_CHANGES_PSEUDONYM_PER_MIN", 30),
     ("RATE_LIMIT_CHAT_GROUP_CHANGES_GROUP_PER_MIN", 60),
     ("RATE_LIMIT_CHAT_GROUP_LINK_PER_MIN", 30),
+    // The first values of two administrators' settings
+    // (`site_settings::chat_group_link_joins`).
+    ("RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_GROUP_PER_MIN", 120),
+    ("RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN", 1200),
     ("RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN", 600),
     ("RATE_LIMIT_CHAT_GROUP_CREATES_RELAY_PER_HOUR", 600),
     ("LOGIN_LOCKOUT_THRESHOLD", 5),
@@ -123,11 +127,17 @@ impl RateLimiter {
 
     /// Records an attempt for `key`, returning false when over the limit — mirrors `Allow`.
     pub fn allow(&self, key: &str) -> bool {
+        self.allow_up_to(key, self.limit)
+    }
+
+    /// [`allow`](Self::allow) under `limit` instead of the limiter's own: for
+    /// a limit administrators change while the server runs.
+    pub fn allow_up_to(&self, key: &str, limit: usize) -> bool {
         let now = Instant::now();
         let mut map = self.requests.lock().unwrap();
         let times = map.entry(key.to_string()).or_default();
         times.retain(|t| now.duration_since(*t) < self.window);
-        if times.len() >= self.limit {
+        if times.len() >= limit {
             return false;
         }
         times.push(now);
@@ -137,12 +147,18 @@ impl RateLimiter {
     /// Whether `key` is under its limit now, without recording an attempt
     /// (a budget charged only when something fails).
     pub fn has_room(&self, key: &str) -> bool {
+        self.has_room_up_to(key, self.limit)
+    }
+
+    /// [`has_room`](Self::has_room) under `limit` instead of the limiter's
+    /// own.
+    pub fn has_room_up_to(&self, key: &str, limit: usize) -> bool {
         let now = Instant::now();
         let mut map = self.requests.lock().unwrap();
         match map.get_mut(key) {
             Some(times) => {
                 times.retain(|t| now.duration_since(*t) < self.window);
-                times.len() < self.limit
+                times.len() < limit
             }
             None => true,
         }
@@ -325,6 +341,31 @@ pub static CHAT_GROUP_LINK: LazyLock<RateLimiter> = LazyLock::new(|| {
         Duration::from_secs(60),
     )
 });
+/// Joins from a link and requests to join that passed their link's proof,
+/// per minute per relay server and group, as administrators set it
+/// (`site_settings::chat_group_link_joins`, 120 at first).
+pub static CHAT_GROUP_LINK_JOINS_RELAY_GROUP: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::new(0, Duration::from_secs(60)));
+/// The same, per minute per relay server across all groups (1200 at first).
+pub static CHAT_GROUP_LINK_JOINS_RELAY: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::new(0, Duration::from_secs(60)));
+
+/// The link-join budgets' first values, before administrators set them,
+/// `(per relay and group, per relay)`
+/// (`RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_GROUP_PER_MIN`,
+/// `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN`), within the settings'
+/// own bounds.
+pub fn chat_group_link_joins_defaults() -> (i64, i64) {
+    let read = |name, default| {
+        i64::try_from(env_limit(name, default))
+            .unwrap_or(i64::MAX)
+            .clamp(1, crate::site_settings::MAX_LINK_JOINS_PER_MIN)
+    };
+    (
+        read("RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_GROUP_PER_MIN", 120),
+        read("RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN", 1200),
+    )
+}
 /// Failed group requests: 600 / minute / relay server
 /// (`RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN`): charged only when a
 /// request fails (unknown group, stranger, refused change), so junk from one
@@ -757,6 +798,8 @@ pub fn spawn_cleanup() {
             CHAT_GROUP_CHANGES_PSEUDONYM.cleanup();
             CHAT_GROUP_CHANGES_GROUP.cleanup();
             CHAT_GROUP_LINK.cleanup();
+            CHAT_GROUP_LINK_JOINS_RELAY_GROUP.cleanup();
+            CHAT_GROUP_LINK_JOINS_RELAY.cleanup();
             CHAT_GROUP_FAILURES_RELAY.cleanup();
             CHAT_GROUP_CREATES_RELAY.cleanup();
             cleanup_totp_tracker();
