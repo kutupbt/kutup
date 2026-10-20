@@ -1533,8 +1533,27 @@ title.
 - **Periodic sync (web).** Each member group is caught up 15 s after the app
   opens, then about every 10 minutes (30 in a hidden tab), ±20%, one group
   at a time.
-- **Waiting on the server:** `GetRequestStatus` (cancel, and "denied"), and
-  `PutAvatar`/`GetAvatar` (the avatar).
+- **A request's outcome** (`GetRequestStatus`, #285). The asker's device
+  asks when the group opens and at each periodic sync: approved takes the
+  whole state (a member now), denied or unknown ends the group as `gone`
+  here. Content arriving for a group still `requesting` settles the request
+  first, so the first messages after an approval aren't dropped (only
+  members send to it). Withdrawing is a `CancelRequest` at the revision and
+  head the status names, so it works after a link reset too; it is asked
+  again once if the log moved meanwhile.
+- **The avatar** (#288). The image is scaled down on the device (256×256,
+  WebP, under 16 KiB, so the second bucket every home takes), padded to its
+  bucket and sealed under a fresh key (`kutup_crypto::chat_group::
+  seal_group_avatar`, vector `chat-group-avatar-v1.json`); uploaded with
+  `PutAvatar` in the route's padded body; then `ModifyAttribute` names the
+  blob's SHA-256 in the clear and `GroupAvatarV1 {version, key,
+  contentType}` in the sealed attribute. Members read it back with
+  `GetAvatar` and check the hash the state names (a home serving another
+  blob is caught); a link's preview reads it under the link proof and opens
+  it with the key (the join info names no hash; the AEAD holds). The web
+  caches pictures by hash. The home's refusals (`avatarTooLarge`,
+  `avatarStorageFull`, `avatarMissing`) are said as such, as every refused
+  group change now is.
 
 ### Slice 2: client notes (for the server design)
 
