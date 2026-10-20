@@ -42,20 +42,38 @@ pub struct ContactListTiming {
 
 /// One entry as the list holds it: its write revision, and what it says
 /// (fields of a later version included, to be written back as they came).
+/// `None`: an entry of a later version this device can't read; it is kept as
+/// it is, never overwritten here.
 #[derive(Debug, Clone)]
 struct Listed {
     revision: u64,
-    entry: ChatContactEntryV1,
+    entry: Option<ChatContactEntryV1>,
 }
 
 impl Listed {
-    fn order(&self) -> (u64, bool, u32) {
-        contact_order(
-            self.entry.control.revision,
-            self.entry.state,
-            self.entry.control.source_device_id,
-        )
+    fn order(&self) -> Option<(u64, bool, u32)> {
+        self.entry.as_ref().map(|entry| {
+            contact_order(
+                entry.control.revision,
+                entry.state,
+                entry.control.source_device_id,
+            )
+        })
     }
+}
+
+/// An entry the account head lists that can't be what it claims: the read
+/// fails as a whole, never with the entry left out.
+fn unreadable(what: &str) -> ChatError {
+    ChatError::Trust(format!("contact list: {what}"))
+}
+
+/// Whether `plain` is an entry of a version after this device's.
+fn later_version(plain: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(plain)
+        .ok()
+        .and_then(|value| value.get("version")?.as_u64())
+        .is_some_and(|version| version > u64::from(CONTACT_ENTRY_VERSION))
 }
 
 /// The list's keys and what this device knows of it.
@@ -154,13 +172,13 @@ fn entry_of(
     contact: &ContactRecord,
     account: AccountRef,
     profile_key: Option<&[u8]>,
-    listed: Option<&Listed>,
+    listed: Option<&ChatContactEntryV1>,
 ) -> ChatContactEntryV1 {
     let blocked = contact.state == ContactState::Blocked;
     let blocked_at_ms = blocked.then(|| {
         listed
-            .filter(|listed| listed.entry.state == ContactState::Blocked)
-            .and_then(|listed| listed.entry.blocked_at_ms)
+            .filter(|listed| listed.state == ContactState::Blocked)
+            .and_then(|listed| listed.blocked_at_ms)
             .unwrap_or(contact.updated_at_ms)
     });
     ChatContactEntryV1 {
@@ -175,14 +193,14 @@ fn entry_of(
         blocked_at_ms,
         profile_key: profile_key
             .map(|key| STANDARD.encode(key))
-            .or_else(|| listed.and_then(|listed| listed.entry.profile_key.clone())),
+            .or_else(|| listed.and_then(|listed| listed.profile_key.clone())),
         control: ContactEntryControlV1 {
             revision: contact.revision,
             source_device_id: contact.source_device_id,
             updated_at_ms: contact.updated_at_ms,
         },
         unknown: listed
-            .map(|listed| listed.entry.unknown.clone())
+            .map(|listed| listed.unknown.clone())
             .unwrap_or_default(),
     }
 }
@@ -222,9 +240,11 @@ impl Engine {
         self.contact_list.as_ref().is_some_and(|list| list.full)
     }
 
-    /// Reads the list: every entry that opens under its id, about the account
-    /// that id is derived from (an entry filed under another contact's id is
-    /// skipped).
+    /// Reads the list: every entry the account head lists must open under its
+    /// id, at the revision the head lists, and be about the account that id is
+    /// derived from. Anything else fails the whole read (the server can't
+    /// leave an entry out, or serve an older one under the listed revision).
+    /// An entry of a later version is kept as it is.
     async fn read_contact_list(&mut self) -> Result<()> {
         let transport = std::rc::Rc::clone(&self.transport);
         let items = transport.fetch_contact_list().await?;
@@ -234,23 +254,30 @@ impl Engine {
         };
         let mut listed = BTreeMap::new();
         for item in items {
-            let Ok(id) = chat_contact_list::decode_entry_id(&item.id) else {
-                continue;
-            };
-            let Ok(sealed) = STANDARD.decode(&item.envelope) else {
-                continue;
-            };
-            // The revision is the one the entry was sealed at, whatever the
-            // server says.
-            let Ok(opened) = list.key.open(&list.binding, &id, &sealed) else {
-                continue;
-            };
-            let Ok(entry) = ChatContactEntryV1::from_bytes(&opened.plain) else {
-                continue;
-            };
-            if list.entry_id(&entry.account) != item.id {
-                continue;
+            let id = chat_contact_list::decode_entry_id(&item.id)
+                .map_err(|_| unreadable("an entry id is malformed"))?;
+            let sealed = STANDARD
+                .decode(&item.envelope)
+                .map_err(|_| unreadable("an entry is not base64"))?;
+            let opened = list
+                .key
+                .open(&list.binding, &id, &sealed)
+                .map_err(|_| unreadable("an entry doesn't open under its id"))?;
+            // The revision it was sealed at is the one the head lists: an
+            // older envelope of the same id can't stand in for it.
+            if opened.revision != item.revision {
+                return Err(unreadable("an entry is not the revision listed"));
             }
+            let entry = if later_version(&opened.plain) {
+                None
+            } else {
+                let entry = ChatContactEntryV1::from_bytes(&opened.plain)
+                    .map_err(|_| unreadable("an entry doesn't read"))?;
+                if list.entry_id(&entry.account) != item.id {
+                    return Err(unreadable("an entry is filed under another id"));
+                }
+                Some(entry)
+            };
             listed.insert(
                 item.id,
                 Listed {
@@ -269,11 +296,21 @@ impl Engine {
         let list = self.contact_list.as_ref().expect("enabled by the caller");
         let account = account_of(&contact.peer)?;
         let listed = list.listed.get(&list.entry_id(&account));
-        if let Some(listed) = listed {
-            if listed.order() > order_of(contact) {
+        // An entry of a later version is that version's to write: this
+        // device's change still reaches the account's other devices by the
+        // contact control, and the later version merges it.
+        if listed.is_some_and(|listed| listed.entry.is_none()) {
+            return Ok(Step::Nothing);
+        }
+        let listed = listed.and_then(|listed| listed.entry.as_ref().map(|entry| (listed, entry)));
+        if let Some((listed, entry)) = listed {
+            if listed
+                .order()
+                .is_some_and(|order| order > order_of(contact))
+            {
                 return Ok(Step::Take(
-                    Box::new(record_of(&contact.peer, &listed.entry)),
-                    listed_profile_key(&listed.entry),
+                    Box::new(record_of(&contact.peer, entry)),
+                    listed_profile_key(entry),
                 ));
             }
         }
@@ -287,12 +324,17 @@ impl Engine {
             .peer_profile(&contact.peer)
             .await?
             .map(|profile| profile.key);
-        let entry = entry_of(contact, account, key.as_deref(), listed);
-        let same = listed.is_some_and(|listed| {
-            listed.order() == order_of(contact)
-                && listed.entry.state == entry.state
-                && listed.entry.previous_state == entry.previous_state
-                && listed.entry.profile_key == entry.profile_key
+        let entry = entry_of(
+            contact,
+            account,
+            key.as_deref(),
+            listed.map(|(_, entry)| entry),
+        );
+        let same = listed.is_some_and(|(listed, written)| {
+            listed.order() == Some(order_of(contact))
+                && written.state == entry.state
+                && written.previous_state == entry.previous_state
+                && written.profile_key == entry.profile_key
         });
         Ok(if same {
             Step::Nothing
@@ -420,7 +462,7 @@ impl Engine {
                         id,
                         Listed {
                             revision,
-                            entry: entry.clone(),
+                            entry: Some(entry.clone()),
                         },
                     );
                     return Ok(ContactListWrite::Stored);
@@ -444,9 +486,10 @@ impl Engine {
         let oldest = |state: ContactState| {
             list.listed
                 .iter()
-                .filter(|(_, listed)| listed.entry.state == state)
-                .min_by_key(|(_, listed)| listed.entry.control.updated_at_ms)
-                .map(|(id, listed)| (id.clone(), listed.revision))
+                .filter_map(|(id, listed)| Some((id, listed, listed.entry.as_ref()?)))
+                .filter(|(_, _, entry)| entry.state == state)
+                .min_by_key(|(_, _, entry)| entry.control.updated_at_ms)
+                .map(|(id, listed, _)| (id.clone(), listed.revision))
         };
         let Some((id, revision)) =
             oldest(ContactState::Rejected).or_else(|| oldest(ContactState::PendingOutgoing))
@@ -487,7 +530,7 @@ impl Engine {
             .expect("checked above")
             .listed
             .values()
-            .map(|listed| listed.entry.clone())
+            .filter_map(|listed| listed.entry.clone())
             .collect();
         let mut taken = 0;
         for entry in listed {

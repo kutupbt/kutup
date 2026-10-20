@@ -39,12 +39,27 @@ const WRITE_DELAY_MAX_MS: i64 = 10 * 60 * 1000;
 /// The list is read again at most this often by a running device.
 const READ_EVERY_MS: i64 = 10 * 60 * 1000;
 
-/// One entry as the list holds it: its revision and what it says.
+/// One entry as the list holds it: its revision and what it says (`None`:
+/// an entry of a later version this device can't read, kept as it is and
+/// never overwritten here).
 #[derive(Debug, Clone, Copy)]
 struct Listed {
     revision: u64,
-    status: GroupListStatus,
-    join_epoch: u32,
+    said: Option<(GroupListStatus, u32)>,
+}
+
+/// An entry the account head lists that can't be what it claims: the read
+/// fails as a whole, never with the entry left out.
+fn unreadable(what: &str) -> ChatError {
+    ChatError::Trust(format!("group list: {what}"))
+}
+
+/// Whether `plain` is an entry of a version after this device's.
+fn later_version(plain: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(plain)
+        .ok()
+        .and_then(|value| value.get("version")?.as_u64())
+        .is_some_and(|version| version > u64::from(kutup_chat_proto::group::GROUP_FORMAT_VERSION))
 }
 
 /// The list's keys and what this device knows of it.
@@ -141,9 +156,7 @@ impl Engine {
     pub(crate) fn listed_join(&self, group_id: &str) -> Option<(GroupListStatus, u32)> {
         let list = self.group_list.as_ref()?;
         let id = list.entry_id(group_id).ok()?;
-        list.listed
-            .get(&id)
-            .map(|listed| (listed.status, listed.join_epoch))
+        list.listed.get(&id).and_then(|listed| listed.said)
     }
 
     /// Makes `group_id`'s entry due when the list doesn't say what the group
@@ -195,7 +208,12 @@ impl Engine {
             };
             let list = self.group_list.as_ref().expect("checked above");
             let id = list.entry_id(&record.group_id)?;
-            if list.listed.get(&id).map(|listed| listed.status) != Some(entry.status) {
+            let listed = list.listed.get(&id);
+            // An entry of a later version is that version's to write.
+            let later = listed.is_some_and(|listed| listed.said.is_none());
+            if !later
+                && listed.and_then(|listed| listed.said).map(|said| said.0) != Some(entry.status)
+            {
                 self.write_group_entry(&id, &entry).await?;
                 written += 1;
             }
@@ -231,8 +249,7 @@ impl Engine {
                     id.to_string(),
                     Listed {
                         revision,
-                        status: entry.status,
-                        join_epoch: entry.join_epoch,
+                        said: Some((entry.status, entry.join_epoch)),
                     },
                 );
                 return Ok(());
@@ -245,8 +262,11 @@ impl Engine {
         ))
     }
 
-    /// Reads the list: what each entry says, opened (an entry that doesn't
-    /// open, or is filed under another group's id, is skipped).
+    /// Reads the list: every entry the account head lists must open under its
+    /// id, at the revision the head lists, and be about the group that id is
+    /// derived from; anything else fails the whole read (the server can't
+    /// leave an entry out, or serve an older one under the listed revision).
+    /// An entry of a later version is kept as it is.
     async fn read_group_list(&mut self) -> Result<Vec<GroupListEntryV1>> {
         let transport = std::rc::Rc::clone(&self.transport);
         let items = transport.fetch_group_list().await?;
@@ -256,29 +276,40 @@ impl Engine {
         };
         let mut entries = Vec::new();
         for item in items {
-            let Ok(id) = chat_group_list::decode_entry_id(&item.id) else {
+            let id = chat_group_list::decode_entry_id(&item.id)
+                .map_err(|_| unreadable("an entry id is malformed"))?;
+            let sealed = STANDARD
+                .decode(&item.envelope)
+                .map_err(|_| unreadable("an entry is not base64"))?;
+            let opened = list
+                .key
+                .open(&list.binding, &id, &sealed)
+                .map_err(|_| unreadable("an entry doesn't open under its id"))?;
+            // The revision it was sealed at is the one the head lists: an
+            // older envelope of the same id can't stand in for it.
+            if opened.revision != item.revision {
+                return Err(unreadable("an entry is not the revision listed"));
+            }
+            if later_version(&opened.plain) {
+                list.listed.insert(
+                    item.id,
+                    Listed {
+                        revision: opened.revision,
+                        said: None,
+                    },
+                );
                 continue;
-            };
-            let Ok(sealed) = STANDARD.decode(&item.envelope) else {
-                continue;
-            };
-            // The revision is the one the entry was sealed at, whatever the
-            // server says.
-            let Ok(opened) = list.key.open(&list.binding, &id, &sealed) else {
-                continue;
-            };
-            let Ok(entry) = GroupListEntryV1::from_canonical_bytes(&opened.plain) else {
-                continue;
-            };
+            }
+            let entry = GroupListEntryV1::from_canonical_bytes(&opened.plain)
+                .map_err(|_| unreadable("an entry doesn't read"))?;
             if list.entry_id(&entry.group_id).ok().as_deref() != Some(item.id.as_str()) {
-                continue;
+                return Err(unreadable("an entry is filed under another id"));
             }
             list.listed.insert(
                 item.id,
                 Listed {
                     revision: opened.revision,
-                    status: entry.status,
-                    join_epoch: entry.join_epoch,
+                    said: Some((entry.status, entry.join_epoch)),
                 },
             );
             entries.push(entry);

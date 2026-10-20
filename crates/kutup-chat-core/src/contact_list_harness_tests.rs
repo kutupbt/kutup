@@ -340,3 +340,104 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
     assert_eq!(world.pin_writes.get(), 1);
     assert!(alice.engine.pins_due.is_empty());
 }
+
+#[test]
+fn contacts_an_older_entry_served_under_the_listed_revision_is_refused() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut carol = world.person(0xc3);
+    say(&mut carol, &alice, "hi");
+    alice.receive();
+    // Accept (written), then block (written at once): two revisions.
+    block_on(
+        alice
+            .engine
+            .accept_contact(&carol.account, ISSUED_AT, &mut rng()),
+    )
+    .unwrap();
+    flush(&mut alice);
+    let id = world.contact_lists.borrow()[&alice.account]
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    let accepted = world.contact_lists.borrow()[&alice.account][&id].1.clone();
+    block(&mut alice, &carol);
+    let (listed_revision, _) = world.contact_lists.borrow()[&alice.account][&id].clone();
+    // The server hands back the accept's envelope under the block's revision.
+    world
+        .contact_lists
+        .borrow_mut()
+        .get_mut(&alice.account)
+        .unwrap()
+        .insert(id.clone(), (listed_revision, accepted));
+    let mut alice2 = world.link_device(&alice);
+    assert!(block_on(alice2.engine.sync_contact_list()).is_err());
+    // And a clean device holds its mailbox rather than take the old accept.
+    assert!(block_on(alice2.engine.receive(&mut rng())).is_err());
+    assert_eq!(state_of(&alice2, &carol), None);
+}
+
+#[test]
+fn contacts_a_listed_entry_that_does_not_open_fails_the_read() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut carol = world.person(0xc3);
+    say(&mut carol, &alice, "hi");
+    alice.receive();
+    block(&mut alice, &carol);
+    let id = world.contact_lists.borrow()[&alice.account]
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    world
+        .contact_lists
+        .borrow_mut()
+        .get_mut(&alice.account)
+        .unwrap()
+        .get_mut(&id)
+        .unwrap()
+        .1 = STANDARD.encode([0u8; chat_contact_list::SEALED_LEN]);
+    let mut alice2 = world.link_device(&alice);
+    assert!(block_on(alice2.engine.sync_contact_list()).is_err());
+}
+
+#[test]
+fn contacts_an_entry_of_a_later_version_is_kept_as_it_is() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut carol = world.person(0xc3);
+    say(&mut carol, &alice, "hi");
+    alice.receive();
+    block(&mut alice, &carol);
+    // A later version rewrote Carol's entry in a shape this device can't read.
+    let (key, binding) = list_key(&alice);
+    let account: kutup_crypto::account_ref::AccountRef = carol.account.parse().unwrap();
+    let id = key.entry_id(&account);
+    let text = chat_contact_list::encode_entry_id(&id);
+    let (revision, _) = world.contact_lists.borrow()[&alice.account][&text].clone();
+    let plain =
+        serde_json::to_vec(&serde_json::json!({ "version": 2, "anything": "new" })).unwrap();
+    let sealed = key.seal(&binding, &id, revision + 1, &plain).unwrap();
+    let envelope = STANDARD.encode(sealed);
+    world
+        .contact_lists
+        .borrow_mut()
+        .get_mut(&alice.account)
+        .unwrap()
+        .insert(text.clone(), (revision + 1, envelope.clone()));
+    // Reading works; an unblock here leaves the later version's entry alone.
+    block_on(alice.engine.sync_contact_list()).unwrap();
+    block_on(
+        alice
+            .engine
+            .unblock_contact(&carol.account, ISSUED_AT, &mut rng()),
+    )
+    .unwrap();
+    flush(&mut alice);
+    assert_eq!(
+        world.contact_lists.borrow()[&alice.account][&text],
+        (revision + 1, envelope)
+    );
+}

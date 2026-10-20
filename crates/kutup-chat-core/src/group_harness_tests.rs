@@ -4097,3 +4097,30 @@ fn group_list_a_rotated_profile_key_reaches_the_group() {
         .group_texts(&group_id)
         .contains(&"after the rotation".to_string()));
 }
+
+#[test]
+fn group_list_an_older_entry_served_under_the_listed_revision_is_refused() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    bob.flush_list();
+    let (id, member) = {
+        let lists = world.group_lists.borrow();
+        let (id, (_, envelope)) = lists[&bob.account].iter().next().unwrap();
+        (id.clone(), envelope.clone())
+    };
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    let (listed, _) = world.group_lists.borrow()[&bob.account][&id].clone();
+    // The "member" envelope under the "left" revision: refused, not followed.
+    world
+        .group_lists
+        .borrow_mut()
+        .get_mut(&bob.account)
+        .unwrap()
+        .insert(id, (listed, member));
+    let mut bob2 = world.link_device(&bob);
+    assert!(block_on(bob2.engine.sync_group_list(&mut rng())).is_err());
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+}
