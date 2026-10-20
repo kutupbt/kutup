@@ -444,6 +444,19 @@ to see members").**
   - The join epoch counts the account's joins of the group: 0 at the first,
     one more at each rejoin after leaving or removal (the device's record and
     the list entry carry it), so a rejoin is a new pseudonym.
+  - **Which epoch a join takes:** one past the highest the device's own
+    record or the account's group list names for the group (an unclaimed
+    older invitation keeps its epoch). The list is read before an
+    invitation's epoch is derived, and again before the claim, so another
+    device's join or leave meanwhile counts.
+  - **Residual:** an account that joined, left, and lost every record of it
+    (the only device gone, and both list writes lost within their random
+    delay) can rejoin at an epoch it used before. The group's home would then
+    see a pseudonym it knew come back, linking the two memberships.
+    Planned follow-up (not in this change): the home keeps hashes of every
+    pseudonym the group has seen and, once a claim's proof passes, answers
+    `pseudonymUsed`; the client then retries at the next epoch, up to a cap,
+    and recovery tries as many epochs. This note stays until that lands.
   - Without the account key the pseudonyms of one account in different
     groups or epochs are unrelated, so they can't be linked across groups.
     This holds as long as the account key is safe; a leaked key exposes the
@@ -468,8 +481,12 @@ to see members").**
     check it against the authority key of that account's verified manifest.
     Every device derives the authority from the master key, so devices
     coming and going (a revoked or repaired one) never make a member
-    unverified, a new device needs to sign nothing, and a revoked device
-    can't forge a binding;
+    unverified, and a new device needs to sign nothing;
+  - **a binding is a transferable proof:** any member can show an outsider a
+    signature by account X's long-lived authority saying X is in group G.
+    Membership is hidden from the home, not from what members choose to
+    show. Signal's zkgroup credentials avoid this; ours don't (it was as true
+    with device-signed bindings);
   - for each pending slot, the invited AccountRef;
   - the title, description, timer and avatar reference.
   - The limits are Signal's: a title of at most 1024 encrypted bytes and a

@@ -56,10 +56,11 @@ const CHANGE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/change-hash/v1\0";
 const STATE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/state-hash/v1\0";
 
 /// A group's home, as its id binds it: the server the group lives on, for
-/// its whole life, and the federation identity document it was pinned at
-/// (the notary's key follows from it). A member who keeps the master key
-/// can't make the group live elsewhere: a home of theirs is another group id,
-/// which no member's binding names.
+/// its whole life, and the federation identity document it was pinned at.
+/// Every notary a member takes is verified against the identity history
+/// followed from that pin (chat-core's `GroupRecordV1::followed_history`).
+/// A member who keeps the master key can't make the group live elsewhere: a
+/// home of theirs is another group id, which no member's binding names.
 #[derive(Clone, Copy, Debug)]
 pub struct GroupHome<'a> {
     pub server: &'a str,
@@ -67,25 +68,30 @@ pub struct GroupHome<'a> {
     pub identity_document_hash: &'a str,
 }
 
-/// The longest server name or identity hash a home binds (a DNS name is at
-/// most 253 bytes): anything longer, or empty, is refused, never cut.
-const MAX_HOME_FIELD: usize = 255;
-
 impl GroupHome<'_> {
     /// The home's digest: SHA-256 over the domain, the server name and the
-    /// identity document hash (each u16-length-prefixed, 1 to 255 bytes),
-    /// then the identity sequence (u64 big-endian). This is the pin made at
-    /// the group's creation, kept for its life: the home's identity rotating
-    /// later doesn't move the id (members follow the rotation from the pin).
+    /// identity document hash (each u16-length-prefixed), then the identity
+    /// sequence (u64 big-endian). Only canonical spellings are taken, so one
+    /// home has one id: the server a lowercase DNS name with no trailing dot
+    /// ([`crate::account_ref::valid_server`]), the hash exactly 64 lowercase
+    /// hex digits; anything else is refused, never normalised. This is the
+    /// pin made at the group's creation, kept for its life: the home's
+    /// identity rotating later doesn't move the id (members follow the
+    /// rotation from the pin).
     fn digest(&self) -> Result<[u8; 32]> {
+        let canonical_hash = self.identity_document_hash.len() == 64
+            && self
+                .identity_document_hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !crate::account_ref::valid_server(self.server) || !canonical_hash {
+            return Err(CryptoError::InvalidInput(
+                "a group home must be a canonical server name and identity hash".into(),
+            ));
+        }
         let mut hash = Sha256::new();
         hash.update(HOME_DOMAIN);
         for text in [self.server, self.identity_document_hash] {
-            if text.is_empty() || text.len() > MAX_HOME_FIELD {
-                return Err(CryptoError::InvalidInput(
-                    "a group home field has an invalid length".into(),
-                ));
-            }
             hash.update((text.len() as u16).to_be_bytes());
             hash.update(text.as_bytes());
         }
@@ -514,22 +520,33 @@ mod tests {
                 ..HOME
             })
         );
-        // A field too long for its prefix, or empty, is refused, not cut.
+        // Only canonical spellings: one home, one id. Anything else is
+        // refused, never normalised (or cut).
+        let upper_hash = "0F".repeat(32);
         let long = "a".repeat(256);
-        assert!(GroupMasterKey::from_bytes(
-            &[7u8; 32],
-            GroupHome {
-                server: &long,
-                ..HOME
-            }
-        )
-        .is_err());
-        assert!(GroupMasterKey::from_bytes(&[7u8; 32], GroupHome { server: "", ..HOME }).is_err());
-        assert!(GroupMasterKey::generate(GroupHome {
-            identity_document_hash: &long,
-            ..HOME
-        })
-        .is_err());
+        for server in [
+            "Home.Example",
+            "home.example.",
+            "",
+            "home",
+            "10.0.0.1",
+            long.as_str(),
+        ] {
+            assert!(
+                GroupMasterKey::from_bytes(&[7u8; 32], GroupHome { server, ..HOME }).is_err(),
+                "{server}"
+            );
+        }
+        for hash in [upper_hash.as_str(), "0f", "", long.as_str()] {
+            assert!(
+                GroupMasterKey::generate(GroupHome {
+                    identity_document_hash: hash,
+                    ..HOME
+                })
+                .is_err(),
+                "{hash}"
+            );
+        }
     }
 
     fn master() -> GroupMasterKey {
