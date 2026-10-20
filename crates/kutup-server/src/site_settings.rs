@@ -108,6 +108,35 @@ pub async fn name_holds(
     Ok(validate_name_holds(hold, receive).unwrap_or((180, 90)))
 }
 
+/// Joins from a group link and requests to join, per minute per relay
+/// server (docs/plans/pairwise-groups.md, slice 3), set under
+/// Administration → Server settings;
+/// `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN` only seeds it.
+pub const CHAT_GROUP_LINK_JOINS_PER_RELAY: &str = "chat_group_link_joins_per_relay_per_min";
+
+pub fn validate_chat_group_link_joins_per_relay(value: i64) -> Result<i64, &'static str> {
+    if (1..=1_000_000).contains(&value) {
+        Ok(value)
+    } else {
+        Err("link joins per relay server must be between 1 and 1000000 a minute")
+    }
+}
+
+/// The link-join budget now: the stored one, else the configured first
+/// value. Read on every join, so a change applies at once.
+pub async fn chat_group_link_joins_per_relay(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    let fallback = crate::ratelimit::chat_group_link_joins_relay_default();
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+            .bind(CHAT_GROUP_LINK_JOINS_PER_RELAY)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|value| validate_chat_group_link_joins_per_relay(value).ok())
+            .unwrap_or(fallback),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +148,18 @@ mod tests {
         assert!(validate_name_holds(29, 0).is_err());
         assert!(validate_name_holds(180, 181).is_err());
         assert!(validate_name_holds(3651, 90).is_err());
+    }
+
+    #[test]
+    fn link_joins_per_relay_are_positive() {
+        assert_eq!(validate_chat_group_link_joins_per_relay(1), Ok(1));
+        assert_eq!(validate_chat_group_link_joins_per_relay(120), Ok(120));
+        assert_eq!(
+            validate_chat_group_link_joins_per_relay(1_000_000),
+            Ok(1_000_000)
+        );
+        assert!(validate_chat_group_link_joins_per_relay(0).is_err());
+        assert!(validate_chat_group_link_joins_per_relay(1_000_001).is_err());
     }
 
     #[test]

@@ -20,8 +20,8 @@ use kutup_chat_proto::group::{
 };
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
-    GroupLogQueryV1, GroupOperationV1, GroupRequestV1, GroupResponseStatusV1, GroupResponseV1,
-    GroupStateAnswerV1, PSEUDONYM_USED,
+    GroupLogQueryV1, GroupOperationV1, GroupRequestStateV1, GroupRequestStatusV1, GroupRequestV1,
+    GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1, PSEUDONYM_USED,
 };
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
@@ -917,6 +917,186 @@ fn requesters_and_approved_members_count_as_seen() {
     let (slot_id, claim_key) = add_slot(&c, &alice, &home, &mut group, &alice_key);
     let reclaim = claim(&group, &slot_id, &claim_key, &dave_key);
     assert_used(&submit(&c, &bob, &home, &group, &reclaim, &dave_key));
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// The signer's own request status, as the home answers it.
+fn request_status(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group_id: &[u8; 32],
+    key: &GroupKeyPair,
+) -> GroupRequestStatusV1 {
+    let request = signed(home, group_id, GroupOperationV1::GetRequestStatus, b"", key);
+    let answer = exchange(c, user, home, &request);
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    GroupRequestStatusV1::from_canonical_bytes(&answer.body().unwrap()).unwrap()
+}
+
+/// A requester follows its request: pending (with what a cancel names),
+/// member once approved, denied once denied or cancelled, and unknown for
+/// a pseudonym the group never saw or a group that doesn't exist.
+#[test]
+fn a_requester_learns_where_its_request_stands() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let group_id = group.id;
+    let status = |key: &GroupKeyPair| request_status(&c, &bob, &home, &group_id, key);
+
+    let stranger = GroupKeyPair::generate();
+    assert_eq!(status(&stranger).status, GroupRequestStateV1::Unknown);
+    let nowhere = request_status(&c, &bob, &home, &random::<32>(), &stranger);
+    assert_eq!(nowhere.status, GroupRequestStateV1::Unknown);
+    assert_eq!(nowhere.revision, None);
+
+    // Carol asks; she is pending at the group's revision and head.
+    let carol_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &carol_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &carol_key));
+    apply(&mut group, &home, &asked);
+    let pending = status(&carol_key);
+    assert_eq!(pending.status, GroupRequestStateV1::Pending);
+    assert_eq!(pending.revision, Some(group.state.revision));
+    assert_eq!(pending.head, Some(b64(&group.head)));
+
+    // Alice approves her: a member.
+    let approve = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ApproveRequest {
+            pseudonym: b64(&carol_key.public_key()),
+        }],
+    );
+    let approved = accepted(&submit(&c, &alice, &home, &group, &approve, &alice_key));
+    apply(&mut group, &home, &approved);
+    assert_eq!(status(&carol_key).status, GroupRequestStateV1::Member);
+
+    // Dave asks and is denied (and so banned).
+    let dave_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &dave_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &dave_key));
+    apply(&mut group, &home, &asked);
+    let deny = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::DenyRequest {
+            pseudonym: b64(&dave_key.public_key()),
+        }],
+    );
+    let denied = accepted(&submit(&c, &alice, &home, &group, &deny, &alice_key));
+    apply(&mut group, &home, &denied);
+    let answer = status(&dave_key);
+    assert_eq!(answer.status, GroupRequestStateV1::Denied);
+    assert_eq!((answer.revision, answer.head), (None, None));
+
+    // Erin asks and cancels: neither requesting nor a member any more.
+    let erin_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &erin_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &erin_key));
+    apply(&mut group, &home, &asked);
+    let cancel = author(&group, &erin_key, vec![GroupActionV1::CancelRequest]);
+    let cancelled = accepted(&submit(&c, &bob, &home, &group, &cancel, &erin_key));
+    apply(&mut group, &home, &cancelled);
+    assert_eq!(status(&erin_key).status, GroupRequestStateV1::Denied);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// Sets the link-join budget per relay server (an administrator's setting),
+/// returning the one it replaced; `None` without an administrator.
+fn set_link_joins_per_relay(c: &Client, base: &str, per_minute: i64) -> Option<i64> {
+    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+        eprintln!("KUTUP_LIVE_ADMIN unset; skipping");
+        return None;
+    };
+    let (name, password) = admin.split_once(':').unwrap();
+    let token = admin_token(c, base, password, name);
+    let before: Value = bearer(c.get(format!("{base}/api/admin/settings")), &token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let r = bearer(c.put(format!("{base}/api/admin/settings")), &token)
+        .json(&serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": per_minute }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let settings: Value = r.json().unwrap();
+    assert_eq!(settings["chatGroupLinkJoinsPerRelayPerMin"], per_minute);
+    let r = bearer(c.put(format!("{base}/api/admin/settings")), &token)
+        .json(&serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": 0 }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    before["chatGroupLinkJoinsPerRelayPerMin"].as_i64()
+}
+
+/// Joins and requests through links are budgeted per relay server, as the
+/// administrators set it, before the change is checked; other changes
+/// aren't. (The gate runs these tests one at a time, so the budget is this
+/// test's alone while it runs.)
+#[test]
+fn link_joins_are_budgeted_per_relay_server() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let Some(before) = set_link_joins_per_relay(&c, &base, 3) else {
+        purge_accounts(&c, &base, &[&alice, &bob]);
+        return;
+    };
+    // Past the window of the joins earlier tests made through this relay.
+    std::thread::sleep(std::time::Duration::from_secs(61));
+
+    for _ in 0..3 {
+        let key = GroupKeyPair::generate();
+        let asks = through_link(&group, &key, &password, true);
+        let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &key));
+        apply(&mut group, &home, &asked);
+    }
+    // The next one is refused before its change is checked: even a wrong
+    // password meets the budget, not an unknown group.
+    let key = GroupKeyPair::generate();
+    let wrong = through_link(&group, &key, &random::<16>(), false);
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &wrong, &key).status,
+        GroupResponseStatusV1::RateLimited
+    );
+    // A member's own change isn't charged.
+    let deny = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::DenyRequest {
+            pseudonym: group.state.requesting[0].pseudonym.clone(),
+        }],
+    );
+    accepted(&submit(&c, &alice, &home, &group, &deny, &alice_key));
+
+    set_link_joins_per_relay(&c, &base, before);
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 

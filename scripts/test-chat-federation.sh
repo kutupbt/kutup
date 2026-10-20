@@ -142,8 +142,10 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 run_phase account-ids
 
 # Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
-# home's signed X-Wing key config, sealed requests relayed and answered.
+# home's signed X-Wing key config, sealed requests relayed and answered. A's
+# administrator (set up in the setup phase) sets the link-join budget.
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+KUTUP_LIVE_ADMIN="admina:federation-live-password" \
   cargo test -p kutup-server --test chat_groups_live -- --test-threads=1 --nocapture
 # The account's group list (§5): sealed entries by keyed id, the revision
 # from each entry's header, the head's chatGroups scope, the limit.

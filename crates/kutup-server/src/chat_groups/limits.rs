@@ -7,8 +7,8 @@ use base64::Engine as _;
 
 use crate::ratelimit::{
     CHAT_GROUP_CHANGES_GROUP, CHAT_GROUP_CHANGES_PSEUDONYM, CHAT_GROUP_CREATES_RELAY,
-    CHAT_GROUP_FAILURES_RELAY, CHAT_GROUP_GATEWAY_RELAY, CHAT_GROUP_LINK, CHAT_GROUP_PSEUDONYM,
-    CHAT_GROUP_RELAY,
+    CHAT_GROUP_FAILURES_RELAY, CHAT_GROUP_GATEWAY_RELAY, CHAT_GROUP_LINK,
+    CHAT_GROUP_LINK_JOINS_RELAY, CHAT_GROUP_PSEUDONYM, CHAT_GROUP_RELAY,
 };
 
 /// A signed-in account relaying a request.
@@ -39,6 +39,14 @@ pub(crate) fn change(pseudonym: &str, group_id: &[u8; 32]) -> bool {
 /// its budget.
 pub(crate) fn link(group_id: &[u8; 32]) -> bool {
     CHAT_GROUP_LINK.allow(&STANDARD.encode(group_id))
+}
+
+/// A join from a link or a request to join through the relay server
+/// `relay`, under the administrators' budget `per_minute`: one server's
+/// users can't flood the groups here with newcomers.
+pub(crate) fn link_join(relay: &str, per_minute: i64) -> bool {
+    CHAT_GROUP_LINK_JOINS_RELAY
+        .allow_up_to(relay, usize::try_from(per_minute).unwrap_or(usize::MAX))
 }
 
 /// Whether the relay server `relay` may still fail: checked before a request
