@@ -3493,7 +3493,13 @@ a bad signature; the operations and answers are `GroupRequestV1` /
 `GroupResponseV1` in `kutup_chat_proto::group_route`. The home limits per
 relaying server (6000/min), per pseudonym (240/min), changes per pseudonym
 (30/min) and per group (60/min), link requests per group (30/min), and new
-groups per relaying server (600/hour). Group budgets are charged only for
+groups per relaying server (600/hour). Joins from a link and requests to
+join are limited per relaying server and group, and per relaying server, as
+administrators set them (`chatGroupLinkJoinsPerRelayGroupPerMin`, 120/min,
+and `chatGroupLinkJoinsPerRelayPerMin`, 1200/min, at first): charged once the
+link's password holds and before the rest of the change is checked, so a
+change without the link spends nothing and one link's holders crowd only
+its group. Group budgets are charged only for
 valid changes and proven link requests; failed requests spend a separate
 budget per relaying server (600/min). A stranger, a removed member, or a
 newcomer whose claim, link password or request doesn't hold gets the same
@@ -3509,6 +3515,33 @@ key holder can sign a request as that pseudonym, so nobody else learns it.
 It is the one refusal that spends neither the relaying server's failure
 budget nor the group's change budget: the client retries at its next join
 epoch (up to 64).
+`getRequestStatus` (no body, signed by the requesting pseudonym) answers
+where the signer's own request stands, as `GroupRequestStatusV1`:
+`{ "status": "pending", "revision", "head" }` while it requests (what a
+cancel names, so it works after a link reset too), `member` once approved,
+`denied` when banned, or when the group saw the pseudonym (as a requester or
+a member) and it is neither now, and `unknown` for a pseudonym the group never
+saw or an unknown group: never `notFound`. It spends the per-pseudonym budget,
+and an `unknown` answer also the relaying server's failure budget; every
+answer takes the same reads, so its timing doesn't tell whether the group
+exists. A cancel is done once: sent again it meets `notFound`, so a client
+that lost the answer to its cancel asks the status (`denied` then).
+Avatars: `putAvatar` (signed by a member that `access.attributes` lets
+change attributes, else `notAllowed`) carries the sealed blob padded to one
+size (`pad_group_avatar`: its length, the blob, zeros to 41,005 bytes; the
+blob is 8,233, 16,425, 32,809 or 41,001 bytes). It becomes the group's one
+pending upload for `chatGroupAvatarPendingSeconds` (a day at first), in
+place of any earlier one; once that passes it counts as missing, swept or
+not. A change naming an
+avatar hash must find that blob, pending or current (`avatarMissing`
+otherwise; a genesis can't name one); once accepted it becomes the current
+blob and the others go, and removing the avatar drops its blob.
+`getAvatar` answers the current blob padded the same way, to a member or
+with the link's password (charged as join info), or `avatarMissing`.
+Refusals: `avatarTooLarge` over the largest blob and `avatarStorageFull`
+over the storage per group (the current blob and the upload), both
+administrators' settings; `malformed` for a body not padded so. An upload
+spends the change budgets.
 
 ### GET /api/chat/group-list
 
@@ -4542,9 +4575,34 @@ Return current global server settings.
   "registrationMode": "code",
   "defaultStorageQuotaBytes": 10737418240,
   "chatMailboxRetentionDays": 30,
-  "chatMediaDeliveryRetentionDays": 45
+  "chatMediaDeliveryRetentionDays": 45,
+  "nameHoldDays": 180,
+  "oldAddressReceiveDays": 90,
+  "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
+  "chatGroupLinkJoinsPerRelayPerMin": 1200,
+  "chatGroupAvatarMaxBytes": 41001,
+  "chatGroupAvatarStoragePerGroupBytes": 82002,
+  "chatGroupAvatarPendingSeconds": 86400
 }
 ```
+
+`chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
+for the groups it hosts: 8233, 16425, 32809 or 41001.
+`chatGroupAvatarStoragePerGroupBytes` is the most one group's avatars (the
+current blob and a pending upload) may take: at least twice the largest blob
+(so a group can always swap its avatar) and at most 82002.
+`chatGroupAvatarPendingSeconds` is how long an upload waits for a change to
+name it, 60 to 604800. The three are checked together (`400` otherwise);
+`null` resets one to its first value (41001, 82002, 86400).
+
+The two link-join budgets limit how many joins from a group link and
+requests to join one relaying server's users may make each minute: to any
+one group this server hosts (`chatGroupLinkJoinsPerRelayGroupPerMin`), and to
+all of them together (`chatGroupLinkJoinsPerRelayPerMin`). Each is 1 to
+1000000 (`400` otherwise); `null` in a `PUT` drops the stored value, so the
+first value applies again: `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_GROUP_PER_MIN`
+(default 120) and `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN` (default
+1200).
 
 `defaultStorageQuotaBytes` is the storage quota new accounts get (registered,
 created by an administrator, or the bootstrap administrator); 10 GiB until an

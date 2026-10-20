@@ -328,7 +328,7 @@ fn require(condition: bool, error: GroupChangeError) -> Result<(), GroupChangeEr
 
 /// Signal's access rule: `member` lets every member act, `administrator` only
 /// administrators; anything else lets no one.
-fn allowed(access: AccessRequired, actor_is_admin: bool) -> bool {
+pub(crate) fn allowed(access: AccessRequired, actor_is_admin: bool) -> bool {
     match access {
         AccessRequired::Member | AccessRequired::Any => true,
         AccessRequired::Administrator => actor_is_admin,

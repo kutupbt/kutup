@@ -672,9 +672,10 @@ arrival, and direct sending. Phases, each with its own plan before code:
   simpler cases:
   - an alias is a prefix the person picks plus a suffix the server offers
     and signs (`netflix.x7f2@<alias domain>`), so nobody can claim another's
-    suffix; random aliases too; ideally on a separate domain
-    (`relay.<domain>`, needing its own MX, SPF and DKIM) so aliases cannot
-    be guessed from usernames; later the person's custom domains;
+    suffix; random aliases too; on a separate alias domain, decided
+    2026-10-20: `relay.<domain>` (`relay.kutup.dev` on kutup.dev), with its
+    own MX, SPF and DKIM, so aliases cannot be guessed from usernames and
+    their sending reputation stays apart; later the person's custom domains;
   - each alias has a display name, a note, the site it was made for, an
     on/off switch (off refuses at RCPT) and counts of forwarded, replied and
     blocked mail;
@@ -1320,6 +1321,25 @@ implemented; these are product-lifecycle improvements above it.
   harness already covers the complete Drive and Chat transport lifecycle)
 - Responsive web has an automated phone/desktop axe and state-transition gate;
   physical-device browser coverage and dedicated native-app flows remain open
+
+### Responsive web · skeleton loading everywhere
+
+Make loading feel fast: show the page's shape at once, then fill it in.
+The shared `Skeleton` (`frontend/packages/ui/src/components/skeleton.tsx`)
+exists, but only Account uses it widely (Drive, Chat, Contacts one place
+each; Mail three; Pass, Photos and Office none). Wanted (user, 2026-10-20):
+- an app-shell skeleton in each app's `index.html` (sidebar, header, list
+  rows), painted before the JavaScript and WebAssembly load, so the first
+  paint is the layout, not a blank page or a spinner;
+- list and detail skeletons in every app while data loads (Drive's file
+  list, Chat's conversation list and thread, Mail's list and reading pane,
+  Pass's vault list and entries, Photos' grid, Office's home), matching the
+  real layout so nothing jumps when content arrives (the component's rule:
+  a skeleton that guesses wrong is worse than none);
+- skeletons only for waits; errors and empty states keep their own words;
+  respect reduced motion (no shimmer then); en/tr labels for screen readers.
+Measure with the performance baselines below (first contentful paint, layout
+shift) before and after.
 
 ### Performance baselines
 

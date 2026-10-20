@@ -47,6 +47,51 @@ const HASH_LEN: usize = 32;
 /// padded size. Answers (a whole state) may take the 256 KiB size.
 pub const MAX_REQUEST_BODY: usize = 46 * 1024;
 
+/// The lengths a group's sealed avatar blob may have
+/// (docs/plans/pairwise-groups.md, "Avatar"): a version byte, a 24-byte
+/// nonce, the image padded to 8, 16, 32 or 40 KiB, and a 16-byte tag. The
+/// home refuses any other length.
+pub const GROUP_AVATAR_BLOB_LENGTHS: [usize; 4] = [8_233, 16_425, 32_809, 41_001];
+/// The largest avatar blob.
+pub const MAX_GROUP_AVATAR_BLOB: usize = 41_001;
+/// An avatar blob as `PutAvatar` carries it and `GetAvatar` answers it: its
+/// length (u32, big-endian), the blob, and zeros to this one size, so the
+/// sealed request and answer don't show the relay which size it is.
+pub const GROUP_AVATAR_BODY_LEN: usize = 4 + MAX_GROUP_AVATAR_BLOB;
+// An upload's padded body fits a request.
+const _: () = assert!(GROUP_AVATAR_BODY_LEN <= MAX_REQUEST_BODY);
+
+/// An avatar blob padded for the route ([`GROUP_AVATAR_BODY_LEN`]).
+pub fn pad_group_avatar(blob: &[u8]) -> Result<Vec<u8>, String> {
+    if !GROUP_AVATAR_BLOB_LENGTHS.contains(&blob.len()) {
+        return Err("an avatar blob has one of the avatar lengths".into());
+    }
+    let mut body = Vec::with_capacity(GROUP_AVATAR_BODY_LEN);
+    body.extend_from_slice(&(blob.len() as u32).to_be_bytes());
+    body.extend_from_slice(blob);
+    body.resize(GROUP_AVATAR_BODY_LEN, 0);
+    Ok(body)
+}
+
+/// The avatar blob in a padded body: its length one of the avatar lengths,
+/// the rest zeros.
+pub fn unpad_group_avatar(body: &[u8]) -> Result<Vec<u8>, String> {
+    let malformed = || "malformed avatar body".to_string();
+    if body.len() != GROUP_AVATAR_BODY_LEN {
+        return Err(malformed());
+    }
+    let (length, rest) = body.split_at(4);
+    let length = u32::from_be_bytes(length.try_into().map_err(|_| malformed())?) as usize;
+    if !GROUP_AVATAR_BLOB_LENGTHS.contains(&length) {
+        return Err(malformed());
+    }
+    let (blob, fill) = rest.split_at(length);
+    if fill.iter().any(|byte| *byte != 0) {
+        return Err(malformed());
+    }
+    Ok(blob.to_vec())
+}
+
 const KEY_CONFIG_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config/v1\0";
 const REQUEST_DOMAIN: &[u8] = b"kutup/chat-group/request/v1\0";
 const LINK_PROOF_DOMAIN: &[u8] = b"kutup/chat-group/link-request/v1\0";
@@ -379,10 +424,16 @@ pub enum GroupOperationV1 {
     GetJoinInfo,
     /// A call token for the group's SFU: no body.
     CallToken,
-    /// The encrypted avatar: no body.
+    /// The group's current avatar blob: no body, signed by a member or with
+    /// the link's password; the answer is the blob as
+    /// [`pad_group_avatar`] pads it.
     GetAvatar,
-    /// A new encrypted avatar: the body is the ciphertext.
+    /// A new avatar blob, padded by [`pad_group_avatar`]: it waits as the
+    /// group's one pending upload until a change names its hash.
     PutAvatar,
+    /// Where the signer's own request to join stands: no body, signed by
+    /// the requesting pseudonym; the answer is a [`GroupRequestStatusV1`].
+    GetRequestStatus,
 }
 
 impl GroupOperationV1 {
@@ -396,13 +447,15 @@ impl GroupOperationV1 {
             Self::CallToken => 6,
             Self::GetAvatar => 7,
             Self::PutAvatar => 8,
+            Self::GetRequestStatus => 9,
         }
     }
 
     /// Whether a link's password may authorise it (otherwise only a
-    /// signature: a member's pseudonym, or a slot's claim key for join info).
+    /// signature: a member's pseudonym, or a slot's claim key for join info):
+    /// join info, and the avatar a link shows.
     pub fn allows_link_password(self) -> bool {
-        matches!(self, Self::GetJoinInfo)
+        matches!(self, Self::GetJoinInfo | Self::GetAvatar)
     }
 }
 
@@ -898,6 +951,66 @@ pub struct GroupJoinInfoV1 {
     pub requires_approval: Option<bool>,
 }
 
+/// Where a request to join stands, as its own pseudonym asks
+/// ([`GroupOperationV1::GetRequestStatus`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GroupRequestStateV1 {
+    /// Still requesting: the answer carries the revision and head a cancel
+    /// names.
+    Pending,
+    /// Banned, or no longer requesting nor a member (denied, or once in and
+    /// now out).
+    Denied,
+    /// A member now (approved).
+    Member,
+    /// A pseudonym the group never saw (or no such group): never `NotFound`,
+    /// so a requester whose change was lost can tell.
+    Unknown,
+}
+
+/// The answer to [`GroupOperationV1::GetRequestStatus`]: `revision` and
+/// `head` only when pending.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupRequestStatusV1 {
+    pub status: GroupRequestStateV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+impl GroupRequestStatusV1 {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        canonical(self)
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let value: Self = from_canonical(
+            bytes,
+            kutup_crypto::oblivious::MAX_BODY,
+            "group request status",
+        )?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let pending = self.status == GroupRequestStateV1::Pending;
+        if pending != (self.revision.is_some() && self.head.is_some())
+            || pending != (self.revision.is_some() || self.head.is_some())
+        {
+            return Err("a request status names its revision and head only when pending".into());
+        }
+        if let Some(head) = &self.head {
+            decode_fixed::<HASH_LEN>("head", head)?;
+        }
+        Ok(())
+    }
+}
+
 canonical_answer!(GroupJoinInfoV1, "group join info");
 canonical_answer!(GroupStateAnswerV1, "group state answer");
 canonical_answer!(GroupLogPageV1, "group log page");
@@ -1351,5 +1464,146 @@ mod tests {
             GroupJoinInfoV1::from_canonical_bytes(&bytes).unwrap(),
             for_claim
         );
+    }
+
+    #[test]
+    fn a_request_status_names_revision_and_head_only_when_pending() {
+        let pending = GroupRequestStatusV1 {
+            status: GroupRequestStateV1::Pending,
+            revision: Some(4),
+            head: Some(STANDARD.encode([9u8; 32])),
+        };
+        let bytes = pending.canonical_bytes().unwrap();
+        assert_eq!(
+            String::from_utf8(bytes.clone()).unwrap(),
+            r#"{"status":"pending","revision":4,"head":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="}"#
+        );
+        assert_eq!(
+            GroupRequestStatusV1::from_canonical_bytes(&bytes).unwrap(),
+            pending
+        );
+        for status in [
+            GroupRequestStateV1::Denied,
+            GroupRequestStateV1::Member,
+            GroupRequestStateV1::Unknown,
+        ] {
+            let bare = GroupRequestStatusV1 {
+                status,
+                revision: None,
+                head: None,
+            };
+            let bytes = bare.canonical_bytes().unwrap();
+            assert_eq!(
+                GroupRequestStatusV1::from_canonical_bytes(&bytes).unwrap(),
+                bare
+            );
+            let with_revision = GroupRequestStatusV1 {
+                revision: Some(4),
+                ..bare.clone()
+            };
+            assert!(with_revision.canonical_bytes().is_err());
+        }
+        assert_eq!(
+            String::from_utf8(
+                GroupRequestStatusV1 {
+                    status: GroupRequestStateV1::Unknown,
+                    revision: None,
+                    head: None,
+                }
+                .canonical_bytes()
+                .unwrap()
+            )
+            .unwrap(),
+            r#"{"status":"unknown"}"#
+        );
+        let half = GroupRequestStatusV1 {
+            head: None,
+            ..pending.clone()
+        };
+        assert!(half.canonical_bytes().is_err());
+        assert!(
+            GroupRequestStatusV1::from_canonical_bytes(br#"{"status":"denied","revision":4}"#)
+                .is_err()
+        );
+        let short = GroupRequestStatusV1 {
+            head: Some(STANDARD.encode([9u8; 31])),
+            ..pending
+        };
+        assert!(short.canonical_bytes().is_err());
+    }
+
+    #[test]
+    fn a_request_status_request_has_no_body_and_a_pseudonym_signature() {
+        let request = GroupRequestV1::sign_with_pseudonym(
+            HOME,
+            &GROUP,
+            GroupOperationV1::GetRequestStatus,
+            1_700_000_000,
+            &NONCE,
+            b"",
+            &key(4),
+        )
+        .unwrap();
+        let bytes = request.canonical_bytes().unwrap();
+        assert!(String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains(r#""operation":"getRequestStatus""#));
+        let parsed = GroupRequestV1::from_canonical_bytes(&bytes).unwrap();
+        assert!(parsed.verify_pseudonym().is_ok());
+        assert!(GroupRequestV1::sign_with_pseudonym(
+            HOME,
+            &GROUP,
+            GroupOperationV1::GetRequestStatus,
+            1_700_000_000,
+            &NONCE,
+            b"body",
+            &key(4),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn an_avatar_body_is_one_size_whatever_the_blob() {
+        for length in GROUP_AVATAR_BLOB_LENGTHS {
+            let blob = vec![0xa5; length];
+            let body = pad_group_avatar(&blob).unwrap();
+            assert_eq!(body.len(), GROUP_AVATAR_BODY_LEN);
+            assert_eq!(unpad_group_avatar(&body).unwrap(), blob);
+        }
+        assert!(pad_group_avatar(&[1; 8_232]).is_err());
+        assert!(pad_group_avatar(&[1; 41_002]).is_err());
+        let mut body = pad_group_avatar(&[7; 8_233]).unwrap();
+        body[GROUP_AVATAR_BODY_LEN - 1] = 1;
+        assert!(unpad_group_avatar(&body).is_err(), "fill must be zeros");
+        let mut body = pad_group_avatar(&[7; 8_233]).unwrap();
+        body[..4].copy_from_slice(&8_234u32.to_be_bytes());
+        assert!(
+            unpad_group_avatar(&body).is_err(),
+            "length must be an avatar length"
+        );
+        assert!(unpad_group_avatar(&body[..GROUP_AVATAR_BODY_LEN - 1]).is_err());
+    }
+
+    #[test]
+    fn an_avatar_may_be_read_with_the_links_password() {
+        let read = GroupRequestV1::with_link_password(
+            HOME,
+            &GROUP,
+            GroupOperationV1::GetAvatar,
+            1_700_000_000,
+            &NONCE,
+            b"password",
+        )
+        .unwrap();
+        assert!(read.verify_link_password(b"password").unwrap());
+        assert!(GroupRequestV1::with_link_password(
+            HOME,
+            &GROUP,
+            GroupOperationV1::PutAvatar,
+            1_700_000_000,
+            &NONCE,
+            b"password",
+        )
+        .is_err());
     }
 }
