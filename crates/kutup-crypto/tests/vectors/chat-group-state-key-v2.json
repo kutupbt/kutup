@@ -1,0 +1,19 @@
+{
+  "masterKey": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=",
+  "identitySequence": 1,
+  "identityDocumentHash": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+  "nonce": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz",
+  "plain": "Team",
+  "cases": [
+    {
+      "server": "home.example",
+      "groupId": "z6ax+WeTox0FBlKJEyzayCSkKhMmCWrCY3vI2ZybyG0=",
+      "sealedTitle": "ATMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMyTmEgdMrPQProXKTKXYbm2AnKS5"
+    },
+    {
+      "server": "elsewhere.example",
+      "groupId": "3udam7LjbvUGs5rF9hHxk0SdlH5Vniv9sj4rCQw4S2g=",
+      "sealedTitle": "ATMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM//BcArzMqnqjdWSUFTk2x9EGo5g"
+    }
+  ]
+}

@@ -11,11 +11,13 @@
 //!   member's book yet, or the message itself) carries a context with the
 //!   master key and the home, as Signal's `GroupContextV2` does, naming the
 //!   account's pseudonym in the group.
-//! - The list comes first: a group it says this account left is never taken
-//!   up again this way, and one it holds is taken up from the list.
 //! - The named pseudonym must be one this account's key gives (epochs 0 to
-//!   [`RECOVERY_EPOCHS`] − 1): then the device asks the home once, for that
-//!   pseudonym. Nobody who doesn't know it can make the device ask anything.
+//!   [`group::MAX_JOIN_EPOCHS`] − 1), found locally. Nobody who doesn't know
+//!   it can make the device ask anything, and every attempt counts against
+//!   the limits below before anything is asked.
+//! - Then the list: a group it says this account left is never taken up
+//!   again this way, and one it holds is taken up from the list. Only then
+//!   does the device ask the home once, for that pseudonym.
 //! - The state is kept only when it holds this account's own binding (signed
 //!   by its authority: a home can't make one up) and the sender's (a
 //!   verified member). Nothing is kept or signed otherwise, and nothing is
@@ -34,10 +36,6 @@ use crate::engine::{Engine, SESSION_RESET_INTERVAL_MS};
 use crate::error::{ChatError, Result};
 use crate::group::{self, GroupRecordV1, GroupStatus, SecretText};
 use crate::group_engine::{group_error, GroupSync};
-
-/// How many join epochs a named pseudonym is matched against: the first
-/// join and fifteen rejoins.
-pub(crate) const RECOVERY_EPOCHS: u32 = 16;
 
 /// At most this many groups are taken up this way per device an hour.
 pub(crate) const MAX_RECOVERIES_PER_HOUR: usize = 10;
@@ -71,6 +69,25 @@ impl Engine {
         if group::master_at(&context.master_key, &group_id, &context.home).is_err() {
             return Ok(false);
         }
+        // The named pseudonym must be this account's (found here, asking
+        // nobody).
+        let keys = self.group_keys()?;
+        let Some(join_epoch) = (0..group::MAX_JOIN_EPOCHS)
+            .find(|&epoch| encode(&keys.pseudonyms.pseudonym(&group, epoch).public_key()) == named)
+        else {
+            return Ok(false);
+        };
+        let pseudonym = keys.pseudonyms.pseudonym(&group, join_epoch);
+        let own_authority = keys.authority.public_key();
+        let sender_account: AccountRef = sender
+            .parse()
+            .map_err(|_| ChatError::Invalid("the sender isn't an account".into()))?;
+        // Counted before anything is asked of a server (the list included),
+        // so a member sending contexts can't make this device ask more than
+        // the limits allow.
+        if !self.may_try_recovery(&group_id).await? {
+            return Ok(false);
+        }
         // The list first: read this run, it takes up what it holds.
         if !self.group_list_read() {
             let _ = self.sync_group_list(rng).await;
@@ -86,21 +103,6 @@ impl Engine {
         // A group the list says this account left stays left; one it holds
         // is the list's to take up (its home couldn't be reached).
         if self.listed_join(&group_id).is_some() {
-            return Ok(false);
-        }
-        // The named pseudonym must be this account's.
-        let keys = self.group_keys()?;
-        let Some(join_epoch) = (0..RECOVERY_EPOCHS)
-            .find(|&epoch| encode(&keys.pseudonyms.pseudonym(&group, epoch).public_key()) == named)
-        else {
-            return Ok(false);
-        };
-        let pseudonym = keys.pseudonyms.pseudonym(&group, join_epoch);
-        let own_authority = keys.authority.public_key();
-        let sender_account: AccountRef = sender
-            .parse()
-            .map_err(|_| ChatError::Invalid("the sender isn't an account".into()))?;
-        if !self.may_try_recovery(&group_id).await? {
             return Ok(false);
         }
         let mut record = GroupRecordV1 {
