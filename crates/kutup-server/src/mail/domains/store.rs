@@ -268,8 +268,21 @@ pub async fn check_and_save(
     row: &Row,
 ) -> AppResult<(Row, Change, Option<Uuid>)> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let (mut checked, mut change) =
-        check::check(resolver, server, &row.domain(), settings.grace(), now).await;
+    // A whole check within its time, however many lookups (SPF includes
+    // among them) it takes; one that runs out changes nothing.
+    let timeout = std::time::Duration::from_secs(settings.check_timeout_seconds.max(1) as u64);
+    let (mut checked, mut change) = tokio::time::timeout(
+        timeout,
+        check::check(resolver, server, &row.domain(), settings.grace(), now),
+    )
+    .await
+    .map_err(|_| {
+        AppError::new(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "the domain's DNS check took too long; try again later",
+        )
+        .with_details(serde_json::json!({ "code": "checkTimedOut" }))
+    })?;
     let mut tx = pool.begin().await?;
     // The row as it is now, locked: a removal or another check in between wins.
     let current: Option<Row> = sqlx::query_as(&format!(

@@ -104,6 +104,8 @@ fn effective(settings: &Settings) -> BTreeMap<String, String> {
         settings.grace_warn_days,
         settings.grace_stopped_hours,
         i64::from(settings.catch_all),
+        settings.refreshes_at_once,
+        settings.check_timeout_seconds,
     ];
     for ((key, _, _), value) in KEYS.iter().zip(values) {
         out.insert((*key).to_owned(), value.to_string());

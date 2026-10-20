@@ -50,6 +50,10 @@ pub struct Settings {
     pub catch_all_per_day: i64,
     pub grace_warn_days: i64,
     pub grace_stopped_hours: i64,
+    /// Owners' checks (`?refresh=1`) running at once on this server.
+    pub refreshes_at_once: i64,
+    /// The most one domain's whole check (every lookup) may take.
+    pub check_timeout_seconds: i64,
 }
 
 impl Default for Settings {
@@ -65,12 +69,14 @@ impl Default for Settings {
             catch_all_per_day: 500,
             grace_warn_days: 14,
             grace_stopped_hours: 72,
+            refreshes_at_once: 16,
+            check_timeout_seconds: 60,
         }
     }
 }
 
 /// The site-setting keys, each with its range.
-pub const KEYS: [(&str, i64, i64); 9] = [
+pub const KEYS: [(&str, i64, i64); 11] = [
     ("mail_domains.per_account", 0, 100),
     ("mail_domains.addresses_per_account", 1, 1000),
     ("mail_domains.on_server", 0, 1_000_000),
@@ -81,6 +87,8 @@ pub const KEYS: [(&str, i64, i64); 9] = [
     ("mail_domains.grace_stopped_hours", 1, 24 * 30),
     // 1 on, 0 off.
     ("mail_domains.catch_all", 0, 1),
+    ("mail_domains.refreshes_at_once", 1, 1000),
+    ("mail_domains.check_timeout_seconds", 10, 600),
 ];
 pub const MODE_KEY: &str = "mail_domains.mode";
 
@@ -126,6 +134,8 @@ impl Settings {
         settings.grace_warn_days = number(KEYS[6].0, settings.grace_warn_days);
         settings.grace_stopped_hours = number(KEYS[7].0, settings.grace_stopped_hours);
         settings.catch_all = number(KEYS[8].0, 1) == 1;
+        settings.refreshes_at_once = number(KEYS[9].0, settings.refreshes_at_once);
+        settings.check_timeout_seconds = number(KEYS[10].0, settings.check_timeout_seconds);
         settings
     }
 

@@ -284,6 +284,30 @@ pub async fn add(
     ))
 }
 
+/// One owner's check running: counted while it lives.
+struct Running;
+
+static RUNNING: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+impl Running {
+    /// A place among `at_once` running checks, or `None` when all are taken.
+    fn start(at_once: i64) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        let taken = RUNNING.fetch_add(1, Ordering::AcqRel);
+        if taken >= at_once {
+            RUNNING.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(Running)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 /// `GET /api/mail/domains/{id}` — one domain; `?refresh=1` checks its DNS
 /// now (uncached; 30 an hour per account).
 #[utoipa::path(
@@ -314,6 +338,11 @@ pub async fn get(
                 "too many checks; try again later",
             ));
         }
+        // Owners' checks running at once on this server, within the
+        // administrators' setting.
+        let _running = Running::start(settings.refreshes_at_once).ok_or_else(|| {
+            AppError::too_many_requests("too many domain checks right now; try again shortly")
+        })?;
         let (checked, change, lost_holder) = store::check_and_save(
             &state.pool,
             resolver(&state)?,

@@ -1813,7 +1813,7 @@ limit (10 by default), its username's included. `400 invalidAddress`, `409`
 Administrators only. `GET`: `{ "configured", "settings": { "mail_domains.mode":
 "everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
 …on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
-…grace_warn_days, …grace_stopped_hours }, "spf", "dkimKeys": [{ "selector",
+…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "spf", "dkimKeys": [{ "selector",
 "state", "host", "txt", "publishedSince" }], "domains": [...] }`. A pending
 DKIM key signs only once its TXT (`*.kutupN._dk.<server>`) has been in DNS for
 a day. `PUT` takes any of the settings, each checked against its range
