@@ -122,6 +122,17 @@ const ACCOUNT_LISTS_MS = 60_000
 const ACCOUNT_LISTS_HIDDEN_MS = 5 * 60_000
 
 /**
+ * How often each pairwise group is caught up with its home when nothing
+ * arrives from it (docs/plans/pairwise-groups.md §11): administrators see
+ * requests to join this way, never by a push that would tell the home who
+ * they are. The first pass comes soon after the app opens.
+ */
+const GROUP_SYNC_MS = 10 * 60_000
+/** In a tab left hidden: rarer, so a background tab costs the home little. */
+const GROUP_SYNC_HIDDEN_MS = 30 * 60_000
+const GROUP_SYNC_FIRST_MS = 15_000
+
+/**
  * `polling`: the live socket cannot be opened (a gateway that blocks
  * WebSockets, say) but the server answers ordinary requests, so the mailbox
  * is read every few seconds instead.
@@ -276,6 +287,7 @@ export class ChatService {
   private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private prekeyTimer: ReturnType<typeof setInterval> | null = null
   private accountListsTimer: ReturnType<typeof setTimeout> | null = null
+  private groupSyncTimer: ReturnType<typeof setTimeout> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -465,6 +477,7 @@ export class ChatService {
       void service.maintainPrekeys()
       service.startPrekeyChecks()
       service.startAccountListSync()
+      service.startGroupSync()
       void service.connectSocket()
       service.startInviteLinks()
       service.startLinkedDeviceChecks()
@@ -2055,6 +2068,42 @@ export class ChatService {
     next()
   }
 
+  /**
+   * Catches up every pairwise group this account is in, one at a time, at
+   * jittered intervals: soon after opening, then about every ten minutes
+   * (thirty in a hidden tab), give or take a fifth, so members' devices
+   * don't line up.
+   */
+  private startGroupSync(): void {
+    if (this.groupSyncTimer || this.capabilities.pairwiseGroups !== true) return
+    const client = this.client
+    if (!client.listGroups || !client.syncGroup) return
+    const next = (base: number) => {
+      if (this.disposed) return
+      const delay = base * (0.8 + Math.random() * 0.4)
+      this.groupSyncTimer = setTimeout(() => {
+        void this.syncMemberGroups()
+          .catch((error: unknown) => console.warn('chat: the groups could not be caught up', error))
+          .finally(() => next(document.visibilityState === 'visible' ? GROUP_SYNC_MS : GROUP_SYNC_HIDDEN_MS))
+      }, delay)
+    }
+    next(GROUP_SYNC_FIRST_MS)
+  }
+
+  private async syncMemberGroups(): Promise<void> {
+    const client = this.groupClient()
+    const groups = await this.withLock(() => client.listGroups())
+    for (const group of groups) {
+      if (this.disposed) return
+      if (group.status !== 'member') continue
+      // One group failing (its home unreachable) never stops the others.
+      await this.withLock(() => client.syncGroup(group.groupId)).catch((error: unknown) =>
+        console.warn('chat: a group could not be caught up', error),
+      )
+    }
+    this.notifyPeers()
+  }
+
   private startPrekeyChecks(): void {
     if (this.prekeyTimer) return
     this.prekeyTimer = setInterval(() => {
@@ -2161,6 +2210,7 @@ export class ChatService {
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
     if (this.accountListsTimer) clearTimeout(this.accountListsTimer)
+    if (this.groupSyncTimer) clearTimeout(this.groupSyncTimer)
     this.engineLock.close()
     this.stopHeartbeat()
     this.socket?.close()
