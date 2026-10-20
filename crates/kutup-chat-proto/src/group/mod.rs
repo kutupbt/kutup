@@ -20,6 +20,7 @@
 
 pub mod check;
 pub mod entry;
+pub mod link;
 #[cfg(test)]
 mod tests;
 

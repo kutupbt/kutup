@@ -133,13 +133,42 @@ impl GatewayCache {
 /// Who signs a request: a member's pseudonym, or a slot's claim key (only
 /// for the join info a claimant needs).
 pub enum RequestSigner<'a> {
+    /// A pseudonym's (or a slot's claim) key signs the request.
     Key(&'a [u8; 32]),
+    /// The invite link's password proves it: only for join info, which a
+    /// link holder reads before it has a pseudonym in the group.
+    LinkPassword(&'a [u8; kutup_chat_proto::group::INVITE_LINK_PASSWORD_LEN]),
 }
 
 impl RequestSigner<'_> {
-    fn signing_key(&self) -> SigningKey {
+    /// The request for `operation`, signed or proven as this signer does it.
+    fn request(
+        &self,
+        home: &str,
+        group_id: &[u8; 32],
+        operation: GroupOperationV1,
+        timestamp: i64,
+        nonce: &[u8; 16],
+        body: &[u8],
+    ) -> std::result::Result<GroupRequestV1, String> {
         match self {
-            Self::Key(seed) => SigningKey::from_bytes(seed),
+            Self::Key(seed) => GroupRequestV1::sign_with_pseudonym(
+                home,
+                group_id,
+                operation,
+                timestamp,
+                nonce,
+                body,
+                &SigningKey::from_bytes(seed),
+            ),
+            Self::LinkPassword(password) => {
+                if !body.is_empty() {
+                    return Err("a link-proven request carries no body".into());
+                }
+                GroupRequestV1::with_link_password(
+                    home, group_id, operation, timestamp, nonce, &password[..],
+                )
+            }
         }
     }
 }
@@ -193,16 +222,16 @@ pub async fn call(
         };
         let mut nonce = [0u8; 16];
         OsRng.fill_bytes(&mut nonce);
-        let request = GroupRequestV1::sign_with_pseudonym(
-            &pin.server,
-            group_id,
-            operation,
-            now + clock_offset,
-            &nonce,
-            body,
-            &signer.signing_key(),
-        )
-        .map_err(ChatError::Invalid)?;
+        let request = signer
+            .request(
+                &pin.server,
+                group_id,
+                operation,
+                now + clock_offset,
+                &nonce,
+                body,
+            )
+            .map_err(ChatError::Invalid)?;
         let bytes = request.canonical_bytes().map_err(ChatError::Invalid)?;
         let (sealed, context) = kutup_crypto::oblivious::seal_request(key_id, &public_key, &bytes)
             .map_err(|error| ChatError::Invalid(error.to_string()))?;
