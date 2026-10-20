@@ -692,8 +692,12 @@ arrival, and direct sending. Phases, each with its own plan before code:
 - **Custom domains** (moved up, decided 2026-10-20): your own domain for
   Mail addresses, following Proton: add the domain, verify ownership and its
   MX, SPF, DKIM and DMARC records, addresses on it with their own keys,
-  catch-all. Runs beside Chat groups and Calendar. A plan note settled from
-  Proton's code comes first (`plans/mail-custom-domains.md`, to be written).
+  catch-all. Runs beside Chat groups and Calendar. Plan:
+  `plans/mail-custom-domains.md`; the server is built (the web UI is the
+  third session's). Open: a signed zone in the mail gate, so DNSSEC
+  validation itself is tested end to end (CoreDNS's `dnssec` plugin, a
+  test-only trust anchor for hickory, and a backend validating beside the
+  one that reads the unsigned test zones).
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, organisations (which then own
   groups' storage, see the groups plan).
 
