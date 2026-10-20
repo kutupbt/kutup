@@ -521,7 +521,16 @@
       "changed": "Anahtar güncellendi.",
       "changeFailed": "Anahtarlar değiştirilemedi. Sayfayı yenileyip yeniden deneyin.",
       "compromisedTitle": "Bu anahtar ele geçirilmiş olarak işaretlensin mi?",
-      "compromisedDescription": "Anahtar başkasının eline geçmiş olabilirse bunu yapın. Artık kimse ona şifreleme yapmaz ve onunla atılan imzalara güvenilmez. Yalnızca eski e-postalarınızı açmak için kalır."
+      "compromisedDescription": "Anahtar başkasının eline geçmiş olabilirse bunu yapın. Artık kimse ona şifreleme yapmaz ve onunla atılan imzalara güvenilmez. Yalnızca eski e-postalarınızı açmak için kalır.",
+      "forwarding": "Yönlendirme",
+      "forwardingUsage": "Size yönlendirilen e-postaları açar",
+      "deleteForwardingKey": "Sil",
+      "deleteForwardingKeyTitle": "Bu yönlendirme anahtarı silinsin mi?",
+      "deleteForwardingKeyDescription": "Bu anahtar e-posta yönlendirmesi için kullanılıyor. Silmek yönlendirmeyi sonlandırır ve bu anahtarla size yönlendirilmiş e-postalar artık açılamaz.",
+      "forwardingKeyDeleted": "Yönlendirme anahtarı silindi",
+      "makePrimaryTitle": "Bu anahtar birincil yapılsın mı?",
+      "outdatesForwardings": "Mevcut uçtan uca şifreli e-posta yönlendirmelerinin elle yeniden etkinleştirilmesi gerekecek.",
+      "encryptionOffForwarding": "{{address}}, Kutup dışına e-posta yönlendirdiği sürece uçtan uca şifreleme kapalıdır. Sıfır erişimli şifreleme açık kalır. Bu türden son yönlendirme sona erdiğinde geri gelir."
     }
   },
   "admin": {
@@ -1085,5 +1094,19 @@
     "description": "Üyesi olduğunuz Posta grupları. Dağıtım listelerinin e-postaları kendi gelen kutunuza gelir; paylaşılan posta kutusu Posta'da açılır ve üyeleri birlikte okur, birlikte yanıtlar.",
     "emptyTitle": "Hiçbir grupta değilsiniz",
     "emptyDescription": "Bir yönetici sizi dağıtım listelerine ve paylaşılan posta kutularına ekler."
+  },
+  "emailForwarding": {
+    "title": "E-posta yönlendirme",
+    "request": "{{from}}, e-postalarını {{to}} adresine yönlendirmek istiyor.",
+    "notEncrypted": "Yönlendirilen e-postalar size gelirken uçtan uca şifreli değildir. Reddedebilirsiniz; {{from}} de yönlendirmeyi istediği zaman durdurabilir.",
+    "accept": "Kabul et",
+    "decline": "Reddet",
+    "accepted": "Yönlendirme kabul edildi. {{from}} adresinden yönlendirilen e-postaları alacaksınız.",
+    "declined": "Yönlendirme reddedildi. {{from}} adresinden yönlendirilen e-postaları almayacaksınız.",
+    "alreadyAnswered": "Bu yönlendirme zaten yanıtlandı.",
+    "alreadyDeclined": "Bu yönlendirme reddedildi.",
+    "invalid": "Bu bağlantı geçerli değil ya da zaten kullanıldı.",
+    "expired": "Bu bağlantının süresi doldu. Yenisi e-postayla size gönderiliyor.",
+    "rateLimited": "Çok fazla deneme. Bir dakika sonra yeniden deneyin."
   }
 }

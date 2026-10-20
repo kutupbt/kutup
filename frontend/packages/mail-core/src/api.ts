@@ -14,6 +14,7 @@ import {
   signMailDetachedAsGroup,
   inspectExternalMailKey,
   openMailGroupMessage,
+  openForwardedMailMessage,
   openMailMessage,
   toBase64,
   verifyMailCleartext,
@@ -58,6 +59,12 @@ export interface MailMessage {
   seen: boolean
   starred: boolean
   protection: 'zero_access' | 'end_to_end'
+  /**
+   * The forwarder's address, when this is a copy forwarded end to end to the
+   * account (docs/plans/mail-forwarding.md): it opens only with a forwarding
+   * key.
+   */
+  forwardedFrom?: string | null
   size: number
   receivedAt: string
   sentAt: string | null
@@ -164,6 +171,11 @@ export interface MailAccount {
    * (docs/plans/username-renames.md), which open the mail sent to them.
    */
   olderKeys: SealedMailKey[]
+  /**
+   * The forwarding keys the account accepted (docs/plans/mail-forwarding.md):
+   * they open only mail forwarded to it, and nothing opens that mail but them.
+   */
+  forwardingKeys: SealedMailKey[]
   /** Every address the account holds (current first, then old ones not yet freed): none but the current one sends. */
   addresses: string[]
   /** The public keys of all of them: what the account's own signatures are checked with. */
@@ -196,8 +208,23 @@ async function openWithGroupKeys(keys: GroupMailKey[], message: Uint8Array, sign
   throw last
 }
 
-/** Opens a message with the primary key, else with an older key (mail from before a new key). */
-async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey?: string) {
+/**
+ * Opens a message with the primary key, else with an older key (mail from
+ * before a new key); one forwarded to the account (`forwarded`) only with a
+ * forwarding key.
+ */
+async function openWithKeys(account: MailAccount, message: Uint8Array, signerKey?: string, forwarded = false) {
+  if (forwarded) {
+    let last: unknown = new Error('no forwarding key opens this forwarded message')
+    for (const key of account.forwardingKeys) {
+      try {
+        return await openForwardedMailMessage(key, message, signerKey)
+      } catch (error) {
+        last = error
+      }
+    }
+    throw last
+  }
   try {
     return await openMailMessage(account.key, message, signerKey)
   } catch (error) {
@@ -237,7 +264,7 @@ export interface OwnAddressRow {
   id: string
   address: string
   state: 'active' | 'receiving' | 'closed' | 'freed'
-  keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean }[]
+  keys: { fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean; forwarding?: boolean }[]
 }
 
 /**
@@ -254,8 +281,11 @@ export function mailAccountOf(
   /** The account itself, as `/user/me` names it: its server and id. */
   self: AccountRef,
 ): MailAccount {
+  // Forwarding keys open only forwarded mail: never primary, never among
+  // the keys that open the account's own mail or vouch for its signatures.
+  const ownKeys = (row: OwnAddressRow) => row.keys.filter((k) => !k.forwarding)
   const current = rows.find((row) => row.state === 'active')
-  const primary = current?.keys.find((k) => k.primary)
+  const primary = current && ownKeys(current).find((k) => k.primary)
   if (!current || !primary) throw new NoAddressKey()
   const earlier = rows.filter((row) => row !== current)
   // A freed name may be someone else's now: its keys only open the mail it
@@ -278,11 +308,12 @@ export function mailAccountOf(
     publicKey: primary.publicKey,
     key: sealed(current)(primary),
     olderKeys: [
-      ...current.keys.filter((k) => k !== primary).map(sealed(current)),
-      ...earlier.flatMap((row) => row.keys.map(sealed(row))),
+      ...ownKeys(current).filter((k) => k !== primary).map(sealed(current)),
+      ...earlier.flatMap((row) => ownKeys(row).map(sealed(row))),
     ],
+    forwardingKeys: held.flatMap((row) => row.keys.filter((k) => k.forwarding).map(sealed(row))),
     addresses: [current.address, ...earlier.filter((row) => row.state !== 'freed').map((row) => row.address)],
-    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => row.keys.filter((k) => k !== primary).map((k) => k.publicKey))],
+    ownPublicKeys: [primary.publicKey, ...held.flatMap((row) => ownKeys(row).filter((k) => k !== primary).map((k) => k.publicKey))],
     isOwnAddress: (candidate) => {
       if (!candidate) return false
       const folded = fold(candidate)
@@ -556,7 +587,7 @@ async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, 
  */
 export async function openMessageText(account: MailAccount, message: MailMessage): Promise<string> {
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
-  const opened = await openWithKeys(account, new Uint8Array(response.data))
+  const opened = await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)
   const sender = message.from?.address
   const outside = message.direction === 'inbound' && !!sender && !sender.endsWith(`@${account.domain}`)
   const pgp = outside
@@ -587,7 +618,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
   })
   const stored = new Uint8Array(response.data)
   // A shared mailbox's mail opens with a group key the reader holds.
-  const open = scope ? (bytes: Uint8Array, signer?: string) => openWithGroupKeys(scope.keys, bytes, signer) : (bytes: Uint8Array, signer?: string) => openWithKeys(account, bytes, signer)
+  const open = scope ? (bytes: Uint8Array, signer?: string) => openWithGroupKeys(scope.keys, bytes, signer) : (bytes: Uint8Array, signer?: string) => openWithKeys(account, bytes, signer, !!message.forwardedFrom)
   const sender = message.from?.address
   let candidates: string[] = []
   if (account.isOwnAddress(sender)) {

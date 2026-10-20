@@ -457,6 +457,50 @@ classic encryption while it lasts, and the person is told.
   forwarded.
 - Strings in `en.json` and `tr.json`.
 
+**As built (web):**
+- `@kutup/mail-core/forwardings` holds the flows:
+  - The kind follows the forwardee (`forwardingKindOf`): end to end for a
+    person's verified Kutup address on this server, outside for anything
+    else. The account's own addresses and shared mailboxes are refused
+    before asking the server.
+  - Setup makes the material in WASM from the forwarder's primary key and
+    the forwardee's verified primary key, binding a client-chosen id. Outside,
+    while the address has no other outside forwarding, it brings the next
+    key list with `EMAIL_NO_ENCRYPT` on every key.
+  - Accepting checks the activation against the forwarder's verified key
+    list (never the server's word) before keeping the forwarding key.
+  - Re-enabling an outdated forwarding makes new material from the current
+    primary key.
+- `@kutup/mail-core/keyList` holds the key-list rules both apps share:
+  - forwarding keys are in no list;
+  - while an address forwards outside, every list keeps `EMAIL_NO_ENCRYPT`;
+  - `keyListOwed` is settled with a list clearing it, by Mail once a session
+    and by the Account keys page.
+- **Mail → Settings → Forwarding:**
+  - "From me" / "To me", with state and kind badges, the conditions in
+    words, `notice` and `skipped`, and the per-state actions of Proton's
+    table;
+  - the setup dialog: the filter conditions editor without the recipient
+    (none forwards everything), then a confirmation that names the kind,
+    the outside warning, and the server-trust hint every time;
+  - Mail's own words for `outsideSendingOff` and `sendingPaused`.
+- **Account → Keys:**
+  - a forwarding key has its badge and can only be deleted, which ends the
+    forwarding;
+  - making a key primary (or a new one) warns that end-to-end forwardings
+    must be re-enabled;
+  - an address forwarding outside says end-to-end encryption is off.
+- **The public page** is `/email-forwarding#<token>` on the Account app. The
+  token stays in the fragment and goes in a request body.
+- **Opening mail:** a message with `forwardedFrom` opens only with the
+  account's forwarding keys, which never open anything else and never count
+  as the account's own keys.
+- **Post-quantum:** `POST_QUANTUM_MAIL` is off, so none of its copy is in the
+  build yet.
+- **Tests:** unit tests for key lists and per-state actions; browser spec
+  163 (end to end set up, accepted, received, paused, resumed and deleted;
+  outside turning encryption off and back on).
+
 The crypto, the server, the gates and the WASM exports are mine (second
 session).
 

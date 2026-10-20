@@ -521,7 +521,16 @@
       "changed": "Key updated.",
       "changeFailed": "The keys could not be changed. Reload and try again.",
       "compromisedTitle": "Mark this key as compromised?",
-      "compromisedDescription": "Do this if someone else may have the key. Nobody encrypts to it any more, and signatures made with it are no longer trusted. It stays only to open your older mail."
+      "compromisedDescription": "Do this if someone else may have the key. Nobody encrypts to it any more, and signatures made with it are no longer trusted. It stays only to open your older mail.",
+      "forwarding": "Forwarding",
+      "forwardingUsage": "Opens email forwarded to you",
+      "deleteForwardingKey": "Delete",
+      "deleteForwardingKeyTitle": "Delete this forwarding key?",
+      "deleteForwardingKeyDescription": "This key is used for email forwarding. Deleting it ends the forwarding, and the email already forwarded to you with it can no longer be opened.",
+      "forwardingKeyDeleted": "Forwarding key deleted",
+      "makePrimaryTitle": "Make this key primary?",
+      "outdatesForwardings": "Existing end-to-end encrypted email forwardings will need to be manually re-enabled.",
+      "encryptionOffForwarding": "End-to-end encryption is off for {{address}} while it forwards email outside Kutup. Zero-access encryption remains on. It comes back when the last such forwarding ends."
     }
   },
   "admin": {
@@ -1085,5 +1094,19 @@
     "description": "The Mail groups you belong to. A distribution list's mail arrives in your own inbox; a shared mailbox opens in Mail, where its members read and answer it together.",
     "emptyTitle": "You are not in any groups",
     "emptyDescription": "An administrator adds you to distribution lists and shared mailboxes."
+  },
+  "emailForwarding": {
+    "title": "Email forwarding",
+    "request": "{{from}} wants to forward email to {{to}}.",
+    "notEncrypted": "Forwarded email isn't end-to-end encrypted on its way to you. You can decline, and {{from}} can stop forwarding at any time.",
+    "accept": "Accept",
+    "decline": "Decline",
+    "accepted": "Forwarding accepted. You'll receive email forwarded from {{from}}.",
+    "declined": "Forwarding declined. You won't receive email forwarded from {{from}}.",
+    "alreadyAnswered": "This forwarding has been answered already.",
+    "alreadyDeclined": "This forwarding was declined.",
+    "invalid": "This link isn't valid, or it has been used already.",
+    "expired": "This link has expired. A new one is on its way to you by email.",
+    "rateLimited": "Too many attempts. Try again in a minute."
   }
 }

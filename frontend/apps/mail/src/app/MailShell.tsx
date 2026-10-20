@@ -47,6 +47,7 @@ import { UserMenu } from '@kutup/ui/components/user-menu'
 import { AdvancedSearch } from '../features/AdvancedSearch'
 import { NotificationBanner } from '../features/NotificationBanner'
 import { useNewMailNotifications } from '../features/useNewMailNotifications'
+import { useSettleOwedKeyLists } from '@kutup/mail-core/forwardings'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAILTO_HASH, parseMailto } from '../features/mailto'
 import { MAIL_DRAG_TYPE, useMailActions, type Movable, type MoveTarget } from '../features/mailActions'
@@ -174,6 +175,8 @@ export function MailShell() {
   useAccountUiPreferences()
   const counts = useCounts()
   useNewMailNotifications()
+  // An outside forwarding that ended elsewhere: encryption back on (once a session).
+  useSettleOwedKeyLists()
   // Body search: building goes on, and new mail is indexed on Mail's poll.
   const contentSearch = useContentSearch()
   useEffect(() => {

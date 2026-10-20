@@ -1,5 +1,5 @@
 import { AlertTriangle, Info } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { HTMLAttributes, ReactNode } from 'react'
 import { cn } from '../lib/cn'
 
 /**
@@ -26,15 +26,17 @@ export function Alert({
   title,
   children,
   className,
+  ...rest
 }: {
   variant?: 'info' | 'error' | 'warn'
   title?: string
   children?: ReactNode
   className?: string
-}) {
+} & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children' | 'className' | 'role'>) {
   const Icon = variant === 'info' ? Info : AlertTriangle
   return (
     <div
+      {...rest}
       role={variant === 'error' ? 'alert' : undefined}
       className={cn(
         'flex gap-2.5 rounded-md border p-3 text-sm',

@@ -2,19 +2,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import {
   DEFAULT_MAIL_KEY_FLAGS,
-  deriveAccountIdentityKeys,
   exportMailAddressKey,
   generateMailAddressKey,
   importMailAddressKey,
   MAIL_KEY_FLAGS,
-  signMailKeyList,
   toBase64,
-  verifyMailKeyList,
   type GeneratedMailAddressKey,
   type MailKeyEntry,
   type SignedMailKeyList,
 } from '@kutup/crypto'
 import { addFirstAddressKey } from '@kutup/mail-core/addressKey'
+import { checkedAddresses, listEntries, nextKeyList, settleOwedKeyLists } from '@kutup/mail-core/keyList'
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
@@ -31,13 +29,21 @@ export interface MailKey {
   primary: boolean
   flags: number
   createdAt: string
+  /**
+   * A forwarding key (docs/plans/mail-forwarding.md): it opens only mail
+   * forwarded to the address, is in no key list, and can only be deleted.
+   */
+  forwarding?: boolean
 }
 
 export interface MailAddress {
   id: string
   address: string
+  state: 'active' | 'receiving' | 'closed' | 'freed'
   keys: MailKey[]
   keyList: { data: string; signature: string } | null
+  /** The last outside forwarding ended without this account's client: a key list turning encryption back on is owed. */
+  keyListOwed?: boolean
 }
 
 export const mailAddressesKey = ['mail-addresses'] as const
@@ -46,23 +52,17 @@ export const createMailKeyMutation = ['mail-keys', 'create'] as const
 /**
  * The caller's addresses, with each current key list checked against this
  * account's own authority: a list the account did not sign is reported, not
- * trusted.
+ * trusted. An address whose last outside forwarding ended elsewhere gets its
+ * end-to-end encryption back first (`keyListOwed`).
  */
 export function useMailAddresses() {
   const session = useRequiredSession()
   return useQuery({
     queryKey: mailAddressesKey,
     queryFn: async () => {
-      const { data } = await api.get<MailAddress[]>('/mail/addresses')
-      const { authorityPublicKey } = await deriveAccountIdentityKeys(toBase64(session.masterKey))
-      return Promise.all(
-        data.map(async (address) => ({
-          ...address,
-          verifiedList: address.keyList
-            ? await verifyMailKeyList(address.keyList, authorityPublicKey).catch(() => null)
-            : null,
-        })),
-      )
+      let { data } = await api.get<MailAddress[]>('/mail/addresses')
+      if (await settleOwedKeyLists(session, data)) data = (await api.get<MailAddress[]>('/mail/addresses')).data
+      return checkedAddresses(session, data)
     },
   })
 }
@@ -98,24 +98,6 @@ export function useEnsureMailKeys() {
 
 // --- Changing keys (docs/plans/mail.md, C3e) --------------------------------
 
-/** The next key list after the address's current one, with `keys`, signed by this account. */
-async function nextList(session: Session, address: CheckedMailAddress, keys: MailKeyEntry[]) {
-  const current = address.verifiedList
-  if (!current) throw new Error('the current key list is not signed by this account')
-  return signMailKeyList(toBase64(session.masterKey), {
-    address: current.address,
-    sequence: current.sequence + 1,
-    previousHash: current.hash,
-    issuedAt: new Date().toISOString(),
-    // Strictly by fingerprint (lowercase hex sorts as the bytes do).
-    keys: [...keys].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1)),
-  })
-}
-
-function entries(address: CheckedMailAddress): MailKeyEntry[] {
-  return address.keys.map((key) => ({ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: key.primary, flags: key.flags }))
-}
-
 /** What a key list change does to one key. */
 export type KeyChange =
   | { kind: 'makePrimary' }
@@ -148,7 +130,7 @@ function useKeyMutation<T>(fn: (input: T, session: Session) => Promise<unknown>)
 /** Makes a key primary, or marks it obsolete or compromised (or not), in a new key list. */
 export function useChangeKey() {
   return useKeyMutation(async (input: { address: CheckedMailAddress; fingerprint: string; change: KeyChange }, session) => {
-    const list = await nextList(session, input.address, changedEntries(entries(input.address), input.fingerprint, input.change))
+    const list = await nextKeyList(session, input.address, changedEntries(listEntries(input.address), input.fingerprint, input.change))
     await api.put(`/mail/addresses/${input.address.id}/key-list`, { keyList: { data: list.data, signature: list.signature } })
   })
 }
@@ -156,10 +138,10 @@ export function useChangeKey() {
 /** Adds a key (new, or imported), primary when asked; the other keys stay to open older mail. */
 async function addKey(session: Session, address: CheckedMailAddress, key: GeneratedMailAddressKey, primary: boolean) {
   const keys = [
-    ...entries(address).map((entry) => (primary ? { ...entry, primary: false } : entry)),
+    ...listEntries(address).map((entry) => (primary ? { ...entry, primary: false } : entry)),
     { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary, flags: DEFAULT_MAIL_KEY_FLAGS },
   ]
-  const list = await nextList(session, address, keys)
+  const list = await nextKeyList(session, address, keys)
   await api.post(`/mail/addresses/${address.id}/keys`, {
     publicKey: key.publicKey,
     privateKeyEnvelope: key.envelope,
@@ -197,4 +179,24 @@ export async function exportKey(session: Session, address: string, key: MailKey,
     { masterKeyBase64: toBase64(session.masterKey), binding: session.envelopeBinding, address, envelope: key.privateKeyEnvelope, fingerprint: key.fingerprint },
     passphrase,
   )
+}
+
+/**
+ * Deletes a forwarding key: the forwarding it serves ends with it
+ * (docs/plans/mail-forwarding.md).
+ */
+export function useDeleteForwardingKey() {
+  return useKeyMutation(async (input: { address: CheckedMailAddress; key: MailKey }) => {
+    await api.delete(`/mail/addresses/${input.address.id}/forwarding-keys/${input.key.id}`)
+  })
+}
+
+/** The forwardings of the caller's addresses, as far as this page needs them. */
+export function useEndToEndForwardings() {
+  return useQuery({
+    queryKey: ['mail', 'forwardings'],
+    queryFn: async () =>
+      (await api.get<{ outgoing: { forwarderAddress: string; kind: string; state: string }[] }>('/mail/forwardings')).data.outgoing,
+    select: (outgoing) => outgoing.filter((forwarding) => forwarding.kind === 'end_to_end' && forwarding.state !== 'rejected'),
+  })
 }
