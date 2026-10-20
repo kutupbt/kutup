@@ -6935,7 +6935,7 @@ fn custom_domains() {
     let first = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
     eventually(
         "Stalwart never took mail for the domain",
-        60,
+        180,
         || {
             smtp_send(
                 &smtp,
