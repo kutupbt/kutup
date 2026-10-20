@@ -317,6 +317,7 @@ fn worker_main(
             Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine.enable_identity_pins(&config.master_key, &config.binding)?;
+        engine.enable_group_list(&config.master_key, &config.binding)?;
         config.master_key.zeroize();
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))

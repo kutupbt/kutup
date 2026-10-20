@@ -1514,6 +1514,10 @@ export interface ChatTransportPort {
   ackMessages(deviceId: number, ids: string[]): Promise<void>
   /** `GET /api/chat/groups/gateway-key`: `{config, identityHistory}`. */
   fetchGroupGateway(home: string, fromSequence: string): Promise<unknown>
+  /** The account's group list, as the verified account head lists it. */
+  fetchGroupList(): Promise<Array<{ id: string; revision: number; envelope: string }>>
+  /** One group-list entry with the next account head: false when another device wrote first. */
+  storeGroupEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<boolean>
   /** `POST /api/chat/groups/relay/{home}` with a sealed group request. */
   relayGroupRequest(
     home: string,
@@ -1992,6 +1996,8 @@ export interface WasmChatClientHandle {
   acceptGroupInvite?(groupId: string): Promise<ChatGroupSync>
   declineGroupInvite?(groupId: string): Promise<void>
   leaveGroup?(groupId: string): Promise<void>
+  /** Writes the due group list entries now (before signing out); how many. */
+  flushGroupList?(): Promise<number>
   removeGroupMember?(groupId: string, pseudonym: string): Promise<void>
   setGroupMemberAdmin?(groupId: string, pseudonym: string, administrator: boolean): Promise<void>
   sendText(
