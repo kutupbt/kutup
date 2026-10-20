@@ -92,6 +92,11 @@ pub struct MailMeta {
     pub attachments: Vec<headers::AttachmentMeta>,
     /// The thread a reply belongs to, when the browser knows it.
     pub thread_id: Option<String>,
+    /// Which of the caller's addresses it is from (an address id): an
+    /// address on a custom domain (docs/plans/mail-custom-domains.md §5).
+    /// None is the account's own address.
+    #[serde(default)]
+    pub from_address: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -210,7 +215,8 @@ async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
         "SELECT a.id, a.address, k.public_key
            FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.user_id = $1 AND a.state = 'active'
+          WHERE a.user_id = $1 AND a.state = 'active' AND a.domain_id IS NULL
+            AND a.group_id IS NULL
           ORDER BY a.created_at DESC LIMIT 1",
     )
     .bind(user_id)
@@ -241,6 +247,72 @@ async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
         address,
         key_id,
     })
+}
+
+/// The sender `from` names (one of the caller's active addresses, on a
+/// custom domain that is usable now), or the account's own when none.
+async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppResult<Sender> {
+    let Some(from) = from else {
+        return sender(state, user_id).await;
+    };
+    let address_id = Uuid::parse_str(from)
+        .map_err(|_| AppError::bad_request("fromAddress must be an address id"))?;
+    let row: Option<(String, Vec<u8>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT a.address, k.public_key, a.domain_id
+           FROM mail_addresses a
+           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
+    )
+    .bind(address_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((address, public_key, domain_id)) = row else {
+        return Err(AppError::not_found("no such address of yours")
+            .with_details(json!({ "code": "notYourAddress" })));
+    };
+    if let Some(domain_id) = domain_id {
+        let settings = crate::mail::domains::settings::Settings::load(&state.pool).await?;
+        let usable = match sqlx::query_as::<_, crate::mail::domains::store::Row>(&format!(
+            "SELECT {} FROM mail_domains WHERE id = $1",
+            crate::mail::domains::store::COLUMNS
+        ))
+        .bind(domain_id)
+        .fetch_optional(&state.pool)
+        .await?
+        {
+            Some(row) => row.usable(&settings) && crate::mail::domains::sweep::configured(state),
+            None => false,
+        };
+        if !usable {
+            return Err(
+                AppError::conflict("this address's domain isn't verified now")
+                    .with_details(json!({ "code": "domainNotVerified" })),
+            );
+        }
+    }
+    let key_id = mail_key::encryption_key_id(&public_key)
+        .map_err(|_| AppError::internal("stored address key does not parse"))?;
+    Ok(Sender {
+        address_id,
+        address,
+        key_id,
+    })
+}
+
+/// The encryption keys of every address the caller sends from.
+async fn own_key_ids(state: &AppState, user_id: Uuid) -> AppResult<Vec<[u8; 8]>> {
+    let keys: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
+          WHERE a.user_id = $1 AND a.state = 'active' AND k.is_primary",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(keys
+        .iter()
+        .filter_map(|key| mail_key::encryption_key_id(key).ok())
+        .collect())
 }
 
 fn mailbox(input: &MailboxInput) -> AppResult<Mailbox> {
@@ -467,7 +539,7 @@ pub async fn create_draft(
     )
     .await?;
     let meta: MailMeta = meta_part(&parts)?;
-    let sender = sender(&state, user_id).await?;
+    let sender = sender_for(&state, user_id, meta.from_address.as_deref()).await?;
     let checked = check_meta(&meta, &sender, &state.config.chat_server_name)?;
     let body = parts
         .get("body")
@@ -555,7 +627,7 @@ pub async fn update_draft(
     )
     .await?;
     let meta: MailMeta = meta_part(&parts)?;
-    let sender = sender(&state, user_id).await?;
+    let sender = sender_for(&state, user_id, meta.from_address.as_deref()).await?;
     let checked = check_meta(&meta, &sender, &state.config.chat_server_name)?;
     let body = parts
         .get("body")
@@ -686,7 +758,15 @@ pub async fn add_draft_attachment(
         .get("part")
         .cloned()
         .ok_or_else(|| AppError::bad_request("missing part"))?;
-    check_own(&part, &sender(&state, user_id).await?)?;
+    // A draft's parts are sealed to the address it is from: any of the
+    // caller's.
+    let own = own_key_ids(&state, user_id).await?;
+    if !mail_key::message_key_id(&part).is_ok_and(|id| own.contains(&id)) {
+        return Err(
+            AppError::bad_request("not encrypted to your current address key")
+                .with_details(json!({ "code": "keyChanged" })),
+        );
+    }
     let attachment = Uuid::new_v4();
     let key = format!("{}att-{attachment}", crate::mail::object_prefix(user_id));
     let size = part.len() as i64;
@@ -1007,7 +1087,10 @@ pub(crate) async fn deliver(
             let (sender, group) = group_sender(&state, user_id, group).await?;
             (sender, Some(group))
         }
-        None => (sender(&state, user_id).await?, None),
+        None => (
+            sender_for(&state, user_id, meta.mail.from_address.as_deref()).await?,
+            None,
+        ),
     };
     // Whose mailbox the sent copy goes to: the account's, or the group's.
     let owner = from_group.as_ref().map_or(user_id, |group| group.id);
