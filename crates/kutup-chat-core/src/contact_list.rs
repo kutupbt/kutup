@@ -227,13 +227,6 @@ impl Engine {
         Ok(())
     }
 
-    /// Whether this device read the list this run.
-    pub(crate) fn contact_list_read(&self) -> bool {
-        self.contact_list
-            .as_ref()
-            .is_some_and(|list| list.read_at_ms > 0)
-    }
-
     /// Whether the list was found full with nothing it may evict: a change
     /// waits (a block too), and the person is told.
     pub fn contact_list_full(&self) -> bool {

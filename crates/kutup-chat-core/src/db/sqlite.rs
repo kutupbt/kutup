@@ -501,6 +501,18 @@ impl ChatDb for SqliteChatDb {
         Ok(value.map(|n| n as u64))
     }
 
+    async fn load_contact_list_followed(&self) -> Result<bool> {
+        let conn = self.conn.borrow();
+        let value: Option<i64> = db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'contact_list_followed'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())?;
+        Ok(value == Some(1))
+    }
+
     async fn load_last_sent_seq(&self) -> Result<Option<u64>> {
         let conn = self.conn.borrow();
         db(conn
@@ -1301,6 +1313,13 @@ impl ChatDb for SqliteChatDb {
                 ))?,
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
             };
+        }
+        if pending.contact_list_followed {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('contact_list_followed', 1) \
+                 ON CONFLICT(key) DO UPDATE SET value = 1",
+                [],
+            ))?;
         }
         if let Some(cursor) = pending.last_cursor {
             // MAX guards monotonicity: the drain cursor never moves backwards.

@@ -1984,18 +1984,18 @@ impl Engine {
         let mut after = self.session.last_cursor().await?;
         let mut report = ReceiveReport::default();
 
-        // A device with no contacts (a clean one, after every device was
-        // lost) reads the account's contact list before it takes any message,
-        // so nothing from someone the account blocked is taken first. If the
-        // list can't be read, the mailbox waits.
-        if self.contact_list.is_some() && !self.contact_list_read() {
-            let clean = self.session.contacts().await?.is_empty();
+        // A device that never followed the account's contact list in full (a
+        // clean one, after every device was lost; or one from before the
+        // list) follows it before it takes any message, so nothing from
+        // someone the account blocked is taken first. Until it can, the
+        // mailbox waits. Afterwards a failed read leaves this device's own
+        // contacts, which it keeps in step.
+        if self.contact_list.is_some() && !self.session.contact_list_followed().await? {
             if let Err(error) = self.sync_contact_list().await {
-                if clean {
-                    self.set_state(EngineState::Degraded);
-                    return Err(error);
-                }
+                self.set_state(EngineState::Degraded);
+                return Err(error);
             }
+            self.session.mark_contact_list_followed().await?;
         }
 
         self.process_inbound(None, &mut report, rng).await?;

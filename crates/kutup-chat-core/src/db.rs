@@ -650,6 +650,10 @@ pub struct Pending {
     /// Highest locally allocated outbound content sequence. Advanced in the
     /// same transaction as the ratchet/outbox/history write.
     pub(crate) last_sent_seq: Option<u64>,
+    /// This device followed the account's contact list once, in full
+    /// (docs/plans/chat-contacts-sync.md, "Reading"): until then its mailbox
+    /// waits. Only ever set.
+    pub(crate) contact_list_followed: bool,
 }
 
 impl Pending {
@@ -691,6 +695,7 @@ impl Pending {
             && self.registration_upload.is_none()
             && self.last_cursor.is_none()
             && self.last_sent_seq.is_none()
+            && !self.contact_list_followed
     }
 
     pub(crate) fn clear(&mut self) {
@@ -770,6 +775,8 @@ pub trait ChatDb {
     async fn load_last_cursor(&self) -> Result<Option<u64>>;
     /// Highest locally committed outbound content sequence.
     async fn load_last_sent_seq(&self) -> Result<Option<u64>>;
+    /// Whether this device followed the account's contact list once, in full.
+    async fn load_contact_list_followed(&self) -> Result<bool>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
     async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
 

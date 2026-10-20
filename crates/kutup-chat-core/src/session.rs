@@ -964,6 +964,17 @@ impl Session {
         self.store.db().load_contact(peer).await
     }
 
+    /// Whether this device followed the account's contact list once, in full.
+    pub(crate) async fn contact_list_followed(&self) -> Result<bool> {
+        self.store.contact_list_followed().await
+    }
+
+    /// Marks the account's contact list followed (after a full sync).
+    pub(crate) async fn mark_contact_list_followed(&mut self) -> Result<()> {
+        self.store.stage_contact_list_followed();
+        self.store.commit().await
+    }
+
     /// Saves a contact as it is (its list entry's due moment, for one).
     pub(crate) async fn save_contact(&mut self, contact: ContactRecord) -> Result<()> {
         self.store.stage_contact(contact);

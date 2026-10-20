@@ -441,3 +441,31 @@ fn contacts_an_entry_of_a_later_version_is_kept_as_it_is() {
         (revision + 1, envelope)
     );
 }
+
+#[test]
+fn contacts_the_mailbox_waits_until_the_list_was_followed_even_with_contacts_here() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut carol = world.person(0xc3);
+    let dave = world.person(0xd4);
+    say(&mut carol, &alice, "hi");
+    alice.receive();
+    block(&mut alice, &carol);
+    let mut alice2 = world.link_device(&alice);
+    drop(alice);
+    // The new device writes to someone first: it has a contact now, but it
+    // never followed the list, so its mailbox still waits for it.
+    world.contact_list_down.set(true);
+    say(&mut alice2, &dave, "hello dave");
+    assert!(!block_on(alice2.engine.session().contacts())
+        .unwrap()
+        .is_empty());
+    say(&mut carol, &alice2, "let me in");
+    assert!(block_on(alice2.engine.receive(&mut rng())).is_err());
+    world.contact_list_down.set(false);
+    alice2.receive();
+    assert_eq!(state_of(&alice2, &carol), Some(ContactState::Blocked));
+    // Followed once: a later outage leaves its own contacts and takes mail.
+    world.contact_list_down.set(true);
+    alice2.receive();
+}

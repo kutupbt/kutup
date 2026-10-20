@@ -89,6 +89,7 @@ const ALL_STORES: [&str; 25] = [
 
 const SINGLETON: &str = "value";
 const LAST_CURSOR: &str = "last_cursor";
+const CONTACT_LIST_FOLLOWED: &str = "contact_list_followed";
 const LAST_SENT_SEQ: &str = "last_sent_seq";
 const PENDING_PREKEY_UPLOAD: &str = "pending_prekey_upload";
 const PREKEY_ROTATION: &str = "prekey_rotation";
@@ -524,6 +525,13 @@ impl ChatDb for IndexedDbChatDb {
         self.get(META, string_key(LAST_CURSOR)).await
     }
 
+    async fn load_contact_list_followed(&self) -> Result<bool> {
+        Ok(self
+            .get::<bool>(META, string_key(CONTACT_LIST_FOLLOWED))
+            .await?
+            .unwrap_or(false))
+    }
+
     async fn load_last_sent_seq(&self) -> Result<Option<u64>> {
         self.get(META, string_key(LAST_SENT_SEQ)).await
     }
@@ -868,6 +876,9 @@ impl ChatDb for IndexedDbChatDb {
         if let Some(cursor) = writes.last_cursor {
             operations.push(self.put(&meta, string_key(LAST_CURSOR), &cursor)?);
         }
+        if let Some(followed) = writes.contact_list_followed {
+            operations.push(self.put(&meta, string_key(CONTACT_LIST_FOLLOWED), &followed)?);
+        }
         if let Some(seq) = writes.last_sent_seq {
             operations.push(self.put(&meta, string_key(LAST_SENT_SEQ), &seq)?);
         }
@@ -993,6 +1004,7 @@ struct PreparedWrites {
     registration_upload: Option<Option<Vec<u8>>>,
     last_cursor: Option<Vec<u8>>,
     last_sent_seq: Option<Vec<u8>>,
+    contact_list_followed: Option<Vec<u8>>,
 }
 
 impl PreparedWrites {
@@ -1050,6 +1062,10 @@ impl PreparedWrites {
                 .transpose()?,
             last_cursor: pending.last_cursor.as_ref().map(encode).transpose()?,
             last_sent_seq: pending.last_sent_seq.as_ref().map(encode).transpose()?,
+            contact_list_followed: pending
+                .contact_list_followed
+                .then(|| encode(&true))
+                .transpose()?,
         })
     }
 }

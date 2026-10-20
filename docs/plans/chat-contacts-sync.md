@@ -181,13 +181,18 @@ cost of the correlation; it does not remove it.
 
 ### Reading
 
-On a clean device (no contacts, no highest-seen account head):
-1. read the pin list and the contact list (`check_index` against the account
-   head);
-2. apply the contacts;
-3. only then drain the mailbox and process transcripts. The mailbox is
-   **held** until the list has been read, so nothing from a blocked person is
-   taken first.
+A device that never followed the contact list in full (a clean one, or one
+from before the list):
+1. reads the contact list (every entry `check_index` lists, at the listed
+   revision, or the read fails);
+2. applies the contacts, and marks the list followed (durably);
+3. only then drains the mailbox and processes transcripts. The mailbox is
+   **held** until the list has been followed, so nothing from a blocked
+   person is taken first.
+
+The pin list is not read ahead of the mailbox: it is consulted for each
+contact as Chat meets them (`sync_identity`), before anything is sealed to
+them, which is the point it decides anything.
 
 `bootstrap_contacts` goes. It marks every peer in the device's own message
 tables as Accepted at revision 0, which would run before the list and accept
@@ -264,8 +269,13 @@ following the main session's review of #252:
     due writes (`sync_contact_list_if_due`).
   - `ContactListTiming { block: Immediate | Debounced }`: the web passes
     `Immediate`, so a block is written before `block_contact` returns.
-  - `receive` on a device with no contacts reads the list first; if it
-    can't, the mailbox waits. `bootstrap_contacts` is gone.
+  - `receive` on a device that never followed the list in full follows it
+    first and marks it followed (a durable flag); until it can, the mailbox
+    waits. `bootstrap_contacts` is gone.
+  - A read fails closed: every entry the account head lists must open at the
+    listed revision and name the account its id comes from. An entry of a
+    later version is kept as it is and never overwritten (the group list
+    reads the same way).
   - First-seen identity pins are queued (`pins_due`) and written later and
     together (`flush_identity_pins`, on the same tick and at sign-out); an
     in-person verification is written at once. A queued pin lost to a reload

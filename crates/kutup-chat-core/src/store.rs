@@ -399,6 +399,19 @@ impl ChatStore {
         pending.last_sent_seq = Some(pending.last_sent_seq.map_or(seq, |prior| prior.max(seq)));
     }
 
+    /// Marks the account's contact list followed (only ever set).
+    pub(crate) fn stage_contact_list_followed(&self) {
+        self.pending.borrow_mut().contact_list_followed = true;
+    }
+
+    /// Whether the account's contact list was followed once, in full.
+    pub(crate) async fn contact_list_followed(&self) -> ChatResult<bool> {
+        if self.pending.borrow().contact_list_followed {
+            return Ok(true);
+        }
+        self.db.load_contact_list_followed().await
+    }
+
     /// The highest mailbox cursor processed (overlay before durable) — the drain
     /// resume point.
     pub(crate) async fn last_cursor(&self) -> ChatResult<Option<u64>> {
