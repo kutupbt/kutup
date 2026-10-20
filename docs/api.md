@@ -3406,6 +3406,20 @@ and an `unknown` answer also the relaying server's failure budget; every
 answer takes the same reads, so its timing doesn't tell whether the group
 exists. A cancel is done once: sent again it meets `notFound`, so a client
 that lost the answer to its cancel asks the status (`denied` then).
+Avatars: `putAvatar` (signed by a member that `access.attributes` lets
+change attributes, else `notAllowed`) carries the sealed blob padded to one
+size (`pad_group_avatar`: its length, the blob, zeros to 41,005 bytes; the
+blob is 8,233, 16,425, 32,809 or 41,001 bytes). It becomes the group's one
+pending upload for 24 hours, in place of any earlier one. A change naming an
+avatar hash must find that blob, pending or current (`avatarMissing`
+otherwise; a genesis can't name one); once accepted it becomes the current
+blob and the others go, and removing the avatar drops its blob.
+`getAvatar` answers the current blob padded the same way, to a member or
+with the link's password (charged as join info), or `avatarMissing`.
+Refusals: `avatarTooLarge` over the largest blob and `avatarStorageFull`
+over the storage per group (the current blob and the upload), both
+administrators' settings; `malformed` for a body not padded so. An upload
+spends the change budgets.
 
 ### GET /api/chat/group-list
 
@@ -4443,9 +4457,17 @@ Return current global server settings.
   "nameHoldDays": 180,
   "oldAddressReceiveDays": 90,
   "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
-  "chatGroupLinkJoinsPerRelayPerMin": 1200
+  "chatGroupLinkJoinsPerRelayPerMin": 1200,
+  "chatGroupAvatarMaxBytes": 41001,
+  "chatGroupAvatarStoragePerGroupBytes": 82002
 }
 ```
+
+`chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
+for the groups it hosts: 8233, 16425, 32809 or 41001.
+`chatGroupAvatarStoragePerGroupBytes` is the most one group's avatars (the
+current blob and a pending upload) may take, 8233 to 10000000. `null` resets
+either to its first value (41001 and 82002).
 
 The two link-join budgets limit how many joins from a group link and
 requests to join one relaying server's users may make each minute: to any

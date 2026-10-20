@@ -1433,7 +1433,10 @@ title.
 **Server parts** (the second session, agreed 2026-10-20):
 - the avatar operations and their storage (above), at most two blobs of
   40 KiB per hosted group, so the existing setting for how many groups a home
-  hosts bounds the total;
+  hosts bounds the total (built: `PutAvatar` and `GetAvatar` bodies padded to
+  one size, 41,005 bytes, by `pad_group_avatar`, so the sealed sizes don't
+  show the relay the bucket; the largest blob and the storage per group are
+  site settings, first 41,001 and 82,002; a genesis can't name an avatar);
 - `GetAvatar` under the link proof;
 - a per-relay-server budget for link joins and requests (about 120 a minute,
   admin-settable), charged before the change is checked;
