@@ -404,6 +404,25 @@ mod tests {
         assert!(decode_entry_id(&loose).is_err(), "non-zero spare bits");
     }
 
+    /// Every label of this list differs from the group list's, and none is a
+    /// prefix of another, so no derivation, id or entry of one can stand
+    /// for the other's.
+    #[test]
+    fn its_labels_are_its_own() {
+        const GROUP_LIST: &[&[u8]] = &[
+            b"kutup/chat-group-list/v1\0",
+            b"kutup/chat-group-list/id-key/v1\0",
+            b"kutup/chat-group-list/seal-key/v1\0",
+            b"kutup/chat-group-list/id/v1\0",
+            b"KUTPGL1\0",
+        ];
+        for ours in [SALT, ID_KEY_INFO, SEAL_KEY_INFO, ID_DOMAIN, &MAGIC[..]] {
+            for theirs in GROUP_LIST {
+                assert!(!ours.starts_with(theirs) && !theirs.starts_with(ours));
+            }
+        }
+    }
+
     /// The group list's entries and the contact list's are different sizes
     /// and magics under different keys: neither list takes the other's.
     #[test]
