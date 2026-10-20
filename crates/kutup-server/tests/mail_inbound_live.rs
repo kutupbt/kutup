@@ -6855,8 +6855,11 @@ fn custom_domains() {
         |v| v["dkimKeys"][0]["state"] == "active",
     );
 
-    // Alice adds the domain and publishes what it lists.
+    // Alice adds the domain and publishes what it lists. Her own address
+    // has its key, as a client makes at sign-up: the server's notices to
+    // her arrive there.
     let alice = register(&c, &base);
+    set_up_address(&c, &base, &alice);
     let r = bearer(c.post(format!("{base}/api/mail/domains")), &alice.token)
         .json(&json!({ "name": "Customer.TEST." }))
         .send()
