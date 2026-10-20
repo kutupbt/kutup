@@ -2409,7 +2409,7 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
 /// The account head chain starts again with the new incarnation, and no
 /// listed value sealed under the old keys stays to be listed in it
 /// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
-/// group list, labels, filters and Pass secrets go; custom folders keep
+/// group list, the Chat contact list, labels, filters and Pass secrets go; custom folders keep
 /// their mail and lose their names, until their owner names them again. The
 /// identity pins were sealed under the old master key too: nothing can open
 /// them now.
@@ -2422,6 +2422,7 @@ async fn clear_account_values(
         "DELETE FROM identity_pins WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
+        "DELETE FROM chat_contact_list WHERE user_id = $1",
         // Forwardings both ways end with their proxy factors: they were
         // made for the old incarnation's keys (docs/plans/mail-forwarding.md).
         "DELETE FROM mail_forwardings WHERE user_id = $1

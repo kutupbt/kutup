@@ -1,8 +1,9 @@
 # Chat contacts that survive device loss
 
 Status: decided (2026-10-19): the main session's review, and the user's
-answers (see Decisions). Third session (client and chat-core). The server half
-reuses the group list's routes; the second session owns it.
+answers (see Decisions). Third session (client and chat-core). The second
+session built `kutup_crypto::chat_contact_list` (with vectors) and the server
+half (`/api/chat/contact-list`, the `chatContacts` scope).
 
 - Gap: [`roadmap.md`](../roadmap.md), "contact states after total device
   loss"; found by spec 34 on #247.
@@ -273,7 +274,7 @@ The user's answers (2026-10-19, relayed by the main session):
 
 ## Order
 
-1. kutup-crypto `chat_contact_list` with vectors (third session).
+1. kutup-crypto `chat_contact_list` with vectors (second session, reviewed by the third).
 2. The server scope and routes (second session).
 3. chat-core:
    - the one order function, used by the contact control too;
