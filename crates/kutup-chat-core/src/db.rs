@@ -503,6 +503,11 @@ pub struct ContactRecord {
     /// Stable id for crash-safe retries of that linked-device control message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_send_id: Option<String>,
+    /// When this contact's entry in the account's contact list is due
+    /// (docs/plans/chat-contacts-sync.md): a random moment after a change,
+    /// kept here so it survives a reload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_due_at_ms: Option<i64>,
 }
 
 /// The local account's Signal-style profile, including the random key. The

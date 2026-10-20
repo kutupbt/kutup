@@ -4,8 +4,29 @@
 //! Signal's storage service keeps `ContactRecord`s.
 
 use kutup_chat_proto::ContactState;
+use rand_core::{OsRng, RngCore as _};
 
 use crate::db::ContactRecord;
+
+/// A due write waits a random time up to this long, so two accounts that
+/// accept each other don't write at the same moment (the plan's "When it is
+/// written").
+pub(crate) const WRITE_DELAY_MAX_MS: i64 = 10 * 60 * 1000;
+
+/// When `contact`'s entry is due after a change: an earlier due moment
+/// stands, else a random one in the next ten minutes. Never for an incoming
+/// request: that is the other person's, not this account's choice.
+pub(crate) fn due_after_change(contact: &ContactRecord, now_ms: i64) -> Option<i64> {
+    if contact.state == ContactState::PendingIncoming {
+        return contact.list_due_at_ms;
+    }
+    Some(contact.list_due_at_ms.unwrap_or_else(|| fresh_due(now_ms)))
+}
+
+/// A random moment in the next [`WRITE_DELAY_MAX_MS`].
+pub(crate) fn fresh_due(now_ms: i64) -> i64 {
+    now_ms + i64::from(OsRng.next_u32()) % (WRITE_DELAY_MAX_MS + 1)
+}
 
 /// The one order of contact states, for the Note-to-Self contact control and
 /// the list alike: the higher wins. At an equal revision a block wins,

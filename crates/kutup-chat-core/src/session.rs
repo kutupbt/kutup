@@ -301,15 +301,13 @@ impl Session {
             }
         }
         let store = ChatStore::attach(db, local)?;
-        let mut session = Session {
+        Ok(Session {
             store,
             registration: None,
             account,
             address,
             group_decisions: Default::default(),
-        };
-        session.bootstrap_contacts().await?;
-        Ok(session)
+        })
     }
 
     /// Resume a fresh install whose exact registration payload was persisted
@@ -1020,43 +1018,6 @@ impl Session {
         self.store.commit().await
     }
 
-    /// Upgrade stores created before contact state existed without turning
-    /// established conversations into message requests after an application
-    /// update. Only peers already present in durable history are accepted.
-    pub(crate) async fn bootstrap_contacts(&mut self) -> Result<()> {
-        let existing = self.store.db().list_contacts().await?;
-        let known: std::collections::HashSet<String> =
-            existing.into_iter().map(|contact| contact.peer).collect();
-        let mut peers = std::collections::BTreeMap::<String, i64>::new();
-        for message in self.store.db().list_messages().await? {
-            peers
-                .entry(message.peer)
-                .and_modify(|time| *time = (*time).max(message.received_at))
-                .or_insert(message.received_at);
-        }
-        for message in self.store.db().list_sent_messages().await? {
-            peers
-                .entry(message.peer)
-                .and_modify(|time| *time = (*time).max(message.created_at))
-                .or_insert(message.created_at);
-        }
-        for (peer, updated_at_ms) in peers {
-            if peer != self.user() && !known.contains(&peer) {
-                self.store.stage_contact(ContactRecord {
-                    peer,
-                    state: ContactState::Accepted,
-                    previous_state: None,
-                    revision: 0,
-                    source_device_id: 0,
-                    updated_at_ms,
-                    sync_pending: false,
-                    sync_send_id: None,
-                });
-            }
-        }
-        self.store.commit().await
-    }
-
     pub async fn accept_contact(&mut self, peer: &str) -> Result<ContactRecord> {
         self.transition_contact(peer, ContactTransition::Accept)
             .await
@@ -1191,6 +1152,11 @@ impl Session {
                 revision,
                 source_device_id,
             )),
+            list_due_at_ms: current.as_ref().and_then(|contact| contact.list_due_at_ms),
+        };
+        let record = ContactRecord {
+            list_due_at_ms: crate::contact_list::due_after_change(&record, now_millis()),
+            ..record
         };
         self.store.stage_contact(record.clone());
         if delete_messages {
@@ -1565,6 +1531,10 @@ impl Session {
                         updated_at_ms: control.updated_at_ms,
                         sync_pending: false,
                         sync_send_id: None,
+                        // The device that made the change writes the list;
+                        // a write due here stays due (it writes only what
+                        // the list doesn't say yet).
+                        list_due_at_ms: current.as_ref().and_then(|contact| contact.list_due_at_ms),
                     });
                 }
                 contact_synced = true;
@@ -1870,6 +1840,7 @@ impl Session {
     async fn stage_incoming_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<bool> {
         let current = self.contact(peer).await?;
         let Some(mut contact) = current else {
+            // An incoming request is the other person's: never in the list.
             self.store.stage_contact(ContactRecord {
                 peer: peer.to_string(),
                 state: ContactState::PendingIncoming,
@@ -1879,6 +1850,7 @@ impl Session {
                 updated_at_ms,
                 sync_pending: false,
                 sync_send_id: None,
+                list_due_at_ms: None,
             });
             return Ok(false);
         };
@@ -1913,6 +1885,10 @@ impl Session {
                     contact.revision,
                     contact.source_device_id,
                 ));
+                // The reply accepted the request: written, or the request
+                // would restore as pending for good.
+                contact.list_due_at_ms =
+                    crate::contact_list::due_after_change(&contact, now_millis());
                 self.store.stage_contact(contact);
                 Ok(false)
             }
@@ -1934,6 +1910,7 @@ impl Session {
                 updated_at_ms,
                 sync_pending: false,
                 sync_send_id: None,
+                list_due_at_ms: Some(crate::contact_list::fresh_due(now_millis())),
             }),
             Some(mut contact)
                 if matches!(
@@ -1952,6 +1929,8 @@ impl Session {
                 contact.updated_at_ms = updated_at_ms;
                 contact.sync_pending = false;
                 contact.sync_send_id = None;
+                contact.list_due_at_ms =
+                    crate::contact_list::due_after_change(&contact, now_millis());
                 self.store.stage_contact(contact);
             }
             Some(_) => {}
@@ -2949,6 +2928,7 @@ impl Session {
                 updated_at_ms,
                 sync_pending: false,
                 sync_send_id: None,
+                list_due_at_ms: Some(crate::contact_list::fresh_due(now_millis())),
             }),
             Some(mut contact) if contact.state == ContactState::Rejected => {
                 contact.revision = next_contact_revision(contact.revision)?;
@@ -2958,6 +2938,8 @@ impl Session {
                 contact.updated_at_ms = updated_at_ms;
                 contact.sync_pending = false;
                 contact.sync_send_id = None;
+                contact.list_due_at_ms =
+                    crate::contact_list::due_after_change(&contact, now_millis());
                 self.store.stage_contact(contact);
             }
             Some(contact)

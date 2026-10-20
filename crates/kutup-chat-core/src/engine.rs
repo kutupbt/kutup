@@ -511,7 +511,6 @@ impl Engine {
             .clone();
         let device_id = transport.register_device(&request).await?;
         session.complete_registration(device_id).await?;
-        session.bootstrap_contacts().await?;
         Ok(Engine::new(session, transport))
     }
 

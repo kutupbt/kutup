@@ -209,7 +209,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     source_device_id INTEGER NOT NULL,
     updated_at_ms    INTEGER NOT NULL,
     sync_pending     INTEGER NOT NULL DEFAULT 0,
-    sync_send_id     TEXT
+    sync_send_id     TEXT,
+    list_due_at_ms   INTEGER
 );
 CREATE TABLE IF NOT EXISTS group_outbox (
     send_id    TEXT PRIMARY KEY,
@@ -667,7 +668,7 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT peer, state, previous_state, revision, source_device_id,
-                        updated_at_ms, sync_pending, sync_send_id
+                        updated_at_ms, sync_pending, sync_send_id, list_due_at_ms
                  FROM contacts WHERE peer = ?1",
                 [peer],
                 contact_row,
@@ -679,7 +680,7 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
             "SELECT peer, state, previous_state, revision, source_device_id,
-                    updated_at_ms, sync_pending, sync_send_id
+                    updated_at_ms, sync_pending, sync_send_id, list_due_at_ms
              FROM contacts ORDER BY peer",
         ))?;
         let rows = db(stmt.query_map([], contact_row))?;
@@ -1168,8 +1169,8 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO contacts
                      (peer, state, previous_state, revision, source_device_id,
-                      updated_at_ms, sync_pending, sync_send_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                      updated_at_ms, sync_pending, sync_send_id, list_due_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(peer) DO UPDATE SET
                      state = excluded.state,
                      previous_state = excluded.previous_state,
@@ -1177,7 +1178,8 @@ impl ChatDb for SqliteChatDb {
                      source_device_id = excluded.source_device_id,
                      updated_at_ms = excluded.updated_at_ms,
                      sync_pending = excluded.sync_pending,
-                     sync_send_id = excluded.sync_send_id",
+                     sync_send_id = excluded.sync_send_id,
+                     list_due_at_ms = excluded.list_due_at_ms",
                 rusqlite::params![
                     peer,
                     contact_state_code(contact.state),
@@ -1187,6 +1189,7 @@ impl ChatDb for SqliteChatDb {
                     contact.updated_at_ms,
                     i64::from(contact.sync_pending),
                     contact.sync_send_id,
+                    contact.list_due_at_ms,
                 ],
             ))?;
         }
@@ -1388,6 +1391,7 @@ fn contact_row(row: &rusqlite::Row) -> rusqlite::Result<ContactRecord> {
         updated_at_ms: row.get(5)?,
         sync_pending: row.get::<_, i64>(6)? != 0,
         sync_send_id: row.get(7)?,
+        list_due_at_ms: row.get(8)?,
     })
 }
 
