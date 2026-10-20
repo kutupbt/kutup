@@ -72,6 +72,18 @@ pub struct GroupGatewayAnswer {
     pub identity_history: Vec<kutup_federation_proto::FederationIdentityDocumentV1>,
 }
 
+/// One entry of the account's group list (`GET /api/chat/group-list`), as
+/// the account head vouches for it: its opaque id, its revision (as the
+/// server read it from the sealed header) and its sealed body
+/// (docs/plans/pairwise-groups.md §5).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupListItem {
+    pub id: String,
+    pub revision: u64,
+    pub envelope: String,
+}
+
 /// What this account's own server answered a relayed group request with
 /// (`POST /api/chat/groups/relay/{homeServer}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -330,6 +342,30 @@ pub trait ChatTransport {
     async fn relay_group_request(&self, _home: &str, _sealed: &[u8]) -> Result<GroupRelayOutcome> {
         Err(crate::error::ChatError::Transport(
             "this transport doesn't reach group homes".into(),
+        ))
+    }
+
+    /// `GET /api/chat/group-list`: every entry, each at the revision the
+    /// verified account head lists (a list it doesn't vouch for is an error).
+    async fn fetch_group_list(&self) -> Result<Vec<GroupListItem>> {
+        Err(crate::error::ChatError::Transport(
+            "this transport keeps no group list".into(),
+        ))
+    }
+
+    /// `PUT /api/chat/group-list/{id}` with the next account head: `false`
+    /// when the listed revision isn't `base_revision` (another device wrote
+    /// first; read the list again). `revision` is the one in the entry's
+    /// sealed header, where the server reads it; the account head lists it.
+    async fn store_group_entry(
+        &self,
+        _id: &str,
+        _base_revision: u64,
+        _revision: u64,
+        _envelope: &str,
+    ) -> Result<bool> {
+        Err(crate::error::ChatError::Transport(
+            "this transport keeps no group list".into(),
         ))
     }
 }

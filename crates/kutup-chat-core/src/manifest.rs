@@ -120,6 +120,28 @@ impl AccountAuthority {
         Ok(Self { identity })
     }
 
+    /// The self-authority's public key, which members check this account's
+    /// group bindings against.
+    pub fn public_key(&self) -> [u8; 32] {
+        self.identity.authority_public_key()
+    }
+
+    /// This account's binding of `pseudonym` in `group_id`
+    /// (`kutup_crypto::chat_group::sign_binding`).
+    pub fn sign_group_binding(
+        &self,
+        group_id: &[u8; 32],
+        pseudonym: &[u8; 32],
+        account: &AccountRef,
+    ) -> [u8; 64] {
+        kutup_crypto::chat_group::sign_binding(
+            self.identity.authority_signing_key(),
+            group_id,
+            pseudonym,
+            account,
+        )
+    }
+
     pub fn public_key_base64(&self) -> String {
         STANDARD.encode(self.identity.authority_public_key())
     }

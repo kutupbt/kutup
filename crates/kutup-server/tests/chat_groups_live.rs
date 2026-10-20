@@ -213,7 +213,12 @@ fn apply(group: &mut Group, home: &Home, entry: &GroupLogEntryV1) {
 }
 
 fn create(c: &Client, user: &User, home: &Home, creator: &GroupKeyPair) -> Group {
-    let master = GroupMasterKey::generate();
+    let master = GroupMasterKey::generate(kutup_crypto::chat_group::GroupHome {
+        server: &home.pin.server,
+        identity_sequence: home.pin.identity_sequence,
+        identity_document_hash: &home.pin.identity_document_hash,
+    })
+    .unwrap();
     let id = master.group_id();
     let mut genesis = GroupChangeV1 {
         version: GROUP_FORMAT_VERSION,
@@ -628,6 +633,33 @@ fn removed_members_and_strangers_learn_nothing() {
             "{operation:?}"
         );
     }
+    // A removed member's pseudonym is answered exactly as one asking about a
+    // group that doesn't exist: a device looking for its account's place
+    // (pairwise-groups.md §2, "A device that lost its group list") tells the
+    // home nothing.
+    let unknown_group: [u8; 32] = random();
+    let as_unknown = exchange(
+        &c,
+        &bob,
+        &home,
+        &signed(
+            &home,
+            &unknown_group,
+            GroupOperationV1::GetState,
+            b"",
+            &bob_key,
+        ),
+    );
+    let as_removed = exchange(
+        &c,
+        &bob,
+        &home,
+        &signed(&home, &group.id, GroupOperationV1::GetState, b"", &bob_key),
+    );
+    assert_eq!(
+        (&as_removed.status, &as_removed.code, &as_removed.body),
+        (&as_unknown.status, &as_unknown.code, &as_unknown.body)
+    );
     let leave = GroupChangeV1 {
         actor: b64(&bob_key.public_key()),
         ..author(&group, &alice_key, vec![GroupActionV1::Leave])

@@ -207,11 +207,10 @@ pub struct Engine {
     /// (docs/plans/pairwise-groups.md §3): refreshed after
     /// `KNOWN_DEVICES_TTL_MS`, and dropped when the group's state changes.
     pub(crate) group_members_seen: BTreeMap<String, crate::group_gate::GroupMembership>,
-    /// A verified manifest's device keys by account, and when they were
+    /// A verified manifest's self-authority key by account, and when it was
     /// fetched: what group bindings are checked against, kept for
     /// `KNOWN_DEVICES_TTL_MS`.
-    pub(crate) manifest_keys_seen:
-        BTreeMap<String, (i64, Vec<(u32, libsignal_protocol::PublicKey)>)>,
+    pub(crate) manifest_keys_seen: BTreeMap<String, (i64, [u8; 32])>,
     /// Each group's catch-ups for incoming content (`group_gate`).
     pub(crate) group_catch_ups: BTreeMap<String, crate::group_gate::CatchUps>,
     /// When the session with a peer device was last set aside for being
@@ -236,6 +235,12 @@ pub struct Engine {
     /// The account's synced identity pins, once the application hands over
     /// the key (`enable_identity_pins`); without it Chat keeps to its own.
     identity_pins: Option<crate::identity_sync::IdentityPinsSync>,
+    /// The account's group list, once the application hands over the key
+    /// (`enable_group_list`).
+    pub(crate) group_list: Option<crate::group_list::GroupListSync>,
+    /// The account's group keys (its self-authority and its pseudonyms),
+    /// from its master key: no group is made or joined without them.
+    pub(crate) group_keys: Option<crate::group::GroupAccountKeys>,
 }
 
 impl Engine {
@@ -334,7 +339,16 @@ impl Engine {
             clock_offset_ms: 0,
             mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
             identity_pins: None,
+            group_list: None,
+            group_keys: None,
         }
+    }
+
+    /// The account's group keys; no group is made or joined without them.
+    pub(crate) fn group_keys(&self) -> Result<&crate::group::GroupAccountKeys> {
+        self.group_keys
+            .as_ref()
+            .ok_or_else(|| ChatError::Invalid("groups need the account's key".into()))
     }
 
     /// Share identities with the account's other apps through its synced
@@ -768,6 +782,14 @@ impl Engine {
         )?;
         self.session.save_local_profile(rotated).await?;
         self.flush_profile(wrapping_key, sent_at, rng).await?;
+        // The groups' members deliver with the profile key in this account's
+        // entry: each group gets the new one (best effort; each group's next
+        // opening tries again).
+        for group in self.session.db().list_groups().await? {
+            if group.status == crate::group::GroupStatus::Member {
+                let _ = self.refresh_own_group_entry(&group.group_id, rng).await;
+            }
+        }
         self.session
             .local_profile()
             .await?
@@ -2123,8 +2145,16 @@ impl Engine {
                         group_id,
                         sender,
                         context,
+                        named,
                     }) if !decided => {
                         decided = true;
+                        // A group this device doesn't know: a member's key
+                        // naming this account's pseudonym may bring it back
+                        // (group_recover.rs). Best effort; the gate below
+                        // decides either way.
+                        if let (Some(context), Some(named)) = (context.as_ref(), named.as_deref()) {
+                            let _ = self.recover_group(context, sender, named, rng).await;
+                        }
                         let gate = match self
                             .decide_group_content(
                                 group_id,

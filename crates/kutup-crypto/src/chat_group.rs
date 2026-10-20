@@ -13,9 +13,10 @@
 //!   key per member per group ([`GroupKeyPair`]). Changes are signed by the
 //!   actor's pseudonym; a claim of a pending slot is also signed by the slot's
 //!   one-time claim key. Signatures are verified strictly.
-//! - A member's binding (pseudonym → account) is signed by one of the
-//!   account's Chat devices with its libsignal identity key; this module only
-//!   fixes the signed bytes ([`binding_signed_bytes`]).
+//! - A member's binding (pseudonym → account) is signed by the account's
+//!   self-authority key, which every device derives from the account master
+//!   key, so devices coming and going never touch it ([`sign_binding`],
+//!   [`verify_binding`]).
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -36,7 +37,11 @@ pub const SLOT_ID_LEN: usize = 16;
 pub const HASH_LEN: usize = 32;
 
 const KDF_SALT: &[u8] = b"kutup/chat-group/v1";
-const ID_INFO: &[u8] = b"kutup/chat-group/id/v1";
+/// v2: the id binds the group's home (its server and the federation identity
+/// it was pinned at), so the same master key at another home is another
+/// group.
+const ID_INFO: &[u8] = b"kutup/chat-group/id/v2\0";
+const HOME_DOMAIN: &[u8] = b"kutup/chat-group/home/v1\0";
 const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v1";
 
 const SEAL_DOMAIN: &[u8] = b"kutup/chat-group/sealed-field/v1\0";
@@ -50,31 +55,87 @@ const BINDING_DOMAIN: &[u8] = b"kutup/chat-group/binding/v1\0";
 const CHANGE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/change-hash/v1\0";
 const STATE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/state-hash/v1\0";
 
-/// A group's master key: the one secret every member holds.
-pub struct GroupMasterKey(Zeroizing<[u8; MASTER_KEY_LEN]>);
+/// A group's home, as its id binds it: the server the group lives on, for
+/// its whole life, and the federation identity document it was pinned at.
+/// Every notary a member takes is verified against the identity history
+/// followed from that pin (chat-core's `GroupRecordV1::followed_history`).
+/// A member who keeps the master key can't make the group live elsewhere: a
+/// home of theirs is another group id, which no member's binding names.
+#[derive(Clone, Copy, Debug)]
+pub struct GroupHome<'a> {
+    pub server: &'a str,
+    pub identity_sequence: u64,
+    pub identity_document_hash: &'a str,
+}
+
+impl GroupHome<'_> {
+    /// The home's digest: SHA-256 over the domain, the server name and the
+    /// identity document hash (each u16-length-prefixed), then the identity
+    /// sequence (u64 big-endian). Only canonical spellings are taken, so one
+    /// home has one id: the server a lowercase DNS name with no trailing dot
+    /// ([`crate::account_ref::valid_server`]), the hash exactly 64 lowercase
+    /// hex digits; anything else is refused, never normalised. This is the
+    /// pin made at the group's creation, kept for its life: the home's
+    /// identity rotating later doesn't move the id (members follow the
+    /// rotation from the pin).
+    fn digest(&self) -> Result<[u8; 32]> {
+        let canonical_hash = self.identity_document_hash.len() == 64
+            && self
+                .identity_document_hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !crate::account_ref::valid_server(self.server) || !canonical_hash {
+            return Err(CryptoError::InvalidInput(
+                "a group home must be a canonical server name and identity hash".into(),
+            ));
+        }
+        let mut hash = Sha256::new();
+        hash.update(HOME_DOMAIN);
+        for text in [self.server, self.identity_document_hash] {
+            hash.update((text.len() as u16).to_be_bytes());
+            hash.update(text.as_bytes());
+        }
+        hash.update(self.identity_sequence.to_be_bytes());
+        Ok(hash.finalize().into())
+    }
+}
+
+/// A group's master key, the one secret every member holds, with the home
+/// it belongs to.
+pub struct GroupMasterKey {
+    key: Zeroizing<[u8; MASTER_KEY_LEN]>,
+    home: [u8; 32],
+}
 
 impl GroupMasterKey {
-    pub fn generate() -> Self {
+    /// A new group's key, at `home`.
+    pub fn generate(home: GroupHome<'_>) -> Result<Self> {
+        let home = home.digest()?;
         let mut key = Zeroizing::new([0u8; MASTER_KEY_LEN]);
         copy_randombytes(key.as_mut());
-        Self(key)
+        Ok(Self { key, home })
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+    /// A group's key from its bytes, for the group at `home`.
+    pub fn from_bytes(bytes: &[u8], home: GroupHome<'_>) -> Result<Self> {
         let key: [u8; MASTER_KEY_LEN] = bytes
             .try_into()
             .map_err(|_| CryptoError::InvalidInput("group master key length".into()))?;
-        Ok(Self(Zeroizing::new(key)))
+        Ok(Self {
+            key: Zeroizing::new(key),
+            home: home.digest()?,
+        })
     }
 
     pub fn as_bytes(&self) -> &[u8; MASTER_KEY_LEN] {
-        &self.0
+        &self.key
     }
 
-    /// The group's id, what the server and every message name it by.
+    /// The group's id, what the server and every message name it by: the
+    /// master key's, at its home.
     pub fn group_id(&self) -> [u8; GROUP_ID_LEN] {
         let mut id = [0u8; GROUP_ID_LEN];
-        self.expand(ID_INFO, &mut id);
+        self.expand(&[ID_INFO, &self.home].concat(), &mut id);
         id
     }
 
@@ -89,7 +150,7 @@ impl GroupMasterKey {
     }
 
     fn expand(&self, info: &[u8], out: &mut [u8]) {
-        Hkdf::<Sha256>::new(Some(KDF_SALT), self.0.as_ref())
+        Hkdf::<Sha256>::new(Some(KDF_SALT), self.key.as_ref())
             .expand(info, out)
             .expect("HKDF output length is fixed and valid");
     }
@@ -256,6 +317,45 @@ impl GroupKeyPair {
     }
 }
 
+const PSEUDONYM_SALT: &[u8] = b"kutup/chat-group-pseudonym/v1\0";
+
+/// Where an account's group pseudonyms come from: its master key, so any
+/// device of the account finds its place in a group again, even one whose
+/// group list entry was lost. A pseudonym's seed is HKDF-SHA256 over the
+/// account master key, salt `kutup/chat-group-pseudonym/v1\0`, info the
+/// group id then the join epoch (u32 big-endian). The join epoch counts the
+/// account's joins of the group: 0 at the first, one more at each rejoin
+/// after leaving, so a rejoin is a new pseudonym. Without the account key,
+/// one account's pseudonyms in different groups (or epochs) are unrelated.
+pub struct GroupPseudonymKey {
+    hkdf: Hkdf<Sha256>,
+}
+
+impl GroupPseudonymKey {
+    pub fn derive(account_master_key: &[u8; 32]) -> Self {
+        Self {
+            hkdf: Hkdf::<Sha256>::new(Some(PSEUDONYM_SALT), account_master_key),
+        }
+    }
+
+    /// The pseudonym's seed in `group_id` at `join_epoch`.
+    pub fn seed(&self, group_id: &[u8; GROUP_ID_LEN], join_epoch: u32) -> Zeroizing<[u8; 32]> {
+        let mut info = [0u8; GROUP_ID_LEN + 4];
+        info[..GROUP_ID_LEN].copy_from_slice(group_id);
+        info[GROUP_ID_LEN..].copy_from_slice(&join_epoch.to_be_bytes());
+        let mut seed = Zeroizing::new([0u8; 32]);
+        self.hkdf
+            .expand(&info, seed.as_mut())
+            .expect("HKDF output length is fixed and valid");
+        seed
+    }
+
+    /// The pseudonym in `group_id` at `join_epoch`.
+    pub fn pseudonym(&self, group_id: &[u8; GROUP_ID_LEN], join_epoch: u32) -> GroupKeyPair {
+        GroupKeyPair::from_seed(&self.seed(group_id, join_epoch))
+    }
+}
+
 /// What a change's actor signs: the domain, then the change's canonical bytes
 /// without its signature.
 pub fn change_signed_bytes(change_bytes: &[u8]) -> Vec<u8> {
@@ -282,15 +382,44 @@ pub fn claim_signed_bytes(
     .concat()
 }
 
-/// What an account's Chat device signs to bind a pseudonym of the group to
-/// the account. The signature is made and checked by chat-core with the
-/// device's libsignal identity key, against the account's verified manifest.
+/// What an account's self-authority signs to bind a pseudonym of the group to
+/// the account: the binding domain, the group id, the pseudonym and the
+/// account. Members check it against the authority key of the account's
+/// verified manifest.
 pub fn binding_signed_bytes(
     group_id: &[u8; GROUP_ID_LEN],
     pseudonym: &[u8; PUBLIC_KEY_LEN],
     account: &AccountRef,
 ) -> Vec<u8> {
     [BINDING_DOMAIN, group_id, pseudonym, &account.bytes()].concat()
+}
+
+/// The account's binding of `pseudonym` in `group_id`, signed by its
+/// self-authority ([`crate::identity::AccountIdentityKeysV1::authority_signing_key`]).
+pub fn sign_binding(
+    authority: &SigningKey,
+    group_id: &[u8; GROUP_ID_LEN],
+    pseudonym: &[u8; PUBLIC_KEY_LEN],
+    account: &AccountRef,
+) -> [u8; SIGNATURE_LEN] {
+    authority
+        .sign(&binding_signed_bytes(group_id, pseudonym, account))
+        .to_bytes()
+}
+
+/// Checks a binding against the account's self-authority public key (strict).
+pub fn verify_binding(
+    authority_public: &[u8; PUBLIC_KEY_LEN],
+    group_id: &[u8; GROUP_ID_LEN],
+    pseudonym: &[u8; PUBLIC_KEY_LEN],
+    account: &AccountRef,
+    signature: &[u8; SIGNATURE_LEN],
+) -> Result<()> {
+    verify(
+        authority_public,
+        &binding_signed_bytes(group_id, pseudonym, account),
+        signature,
+    )
 }
 
 /// Verifies an Ed25519 signature of a group key (strict).
@@ -354,14 +483,175 @@ pub fn state_hash(state_bytes: &[u8]) -> [u8; HASH_LEN] {
 mod tests {
     use super::*;
 
+    const HOME: GroupHome<'static> = GroupHome {
+        server: "home.example",
+        identity_sequence: 1,
+        identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    };
+
+    #[test]
+    fn the_same_key_at_another_home_is_another_group() {
+        let at = |home: GroupHome<'_>| {
+            GroupMasterKey::from_bytes(&[7u8; 32], home)
+                .unwrap()
+                .group_id()
+        };
+        let here = at(HOME);
+        assert_eq!(here, at(HOME));
+        assert_ne!(
+            here,
+            at(GroupHome {
+                server: "elsewhere.example",
+                ..HOME
+            })
+        );
+        assert_ne!(
+            here,
+            at(GroupHome {
+                identity_sequence: 2,
+                ..HOME
+            })
+        );
+        assert_ne!(
+            here,
+            at(GroupHome {
+                identity_document_hash:
+                    "1f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+                ..HOME
+            })
+        );
+        // Only canonical spellings: one home, one id. Anything else is
+        // refused, never normalised (or cut).
+        let upper_hash = "0F".repeat(32);
+        let long = "a".repeat(256);
+        for server in [
+            "Home.Example",
+            "home.example.",
+            "",
+            "home",
+            "10.0.0.1",
+            long.as_str(),
+        ] {
+            assert!(
+                GroupMasterKey::from_bytes(&[7u8; 32], GroupHome { server, ..HOME }).is_err(),
+                "{server}"
+            );
+        }
+        for hash in [upper_hash.as_str(), "0f", "", long.as_str()] {
+            assert!(
+                GroupMasterKey::generate(GroupHome {
+                    identity_document_hash: hash,
+                    ..HOME
+                })
+                .is_err(),
+                "{hash}"
+            );
+        }
+    }
+
     fn master() -> GroupMasterKey {
-        GroupMasterKey::from_bytes(&[7u8; 32]).unwrap()
+        GroupMasterKey::from_bytes(&[7u8; 32], HOME).unwrap()
+    }
+
+    fn account() -> AccountRef {
+        "aci:00000000-0000-4000-8000-0000000000b2@a.test"
+            .parse()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_binding_verifies_only_under_its_accounts_authority() {
+        let identity = crate::identity::AccountIdentityKeysV1::derive(&[0x11u8; 32]).unwrap();
+        let other = crate::identity::AccountIdentityKeysV1::derive(&[0x12u8; 32]).unwrap();
+        let group_id = master().group_id();
+        let pseudonym = GroupKeyPair::from_seed(&[3u8; 32]).public_key();
+        let signature = sign_binding(
+            identity.authority_signing_key(),
+            &group_id,
+            &pseudonym,
+            &account(),
+        );
+        let authority = identity.authority_public_key();
+        assert!(verify_binding(&authority, &group_id, &pseudonym, &account(), &signature).is_ok());
+        // Another account's authority, group, pseudonym or account: refused.
+        let another_authority = other.authority_public_key();
+        assert!(verify_binding(
+            &another_authority,
+            &group_id,
+            &pseudonym,
+            &account(),
+            &signature
+        )
+        .is_err());
+        let another_group = GroupMasterKey::from_bytes(&[8u8; 32], HOME)
+            .unwrap()
+            .group_id();
+        assert!(verify_binding(
+            &authority,
+            &another_group,
+            &pseudonym,
+            &account(),
+            &signature
+        )
+        .is_err());
+        let another_pseudonym = GroupKeyPair::from_seed(&[4u8; 32]).public_key();
+        assert!(verify_binding(
+            &authority,
+            &group_id,
+            &another_pseudonym,
+            &account(),
+            &signature
+        )
+        .is_err());
+        let carol: AccountRef = "aci:00000000-0000-4000-8000-0000000000c3@a.test"
+            .parse()
+            .unwrap();
+        assert!(verify_binding(&authority, &group_id, &pseudonym, &carol, &signature).is_err());
+    }
+
+    /// The authority signs other objects too (manifests, device
+    /// registrations and revocations, renames, Drive key bindings and
+    /// collection epochs, contact summaries, mail keys, Chat backup signers
+    /// and manifests): none of their signatures passes as a binding,
+    /// and a binding's signed bytes can't be read as one of theirs, because
+    /// every domain is distinct and none is a prefix of another.
+    #[test]
+    fn no_other_authority_signature_passes_as_a_binding() {
+        const OTHER_DOMAINS: &[&[u8]] = &[
+            b"kutup/device-registration/v1\0",
+            b"kutup/device-revocation/v1\0",
+            b"kutup/drive-key-binding/v2\0",
+            b"kutup/account-rename/v1\0",
+            b"kutup/contact-summary/v2\0",
+            b"kutup/mail-key-list/v1\0",
+            b"kutup/mail-group-key-share/v2\0",
+            b"kutup/drive/collection-key-commitment/v1\0",
+            b"kutup/account-manifest/v1\0",
+            b"kutup/chat-backup/signer-authorization/v1\0",
+            b"kutup/chat-backup/manifest/v1\0",
+            // A collection epoch statement starts with its magic.
+            b"KUTPCE1\0",
+        ];
+        let identity = crate::identity::AccountIdentityKeysV1::derive(&[0x11u8; 32]).unwrap();
+        let authority = identity.authority_public_key();
+        let group_id = master().group_id();
+        let pseudonym = GroupKeyPair::from_seed(&[3u8; 32]).public_key();
+        let payload = [&group_id[..], &pseudonym, &account().bytes()].concat();
+        for domain in OTHER_DOMAINS {
+            assert!(!domain.starts_with(BINDING_DOMAIN) && !BINDING_DOMAIN.starts_with(domain));
+            // The same payload under another domain, signed by the same key.
+            let other = identity
+                .authority_signing_key()
+                .sign(&[*domain, &payload].concat())
+                .to_bytes();
+            assert!(verify_binding(&authority, &group_id, &pseudonym, &account(), &other).is_err());
+        }
     }
 
     #[test]
     fn ids_and_keys_are_derived_and_distinct() {
         let a = master();
-        let b = GroupMasterKey::from_bytes(&[8u8; 32]).unwrap();
+        let b = GroupMasterKey::from_bytes(&[8u8; 32], HOME).unwrap();
         assert_eq!(a.group_id(), master().group_id());
         assert_ne!(a.group_id(), b.group_id());
         assert_ne!(a.group_id().as_slice(), a.state_key().key.as_slice());
@@ -387,7 +677,9 @@ mod tests {
         assert!(key
             .open(SealedField::SlotEntry, &[1u8; 32], &sealed)
             .is_err());
-        let other = GroupMasterKey::from_bytes(&[9u8; 32]).unwrap().state_key();
+        let other = GroupMasterKey::from_bytes(&[9u8; 32], HOME)
+            .unwrap()
+            .state_key();
         assert!(other
             .open(SealedField::MemberEntry, &[1u8; 32], &sealed)
             .is_err());

@@ -17,7 +17,7 @@ use ed25519_dalek::SigningKey;
 use futures_executor::block_on;
 use kutup_chat_proto::group::{
     check_change, check_genesis, decode_exact, GroupActionV1, GroupChangeError, GroupChangeV1,
-    GroupLimits, GroupStateV1,
+    GroupContextV1, GroupLimits, GroupStateV1,
 };
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
@@ -109,6 +109,10 @@ struct HostedGroup {
 }
 
 /// The one server of these tests.
+/// One account's group list as its server keeps it: entry id → (revision,
+/// envelope).
+pub(crate) type GroupList = BTreeMap<String, (u64, String)>;
+
 pub(crate) struct World {
     identity: FederationIdentityDocumentV1,
     key: SigningKey,
@@ -124,8 +128,16 @@ pub(crate) struct World {
     cursor: Cell<u64>,
     /// Every sealed submission that was stored: `(recipient, submission)`.
     pub(crate) sealed_sent: RefCell<Vec<(String, SealedMessageSubmissionV1)>>,
+    /// Each account's group list: entry id → (revision, envelope).
+    pub(crate) group_lists: RefCell<BTreeMap<String, GroupList>>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
+    /// How many whole states the group home was asked for.
+    pub(crate) state_requests: Cell<usize>,
+    /// How many changes the group home took.
+    pub(crate) group_changes: Cell<usize>,
+    /// The group list can't be read (its server is down).
+    pub(crate) group_list_down: Cell<bool>,
     /// One-shot answers the batch route gives an account instead of taking
     /// its send.
     pub(crate) batch_answers: RefCell<Vec<(String, kutup_chat_proto::SealedBatchOutcomeV1)>>,
@@ -216,9 +228,13 @@ impl World {
             cursor: Cell::new(0),
             sealed_sent: RefCell::new(Vec::new()),
             batches: Cell::new(0),
+            state_requests: Cell::new(0),
+            group_changes: Cell::new(0),
+            group_list_down: Cell::new(false),
             batch_answers: RefCell::new(Vec::new()),
             batch_failures: Cell::new(0),
             manifests_down: RefCell::new(HashSet::new()),
+            group_lists: RefCell::new(BTreeMap::new()),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
         })
@@ -272,6 +288,14 @@ impl World {
             .strip_suffix(&format!("@{SERVER}"))
             .and_then(|id| u8::from_str_radix(&id[id.len() - 2..], 16).ok())
             .unwrap();
+        // The account's master key (its authority's, as above) and key
+        // binding, as the app hands them over.
+        engine
+            .enable_group_list(
+                &[authority_seed; 32],
+                &format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}"),
+            )
+            .unwrap();
         Person {
             engine,
             client,
@@ -307,6 +331,36 @@ impl World {
     }
 
     /// The group as its home holds it now.
+    /// A home that makes things up: it serves the group's state with
+    /// `pseudonym` added as a member under `entry`, notarised as if a change
+    /// had put it there (no member signed one).
+    pub(crate) fn serve_made_up_member(&self, group_id: &str, pseudonym: &str, entry: &str) {
+        let id = kutup_chat_proto::group::decode_group_id(group_id).unwrap();
+        let mut groups = self.groups.borrow_mut();
+        let group = groups.get_mut(&id).unwrap();
+        let mut next = group.state.clone();
+        next.revision += 1;
+        next.members.push(kutup_chat_proto::group::GroupMemberV1 {
+            pseudonym: pseudonym.to_string(),
+            role: kutup_chat_proto::group::GroupRole::Member,
+            joined_at_revision: next.revision,
+            entry: entry.to_string(),
+        });
+        // In key order, as a state lists its members.
+        next.members
+            .sort_by_key(|member| decode_exact::<32>("pseudonym", &member.pseudonym).unwrap());
+        let (last, _) = group.log.last().unwrap().clone();
+        let change = GroupChangeV1 {
+            revision: next.revision,
+            previous_hash: kutup_chat_proto::group::encode(&group.head),
+            ..last
+        };
+        let notary = self.notarise(&id, &change, &next);
+        group.state = next;
+        group.head = change.hash().unwrap();
+        group.log.push((change, notary));
+    }
+
     pub(crate) fn group_state(&self, group_id: &str) -> GroupStateV1 {
         let id = kutup_chat_proto::group::decode_group_id(group_id).unwrap();
         self.groups.borrow()[&id].state.clone()
@@ -505,6 +559,7 @@ impl World {
                 )
             }
             GroupOperationV1::GetState => {
+                self.state_requests.set(self.state_requests.get() + 1);
                 let Some(group) = groups.get(&group_id) else {
                     return Self::status(GroupResponseStatusV1::NotFound);
                 };
@@ -578,6 +633,7 @@ impl World {
                 group.state = next;
                 group.head = change.hash().unwrap();
                 group.log.push((change.clone(), notary.clone()));
+                self.group_changes.set(self.group_changes.get() + 1);
                 Self::ok(
                     serde_json::to_vec(&GroupLogEntryV1 {
                         change: STANDARD.encode(change.canonical_bytes().unwrap()),
@@ -748,6 +804,14 @@ impl ChatTransport for Client {
             .last()
             .is_none_or(|prior| prior.sequence < manifest.sequence)
         {
+            // A device the account no longer lists is revoked: the server
+            // stops serving it, as the real one does.
+            let listed: HashSet<u32> = manifest
+                .devices
+                .iter()
+                .map(|device| device.device_id)
+                .collect();
+            hosted.devices.retain(|id, _| listed.contains(id));
             hosted.manifests.push(manifest.clone());
         }
         Ok(AccountManifestPublicationV1 {
@@ -842,6 +906,52 @@ impl ChatTransport for Client {
             return Err(ChatError::Transport("sealed delivery unavailable".into()));
         }
         self.world.bundles(account, None)
+    }
+
+    async fn fetch_group_list(&self) -> Result<Vec<crate::GroupListItem>> {
+        if self.world.group_list_down.get() {
+            return Err(ChatError::Transport("the group list is down".into()));
+        }
+        Ok(self
+            .world
+            .group_lists
+            .borrow()
+            .get(&self.account)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, (revision, envelope))| crate::GroupListItem {
+                        id: id.clone(),
+                        revision: *revision,
+                        envelope: envelope.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn store_group_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<bool> {
+        // As the server: the revision from the sealed header, one size only.
+        let sealed = STANDARD
+            .decode(envelope)
+            .map_err(|_| ChatError::Transport("malformed envelope".into()))?;
+        let header = kutup_crypto::chat_group_list::inspect(&sealed)
+            .map_err(|error| ChatError::Transport(error.to_string()))?;
+        assert_eq!(header, revision, "the head lists the sealed revision");
+        let mut lists = self.world.group_lists.borrow_mut();
+        let entries = lists.entry(self.account.clone()).or_default();
+        let listed = entries.get(id).map_or(0, |(revision, _)| *revision);
+        if listed != base_revision || revision <= listed {
+            return Ok(false);
+        }
+        entries.insert(id.to_string(), (revision, envelope.to_string()));
+        Ok(true)
     }
 
     /// The batch route, recipient by recipient as the server applies it.
@@ -1091,6 +1201,12 @@ impl Person {
             .unwrap();
         assert_eq!(summary.pending, 0, "every leg went out");
         send_id
+    }
+
+    /// Writes this device's due group list entries now (as before signing
+    /// out); how many were written.
+    pub(crate) fn flush_list(&mut self) -> usize {
+        block_on(self.engine.flush_group_list(true)).unwrap()
     }
 
     pub(crate) fn status(&self, group_id: &str) -> GroupStatus {
@@ -3020,4 +3136,640 @@ fn group_ui_an_invitation_names_the_group_before_joining() {
         .find(|group| group.group_id == group_id)
         .unwrap();
     assert_eq!(invited.title.as_deref(), Some("Team"));
+}
+
+// ----- new devices keep their groups (pairwise-groups.md §5) -----
+
+#[test]
+fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // Bob's entry is in his list (once his delayed write went).
+    bob.flush_list();
+    assert_eq!(
+        world
+            .group_lists
+            .borrow()
+            .get(&bob.account)
+            .map(BTreeMap::len),
+        Some(1)
+    );
+
+    // Bob's only device is gone; a new one is set up and the old one revoked.
+    let mut bob2 = world.link_device(&bob);
+    let authority = AccountAuthority::derive(&[0xb2; 32]).unwrap();
+    block_on(
+        bob2.engine
+            .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
+    )
+    .unwrap();
+    drop(bob);
+    // Bob's binding is his account authority's, not the old device's: Alice
+    // still sees him verified.
+    forget_member_caches(&mut alice);
+    let members = block_on(alice.engine.group_members(&group_id)).unwrap();
+    assert!(
+        members.iter().all(|member| member.verified.is_some()),
+        "{members:?}"
+    );
+
+    // It learns the group from the list and takes its state.
+    let taken = block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(taken, vec![group_id.clone()]);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    let entry =
+        crate::group::own_entry(&block_on(bob2.engine.load_group_record(&group_id)).unwrap())
+            .unwrap()
+            .expect("a member");
+    assert_eq!(entry.account.to_string(), bob2.account);
+
+    // Alice sees him verified again, and they write to each other.
+    alice.receive();
+    let members = block_on(alice.engine.group_members(&group_id)).unwrap();
+    assert!(
+        members.iter().all(|member| member.verified.is_some()),
+        "{members:?}"
+    );
+    alice.send_text(&group_id, "after the new device");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert!(bob2
+        .group_texts(&group_id)
+        .contains(&"after the new device".to_string()));
+    bob2.send_text(&group_id, "from the new device");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert!(alice
+        .group_texts(&group_id)
+        .contains(&"from the new device".to_string()));
+}
+
+/// Bob's only device goes before its list write did; a new one is set up
+/// and the old one revoked. Nothing in his list.
+fn bob_replaced_before_his_list_write(world: &Rc<World>, bob: Person) -> Person {
+    let mut bob2 = world.link_device(&bob);
+    let authority = AccountAuthority::derive(&[bob.authority_seed; 32]).unwrap();
+    block_on(
+        bob2.engine
+            .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
+    )
+    .unwrap();
+    drop(bob);
+    bob2
+}
+
+#[test]
+fn group_recover_a_device_whose_list_write_was_lost_gets_the_group_from_the_next_send() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // His entry was due a few minutes on; the device went first.
+    assert!(world.group_lists.borrow().get(&bob.account).is_none());
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    assert!(block_on(bob2.engine.sync_group_list(&mut rng()))
+        .unwrap()
+        .is_empty());
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+
+    // Alice's next message reaches the new device pairwise, with the group's
+    // key in its context naming Bob's pseudonym: it finds Bob's place again
+    // and reads it, signing nothing anew.
+    let changes = world.group_changes.get();
+    alice.send_text(&group_id, "after the loss");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert_eq!(world.group_changes.get(), changes);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert!(bob2
+        .group_texts(&group_id)
+        .contains(&"after the loss".to_string()));
+    let record = block_on(bob2.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, 0);
+    assert!(record.list_due_at_ms.is_some(), "the entry is written back");
+    bob2.flush_list();
+    assert_eq!(
+        world
+            .group_lists
+            .borrow()
+            .get(&bob2.account)
+            .map(BTreeMap::len),
+        Some(1)
+    );
+    // And he writes to the group again.
+    bob2.send_text(&group_id, "back");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert!(alice.group_texts(&group_id).contains(&"back".to_string()));
+}
+
+/// The context a message of `person`'s group carries.
+fn context_of(person: &Person, group_id: &str) -> GroupContextV1 {
+    Engine::group_context(&block_on(person.engine.load_group_record(group_id)).unwrap()).unwrap()
+}
+
+/// `person`'s account's pseudonym in `group_id` at `epoch`, as its key gives it.
+fn derived_pseudonym(person: &Person, group_id: &str, epoch: u32) -> String {
+    let keys = crate::group::GroupAccountKeys::derive(&[person.authority_seed; 32]).unwrap();
+    let group = kutup_chat_proto::group::decode_group_id(group_id).unwrap();
+    kutup_chat_proto::group::encode(&keys.pseudonyms.pseudonym(&group, epoch).public_key())
+}
+
+fn recover(person: &mut Person, context: &GroupContextV1, sender: &Person, named: &str) -> bool {
+    block_on(
+        person
+            .engine
+            .recover_group(context, &sender.account, named, &mut rng()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn group_recover_a_removed_member_gets_nothing_back() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let context = context_of(&alice, &group_id);
+    let bobs = pseudonym_of(&mut alice, &group_id, &bob);
+    block_on(
+        alice
+            .engine
+            .remove_group_member(&group_id, &bobs, &mut rng()),
+    )
+    .unwrap();
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    // Even holding the group's key and his own pseudonym (from an older
+    // message), he gets the answer an unknown group gets: one question.
+    let probes = world.state_requests.get();
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.state_requests.get() - probes, 1);
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+    // Not asked again within the hour.
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.state_requests.get() - probes, 1);
+}
+
+#[test]
+fn group_recover_asks_nothing_for_a_pseudonym_that_isnt_this_accounts() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let context = context_of(&alice, &group_id);
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    // A stranger naming someone else's pseudonym, or none of his, makes the
+    // device ask the home nothing at all.
+    let probes = world.state_requests.get();
+    let carols = derived_pseudonym(&carol, &group_id, 0);
+    assert!(!recover(&mut bob2, &context, &carol, &carols));
+    let alices = derived_pseudonym(&alice, &group_id, 0);
+    assert!(!recover(&mut bob2, &context, &alice, &alices));
+    assert_eq!(world.state_requests.get(), probes);
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+}
+
+#[test]
+fn group_recover_takes_nothing_from_a_sender_who_isnt_a_member() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let context = context_of(&alice, &group_id);
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    // Carol learnt the group's key and Bob's pseudonym somehow; she isn't a
+    // member, so nothing is kept (and the group can still come back from a
+    // member, after the hour).
+    assert!(!recover(&mut bob2, &context, &carol, &bobs));
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+}
+
+#[test]
+fn group_recover_a_group_the_list_says_he_left_stays_left() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let context = context_of(&alice, &group_id);
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    bob.flush_list();
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    let probes = world.state_requests.get();
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.state_requests.get(), probes, "the list says gone");
+    assert!(!matches!(
+        block_on(bob2.engine.session().db().load_group(&group_id)).unwrap(),
+        Some(record) if record.status == GroupStatus::Member
+    ));
+}
+
+#[test]
+fn group_recover_a_made_up_state_without_his_binding_is_not_joined() {
+    let world = World::new();
+    let mut mallory = world.person(0xd4);
+    let mut bob = world.person(0xb2);
+    befriend(&mut mallory, &mut bob);
+    // Mallory's own group; her home (here, the one test home) serves a state
+    // listing Bob's pseudonym for it with an entry naming Bob, bound by
+    // Mallory's authority, not his.
+    let group_id = block_on(mallory.engine.create_group("Trap"))
+        .unwrap()
+        .group_id;
+    let record = block_on(mallory.engine.load_group_record(&group_id)).unwrap();
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
+    let mallory_keys =
+        crate::group::GroupAccountKeys::derive(&[mallory.authority_seed; 32]).unwrap();
+    let entry = crate::group::seal_member_entry(
+        &record.master().unwrap().state_key(),
+        &group,
+        &kutup_chat_proto::group::decode_exact::<32>("p", &bobs).unwrap(),
+        &bob.account.parse().unwrap(),
+        &[7u8; 32],
+        &mallory_keys.authority,
+    )
+    .unwrap();
+    world.serve_made_up_member(&group_id, &bobs, &entry);
+    let context = context_of(&mallory, &group_id);
+    let submitted = world.group_changes.get();
+
+    assert!(!recover(&mut bob, &context, &mallory, &bobs));
+    assert!(block_on(bob.engine.session().db().load_group(&group_id))
+        .unwrap()
+        .is_none());
+    // Nothing was signed into her group.
+    assert_eq!(world.group_changes.get(), submitted);
+    assert_eq!(
+        world
+            .group_lists
+            .borrow()
+            .get(&bob.account)
+            .map_or(0, BTreeMap::len),
+        0
+    );
+}
+
+#[test]
+fn group_recover_a_home_of_a_former_members_is_another_group() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    // Mallory, removed long ago, kept the key and saw Bob's binding; she
+    // names a home of her own for the real group id. The id binds the home,
+    // so that is another group: refused before anything is asked.
+    let mut context = context_of(&alice, &group_id);
+    context.home.server = "mallory.test".into();
+    let probes = world.state_requests.get();
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    let mut context = context_of(&alice, &group_id);
+    context.home.identity_sequence += 1;
+    assert!(!recover(&mut bob2, &context, &alice, &bobs));
+    assert_eq!(world.state_requests.get(), probes);
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+    // The honest recovery isn't locked out by it.
+    assert!(recover(
+        &mut bob2,
+        &context_of(&alice, &group_id),
+        &alice,
+        &bobs
+    ));
+}
+
+#[test]
+fn group_recover_fails_closed_when_the_list_cant_be_read() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let bobs = derived_pseudonym(&bob, &group_id, 0);
+    // A fresh device that hasn't read the list this run, which is down.
+    let mut bob2 = world.link_device(&bob);
+    drop(bob);
+    world.group_list_down.set(true);
+    let probes = world.state_requests.get();
+    assert!(!recover(
+        &mut bob2,
+        &context_of(&alice, &group_id),
+        &alice,
+        &bobs
+    ));
+    assert_eq!(world.state_requests.get(), probes);
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+}
+
+#[test]
+fn group_recover_takes_up_at_most_ten_groups_an_hour() {
+    let world = World::new();
+    let alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let home = context_of_new_group(&world);
+    let probes = world.state_requests.get();
+    // Eleven groups he isn't in (unknown at the home): ten are asked about.
+    for _ in 0..11 {
+        let (context, group_id) = home();
+        let named = derived_pseudonym(&bob, &group_id, 0);
+        assert!(!recover(&mut bob, &context, &alice, &named));
+    }
+    assert_eq!(
+        world.state_requests.get() - probes,
+        crate::group_recover::MAX_RECOVERIES_PER_HOUR
+    );
+}
+
+/// Contexts of groups that don't exist at the test home, each with a fresh
+/// key bound to it (as a real one would be).
+fn context_of_new_group(world: &Rc<World>) -> impl Fn() -> (GroupContextV1, String) {
+    let template = {
+        let mut someone = world.person(0xe5);
+        let group_id = block_on(someone.engine.create_group("Template"))
+            .unwrap()
+            .group_id;
+        context_of(&someone, &group_id)
+    };
+    move || {
+        let key = kutup_crypto::chat_group::GroupMasterKey::generate(crate::group::home_of(
+            &template.home,
+        ))
+        .unwrap();
+        let group_id = kutup_chat_proto::group::encode_group_id(&key.group_id());
+        let mut context = template.clone();
+        context.group_id = group_id.clone();
+        context.master_key = kutup_chat_proto::group::encode(key.as_bytes());
+        (context, group_id)
+    }
+}
+
+#[test]
+fn group_claim_goes_past_an_epoch_the_list_learnt_after_the_invitation() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    // Bob's second device reads his (empty) list early in its run.
+    let mut bob2 = world.link_device(&bob);
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    // The invitation reaches both devices; the first joins (epoch 0) and
+    // leaves again, and the list says so.
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    bob.flush_list();
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    deliver_all(&mut [&mut alice, &mut bob, &mut bob2]);
+    // Alice invites him back; the second device, still on its early read
+    // and its first invitation's epoch, accepts: the claim reads the list
+    // again and goes past epoch 0, which he left.
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob2.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob2.receive();
+    let invited = block_on(bob2.engine.load_group_record(&group_id)).unwrap();
+    assert!(matches!(invited.status, GroupStatus::Invited { .. }));
+    assert_eq!(
+        invited.join_epoch, 0,
+        "the invitation came on the early read"
+    );
+    block_on(bob2.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert_eq!(
+        block_on(bob2.engine.load_group_record(&group_id))
+            .unwrap()
+            .join_epoch,
+        1
+    );
+}
+
+#[test]
+fn group_rejoin_after_a_reload_goes_past_the_epoch_the_list_holds() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let first = pseudonym_of(&mut alice, &group_id, &bob);
+    bob.flush_list();
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // A fresh device of Bob's, which hasn't read the list this run, is
+    // invited back and accepts: epoch 1, a new pseudonym.
+    let mut bob2 = world.link_device(&bob);
+    drop(bob);
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob2.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob2.receive();
+    block_on(bob2.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    let record = block_on(bob2.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, 1);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    alice.sync(&group_id);
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert_ne!(pseudonym_of(&mut alice, &group_id, &bob2), first);
+}
+
+#[test]
+fn group_recover_a_rejoin_is_a_new_pseudonym_found_again() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let first = pseudonym_of(&mut alice, &group_id, &bob);
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob]);
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    assert_eq!(bob.status(&group_id), GroupStatus::Member);
+    let record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, 1);
+    // Alice learns of the rejoin at her next catch-up, then reads what he
+    // sent meanwhile.
+    alice.sync(&group_id);
+    deliver_all(&mut [&mut alice, &mut bob]);
+    let second = pseudonym_of(&mut alice, &group_id, &bob);
+    assert_ne!(first, second);
+
+    // His only device goes before the rejoin's list write: the new one
+    // passes epoch 0 (removed) and finds him at 1.
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    alice.send_text(&group_id, "welcome back");
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert_eq!(
+        block_on(bob2.engine.load_group_record(&group_id))
+            .unwrap()
+            .join_epoch,
+        1
+    );
+    assert!(bob2
+        .group_texts(&group_id)
+        .contains(&"welcome back".to_string()));
+}
+
+#[test]
+fn group_claim_two_devices_accepting_at_once_are_both_members() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut bob2 = world.link_device(&bob);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    bob2.receive();
+    // Both devices have the invitation; the first claims the slot, the
+    // second finds the account in the group under the same pseudonym.
+    for device in [&mut bob, &mut bob2] {
+        let joined = block_on(device.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+        assert!(matches!(joined, GroupSync::Current { .. }), "{joined:?}");
+        assert_eq!(device.status(&group_id), GroupStatus::Member);
+    }
+    let pseudonym = |person: &Person| {
+        block_on(person.engine.load_group_record(&group_id))
+            .unwrap()
+            .pseudonym_text()
+            .unwrap()
+    };
+    assert_eq!(pseudonym(&bob), pseudonym(&bob2));
+    assert_eq!(world.group_state(&group_id).members.len(), 2);
+}
+
+#[test]
+fn group_list_a_group_left_on_one_device_is_left_on_the_other() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    bob.flush_list();
+    let mut bob2 = world.link_device(&bob);
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob2.status(&group_id), GroupStatus::Gone);
+}
+
+#[test]
+fn group_list_entries_are_per_account_and_sealed() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.flush_list();
+    bob.flush_list();
+    let lists = world.group_lists.borrow();
+    let ids = |account: &str| lists[account].keys().cloned().collect::<Vec<_>>();
+    // The same group under unrelated ids, and no group id in the clear.
+    assert_ne!(ids(&alice.account), ids(&bob.account));
+    for entries in lists.values() {
+        for (id, (_, envelope)) in entries {
+            assert_ne!(*id, group_id);
+            assert!(!envelope.contains(&group_id));
+            // One size for every entry.
+            assert_eq!(
+                STANDARD.decode(envelope).unwrap().len(),
+                kutup_crypto::chat_group_list::SEALED_LEN
+            );
+        }
+    }
+}
+
+#[test]
+fn group_list_writes_wait_and_only_joins_and_leaves_write() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let written = |account: &str| {
+        world
+            .group_lists
+            .borrow()
+            .get(account)
+            .map_or(0, BTreeMap::len)
+    };
+    // Joined: due at a random moment in the next ten minutes, not at once.
+    assert_eq!(written(&bob.account), 0);
+    let due = block_on(bob.engine.load_group_record(&group_id))
+        .unwrap()
+        .list_due_at_ms
+        .expect("a write is due");
+    let now = crate::clock::unix_millis();
+    assert!(
+        due >= now - 60_000 && due <= now + 10 * 60 * 1000,
+        "{due} vs {now}"
+    );
+    assert_eq!(bob.flush_list(), 1);
+    assert_eq!(written(&bob.account), 1);
+
+    // Messages and other changes write nothing; a second device that reads
+    // the list writes nothing either.
+    alice.send_text(&group_id, "hello");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    assert_eq!(bob.flush_list(), 0);
+    let mut bob2 = world.link_device(&bob);
+    block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob2.flush_list(), 0);
+
+    // Leaving writes, once.
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    assert_eq!(bob.flush_list(), 1);
+    assert_eq!(bob.flush_list(), 0);
+}
+
+#[test]
+fn group_list_a_rotated_profile_key_reaches_the_group() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    alice.send_text(&group_id, "before");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    // Bob's profile key changes (as blocking someone rotates it): his entry
+    // in the group gets the new one, so the group still reaches him.
+    let wrapping_key = bob.wrapping_key;
+    block_on(
+        bob.engine
+            .rotate_profile_key(&wrapping_key, ISSUED_AT, &mut rng()),
+    )
+    .unwrap();
+    let entry =
+        crate::group::own_entry(&block_on(bob.engine.load_group_record(&group_id)).unwrap())
+            .unwrap()
+            .unwrap();
+    let profile = block_on(bob.engine.local_profile()).unwrap().unwrap();
+    assert_eq!(entry.profile_key, STANDARD.encode(&profile.key));
+    deliver_all(&mut [&mut alice, &mut bob]);
+    alice.send_text(&group_id, "after the rotation");
+    deliver_all(&mut [&mut alice, &mut bob]);
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"after the rotation".to_string()));
 }
