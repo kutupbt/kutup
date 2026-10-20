@@ -76,7 +76,7 @@ but offers no way to see or change it.
 | Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | 🟡 | Proton Pass's CSV only |
 | Import KeePass 1 (`.kdb`) | `KeePass1Reader.cpp` | ❌ | |
 | Import KeePass XML | Import → KeePass XML | ❌ | |
-| Export KDBX (the file itself) | Save a copy | ✅ | the vault **is** a `.kdbx` in Drive: download it there |
+| Export KDBX (the file itself) | Save a copy | 🟡 | the vault **is** a `.kdbx` in Drive, but Pass has no download: you go to Drive (user report) |
 | Export CSV | `CsvExporter.cpp` | ❌ | |
 | Export XML | `KdbxXmlWriter.cpp` | ❌ | |
 | Export HTML (paper backup) | `HtmlExporter.cpp` | ❌ | |
@@ -264,7 +264,8 @@ What people hit first, then what blocks moving from KeePassXC:
 2. **Vault management from the vault list** (user report): a menu on each
    vault in `VaultsPage.tsx`, also while locked: rename (today only inside
    an unlocked vault's "…" menu), move to another folder, duplicate,
-   delete (to Drive's trash), "Show in Drive". Keep the KDBX
+   delete (to Drive's trash), "Show in Drive", and **Download the
+   `.kdbx`** (for KeePassXC or a backup; user report). Keep the KDBX
    `DatabaseName` in step with a rename made in Drive (on the next save).
 3. **Change the vault's key** (user report, with item 1's urgency): a
    Vault settings → Security page wiring `changeKey`: change the password,
