@@ -20,9 +20,9 @@
 
 use kutup_chat_proto::group::{
     check_change, check_genesis, decode_exact, decode_group_id, encode, encode_group_id,
-    resulting_genesis_state, resulting_state, GroupActionV1, GroupAttribute, GroupChangeError,
-    GroupChangeV1, GroupHomePinV1, GroupInviteV1, GroupLimits, GroupListStatus, GroupMemberEntryV1,
-    GroupRole, GroupSlotEntryV1, GroupStateV1, GROUP_FORMAT_VERSION,
+    resulting_genesis_state, resulting_state, GroupActionV1, GroupAttribute, GroupBanListV1,
+    GroupChangeError, GroupChangeV1, GroupHomePinV1, GroupInviteV1, GroupLimits, GroupListStatus,
+    GroupMemberEntryV1, GroupRole, GroupSlotEntryV1, GroupStateV1, GROUP_FORMAT_VERSION,
 };
 use kutup_chat_proto::group_route::GroupNotaryV1;
 use kutup_crypto::account_ref::AccountRef;
@@ -1167,16 +1167,41 @@ pub fn renewed_own_entry(
 /// The accounts the last verified state's entries name, unverified: whose
 /// manifests to fetch before [`members`] checks the bindings.
 pub fn member_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupError> {
+    entry_accounts(record, |state| {
+        state
+            .members
+            .iter()
+            .map(|member| (member.pseudonym.clone(), member.entry.clone()))
+            .collect()
+    })
+}
+
+/// The accounts the requests to join name, unverified: whose manifests to
+/// fetch before [`requesters`] checks the bindings.
+pub fn request_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupError> {
+    entry_accounts(record, |state| {
+        state
+            .requesting
+            .iter()
+            .map(|request| (request.pseudonym.clone(), request.entry.clone()))
+            .collect()
+    })
+}
+
+fn entry_accounts(
+    record: &GroupRecordV1,
+    entries: impl Fn(&GroupStateV1) -> Vec<(String, String)>,
+) -> Result<Vec<AccountRef>, GroupError> {
     let Some((state, _)) = record.verified()? else {
         return Ok(Vec::new());
     };
     let key = record.master()?.state_key();
     let mut accounts = std::collections::BTreeSet::new();
-    for member in &state.members {
-        let Ok(pseudonym) = decode_exact::<32>("pseudonym", &member.pseudonym) else {
+    for (pseudonym, entry) in entries(&state) {
+        let Ok(pseudonym) = decode_exact::<32>("pseudonym", &pseudonym) else {
             continue;
         };
-        let Ok(sealed) = base64_decode(&member.entry) else {
+        let Ok(sealed) = base64_decode(&entry) else {
             continue;
         };
         let Ok(plain) = key.open(SealedField::MemberEntry, &pseudonym, &sealed) else {
@@ -1187,6 +1212,85 @@ pub fn member_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupE
         }
     }
     Ok(accounts.into_iter().collect())
+}
+
+/// A request to join through the link, as an administrator sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRequesterView {
+    pub pseudonym: String,
+    pub requested_at_revision: u64,
+    /// Who asks, when the entry opened and its binding verified; `None` for
+    /// one that didn't (approving it gives an unverified member).
+    pub verified: Option<VerifiedMember>,
+}
+
+/// The requests to join, each binding checked as a member's is.
+pub fn requesters(
+    record: &GroupRecordV1,
+    authority_of: &AuthorityOf<'_>,
+) -> Result<Vec<GroupRequesterView>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(Vec::new());
+    };
+    let key = record.master()?.state_key();
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    Ok(state
+        .requesting
+        .iter()
+        .map(|request| GroupRequesterView {
+            pseudonym: request.pseudonym.clone(),
+            requested_at_revision: request.requested_at_revision,
+            verified: open_member(
+                &key,
+                &group_id,
+                &request.pseudonym,
+                &request.entry,
+                authority_of,
+            ),
+        })
+        .collect())
+}
+
+/// The sealed ban list of the last verified state, opened; empty when there
+/// is none. One that doesn't open is an error, never read as empty: an
+/// administrator writing over it would lift every ban.
+pub fn ban_list(record: &GroupRecordV1) -> Result<GroupBanListV1, GroupError> {
+    let empty = GroupBanListV1 {
+        version: GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    let Some((state, _)) = record.verified()? else {
+        return Ok(empty);
+    };
+    let Some(sealed) = &state.ban_list else {
+        return Ok(empty);
+    };
+    let key = record.master()?.state_key();
+    let plain = key
+        .open(SealedField::BanList, b"", &base64_decode(sealed)?)
+        .map_err(|error| GroupError::Sealed(error.to_string()))?;
+    GroupBanListV1::from_canonical_bytes(&plain).map_err(GroupError::Sealed)
+}
+
+/// Seals a ban list for a `ModifyBanList` action: `None` when it is empty.
+pub fn seal_ban_list(
+    record: &GroupRecordV1,
+    list: &GroupBanListV1,
+) -> Result<Option<String>, GroupError> {
+    if list.banned.is_empty() {
+        return Ok(None);
+    }
+    let plain = Zeroizing::new(list.canonical_bytes().map_err(record_error)?);
+    if kutup_crypto::chat_group::sealed_len(plain.len())
+        > kutup_chat_proto::group::MAX_SEALED_BAN_LIST_BYTES
+    {
+        return Err(GroupError::Change(GroupChangeError::LimitReached));
+    }
+    let key = record.master()?.state_key();
+    Ok(Some(encode(
+        &key.seal(SealedField::BanList, b"", &plain)
+            .map_err(record_error)?,
+    )))
 }
 
 /// A group-wide sealed attribute of the last verified state, opened.
