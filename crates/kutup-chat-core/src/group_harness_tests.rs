@@ -3760,6 +3760,42 @@ fn group_claim_stops_after_the_last_join_epoch() {
 }
 
 #[test]
+fn group_claim_from_a_later_epoch_still_stops_at_the_last_one() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    // The invitation came at epoch 10 (the account's eleventh join).
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let keys = crate::group::GroupAccountKeys::derive(&[bob.authority_seed; 32]).unwrap();
+    let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
+    record.join_epoch = 10;
+    record.pseudonym_seed = crate::group::SecretText(kutup_chat_proto::group::encode(
+        keys.pseudonyms.pseudonym(&group, 10).seed(),
+    ));
+    block_on(bob.engine.save_group(&record)).unwrap();
+    world.every_pseudonym_used.set(true);
+    assert!(block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).is_err());
+    // Epochs 10 to 63, no further: recovery's window still covers it.
+    assert_eq!(
+        world.pseudonyms_used.get(),
+        (crate::group::MAX_JOIN_EPOCHS - 10) as usize
+    );
+    let record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, crate::group::MAX_JOIN_EPOCHS - 1);
+}
+
+#[test]
 fn group_claim_after_another_device_joined_and_listed_it_is_a_member_too() {
     let world = World::new();
     let mut alice = world.person(0xa1);

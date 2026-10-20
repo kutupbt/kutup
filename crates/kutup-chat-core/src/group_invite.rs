@@ -115,6 +115,7 @@ impl Engine {
         self.reread_group_list().await;
         if let Some(epoch) = group::listed_join_epoch(self.listed_join(group_id)) {
             if epoch > record.join_epoch {
+                let epoch = group::within_join_epochs(epoch).map_err(group_error)?;
                 self.move_join_epoch(&mut record, epoch).await?;
             }
         }
@@ -140,7 +141,6 @@ impl Engine {
         };
         let me = self.session.account_ref().clone();
         let profile_key = self.own_profile_key().await?;
-        let mut tries = 1;
         loop {
             let change = group::claim(
                 &mut record,
@@ -159,17 +159,11 @@ impl Engine {
                 // this epoch and lost every record of it): the claim holds
                 // otherwise, so it is made again at the next epoch, with the
                 // same slot and revision. Saved first, so a reload never
-                // goes back to a used one.
+                // goes back to a used one. Never past the last epoch: a home
+                // that refuses every one stops here, at most 64 claims in all.
                 Ok(response) if used_pseudonym(&response) => {
-                    if tries >= group::MAX_JOIN_EPOCHS {
-                        return Err(ChatError::Invalid(
-                            "no unused pseudonym is left for this group".into(),
-                        ));
-                    }
-                    tries += 1;
-                    let next = record.join_epoch.checked_add(1).ok_or_else(|| {
-                        ChatError::Invalid("no unused pseudonym is left for this group".into())
-                    })?;
+                    let next = group::within_join_epochs(record.join_epoch.saturating_add(1))
+                        .map_err(group_error)?;
                     self.move_join_epoch(&mut record, next).await?;
                 }
                 Ok(response) if response.status != GroupResponseStatusV1::Ok => {

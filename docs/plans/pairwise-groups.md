@@ -398,7 +398,9 @@ revision (`SignalService.proto:947-951`).
 **What we copy from `Groups.proto:23-124` and `groups.preload.ts`:**
 - **Master key.** A random 32-byte group master key. From it, the group id and
   the state key are derived (the id binds the home; the state key's info
-  carries the id, `kutup/chat-group/state-key/v2\0` ‖ group id). Signal derives `GroupSecretParams` the same way
+  carries the id, `kutup/chat-group/state-key/v2\0` ‖ group id, with a
+  vector in `chat-group-state-key-v2.json`). Signal derives
+  `GroupSecretParams` the same way
   (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
   - **The id binds the home** (decided 2026-10-19, after the #268 review). A
@@ -466,8 +468,12 @@ to see members").**
     pseudonym's owner hears it, and it costs no relay or change budget (§3,
     "A pseudonym comes back only once"). The
     client then moves to the next epoch, saves it, signs the claim again for
-    the new pseudonym and sends it at the same revision, for at most
-    `MAX_JOIN_EPOCHS` (64) claims; recovery matches the same 64 epochs.
+    the new pseudonym and sends it at the same revision. No path takes an
+    epoch past `MAX_JOIN_EPOCHS` − 1 (63): not an invitation, not the list,
+    not this retry (a home that refuses every one stops it there), so
+    recovery, which matches epochs 0 to 63, always covers the account's
+    place. Joining by link and asking to join get the same retry when the
+    client builds them (the home already answers them so).
   - Without the account key the pseudonyms of one account in different
     groups or epochs are unrelated, so they can't be linked across groups.
     This holds as long as the account key is safe; a leaked key exposes the

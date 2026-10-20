@@ -607,8 +607,10 @@ pub struct ClaimBasis {
 /// The pseudonym is derived at the join epoch after the last one this
 /// account used: one more than an ended membership's (here, or `listed` in
 /// the account's group list), the same as an older invitation's (never
-/// claimed), 0 for a group the account never was in. So a rejoin is a new
-/// pseudonym.
+/// claimed) or as a current membership the list names (another device's,
+/// where the account is in already), 0 for a group the account never was in.
+/// So a rejoin is a new pseudonym. Never past [`MAX_JOIN_EPOCHS`] − 1: an
+/// invitation that would need a later epoch is refused.
 pub fn record_from_invite(
     invite: GroupInviteV1,
     inviter: &str,
@@ -625,12 +627,14 @@ pub fn record_from_invite(
         GroupStatus::Invited { .. } | GroupStatus::Requesting => epoch,
         GroupStatus::Member | GroupStatus::Gone => epoch.saturating_add(1),
     };
-    let join_epoch = previous
-        .map(|previous| after(&previous.status, previous.join_epoch))
-        .into_iter()
-        .chain(listed_join_epoch(listed))
-        .max()
-        .unwrap_or(0);
+    let join_epoch = within_join_epochs(
+        previous
+            .map(|previous| after(&previous.status, previous.join_epoch))
+            .into_iter()
+            .chain(listed_join_epoch(listed))
+            .max()
+            .unwrap_or(0),
+    )?;
     let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
     let mut record = GroupRecordV1 {
         version: GROUP_FORMAT_VERSION,
@@ -689,12 +693,22 @@ pub fn record_from_invite(
     Ok(record)
 }
 
-/// How many join epochs an account looks through for its place in a group:
-/// a claim the home refuses as a used pseudonym is made again at the next
-/// epoch at most this many times in all, and a device without the group list
-/// matches a pseudonym named to it against epochs 0 to this − 1. Matching is
-/// local (one derivation per epoch), so the bound only keeps both finite.
+/// How many join epochs an account has in a group: 0 to this − 1, and no
+/// path takes a higher one (an invitation, the list, a claim the home refuses
+/// as a used pseudonym), so a device without the group list, which matches a
+/// pseudonym named to it against exactly these epochs, always finds its
+/// place. Matching is local (one derivation per epoch).
 pub const MAX_JOIN_EPOCHS: u32 = 64;
+
+/// `epoch`, when it is one an account may join at ([`MAX_JOIN_EPOCHS`]).
+pub fn within_join_epochs(epoch: u32) -> Result<u32, GroupError> {
+    if epoch >= MAX_JOIN_EPOCHS {
+        return Err(record_error(
+            "this account has joined this group as often as it can",
+        ));
+    }
+    Ok(epoch)
+}
 
 /// The lowest join epoch an invitation may take by the account's group
 /// list: past an ended membership there, but a current one's own epoch,

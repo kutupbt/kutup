@@ -276,7 +276,7 @@ fn a_rejoin_takes_the_next_join_epoch() {
     assert_eq!(listed.join_epoch, 5);
     // A current membership there is another device's: its own epoch.
     let current = record_from_invite(
-        invitation,
+        invitation.clone(),
         INVITER,
         None,
         Some((GroupListStatus::Member, 4)),
@@ -284,6 +284,25 @@ fn a_rejoin_takes_the_next_join_epoch() {
     )
     .unwrap();
     assert_eq!(current.join_epoch, 4);
+    // Never past the last epoch recovery searches.
+    let last = crate::group::MAX_JOIN_EPOCHS - 1;
+    let at_last = record_from_invite(
+        invitation.clone(),
+        INVITER,
+        None,
+        Some((GroupListStatus::Gone, last - 1)),
+        &bob.keys,
+    )
+    .unwrap();
+    assert_eq!(at_last.join_epoch, last);
+    assert!(record_from_invite(
+        invitation,
+        INVITER,
+        None,
+        Some((GroupListStatus::Gone, last)),
+        &bob.keys
+    )
+    .is_err());
 }
 
 #[test]
