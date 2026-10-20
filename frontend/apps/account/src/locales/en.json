@@ -214,6 +214,7 @@
           "tooManyHeld": "You hold as many earlier names as an account can while they receive mail. Stop one of them from receiving below, then change your username.",
           "breakGlass": "This server's emergency administrator account keeps its name.",
           "setupRequired": "Finish setting up your account first.",
+          "ownFreedName": "This was your name before, and its old encryption keys must be carried over to take it back. That isn't possible yet; it will be soon.",
           "conflict": "Your username changed on another device meanwhile. Close this and try again."
         }
       },
@@ -474,6 +475,7 @@
       "signedByAccount": "Signed by your account (key list {{sequence}})",
       "notInList": "Not in your key list",
       "notInListHint": "The server lists this key, but the key list your account signed doesn't have it. It is never added to your next key list. Contact your administrator.",
+      "missing": "Your key list names a key the server no longer has right: {{fingerprint}}. Contact your administrator.",
       "notSigned": "This key list is not signed by your account. Do not trust these keys and contact your administrator.",
       "algorithm": "Curve25519 (Ed25519 and X25519)",
       "primary": "Primary",
@@ -523,7 +525,16 @@
       "changed": "Key updated.",
       "changeFailed": "The keys could not be changed. Reload and try again.",
       "compromisedTitle": "Mark this key as compromised?",
-      "compromisedDescription": "Do this if someone else may have the key. Nobody encrypts to it any more, and signatures made with it are no longer trusted. It stays only to open your older mail."
+      "compromisedDescription": "Do this if someone else may have the key. Nobody encrypts to it any more, and signatures made with it are no longer trusted. It stays only to open your older mail.",
+      "forwarding": "Forwarding",
+      "forwardingUsage": "Opens email forwarded to you",
+      "deleteForwardingKey": "Delete",
+      "deleteForwardingKeyTitle": "Delete this forwarding key?",
+      "deleteForwardingKeyDescription": "This key is used for email forwarding. Deleting it ends the forwarding, and the email already forwarded to you with it can no longer be opened.",
+      "forwardingKeyDeleted": "Forwarding key deleted",
+      "makePrimaryTitle": "Make this key primary?",
+      "outdatesForwardings": "Existing end-to-end encrypted email forwardings will need to be manually re-enabled.",
+      "encryptionOffForwarding": "End-to-end encryption is off for {{address}} while it forwards email outside Kutup. Zero-access encryption remains on. It comes back when the last such forwarding ends."
     }
   },
   "admin": {
@@ -1087,5 +1098,19 @@
     "description": "The Mail groups you belong to. A distribution list's mail arrives in your own inbox; a shared mailbox opens in Mail, where its members read and answer it together.",
     "emptyTitle": "You are not in any groups",
     "emptyDescription": "An administrator adds you to distribution lists and shared mailboxes."
+  },
+  "emailForwarding": {
+    "title": "Email forwarding",
+    "request": "{{from}} wants to forward email to {{to}}.",
+    "notEncrypted": "Forwarded email isn't end-to-end encrypted on its way to you. You can decline, and {{from}} can stop forwarding at any time.",
+    "accept": "Accept",
+    "decline": "Decline",
+    "accepted": "Forwarding accepted. You'll receive email forwarded from {{from}}.",
+    "declined": "Forwarding declined. You won't receive email forwarded from {{from}}.",
+    "alreadyAnswered": "This forwarding has been answered already.",
+    "alreadyDeclined": "This forwarding was declined.",
+    "invalid": "This link isn't valid, or it has been used already.",
+    "expired": "This link has expired. A new one is on its way to you by email.",
+    "rateLimited": "Too many attempts. Try again in a minute."
   }
 }

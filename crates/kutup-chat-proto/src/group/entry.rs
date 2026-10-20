@@ -6,7 +6,7 @@ use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_group::{MASTER_KEY_LEN, SLOT_ID_LEN};
 use serde::{Deserialize, Serialize};
 
-use super::{decode_exact, decode_group_id, GroupHomePinV1, GROUP_FORMAT_VERSION};
+use super::{decode_exact, decode_group_id, validate_home, GroupHomePinV1, GROUP_FORMAT_VERSION};
 
 /// A profile key's length (docs/chat-protocol.md §7).
 pub const PROFILE_KEY_LEN: usize = 32;
@@ -61,6 +61,7 @@ impl GroupContextV1 {
         require_version(self.version)?;
         decode_group_id(&self.group_id)?;
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
+        validate_home(&self.home)?;
         decode_exact::<32>("chainHash", &self.chain_hash)?;
         if let Some(pseudonym) = &self.recipient_pseudonym {
             decode_exact::<32>("recipientPseudonym", pseudonym)?;
@@ -169,6 +170,7 @@ impl GroupListEntryV1 {
         require_version(self.version)?;
         decode_group_id(&self.group_id)?;
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
+        validate_home(&self.home)?;
         decode_exact::<32>("chainHash", &self.chain_hash)?;
         Ok(())
     }
@@ -243,6 +245,7 @@ impl GroupInviteV1 {
         require_version(self.version)?;
         decode_group_id(&self.group_id)?;
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
+        validate_home(&self.home)?;
         decode_exact::<SLOT_ID_LEN>("slotId", &self.slot_id)?;
         decode_exact::<32>("claimKeySeed", &self.claim_key_seed)?;
         if self

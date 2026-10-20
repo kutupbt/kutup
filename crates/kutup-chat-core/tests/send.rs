@@ -3240,7 +3240,9 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
         (alice, server)
     };
 
-    // Unknown to the list: trusted on first use, and added to it.
+    // Unknown to the list: trusted on first use, and added to it later, with
+    // the next due writes (docs/plans/chat-contacts-sync.md), not at the
+    // moment the two meet.
     let (mut alice, server) = open(None);
     let safety = block_on(alice.safety_number(
         &local_authority,
@@ -3248,6 +3250,11 @@ fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     ))
     .unwrap();
     assert_eq!(safety.trust, AuthorityTrust::Tofu);
+    assert!(
+        server.identity_pins.borrow().is_none(),
+        "not at first sight"
+    );
+    assert_eq!(block_on(alice.flush_identity_pins(true)).unwrap(), 1);
     assert!(server.identity_pins.borrow().as_ref().unwrap().revision >= 1);
 
     // Verified in Drive (or on another device): verified in Chat at first sight.

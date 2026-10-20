@@ -72,9 +72,10 @@ describe('the group list under the account head', () => {
     head.index = () => [['a', 5]]
     expect(await transport.storeGroupEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe(false)
     expect(http.put).not.toHaveBeenCalled()
-    // Already stored (an answer that was lost): counts as stored.
+    // Already at that revision (ours with a lost answer, or another
+    // device's): not "stored"; the engine reads again and merges.
     head.index = () => [['a', 3]]
-    expect(await transport.storeGroupEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe(true)
+    expect(await transport.storeGroupEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe(false)
     expect(http.put).not.toHaveBeenCalled()
   })
 })

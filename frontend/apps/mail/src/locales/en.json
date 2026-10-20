@@ -11,6 +11,8 @@
   },
   "account": {
     "noKeyTitle": "Your mail address is not set up yet",
+    "unverifiedTitle": "Your keys can't be trusted",
+    "unverified": "The keys the server lists for your address don't match the key list your account signed, so Mail won't encrypt anything to them. Check your keys, and contact your administrator.",
     "noKey": "Your address key is made when you open your account once.",
     "openAccount": "Open Account"
   },
@@ -237,7 +239,8 @@
         "keysOpenpgp": "End-to-end encrypted with a key from keys.openpgp.org"
       },
       "readableKutup": "Not end-to-end encrypted for this message: encrypted when it arrives",
-      "readableOutside": "Not encrypted for this message: plain mail"
+      "readableOutside": "Not encrypted for this message: plain mail",
+      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives"
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
     "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
@@ -535,7 +538,8 @@
     "senders": "Block and allow",
     "identity": "Identity",
     "autoReply": "Auto-reply",
-    "appearance": "Appearance"
+    "appearance": "Appearance",
+    "forwarding": "Forwarding"
   },
   "emptyFolder": {
     "action": "Delete all",
@@ -1054,5 +1058,94 @@
     "settingsOff": "Not kept in this browser.",
     "delete": "Delete local search data",
     "deleted": "Local search data deleted."
+  },
+  "forwarding": {
+    "title": "Forwarding",
+    "description": "Send copies of the email you receive to another address. The original stays in your mailbox.",
+    "add": "Add forwarding",
+    "addTitle": "Set up forwarding",
+    "editTitle": "Edit forwarding",
+    "dialogHint": "Choose where to forward and which messages. Without conditions, every message is forwarded.",
+    "from": "Forward from",
+    "to": "Forward to",
+    "toPlaceholder": "name@example.com",
+    "toInvalid": "Enter an email address to forward to.",
+    "conditions": "Conditions",
+    "conditionsHint": "Only messages that match are forwarded.",
+    "everythingHint": "No conditions: every message is forwarded.",
+    "conditionEmpty": "Fill in every condition, or remove the empty ones.",
+    "noChains": "Emails forwarded to you are excluded and will not be forwarded.",
+    "next": "Next",
+    "submit": "Set up forwarding",
+    "summary": "From {{from}} to {{to}}",
+    "everything": "Every message",
+    "and": " and ",
+    "or": " or ",
+    "endToEndExplained": "End-to-end encrypted: the server re-encrypts each message for {{to}} without reading it. {{to}} must accept the forwarding first.",
+    "outsideExplained": "{{to}} gets an email to confirm the forwarding. Messages that arrived end-to-end encrypted can't be forwarded outside Kutup and are skipped.",
+    "outsideWarning": "Forwarding to an address without end-to-end encryption will disable end-to-end encryption for your {{address}} address, but zero-access encryption remains enabled.",
+    "trustHint": "Forwarding lets the server re-encrypt your mail for the recipient; only set it up with someone you trust with your mail.",
+    "encryptionOff": "End-to-end encryption is off for {{address}} while it forwards to an address outside Kutup. Zero-access encryption remains on. Deleting the last such forwarding turns it back on.",
+    "created": "Forwarding to {{to}} set up. It starts once {{to}} accepts.",
+    "createdOutside": "Forwarding to {{to}} set up. It starts once {{to}} confirms by email.",
+    "saved": "Forwarding saved",
+    "fromMe": "From me",
+    "toMe": "To me",
+    "emptyFromMe": "No forwarding yet",
+    "emptyFromMeHint": "Forward your email to another address with Add forwarding.",
+    "emptyToMe": "Nobody forwards to you",
+    "emptyToMeHint": "Forwardings to your address appear here for you to accept.",
+    "edit": "Edit",
+    "pause": "Pause",
+    "paused": "Forwarding paused",
+    "resume": "Resume",
+    "resumed": "Forwarding resumed",
+    "reinvite": "Send the confirmation again",
+    "reinvited": "A new confirmation email is on its way to {{to}}",
+    "renew": "Re-enable",
+    "renewed": "Forwarding re-enabled. It starts again once accepted.",
+    "delete": "Delete",
+    "deleted": "Forwarding deleted",
+    "deleteTitle": "Delete this forwarding?",
+    "deleteDescription": "Email will no longer be forwarded to {{to}}.",
+    "deleteOutsideDescription": "Email will no longer be forwarded to {{to}}. If it's your last forwarding outside Kutup, end-to-end encryption comes back on for your address.",
+    "deleteIncomingDescription": "Email from {{from}} will no longer be forwarded to you. What was forwarded already stays.",
+    "accept": "Accept",
+    "accepted": "You now receive email forwarded from {{from}}",
+    "acceptFailed": "The forwarding couldn't be accepted. Try again.",
+    "decline": "Decline",
+    "declined": "Forwarding declined",
+    "skipped_one": "{{count}} message couldn't be forwarded",
+    "skipped_other": "{{count}} messages couldn't be forwarded",
+    "state": {
+      "pending": "Pending",
+      "active": "Active",
+      "outdated": "Needs re-enabling",
+      "paused": "Paused",
+      "rejected": "Declined"
+    },
+    "kind": {
+      "end_to_end": "End-to-end encrypted",
+      "outside": "Not end-to-end encrypted"
+    },
+    "notice": {
+      "bounces": "Paused after repeated bounces from the recipient's server.",
+      "budget": "Today's forwarding limit is reached; it goes on tomorrow."
+    },
+    "errors": {
+      "ownAddress": "You can't forward to one of your own addresses.",
+      "unknown": "There's no such address on this server.",
+      "kindChanged": "This address changed since you checked it. Check it again before you save.",
+      "group": "Email can't be forwarded to a shared mailbox or a list.",
+      "unverified": "This address's keys couldn't be verified, so nothing can be forwarded to it now.",
+      "exists": "You already forward to this address.",
+      "limit": "You've reached the forwarding limit: 10 per address, 25 per account.",
+      "unavailable": "Forwarding isn't available on this server.",
+      "international": "Addresses with non-Latin characters can't be forwarded to yet.",
+      "endToEndRequired": "This is a Kutup address: reload the page and try again.",
+      "keyList": "Your address keys changed meanwhile. Reload the page and try again.",
+      "state": "This forwarding changed meanwhile. Reload the page and try again.",
+      "rateLimited": "Too many confirmation emails today. Try again tomorrow."
+    }
   }
 }

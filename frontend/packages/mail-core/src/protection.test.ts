@@ -9,7 +9,8 @@ vi.mock('@kutup/crypto', () => ({
   },
 }))
 const lookup = vi.fn<(address: string) => Promise<unknown>>()
-vi.mock('./keys', () => ({ outsideKey: (address: string) => lookup(address) }))
+const kutupKeys = vi.fn<(address: string) => Promise<unknown>>()
+vi.mock('./keys', () => ({ outsideKey: (address: string) => lookup(address), addressKeys: (address: string) => kutupKeys(address) }))
 
 const { protectionFor } = await import('./protection')
 
@@ -39,6 +40,14 @@ describe('protection with several trusted keys', () => {
   })
 
   it('leaves Kutup addresses to their key lists', async () => {
+    kutupKeys.mockResolvedValue({ encryptionDisabled: false })
     expect(await protectionFor('ayse@kutup.dev', 'kutup.dev', undefined)).toEqual({ kind: 'kutup' })
+    kutupKeys.mockRejectedValue(new Error('no such address'))
+    expect(await protectionFor('ayse@kutup.dev', 'kutup.dev', undefined)).toEqual({ kind: 'kutup' })
+  })
+
+  it('says when a Kutup address forwards outside, as its key list does', async () => {
+    kutupKeys.mockResolvedValue({ encryptionDisabled: true })
+    expect(await protectionFor('ayse@kutup.dev', 'kutup.dev', undefined)).toEqual({ kind: 'kutup', encryptionDisabled: true })
   })
 })

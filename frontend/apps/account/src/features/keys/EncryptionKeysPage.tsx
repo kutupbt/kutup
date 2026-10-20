@@ -16,7 +16,18 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { ExportKeyDialog, ImportKeyDialog, NewKeyDialog } from './KeyDialogs'
-import { asSigned, createMailKeyMutation, useChangeKey, useMailAddresses, type CheckedMailAddress, type KeyChange, type MailKey } from './mailKeys'
+import {
+  asSigned,
+  createMailKeyMutation,
+  useChangeKey,
+  useDeleteForwardingKey,
+  useEndToEndForwardings,
+  useMailAddresses,
+  type CheckedMailAddress,
+  type KeyChange,
+  type MailKey,
+} from './mailKeys'
+import { encryptionOff, missingKeys, type CheckedKey } from '@kutup/mail-core/keyList'
 
 /**
  * Your email addresses and their encryption keys, as Proton's Settings →
@@ -53,9 +64,14 @@ function AddressKeys({ address, creating, failed }: { address: CheckedMailAddres
   const { t } = useTranslation()
   const verified = address.verifiedList !== null
   const [dialog, setDialog] = useState<'new' | 'import' | null>(null)
+  // A new primary key outdates the address's end-to-end forwardings (Proton's warning).
+  const forwardings = useEndToEndForwardings()
+  const forwardsEndToEnd = (forwardings.data ?? []).some((forwarding) => forwarding.forwarderAddress === address.address)
   return (
     <Section title={address.address} description={t('settings.keys.addressHint')}>
-      {address.keys.length === 0 ? (
+      {/* No key yet only without a key list too: rows gone from under a
+          signed list are shown as missing, below. */}
+      {address.keys.length === 0 && address.keyList === null ? (
         failed ? (
           <Alert variant="error">{t('settings.keys.createFailed')}</Alert>
         ) : (
@@ -81,11 +97,23 @@ function AddressKeys({ address, creating, failed }: { address: CheckedMailAddres
               </>
             )}
           </p>
+          {encryptionOff(address) ? (
+            <Alert data-testid="mail-keys-encryption-off">{t('settings.keys.encryptionOffForwarding', { address: address.address })}</Alert>
+          ) : null}
+          {missingKeys(address).map((entry) => (
+            <Alert key={entry.fingerprint} variant="error" data-testid="mail-key-missing">
+              {t('settings.keys.missing', { fingerprint: fingerprintGroups(entry.fingerprint).join(' ') })}
+            </Alert>
+          ))}
           <Card>
             <CardContent className="divide-y divide-border p-0">
-              {address.keys.map((key) => (
-                <KeyRow key={key.id} address={address} listed={key} />
-              ))}
+              {address.keys.map((key) =>
+                key.forwarding ? (
+                  <ForwardingKeyRow key={key.id} address={address} mailKey={key} />
+                ) : (
+                  <KeyRow key={key.id} address={address} listed={key} forwardsEndToEnd={forwardsEndToEnd} />
+                ),
+              )}
             </CardContent>
           </Card>
           {verified ? (
@@ -100,8 +128,8 @@ function AddressKeys({ address, creating, failed }: { address: CheckedMailAddres
               </Button>
             </div>
           ) : null}
-          {dialog === 'new' ? <NewKeyDialog address={address} onClose={() => setDialog(null)} /> : null}
-          {dialog === 'import' ? <ImportKeyDialog address={address} onClose={() => setDialog(null)} /> : null}
+          {dialog === 'new' ? <NewKeyDialog address={address} forwardsEndToEnd={forwardsEndToEnd} onClose={() => setDialog(null)} /> : null}
+          {dialog === 'import' ? <ImportKeyDialog address={address} forwardsEndToEnd={forwardsEndToEnd} onClose={() => setDialog(null)} /> : null}
         </>
       )}
     </Section>
@@ -114,15 +142,75 @@ function fingerprintGroups(fingerprint: string): string[] {
 }
 
 /**
+ * A key another account's forwarding gave this address (docs/plans/mail-forwarding.md):
+ * it opens only mail forwarded here, is in no key list and isn't exported;
+ * it can only be deleted, which ends the forwarding.
+ */
+function ForwardingKeyRow({ address, mailKey }: { address: CheckedMailAddress; mailKey: MailKey }) {
+  const { t, i18n } = useTranslation()
+  const [confirm, setConfirm] = useState(false)
+  const remove = useDeleteForwardingKey()
+  return (
+    <div className="space-y-3 p-5" data-fingerprint={mailKey.fingerprint} data-testid="mail-forwarding-key">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">{t('settings.keys.algorithm')}</span>
+        <Badge variant="neutral">{t('settings.keys.forwarding')}</Badge>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs text-muted-foreground">{t('settings.keys.fingerprint')}</p>
+        <Mono className="flex flex-wrap gap-x-2 text-sm">
+          {fingerprintGroups(mailKey.fingerprint).map((group, i) => (
+            <span key={i} className="whitespace-nowrap">
+              {group}
+            </span>
+          ))}
+        </Mono>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+        <span>
+          {t('settings.keys.created', { when: formatInstant(mailKey.createdAt, i18n.language) })}
+          {' · '}
+          {t('settings.keys.forwardingUsage')}
+        </span>
+        <Button variant="outline" size="sm" onClick={() => setConfirm(true)}>
+          {t('settings.keys.deleteForwardingKey')}
+        </Button>
+      </div>
+      <ConfirmDestructive
+        open={confirm}
+        onOpenChange={setConfirm}
+        title={t('settings.keys.deleteForwardingKeyTitle')}
+        description={t('settings.keys.deleteForwardingKeyDescription')}
+        submit={t('settings.keys.deleteForwardingKey')}
+        pending={remove.isPending}
+        error={remove.error}
+        errorFallback={t('settings.keys.changeFailed')}
+        onConfirm={() =>
+          remove.mutate(
+            { address, key: mailKey },
+            {
+              onSuccess: () => {
+                toast.success(t('settings.keys.forwardingKeyDeleted'))
+                setConfirm(false)
+              },
+            },
+          )
+        }
+      />
+    </div>
+  )
+}
+
+/**
  * One key. With a signed list, its primary and flags are the list's; a key
  * the server lists but the list lacks is shown as such, and can't be changed
  * (a change would sign it into the next list).
  */
-function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; listed: MailKey }) {
+function KeyRow({ address: owner, listed, forwardsEndToEnd }: { address: CheckedMailAddress; listed: CheckedKey<MailKey>; forwardsEndToEnd: boolean }) {
   const { t, i18n } = useTranslation()
   const address = owner.address
   const [busy, setBusy] = useState(false)
-  const [dialog, setDialog] = useState<'export' | 'compromised' | null>(null)
+  const [dialog, setDialog] = useState<'export' | 'compromised' | 'primary' | null>(null)
   const change = useChangeKey()
   const inList = owner.verifiedList ? asSigned(owner, listed) : null
   const mailKey = inList ?? listed
@@ -194,10 +282,13 @@ function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; liste
           {canEncrypt ? t('settings.keys.usage') : t('settings.keys.usageDecryptOnly')}
         </span>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void download()} loading={busy}>
-            <Download />
-            {t('settings.keys.download')}
-          </Button>
+          {/* Only a key whose public key has the fingerprints the signed list names. */}
+          {signed ? (
+            <Button variant="outline" size="sm" onClick={() => void download()} loading={busy}>
+              <Download />
+              {t('settings.keys.download')}
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label={t('settings.keys.more')} disabled={change.isPending}>
@@ -210,7 +301,11 @@ function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; liste
                 <>
                   <DropdownMenuSeparator />
                   {canEncrypt && canVerify ? (
-                    <DropdownMenuItem onSelect={() => apply({ kind: 'makePrimary' }, t('settings.keys.madePrimary'))}>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        forwardsEndToEnd ? setDialog('primary') : apply({ kind: 'makePrimary' }, t('settings.keys.madePrimary'))
+                      }
+                    >
                       {t('settings.keys.makePrimary')}
                     </DropdownMenuItem>
                   ) : null}
@@ -246,6 +341,17 @@ function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; liste
         error={dialog === 'compromised' ? change.error : null}
         errorFallback={t('settings.keys.changeFailed')}
         onConfirm={() => apply({ kind: 'compromised', on: true }, t('settings.keys.changed'))}
+      />
+      <ConfirmDestructive
+        open={dialog === 'primary'}
+        onOpenChange={(open) => setDialog(open ? 'primary' : null)}
+        title={t('settings.keys.makePrimaryTitle')}
+        description={t('settings.keys.outdatesForwardings')}
+        submit={t('settings.keys.makePrimary')}
+        pending={change.isPending}
+        error={dialog === 'primary' ? change.error : null}
+        errorFallback={t('settings.keys.changeFailed')}
+        onConfirm={() => apply({ kind: 'makePrimary' }, t('settings.keys.madePrimary'))}
       />
     </div>
   )

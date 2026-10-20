@@ -53,6 +53,7 @@ const ServerSettingsPage = page(() => import('./features/admin/ServerSettingsPag
 const UserPage = page(() => import('./features/admin/UserPage').then((m) => ({ default: m.UserPage })))
 const UsersPage = page(() => import('./features/admin/UsersPage').then((m) => ({ default: m.UsersPage })))
 const RecoverPage = page(() => import('./features/auth/RecoverPage').then((m) => ({ default: m.RecoverPage })))
+const EmailForwardingPage = page(() => import('./features/auth/EmailForwardingPage').then((m) => ({ default: m.EmailForwardingPage })))
 
 /** When the server ends this sign-in (revoked elsewhere, expired), go to sign-in. */
 function UnauthenticatedRedirect() {
@@ -78,6 +79,8 @@ export function App() {
             <Route path="/first-login" element={<FirstLoginPage />} />
             <Route path="/recover" element={<RecoverPage />} />
             <Route path="/authorize" element={<AuthorizePage />} />
+            {/* An outside forwardee's confirmation link: no account needed. */}
+            <Route path="/email-forwarding" element={<EmailForwardingPage />} />
             <Route
               element={
                 <RequireSession>

@@ -301,15 +301,17 @@ group again from the next member's send, built in `group_recover.rs`:
    pairwise to one account it names that account's pseudonym in the group
    (`recipientPseudonym`). The member sends to it because bindings are the
    account's (§3), not a device's.
-2. The list comes first: the device reads it if it hasn't this run. A group
-   it says the account left is never taken up this way; one it holds is taken
-   up from the list (its home, epoch and verified revision).
-3. The context's key must be its group's at the home it names (the id binds
+2. The context's key must be its group's at the home it names (the id binds
    the home), so nobody can name a home of their own. The named pseudonym
-   must be one the account key gives (join epochs 0 to 15). Only then does
-   the device ask the home, once, for that pseudonym. A stranger who doesn't
-   know it makes the device ask nothing. A list that can't be read stops it
-   (it may say the account left).
+   must be one the account key gives (join epochs 0 to 63,
+   `MAX_JOIN_EPOCHS`), found locally: a stranger who doesn't know it makes
+   the device ask nothing. The attempt then counts against the limits below,
+   before anything is asked of a server.
+3. The list: the device reads it if it hasn't this run. A group it says the
+   account left is never taken up this way; one it holds is taken up from
+   the list (its home, epoch and verified revision). A list that can't be
+   read stops it (it may say the account left). Only then does the device
+   ask the home, once, for that pseudonym.
 4. The state is kept only when it holds this account's own binding, verified
    under its own authority (no home can make one up), and the sender is a
    verified member of it. Nothing is kept on failure, and nothing is signed
@@ -395,7 +397,10 @@ revision (`SignalService.proto:947-951`).
 
 **What we copy from `Groups.proto:23-124` and `groups.preload.ts`:**
 - **Master key.** A random 32-byte group master key. From it, the group id and
-  the state key are derived. Signal derives `GroupSecretParams` the same way
+  the state key are derived (the id binds the home; the state key's info
+  carries the id, `kutup/chat-group/state-key/v2\0` ‖ group id, with a
+  vector in `chat-group-state-key-v2.json`). Signal derives
+  `GroupSecretParams` the same way
   (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
   - **The id binds the home** (decided 2026-10-19, after the #268 review). A
@@ -444,19 +449,31 @@ to see members").**
   - The join epoch counts the account's joins of the group: 0 at the first,
     one more at each rejoin after leaving or removal (the device's record and
     the list entry carry it), so a rejoin is a new pseudonym.
-  - **Which epoch a join takes:** one past the highest the device's own
-    record or the account's group list names for the group (an unclaimed
-    older invitation keeps its epoch). The list is read before an
-    invitation's epoch is derived, and again before the claim, so another
-    device's join or leave meanwhile counts.
-  - **Residual:** an account that joined, left, and lost every record of it
-    (the only device gone, and both list writes lost within their random
-    delay) can rejoin at an epoch it used before. The group's home would then
-    see a pseudonym it knew come back, linking the two memberships.
-    Planned follow-up (not in this change): the home keeps hashes of every
-    pseudonym the group has seen and, once a claim's proof passes, answers
-    `pseudonymUsed`; the client then retries at the next epoch, up to a cap,
-    and recovery tries as many epochs. This note stays until that lands.
+  - **Which epoch a join takes:** one past an ended membership the device's
+    own record or the account's group list names for the group; a current
+    membership the list names is another device's, and its epoch is taken as
+    it is (a claim there finds the account in). An unclaimed older
+    invitation keeps its epoch. The list is read before an invitation's
+    epoch is derived, and again before the claim, so another device's join
+    or leave meanwhile counts.
+  - **A pseudonym used before (`pseudonymUsed`).** An account that joined,
+    left, and lost every record of it (the only device gone, and both list
+    writes lost within their random delay) would rejoin at an epoch it used
+    before, and the home would see a pseudonym it knew come back. So the
+    home keeps a hash of every pseudonym that was ever a member of the group
+    or asked to join it
+    and refuses a newcomer's claim, link join or join request under one with
+    `pseudonymUsed`, only once the change holds in every other way (its
+    claim signature or link proof, and the acceptance checks): only that
+    pseudonym's owner hears it, and it costs no relay or change budget (§3,
+    "A pseudonym comes back only once"). The
+    client then moves to the next epoch, saves it, signs the claim again for
+    the new pseudonym and sends it at the same revision. No path takes an
+    epoch past `MAX_JOIN_EPOCHS` − 1 (63): not an invitation, not the list,
+    not this retry (a home that refuses every one stops it there), so
+    recovery, which matches epochs 0 to 63, always covers the account's
+    place. Joining by link and asking to join get the same retry when the
+    client builds them (the home already answers them so).
   - Without the account key the pseudonyms of one account in different
     groups or epochs are unrelated, so they can't be linked across groups.
     This holds as long as the account key is safe; a leaked key exposes the
@@ -587,6 +604,18 @@ to see members").**
 - **Requests from non-members** (a link's join info, a join request) carry a
   proof of the link password instead of a member signature. They are limited
   per group and per relay server, so a link holder can't flood the group.
+- **A pseudonym comes back only once.** The home keeps a hash of every
+  pseudonym the group has seen, as a member or a requester (the log is
+  pruned and the state forgets who left, so neither can answer it). A claim, a join from the
+  link or a request to join whose pseudonym is among them is refused with
+  `pseudonymUsed` (`group_route::PSEUDONYM_USED`), so the members never see a
+  pseudonym they knew come back after a device lost its join epoch.
+  - The home answers it only once the claim's or the link's proof holds and
+    the change passes every other check; the request is signed by that
+    pseudonym, so only its own holder hears it, and it is no membership oracle.
+  - The client derives the next join epoch's pseudonym and tries again, up to
+    64 epochs (recovery searches as many). The refusal spends neither the
+    relay's failure budget nor the group's change budget.
 - **Abuse limits without identity:**
   - **The relay** knows its signed-in user and limits how many requests each
     user may relay per minute, without seeing their contents.
@@ -1022,7 +1051,7 @@ them on pseudonyms (§3).
   - LiveKit's end-to-end encryption supports per-participant keys (its key
     provider with shared keys off), but setting a key per remote participant
     from our own messages needs **a key provider of our own**. Today's group
-    calls use one shared MLS key. Building it is part of slice 3.
+    calls use one shared MLS key. Building it is part of slice 4.
 - **When keys change.**
   - When a participant leaves the call, everyone draws a new key and sends it
     only to those still in it.
@@ -1192,7 +1221,8 @@ groups (`chat.pairwiseGroups`):
   so); administrators promote, demote and remove; anyone may rename it or
   invite contacts as the group's access allows; leaving as the last
   administrator names another first.
-- Group links stay MLS's until slice 2.
+- Pairwise groups get links in slice 3; until then they have none (the old
+  MLS groups keep theirs until slice 5 removes them).
 
 **Slice 1 builds usable groups first.** In it, group messages are sender-key
 ciphertexts sent as one sealed envelope per member device, over the existing
@@ -1292,6 +1322,330 @@ figures are from its review.
   twin are new. If it runs over, it pushes the rest out rather than being cut.
 
 `CHAT_GROUPS` turns on only after slice 5 and its gates, when the user decides.
+
+## 11. Build notes: slice 3, then slice 2 (2026-10-20)
+
+Order (the main session, 2026-10-20): slice 3 (links, requests, settings), then
+slice 2 (sending once), then calls, then MLS out. Groups stay off until all of
+them are done (the user, 2026-10-20: no early or partial launch).
+
+### Slice 3: what exists, and the formats
+
+**Already in place.** The shared checks (`kutup_chat_proto::group::check`)
+apply every slice-3 action: `JoinFromLink`, `RequestToJoin`, `CancelRequest`,
+`ApproveRequest`, `DenyRequest`, `ModifyAttribute`, `ModifyAccess`,
+`ModifyAnnouncementsOnly`, `ModifyInviteLink`, `Ban`, `Unban`,
+`ModifyBanList` and `Terminate`, with the link password compared in constant
+time. The home's gateway gates link join info by the link proof, and records
+requesters as seen pseudonyms (`pseudonymUsed`). The client handles all of
+them when it applies a change, but authors only slice 1's actions and the
+title.
+
+**The invite link.**
+- `https://chat.<server>/join#<base64url>`. The fragment is
+  `GroupInviteLinkV1`: version, the master key, the 16-byte password, and the
+  home pin (server, identity sequence, identity document hash), canonical
+  JSON, base64url without padding. The fragment never reaches a server: not in
+  the path or query, so not in logs or `Referer`.
+- The joiner derives the group id from the key and the pin and checks it as
+  any invitation is checked (`master_at`). Kept short for QR codes: the pin's
+  hash is the 64-character hex form, and the whole link stays under 300
+  characters.
+
+**Join info, joining and asking.**
+- Join info comes through the anonymous route under the link proof
+  (`GroupRequestV1::with_link_password`, a `RequestSigner` for the link). Its
+  sealed title, description and avatar open with the link's master key; the
+  member count and whether approval is needed are in the clear.
+- Joining (`ANY`) and asking (`ADMINISTRATOR`) are changes signed by a new
+  pseudonym, at the join epoch a claim would take, with the same
+  `pseudonymUsed` retry and the same 64-epoch bound. The change carries a
+  member entry sealed as `MemberEntry` (an approval moves it as it is).
+- A joiner then takes the whole state and announces, as after a claim. An
+  asker is saved as `Requesting`.
+
+**Requests are quiet: admins see them at their next sync** (the main session,
+2026-10-20, as proposed).
+- Every client syncs each pairwise group when the app opens and about every
+  ten minutes: one log read from its revision per group, jittered, paused while
+  the tab stays hidden past the usual hidden interval.
+- So administrators see a new request at their next sync. A push to them would
+  tell the home who the administrators are. The plan and the UI say this as it
+  is.
+- An approving administrator sends the usual `groupChange` pairwise to the
+  newcomer, whose binding now says who they are.
+- The requester asks about its own request with `GetRequestStatus` (the home,
+  signed by the requesting pseudonym, about that pseudonym only): `pending`
+  with the revision and head a cancel needs (so a cancel works after a link
+  reset too), `denied`, `member` or `unknown`.
+- Denying also bans the pseudonym from the link, as Signal does.
+
+**Bans, and what they can't do.**
+- The state keeps banned pseudonyms in the clear, which the home enforces, and
+  a ban list by account in the sealed part (`banList`, as built: one sealed
+  list of AccountRefs, up to 24 KiB, about 180 accounts), replaced in the same
+  change as the ban (`Ban` plus `ModifyBanList`).
+- The home sees only pseudonyms, so **it can't enforce a ban on an account**.
+  What holds:
+  - an administrator's client refuses to approve a request whose binding names
+    a banned account;
+  - the banned pseudonym itself is refused by the home;
+  - a banned account asking again at a new epoch is caught at approval by its
+    binding;
+  - with approval off (`ANY`), a banned account holding the link can join under
+    a new pseudonym. Every member's client then shows it as banned, and
+    administrators are asked to remove it. Banning resets the link password by
+    default, so the link it held stops working.
+
+**Attributes.**
+- Description: sealed text, up to its cap (as the title).
+- Timer: sealed `u32` seconds (Signal's `DisappearingMessagesTimer`); 0 is off.
+  Every sender applies it to group messages, as in direct chats.
+- **Avatar**: the attribute is `{hash, sealed}`.
+  - `hash` is the SHA-256 of the sealed blob, in the clear, so the home can
+    serve and clean up blobs.
+  - `sealed` (`Avatar`, up to 512 bytes) holds the blob's key and its content
+    type.
+  - The client pads the image to a size bucket (8, 16, 32 or 40 KiB) and seals
+    it under a fresh random key, so the same picture in two groups gives
+    unrelated hashes: a version byte, a 24-byte nonce, the padded image and a
+    16-byte tag (XChaCha20-Poly1305), so exactly 8,233, 16,425, 32,809 or
+    41,001 bytes. The home refuses any other length as malformed. The client
+    uploads it with `PutAvatar`, then makes the change.
+  - `PutAvatar` is authorised as the avatar change is: the signer is a member
+    and passes `access.attributes`, checked against the state as it arrives.
+  - A change naming an avatar hash must find its blob: the home refuses a
+    `ModifyAttribute` for the avatar whose hash is neither the pending nor the
+    current blob (`avatarMissing`). Once the change is accepted, the pending
+    blob becomes the current one and the old one goes at once.
+  - The home keeps the current blob and at most one pending upload per group
+    (the pending one goes after 24 hours), counts them against its own limits
+    for groups it hosts (not any account's pool, since the home doesn't know
+    who uploaded), and answers `GetAvatar` padded to one size, to members and
+    under the link proof for the current hash only.
+- Announcements-only: only administrators send; other members' messages are
+  refused on receipt, as in Signal.
+
+- **Limits are site settings**, admin-editable as every Kutup limit (the
+  user's standing rule), never constants: the largest avatar, the avatar
+  storage per group, and the link-join and request budget per relay server.
+
+**Server parts** (the second session, agreed 2026-10-20):
+- the avatar operations and their storage (above), at most two blobs of
+  40 KiB per hosted group, so the existing setting for how many groups a home
+  hosts bounds the total;
+- `GetAvatar` under the link proof;
+- a per-relay-server budget for link joins and requests (about 120 a minute,
+  admin-settable), charged before the change is checked;
+- `GetRequestStatus`: `unknown` (never `NotFound`) for a pseudonym the group
+  never saw, `denied` for a banned one or one seen as a requester that is now
+  neither requesting nor a member; it spends the per-pseudonym budget like
+  any signed request, and is no oracle (the asker proves the pseudonym);
+- the per-relay budget is charged on `JoinFromLink` and `RequestToJoin` only;
+  join info keeps its per-group limit.
+
+**Client parts** (the third session):
+- the link format, its parser and the link request signer;
+- join, ask and cancel with the epoch retry;
+- approve, deny, access, link reset, announcements-only, ban and unban, end
+  the group, and "remove all unverified";
+- the description, timer and avatar formats;
+- the receiving rules (announcements-only, banned shown as such);
+- the periodic group sync;
+- per-change timeline lines;
+- the web: wasm and service, the link, request and settings screens moved off
+  their MLS versions, en and tr, specs on one and two servers.
+
+### Slice 2: client notes (for the server design)
+
+The design is §1 ("Sending once" and "Multi-recipient: a delivery capability
+per member"). What the client side settles:
+- **Encrypting.** libsignal's `sealed_sender_multi_recipient_encrypt` over
+  one destination server's member devices, with recipients as 16-byte service
+  ids (the account ids) and the content in `UnidentifiedSenderMessageContent`
+  with the group id. One request per destination server, through this
+  account's own server as today's sealed route.
+- **Capabilities.**
+  - Each member draws a random 16-byte capability per group and publishes its
+    `SHA-256` to its own server with today's capability publishing (per
+    account, no group id).
+  - It sends the capability to the other members in a hidden `groupDelivery`
+    content kind and keeps it in its group list entry, so its own devices hold
+    it.
+  - It replaces it in one step when a member is removed or leaves: publish the
+    new, unpublish the old, send the new.
+- **Sending.** One capability per recipient account in the request; a
+  recipient whose capability this sender doesn't hold yet goes by the
+  pairwise fallback (slice 1's path, which stays).
+- **Answers.**
+  - `409` and `410` per account: refetch that account's manifest, never a member
+    list from the server, rearrange the book, retry (as direct sends);
+  - `404` for a member at the sender's revision: that copy goes pairwise at
+    once, the group is refreshed, and the member is retried on the
+    multi-recipient route once its new capability arrives.
+- **Lifting the 64-member cap** on test stacks once this route carries group
+  messages.
+
+Questions for the server design (second session):
+- the request shape on the origin and the federated route;
+- how capabilities ride with the multi-recipient body;
+- shared-payload storage and per-device views (Signal-Server's
+  `MessagesCache`);
+- the sealed-send units per recipient;
+- the destination split;
+- the `409`/`410`/`404` answers per account inside one request.
+
+### Slice 2: the server design (second session, 2026-10-20)
+
+Copied from Signal-Server (`MessageController` `PUT /v1/messages/multi_recipient`,
+`MessagesCache`'s shared payload, libsignal's `SealedSenderV2SentMessage`),
+with the deviations federation forces: capabilities instead of group send
+endorsements, one request per destination server, and remote delivery that
+is synchronous with the pairwise path as its durable fallback. Reviewed by
+the third session (client side) and the main session.
+
+**1. The request.** `POST /api/chat/anonymous/messages/multi?server=<destination>`,
+anonymous (no bearer, no cookie), as today's sealed routes. Recipients on the
+sender's own server are the same request with `server=<own>`, delivered
+locally. Body `SealedMultiSubmissionV1`, canonical JSON:
+- `sendId`: dedup and the client's retry key. It counts as seen per
+  recipient device only once something was stored for it: a retry after a
+  `409`/`410` with the same `sendId` is deduplicated per device, never
+  refused as a whole.
+- `payload`: base64 of libsignal's sent multi-recipient message (version
+  `0x23`, 17-byte service ids = ACI of the account ids), parsed with the Rust
+  `SealedSenderV2SentMessage::parse`; each recipient's message is assembled
+  with `received_message_parts_for_recipient` (key material
+  `range_for_recipient_key_material`). `C_i ‖ AT_i` is per account, not per
+  device. No excluded recipients.
+- `capabilities`: `{ "<accountId>": "<16-byte capability, base64>" }`, exactly
+  the payload's recipient accounts.
+- `urgent` (default true): `false` skips web push and only nudges connected
+  devices, as Signal's flag (receipts-like traffic never wakes a phone).
+
+Limits, each an admin-editable site setting with Signal's values as defaults:
+- the request at most `256 KiB + (32 + 100) × recipients` (about 282 KiB at
+  256), base64 aside; the real ceiling is each recipient's assembled message,
+  at most 96 KiB (Signal's per-recipient cap);
+- at most 256 accounts per request (the group size);
+- too large is `413`; a malformed payload, a device listed twice, a
+  recipient missing from `capabilities` or the other way round is `400`.
+
+**2. Capabilities.** A new table, because today's `chat_delivery_capabilities`
+holds one profile-derived capability per account: `chat_group_capabilities
+(user_id, capability_hash bytea(32), created_at)`, no group id.
+- `PUT /api/chat/group-capabilities { "add": [hash], "remove": [hash] }`
+  (bearer, the owner) adds and removes in one transaction, so a removal's swap
+  is atomic; `POST …/set { "hashes": [...] }` sets exactly these (a device
+  restoring from its group list).
+- At most 1024 per account (a site setting): a call that would pass it is
+  refused whole (`409 capabilityLimit`), never trimmed.
+- The raw capability is never stored; a recipient's is checked as today's
+  (`SHA-256`, constant time).
+
+**3. The order of checks** (Signal's: access before recipients).
+1. Parse and size (`400`/`413`).
+2. **Capabilities first**, per recipient account. A recipient that isn't a
+   local active account or whose capability doesn't hold is `refused`: one
+   outcome for all three, so the answer is no account-existence oracle.
+3. Budgets (§4), per request, then per recipient: a recipient over its
+   budget is `rateLimited`.
+4. Devices, only for the recipients that passed 2 and 3: any with missing or
+   extra devices → `409 [{accountId, missingDevices, extraDevices}]`; else any
+   with a changed registration id → `410 [{accountId, staleDevices}]`. Nothing
+   is stored on either, and the answer carries `refused` and `rateLimited` as
+   well, so the client handles them in the same retry.
+5. Store (§6) and answer `200 { "refused": [...], "rateLimited": [...] }`.
+   §1's `404` handling applies to `refused` per member: pairwise at once,
+   refresh the group, multi-recipient again once the new capability arrives;
+   `rateLimited` members go pairwise later, with back-off.
+
+Recipients are processed in account-id order, so concurrent requests lock
+mailboxes in one order.
+
+**4. Budgets: per request or per recipient, said for each.**
+- Per request: the anonymous route's per-IP budget, charged once per request
+  plus a bytes-per-minute budget per IP, so one message to 256 members costs
+  one request (today's batch route charges every recipient after the first,
+  which can't carry a 256-member group or CGNAT neighbours; it changes the
+  same way, and so do the pairwise SKDMs and the fallback over it).
+- Per recipient: a budget per group capability (keyed by its hash), not the
+  recipient's shared sealed budget, so one abusive member can only drain one
+  group's capability of each member, never their direct sealed route.
+- Per origin server and destination: per request and bytes, not per stored
+  recipient (today's per-recipient counting gives about two 256-member
+  messages a minute).
+- The 64-member cap is lifted only with these.
+
+**5. Remote destinations: synchronous, the pairwise path durable.** The
+durable sealed federation path doesn't fit a multi-recipient body (its 1 MiB
+transaction cap, one sequence per destination that a stuck row would block,
+per-recipient settlement). So:
+- the origin forwards the request at once to the destination's
+  `POST /api/fed/chat/sealed/multi` (signed federation, its own endpoint and
+  size cap from §1), waits up to the usual timeout, and relays the answer as
+  it is (`200` with `refused`/`rateLimited`, `409`, `410`);
+- a slow or unreachable destination is `503 peerUnavailable`: nothing is
+  queued, and the client sends those members' copies over the pairwise
+  path, which is durable. No late `409`/`410` can be lost, and no row waits
+  in a sequence;
+- the origin keeps nothing of the body once answered.
+
+**6. Storage once (Signal-Server's shared payload).**
+- `chat_shared_payloads (id uuid, payload bytea, created_at)`: `e_pub ‖
+  ciphertext`, once per request and destination, inserted only if at least
+  one recipient device is newly stored, in the same transaction as the rows.
+- Each recipient device gets its ordinary `chat_mailbox` row, its account's
+  48 bytes of key material as `content`, and `shared_payload_id` (a foreign
+  key, `ON DELETE RESTRICT`). The partial index on `shared_payload_id`
+  (`WHERE shared_payload_id IS NOT NULL`) is `CREATE INDEX CONCURRENTLY`, alone
+  in its own no-transaction migration.
+- A drain assembles `[0x22] ‖ C_i ‖ AT_i ‖ e_pub ‖ ciphertext`, the device's
+  ordinary sealed envelope; drain pages are capped by bytes as well as
+  count.
+- **Collection by reference**, not by a fixed expiry: the mailbox sweep
+  (retention, device deletion's cascade, acks) removes rows; then payloads no
+  row references are deleted (`NOT EXISTS`, using the index), every sweep and
+  best-effort after an ack. Concurrent acks, raised retention and deleted
+  devices then never leave or lose a payload.
+- Pushes and WebSocket nudges carry no payload: a connected device drains,
+  so nothing assembles 256 × 96 KiB in memory at once.
+
+**What a server learns.**
+- As Signal's: which of its users share one multi-recipient send.
+- The origin sees the raw capabilities for a remote destination, so a
+  malicious origin could sealed-send to those members within their group
+  budget: parity with today's profile capability on the direct route. A
+  member who fears it replaces its capability.
+- The destination sees capability hashes used together, so it can link a
+  group's members' capabilities, and an add/remove pair links a rotation to
+  the one before. It can't tell which group, nor who sends.
+- An account's number of capabilities is its number of groups (the client
+  may publish padding capabilities; open).
+- A request's size reveals its recipient count through the per-recipient
+  headers. The client pads the content (libsignal's plaintext padding, to a
+  bucket), which hides its length, not the count, as in Signal.
+
+**Questions answered.**
+- Dedup after a capability rotation: the server's dedup is per device and
+  `sendId`; a copy that arrives twice (multi, then pairwise after a refusal)
+  is dropped by the receiver's sender-key duplicate check.
+- Retry after `202`: there is no `202` now (§5); a retry after `503` uses the
+  pairwise path.
+- `urgent=false`: no web push (above).
+
+**Tests.** Unit: validation (`400`/`413`), the order (refused before devices,
+`409` before `410`, `refused`/`rateLimited` carried in each), assembly equal to
+libsignal's, collection by reference under concurrent acks. Live, one server:
+a 3-member send stored once and drained by each device; a stale device; a
+refused capability; the payload gone after the last ack and after a device
+is deleted. Two servers: the federated send, a remote `409` relayed, `503`
+when the peer is down, the destination refusing a foreign account.
+
+**Lifting the 64 cap.** `CHAT_GROUP_MAX_MEMBERS` (a site setting) defaults to
+256 (decision 5) once §4's budgets are in; test stacks first.
+
+Estimate as §10 (8–10 days), the budgets and the storage change being most of it.
 
 ## Decisions (the user, 2026-10-17)
 

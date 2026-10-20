@@ -50,7 +50,7 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
-const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
+pub(crate) const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
 
 pub(crate) fn rng() -> impl Rng + CryptoRng {
     OsRng.unwrap_err()
@@ -106,6 +106,9 @@ struct HostedGroup {
     state: GroupStateV1,
     head: [u8; 32],
     log: Vec<(GroupChangeV1, GroupNotaryV1)>,
+    /// Every pseudonym that was ever a member or a requester (the server
+    /// keeps hashes).
+    seen: HashSet<String>,
 }
 
 /// The one server of these tests.
@@ -130,6 +133,16 @@ pub(crate) struct World {
     pub(crate) sealed_sent: RefCell<Vec<(String, SealedMessageSubmissionV1)>>,
     /// Each account's group list: entry id → (revision, envelope).
     pub(crate) group_lists: RefCell<BTreeMap<String, GroupList>>,
+    /// Each account's Chat contact list: entry id → (revision, envelope).
+    pub(crate) contact_lists: RefCell<BTreeMap<String, GroupList>>,
+    /// The most entries a contact list holds (the server's is 10,000).
+    pub(crate) contact_list_cap: Cell<usize>,
+    /// The contact list can't be read (its server is down).
+    pub(crate) contact_list_down: Cell<bool>,
+    /// Each account's identity pin list: (revision, envelope).
+    pub(crate) identity_pins: RefCell<BTreeMap<String, (u64, String)>>,
+    /// How many pin lists were written.
+    pub(crate) pin_writes: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
     /// How many whole states the group home was asked for.
@@ -138,6 +151,12 @@ pub(crate) struct World {
     pub(crate) group_changes: Cell<usize>,
     /// The group list can't be read (its server is down).
     pub(crate) group_list_down: Cell<bool>,
+    /// The home calls every newcomer's pseudonym used.
+    pub(crate) every_pseudonym_used: Cell<bool>,
+    /// How many claims the home refused as a used pseudonym.
+    pub(crate) pseudonyms_used: Cell<usize>,
+    /// How many times a group list was read.
+    pub(crate) list_reads: Cell<usize>,
     /// One-shot answers the batch route gives an account instead of taking
     /// its send.
     pub(crate) batch_answers: RefCell<Vec<(String, kutup_chat_proto::SealedBatchOutcomeV1)>>,
@@ -231,10 +250,18 @@ impl World {
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
             group_list_down: Cell::new(false),
+            every_pseudonym_used: Cell::new(false),
+            pseudonyms_used: Cell::new(0),
+            list_reads: Cell::new(0),
             batch_answers: RefCell::new(Vec::new()),
             batch_failures: Cell::new(0),
             manifests_down: RefCell::new(HashSet::new()),
             group_lists: RefCell::new(BTreeMap::new()),
+            contact_lists: RefCell::new(BTreeMap::new()),
+            contact_list_cap: Cell::new(10_000),
+            contact_list_down: Cell::new(false),
+            identity_pins: RefCell::new(BTreeMap::new()),
+            pin_writes: Cell::new(0),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
         })
@@ -290,10 +317,18 @@ impl World {
             .unwrap();
         // The account's master key (its authority's, as above) and key
         // binding, as the app hands them over.
+        let binding = format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}");
         engine
-            .enable_group_list(
+            .enable_group_list(&[authority_seed; 32], &binding)
+            .unwrap();
+        // Timed as the web is: a block is written at once.
+        engine
+            .enable_contact_list(
                 &[authority_seed; 32],
-                &format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}"),
+                &binding,
+                crate::contact_list::ContactListTiming {
+                    block: crate::contact_list::BlockTiming::Immediate,
+                },
             )
             .unwrap();
         Person {
@@ -546,6 +581,11 @@ impl World {
                         state: genesis.clone(),
                         head: change.hash().unwrap(),
                         log: vec![(change.clone(), notary.clone())],
+                        seen: genesis
+                            .members
+                            .iter()
+                            .map(|member| member.pseudonym.clone())
+                            .collect(),
                     },
                 );
                 Self::ok(
@@ -629,7 +669,27 @@ impl World {
                     Ok(next) => next,
                     Err(error) => return Self::refused(&error),
                 };
+                // As the server: valid in every way, but this pseudonym was
+                // a member before.
+                if change.is_newcomers_change()
+                    && (self.every_pseudonym_used.get() || group.seen.contains(&change.actor))
+                {
+                    self.pseudonyms_used.set(self.pseudonyms_used.get() + 1);
+                    return GroupResponseV1::refused(
+                        kutup_chat_proto::group_route::PSEUDONYM_USED,
+                        now(),
+                    );
+                }
                 let notary = self.notarise(&group_id, &change, &next);
+                // Ever a member, or a requester (as the server).
+                group
+                    .seen
+                    .extend(next.members.iter().map(|member| member.pseudonym.clone()));
+                group.seen.extend(
+                    next.requesting
+                        .iter()
+                        .map(|request| request.pseudonym.clone()),
+                );
                 group.state = next;
                 group.head = change.hash().unwrap();
                 group.log.push((change.clone(), notary.clone()));
@@ -909,6 +969,7 @@ impl ChatTransport for Client {
     }
 
     async fn fetch_group_list(&self) -> Result<Vec<crate::GroupListItem>> {
+        self.world.list_reads.set(self.world.list_reads.get() + 1);
         if self.world.group_list_down.get() {
             return Err(ChatError::Transport("the group list is down".into()));
         }
@@ -951,6 +1012,95 @@ impl ChatTransport for Client {
             return Ok(false);
         }
         entries.insert(id.to_string(), (revision, envelope.to_string()));
+        Ok(true)
+    }
+
+    async fn fetch_identity_pins(&self) -> Result<Option<crate::IdentityPinsRecord>> {
+        Ok(self
+            .world
+            .identity_pins
+            .borrow()
+            .get(&self.account)
+            .map(|(revision, envelope)| crate::IdentityPinsRecord {
+                revision: *revision,
+                envelope: envelope.clone(),
+            }))
+    }
+
+    async fn store_identity_pins(&self, write: &crate::IdentityPinsWrite) -> Result<bool> {
+        let mut pins = self.world.identity_pins.borrow_mut();
+        let listed = pins.get(&self.account).map_or(0, |(revision, _)| *revision);
+        if listed != write.base_revision {
+            return Ok(false);
+        }
+        pins.insert(
+            self.account.clone(),
+            (write.revision, write.envelope.clone()),
+        );
+        self.world.pin_writes.set(self.world.pin_writes.get() + 1);
+        Ok(true)
+    }
+
+    async fn fetch_contact_list(&self) -> Result<Vec<crate::transport::ContactListItem>> {
+        if self.world.contact_list_down.get() {
+            return Err(ChatError::Transport("the contact list is down".into()));
+        }
+        Ok(self
+            .world
+            .contact_lists
+            .borrow()
+            .get(&self.account)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, (revision, envelope))| crate::GroupListItem {
+                        id: id.clone(),
+                        revision: *revision,
+                        envelope: envelope.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn store_contact_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<crate::transport::ContactListWrite> {
+        use crate::transport::ContactListWrite;
+        if self.world.contact_list_down.get() {
+            return Err(ChatError::Transport("the contact list is down".into()));
+        }
+        // As the server: the revision from the sealed header, one size only.
+        let sealed = STANDARD
+            .decode(envelope)
+            .map_err(|_| ChatError::Transport("malformed envelope".into()))?;
+        let header = kutup_crypto::chat_contact_list::inspect(&sealed)
+            .map_err(|error| ChatError::Transport(error.to_string()))?;
+        assert_eq!(header, revision, "the head lists the sealed revision");
+        let mut lists = self.world.contact_lists.borrow_mut();
+        let entries = lists.entry(self.account.clone()).or_default();
+        let listed = entries.get(id).map_or(0, |(revision, _)| *revision);
+        if listed != base_revision || revision <= listed {
+            return Ok(ContactListWrite::Conflict);
+        }
+        if base_revision == 0 && entries.len() >= self.world.contact_list_cap.get() {
+            return Ok(ContactListWrite::Full);
+        }
+        entries.insert(id.to_string(), (revision, envelope.to_string()));
+        Ok(ContactListWrite::Stored)
+    }
+
+    async fn delete_contact_entry(&self, id: &str, revision: u64) -> Result<bool> {
+        let mut lists = self.world.contact_lists.borrow_mut();
+        let entries = lists.entry(self.account.clone()).or_default();
+        if entries.get(id).map(|(listed, _)| *listed) != Some(revision) {
+            return Ok(false);
+        }
+        entries.remove(id);
         Ok(true)
     }
 
@@ -1164,9 +1314,9 @@ pub(crate) struct Person {
     pub(crate) client: Rc<Client>,
     pub(crate) account: String,
     #[allow(dead_code)] // what linking another device needs
-    authority_seed: u8,
+    pub(crate) authority_seed: u8,
     #[allow(dead_code)]
-    wrapping_key: [u8; 32],
+    pub(crate) wrapping_key: [u8; 32],
 }
 
 impl Person {
@@ -3465,6 +3615,19 @@ fn group_recover_fails_closed_when_the_list_cant_be_read() {
     ));
     assert_eq!(world.state_requests.get(), probes);
     assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
+    // The attempt counted before the list was asked for: more contexts
+    // within the hour ask nothing more, of the list or the home.
+    let reads = world.list_reads.get();
+    for _ in 0..5 {
+        assert!(!recover(
+            &mut bob2,
+            &context_of(&alice, &group_id),
+            &alice,
+            &bobs
+        ));
+    }
+    assert_eq!(world.list_reads.get(), reads);
+    assert_eq!(world.state_requests.get(), probes);
 }
 
 #[test]
@@ -3626,6 +3789,167 @@ fn group_recover_a_rejoin_is_a_new_pseudonym_found_again() {
 }
 
 #[test]
+fn group_claim_after_a_total_loss_goes_past_a_pseudonym_the_home_has_seen() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let first = pseudonym_of(&mut alice, &group_id, &bob);
+    // He leaves, and his only device goes before either list write.
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob]);
+    assert!(world.group_lists.borrow().get(&bob.account).is_none());
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    // Invited back, the new device knows of no earlier join: epoch 0, which
+    // the home has seen. It refuses that alone, and the claim is made again
+    // at epoch 1.
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob2.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob2.receive();
+    assert_eq!(
+        block_on(bob2.engine.load_group_record(&group_id))
+            .unwrap()
+            .join_epoch,
+        0
+    );
+    let joined = block_on(bob2.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    assert!(matches!(joined, GroupSync::Current { .. }), "{joined:?}");
+    assert_eq!(world.pseudonyms_used.get(), 1);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert_eq!(
+        block_on(bob2.engine.load_group_record(&group_id))
+            .unwrap()
+            .join_epoch,
+        1
+    );
+    alice.sync(&group_id);
+    deliver_all(&mut [&mut alice, &mut bob2]);
+    assert_ne!(pseudonym_of(&mut alice, &group_id, &bob2), first);
+    // The list now holds epoch 1, for his next devices.
+    bob2.flush_list();
+    let mut bob3 = world.link_device(&bob2);
+    block_on(bob3.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob3.status(&group_id), GroupStatus::Member);
+    assert_eq!(
+        block_on(bob3.engine.load_group_record(&group_id))
+            .unwrap()
+            .join_epoch,
+        1
+    );
+}
+
+#[test]
+fn group_claim_stops_after_the_last_join_epoch() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    world.every_pseudonym_used.set(true);
+    let changes = world.group_changes.get();
+    assert!(block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).is_err());
+    assert_eq!(
+        world.pseudonyms_used.get(),
+        crate::group::MAX_JOIN_EPOCHS as usize
+    );
+    assert_eq!(world.group_changes.get(), changes);
+    let record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    assert!(matches!(record.status, GroupStatus::Invited { .. }));
+    assert_eq!(record.join_epoch, crate::group::MAX_JOIN_EPOCHS - 1);
+}
+
+#[test]
+fn group_claim_from_a_later_epoch_still_stops_at_the_last_one() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    // The invitation came at epoch 10 (the account's eleventh join).
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let keys = crate::group::GroupAccountKeys::derive(&[bob.authority_seed; 32]).unwrap();
+    let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
+    record.join_epoch = 10;
+    record.pseudonym_seed = crate::group::SecretText(kutup_chat_proto::group::encode(
+        keys.pseudonyms.pseudonym(&group, 10).seed(),
+    ));
+    block_on(bob.engine.save_group(&record)).unwrap();
+    world.every_pseudonym_used.set(true);
+    assert!(block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).is_err());
+    // Epochs 10 to 63, no further: recovery's window still covers it.
+    assert_eq!(
+        world.pseudonyms_used.get(),
+        (crate::group::MAX_JOIN_EPOCHS - 10) as usize
+    );
+    let record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, crate::group::MAX_JOIN_EPOCHS - 1);
+}
+
+#[test]
+fn group_claim_after_another_device_joined_and_listed_it_is_a_member_too() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut bob2 = world.link_device(&bob);
+    befriend(&mut alice, &mut bob);
+    let group_id = block_on(alice.engine.create_group("Team"))
+        .unwrap()
+        .group_id;
+    block_on(
+        alice
+            .engine
+            .invite_to_group(&group_id, &[bob.account.clone()], &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    bob2.receive();
+    // The first device joins and its list entry (a member at epoch 0) is
+    // written before the second accepts: the second's claim re-reads the
+    // list and stays at epoch 0, where the account is in.
+    block_on(bob.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    let joined = block_on(bob2.engine.accept_group_invite(&group_id, &mut rng())).unwrap();
+    assert!(matches!(joined, GroupSync::Current { .. }), "{joined:?}");
+    for device in [&bob, &bob2] {
+        assert_eq!(device.status(&group_id), GroupStatus::Member);
+        assert_eq!(
+            block_on(device.engine.load_group_record(&group_id))
+                .unwrap()
+                .join_epoch,
+            0
+        );
+    }
+    // Neither device wrote the account out of the group.
+    bob2.flush_list();
+    let mut bob3 = world.link_device(&bob);
+    block_on(bob3.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(bob3.status(&group_id), GroupStatus::Member);
+    assert_eq!(world.group_state(&group_id).members.len(), 2);
+}
+
+#[test]
 fn group_claim_two_devices_accepting_at_once_are_both_members() {
     let world = World::new();
     let mut alice = world.person(0xa1);
@@ -3772,4 +4096,31 @@ fn group_list_a_rotated_profile_key_reaches_the_group() {
     assert!(bob
         .group_texts(&group_id)
         .contains(&"after the rotation".to_string()));
+}
+
+#[test]
+fn group_list_an_older_entry_served_under_the_listed_revision_is_refused() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    bob.flush_list();
+    let (id, member) = {
+        let lists = world.group_lists.borrow();
+        let (id, (_, envelope)) = lists[&bob.account].iter().next().unwrap();
+        (id.clone(), envelope.clone())
+    };
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    bob.flush_list();
+    let (listed, _) = world.group_lists.borrow()[&bob.account][&id].clone();
+    // The "member" envelope under the "left" revision: refused, not followed.
+    world
+        .group_lists
+        .borrow_mut()
+        .get_mut(&bob.account)
+        .unwrap()
+        .insert(id, (listed, member));
+    let mut bob2 = world.link_device(&bob);
+    assert!(block_on(bob2.engine.sync_group_list(&mut rng())).is_err());
+    assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
 }

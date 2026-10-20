@@ -63,6 +63,7 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -1157,6 +1158,8 @@ chain start names. **Auth:** Bearer JWT. Scopes and their ids:
 - `chatGroups`: the group list's entry ids (`GET /api/chat/group-list`), with
   the revision in each sealed entry's header. Readable whether or not pairwise
   groups are on (empty when they are off, since nothing can be written);
+- `chatContacts`: the Chat contact list's entry ids (`GET
+  /api/chat/contact-list`), with the revision in each sealed entry's header;
 - `passSecrets`: the vault's file id, for every secret the account keeps, the
   vault trashed, purged or out of reach included ("unreachable but listed":
   the secret stays until its owner forgets it, `POST
@@ -3467,6 +3470,17 @@ valid changes and proven link requests; failed requests spend a separate
 budget per relaying server (600/min). A stranger, a removed member, or a
 newcomer whose claim, link password or request doesn't hold gets the same
 `notFound` as an unknown group, never a conflict or a refusal code.
+Refusal codes besides the group checks' own (`kutup_chat_proto::group`):
+`malformed` (a body that doesn't parse), `wrongActor` (a change whose actor
+isn't the request's signer), `wrongGroup` (a genesis for another group),
+`serverFull`, and `pseudonymUsed`: a newcomer's claim, join from the link or
+request to join under a pseudonym the group has had before, as a member or
+a requester. The home answers `pseudonymUsed` only once the claim's or the
+link's proof holds and the change passes every other check, and only its own
+key holder can sign a request as that pseudonym, so nobody else learns it.
+It is the one refusal that spends neither the relaying server's failure
+budget nor the group's change budget: the client retries at its next join
+epoch (up to 64).
 
 ### GET /api/chat/group-list
 
@@ -3498,6 +3512,36 @@ parse, and for a new entry past 1024; `404` for an id that isn't one.
 it is still at `baseRevision` (an ended group whose chat its person deleted).
 `409 revision_conflict` with the current revision when it moved, `404` when
 there is no such entry; `head` as for `PUT`.
+
+### GET /api/chat/contact-list
+
+The account's Chat contacts ([`plans/chat-contacts-sync.md`](plans/chat-contacts-sync.md)):
+one sealed entry per person the account accepted, rejected, blocked or asked,
+so a device that lost everything restores them. Wherever Chat is (pairwise
+groups needn't be on). `{ "entries": [{ "id", "revision", "envelope" }] }`.
+`id` is a keyed hash of the contact's account (`AccountRef`) under a key
+derived from the account's master key (43 characters of base64url without
+padding); `envelope` is the sealed entry (standard base64, always 2048 bytes),
+whose authenticated header carries its revision. The server never opens it.
+The account head's `chatContacts` scope lists every entry. **Auth:** Bearer
+JWT. An account reset clears the list.
+
+### PUT /api/chat/contact-list/{id}
+
+As `PUT /api/chat/group-list/{id}`: `{ "baseRevision", "envelope", "head"? }`
+→ `200` with the stored entry; `409 revision_conflict` with the current
+`revision`, `head_required` / `head_conflict`. `400` for an envelope that
+isn't 2048 bytes of canonical base64 or isn't a contact list entry (a group
+list entry isn't one), and `400 contactListFull` for a new entry past 10,000
+(the client evicts before that: the oldest rejections, then the oldest pending
+requests, never a block); `404` for an id that isn't one.
+
+### DELETE /api/chat/contact-list/{id}
+
+`{ "baseRevision": <n>, "head"?: "<base64>" }` → `204`: removes the entry if
+it is still at `baseRevision` (one the client evicted). `409
+revision_conflict` with the current revision when it moved, `404` when there
+is no such entry; `head` as for `PUT`.
 
 ### POST /api/chat/call-links
 

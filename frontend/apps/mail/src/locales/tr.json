@@ -11,6 +11,8 @@
   },
   "account": {
     "noKeyTitle": "Posta adresiniz henüz hazır değil",
+    "unverifiedTitle": "Anahtarlarınıza güvenilemiyor",
+    "unverified": "Sunucunun adresiniz için listelediği anahtarlar, hesabınızın imzaladığı anahtar listesiyle eşleşmiyor; bu yüzden Mail onlara hiçbir şey şifrelemez. Anahtarlarınızı kontrol edin ve yöneticinize başvurun.",
     "noKey": "Adres anahtarınız, hesabınızı bir kez açtığınızda oluşturulur.",
     "openAccount": "Hesabı aç"
   },
@@ -237,7 +239,8 @@
         "keysOpenpgp": "keys.openpgp.org'dan alınan bir anahtarla uçtan uca şifreli"
       },
       "readableKutup": "Bu ileti için uçtan uca şifreli değil: geldiğinde şifrelenir",
-      "readableOutside": "Bu ileti için şifreli değil: düz posta"
+      "readableOutside": "Bu ileti için şifreli değil: düz posta",
+      "encryptionDisabled": "Uçtan uca şifreli değil: bu adres postasını Kutup dışına yönlendiriyor, bu yüzden ulaştığında şifrelenir"
     },
     "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
     "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın.",
@@ -535,7 +538,8 @@
     "senders": "Engelle ve izin ver",
     "identity": "Kimlik",
     "autoReply": "Otomatik yanıt",
-    "appearance": "Görünüm"
+    "appearance": "Görünüm",
+    "forwarding": "Yönlendirme"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -1054,5 +1058,94 @@
     "settingsOff": "Bu tarayıcıda tutulmuyor.",
     "delete": "Yerel arama verisini sil",
     "deleted": "Yerel arama verisi silindi."
+  },
+  "forwarding": {
+    "title": "Yönlendirme",
+    "description": "Aldığınız e-postaların kopyalarını başka bir adrese gönderin. Asılları posta kutunuzda kalır.",
+    "add": "Yönlendirme ekle",
+    "addTitle": "Yönlendirme kur",
+    "editTitle": "Yönlendirmeyi düzenle",
+    "dialogHint": "Nereye ve hangi iletileri yönlendireceğinizi seçin. Koşul yoksa her ileti yönlendirilir.",
+    "from": "Şuradan yönlendir",
+    "to": "Şuraya yönlendir",
+    "toPlaceholder": "ad@ornek.com",
+    "toInvalid": "Yönlendirilecek bir e-posta adresi girin.",
+    "conditions": "Koşullar",
+    "conditionsHint": "Yalnızca eşleşen iletiler yönlendirilir.",
+    "everythingHint": "Koşul yok: her ileti yönlendirilir.",
+    "conditionEmpty": "Her koşulu doldurun ya da boş olanları kaldırın.",
+    "noChains": "Size yönlendirilen e-postalar hariç tutulur ve yönlendirilmez.",
+    "next": "İleri",
+    "submit": "Yönlendirmeyi kur",
+    "summary": "{{from}} adresinden {{to}} adresine",
+    "everything": "Her ileti",
+    "and": " ve ",
+    "or": " veya ",
+    "endToEndExplained": "Uçtan uca şifreli: sunucu her iletiyi okumadan {{to}} için yeniden şifreler. Önce {{to}} yönlendirmeyi kabul etmelidir.",
+    "outsideExplained": "{{to}} yönlendirmeyi onaylamak için bir e-posta alır. Uçtan uca şifreli gelen iletiler Kutup dışına yönlendirilemez ve atlanır.",
+    "outsideWarning": "Uçtan uca şifrelemesi olmayan bir adrese yönlendirmek, {{address}} adresiniz için uçtan uca şifrelemeyi kapatır; sıfır erişimli şifreleme açık kalır.",
+    "trustHint": "Yönlendirme, sunucunun postanızı alıcı için yeniden şifrelemesine izin verir; yalnızca postanız konusunda güvendiğiniz biriyle kurun.",
+    "encryptionOff": "{{address}}, Kutup dışındaki bir adrese yönlendirdiği sürece uçtan uca şifreleme kapalıdır. Sıfır erişimli şifreleme açık kalır. Bu türden son yönlendirmeyi silmek onu yeniden açar.",
+    "created": "{{to}} adresine yönlendirme kuruldu. {{to}} kabul edince başlar.",
+    "createdOutside": "{{to}} adresine yönlendirme kuruldu. {{to}} e-postayla onaylayınca başlar.",
+    "saved": "Yönlendirme kaydedildi",
+    "fromMe": "Benden",
+    "toMe": "Bana",
+    "emptyFromMe": "Henüz yönlendirme yok",
+    "emptyFromMeHint": "Yönlendirme ekle ile e-postanızı başka bir adrese yönlendirin.",
+    "emptyToMe": "Size yönlendiren kimse yok",
+    "emptyToMeHint": "Adresinize yapılan yönlendirmeler kabul etmeniz için burada görünür.",
+    "edit": "Düzenle",
+    "pause": "Duraklat",
+    "paused": "Yönlendirme duraklatıldı",
+    "resume": "Sürdür",
+    "resumed": "Yönlendirme sürdürüldü",
+    "reinvite": "Onayı yeniden gönder",
+    "reinvited": "{{to}} adresine yeni bir onay e-postası gönderiliyor",
+    "renew": "Yeniden etkinleştir",
+    "renewed": "Yönlendirme yeniden etkinleştirildi. Kabul edilince yeniden başlar.",
+    "delete": "Sil",
+    "deleted": "Yönlendirme silindi",
+    "deleteTitle": "Bu yönlendirme silinsin mi?",
+    "deleteDescription": "E-postalar artık {{to}} adresine yönlendirilmeyecek.",
+    "deleteOutsideDescription": "E-postalar artık {{to}} adresine yönlendirilmeyecek. Kutup dışına son yönlendirmenizse, adresiniz için uçtan uca şifreleme yeniden açılır.",
+    "deleteIncomingDescription": "{{from}} adresinden gelen e-postalar artık size yönlendirilmeyecek. Önceden yönlendirilenler kalır.",
+    "accept": "Kabul et",
+    "accepted": "Artık {{from}} adresinden yönlendirilen e-postaları alıyorsunuz",
+    "acceptFailed": "Yönlendirme kabul edilemedi. Yeniden deneyin.",
+    "decline": "Reddet",
+    "declined": "Yönlendirme reddedildi",
+    "skipped_one": "{{count}} ileti yönlendirilemedi",
+    "skipped_other": "{{count}} ileti yönlendirilemedi",
+    "state": {
+      "pending": "Beklemede",
+      "active": "Etkin",
+      "outdated": "Yeniden etkinleştirilmeli",
+      "paused": "Duraklatıldı",
+      "rejected": "Reddedildi"
+    },
+    "kind": {
+      "end_to_end": "Uçtan uca şifreli",
+      "outside": "Uçtan uca şifreli değil"
+    },
+    "notice": {
+      "bounces": "Alıcının sunucusundan tekrarlanan geri dönmeler nedeniyle duraklatıldı.",
+      "budget": "Bugünkü yönlendirme sınırına ulaşıldı; yarın sürer."
+    },
+    "errors": {
+      "ownAddress": "Kendi adreslerinizden birine yönlendiremezsiniz.",
+      "unknown": "Bu sunucuda böyle bir adres yok.",
+      "kindChanged": "Bu adres siz kontrol ettikten sonra değişti. Kaydetmeden önce yeniden kontrol edin.",
+      "group": "E-posta paylaşılan bir posta kutusuna veya listeye yönlendirilemez.",
+      "unverified": "Bu adresin anahtarları doğrulanamadı, bu yüzden şu an ona yönlendirme yapılamaz.",
+      "exists": "Bu adrese zaten yönlendiriyorsunuz.",
+      "limit": "Yönlendirme sınırına ulaştınız: adres başına 10, hesap başına 25.",
+      "unavailable": "Bu sunucuda yönlendirme kullanılamıyor.",
+      "international": "Latin dışı karakterler içeren adreslere henüz yönlendirme yapılamıyor.",
+      "endToEndRequired": "Bu bir Kutup adresi: sayfayı yenileyip yeniden deneyin.",
+      "keyList": "Adres anahtarlarınız bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
+      "state": "Bu yönlendirme bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
+      "rateLimited": "Bugün çok fazla onay e-postası gönderildi. Yarın yeniden deneyin."
+    }
   }
 }

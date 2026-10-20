@@ -2409,7 +2409,7 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
 /// The account head chain starts again with the new incarnation, and no
 /// listed value sealed under the old keys stays to be listed in it
 /// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
-/// group list, labels, filters and Pass secrets go; custom folders keep
+/// group list, the Chat contact list, labels, filters and Pass secrets go; custom folders keep
 /// their mail and lose their names, until their owner names them again. The
 /// identity pins were sealed under the old master key too: nothing can open
 /// them now.
@@ -2422,6 +2422,7 @@ async fn clear_account_values(
         "DELETE FROM identity_pins WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
+        "DELETE FROM chat_contact_list WHERE user_id = $1",
         // Forwardings both ways end with their proxy factors: they were
         // made for the old incarnation's keys (docs/plans/mail-forwarding.md).
         "DELETE FROM mail_forwardings WHERE user_id = $1
@@ -2481,10 +2482,10 @@ mod tests {
         assert!(validate_activity_query(&noncanonical_domain).is_err());
     }
 
-    /// A reset leaves none of the old incarnation's group list behind, and
-    /// touches no other account's.
+    /// A reset leaves none of the old incarnation's group list or Chat
+    /// contact list behind, and touches no other account's.
     #[tokio::test]
-    async fn live_an_account_reset_clears_the_group_list() {
+    async fn live_an_account_reset_clears_the_group_and_contact_lists() {
         let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
@@ -2516,19 +2517,32 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+            sqlx::query(
+                "INSERT INTO chat_contact_list (user_id, id, revision, envelope) VALUES ($1, $2, 1, $3)",
+            )
+            .bind(user_id)
+            .bind("A".repeat(43))
+            .bind(vec![0u8; kutup_crypto::chat_contact_list::SEALED_LEN])
+            .execute(&pool)
+            .await
+            .unwrap();
         }
 
         let mut tx = pool.begin().await.unwrap();
         clear_account_values(&mut tx, reset).await.unwrap();
         tx.commit().await.unwrap();
 
-        let count = |user_id: Uuid| {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chat_group_list WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_one(&pool)
-        };
-        assert_eq!(count(reset).await.unwrap(), 0);
-        assert_eq!(count(kept).await.unwrap(), 1);
+        for table in ["chat_group_list", "chat_contact_list"] {
+            let query = format!("SELECT COUNT(*) FROM {table} WHERE user_id = $1");
+            for (user_id, expected) in [(reset, 0), (kept, 1)] {
+                let count: i64 = sqlx::query_scalar(&query)
+                    .bind(user_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(count, expected, "{table}");
+            }
+        }
         sqlx::query("DELETE FROM users WHERE id = ANY($1)")
             .bind(vec![reset, kept])
             .execute(&pool)

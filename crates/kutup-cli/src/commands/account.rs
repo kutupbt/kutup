@@ -198,8 +198,24 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
         kutup_crypto::account_rename::sign(&identity, sequence, &address, &current, now_ms)
             .context("sign the rename")?;
     // The new address's key comes with the rename, unless the name is one
-    // taken back whose address kept its keys (the check says).
-    let mail_address = if check["needsKey"] == false {
+    // taken back whose address kept its keys: the check says so, and so do
+    // the account's own addresses (a key or key list there means none is
+    // made over it, whatever the check said).
+    let own = if check["needsKey"] == false {
+        OwnAddress::Keyed
+    } else {
+        own_address(&ctx, &current)?
+    };
+    // One's own freed name must continue its old key list, which isn't built
+    // yet: refused, never restarted at 1 (every device that saw the old list
+    // would take a restart for a rollback).
+    if own == OwnAddress::Freed {
+        bail!(
+            "{name} was your name before, and its old encryption keys must be carried over to \
+             take it back; that isn't possible yet"
+        );
+    }
+    let mail_address = if own == OwnAddress::Keyed {
         Value::Null
     } else {
         let issued_at = time::OffsetDateTime::now_utc()
@@ -287,4 +303,78 @@ fn drop_name(profile: &str, json: bool, name: &str) -> Result<()> {
         println!("{name} receives no more mail; it stays held until its date.");
     }
     Ok(())
+}
+
+/// What the account's own addresses say about an address a rename goes to.
+#[derive(PartialEq, Eq)]
+enum OwnAddress {
+    /// A held (not freed) address of the account is it, with a key or a key
+    /// list: no first key is made over it, whatever the check said.
+    Keyed,
+    /// The account's own freed row is it, with a key list.
+    Freed,
+    /// A first key at sequence 1.
+    New,
+}
+
+fn own_address(ctx: &crate::context::Ctx, address: &str) -> Result<OwnAddress> {
+    let rows: Value = decode_json(ctx.client.request(Method::GET, "/mail/addresses").send()?)?;
+    Ok(own_address_of(&rows, address))
+}
+
+/// [`own_address`] over `GET /api/mail/addresses`'s rows.
+fn own_address_of(rows: &Value, address: &str) -> OwnAddress {
+    let folded = kutup_crypto::names::fold_address(address);
+    let mut own = OwnAddress::New;
+    for row in rows.as_array().into_iter().flatten() {
+        let same = row["address"]
+            .as_str()
+            .and_then(kutup_crypto::names::fold_address)
+            .is_some_and(|row_address| Some(row_address) == folded);
+        if !same {
+            continue;
+        }
+        let freed = row["state"] == "freed";
+        let keyed = row["keys"].as_array().is_some_and(|keys| !keys.is_empty());
+        let listed = !row["keyList"].is_null();
+        if !freed && (keyed || listed) {
+            return OwnAddress::Keyed;
+        }
+        if freed && listed {
+            own = OwnAddress::Freed;
+        }
+    }
+    own
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(address: &str, state: &str, keyed: bool) -> Value {
+        json!({
+            "address": address,
+            "state": state,
+            "keys": if keyed { json!([{ "fingerprint": "aa" }]) } else { json!([]) },
+            "keyList": if keyed { json!({ "data": "d", "signature": "s" }) } else { Value::Null },
+        })
+    }
+
+    #[test]
+    fn a_rename_makes_a_first_key_only_over_nothing() {
+        let rows = json!([
+            row("ada.lovelace@kutup.test", "active", true),
+            row("ada.l@kutup.test", "receiving", true),
+            row("ada@kutup.test", "freed", true),
+        ]);
+        // A held name taken back keeps its keys, in any spelling.
+        assert!(own_address_of(&rows, "Ada-L@kutup.test") == OwnAddress::Keyed);
+        // One's own freed name: refused until its list can be continued.
+        assert!(own_address_of(&rows, "a.da@kutup.test") == OwnAddress::Freed);
+        // A new name, or one never held: a first key.
+        assert!(own_address_of(&rows, "grace@kutup.test") == OwnAddress::New);
+        // A freed row without a list says nothing.
+        let bare = json!([row("ada@kutup.test", "freed", false)]);
+        assert!(own_address_of(&bare, "ada@kutup.test") == OwnAddress::New);
+    }
 }

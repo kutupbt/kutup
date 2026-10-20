@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
@@ -209,7 +209,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     source_device_id INTEGER NOT NULL,
     updated_at_ms    INTEGER NOT NULL,
     sync_pending     INTEGER NOT NULL DEFAULT 0,
-    sync_send_id     TEXT
+    sync_send_id     TEXT,
+    list_due_at_ms   INTEGER
 );
 CREATE TABLE IF NOT EXISTS group_outbox (
     send_id    TEXT PRIMARY KEY,
@@ -291,11 +292,12 @@ impl SqliteChatDb {
         // SQLite free pages after its logical row is removed.
         db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
-        // One schema version, created whole. A store from an older layout
+        // One schema version, created whole (3: contacts gained when their
+        // list entry is due, and the contact-list flag). A store from an older layout
         // (development builds only; no native app has shipped) is refused
         // rather than upgraded.
         let foreign: i64 = db(conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 2",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 3",
             [],
             |row| row.get(0),
         ))?;
@@ -500,6 +502,27 @@ impl ChatDb for SqliteChatDb {
         Ok(value.map(|n| n as u64))
     }
 
+    async fn load_pins_due(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row("SELECT value FROM meta WHERE key = 'pins_due'", [], |row| {
+                row.get(0)
+            })
+            .optional())
+    }
+
+    async fn load_contact_list_followed(&self) -> Result<bool> {
+        let conn = self.conn.borrow();
+        let value: Option<i64> = db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'contact_list_followed'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())?;
+        Ok(value == Some(1))
+    }
+
     async fn load_last_sent_seq(&self) -> Result<Option<u64>> {
         let conn = self.conn.borrow();
         db(conn
@@ -667,7 +690,7 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT peer, state, previous_state, revision, source_device_id,
-                        updated_at_ms, sync_pending, sync_send_id
+                        updated_at_ms, sync_pending, sync_send_id, list_due_at_ms
                  FROM contacts WHERE peer = ?1",
                 [peer],
                 contact_row,
@@ -679,7 +702,7 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
             "SELECT peer, state, previous_state, revision, source_device_id,
-                    updated_at_ms, sync_pending, sync_send_id
+                    updated_at_ms, sync_pending, sync_send_id, list_due_at_ms
              FROM contacts ORDER BY peer",
         ))?;
         let rows = db(stmt.query_map([], contact_row))?;
@@ -1168,8 +1191,8 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO contacts
                      (peer, state, previous_state, revision, source_device_id,
-                      updated_at_ms, sync_pending, sync_send_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                      updated_at_ms, sync_pending, sync_send_id, list_due_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(peer) DO UPDATE SET
                      state = excluded.state,
                      previous_state = excluded.previous_state,
@@ -1177,7 +1200,8 @@ impl ChatDb for SqliteChatDb {
                      source_device_id = excluded.source_device_id,
                      updated_at_ms = excluded.updated_at_ms,
                      sync_pending = excluded.sync_pending,
-                     sync_send_id = excluded.sync_send_id",
+                     sync_send_id = excluded.sync_send_id,
+                     list_due_at_ms = excluded.list_due_at_ms",
                 rusqlite::params![
                     peer,
                     contact_state_code(contact.state),
@@ -1187,6 +1211,7 @@ impl ChatDb for SqliteChatDb {
                     contact.updated_at_ms,
                     i64::from(contact.sync_pending),
                     contact.sync_send_id,
+                    contact.list_due_at_ms,
                 ],
             ))?;
         }
@@ -1299,6 +1324,20 @@ impl ChatDb for SqliteChatDb {
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
             };
         }
+        if let Some(state) = &pending.pins_due {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('pins_due', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [state],
+            ))?;
+        }
+        if pending.contact_list_followed {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('contact_list_followed', 1) \
+                 ON CONFLICT(key) DO UPDATE SET value = 1",
+                [],
+            ))?;
+        }
         if let Some(cursor) = pending.last_cursor {
             // MAX guards monotonicity: the drain cursor never moves backwards.
             db(tx.execute(
@@ -1388,6 +1427,7 @@ fn contact_row(row: &rusqlite::Row) -> rusqlite::Result<ContactRecord> {
         updated_at_ms: row.get(5)?,
         sync_pending: row.get::<_, i64>(6)? != 0,
         sync_send_id: row.get(7)?,
+        list_due_at_ms: row.get(8)?,
     })
 }
 
