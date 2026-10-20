@@ -91,6 +91,15 @@ pub struct AdminSettingsResponse {
     pub chat_group_link_joins_per_relay_group_per_min: i64,
     /// The same per minute per relay server, across all groups.
     pub chat_group_link_joins_per_relay_per_min: i64,
+    /// The largest group avatar blob this home takes: 8233, 16425, 32809 or
+    /// 41001 bytes.
+    pub chat_group_avatar_max_bytes: i64,
+    /// The most a hosted group's avatars (current and pending) may take:
+    /// at least twice the largest avatar, at most 82002 bytes.
+    pub chat_group_avatar_storage_per_group_bytes: i64,
+    /// How long an avatar upload waits for a change to name it (60 seconds
+    /// to a week).
+    pub chat_group_avatar_pending_seconds: i64,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -483,6 +492,12 @@ pub struct UpdateAdminSettingsRequest {
     pub chat_group_link_joins_per_relay_group_per_min: Option<i64>,
     /// `null` resets to the configured first value.
     pub chat_group_link_joins_per_relay_per_min: Option<i64>,
+    /// `null` resets to the first value (41001).
+    pub chat_group_avatar_max_bytes: Option<i64>,
+    /// `null` resets to the first value (82002).
+    pub chat_group_avatar_storage_per_group_bytes: Option<i64>,
+    /// `null` resets to the first value (86400).
+    pub chat_group_avatar_pending_seconds: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.

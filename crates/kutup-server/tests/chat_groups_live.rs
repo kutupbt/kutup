@@ -15,13 +15,14 @@ use common::*;
 use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group::{
     check_change, check_genesis, encode_group_id, resulting_genesis_state, resulting_state,
-    GroupAccessV1, GroupActionV1, GroupChangeV1, GroupLimits, GroupRole, GroupStateV1,
-    GROUP_FORMAT_VERSION,
+    GroupAccessV1, GroupActionV1, GroupAttribute, GroupChangeV1, GroupLimits, GroupRole,
+    GroupStateV1, GROUP_FORMAT_VERSION,
 };
 use kutup_chat_proto::group_route::{
-    GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
-    GroupLogQueryV1, GroupOperationV1, GroupRequestStateV1, GroupRequestStatusV1, GroupRequestV1,
-    GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1, PSEUDONYM_USED,
+    pad_group_avatar, unpad_group_avatar, GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1,
+    GroupLogEntryV1, GroupLogPageV1, GroupLogQueryV1, GroupOperationV1, GroupRequestStateV1,
+    GroupRequestStatusV1, GroupRequestV1, GroupResponseStatusV1, GroupResponseV1,
+    GroupStateAnswerV1, PSEUDONYM_USED,
 };
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
@@ -1090,8 +1091,9 @@ fn a_requester_cancels_from_its_status_after_a_link_reset() {
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
-/// An administrator's session, which puts the link-join budgets back to
-/// their configured first values when dropped (a failing test too).
+/// An administrator's session, which puts the group settings (the link-join
+/// budgets, the avatar limits) back to their first values when dropped (a
+/// failing test too).
 struct LinkJoinBudgets {
     c: Client,
     base: String,
@@ -1142,6 +1144,9 @@ impl Drop for LinkJoinBudgets {
         let (status, _) = self.put(serde_json::json!({
             "chatGroupLinkJoinsPerRelayGroupPerMin": null,
             "chatGroupLinkJoinsPerRelayPerMin": null,
+            "chatGroupAvatarMaxBytes": null,
+            "chatGroupAvatarStoragePerGroupBytes": null,
+            "chatGroupAvatarPendingSeconds": null,
         }));
         if status != StatusCode::OK && !std::thread::panicking() {
             panic!("the link-join budgets were not reset: {status}");
@@ -1232,6 +1237,323 @@ fn link_joins_are_budgeted_per_relay_server_and_group() {
     );
     accepted(&submit(&c, &alice, &home, &first, &deny, &alice_key));
     drop(budgets);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// A sealed avatar blob of `length` bytes (the home sees only its length
+/// and hash).
+fn avatar_blob(length: usize) -> Vec<u8> {
+    let mut blob = vec![0u8; length];
+    rand::thread_rng().fill_bytes(&mut blob);
+    blob
+}
+
+fn put_avatar(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &Group,
+    key: &GroupKeyPair,
+    body: &[u8],
+) -> GroupResponseV1 {
+    let request = signed(home, &group.id, GroupOperationV1::PutAvatar, body, key);
+    exchange(c, user, home, &request)
+}
+
+fn get_avatar(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &Group,
+    key: &GroupKeyPair,
+) -> GroupResponseV1 {
+    let request = signed(home, &group.id, GroupOperationV1::GetAvatar, b"", key);
+    exchange(c, user, home, &request)
+}
+
+/// The blob a `GetAvatar` answer carries.
+fn avatar_of(answer: &GroupResponseV1) -> Vec<u8> {
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    unpad_group_avatar(&answer.body().unwrap()).unwrap()
+}
+
+fn assert_refused(answer: &GroupResponseV1, code: &str) {
+    assert_eq!(answer.status, GroupResponseStatusV1::Refused, "{answer:?}");
+    assert_eq!(answer.code.as_deref(), Some(code), "{answer:?}");
+}
+
+/// A change setting the avatar to the blob `hash` (or removing it).
+fn set_avatar(group: &Group, key: &GroupKeyPair, hash: Option<[u8; 32]>) -> GroupChangeV1 {
+    let value = hash.map(|_| {
+        b64(&group
+            .master
+            .state_key()
+            .seal(SealedField::Avatar, b"", b"key and type")
+            .unwrap())
+    });
+    author(
+        group,
+        key,
+        vec![GroupActionV1::ModifyAttribute {
+            attribute: GroupAttribute::Avatar,
+            value,
+            avatar_hash: hash.map(|hash| b64(&hash)),
+        }],
+    )
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// A member uploads an avatar, then names it in a change: the home refuses
+/// a change naming a blob it doesn't hold, swaps the named one in, serves
+/// it padded to one size to members and to the link's holders, and keeps at
+/// most the current blob and one pending upload, within its settings.
+#[test]
+fn a_groups_avatar_is_uploaded_named_and_served() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let bob_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Any,
+    );
+    let joins = through_link(&group, &bob_key, &password, false);
+    let joined = accepted(&submit(&c, &bob, &home, &group, &joins, &bob_key));
+    apply(&mut group, &home, &joined);
+
+    // Nothing yet; an upload not padded to the one size is malformed.
+    assert_refused(
+        &get_avatar(&c, &bob, &home, &group, &bob_key),
+        "avatarMissing",
+    );
+    let first = avatar_blob(8_233);
+    assert_refused(
+        &put_avatar(&c, &alice, &home, &group, &alice_key, &first),
+        "malformed",
+    );
+    // A stranger's upload meets an unknown group.
+    let stranger = GroupKeyPair::generate();
+    let body = pad_group_avatar(&first).unwrap();
+    assert_eq!(
+        put_avatar(&c, &bob, &home, &group, &stranger, &body).status,
+        GroupResponseStatusV1::NotFound
+    );
+    let uploaded = put_avatar(&c, &alice, &home, &group, &alice_key, &body);
+    assert_eq!(uploaded.status, GroupResponseStatusV1::Ok, "{uploaded:?}");
+    // Still not the avatar: no change named it.
+    assert_refused(
+        &get_avatar(&c, &bob, &home, &group, &bob_key),
+        "avatarMissing",
+    );
+
+    // A change naming a blob the home doesn't hold is refused.
+    let wrong = set_avatar(&group, &alice_key, Some(sha256(&avatar_blob(8_233))));
+    assert_refused(
+        &submit(&c, &alice, &home, &group, &wrong, &alice_key),
+        "avatarMissing",
+    );
+    let named = set_avatar(&group, &alice_key, Some(sha256(&first)));
+    let named = accepted(&submit(&c, &alice, &home, &group, &named, &alice_key));
+    apply(&mut group, &home, &named);
+    assert_eq!(
+        avatar_of(&get_avatar(&c, &bob, &home, &group, &bob_key)),
+        first
+    );
+
+    // The link's holders see it too (the link's preview), and a wrong
+    // password meets an unknown group.
+    let group_id = group.id;
+    let link_read = |password: &[u8]| {
+        let request = GroupRequestV1::with_link_password(
+            &home.name,
+            &group_id,
+            GroupOperationV1::GetAvatar,
+            now(),
+            &random::<16>(),
+            password,
+        )
+        .unwrap();
+        exchange(&c, &bob, &home, &request)
+    };
+    assert_eq!(avatar_of(&link_read(&password)), first);
+    assert_eq!(
+        link_read(&random::<16>()).status,
+        GroupResponseStatusV1::NotFound
+    );
+
+    // A second upload replaces nothing until named; then the old one goes.
+    let second = avatar_blob(16_425);
+    let uploaded = put_avatar(
+        &c,
+        &bob,
+        &home,
+        &group,
+        &bob_key,
+        &pad_group_avatar(&second).unwrap(),
+    );
+    assert_eq!(uploaded.status, GroupResponseStatusV1::Ok, "{uploaded:?}");
+    assert_eq!(
+        avatar_of(&get_avatar(&c, &bob, &home, &group, &bob_key)),
+        first
+    );
+    let renamed = set_avatar(&group, &bob_key, Some(sha256(&second)));
+    let renamed = accepted(&submit(&c, &bob, &home, &group, &renamed, &bob_key));
+    apply(&mut group, &home, &renamed);
+    assert_eq!(
+        avatar_of(&get_avatar(&c, &alice, &home, &group, &alice_key)),
+        second
+    );
+    // The first blob is gone: naming it again finds nothing.
+    let back = set_avatar(&group, &alice_key, Some(sha256(&first)));
+    assert_refused(
+        &submit(&c, &alice, &home, &group, &back, &alice_key),
+        "avatarMissing",
+    );
+
+    // Only administrators change attributes now: Bob's upload is refused.
+    let mut access = group.state.access;
+    access.attributes = kutup_chat_proto::group::AccessRequired::Administrator;
+    let restrict = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyAccess { access }],
+    );
+    let restricted = accepted(&submit(&c, &alice, &home, &group, &restrict, &alice_key));
+    apply(&mut group, &home, &restricted);
+    assert_refused(
+        &put_avatar(
+            &c,
+            &bob,
+            &home,
+            &group,
+            &bob_key,
+            &pad_group_avatar(&avatar_blob(8_233)).unwrap(),
+        ),
+        "notAllowed",
+    );
+
+    // The home's limits, as its administrators set them. Storage always
+    // holds two of the largest avatar, so a swap fits; it can be full only
+    // when the largest is lowered below the current blob.
+    if let Some(settings) = LinkJoinBudgets::take(&c, &base) {
+        let (status, body) = settings.put(serde_json::json!({ "chatGroupAvatarMaxBytes": 40_000 }));
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let (status, body) = settings.put(serde_json::json!({
+            "chatGroupAvatarMaxBytes": 16_425,
+            "chatGroupAvatarStoragePerGroupBytes": 16_425 + 8_233,
+        }));
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "storage below two avatars: {body}"
+        );
+        let (status, body) = settings.put(serde_json::json!({
+            "chatGroupAvatarMaxBytes": 16_425,
+            "chatGroupAvatarStoragePerGroupBytes": 2 * 16_425,
+        }));
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_refused(
+            &put_avatar(
+                &c,
+                &alice,
+                &home,
+                &group,
+                &alice_key,
+                &pad_group_avatar(&avatar_blob(32_809)).unwrap(),
+            ),
+            "avatarTooLarge",
+        );
+        // The current blob is 16,425 bytes; with the largest lowered to
+        // 8,233 and room for two of those, a new one doesn't fit beside it.
+        let (status, body) = settings.put(serde_json::json!({
+            "chatGroupAvatarMaxBytes": 8_233,
+            "chatGroupAvatarStoragePerGroupBytes": 2 * 8_233,
+        }));
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_refused(
+            &put_avatar(
+                &c,
+                &alice,
+                &home,
+                &group,
+                &alice_key,
+                &pad_group_avatar(&avatar_blob(8_233)).unwrap(),
+            ),
+            "avatarStorageFull",
+        );
+        // An upload no change named within its wait is missing, swept or
+        // not.
+        let (status, body) = settings.put(serde_json::json!({
+            "chatGroupAvatarMaxBytes": null,
+            "chatGroupAvatarStoragePerGroupBytes": null,
+            "chatGroupAvatarPendingSeconds": 60,
+        }));
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let late = avatar_blob(8_233);
+        let uploaded = put_avatar(
+            &c,
+            &alice,
+            &home,
+            &group,
+            &alice_key,
+            &pad_group_avatar(&late).unwrap(),
+        );
+        assert_eq!(uploaded.status, GroupResponseStatusV1::Ok, "{uploaded:?}");
+        std::thread::sleep(std::time::Duration::from_secs(62));
+        let named = set_avatar(&group, &alice_key, Some(sha256(&late)));
+        assert_refused(
+            &submit(&c, &alice, &home, &group, &named, &alice_key),
+            "avatarMissing",
+        );
+        drop(settings);
+    }
+
+    // The link turned off: its holders read nothing, the avatar included.
+    let mut access = group.state.access;
+    access.add_from_invite_link = kutup_chat_proto::group::AccessRequired::Unsatisfiable;
+    let off = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyAccess { access }],
+    );
+    let off = accepted(&submit(&c, &alice, &home, &group, &off, &alice_key));
+    apply(&mut group, &home, &off);
+    assert_eq!(link_read(&password).status, GroupResponseStatusV1::NotFound);
+
+    // Removing the avatar drops its blob.
+    let removed = set_avatar(&group, &alice_key, None);
+    let removed = accepted(&submit(&c, &alice, &home, &group, &removed, &alice_key));
+    apply(&mut group, &home, &removed);
+    assert_refused(
+        &get_avatar(&c, &bob, &home, &group, &bob_key),
+        "avatarMissing",
+    );
+    // A removed member reads nothing: an unknown group.
+    let remove = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::RemoveMember {
+            pseudonym: b64(&bob_key.public_key()),
+        }],
+    );
+    let removed = accepted(&submit(&c, &alice, &home, &group, &remove, &alice_key));
+    apply(&mut group, &home, &removed);
+    assert_eq!(
+        get_avatar(&c, &bob, &home, &group, &bob_key).status,
+        GroupResponseStatusV1::NotFound
+    );
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 

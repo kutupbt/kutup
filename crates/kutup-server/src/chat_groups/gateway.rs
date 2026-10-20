@@ -13,10 +13,10 @@ use kutup_chat_proto::group::{
     GroupLimits, GroupStateV1,
 };
 use kutup_chat_proto::group_route::{
-    GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1, GroupLogQueryV1,
-    GroupNotaryV1, GroupOperationV1, GroupRequestAuthV1, GroupRequestStateV1, GroupRequestStatusV1,
-    GroupRequestV1, GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS,
-    PSEUDONYM_USED,
+    pad_group_avatar, unpad_group_avatar, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1,
+    GroupLogPageV1, GroupLogQueryV1, GroupNotaryV1, GroupOperationV1, GroupRequestAuthV1,
+    GroupRequestStateV1, GroupRequestStatusV1, GroupRequestV1, GroupResponseStatusV1,
+    GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS, PSEUDONYM_USED,
 };
 use kutup_crypto::oblivious::ResponseContext;
 use sha2::{Digest, Sha256};
@@ -33,6 +33,8 @@ use crate::AppState;
 const LOG_PAGE_BYTES: usize = 180 * 1024;
 const MAX_LOG_PAGE_CHANGES: i64 = 256;
 const SEEN_PSEUDONYM_DOMAIN: &[u8] = b"kutup/chat-group/seen-pseudonym/v1\0";
+/// A change or a read naming an avatar blob the home doesn't hold.
+const AVATAR_MISSING: &str = "avatarMissing";
 
 /// What became of a sealed request.
 pub(crate) enum Opened {
@@ -139,9 +141,10 @@ async fn answer_checked(
             }
             pseudonym.clone()
         }
-        // Only join info takes a link's password (the format checks that).
+        // Only join info and the avatar take a link's password (the format
+        // checks that).
         GroupRequestAuthV1::LinkPassword { .. } => {
-            return link_join_info(state, request, &group_id, now).await;
+            return link_request(state, request, &group_id, now).await;
         }
     };
     if !limits::pseudonym(&pseudonym) {
@@ -170,10 +173,10 @@ async fn answer_checked(
         GroupOperationV1::GetRequestStatus => {
             request_status(state, relay, &group_id, &pseudonym, now).await
         }
-        // Calls and avatars come with slices 3 and 4.
-        GroupOperationV1::CallToken | GroupOperationV1::GetAvatar | GroupOperationV1::PutAvatar => {
-            Ok(status(GroupResponseStatusV1::Unavailable, now))
-        }
+        GroupOperationV1::GetAvatar => get_avatar(state, &group_id, &pseudonym, now).await,
+        GroupOperationV1::PutAvatar => put_avatar(state, request, &group_id, &pseudonym, now).await,
+        // Calls come with slice 4.
+        GroupOperationV1::CallToken => Ok(status(GroupResponseStatusV1::Unavailable, now)),
     }
 }
 
@@ -185,10 +188,10 @@ fn member_count(group: &GroupStateV1) -> AppResult<u16> {
     u16::try_from(group.members.len()).map_err(|_| AppError::internal("member count"))
 }
 
-/// Join info for a link's holder: what Signal's `GroupJoinInfo` shows, with
-/// the revision and head to join at. A wrong password, a link that's off and
-/// an unknown group get one answer.
-async fn link_join_info(
+/// A request with the link's password: join info, or the avatar a link
+/// shows. A wrong password, a link that's off and an unknown group get one
+/// answer.
+async fn link_request(
     state: &AppState,
     request: &GroupRequestV1,
     group_id: &[u8; 32],
@@ -216,11 +219,23 @@ async fn link_join_info(
     if !remember_nonce(state, request, now).await? {
         return Ok(status(GroupResponseStatusV1::Replayed, now));
     }
+    match request.operation {
+        GroupOperationV1::GetJoinInfo => link_join_info(&group, &head, now),
+        // The current avatar only, which the link's join info names.
+        GroupOperationV1::GetAvatar => current_avatar(state, &group, group_id, now).await,
+        // The format lets a password authorise nothing else.
+        _ => Ok(GroupResponseV1::refused("malformed", now)),
+    }
+}
+
+/// Join info for a link's holder: what Signal's `GroupJoinInfo` shows, with
+/// the revision and head to join at.
+fn link_join_info(group: &GroupStateV1, head: &[u8; 32], now: i64) -> AppResult<GroupResponseV1> {
     join_info_answer(
         &GroupJoinInfoV1 {
             revision: group.revision,
             head: STANDARD.encode(head),
-            member_count: member_count(&group)?,
+            member_count: member_count(group)?,
             title: group.attributes.title.clone(),
             description: group.attributes.description.clone(),
             avatar: group.attributes.avatar.clone(),
@@ -230,6 +245,229 @@ async fn link_join_info(
         },
         now,
     )
+}
+
+/// The group's current avatar blob, padded to one size, or `avatarMissing`
+/// when it has none.
+async fn current_avatar(
+    state: &AppState,
+    group: &GroupStateV1,
+    group_id: &[u8; 32],
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    let Some(hash) = group
+        .attributes
+        .avatar_hash
+        .as_deref()
+        .and_then(decode_exact::<32>)
+    else {
+        return Ok(GroupResponseV1::refused(AVATAR_MISSING, now));
+    };
+    let blob: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT blob FROM chat_group_avatars
+         WHERE group_id = $1 AND hash = $2 AND expires_at IS NULL",
+    )
+    .bind(&group_id[..])
+    .bind(&hash[..])
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(blob) = blob else {
+        return Ok(GroupResponseV1::refused(AVATAR_MISSING, now));
+    };
+    Ok(ok(
+        now,
+        pad_group_avatar(&blob).map_err(AppError::internal)?,
+    ))
+}
+
+/// The avatar, to a member.
+async fn get_avatar(
+    state: &AppState,
+    group_id: &[u8; 32],
+    pseudonym: &str,
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    let Some((group, _)) = load_state(&state.pool, group_id, false).await? else {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    };
+    if group.member(pseudonym).is_none() {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
+    current_avatar(state, &group, group_id, now).await
+}
+
+/// A member's avatar upload, authorised as the avatar change is (a member
+/// that `access.attributes` lets change it), checked against the state as it
+/// arrives. It becomes the group's one pending upload, in place of any
+/// earlier one, until a change names its hash or 24 hours pass. The home
+/// counts it against its own limits (the largest blob, the storage per
+/// group), never an account's pool: it doesn't know who uploaded.
+async fn put_avatar(
+    state: &AppState,
+    request: &GroupRequestV1,
+    group_id: &[u8; 32],
+    pseudonym: &str,
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    let Some(blob) = request
+        .body()
+        .ok()
+        .and_then(|body| unpad_group_avatar(&body).ok())
+    else {
+        return Ok(GroupResponseV1::refused("malformed", now));
+    };
+    let limits = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+    let (largest, storage) = (limits.max_bytes, limits.storage_bytes);
+    let mut tx = state.pool.begin().await?;
+    // Locked, so an upload and a change naming it don't cross.
+    let Some((group, _)) = load_state(&mut *tx, group_id, true).await? else {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    };
+    if group.member(pseudonym).is_none() {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
+    if !group.may_modify_attributes(pseudonym) {
+        return Ok(GroupResponseV1::refused(
+            GroupChangeError::NotAllowed.code(),
+            now,
+        ));
+    }
+    let size = i64::try_from(blob.len()).map_err(|_| AppError::internal("avatar size"))?;
+    if size > largest {
+        return Ok(GroupResponseV1::refused("avatarTooLarge", now));
+    }
+    let hash: [u8; 32] = Sha256::digest(&blob).into();
+    let current: Option<(Vec<u8>, i32)> = sqlx::query_as(
+        "SELECT hash, octet_length(blob) FROM chat_group_avatars
+         WHERE group_id = $1 AND expires_at IS NULL",
+    )
+    .bind(&group_id[..])
+    .fetch_optional(&mut *tx)
+    .await?;
+    // The current blob again: nothing to store.
+    if current
+        .as_ref()
+        .is_some_and(|(current, _)| current[..] == hash[..])
+    {
+        return Ok(ok(now, Vec::new()));
+    }
+    let current_size = current.map_or(0, |(_, size)| i64::from(size));
+    if current_size + size > storage {
+        return Ok(GroupResponseV1::refused("avatarStorageFull", now));
+    }
+    // Charged only for an upload that holds, as a change is.
+    if !limits::change(pseudonym, group_id) {
+        return Ok(status(GroupResponseStatusV1::RateLimited, now));
+    }
+    let expires_at =
+        OffsetDateTime::from_unix_timestamp(now.saturating_add(limits.pending_seconds))
+            .map_err(|_| AppError::internal("avatar expiry"))?;
+    sqlx::query("DELETE FROM chat_group_avatars WHERE group_id = $1 AND expires_at IS NOT NULL")
+        .bind(&group_id[..])
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO chat_group_avatars (group_id, hash, blob, expires_at)
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&group_id[..])
+    .bind(&hash[..])
+    .bind(&blob)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(ok(now, Vec::new()))
+}
+
+/// The avatar blob `next` names, when it differs from `current`'s:
+/// `Some(Some(hash))` for a new one, `Some(None)` when it was removed.
+fn avatar_change(
+    current: &GroupStateV1,
+    next: &GroupStateV1,
+) -> AppResult<Option<Option<[u8; 32]>>> {
+    if current.attributes.avatar_hash == next.attributes.avatar_hash {
+        return Ok(None);
+    }
+    next.attributes
+        .avatar_hash
+        .as_deref()
+        .map(|hash| decode_exact::<32>(hash).ok_or_else(|| AppError::internal("avatar hash")))
+        .transpose()
+        .map(Some)
+}
+
+/// Whether the group holds the blob `hash`: current, or pending and not yet
+/// expired. Locked for the change's transaction, so the sweep can't take it
+/// between this check and the swap.
+async fn has_avatar(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: &[u8; 32],
+    hash: &[u8; 32],
+) -> AppResult<bool> {
+    let found: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM chat_group_avatars
+          WHERE group_id = $1 AND hash = $2 AND (expires_at IS NULL OR expires_at > now())
+          FOR UPDATE",
+    )
+    .bind(&group_id[..])
+    .bind(&hash[..])
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// Once a change naming a new avatar is accepted: its blob becomes the
+/// current one and every other goes at once. A removed avatar's blob goes;
+/// a pending upload waits out its day.
+async fn swap_avatar(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: &[u8; 32],
+    avatar: Option<[u8; 32]>,
+) -> AppResult<()> {
+    match avatar {
+        Some(hash) => {
+            sqlx::query("DELETE FROM chat_group_avatars WHERE group_id = $1 AND hash <> $2")
+                .bind(&group_id[..])
+                .bind(&hash[..])
+                .execute(&mut **tx)
+                .await?;
+            let made_current = sqlx::query(
+                "UPDATE chat_group_avatars SET expires_at = NULL
+                 WHERE group_id = $1 AND hash = $2",
+            )
+            .bind(&group_id[..])
+            .bind(&hash[..])
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+            // The blob was locked by `has_avatar`; never commit a state
+            // naming a blob the home doesn't hold.
+            if made_current != 1 {
+                return Err(AppError::internal("the named avatar blob is gone"));
+            }
+        }
+        None => {
+            sqlx::query(
+                "DELETE FROM chat_group_avatars WHERE group_id = $1 AND expires_at IS NULL",
+            )
+            .bind(&group_id[..])
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Drops avatar uploads no change named within their day (the maintenance
+/// loop calls this).
+pub(crate) async fn sweep_avatars(pool: &sqlx::PgPool) -> AppResult<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM chat_group_avatars WHERE expires_at IS NOT NULL AND expires_at < now()",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected())
 }
 
 /// Join info for an invitee about to claim its slot: the revision and head
@@ -415,6 +653,10 @@ async fn create(
         Ok(genesis) => genesis,
         Err(error) => return Ok(refused(&error, now)),
     };
+    // An avatar is uploaded to a group that exists: a genesis can't name one.
+    if genesis.attributes.avatar_hash.is_some() {
+        return Ok(GroupResponseV1::refused(AVATAR_MISSING, now));
+    }
     // New groups are limited per relaying server, and in all.
     if !limits::create(relay) {
         return Ok(status(GroupResponseStatusV1::RateLimited, now));
@@ -842,6 +1084,13 @@ async fn submit(
         Ok(next) => next,
         Err(error) => return Ok(refused(&error, now)),
     };
+    // A change naming an avatar must find its blob, pending or current.
+    let avatar = avatar_change(&current, &next)?;
+    if let Some(Some(hash)) = &avatar {
+        if !has_avatar(&mut tx, group_id, hash).await? {
+            return Ok(GroupResponseV1::refused(AVATAR_MISSING, now));
+        }
+    }
     // A newcomer under a pseudonym the group has had before would let the
     // members link the two memberships; its signer is told so, and only
     // now, with its claim or link proof and the change itself accepted.
@@ -885,6 +1134,9 @@ async fn submit(
     .await?;
     prune_log(&mut tx, group_id, &next).await?;
     remember_newcomers(&mut tx, group_id, &next).await?;
+    if let Some(avatar) = avatar {
+        swap_avatar(&mut tx, group_id, avatar).await?;
+    }
     tx.commit().await?;
     // The change with its notary: a member applies it to the state it has;
     // a newcomer whose request awaits approval learns nothing more.
