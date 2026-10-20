@@ -7,7 +7,6 @@ import {
   generateMailAddressKey,
   importMailAddressKey,
   MAIL_KEY_FLAGS,
-  signMailKeyList,
   toBase64,
   verifyMailKeyList,
   type GeneratedMailAddressKey,
@@ -15,6 +14,7 @@ import {
   type SignedMailKeyList,
 } from '@kutup/crypto'
 import { addFirstAddressKey } from '@kutup/mail-core/addressKey'
+import { nextKeyList, signedEntries, signedEntry } from '@kutup/mail-core/keyList'
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 
@@ -97,24 +97,10 @@ export function useEnsureMailKeys() {
 }
 
 // --- Changing keys (docs/plans/mail.md, C3e) --------------------------------
-
-/** The next key list after the address's current one, with `keys`, signed by this account. */
-async function nextList(session: Session, address: CheckedMailAddress, keys: MailKeyEntry[]) {
-  const current = address.verifiedList
-  if (!current) throw new Error('the current key list is not signed by this account')
-  return signMailKeyList(toBase64(session.masterKey), {
-    address: current.address,
-    sequence: current.sequence + 1,
-    previousHash: current.hash,
-    issuedAt: new Date().toISOString(),
-    // Strictly by fingerprint (lowercase hex sorts as the bytes do).
-    keys: [...keys].sort((a, b) => (a.fingerprint < b.fingerprint ? -1 : 1)),
-  })
-}
-
-function entries(address: CheckedMailAddress): MailKeyEntry[] {
-  return address.keys.map((key) => ({ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: key.primary, flags: key.flags }))
-}
+//
+// Every change starts from the key list this account signed
+// (`signedEntries`), never from the server's rows: a key, primary or flag the
+// server lists on its own is never signed into the next list.
 
 /** What a key list change does to one key. */
 export type KeyChange =
@@ -122,8 +108,9 @@ export type KeyChange =
   | { kind: 'obsolete'; on: boolean }
   | { kind: 'compromised'; on: boolean }
 
-/** The keys after `change` to the key `fingerprint`. */
+/** The keys after `change` to the key `fingerprint`, which must be one of them. */
 export function changedEntries(keys: MailKeyEntry[], fingerprint: string, change: KeyChange): MailKeyEntry[] {
+  if (!keys.some((key) => key.fingerprint === fingerprint)) throw new KeyNotInList()
   return keys.map((key) => {
     if (change.kind === 'makePrimary') return { ...key, primary: key.fingerprint === fingerprint }
     if (key.fingerprint !== fingerprint) return key
@@ -148,18 +135,23 @@ function useKeyMutation<T>(fn: (input: T, session: Session) => Promise<unknown>)
 /** Makes a key primary, or marks it obsolete or compromised (or not), in a new key list. */
 export function useChangeKey() {
   return useKeyMutation(async (input: { address: CheckedMailAddress; fingerprint: string; change: KeyChange }, session) => {
-    const list = await nextList(session, input.address, changedEntries(entries(input.address), input.fingerprint, input.change))
+    const list = await nextKeyList(session, input.address, changedEntries(signedEntries(input.address), input.fingerprint, input.change))
     await api.put(`/mail/addresses/${input.address.id}/key-list`, { keyList: { data: list.data, signature: list.signature } })
   })
 }
 
-/** Adds a key (new, or imported), primary when asked; the other keys stay to open older mail. */
-async function addKey(session: Session, address: CheckedMailAddress, key: GeneratedMailAddressKey, primary: boolean) {
-  const keys = [
-    ...entries(address).map((entry) => (primary ? { ...entry, primary: false } : entry)),
+/** The signed keys with `key` added, primary when asked; the others stay to open older mail. */
+export function entriesWithKey(signed: MailKeyEntry[], key: Pick<GeneratedMailAddressKey, 'fingerprint' | 'sha256Fingerprint'>, primary: boolean): MailKeyEntry[] {
+  if (signed.some((entry) => entry.fingerprint === key.fingerprint)) throw new KeyAlreadyThere()
+  return [
+    ...signed.map((entry) => (primary ? { ...entry, primary: false } : entry)),
     { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary, flags: DEFAULT_MAIL_KEY_FLAGS },
   ]
-  const list = await nextList(session, address, keys)
+}
+
+/** Adds a key (new, or imported), primary when asked. */
+async function addKey(session: Session, address: CheckedMailAddress, key: GeneratedMailAddressKey, primary: boolean) {
+  const list = await nextKeyList(session, address, entriesWithKey(signedEntries(address), key, primary))
   await api.post(`/mail/addresses/${address.id}/keys`, {
     publicKey: key.publicKey,
     privateKeyEnvelope: key.envelope,
@@ -182,6 +174,23 @@ export function useImportKey() {
     if (input.address.keys.some((k) => k.fingerprint === key.fingerprint)) throw new KeyAlreadyThere()
     await addKey(session, input.address, key, input.primary)
   })
+}
+
+/** The key isn't in the address's signed key list: the server listed it on its own. */
+export class KeyNotInList extends Error {
+  constructor() {
+    super('this key is not in the key list this account signed')
+  }
+}
+
+/**
+ * A key as this account's signed list has it: its primary and flags are the
+ * list's, never the server's. Null when the list doesn't have it.
+ */
+export function asSigned(address: CheckedMailAddress, key: MailKey): MailKey | null {
+  const entry = signedEntry(address, key.fingerprint)
+  if (!entry || entry.sha256Fingerprint !== key.sha256Fingerprint) return null
+  return { ...key, primary: entry.primary, flags: entry.flags }
 }
 
 /** The imported key is one of the address's keys already. */

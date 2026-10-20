@@ -599,8 +599,8 @@ to see members").**
   proof of the link password instead of a member signature. They are limited
   per group and per relay server, so a link holder can't flood the group.
 - **A pseudonym comes back only once.** The home keeps a hash of every
-  pseudonym that was ever a member of the group (the log is pruned and the
-  state forgets who left, so neither can answer it). A claim, a join from the
+  pseudonym the group has seen, as a member or a requester (the log is
+  pruned and the state forgets who left, so neither can answer it). A claim, a join from the
   link or a request to join whose pseudonym is among them is refused with
   `pseudonymUsed` (`group_route::PSEUDONYM_USED`), so the members never see a
   pseudonym they knew come back after a device lost its join epoch.

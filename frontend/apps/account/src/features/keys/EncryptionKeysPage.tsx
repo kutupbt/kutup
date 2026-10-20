@@ -16,7 +16,7 @@ import { Skeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { ExportKeyDialog, ImportKeyDialog, NewKeyDialog } from './KeyDialogs'
-import { createMailKeyMutation, useChangeKey, useMailAddresses, type CheckedMailAddress, type KeyChange, type MailKey } from './mailKeys'
+import { asSigned, createMailKeyMutation, useChangeKey, useMailAddresses, type CheckedMailAddress, type KeyChange, type MailKey } from './mailKeys'
 
 /**
  * Your email addresses and their encryption keys, as Proton's Settings →
@@ -84,7 +84,7 @@ function AddressKeys({ address, creating, failed }: { address: CheckedMailAddres
           <Card>
             <CardContent className="divide-y divide-border p-0">
               {address.keys.map((key) => (
-                <KeyRow key={key.id} address={address} mailKey={key} />
+                <KeyRow key={key.id} address={address} listed={key} />
               ))}
             </CardContent>
           </Card>
@@ -113,13 +113,21 @@ function fingerprintGroups(fingerprint: string): string[] {
   return fingerprint.toUpperCase().match(/.{1,4}/g) ?? [fingerprint]
 }
 
-function KeyRow({ address: owner, mailKey }: { address: CheckedMailAddress; mailKey: MailKey }) {
+/**
+ * One key. With a signed list, its primary and flags are the list's; a key
+ * the server lists but the list lacks is shown as such, and can't be changed
+ * (a change would sign it into the next list).
+ */
+function KeyRow({ address: owner, listed }: { address: CheckedMailAddress; listed: MailKey }) {
   const { t, i18n } = useTranslation()
   const address = owner.address
   const [busy, setBusy] = useState(false)
   const [dialog, setDialog] = useState<'export' | 'compromised' | null>(null)
   const change = useChangeKey()
-  const signed = owner.verifiedList !== null
+  const inList = owner.verifiedList ? asSigned(owner, listed) : null
+  const mailKey = inList ?? listed
+  const unlisted = owner.verifiedList !== null && inList === null
+  const signed = inList !== null
   const apply = (keyChange: KeyChange, done: string) =>
     change.mutate(
       { address: owner, fingerprint: mailKey.fingerprint, change: keyChange },
@@ -158,7 +166,13 @@ function KeyRow({ address: owner, mailKey }: { address: CheckedMailAddress; mail
     <div className="space-y-3 p-5" data-fingerprint={mailKey.fingerprint}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium">{t('settings.keys.algorithm')}</span>
-        {mailKey.primary ? <Badge>{t('settings.keys.primary')}</Badge> : null}
+        {unlisted ? (
+          <Badge variant="danger" data-testid="mail-key-unlisted">
+            {t('settings.keys.notInList')}
+          </Badge>
+        ) : mailKey.primary ? (
+          <Badge>{t('settings.keys.primary')}</Badge>
+        ) : null}
         {canEncrypt ? null : <Badge variant="neutral">{t('settings.keys.obsolete')}</Badge>}
         {canVerify ? null : <Badge variant="neutral">{t('settings.keys.compromised')}</Badge>}
       </div>
@@ -220,6 +234,7 @@ function KeyRow({ address: owner, mailKey }: { address: CheckedMailAddress; mail
           </DropdownMenu>
         </div>
       </div>
+      {unlisted ? <p className="text-sm text-destructive">{t('settings.keys.notInListHint')}</p> : null}
       {dialog === 'export' ? <ExportKeyDialog address={address} mailKey={mailKey} onClose={() => setDialog(null)} /> : null}
       <ConfirmDestructive
         open={dialog === 'compromised'}

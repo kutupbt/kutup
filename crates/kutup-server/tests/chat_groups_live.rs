@@ -714,6 +714,55 @@ fn removed_members_and_strangers_learn_nothing() {
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
+/// Turns the group's link on with a fresh password, for anyone
+/// (`AccessRequired::Any`) or by request (`Administrator`).
+fn link_on(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &mut Group,
+    admin: &GroupKeyPair,
+    required: kutup_chat_proto::group::AccessRequired,
+) -> [u8; 16] {
+    let password = random::<16>();
+    let mut access = group.state.access;
+    access.add_from_invite_link = required;
+    let link = author(
+        group,
+        admin,
+        vec![
+            GroupActionV1::ModifyInviteLink {
+                password: Some(b64(&password)),
+            },
+            GroupActionV1::ModifyAccess { access },
+        ],
+    );
+    let linked = accepted(&submit(c, user, home, group, &link, admin));
+    apply(group, home, &linked);
+    password
+}
+
+/// A newcomer's change through the link: a join or a request.
+fn through_link(
+    group: &Group,
+    key: &GroupKeyPair,
+    password: &[u8; 16],
+    request: bool,
+) -> GroupChangeV1 {
+    let (password, entry) = (b64(password), entry(&group.master, &key.public_key()));
+    let action = if request {
+        GroupActionV1::RequestToJoin { password, entry }
+    } else {
+        GroupActionV1::JoinFromLink { password, entry }
+    };
+    author(group, key, vec![action])
+}
+
+fn assert_used(answer: &GroupResponseV1) {
+    assert_eq!(answer.status, GroupResponseStatusV1::Refused, "{answer:?}");
+    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED), "{answer:?}");
+}
+
 #[test]
 fn a_former_members_pseudonym_never_joins_again() {
     let Some(base) = live() else { return };
@@ -745,36 +794,19 @@ fn a_former_members_pseudonym_never_joins_again() {
     );
     // With the slot's own signature, his old pseudonym is refused as used.
     let again = claim(&group, &slot_id, &claim_key, &bob_key);
-    let answer = submit(&c, &bob, &home, &group, &again, &bob_key);
-    assert_eq!(answer.status, GroupResponseStatusV1::Refused, "{answer:?}");
-    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED));
+    assert_used(&submit(&c, &bob, &home, &group, &again, &bob_key));
 
     // The link refuses it the same way once its password holds.
-    let password = random::<16>();
-    let mut access = group.state.access;
-    access.add_from_invite_link = kutup_chat_proto::group::AccessRequired::Any;
-    let link = author(
-        &group,
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
         &alice_key,
-        vec![
-            GroupActionV1::ModifyInviteLink {
-                password: Some(b64(&password)),
-            },
-            GroupActionV1::ModifyAccess { access },
-        ],
+        kutup_chat_proto::group::AccessRequired::Any,
     );
-    let linked = accepted(&submit(&c, &alice, &home, &group, &link, &alice_key));
-    apply(&mut group, &home, &linked);
-    let from_link = author(
-        &group,
-        &bob_key,
-        vec![GroupActionV1::JoinFromLink {
-            password: b64(&password),
-            entry: entry(&group.master, &bob_key.public_key()),
-        }],
-    );
-    let answer = submit(&c, &bob, &home, &group, &from_link, &bob_key);
-    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED), "{answer:?}");
+    let from_link = through_link(&group, &bob_key, &password, false);
+    assert_used(&submit(&c, &bob, &home, &group, &from_link, &bob_key));
 
     // The next epoch's pseudonym claims the same slot, which is still open.
     let bob_next = GroupKeyPair::generate();
@@ -782,14 +814,37 @@ fn a_former_members_pseudonym_never_joins_again() {
     let claimed = accepted(&submit(&c, &bob, &home, &group, &next, &bob_next));
     apply(&mut group, &home, &claimed);
     assert!(group.state.member(&b64(&bob_next.public_key())).is_some());
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
 
-    // The creator's pseudonym counts from genesis on: after leaving, it
-    // can't come back through the link either.
+/// The creator is recorded by the genesis alone: no later change records a
+/// member who didn't join at it.
+#[test]
+fn the_creators_pseudonym_counts_from_genesis_on() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let bob_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Any,
+    );
+    let joins = through_link(&group, &bob_key, &password, false);
+    let joined = accepted(&submit(&c, &bob, &home, &group, &joins, &bob_key));
+    apply(&mut group, &home, &joined);
     let promote = author(
         &group,
         &alice_key,
         vec![GroupActionV1::ModifyRole {
-            pseudonym: b64(&bob_next.public_key()),
+            pseudonym: b64(&bob_key.public_key()),
             role: GroupRole::Administrator,
         }],
     );
@@ -798,16 +853,70 @@ fn a_former_members_pseudonym_never_joins_again() {
     let leave = author(&group, &alice_key, vec![GroupActionV1::Leave]);
     let left = accepted(&submit(&c, &alice, &home, &group, &leave, &alice_key));
     apply(&mut group, &home, &left);
-    let back = author(
+
+    let back = through_link(&group, &alice_key, &password, false);
+    assert_used(&submit(&c, &alice, &home, &group, &back, &alice_key));
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// A requester counts as seen, and so does a member an administrator
+/// approved: neither comes back under the same pseudonym.
+#[test]
+fn requesters_and_approved_members_count_as_seen() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    let password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut group,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+
+    // A request, cancelled, then made again under the same pseudonym.
+    let carol_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &carol_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &carol_key));
+    apply(&mut group, &home, &asked);
+    let cancel = author(&group, &carol_key, vec![GroupActionV1::CancelRequest]);
+    let cancelled = accepted(&submit(&c, &bob, &home, &group, &cancel, &carol_key));
+    apply(&mut group, &home, &cancelled);
+    let again = through_link(&group, &carol_key, &password, true);
+    assert_used(&submit(&c, &bob, &home, &group, &again, &carol_key));
+
+    // A request approved, the member removed, then a claim under it.
+    let dave_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &dave_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &dave_key));
+    apply(&mut group, &home, &asked);
+    let approve = author(
         &group,
         &alice_key,
-        vec![GroupActionV1::JoinFromLink {
-            password: b64(&password),
-            entry: entry(&group.master, &alice_key.public_key()),
+        vec![GroupActionV1::ApproveRequest {
+            pseudonym: b64(&dave_key.public_key()),
         }],
     );
-    let answer = submit(&c, &alice, &home, &group, &back, &alice_key);
-    assert_eq!(answer.code.as_deref(), Some(PSEUDONYM_USED), "{answer:?}");
+    let approved = accepted(&submit(&c, &alice, &home, &group, &approve, &alice_key));
+    apply(&mut group, &home, &approved);
+    assert!(group.state.member(&b64(&dave_key.public_key())).is_some());
+    let remove = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::RemoveMember {
+            pseudonym: b64(&dave_key.public_key()),
+        }],
+    );
+    let removed = accepted(&submit(&c, &alice, &home, &group, &remove, &alice_key));
+    apply(&mut group, &home, &removed);
+    let (slot_id, claim_key) = add_slot(&c, &alice, &home, &mut group, &alice_key);
+    let reclaim = claim(&group, &slot_id, &claim_key, &dave_key);
+    assert_used(&submit(&c, &bob, &home, &group, &reclaim, &dave_key));
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
