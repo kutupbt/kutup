@@ -1955,7 +1955,10 @@ impl WasmChatClient {
 
     /// The group's picture, checked against the hash its state names.
     #[wasm_bindgen(js_name = groupAvatar)]
-    pub async fn group_avatar(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
+    pub async fn group_avatar(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
         let fetched = self
             .engine
             .group_avatar(&group_id)
