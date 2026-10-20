@@ -148,37 +148,57 @@ pub async fn chat_group_link_joins(pool: &PgPool) -> Result<(i64, i64), sqlx::Er
 }
 
 /// Group avatars on this home (docs/plans/pairwise-groups.md, "Avatar"):
-/// the largest blob it takes (one of the avatar lengths) and the most its
-/// avatars may take per group (the current blob and a pending upload), set
-/// under Administration → Server settings.
+/// the largest blob it takes (one of the avatar lengths), the most its
+/// avatars may take per group (the current blob and a pending upload), and
+/// how long an upload waits for a change to name it, set under
+/// Administration → Server settings.
 pub const CHAT_GROUP_AVATAR_MAX_BYTES: &str = "chat_group_avatar_max_bytes";
 pub const CHAT_GROUP_AVATAR_STORAGE_BYTES: &str = "chat_group_avatar_storage_per_group_bytes";
-/// The first values: the largest blob, and room for two of them.
-pub const DEFAULT_CHAT_GROUP_AVATAR_MAX_BYTES: i64 = 41_001;
-pub const DEFAULT_CHAT_GROUP_AVATAR_STORAGE_BYTES: i64 = 2 * 41_001;
-pub const MAX_CHAT_GROUP_AVATAR_STORAGE_BYTES: i64 = 10_000_000;
+pub const CHAT_GROUP_AVATAR_PENDING_SECONDS: &str = "chat_group_avatar_pending_seconds";
 
-pub fn validate_chat_group_avatar_max_bytes(value: i64) -> Result<i64, &'static str> {
-    if usize::try_from(value).is_ok_and(|value| {
-        kutup_chat_proto::group_route::GROUP_AVATAR_BLOB_LENGTHS.contains(&value)
-    }) {
-        Ok(value)
-    } else {
-        Err("the largest group avatar is 8233, 16425, 32809 or 41001 bytes")
+/// A home's avatar limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvatarLimits {
+    pub max_bytes: i64,
+    pub storage_bytes: i64,
+    pub pending_seconds: i64,
+}
+
+impl AvatarLimits {
+    /// The first values: the largest blob, room for two of them (so a
+    /// group can always swap its avatar), a day.
+    pub const DEFAULT: AvatarLimits = AvatarLimits {
+        max_bytes: 41_001,
+        storage_bytes: 2 * 41_001,
+        pending_seconds: 24 * 3600,
+    };
+    /// The most storage a group's avatars may be given: two of the largest.
+    pub const MAX_STORAGE_BYTES: i64 = 2 * 41_001;
+
+    /// Checks the three together: the largest blob one of the avatar
+    /// lengths, the storage room for two of them (a swap needs the old and
+    /// the new) and at most two of the largest, the wait a minute to a week.
+    pub fn validate(self) -> Result<Self, &'static str> {
+        let lengths = kutup_chat_proto::group_route::GROUP_AVATAR_BLOB_LENGTHS;
+        if !usize::try_from(self.max_bytes).is_ok_and(|value| lengths.contains(&value)) {
+            return Err("the largest group avatar is 8233, 16425, 32809 or 41001 bytes");
+        }
+        if !(2 * self.max_bytes..=Self::MAX_STORAGE_BYTES).contains(&self.storage_bytes) {
+            return Err(
+                "group avatar storage is at least twice the largest avatar and at most 82002 bytes",
+            );
+        }
+        if !(60..=7 * 24 * 3600).contains(&self.pending_seconds) {
+            return Err("an avatar upload waits 60 seconds to a week");
+        }
+        Ok(self)
     }
 }
 
-pub fn validate_chat_group_avatar_storage_bytes(value: i64) -> Result<i64, &'static str> {
-    if (8_233..=MAX_CHAT_GROUP_AVATAR_STORAGE_BYTES).contains(&value) {
-        Ok(value)
-    } else {
-        Err("group avatar storage is 8233 to 10000000 bytes a group")
-    }
-}
-
-/// The avatar limits now, `(largest blob, storage per group)`: the stored
-/// ones, else the first values. Read on every upload.
-pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<(i64, i64), sqlx::Error> {
+/// The avatar limits now: the stored ones, else the first values; a stored
+/// set that doesn't hold together (checked when stored) gives the first
+/// values. Read on every upload and change.
+pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<AvatarLimits, sqlx::Error> {
     let read = |key: &'static str| async move {
         sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
             .bind(key)
@@ -186,15 +206,19 @@ pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<(i64, i64), sqlx:
             .await
             .map(|value| value.and_then(|value| value.parse::<i64>().ok()))
     };
-    let largest = read(CHAT_GROUP_AVATAR_MAX_BYTES)
-        .await?
-        .and_then(|value| validate_chat_group_avatar_max_bytes(value).ok())
-        .unwrap_or(DEFAULT_CHAT_GROUP_AVATAR_MAX_BYTES);
-    let storage = read(CHAT_GROUP_AVATAR_STORAGE_BYTES)
-        .await?
-        .and_then(|value| validate_chat_group_avatar_storage_bytes(value).ok())
-        .unwrap_or(DEFAULT_CHAT_GROUP_AVATAR_STORAGE_BYTES);
-    Ok((largest, storage))
+    let default = AvatarLimits::DEFAULT;
+    let limits = AvatarLimits {
+        max_bytes: read(CHAT_GROUP_AVATAR_MAX_BYTES)
+            .await?
+            .unwrap_or(default.max_bytes),
+        storage_bytes: read(CHAT_GROUP_AVATAR_STORAGE_BYTES)
+            .await?
+            .unwrap_or(default.storage_bytes),
+        pending_seconds: read(CHAT_GROUP_AVATAR_PENDING_SECONDS)
+            .await?
+            .unwrap_or(default.pending_seconds),
+    };
+    Ok(limits.validate().unwrap_or(default))
 }
 
 #[cfg(test)]
@@ -211,21 +235,36 @@ mod tests {
     }
 
     #[test]
-    fn group_avatar_limits_are_avatar_lengths_and_bounded() {
+    fn group_avatar_limits_hold_together() {
+        let ok = AvatarLimits::DEFAULT;
+        assert_eq!(ok.validate(), Ok(ok));
         for length in [8_233, 16_425, 32_809, 41_001] {
-            assert_eq!(validate_chat_group_avatar_max_bytes(length), Ok(length));
+            let limits = AvatarLimits {
+                max_bytes: length,
+                storage_bytes: 2 * length,
+                ..ok
+            };
+            assert_eq!(limits.validate(), Ok(limits));
         }
-        assert!(validate_chat_group_avatar_max_bytes(40_000).is_err());
-        assert!(validate_chat_group_avatar_max_bytes(0).is_err());
-        assert_eq!(
-            validate_chat_group_avatar_storage_bytes(DEFAULT_CHAT_GROUP_AVATAR_STORAGE_BYTES),
-            Ok(82_002)
-        );
-        assert!(validate_chat_group_avatar_storage_bytes(8_232).is_err());
-        assert!(
-            validate_chat_group_avatar_storage_bytes(MAX_CHAT_GROUP_AVATAR_STORAGE_BYTES + 1)
-                .is_err()
-        );
+        let bad = |change: fn(&mut AvatarLimits)| {
+            let mut limits = ok;
+            change(&mut limits);
+            limits.validate().is_err()
+        };
+        assert!(bad(|l| l.max_bytes = 40_000));
+        // Room for a swap: twice the largest.
+        assert!(bad(|l| l.storage_bytes = 41_001 + 8_233));
+        assert!(bad(
+            |l| l.storage_bytes = AvatarLimits::MAX_STORAGE_BYTES + 1
+        ));
+        assert!(bad(|l| l.pending_seconds = 59));
+        assert!(bad(|l| l.pending_seconds = 7 * 24 * 3600 + 1));
+        let small = AvatarLimits {
+            max_bytes: 8_233,
+            storage_bytes: 16_466,
+            pending_seconds: 60,
+        };
+        assert_eq!(small.validate(), Ok(small));
     }
 
     #[test]

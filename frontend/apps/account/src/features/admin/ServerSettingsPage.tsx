@@ -24,9 +24,14 @@ const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
 const MAX_RETENTION_DAYS = 3650
 /** The server's bounds (site_settings::validate_chat_group_link_joins_per_relay). */
 const MAX_LINK_JOINS = 1_000_000
-/** The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and storage bounds. */
+/**
+ * The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and the
+ * server's bounds (site_settings::AvatarLimits): storage holds two of the
+ * largest avatar (a swap needs the old and the new), at most two of 41001.
+ */
 const AVATAR_LENGTHS = [8233, 16425, 32809, 41001] as const
-const MAX_AVATAR_STORAGE = 10_000_000
+const MAX_AVATAR_STORAGE = 2 * 41001
+const AVATAR_PENDING_SECONDS = { min: 60, max: 7 * 24 * 3600 } as const
 
 export function ServerSettingsPage() {
   const { t } = useTranslation()
@@ -43,8 +48,9 @@ export function ServerSettingsPage() {
     linkJoinsGroup: linkJoins,
     linkJoinsRelay: linkJoins,
     avatarMax: z.coerce.number<number>().refine((value) => (AVATAR_LENGTHS as readonly number[]).includes(value), t('admin.settings.groupAvatarMaxRange')),
-    avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).min(AVATAR_LENGTHS[0], t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
-  })
+    avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
+    avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
+  }).refine((v) => v.avatarStorage >= 2 * v.avatarMax, { path: ['avatarStorage'], message: t('admin.settings.groupAvatarStorageRange') })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
   })
@@ -59,6 +65,7 @@ export function ServerSettingsPage() {
       linkJoinsRelay: settings.data.chatGroupLinkJoinsPerRelayPerMin,
       avatarMax: settings.data.chatGroupAvatarMaxBytes,
       avatarStorage: settings.data.chatGroupAvatarStoragePerGroupBytes,
+      avatarPending: settings.data.chatGroupAvatarPendingSeconds,
     })
   }, [settings.data, reset])
 
@@ -78,6 +85,7 @@ export function ServerSettingsPage() {
         chatGroupLinkJoinsPerRelayPerMin: v.linkJoinsRelay,
         chatGroupAvatarMaxBytes: v.avatarMax,
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
+        chatGroupAvatarPendingSeconds: v.avatarPending,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -145,7 +153,10 @@ export function ServerSettingsPage() {
                 )}
               </Field>
               <Field label={t('admin.settings.groupAvatarStorage')} error={errors.avatarStorage?.message} description={t('admin.settings.groupAvatarStorageHint')} required>
-                {(field) => <Input {...field} {...register('avatarStorage')} type="number" min={AVATAR_LENGTHS[0]} max={MAX_AVATAR_STORAGE} step={1} inputMode="numeric" />}
+                {(field) => <Input {...field} {...register('avatarStorage')} type="number" min={2 * AVATAR_LENGTHS[0]} max={MAX_AVATAR_STORAGE} step={1} inputMode="numeric" />}
+              </Field>
+              <Field label={t('admin.settings.groupAvatarPending')} error={errors.avatarPending?.message} description={t('admin.settings.groupAvatarPendingHint')} required>
+                {(field) => <Input {...field} {...register('avatarPending')} type="number" min={AVATAR_PENDING_SECONDS.min} max={AVATAR_PENDING_SECONDS.max} step={1} inputMode="numeric" />}
               </Field>
             </CardContent>
           </Card>

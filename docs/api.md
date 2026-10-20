@@ -3410,7 +3410,9 @@ Avatars: `putAvatar` (signed by a member that `access.attributes` lets
 change attributes, else `notAllowed`) carries the sealed blob padded to one
 size (`pad_group_avatar`: its length, the blob, zeros to 41,005 bytes; the
 blob is 8,233, 16,425, 32,809 or 41,001 bytes). It becomes the group's one
-pending upload for 24 hours, in place of any earlier one. A change naming an
+pending upload for `chatGroupAvatarPendingSeconds` (a day at first), in
+place of any earlier one; once that passes it counts as missing, swept or
+not. A change naming an
 avatar hash must find that blob, pending or current (`avatarMissing`
 otherwise; a genesis can't name one); once accepted it becomes the current
 blob and the others go, and removing the avatar drops its blob.
@@ -4459,15 +4461,19 @@ Return current global server settings.
   "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
   "chatGroupLinkJoinsPerRelayPerMin": 1200,
   "chatGroupAvatarMaxBytes": 41001,
-  "chatGroupAvatarStoragePerGroupBytes": 82002
+  "chatGroupAvatarStoragePerGroupBytes": 82002,
+  "chatGroupAvatarPendingSeconds": 86400
 }
 ```
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.
 `chatGroupAvatarStoragePerGroupBytes` is the most one group's avatars (the
-current blob and a pending upload) may take, 8233 to 10000000. `null` resets
-either to its first value (41001 and 82002).
+current blob and a pending upload) may take: at least twice the largest blob
+(so a group can always swap its avatar) and at most 82002.
+`chatGroupAvatarPendingSeconds` is how long an upload waits for a change to
+name it, 60 to 604800. The three are checked together (`400` otherwise);
+`null` resets one to its first value (41001, 82002, 86400).
 
 The two link-join budgets limit how many joins from a group link and
 requests to join one relaying server's users may make each minute: to any
