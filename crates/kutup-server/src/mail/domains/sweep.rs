@@ -7,6 +7,7 @@
 //! - makes Stalwart's domains and signatures follow the rows, one runner at
 //!   a time (an advisory lock).
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ use uuid::Uuid;
 
 use super::reconcile::{self, Recorded, Signature, Wanted};
 use super::settings::{Mode, Settings};
-use super::stalwart::StalwartApi;
+use super::stalwart::{Refused, StalwartApi};
 use super::store::{self, Row, COLUMNS};
 use super::{check, dkim};
 use crate::error::AppResult;
@@ -26,6 +27,14 @@ use crate::AppState;
 /// At most this many checks a tick, and this many at once.
 const CHECKS_PER_TICK: i64 = 200;
 const CHECKS_AT_ONCE: usize = 8;
+/// After Stalwart refuses the account, how long the reconcile waits.
+const REFUSED_BACKOFF_SECS: i64 = 30 * 60;
+static REFUSED_UNTIL: AtomicI64 = AtomicI64::new(0);
+
+fn now_secs() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
 /// The advisory lock the reconcile holds (an arbitrary constant).
 const RECONCILE_LOCK: i64 = 0x6b75_7470_646f_6d73;
 
@@ -138,6 +147,9 @@ pub fn reconcile_soon(state: AppState) {
 
 /// Stalwart's tagged objects follow the usable rows, under one lock.
 async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<()> {
+    if now_secs() < REFUSED_UNTIL.load(Ordering::Relaxed) {
+        return Ok(());
+    }
     let mut tx = state.pool.begin().await?;
     let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock($1)")
         .bind(RECONCILE_LOCK)
@@ -178,11 +190,28 @@ async fn reconcile_stalwart(state: &AppState, settings: &Settings) -> AppResult<
     let api = StalwartApi::new(
         stalwart_client()?,
         &state.config.mail_stalwart_url,
+        &state.config.chat_server_name,
         &state.config.mail_stalwart_domains_token,
     );
-    let applied = reconcile::apply(&api, &wanted)
-        .await
-        .map_err(|e| crate::error::AppError::internal(format!("Stalwart reconcile: {e}")))?;
+    let applied = match reconcile::apply(&api, &wanted).await {
+        Ok(applied) => applied,
+        Err(error) => {
+            if let Some(refused) = error.downcast_ref::<Refused>() {
+                // Wrong secret, or the address banned after failures:
+                // retrying each sweep would keep it banned.
+                let until = now_secs() + REFUSED_BACKOFF_SECS;
+                REFUSED_UNTIL.store(until, Ordering::Relaxed);
+                tracing::error!(
+                    status = refused.0,
+                    "mail: Stalwart refused the custom domains account \
+                     (MAIL_STALWART_DOMAINS_TOKEN, stalwart-setup); not retried for 30 minutes"
+                );
+            }
+            return Err(crate::error::AppError::internal(format!(
+                "Stalwart reconcile: {error}"
+            )));
+        }
+    };
     for (id, recorded) in applied.recorded {
         record_signature(&mut tx, id, recorded).await?;
     }

@@ -12,21 +12,50 @@ use serde_json::{json, Value};
 use super::reconcile::{Stalwart, StalwartDomain, StalwartSignature};
 
 const USING: [&str; 2] = ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"];
-/// The account stalwart-setup makes for this (stalwart/plan-domains.ndjson).
+/// The account stalwart-setup makes for this (stalwart/plan-domains.ndjson);
+/// it signs in as `kutup-domains@<server>`, as the sending account does.
 const ACCOUNT: &str = "kutup-domains";
+
+/// Stalwart refused the sign-in (401) or the address (403, after failed
+/// sign-ins it bans the address). The reconcile then backs off: retrying
+/// every sweep would keep the backend's address banned, and that address
+/// also delivers mail.
+#[derive(Debug)]
+pub struct Refused(pub u16);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Stalwart refused the custom domains account (HTTP {})",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for Refused {}
+
+fn checked(response: reqwest::Response) -> Result<reqwest::Response> {
+    match response.status().as_u16() {
+        status @ (401 | 403) => Err(Refused(status).into()),
+        _ => Ok(response.error_for_status()?),
+    }
+}
 
 pub struct StalwartApi {
     http: reqwest::Client,
     /// Stalwart's HTTP listener, e.g. `http://stalwart:8080`.
     base: String,
+    login: String,
     token: String,
 }
 
 impl StalwartApi {
-    pub fn new(http: reqwest::Client, base: &str, token: &str) -> Self {
+    pub fn new(http: reqwest::Client, base: &str, server_name: &str, token: &str) -> Self {
         StalwartApi {
             http,
             base: base.trim_end_matches('/').to_owned(),
+            login: format!("{ACCOUNT}@{server_name}"),
             token: token.to_owned(),
         }
     }
@@ -36,10 +65,11 @@ impl StalwartApi {
         let session: Value = self
             .http
             .get(format!("{}/jmap/session", self.base))
-            .basic_auth(ACCOUNT, Some(&self.token))
+            .basic_auth(&self.login, Some(&self.token))
             .send()
-            .await?
-            .error_for_status()?
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(checked)?
             .json()
             .await?;
         session["primaryAccounts"]["urn:stalwart:jmap"]
@@ -61,11 +91,12 @@ impl StalwartApi {
         let answer: Value = self
             .http
             .post(format!("{}/jmap", self.base))
-            .basic_auth(ACCOUNT, Some(&self.token))
+            .basic_auth(&self.login, Some(&self.token))
             .json(&body)
             .send()
-            .await?
-            .error_for_status()?
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(checked)?
             .json()
             .await?;
         let response = &answer["methodResponses"][0];
