@@ -724,9 +724,11 @@ and invalid capability return the same response shape.
 1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
 recipient's `accountId` and its single-route submission), at most 4 MiB, in one
 request: a group message reaches every member device without one request per
-member. The address's anonymous limit counts recipients, as single sends
-would; each recipient's capability is checked and counted on its own, and
-each gets its own result in order:
+member. The address's anonymous limit counts the request once, and its bytes
+a minute (an administrators' setting shared with multi-recipient sends;
+`429` past it), so a message to many members is one request and neighbours
+behind one address aren't starved; each recipient's capability is checked and
+counted on its own, and each gets its own result in order:
 
 - `delivered`;
 - `deviceMismatch`, with the single route's mismatch body;
@@ -735,8 +737,8 @@ each gets its own result in order:
 - `refused`, refused for good by that server, or too large for one federated
   transaction (1 MiB encoded), and then never queued;
 - `peerUnsupported`;
-- `rateLimited`, over the address's, the capability's or the recipient's
-  limit; nothing was stored or queued, so it is resent later;
+- `rateLimited`, over the capability's or the recipient's limit; nothing was
+  stored or queued, so it is resent later;
 - `conflict`, other content under this `sendId` still queued; nothing was
   queued, so it is resent once that one is answered.
 

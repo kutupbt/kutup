@@ -2013,32 +2013,47 @@ pub async fn send_sealed_batch(
         send_id: send_id.to_owned(),
         outcome,
     };
-    // The address's anonymous wall counts recipients, as single sends
-    // would: the middleware charged the first, each further one is charged
-    // here, and those over it are answered on their own.
+    // The address's anonymous limit counts the request once (the
+    // middleware charged it) and its bytes a minute, as multi-recipient sends
+    // do (docs/plans/pairwise-groups.md, slice 2 §4): a group message to many
+    // members is one request, and neighbours behind one address aren't
+    // starved by a recipient count.
     let address =
         crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
-    let mut within_wall = (0..batch.recipients.len()).map(|index| {
-        index == 0 || {
-            let allowed = crate::ratelimit::CHAT_ANONYMOUS_IP.allow(&address);
-            if !allowed {
-                crate::telemetry::rate_limit_rejection("anonymous_ip");
-            }
-            allowed
+    let address_digest: [u8; 32] =
+        Sha256::digest([b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat())
+            .into();
+    let bytes: usize = batch
+        .recipients
+        .iter()
+        .flat_map(|recipient| &recipient.submission.envelopes)
+        .map(|envelope| envelope.content.len())
+        .sum();
+    let ip_bytes_per_min = crate::site_settings::CHAT_MULTI_IP_BYTES_PER_MIN
+        .load(&state.pool)
+        .await?;
+    {
+        let mut tx = state.pool.begin().await?;
+        let count = anonymous_count(
+            &mut tx,
+            "ip_bytes",
+            &address_digest,
+            i64::try_from(bytes).unwrap_or(i64::MAX),
+            60,
+        )
+        .await?;
+        tx.commit().await?;
+        if count > ip_bytes_per_min {
+            crate::telemetry::rate_limit_rejection("anonymous_ip");
+            return Err(AppError::too_many_requests(
+                "anonymous delivery rate limit exceeded",
+            ));
         }
-    });
+    }
     let mut results = Vec::with_capacity(batch.recipients.len());
     if server == local {
         for recipient in batch.recipients {
             let send_id = recipient.submission.send_id.clone();
-            if within_wall.next() != Some(true) {
-                results.push(result(
-                    &recipient.account_id,
-                    &send_id,
-                    Outcome::RateLimited,
-                ));
-                continue;
-            }
             // An account that isn't ours, or not active, is a wrong capability.
             let outcome =
                 match crate::account_ids::named(&local, &recipient.account_id, Some(&local))
@@ -2091,9 +2106,7 @@ pub async fn send_sealed_batch(
     let mut queued = Vec::with_capacity(batch.recipients.len());
     for recipient in batch.recipients {
         let send_id = recipient.submission.send_id.clone();
-        let outcome = if within_wall.next() != Some(true) {
-            Err(Outcome::RateLimited)
-        } else {
+        let outcome = {
             match crate::account_ids::named(&local, &recipient.account_id, Some(&server)) {
                 Err(_) => Err(Outcome::Unavailable),
                 Ok(account) => match crate::chat_federation::enqueue_sealed_row(
