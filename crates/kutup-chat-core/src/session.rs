@@ -5384,7 +5384,11 @@ fn is_group_history_kind(kind: &str) -> bool {
 fn group_of_content(
     content: &ChatContent,
 ) -> Option<(String, Option<kutup_chat_proto::group::GroupContextV1>)> {
-    if content.kind == kutup_chat_proto::content::kind::GROUP_INVITE {
+    // Both verify on their own: an invitation by what it carries, a removal
+    // by the chain head and notary this device holds.
+    if content.kind == kutup_chat_proto::content::kind::GROUP_INVITE
+        || content.kind == kutup_chat_proto::content::kind::GROUP_REMOVAL
+    {
         return None;
     }
     let context = content.group_context().or_else(|| {
@@ -5414,6 +5418,7 @@ fn is_group_content(content: &ChatContent) -> bool {
     use kutup_chat_proto::content::kind;
     content.kind == kind::SENDER_KEY_DISTRIBUTION
         || content.kind == kind::GROUP_INVITE
+        || content.kind == kind::GROUP_REMOVAL
         || content.group_context().is_some()
         || content
             .as_session_control()

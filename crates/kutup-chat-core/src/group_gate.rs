@@ -627,6 +627,10 @@ impl Engine {
         if let Some(invite) = content.as_group_invite() {
             return self.take_group_invite(invite, &sender).await;
         }
+        if let Some(removal) = content.as_group_removal() {
+            self.take_group_removal(removal).await?;
+            return Ok(GroupContentOutcome::Ignored);
+        }
         if let Some(control) = content.as_session_control() {
             if control.group.is_none() {
                 return Ok(GroupContentOutcome::Ignored);

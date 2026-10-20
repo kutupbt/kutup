@@ -4865,3 +4865,48 @@ fn group_settings_a_full_ban_list_says_so_and_bans_hold_by_pseudonym() {
         .iter()
         .any(|ban| ban.account.as_ref().map(ToString::to_string) == Some(dave.account.clone())));
 }
+
+#[test]
+fn group_removal_a_removed_member_learns_it_pairwise_without_the_home() {
+    use kutup_chat_proto::GroupUpdateChange as C;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    let carols = pseudonym_of(&mut alice, &group_id, &carol);
+    block_on(
+        alice
+            .engine
+            .remove_group_member(&group_id, &carols, &mut rng()),
+    )
+    .unwrap();
+    // The home doesn't answer a removed member; the notice alone is enough.
+    let requests = world.home_requests.get();
+    world.home_down.set(true);
+    carol.receive();
+    world.home_down.set(false);
+    assert_eq!(carol.status(&group_id), GroupStatus::Gone);
+    assert_eq!(world.home_requests.get(), requests);
+    let last = group_lines(&carol, &group_id).pop().unwrap();
+    assert_eq!(
+        last.changes,
+        vec![C::MemberRemoved {
+            member: crate::address::parse_account(&carol.account).unwrap()
+        }]
+    );
+
+    // A ban tells the banned member too (one who holds the chain up to it:
+    // a member further behind learns when the home stops answering).
+    bob.receive();
+    bob.sync(&group_id);
+    let bobs = pseudonym_of(&mut alice, &group_id, &bob);
+    block_on(
+        alice
+            .engine
+            .ban_group_member(&group_id, &bobs, false, &mut rng()),
+    )
+    .unwrap();
+    bob.receive();
+    assert_eq!(bob.status(&group_id), GroupStatus::Gone);
+}

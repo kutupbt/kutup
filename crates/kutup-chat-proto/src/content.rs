@@ -127,6 +127,11 @@ pub mod kind {
     /// (Signal's group update message). Sent under the sender key with an
     /// implicit content hint; never history. [IMPL]
     pub const GROUP_CHANGE: &str = "groupChange";
+    /// Tells a removed (or banned) member of their removal, pairwise: the
+    /// change and its notary, which they verify against the chain head they
+    /// hold, since the home no longer answers them. Hidden; never history.
+    /// [IMPL]
+    pub const GROUP_REMOVAL: &str = "groupRemoval";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -473,6 +478,7 @@ impl ChatContent {
             // transcript (docs/plans/pairwise-groups.md §1, §4).
             || self.kind == kind::SENDER_KEY_DISTRIBUTION
             || self.kind == kind::GROUP_INVITE
+            || self.kind == kind::GROUP_REMOVAL
     }
 
     /// Builds the invisible message that carries a fresh session to a device
@@ -577,6 +583,32 @@ impl ChatContent {
             seq,
             serde_json::json!({}),
         )
+    }
+
+    /// A removal, for the removed member only: the group and the log entry
+    /// that removed them.
+    pub fn group_removal_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        removal: &GroupRemovalBody,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::GROUP_REMOVAL,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::to_value(removal).unwrap_or_default(),
+        )
+    }
+
+    pub fn as_group_removal(&self) -> Option<GroupRemovalBody> {
+        if self.kind != kind::GROUP_REMOVAL || self.v != Self::VERSION {
+            return None;
+        }
+        let removal: GroupRemovalBody = serde_json::from_value(self.body.clone()).ok()?;
+        crate::group::decode_group_id(&removal.group_id).ok()?;
+        Some(removal)
     }
 
     pub fn as_group_invite(&self) -> Option<crate::group::GroupInviteV1> {
@@ -1193,8 +1225,18 @@ impl ChatContent {
                     | kind::SENDER_KEY_DISTRIBUTION
                     | kind::GROUP_INVITE
                     | kind::GROUP_CHANGE
+                    | kind::GROUP_REMOVAL
             )
     }
+}
+
+/// Body of a `groupRemoval`: the group, and the log entry that removed the
+/// recipient (its change and the home's notary), as `GetLogs` serves it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupRemovalBody {
+    pub group_id: String,
+    pub entry: crate::group_route::GroupLogEntryV1,
 }
 
 /// Body of a `text` message.
