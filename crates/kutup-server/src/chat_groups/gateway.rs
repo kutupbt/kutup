@@ -401,7 +401,7 @@ async fn create(
         &notary_bytes,
     )
     .await?;
-    remember_members(&mut tx, group_id, &genesis).await?;
+    remember_newcomers(&mut tx, group_id, &genesis).await?;
     tx.commit().await?;
     let answer = GroupStateAnswerV1 {
         state: STANDARD.encode(&state_bytes),
@@ -647,8 +647,8 @@ fn seen_hash(pseudonym: &str) -> AppResult<[u8; 32]> {
         .into())
 }
 
-/// Whether `pseudonym` was ever a member of the group: one now, or one
-/// [`remember_members`] recorded.
+/// Whether the group has seen `pseudonym`: [`remember_newcomers`] recorded
+/// it as a member or a requester.
 async fn was_member(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     group_id: &[u8; 32],
@@ -665,19 +665,32 @@ async fn was_member(
     Ok(seen)
 }
 
-/// Records every member of `next` as seen, for good: the log is pruned, and
-/// the state forgets whoever left. Recording all of them, not only the new
-/// ones, keeps groups from before this table whole for their current members.
-async fn remember_members(
+/// Records the pseudonyms `next` brought in, for good: the members who
+/// joined at its revision (the creator at genesis, a claim, a join from the
+/// link, an approved request) and the requests made at it. The log is
+/// pruned and the state forgets whoever left, so neither can answer later.
+async fn remember_newcomers(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     group_id: &[u8; 32],
     next: &GroupStateV1,
 ) -> AppResult<()> {
-    let hashes = next
+    let joined = next
         .members
         .iter()
-        .map(|member| seen_hash(&member.pseudonym).map(|hash| hash.to_vec()))
+        .filter(|member| member.joined_at_revision == next.revision)
+        .map(|member| &member.pseudonym);
+    let requested = next
+        .requesting
+        .iter()
+        .filter(|request| request.requested_at_revision == next.revision)
+        .map(|request| &request.pseudonym);
+    let hashes = joined
+        .chain(requested)
+        .map(|pseudonym| seen_hash(pseudonym).map(|hash| hash.to_vec()))
         .collect::<AppResult<Vec<_>>>()?;
+    if hashes.is_empty() {
+        return Ok(());
+    }
     sqlx::query(
         "INSERT INTO chat_group_seen_pseudonyms (group_id, pseudonym_hash)
          SELECT $1, hash FROM unnest($2::bytea[]) AS hash
@@ -789,7 +802,7 @@ async fn submit(
     )
     .await?;
     prune_log(&mut tx, group_id, &next).await?;
-    remember_members(&mut tx, group_id, &next).await?;
+    remember_newcomers(&mut tx, group_id, &next).await?;
     tx.commit().await?;
     // The change with its notary: a member applies it to the state it has;
     // a newcomer whose request awaits approval learns nothing more.
