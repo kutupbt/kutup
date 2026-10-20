@@ -1913,6 +1913,7 @@ mod tests {
             attachment_count: 1,
             attachments: Vec::new(),
             thread_id: None,
+            from_address: None,
         }
     }
 
