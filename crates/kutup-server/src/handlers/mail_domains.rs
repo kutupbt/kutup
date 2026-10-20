@@ -314,7 +314,7 @@ pub async fn get(
                 "too many checks; try again later",
             ));
         }
-        let (checked, change) = store::check_and_save(
+        let (checked, change, lost_holder) = store::check_and_save(
             &state.pool,
             resolver(&state)?,
             &server(&state),
@@ -327,6 +327,7 @@ pub async fn get(
         if change != crate::mail::domains::policy::Change::None {
             crate::mail::domains::sweep::reconcile_soon(state.clone());
         }
+        crate::mail::domains::sweep::tell_losses(&state, &checked, change, lost_holder).await;
         row = checked;
     }
     Ok(Json(view(&state, &row, &settings).await?))

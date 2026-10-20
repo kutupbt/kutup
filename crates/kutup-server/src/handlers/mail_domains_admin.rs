@@ -287,7 +287,14 @@ pub async fn deactivate(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let admin_id =
         Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("bad session"))?;
-    let name = store::deactivate(&state.pool, id, admin_id).await?;
+    let (owner, name) = store::deactivate(&state.pool, id, admin_id).await?;
+    crate::mail::notice::domain_lost(
+        &state,
+        owner,
+        &name,
+        crate::mail::notice::DomainLost::Deactivated,
+    )
+    .await;
     audit(
         &state.pool,
         &admin.user_id,

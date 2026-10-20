@@ -266,7 +266,7 @@ pub async fn check_and_save(
     server: &check::Server,
     settings: &Settings,
     row: &Row,
-) -> AppResult<(Row, Change)> {
+) -> AppResult<(Row, Change, Option<Uuid>)> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let (mut checked, mut change) =
         check::check(resolver, server, &row.domain(), settings.grace(), now).await;
@@ -283,10 +283,12 @@ pub async fn check_and_save(
     };
     if current.state != row.state || current.checked_at != row.checked_at {
         tx.commit().await?;
-        return Ok((current, Change::None));
+        return Ok((current, Change::None, None));
     }
     // The transfer's first sighting holds only while every check finds this
     // account's code.
+    // The account that lost the domain to this one, to be told.
+    let mut lost_holder = None;
     let mut transfer_seen = if checked.verify_state == records::verify::GOOD {
         current.transfer_seen_at
     } else {
@@ -316,6 +318,7 @@ pub async fn check_and_save(
                 });
             if confirmed {
                 lose(&mut tx, holder_id, holder_user, &row.name).await?;
+                lost_holder = Some(holder_user);
                 transfer_seen = None;
             } else {
                 // Not yet (or not at all): pending, the holder untouched.
@@ -366,7 +369,7 @@ pub async fn check_and_save(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok((saved, change))
+    Ok((saved, change, lost_holder))
 }
 
 /// The holder loses a domain another account proved: inactive, its
@@ -491,7 +494,8 @@ pub async fn set_catch_all(
 /// An administrator deactivates a domain (abuse): inactive at once, its
 /// addresses freed, its owner told, and its name blocked until an
 /// administrator lifts it ([`unblock`]), so no refresh brings it back.
-pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<String> {
+/// The owner and the name.
+pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<(Uuid, String)> {
     let mut tx = pool.begin().await?;
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "UPDATE mail_domains SET state = 0, failing_since = NULL, warned_at = NULL,
@@ -513,7 +517,7 @@ pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<Strin
     free_addresses(&mut tx, id).await?;
     security_events::record_names(&mut tx, user, Kind::DomainLost, None, None, &name, None).await?;
     tx.commit().await?;
-    Ok(name)
+    Ok((user, name))
 }
 
 /// An administrator lifts the block on the name of domain `id`: its owner

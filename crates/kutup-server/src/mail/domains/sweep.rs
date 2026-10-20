@@ -15,6 +15,7 @@ use rand::Rng as _;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use super::policy::Change;
 use super::reconcile::{self, Recorded, Signature, Wanted};
 use super::settings::{Mode, Settings};
 use super::stalwart::{Refused, StalwartApi};
@@ -124,25 +125,47 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
     let mut tasks = tokio::task::JoinSet::new();
     for row in rows {
         let permit = limit.clone().acquire_owned().await.expect("never closed");
-        let (pool, server, settings) = (state.pool.clone(), server.clone(), *settings);
+        let (state, server, settings) = (state.clone(), server.clone(), *settings);
         tasks.spawn(async move {
             // A small random wait, so a tick's checks don't all start at once.
             let wait = rand::thread_rng().gen_range(0..2000);
             tokio::time::sleep(Duration::from_millis(wait)).await;
-            let user_settings = match settings.for_user(&pool, row.user_id).await {
+            let user_settings = match settings.for_user(&state.pool, row.user_id).await {
                 Ok(settings) => settings,
                 Err(_) => settings,
             };
-            if let Err(error) =
-                store::check_and_save(&pool, resolver, &server, &user_settings, &row).await
+            match store::check_and_save(&state.pool, resolver, &server, &user_settings, &row).await
             {
-                tracing::warn!(error = %error, "mail: a custom domain's check failed");
+                Ok((checked, change, lost_holder)) => {
+                    tell_losses(&state, &checked, change, lost_holder).await;
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "mail: a custom domain's check failed");
+                }
             }
             drop(permit);
         });
     }
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+/// Tells the accounts a check took a domain from, in their inboxes: the
+/// owner whose domain lapsed, and a holder another account's proof moved it
+/// from.
+pub async fn tell_losses(
+    state: &AppState,
+    checked: &Row,
+    change: Change,
+    lost_holder: Option<Uuid>,
+) {
+    use crate::mail::notice::{domain_lost, DomainLost};
+    if change == Change::Inactive {
+        domain_lost(state, checked.user_id, &checked.name, DomainLost::Lapsed).await;
+    }
+    if let Some(holder) = lost_holder {
+        domain_lost(state, holder, &checked.name, DomainLost::Transferred).await;
+    }
 }
 
 /// Reconciles Stalwart now, in the background (after a domain changed
