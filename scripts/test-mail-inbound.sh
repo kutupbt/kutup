@@ -35,6 +35,8 @@ export RATE_LIMIT_REGISTER_PER_HOUR=100
 export REGISTRATION_MODE=on
 # Every test signs accounts in; the default per-minute limit trips.
 export RATE_LIMIT_LOGIN_PER_MIN=1000
+# The custom domains test checks its domains many times in a minute.
+export RATE_LIMIT_MAIL_DOMAIN_CHECKS_PER_HOUR=1000
 # Key lookups go to the gate's WKD stand-in (only on a test stack).
 export APP_ENV=test
 export MAIL_OUTSIDE_SENDING=on

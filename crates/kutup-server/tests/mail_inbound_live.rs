@@ -6866,6 +6866,22 @@ fn custom_domains() {
     assert_eq!(added["name"], customer);
     let id = added["id"].as_str().unwrap().to_owned();
     let records = &added["records"];
+    // Pending: no address on it, and Stalwart takes no mail for it.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &alice.token,
+    )
+    .json(&json!({ "local": "early", "domainId": id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "domainNotVerified");
+    let (rcpt, _) = smtp_send(
+        &smtp,
+        "early@customer.test",
+        "From: writer@sender.test\r\nTo: early@customer.test\r\nSubject: early\r\n\r\nearly\r\n",
+    );
+    assert!(rcpt >= 500, "a pending domain takes no mail: {rcpt}");
     let zone_for = |code: &str| -> Vec<String> {
         let mut zone = vec![
             format!("@ IN TXT {}", txt(code)),
@@ -6966,6 +6982,77 @@ fn custom_domains() {
     assert_eq!((rcpt, data), (250, 250));
     wait_for(&c, &base, &alice, &caught);
 
+    // info@ forwards to Carol: mail to it reaches her, caught mail never
+    // does (a catch-all can't relay mail for any name to anywhere).
+    let carol = register(&c, &base);
+    let carol_address = set_up_address(&c, &base, &carol);
+    let (_, request, terms) =
+        forwarding_request(&info, &address_id, &carol_address, "all", json!([]));
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+        .json(&request)
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    accept_forwarding(&c, &base, &carol, &carol_address, &info.public_key, &terms);
+    let direct = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "info@customer.test",
+            &message("info@customer.test", &direct)
+        ),
+        (250, 250)
+    );
+    wait_for(&c, &base, &carol, &direct);
+    let caught_again = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "someone@customer.test",
+            &message("someone@customer.test", &caught_again)
+        ),
+        (250, 250)
+    );
+    wait_for(&c, &base, &alice, &caught_again);
+    std::thread::sleep(Duration::from_secs(5));
+    assert!(
+        !messages(&c, &base, &carol.token)
+            .iter()
+            .any(|m| m["messageId"] == caught_again),
+        "caught mail was forwarded"
+    );
+
+    // The catch-all's daily cap, counted once per message in the database:
+    // two caught so far, so a cap of 3 takes one more, then answers 452.
+    let put_settings = |body: Value| {
+        let r = bearer(
+            c.put(format!("{base}/api/admin/mail/domains/settings")),
+            &admin_token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        assert!(r.status().is_success(), "settings: {}", r.status());
+    };
+    put_settings(json!({ "mail_domains.catch_all_per_day": "3" }));
+    let third = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "third@customer.test",
+            &message("third@customer.test", &third)
+        ),
+        (250, 250)
+    );
+    wait_for(&c, &base, &alice, &third);
+    let (rcpt, _) = smtp_send(
+        &smtp,
+        "fourth@customer.test",
+        &message("fourth@customer.test", "fourth@sender.test"),
+    );
+    assert_eq!(rcpt, 452, "the catch-all's day is full");
+    put_settings(json!({ "mail_domains.catch_all_per_day": "500" }));
+
     // Mail from the address to the outside: the gate checks the sink for
     // the domain's own DKIM signature.
     let outside_id = format!("{}@customer.test", uuid::Uuid::new_v4().simple());
@@ -6997,9 +7084,55 @@ fn custom_domains() {
     );
     println!("DOMAIN-OUTSIDE-ID {outside_id}");
 
-    // Bob proves the domain too: refused while Alice holds it, then, once
-    // only Bob's code is published, two checks apart move it to him.
+    // Sending as an address that isn't Alice's, or with another From in the
+    // MIME, is refused.
+    let send_as = |user: &User, from_address: &str, from_header: &str| {
+        let message_id = format!("{}@customer.test", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {from_header}\r\nTo: dave@outside.test\r\nSubject: as\r\nMessage-ID: <{message_id}>\r\n\r\nhello\r\n"
+        );
+        let split = mail_key::encrypt_split(&[&info.public_key], &info.secret_key, mime.as_bytes())
+            .unwrap();
+        let meta = json!({
+            "to": [{ "address": "dave@outside.test" }],
+            "subject": "as",
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[0]) },
+            "readable": ["dave@outside.test"],
+            "fromAddress": from_address,
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+                ("mime", mime.into_bytes()),
+            ]))
+            .send()
+            .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
     let bob = register(&c, &base);
+    let bobs_own = self::address_id(&c, &base, &bob);
+    let (status, body) = send_as(&alice, &bobs_own, "info@customer.test");
+    assert_eq!(
+        (status, &body["code"]),
+        (404, &json!("notYourAddress")),
+        "{body}"
+    );
+    let (status, body) = send_as(&alice, &address_id, "boss@customer.test");
+    assert_eq!(status, 400, "another From in the MIME: {body}");
+    let alices_key: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let alices_fingerprint = alices_key["keys"][0]["fingerprint"].clone();
+
+    // Bob proves the domain too: refused while Alice holds it.
     let r = bearer(c.post(format!("{base}/api/mail/domains")), &bob.token)
         .json(&json!({ "name": customer }))
         .send()
@@ -7016,13 +7149,32 @@ fn custom_domains() {
         0,
         "Alice holds it"
     );
-    write_zone(&zones, customer, &zone_for(&bob_code));
-    eventually(
-        "the domain never moved to Bob",
-        60,
-        || domain(&c, &base, &bob, &bob_id, true),
-        |d| d["state"] == 1,
+    // Both codes published: no transfer, however far apart the checks.
+    let alice_code = records["verify"]["value"].as_str().unwrap().to_owned();
+    let mut both = zone_for(&alice_code);
+    both.push(format!("@ IN TXT {}", txt(&bob_code)));
+    write_zone(&zones, customer, &both);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(domain(&c, &base, &bob, &bob_id, true)["state"], 0);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "while Alice's code is published too"
     );
+    // Only Bob's code: one check never moves it (the sweep leaves Bob's row
+    // alone for 15 minutes after his own checks); one a (scaled) hour
+    // later does.
+    write_zone(&zones, customer, &zone_for(&bob_code));
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "a single check never transfers"
+    );
+    assert_eq!(domain(&c, &base, &alice, &id, false)["state"], 1);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(domain(&c, &base, &bob, &bob_id, true)["state"], 1);
     assert_eq!(
         domain(&c, &base, &alice, &id, false)["state"],
         0,
@@ -7050,7 +7202,25 @@ fn custom_domains() {
     .json()
     .unwrap();
     assert!(events.to_string().contains("domainLost"), "{events}");
-    // Bob can make the same name now.
+    // ... and a notice in her inbox.
+    eventually(
+        "Alice was never told in her inbox",
+        30,
+        || messages(&c, &base, &alice.token),
+        |rows| {
+            rows.iter()
+                .any(|m| m["subject"] == "You no longer hold customer.test")
+        },
+    );
+    // She can't send from it any more.
+    let (status, body) = send_as(&alice, &address_id, "info@customer.test");
+    assert!(
+        status >= 400
+            && ["notYourAddress", "domainNotVerified"]
+                .contains(&body["code"].as_str().unwrap_or("")),
+        "Alice still sends from the domain: {status} {body}"
+    );
+    // Bob makes the same name, and its key is the only one served.
     let r = bearer(
         c.post(format!("{base}/api/mail/domains/addresses")),
         &bob.token,
@@ -7059,4 +7229,55 @@ fn custom_domains() {
     .send()
     .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let bobs_address: Value = r.json().unwrap();
+    add_address_key(
+        &c,
+        &base,
+        &bob,
+        bobs_address["id"].as_str().unwrap(),
+        "info@customer.test",
+    );
+    let served: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let keys = served["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 1, "{served}");
+    assert_ne!(keys[0]["fingerprint"], alices_fingerprint, "{served}");
+
+    // Bob's ownership TXT goes, his MX stays: warn after two failing
+    // checks (12 scaled hours apart), inactive after the warn grace (set to
+    // a day: 24 seconds here), and then RCPT refuses.
+    put_settings(json!({ "mail_domains.grace_warn_days": "1" }));
+    write_zone(&zones, customer, &zone_for(&bob_code)[1..]);
+    eventually(
+        "Bob's domain never warned",
+        60,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 2,
+    );
+    eventually(
+        "Bob's domain never went inactive",
+        90,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 0,
+    );
+    eventually(
+        "RCPT still takes mail for an inactive domain",
+        60,
+        || {
+            smtp_send(
+                &smtp,
+                "info@customer.test",
+                &message("info@customer.test", "late@sender.test"),
+            )
+            .0
+        },
+        |rcpt| *rcpt >= 500,
+    );
+    put_settings(json!({ "mail_domains.grace_warn_days": "14" }));
 }
