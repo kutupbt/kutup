@@ -5133,3 +5133,30 @@ fn group_avatar_names_the_hash_of_the_blob_as_stored_never_the_image() {
         .avatar
         .is_none());
 }
+
+#[test]
+fn group_request_the_first_messages_after_an_approval_are_kept() {
+    use crate::group_link::GroupLinkMode;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+    block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    alice.sync(&group_id);
+    let daves = details(&mut alice, &group_id).requests[0]
+        .requester
+        .pseudonym
+        .clone();
+    block_on(
+        alice
+            .engine
+            .approve_group_request(&group_id, &daves, &mut rng()),
+    )
+    .unwrap();
+    alice.send_text(&group_id, "right after");
+    // Dave hasn't asked about his request: what arrives settles it.
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    assert_eq!(dave.status(&group_id), GroupStatus::Member);
+    assert_eq!(dave.group_texts(&group_id), vec!["right after".to_string()]);
+}

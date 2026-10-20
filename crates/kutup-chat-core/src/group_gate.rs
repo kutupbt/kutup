@@ -488,6 +488,7 @@ impl Engine {
         if self.is_blocked(sender).await? {
             return Ok(GroupGate::Refuse);
         }
+        self.settle_if_requesting(group_id).await;
         let mut caught_up = self.caught_up_since(group_id, received_at);
         for first in [true, false] {
             let Some(record) = self.session.db().load_group(group_id).await? else {
@@ -528,6 +529,24 @@ impl Engine {
         Ok(GroupGate::Hold)
     }
 
+    /// Content of a group this account asked to join: only members send to
+    /// it, so it may have been approved meanwhile (the home tells nobody).
+    /// The request is settled before the content is decided, so the first
+    /// messages after an approval aren't dropped. Best effort.
+    async fn settle_if_requesting(&mut self, group_id: &str) {
+        let requesting = self
+            .session
+            .db()
+            .load_group(group_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|record| record.status == GroupStatus::Requesting);
+        if requesting {
+            let _ = self.check_group_request(group_id).await;
+        }
+    }
+
     /// A sender-key message: opened, then kept only as the gate says. Read
     /// again after a catch-up; held (left queued) when its sender can't be
     /// confirmed now.
@@ -550,6 +569,7 @@ impl Engine {
             self.session.ack_dropped(envelope).await?;
             return Ok(dropped());
         }
+        self.settle_if_requesting(&group_id).await;
         let mut caught_up = self.caught_up_since(&group_id, received_at);
         for first in [true, false] {
             let record = match self.session.db().load_group(&group_id).await? {
