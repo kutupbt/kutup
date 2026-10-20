@@ -84,6 +84,21 @@ pub struct GroupListItem {
     pub envelope: String,
 }
 
+/// One entry of the account's Chat contact list (`GET /api/chat/contact-list`),
+/// as the account head vouches for it (docs/plans/chat-contacts-sync.md).
+pub type ContactListItem = GroupListItem;
+
+/// How a contact list write went (`PUT /api/chat/contact-list/{id}`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContactListWrite {
+    Stored,
+    /// Another device wrote first: read the list again.
+    Conflict,
+    /// The list holds as many entries as it may (`contactListFull`): a new
+    /// entry needs one evicted first.
+    Full,
+}
+
 /// What this account's own server answered a relayed group request with
 /// (`POST /api/chat/groups/relay/{homeServer}`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -342,6 +357,37 @@ pub trait ChatTransport {
     async fn relay_group_request(&self, _home: &str, _sealed: &[u8]) -> Result<GroupRelayOutcome> {
         Err(crate::error::ChatError::Transport(
             "this transport doesn't reach group homes".into(),
+        ))
+    }
+
+    /// `GET /api/chat/contact-list`: every entry, each at the revision the
+    /// verified account head lists (a list it doesn't vouch for is an error).
+    async fn fetch_contact_list(&self) -> Result<Vec<ContactListItem>> {
+        Err(crate::error::ChatError::Transport(
+            "this transport keeps no contact list".into(),
+        ))
+    }
+
+    /// `PUT /api/chat/contact-list/{id}` with the next account head, over
+    /// `base_revision` (0: a new entry). `revision` is the one in the
+    /// entry's sealed header.
+    async fn store_contact_entry(
+        &self,
+        _id: &str,
+        _base_revision: u64,
+        _revision: u64,
+        _envelope: &str,
+    ) -> Result<ContactListWrite> {
+        Err(crate::error::ChatError::Transport(
+            "this transport keeps no contact list".into(),
+        ))
+    }
+
+    /// `DELETE /api/chat/contact-list/{id}` at `revision` (an eviction):
+    /// `false` when another device changed it first.
+    async fn delete_contact_entry(&self, _id: &str, _revision: u64) -> Result<bool> {
+        Err(crate::error::ChatError::Transport(
+            "this transport keeps no contact list".into(),
         ))
     }
 

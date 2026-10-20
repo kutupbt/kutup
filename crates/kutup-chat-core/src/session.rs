@@ -964,6 +964,38 @@ impl Session {
         self.store.db().load_contact(peer).await
     }
 
+    /// Saves a contact as it is (its list entry's due moment, for one).
+    pub(crate) async fn save_contact(&mut self, contact: ContactRecord) -> Result<()> {
+        self.store.stage_contact(contact);
+        self.store.commit().await
+    }
+
+    /// Takes a contact from the account's contact list: its state, and its
+    /// profile key when this device has none for them yet.
+    pub(crate) async fn restore_contact(
+        &mut self,
+        contact: ContactRecord,
+        profile_key: Option<Vec<u8>>,
+    ) -> Result<()> {
+        if let Some(key) = profile_key {
+            if self.peer_profile(&contact.peer).await?.is_none() {
+                self.store.stage_peer_profile(PeerProfile {
+                    peer: contact.peer.clone(),
+                    key,
+                    display_name: None,
+                    avatar: None,
+                    avatar_content_type: None,
+                    about: None,
+                    // Revision zero: the profile is fetched with this key.
+                    revision: 0,
+                    source_device_id: 0,
+                });
+            }
+        }
+        self.store.stage_contact(contact);
+        self.store.commit().await
+    }
+
     pub async fn local_profile(&self) -> Result<Option<LocalProfile>> {
         self.store.db().load_local_profile().await
     }
@@ -1834,6 +1866,14 @@ impl Session {
             revision: 0,
             source_device_id: 0,
         });
+        // A contact's new key goes into their list entry lazily: with the
+        // next write that is due anyway, or within the hour.
+        if let Some(mut contact) = self.contact(peer).await? {
+            if contact.state != ContactState::PendingIncoming && contact.list_due_at_ms.is_none() {
+                contact.list_due_at_ms = Some(crate::contact_list::lazy_due(now_millis()));
+                self.store.stage_contact(contact);
+            }
+        }
         Ok(true)
     }
 

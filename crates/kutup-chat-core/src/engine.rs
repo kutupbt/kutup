@@ -238,6 +238,8 @@ pub struct Engine {
     /// The account's group list, once the application hands over the key
     /// (`enable_group_list`).
     pub(crate) group_list: Option<crate::group_list::GroupListSync>,
+    /// The account's Chat contact list (`enable_contact_list`).
+    pub(crate) contact_list: Option<crate::contact_list::ContactListSync>,
     /// The account's group keys (its self-authority and its pseudonyms),
     /// from its master key: no group is made or joined without them.
     pub(crate) group_keys: Option<crate::group::GroupAccountKeys>,
@@ -340,6 +342,7 @@ impl Engine {
             mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
             identity_pins: None,
             group_list: None,
+            contact_list: None,
             group_keys: None,
         }
     }
@@ -924,6 +927,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.accept_contact(peer).await?;
+        self.contact_changed(peer).await;
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         // Signal shares the recipient's profile when a request is accepted.
         // The send path journals ciphertext before networking; a transient
@@ -939,6 +943,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.reject_contact(peer).await?;
+        self.contact_changed(peer).await;
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         Ok(self.session.contact(peer).await?.unwrap_or(record))
     }
@@ -951,6 +956,9 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.block_contact(peer).await?;
+        // Into the account's contact list first (at once on the web), so the
+        // block holds whatever happens to this device next.
+        self.contact_changed(peer).await;
         // The block is already durable. If a profile exists, rotate and publish
         // its capability verifier before sharing the new key with the remaining
         // contacts. A publication failure is surfaced and its exact encrypted
@@ -969,6 +977,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.unblock_contact(peer).await?;
+        self.contact_changed(peer).await;
         // The block replaced the profile key and kept the new one from this
         // contact, so their sealed messages are refused. Give it to them again
         // when the conversation is back to accepted.
@@ -1918,6 +1927,20 @@ impl Engine {
         let device_id = self.session.device_id();
         let mut after = self.session.last_cursor().await?;
         let mut report = ReceiveReport::default();
+
+        // A device with no contacts (a clean one, after every device was
+        // lost) reads the account's contact list before it takes any message,
+        // so nothing from someone the account blocked is taken first. If the
+        // list can't be read, the mailbox waits.
+        if self.contact_list.is_some() && !self.contact_list_read() {
+            let clean = self.session.contacts().await?.is_empty();
+            if let Err(error) = self.sync_contact_list().await {
+                if clean {
+                    self.set_state(EngineState::Degraded);
+                    return Err(error);
+                }
+            }
+        }
 
         self.process_inbound(None, &mut report, rng).await?;
 
