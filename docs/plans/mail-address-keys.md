@@ -160,6 +160,22 @@ manifest, signed with Ed25519 by the account authority:
   a primary or flag the server changes on its own is shown and signed as the
   list has it. Otherwise a server could add a key it holds as primary and
   have the account's next change sign it in.
+- **The account's own keys are checked like anyone's** (`checkedAddresses`
+  in `@kutup/mail-core/keyList`), against the authority derived from the
+  master key: each address's current list must verify, name that address
+  (folded), and be no older than one this device has seen for it (the same
+  revision-guard count recipients' lists keep). A key row is the account's
+  only when its public key, inspected here, has the fingerprints a signed
+  entry names. Mail seals drafts and Sent copies only to that primary and
+  stops with "your keys can't be trusted" when there is none (a list older
+  than one seen stops it too); only those keys check the account's own
+  signatures. The keys page shows a signed key the server no longer has
+  right, and offers "Download public key" only for checked keys.
+- **A first key only over nothing:** Mail, the Account shell and both
+  renames (web and CLI) make an address's first key only when the address
+  has neither a key nor a key list, whatever the server's rows or rename
+  check say, so a server can't have a fresh first list signed over a chain
+  the address has.
 - The fork list gains `mail`, `calendar` and `contacts` with their app
   origins when those apps exist, not before.
 

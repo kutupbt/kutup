@@ -34,14 +34,16 @@ describe('key list changes start from the signed list', () => {
     signature: 'signature',
     hash: 'current',
   }
-  const row = (key: typeof a) => ({ ...key, id: key.fingerprint, publicKey: '', privateKeyEnvelope: '', createdAt: '' })
-  // The server adds a key of its own as primary and drops a flag from another.
+  const row = (key: typeof a, listed = true) => ({ ...key, id: key.fingerprint, publicKey: '', privateKeyEnvelope: '', createdAt: '', listed })
+  // The server adds a key of its own as primary and marks another
+  // compromised (flags 0): a result built from its rows would differ from the
+  // signed list's in every case below.
   const injected = { fingerprint: 'cc', sha256Fingerprint: '03', primary: true, flags: 3 }
   const address = {
     id: 'address',
     address: list.address,
     state: 'active' as const,
-    keys: [row({ ...a, primary: false }), row({ ...b, flags: 1 }), row(injected)],
+    keys: [row({ ...a, primary: false }), row({ ...b, flags: 0 }), row(injected, false)],
     keyList: { data: 'data', signature: 'signature' },
     verifiedList: list,
   }

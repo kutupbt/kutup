@@ -1,4 +1,4 @@
-import { DEFAULT_MAIL_KEY_FLAGS, generateMailAddressKey, signMailKeyList, toBase64 } from '@kutup/crypto'
+import { DEFAULT_MAIL_KEY_FLAGS, foldAddress, generateMailAddressKey, signMailKeyList, toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { Session } from '@kutup/session/store'
 
@@ -38,4 +38,19 @@ export async function firstAddressKey(session: Pick<Session, 'masterKey' | 'enve
  */
 export async function addFirstAddressKey(session: Session, address: { id: string; address: string }) {
   await api.post(`/mail/addresses/${address.id}/keys`, await firstAddressKey(session, address.address))
+}
+
+/**
+ * Whether one of the account's own addresses is `address` (folded) and has
+ * a key or a key list already: then no first key is made for it, whatever a
+ * check said, so a server can't have a fresh first list signed over a chain
+ * the address has.
+ */
+export async function ownAddressKeyed(address: string): Promise<boolean> {
+  const folded = await foldAddress(address)
+  const { data } = await api.get<{ address: string; keys: unknown[]; keyList: unknown }[]>('/mail/addresses')
+  for (const row of data) {
+    if ((await foldAddress(row.address)) === folded && (row.keys.length > 0 || row.keyList !== null)) return true
+  }
+  return false
 }

@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { toBase64 } from '@kutup/crypto/base64'
 import { foldAddress, signAccountRename, type AccountRenameV1 } from '@kutup/crypto/accountRename'
-import { firstAddressKey, type FirstAddressKey } from '@kutup/mail-core/addressKey'
+import { firstAddressKey, ownAddressKeyed, type FirstAddressKey } from '@kutup/mail-core/addressKey'
 import { loadServerSettings } from '@kutup/session/apps'
 import api from '@kutup/session/client'
 import { recheckAccount, type MeResponse } from '@kutup/session/profile'
@@ -114,7 +114,9 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
   const body: RenameRequest = {
     grant,
     rename: await signAccountRename(masterKey, me.renames.sequence + 1, me.address, address, Date.now()),
-    ...(needsKey ? { mailAddress: await firstAddressKey(session, address) } : {}),
+    // A name taken back keeps its address's keys: none is made over them,
+    // whatever the check said.
+    ...(needsKey && !(await ownAddressKeyed(address)) ? { mailAddress: await firstAddressKey(session, address) } : {}),
   }
   try {
     return (await api.post<Renamed>('/user/rename', body)).data

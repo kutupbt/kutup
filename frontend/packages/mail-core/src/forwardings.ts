@@ -172,7 +172,8 @@ export interface NewForwarding {
 function sealedPrimary(session: Pick<Session, 'masterKey' | 'envelopeBinding'>, address: CheckedAddress): SealedMailKey {
   if (!address.verifiedList) throw new KeyListNotSigned()
   const entry = address.verifiedList.keys.find((key) => key.primary)
-  const primary = entry && address.keys.find((key) => !key.forwarding && key.fingerprint === entry.fingerprint && key.sha256Fingerprint === entry.sha256Fingerprint)
+  // Its public key checked against the signed fingerprints (`listed`).
+  const primary = entry && address.keys.find((key) => !key.forwarding && key.listed && key.fingerprint === entry.fingerprint)
   if (!primary) throw new Error(`${address.address} has no primary key`)
   return {
     masterKeyBase64: toBase64(session.masterKey),

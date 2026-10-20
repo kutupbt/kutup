@@ -8,6 +8,9 @@ const verified = new Map<string, SignedMailKeyList>()
 vi.mock('@kutup/crypto', () => ({
   MAIL_KEY_FLAGS: { notCompromised: 1, notObsolete: 2, emailNoEncrypt: 4, emailNoSign: 8 },
   toBase64: () => 'master',
+  foldAddress: (address: string) => Promise.resolve(address.toLowerCase()),
+  // Rows here carry no real public keys: none is listed (settling needs only the signed list).
+  inspectMailAddressPublicKey: () => Promise.reject(new Error('not a key')),
   deriveAccountIdentityKeys: () => Promise.resolve({ authorityPublicKey: 'authority' }),
   verifyMailKeyList: (list: { data: string }) => {
     const found = verified.get(list.data)
@@ -17,6 +20,10 @@ vi.mock('@kutup/crypto', () => ({
     signed.push(input)
     return Promise.resolve({ ...input, data: 'data', signature: 'signature', hash: 'next' })
   },
+}))
+vi.mock('@kutup/crypto/revisionGuard', () => ({
+  OlderThanSeenError: class extends Error {},
+  revisionGuard: () => ({ accept: () => Promise.resolve() }),
 }))
 vi.mock('@kutup/session/client', () => ({ default: { put: (url: string, body: unknown) => put(url, body) } }))
 
@@ -38,7 +45,7 @@ const listOf = (keys: (typeof a)[], data = 'data'): SignedMailKeyList => ({
   hash: 'current',
 })
 const list = listOf([a, b])
-const session = { masterKey: new Uint8Array(32) }
+const session = { masterKey: new Uint8Array(32), userId: 'me' }
 const row = (key: typeof a & { forwarding?: boolean }) => ({ ...key, id: key.fingerprint, publicKey: '', privateKeyEnvelope: '', createdAt: '' })
 
 beforeEach(() => {

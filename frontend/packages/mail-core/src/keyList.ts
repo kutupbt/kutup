@@ -1,5 +1,7 @@
 import {
   deriveAccountIdentityKeys,
+  foldAddress,
+  inspectMailAddressPublicKey,
   MAIL_KEY_FLAGS,
   signMailKeyList,
   toBase64,
@@ -7,6 +9,7 @@ import {
   type MailKeyEntry,
   type SignedMailKeyList,
 } from '@kutup/crypto'
+import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import api from '@kutup/session/client'
 import type { Session } from '@kutup/session/store'
 
@@ -143,21 +146,10 @@ export interface AddressRow {
   keyListOwed?: boolean
 }
 
-/** An address with its key list checked against this account's own authority. */
-export type CheckedAddress = AddressRow & { verifiedList: SignedMailKeyList | null }
-
-/** `rows` with each current key list checked against this account's own authority (a list it didn't sign is null, not trusted). */
-export async function checkedAddresses<T extends AddressRow>(
-  session: Pick<Session, 'masterKey'>,
-  rows: T[],
-): Promise<(T & { verifiedList: SignedMailKeyList | null })[]> {
-  const { authorityPublicKey } = await deriveAccountIdentityKeys(toBase64(session.masterKey))
-  return Promise.all(
-    rows.map(async (row) => ({
-      ...row,
-      verifiedList: row.keyList ? await verifyMailKeyList(row.keyList, authorityPublicKey).catch(() => null) : null,
-    })),
-  )
+/** An address with its key list and keys checked against this account's own authority (`checkedAddresses`). */
+export type CheckedAddress = Omit<AddressRow, 'keys'> & {
+  keys: CheckedKey<AddressRow['keys'][number]>[]
+  verifiedList: SignedMailKeyList | null
 }
 
 /**
@@ -169,7 +161,7 @@ export async function checkedAddresses<T extends AddressRow>(
  * on already is left alone, whatever the server says. Another tab doing the
  * same is safe: the server takes the first list and refuses the second (409).
  */
-export async function settleOwedKeyLists(session: Pick<Session, 'masterKey'>, rows: AddressRow[]): Promise<boolean> {
+export async function settleOwedKeyLists(session: Pick<Session, 'masterKey' | 'userId'>, rows: AddressRow[]): Promise<boolean> {
   const owed = rows.filter((row) => row.keyListOwed && row.keyList)
   if (owed.length === 0) return false
   let signed = false
@@ -185,4 +177,86 @@ export async function settleOwedKeyLists(session: Pick<Session, 'masterKey'>, ro
     }
   }
   return signed
+}
+
+/** What the revision guard calls an address's key list (the same count `keys.ts` keeps for recipients). */
+export const KEY_LIST_GUARD_SCOPE = 'mail-key-list'
+
+/** The address's own key list is older than one this device has seen: the server went back. */
+export class OwnKeyListRolledBack extends Error {
+  constructor(readonly address: string) {
+    super(`the key list of ${address} is older than one this device has seen`)
+  }
+}
+
+/** A row of `GET /api/mail/addresses` as far as checking it needs. */
+interface OwnRow<K> {
+  address: string
+  keys: K[]
+  keyList: { data: string; signature: string } | null
+}
+
+/** A server key row, with whether the account's signed list names it (`listed`): its public key's own fingerprints, not the row's word. */
+export type CheckedKey<K> = K & { listed: boolean }
+
+/**
+ * `rows` checked against this account's own authority (derived from the
+ * master key, never the server's word): each current key list must verify,
+ * name the row's address (folded), and be no older than one this device has
+ * seen for it; a list that fails is null (`verifiedList`), not trusted. Each
+ * key row is `listed` only when its public key, inspected here, has the
+ * fingerprints a signed entry names: only those may be encrypted to, shown
+ * as the account's, or downloaded. A list older than one seen throws
+ * `OwnKeyListRolledBack` when `strict`, else is null.
+ */
+export async function checkedAddresses<T extends OwnRow<ListedKey & { publicKey: string }>>(
+  session: Pick<Session, 'masterKey' | 'userId'>,
+  rows: T[],
+  options: { strict?: boolean } = {},
+): Promise<(Omit<T, 'keys'> & { keys: CheckedKey<T['keys'][number]>[]; verifiedList: SignedMailKeyList | null })[]> {
+  const { authorityPublicKey } = await deriveAccountIdentityKeys(toBase64(session.masterKey))
+  const checked = []
+  for (const row of rows) {
+    const verifiedList = await ownList(session, authorityPublicKey, row, options.strict ?? false)
+    const keys = await Promise.all(
+      row.keys.map(async (key) => ({ ...key, listed: verifiedList ? await namedBy(verifiedList, row.address, key) : false })),
+    )
+    checked.push({ ...row, keys, verifiedList })
+  }
+  return checked
+}
+
+async function ownList(
+  session: Pick<Session, 'masterKey' | 'userId'>,
+  authorityPublicKey: string,
+  row: OwnRow<unknown>,
+  strict: boolean,
+): Promise<SignedMailKeyList | null> {
+  if (!row.keyList) return null
+  const list = await verifyMailKeyList(row.keyList, authorityPublicKey).catch(() => null)
+  if (!list) return null
+  // The list must be this row's address's, not another one of the account's.
+  const folded = await foldAddress(row.address)
+  if (!folded || folded !== (await foldAddress(list.address))) return null
+  try {
+    await revisionGuard(session).accept(KEY_LIST_GUARD_SCOPE, `${folded}:${authorityPublicKey}`, list.sequence)
+  } catch (error) {
+    if (!(error instanceof OlderThanSeenError)) throw error
+    if (strict) throw new OwnKeyListRolledBack(row.address)
+    return null
+  }
+  return list
+}
+
+/** Whether `key`'s public key is one the signed list names (its fingerprints, as inspected here). */
+async function namedBy(list: SignedMailKeyList, address: string, key: ListedKey & { publicKey: string }): Promise<boolean> {
+  const entry = list.keys.find((listed) => listed.fingerprint === key.fingerprint)
+  if (!entry || entry.sha256Fingerprint !== key.sha256Fingerprint) return false
+  const info = await inspectMailAddressPublicKey(key.publicKey, address).catch(() => null)
+  return !!info && info.fingerprint === entry.fingerprint && info.sha256Fingerprint === entry.sha256Fingerprint
+}
+
+/** Signed entries no server row carries with a matching public key: the server dropped (or swapped) a key the account signed. */
+export function missingKeys(address: { keys: { fingerprint: string; listed: boolean }[]; verifiedList: SignedMailKeyList | null }): MailKeyEntry[] {
+  return (address.verifiedList?.keys ?? []).filter((entry) => !address.keys.some((key) => key.listed && key.fingerprint === entry.fingerprint))
 }

@@ -11,6 +11,8 @@
   },
   "account": {
     "noKeyTitle": "Your mail address is not set up yet",
+    "unverifiedTitle": "Your keys can't be trusted",
+    "unverified": "The keys the server lists for your address don't match the key list your account signed, so Mail won't encrypt anything to them. Check your keys, and contact your administrator.",
     "noKey": "Your address key is made when you open your account once.",
     "openAccount": "Open Account"
   },

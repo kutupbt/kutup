@@ -474,6 +474,7 @@
       "signedByAccount": "Signed by your account (key list {{sequence}})",
       "notInList": "Not in your key list",
       "notInListHint": "The server lists this key, but the key list your account signed doesn't have it. It is never added to your next key list. Contact your administrator.",
+      "missing": "Your key list names a key the server no longer has right: {{fingerprint}}. Contact your administrator.",
       "notSigned": "This key list is not signed by your account. Do not trust these keys and contact your administrator.",
       "algorithm": "Curve25519 (Ed25519 and X25519)",
       "primary": "Primary",
