@@ -15,6 +15,12 @@ import {
 
 const PASSWORD = 'Deneme123*GroupLinkPassword'
 
+/** A 4×4 red PNG: a group picture small enough to read anywhere. */
+const PICTURE = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGM4o6QERwzEcQDE4xEBYJBBnwAAAABJRU5ErkJggg==',
+  'base64',
+)
+
 /** The members' panel of the group open on `page`, caught up by reopening it. */
 async function reopenDetails(page: Page, groupId: string): Promise<void> {
   await closeDetails(page)
@@ -55,6 +61,9 @@ test('a stranger asks through the group link, is approved, then banned; the old 
   await pageA.getByTestId('chat-group-description-input').fill(`About ${tag}`)
   await pageA.getByTestId('chat-group-description-save').click()
   await expect(pageA.getByTestId('chat-group-description')).toHaveText(`About ${tag}`, { timeout: 45_000 })
+  // A picture: scaled down and sealed here, stored on the home as a blob.
+  await pageA.getByTestId('chat-group-picture-input').setInputFiles({ name: 'team.png', mimeType: 'image/png', buffer: PICTURE })
+  await expect(pageA.getByText('Group picture changed.')).toBeVisible({ timeout: 45_000 })
   await pageA.getByTestId('chat-group-link-mode').click()
   await pageA.getByTestId('chat-group-link-mode-approve').click()
   const url = (await pageA.getByTestId('chat-group-link-url').textContent({ timeout: 45_000 }))!.trim()
@@ -66,6 +75,7 @@ test('a stranger asks through the group link, is approved, then banned; the old 
   await expect(join.getByTestId('chat-group-join-preview')).toContainText(`Linked ${tag}`, { timeout: 60_000 })
   await expect(join).toContainText(`About ${tag}`)
   await expect(join).toContainText('2 members')
+  await expect(join.getByTestId('chat-group-join-preview').locator('img')).toHaveCount(1)
   await expect(join).toContainText('An administrator approves new members')
   await join.getByTestId('chat-group-join-submit').click()
   await expect(join).toBeHidden({ timeout: 60_000 })
@@ -88,6 +98,7 @@ test('a stranger asks through the group link, is approved, then banned; the old 
   const notices = pageB.getByTestId('chat-group-notice')
   await expect(notices.filter({ hasText: /asked to join through the group link/ })).toBeVisible({ timeout: 90_000 })
   await expect(notices.filter({ hasText: /approved .* request to join/ })).toBeVisible()
+  await expect(notices.filter({ hasText: /changed the group picture/ })).toBeVisible()
 
   // Announcements only: Carol's composer goes; Alice still sends.
   await openDetails(pageA)
