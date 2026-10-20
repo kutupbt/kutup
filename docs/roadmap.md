@@ -1288,7 +1288,11 @@ its fix is in the lockfile. Recorded 2026-10-17.
   decrypts or signs with an RSA private key.
 - **Unmaintained**, no replacement in their parents yet: `number_prefix`
   (indicatif, CLI), `proc-macro-error2` (hax-lib, under libsignal's ML-KEM),
-  `smallstr` (yrs) and `instant` (OpenMLS, removed with MLS).
+  `smallstr` (yrs), `instant` (OpenMLS, removed with MLS) and `basic-toml`
+  (RUSTSEC-2026-0374, 2026-10-20: askama's compile-time config under uniffi's
+  bindings generator, only with `kutup-client-ffi`'s `bindgen` feature; no
+  shipped binary links it; uniffi 0.32.2 still uses askama 0.16, so revisit
+  at the next uniffi release).
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
   overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
   so `cargo deny` doesn't see it. It reaches `kutup-chat-core` and
