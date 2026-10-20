@@ -286,7 +286,12 @@ following the main session's review of #252:
     the peer's rename chain against the queued pin
     (`pendingIdentityPin`, the chain verified against its authority; the
     list is not touched), so a rename right after a first meeting is told
-    at once (spec 160; master CI on e43bb82c found it missed).
+    at once (spec 160; master CI on e43bb82c found it missed). When that
+    shows a rename, the peer's pin is written at once
+    (`writeIdentityPinNow`) and the chain followed into the list, so the
+    list's other checks (someone else now at their old address) know them
+    by both addresses. A rename is rare and the list sealed: writing early
+    then tells the server little.
 - Web: `ApiChatTransport.fetchContactList / storeContactEntry /
   deleteContactEntry` under the account head's `chatContacts` scope; `full`
   is the server's `contactListFull` code. Signing out flushes the contact

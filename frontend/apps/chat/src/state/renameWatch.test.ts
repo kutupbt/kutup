@@ -18,13 +18,16 @@ const RENAME = { from: 'ada@a.test', to: 'ada.new@a.test', sequence: 1, issuedAt
 
 const record = vi.fn<(account: unknown, rename: unknown) => Promise<boolean>>()
 const pendingPin = vi.fn<(account: unknown) => Promise<unknown>>()
+const writeNow = vi.fn<(account: unknown) => Promise<boolean>>()
 
 function service(written = true, pending: unknown = null) {
   record.mockReset()
   record.mockResolvedValue(written)
   pendingPin.mockReset()
   pendingPin.mockResolvedValue(pending)
-  return { recordPeerRenamed: record, pendingIdentityPin: pendingPin } as unknown as import('@kutup/chat-core/service').ChatService
+  writeNow.mockReset()
+  writeNow.mockResolvedValue(true)
+  return { recordPeerRenamed: record, pendingIdentityPin: pendingPin, writeIdentityPinNow: writeNow } as unknown as import('@kutup/chat-core/service').ChatService
 }
 
 afterEach(() => {
@@ -104,6 +107,10 @@ describe('directPeersByRecency', () => {
     const pending = { authorityPublicKey: 'A', since: '2026-10-20T00:00:00Z' }
     await checkRenames(service(true, pending), [key(1)], vi.fn(), 10)
     expect(followAccountRenames.mock.calls[0]?.[3]).toEqual(pending)
+    // The pin is written now, and the chain followed into the list.
+    expect(writeNow).toHaveBeenCalledTimes(1)
+    expect(followAccountRenames).toHaveBeenCalledTimes(2)
+    expect(followAccountRenames.mock.calls[1]?.[3]).toBeUndefined()
     expect(record).toHaveBeenCalledWith(expect.anything(), RENAME)
   })
 })

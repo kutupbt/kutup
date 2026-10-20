@@ -350,13 +350,20 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
         due.seen_ms = hour_ago;
     }
     let since = kutup_crypto::identity_pins::since_from_unix((hour_ago / 1000) as u64);
+    // Carol renamed: her pin alone is written now, ahead of its moment.
+    assert!(block_on(alice.engine.write_identity_pin_now(&carol.account)).unwrap());
+    assert_eq!(world.pin_writes.get(), 1);
+    assert!(block_on(alice.engine.pending_identity_pin(&carol.account))
+        .unwrap()
+        .is_none());
+    assert!(!block_on(alice.engine.write_identity_pin_now(&carol.account)).unwrap());
     let (authority, offered) = block_on(alice.engine.pending_identity_pin(&bob.account))
         .unwrap()
         .unwrap();
     assert_eq!(offered, since);
-    // Both in one write (as before signing out).
-    assert_eq!(block_on(alice.engine.flush_identity_pins(true)).unwrap(), 2);
-    assert_eq!(world.pin_writes.get(), 1);
+    // The rest in one write (as before signing out).
+    assert_eq!(block_on(alice.engine.flush_identity_pins(true)).unwrap(), 1);
+    assert_eq!(world.pin_writes.get(), 2);
     assert!(alice.engine.pins_due.is_empty());
     assert!(block_on(alice.engine.pending_identity_pin(&bob.account))
         .unwrap()

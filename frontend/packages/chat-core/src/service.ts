@@ -1180,6 +1180,17 @@ export class ChatService {
     return this.withLock(() => client.pendingIdentityPin!(accountKey(peer)))
   }
 
+  /**
+   * Writes `peer`'s pending pin to the account's list now, ahead of its
+   * random moment (they renamed, so the list must know them and their old
+   * address): true when one was written.
+   */
+  async writeIdentityPinNow(peer: AccountRef): Promise<boolean> {
+    const client = this.client
+    if (!client.writeIdentityPinNow) return false
+    return this.withLock(() => client.writeIdentityPinNow!(accountKey(peer)))
+  }
+
   /** ICE servers for a call: STUN, and TURN with fresh credentials when the server has a relay. */
   async callServers(): Promise<ChatCallServers> {
     const cached = this.cachedCallServers

@@ -3542,6 +3542,19 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    /// Writes `peer`'s pending pin to the account's list now (they renamed):
+    /// true when one was written.
+    #[wasm_bindgen(js_name = writeIdentityPinNow)]
+    pub async fn write_identity_pin_now(
+        &mut self,
+        peer: String,
+    ) -> std::result::Result<bool, JsValue> {
+        self.engine
+            .write_identity_pin_now(&peer)
+            .await
+            .map_err(chat_error)
+    }
+
     /// The pin Chat keeps for `peer` and hasn't written to the account's
     /// list yet: `{authorityPublicKey, since}`, or null.
     #[wasm_bindgen(js_name = pendingIdentityPin)]

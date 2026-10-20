@@ -54,7 +54,13 @@ export async function checkRenames(service: ChatService, peers: readonly string[
         // A peer met lately may not be pinned in the account's list yet:
         // Chat's own pin, waiting for its write, stands in meanwhile.
         const pending = await service.pendingIdentityPin(account)
-        const renames = await followAccountRenames(identity, account, current, pending)
+        let renames = await followAccountRenames(identity, account, current, pending)
+        // They renamed before their pin was written: it is written now, and
+        // the chain followed again into the list, so its checks (someone
+        // else at their old address) know them by both addresses.
+        if (pending && renames.length > 0 && (await service.writeIdentityPinNow(account))) {
+          renames = await followAccountRenames(identity, account, current)
+        }
         for (const rename of renames) {
           if (await service.recordPeerRenamed(account, rename)) wrote = true
         }

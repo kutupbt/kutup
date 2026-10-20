@@ -474,6 +474,24 @@ impl Engine {
             .filter(|(_, pin)| all || pin.due_ms <= now)
             .map(|(peer, _)| peer.clone())
             .collect();
+        self.write_due_pins(due).await
+    }
+
+    /// Writes `peer`'s first-seen pin now, ahead of its random moment: when
+    /// the peer renamed, so the account's list (which every app's checks
+    /// read) knows them and their old address. A rename is rare and the
+    /// list is sealed, so writing early tells the server little. True when
+    /// one was written.
+    pub async fn write_identity_pin_now(&mut self, peer: &str) -> Result<bool> {
+        self.load_pins_due().await?;
+        if !self.pins_due.contains_key(peer) {
+            return Ok(false);
+        }
+        Ok(self.write_due_pins(vec![peer.to_string()]).await? > 0)
+    }
+
+    async fn write_due_pins(&mut self, due: Vec<String>) -> Result<usize> {
+        let now = self.now_ms();
         if due.is_empty() {
             return Ok(0);
         }
