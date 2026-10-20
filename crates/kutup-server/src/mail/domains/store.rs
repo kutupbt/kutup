@@ -439,3 +439,22 @@ pub async fn set_catch_all(
     tx.commit().await?;
     Ok(())
 }
+
+/// An administrator ends a domain: inactive at once, its addresses freed,
+/// its owner told. The name of the domain it was.
+pub async fn deactivate(pool: &PgPool, id: Uuid) -> AppResult<String> {
+    let mut tx = pool.begin().await?;
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "UPDATE mail_domains SET state = 0, failing_since = NULL, warned_at = NULL,
+                stopped_at = NULL, transfer_seen_at = NULL, approved_at = NULL
+          WHERE id = $1 AND removed_at IS NULL RETURNING user_id, name",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (user, name) = row.ok_or_else(|| AppError::not_found("no such domain"))?;
+    free_addresses(&mut tx, id).await?;
+    security_events::record_names(&mut tx, user, Kind::DomainLost, None, None, &name, None).await?;
+    tx.commit().await?;
+    Ok(name)
+}

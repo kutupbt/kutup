@@ -2280,6 +2280,27 @@ fn build_router(state: AppState) -> Router {
                     get(handlers::mail_sending::senders),
                 )
                 .route(
+                    "/api/admin/mail/domains",
+                    get(handlers::mail_domains_admin::list),
+                )
+                .route(
+                    "/api/admin/mail/domains/settings",
+                    put(handlers::mail_domains_admin::set_settings),
+                )
+                .route(
+                    "/api/admin/mail/domains/:id/approve",
+                    post(handlers::mail_domains_admin::approve),
+                )
+                .route(
+                    "/api/admin/mail/domains/:id/deactivate",
+                    post(handlers::mail_domains_admin::deactivate),
+                )
+                .route(
+                    "/api/admin/users/:id/mail-domains",
+                    get(handlers::mail_domains_admin::overrides)
+                        .put(handlers::mail_domains_admin::set_overrides),
+                )
+                .route(
                     "/api/admin/mail/outside-sending",
                     get(handlers::mail_sending::outside_sending)
                         .put(handlers::mail_sending::set_outside_sending),
