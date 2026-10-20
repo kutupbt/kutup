@@ -11,7 +11,9 @@ import { Input } from '@kutup/ui/components/input'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { chatErrorMessage } from '../../lib/errors'
+import { chatGroupLinkFragment } from '../../lib/chatGroupLink'
 import { closeJoinLink, openJoinLink, useJoinLink } from '../../lib/joinLink'
+import { ChatGroupJoinDialog } from './ChatGroupJoinDialog'
 import { pathForConversation } from '../list/paths'
 
 type View =
@@ -30,7 +32,12 @@ const JOIN_WAIT_MS = 90_000
  */
 export function JoinGroupHost() {
   const url = useJoinLink()
-  return url === null ? null : <JoinGroupDialog key={url} url={url} />
+  const { capabilities } = useChat()
+  if (url === null) return null
+  // A pairwise group's link, on a server with them; any other is an MLS link.
+  const fragment = capabilities?.pairwiseGroups === true ? chatGroupLinkFragment(url) : null
+  if (fragment) return <ChatGroupJoinDialog key={fragment} fragment={fragment} />
+  return <JoinGroupDialog key={url} url={url} />
 }
 
 function JoinGroupDialog({ url }: { url: string }) {

@@ -1237,6 +1237,12 @@ struct GroupSummaryView {
     /// Who may rename it (`attributes`) and add members (`members`):
     /// `any`, `member`, `administrator` or `unsatisfiable`.
     access: Option<kutup_chat_proto::group::GroupAccessV1>,
+    /// This account may send there now (a member; not ended; an
+    /// administrator while it is announcements-only).
+    may_send: bool,
+    announcements_only: bool,
+    terminated: bool,
+    timer_seconds: u32,
 }
 
 impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
@@ -1260,6 +1266,10 @@ impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
             fork_suspected: summary.fork_suspected,
             known_since_ms: summary.known_since_ms,
             access: summary.access,
+            may_send: summary.may_send,
+            announcements_only: summary.announcements_only,
+            terminated: summary.terminated,
+            timer_seconds: summary.timer_seconds,
         }
     }
 }

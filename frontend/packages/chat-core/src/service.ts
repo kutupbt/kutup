@@ -47,6 +47,11 @@ import { isChatGroupId } from './types'
 import type {
   ChatGroupMember,
   ChatGroupSend,
+  ChatGroupBan,
+  ChatGroupDetails,
+  ChatGroupLinkJoin,
+  ChatGroupLinkMode,
+  ChatGroupLinkPreview,
   ChatGroupSummary,
   ChatGroupSync,
 } from './types'
@@ -1614,6 +1619,111 @@ export class ChatService {
     )
     this.notifyPeers()
     return sent
+  }
+
+  /** The link, settings and administrators' actions (slice 3). */
+  private groupSettingsClient(): Required<Pick<WasmChatClientHandle,
+    | 'previewGroupLink' | 'joinGroupByLink' | 'groupDetails' | 'setGroupLink' | 'resetGroupLink'
+    | 'setGroupDescription' | 'setGroupTimer' | 'setGroupAccess' | 'setGroupAnnouncementsOnly'
+    | 'approveGroupRequest' | 'denyGroupRequest' | 'banGroupMember' | 'unbanGroup' | 'endGroup'
+    | 'removeUnverifiedGroupMembers'>> {
+    this.groupClient()
+    const client = this.client
+    if (!client.previewGroupLink || !client.joinGroupByLink || !client.groupDetails
+      || !client.setGroupLink || !client.resetGroupLink || !client.setGroupDescription
+      || !client.setGroupTimer || !client.setGroupAccess || !client.setGroupAnnouncementsOnly
+      || !client.approveGroupRequest || !client.denyGroupRequest || !client.banGroupMember
+      || !client.unbanGroup || !client.endGroup || !client.removeUnverifiedGroupMembers) {
+      throw new ChatServiceError('serverUnsupported')
+    }
+    return client as never
+  }
+
+  /** What a group link (its URL fragment) leads to, read before joining. */
+  async previewChatGroupLink(fragment: string): Promise<ChatGroupLinkPreview> {
+    const client = this.groupSettingsClient()
+    return this.withLock(() => client.previewGroupLink(fragment))
+  }
+
+  /** Joins through a link, or asks to when an administrator approves. */
+  async joinChatGroupByLink(fragment: string): Promise<ChatGroupLinkJoin> {
+    const client = this.groupSettingsClient()
+    const joined = await this.withLock(() => client.joinGroupByLink(fragment))
+    this.notifyPeers()
+    return joined
+  }
+
+  async chatGroupDetails(groupId: string): Promise<ChatGroupDetails> {
+    const client = this.groupSettingsClient()
+    return this.withLock(() => client.groupDetails(groupId))
+  }
+
+  async setChatGroupLink(groupId: string, mode: ChatGroupLinkMode): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupLink(groupId, mode))
+  }
+
+  async resetChatGroupLink(groupId: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.resetGroupLink(groupId))
+  }
+
+  async setChatGroupDescription(groupId: string, description: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupDescription(groupId, description))
+  }
+
+  /** The disappearing-messages timer in seconds; 0 turns it off. */
+  async setChatGroupTimer(groupId: string, seconds: number): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupTimer(groupId, seconds))
+  }
+
+  async setChatGroupAccess(
+    groupId: string,
+    attributes: 'member' | 'administrator',
+    members: 'member' | 'administrator',
+  ): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupAccess(groupId, attributes, members))
+  }
+
+  async setChatGroupAnnouncementsOnly(groupId: string, on: boolean): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupAnnouncementsOnly(groupId, on))
+  }
+
+  async approveChatGroupRequest(groupId: string, pseudonym: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.approveGroupRequest(groupId, pseudonym))
+  }
+
+  /** Turns a request down; it is banned from the link, as Signal does. */
+  async denyChatGroupRequest(groupId: string, pseudonym: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.denyGroupRequest(groupId, pseudonym))
+  }
+
+  async banChatGroupMember(groupId: string, pseudonym: string, resetLink: boolean): Promise<void> {
+    await this.groupSettingsChange((client) => client.banGroupMember(groupId, pseudonym, resetLink))
+  }
+
+  async unbanChatGroup(groupId: string, ban: ChatGroupBan): Promise<void> {
+    await this.groupSettingsChange((client) => client.unbanGroup(groupId, ban))
+  }
+
+  /** Ends the group for everyone. */
+  async endChatGroup(groupId: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.endGroup(groupId))
+  }
+
+  /** Removes every unverified or banned member: how many. */
+  async removeUnverifiedChatGroupMembers(groupId: string): Promise<number> {
+    let removed = 0
+    await this.groupSettingsChange(async (client) => {
+      removed = await client.removeUnverifiedGroupMembers(groupId)
+    })
+    return removed
+  }
+
+  private async groupSettingsChange(
+    change: (client: ReturnType<ChatService['groupSettingsClient']>) => Promise<void>,
+  ): Promise<void> {
+    const client = this.groupSettingsClient()
+    await this.withLock(() => change(client))
+    this.notifyPeers()
   }
 
   private async groupChange(change: (client: ReturnType<ChatService['groupClient']>) => Promise<void>): Promise<void> {

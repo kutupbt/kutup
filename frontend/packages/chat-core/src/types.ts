@@ -135,6 +135,13 @@ export type ChatGroupUpdateChange =
   | { type: 'inviteLinkEnabled' | 'inviteLinkApprovalChanged'; approvalRequired: boolean }
   | { type: 'inviteLinkDisabled' | 'inviteLinkReset' }
   | { type: 'closed' }
+  /** The group's disappearing-messages timer; 0 is off. */
+  | { type: 'timerChanged'; seconds: number }
+  | { type: 'addersChanged'; administratorsOnly: boolean }
+  | { type: 'membersInvited' | 'invitationsRevoked'; count: number }
+  /** The actor joined, or asked to, or withdrew the request. */
+  | { type: 'joinedByInvitation' | 'joinedFromLink' | 'joinRequested' | 'joinRequestCanceled' }
+  | { type: 'joinRequestApproved' | 'joinRequestDenied' | 'memberBanned' | 'memberUnbanned'; member: AccountRef }
 
 export interface ChatGroupUpdate {
   /** Who made the change. */
@@ -352,6 +359,12 @@ export interface ChatGroupSummary {
   knownSinceMs?: number | null
   /** Who may rename it (`attributes`) and add members (`members`), as its verified state says. */
   access?: { attributes: ChatGroupAccessRequired; members: ChatGroupAccessRequired; addFromInviteLink: ChatGroupAccessRequired } | null
+  /** This account may send there now: a member, the group not ended, an administrator while it is announcements-only. */
+  maySend: boolean
+  announcementsOnly: boolean
+  terminated: boolean
+  /** The group's disappearing-messages timer in seconds; 0 is off. */
+  timerSeconds: number
 }
 
 /** Who may do something in a group (Signal's `AccessControl.AccessRequired`). */
@@ -365,6 +378,66 @@ export interface ChatGroupMember {
   joinedAtRevision: number
   /** Their account when their binding verified; absent for an unverified member. */
   account?: string | null
+}
+
+/** What a group link leads to, read before joining. */
+export type ChatGroupLinkPreview =
+  | {
+      kind: 'group'
+      groupId: string
+      title?: string | null
+      description?: string | null
+      memberCount: number
+      requiresApproval: boolean
+      /** This account's place in it already. */
+      status?: ChatGroupSummary['status'] | null
+    }
+  /** Reset, turned off, or the group gone. */
+  | { kind: 'invalid' }
+  | { kind: 'unreachable'; reason: string }
+
+/** A join through a group link. */
+export type ChatGroupLinkJoin =
+  | { kind: 'joined'; sync: ChatGroupSync }
+  /** Asked: an administrator sees it at their next sync. */
+  | { kind: 'requested' }
+  | { kind: 'invalid' }
+  | { kind: 'unreachable'; reason: string }
+
+/** What the group link does: anyone with it joins, asks, or it is off. */
+export type ChatGroupLinkMode = 'off' | 'join' | 'approve'
+
+/** A request to join, as an administrator sees it. */
+export interface ChatGroupRequest {
+  pseudonym: string
+  requestedAtRevision: number
+  /** Their account when the binding verified. */
+  account?: string | null
+  /** Their account is banned: it can't be approved. */
+  banned: boolean
+}
+
+/** A ban: an account with its banned pseudonyms, or a lone pseudonym nobody verified. */
+export interface ChatGroupBan {
+  account?: string | null
+  pseudonyms: string[]
+}
+
+/** A pairwise group's settings, requests and bans, from its verified state. */
+export interface ChatGroupDetails {
+  groupId: string
+  title?: string | null
+  description?: string | null
+  timerSeconds: number
+  announcementsOnly: boolean
+  terminated: boolean
+  access: { attributes: ChatGroupAccessRequired; members: ChatGroupAccessRequired; addFromInviteLink: ChatGroupAccessRequired }
+  link: { mode: ChatGroupLinkMode; fragment?: string | null }
+  administrator: boolean
+  requests: ChatGroupRequest[]
+  bans: ChatGroupBan[]
+  /** Members whose account is banned (back through the link): administrators remove them. */
+  bannedMembers: string[]
 }
 
 /** How a catch-up with a group's home ended. */
@@ -2000,6 +2073,21 @@ export interface WasmChatClientHandle {
   flushGroupList?(): Promise<number>
   removeGroupMember?(groupId: string, pseudonym: string): Promise<void>
   setGroupMemberAdmin?(groupId: string, pseudonym: string, administrator: boolean): Promise<void>
+  previewGroupLink?(fragment: string): Promise<ChatGroupLinkPreview>
+  joinGroupByLink?(fragment: string): Promise<ChatGroupLinkJoin>
+  groupDetails?(groupId: string): Promise<ChatGroupDetails>
+  setGroupLink?(groupId: string, mode: ChatGroupLinkMode): Promise<void>
+  resetGroupLink?(groupId: string): Promise<void>
+  setGroupDescription?(groupId: string, description: string): Promise<void>
+  setGroupTimer?(groupId: string, seconds: number): Promise<void>
+  setGroupAccess?(groupId: string, attributes: 'member' | 'administrator', members: 'member' | 'administrator'): Promise<void>
+  setGroupAnnouncementsOnly?(groupId: string, on: boolean): Promise<void>
+  approveGroupRequest?(groupId: string, pseudonym: string): Promise<void>
+  denyGroupRequest?(groupId: string, pseudonym: string): Promise<void>
+  banGroupMember?(groupId: string, pseudonym: string, resetLink: boolean): Promise<void>
+  unbanGroup?(groupId: string, ban: ChatGroupBan): Promise<void>
+  endGroup?(groupId: string): Promise<void>
+  removeUnverifiedGroupMembers?(groupId: string): Promise<number>
   sendText(
     sendId: string,
     peer: string,

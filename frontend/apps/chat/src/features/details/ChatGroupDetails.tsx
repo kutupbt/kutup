@@ -1,8 +1,8 @@
-import { DoorOpen, Pencil, Shield, UserMinus, UserPlus } from 'lucide-react'
+import { Ban, DoorOpen, Pencil, Shield, ShieldAlert, UserMinus, UserPlus } from 'lucide-react'
 import { useEffect, useId, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import type { ChatGroupAccessRequired, ChatGroupMember, ChatGroupSummary } from '@kutup/chat-core/types'
+import type { ChatGroupAccessRequired, ChatGroupDetails as Details, ChatGroupMember, ChatGroupSummary } from '@kutup/chat-core/types'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -22,6 +22,16 @@ import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
 import { personName } from '../../lib/names'
 import { accountName } from '../../state/accountNames'
+import {
+  BanDialog,
+  GroupAboutSection,
+  GroupBansSection,
+  GroupEndSection,
+  GroupLinkSection,
+  GroupPermissionsSection,
+  GroupRequestsSection,
+  GroupTimerSection,
+} from './ChatGroupSettings'
 import { Section } from './DetailsPanel'
 
 /** A title's longest (Signal's group name limit). */
@@ -46,6 +56,8 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
   const selfKey = self!.key
   const [members, setMembers] = useState<ChatGroupMember[] | null>(null)
   const [membersFailed, setMembersFailed] = useState(false)
+  const [details, setDetails] = useState<Details | null>(null)
+  const [banning, setBanning] = useState<{ member: ChatGroupMember; name: string } | null>(null)
   // A removal or a demotion, asked before it is done.
   const [confirming, setConfirming] = useState<{ kind: 'remove' | 'demote'; member: ChatGroupMember; name: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -78,10 +90,26 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
     }
   }, [service, group.groupId, group.revision, member])
 
+  // The settings, requests and bans, from the same verified state.
+  useEffect(() => {
+    if (!service || !member) return
+    let current = true
+    service
+      .chatGroupDetails(group.groupId)
+      .then((next) => current && setDetails(next))
+      .catch((error: unknown) => console.warn('chat: the group settings could not be read', error))
+    return () => {
+      current = false
+    }
+  }, [service, group.groupId, group.revision, member])
+
   const me = members?.find((m) => m.account === selfKey) ?? null
-  const isAdmin = me?.administrator === true
-  const canRename = members !== null && allowed(group.access?.attributes, isAdmin)
-  const canAdd = members !== null && allowed(group.access?.members, isAdmin)
+  const ended = details?.terminated === true
+  const isAdmin = me?.administrator === true && !ended
+  const canRename = members !== null && !ended && allowed(group.access?.attributes, isAdmin)
+  const canAdd = members !== null && !ended && allowed(group.access?.members, isAdmin)
+  const banned = new Set(details?.bannedMembers ?? [])
+  const removable = (members ?? []).filter((m) => m.account !== selfKey && !m.administrator && (!m.account || banned.has(m.pseudonym)))
 
   async function run(work: () => Promise<unknown>, done: string) {
     if (!service) return
@@ -91,6 +119,7 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
       toast.success(done)
       await refreshChat()
       setMembers(await service.chatGroupMembers(group.groupId).catch(() => members))
+      setDetails(await service.chatGroupDetails(group.groupId).catch(() => details))
     } catch (error) {
       toast.error(chatErrorMessage(error, t))
     } finally {
@@ -102,8 +131,14 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
   const sorted = [...(members ?? [])].sort(
     (a, b) => Number(b.account === selfKey) - Number(a.account === selfKey) || Number(b.administrator) - Number(a.administrator),
   )
+  const id = group.groupId
   return (
     <>
+      {ended ? (
+        <p className="mx-6 mb-2 rounded-md bg-muted px-3 py-2 text-center text-sm" role="status" data-testid="chat-group-ended">
+          {t('chat.chatGroup.endedNotice')}
+        </p>
+      ) : null}
       {canRename ? (
         <section className="flex justify-center px-6 pb-2">
           <Button variant="outline" size="sm" onClick={() => setRenaming(true)} disabled={busy} data-testid="chat-group-rename">
@@ -111,6 +146,22 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
             {t('chat.chatGroup.rename')}
           </Button>
         </section>
+      ) : null}
+      {details ? (
+        <>
+          <GroupAboutSection details={details} canEdit={canRename} busy={busy} run={run} onSave={(text) => service!.setChatGroupDescription(id, text)} />
+          <GroupTimerSection details={details} canEdit={canRename} busy={busy} run={run} onChoose={(seconds) => service!.setChatGroupTimer(id, seconds)} />
+        </>
+      ) : null}
+      {details && isAdmin ? (
+        <GroupRequestsSection
+          details={details}
+          nameOf={nameOf}
+          busy={busy}
+          run={run}
+          onApprove={(pseudonym) => service!.approveChatGroupRequest(id, pseudonym)}
+          onDeny={(pseudonym) => service!.denyChatGroupRequest(id, pseudonym)}
+        />
       ) : null}
       <Section title={t('chat.group.membersTitle', { count: members?.length ?? group.memberCount })} testId="chat-group-members">
         {canAdd ? (
@@ -138,7 +189,9 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
                 name={m.account ? nameOf(m.account) : t('chat.chatGroup.unverifiedMember')}
                 self={m.account === selfKey}
                 canManage={isAdmin && m.account !== selfKey}
+                banned={banned.has(m.pseudonym)}
                 busy={busy}
+                onBan={(name) => setBanning({ member: m, name })}
                 onToggleAdmin={(name) =>
                   m.administrator
                     ? setConfirming({ kind: 'demote', member: m, name })
@@ -148,7 +201,40 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
             ))}
           </ul>
         )}
+        {isAdmin && removable.length > 0 ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            disabled={busy}
+            onClick={() => void run(() => service!.removeUnverifiedChatGroupMembers(id), t('chat.chatGroup.unverifiedRemoved', { count: removable.length }))}
+            data-testid="chat-group-remove-unverified"
+          >
+            <ShieldAlert />
+            {t('chat.chatGroup.removeUnverified', { count: removable.length })}
+          </Button>
+        ) : null}
       </Section>
+
+      {details && isAdmin ? (
+        <>
+          <GroupLinkSection
+            details={details}
+            busy={busy}
+            run={run}
+            onMode={(mode) => service!.setChatGroupLink(id, mode)}
+            onReset={() => service!.resetChatGroupLink(id)}
+          />
+          <GroupPermissionsSection
+            details={details}
+            busy={busy}
+            run={run}
+            onAccess={(attributes, adders) => service!.setChatGroupAccess(id, attributes, adders)}
+            onAnnouncements={(on) => service!.setChatGroupAnnouncementsOnly(id, on)}
+          />
+          <GroupBansSection details={details} nameOf={nameOf} busy={busy} run={run} onUnban={(ban) => service!.unbanChatGroup(id, ban)} />
+        </>
+      ) : null}
 
       <section className="border-t border-border px-4 py-3">
         <Button
@@ -161,7 +247,19 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
           <DoorOpen />
           {t('chat.group.leave.action')}
         </Button>
+        {isAdmin ? <GroupEndSection busy={busy} run={run} onEnd={() => service!.endChatGroup(id)} /> : null}
       </section>
+      <BanDialog
+        name={banning?.name ?? null}
+        linkOn={details?.link.mode !== undefined && details.link.mode !== 'off'}
+        busy={busy}
+        onOpenChange={(open) => !open && setBanning(null)}
+        onBan={(resetLink) => {
+          const target = banning
+          setBanning(null)
+          if (target) void run(() => service!.banChatGroupMember(id, target.member.pseudonym, resetLink), t('chat.chatGroup.banned'))
+        }}
+      />
 
       <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
         <AlertDialogContent data-testid="chat-group-member-confirm">
@@ -246,17 +344,21 @@ function MemberRow({
   name,
   self,
   canManage,
+  banned,
   busy,
   onToggleAdmin,
   onRemove,
+  onBan,
 }: {
   member: ChatGroupMember
   name: string
   self: boolean
   canManage: boolean
+  banned: boolean
   busy: boolean
   onToggleAdmin: (name: string) => void
   onRemove: (name: string) => void
+  onBan: (name: string) => void
 }) {
   const { t } = useTranslation()
   const address = member.account ? accountName(member.account) : null
@@ -269,6 +371,7 @@ function MemberRow({
           {address && name !== address && !self ? <span className="truncate">{address}</span> : null}
           {member.administrator ? <span>{t('chat.group.admin')}</span> : null}
           {!member.account ? <span className="text-status-warn">{t('chat.chatGroup.unverifiedHint')}</span> : null}
+          {banned ? <span className="text-status-warn" data-testid="chat-group-member-banned">{t('chat.chatGroup.bannedAccount')}</span> : null}
         </span>
       </span>
       {canManage ? (
@@ -292,6 +395,16 @@ function MemberRow({
             data-testid="chat-group-member-remove"
           >
             <UserMinus />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => onBan(name)}
+            aria-label={t('chat.chatGroup.banName', { name })}
+            data-testid="chat-group-member-ban"
+          >
+            <Ban />
           </Button>
         </span>
       ) : null}

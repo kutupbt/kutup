@@ -73,6 +73,10 @@ describe('conversationList', () => {
       memberCount: 2,
       forkSuspected: false,
       knownSinceMs,
+      maySend: status === 'member',
+      announcementsOnly: false,
+      terminated: false,
+      timerSeconds: 0,
     })
     const ended: ConversationId = { kind: 'group', groupId: 'E'.repeat(43) }
     const history = [entry(ended, 'incoming', 5, { messageId: 'x1', text: 'old' })]
@@ -103,8 +107,8 @@ describe('conversationList', () => {
         ...data([]),
         contacts: [{ peer: blocked, state: 'blocked' } as never],
         chatGroups: [
-          { groupId: 'I'.repeat(43), title: 'x', status: 'invited', memberCount: 0, forkSuspected: false, knownSinceMs: 1, inviter: blocked },
-          { groupId: 'J'.repeat(43), title: 'y', status: 'invited', memberCount: 0, forkSuspected: false, knownSinceMs: 2, inviter: 'aci:00000000-0000-4000-8000-0000000000c3@a.test' },
+          { groupId: 'I'.repeat(43), title: 'x', status: 'invited', memberCount: 0, forkSuspected: false, knownSinceMs: 1, inviter: blocked, maySend: false, announcementsOnly: false, terminated: false, timerSeconds: 0 },
+          { groupId: 'J'.repeat(43), title: 'y', status: 'invited', memberCount: 0, forkSuspected: false, knownSinceMs: 2, inviter: 'aci:00000000-0000-4000-8000-0000000000c3@a.test', maySend: false, announcementsOnly: false, terminated: false, timerSeconds: 0 },
         ],
       },
       SELF,

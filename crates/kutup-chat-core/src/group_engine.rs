@@ -42,6 +42,13 @@ pub struct GroupSummary {
     pub known_since_ms: Option<i64>,
     /// Who may rename it and add members, as the verified state says.
     pub access: Option<kutup_chat_proto::group::GroupAccessV1>,
+    /// Whether this account may send there now: not once the group ended,
+    /// and only as an administrator while it is announcements-only.
+    pub may_send: bool,
+    pub announcements_only: bool,
+    pub terminated: bool,
+    /// The disappearing-messages timer in seconds; 0 is off.
+    pub timer_seconds: u32,
 }
 
 /// What group content that came pairwise did.
@@ -867,7 +874,20 @@ impl Engine {
                     });
                 let verified = record.verified().ok().flatten();
                 let access = verified.as_ref().map(|(state, _)| state.access);
+                let me = record.pseudonym_text().ok();
+                let state = verified.as_ref().map(|(state, _)| state);
+                let announcements_only = state.is_some_and(|state| state.announcements_only);
+                let terminated = state.is_some_and(|state| state.terminated);
+                let administrator = state
+                    .zip(me.as_deref())
+                    .is_some_and(|(state, me)| state.is_administrator(me));
                 GroupSummary {
+                    may_send: record.status == GroupStatus::Member
+                        && !terminated
+                        && (!announcements_only || administrator),
+                    announcements_only,
+                    terminated,
+                    timer_seconds: crate::group_settings::timer_seconds(&record),
                     group_id: record.group_id.clone(),
                     title,
                     status: record.status.clone(),
