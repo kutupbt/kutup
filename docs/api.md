@@ -1893,7 +1893,7 @@ only), `inReplyTo` and `references`.
 ### POST /api/mail/drafts · PUT /api/mail/drafts/:id
 
 Multipart: `meta` (JSON: `subject`, `fromName`, `to`, `cc`, `bcc` as
-`[{ "address", "name" }]`, `messageId` as `…@<server name>`, `inReplyTo`,
+`[{ "address", "name" }]`, `messageId` as `…@<server name>` or `…@<the sender's domain>`, `inReplyTo`,
 `references`, `attachmentCount`, `threadId`) and `body` (the message without
 attachments, encrypted to your own address key; `400` with `code: keyChanged`
 otherwise). **Response:** the draft, as in the list. `413` when too large or

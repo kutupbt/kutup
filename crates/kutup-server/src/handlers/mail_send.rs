@@ -78,8 +78,9 @@ pub struct MailMeta {
     pub cc: Vec<MailboxInput>,
     #[serde(default)]
     pub bcc: Vec<MailboxInput>,
-    /// The Message-ID the browser gave the message, `<…@server name>`
-    /// without the brackets.
+    /// The Message-ID the browser gave the message, `<…@server name>` or
+    /// `<…@the sender's domain>` (a custom domain's, as Proton) without the
+    /// brackets.
     pub message_id: String,
     pub in_reply_to: Option<String>,
     #[serde(default)]
@@ -355,12 +356,17 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
     if to.len() + cc.len() + bcc.len() > MAX_RECIPIENTS {
         return Err(AppError::bad_request("at most 100 recipients"));
     }
+    let sender_domain = sender.address.rsplit_once('@').map(|(_, domain)| domain);
     let message_id = headers::message_id(&meta.message_id)
         .filter(|id| {
-            id.rsplit_once('@')
-                .is_some_and(|(_, domain)| domain.eq_ignore_ascii_case(server_name))
+            id.rsplit_once('@').is_some_and(|(_, domain)| {
+                domain.eq_ignore_ascii_case(server_name)
+                    || sender_domain.is_some_and(|own| domain.eq_ignore_ascii_case(own))
+            })
         })
-        .ok_or_else(|| AppError::bad_request("messageId must be <…@server name>"))?;
+        .ok_or_else(|| {
+            AppError::bad_request("messageId must be <…@server name or the sender's domain>")
+        })?;
     let in_reply_to = match meta.in_reply_to.as_deref() {
         Some(id) => {
             Some(headers::message_id(id).ok_or_else(|| AppError::bad_request("bad inReplyTo"))?)
@@ -2044,6 +2050,15 @@ mod tests {
         let mut foreign = meta();
         foreign.message_id = "abc@elsewhere.org".into();
         assert!(check_meta(&foreign, &sender(), "kutup.test").is_err());
+        // A custom domain's sender names its own domain, as Proton does.
+        let custom = Sender {
+            address: "alice@customer.test".into(),
+            ..sender()
+        };
+        let mut own = meta();
+        own.message_id = "abc@customer.test".into();
+        assert!(check_meta(&own, &custom, "kutup.test").is_ok());
+        assert!(check_meta(&own, &sender(), "kutup.test").is_err());
         let mut bad = meta();
         bad.to[0].address = "Bob <bob@kutup.test>".into();
         assert!(check_meta(&bad, &sender(), "kutup.test").is_err());
