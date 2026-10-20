@@ -168,7 +168,7 @@ async fn answer_checked(
         }
         GroupOperationV1::GetJoinInfo => claim_join_info(state, &group_id, &pseudonym, now).await,
         GroupOperationV1::GetRequestStatus => {
-            request_status(state, &group_id, &pseudonym, now).await
+            request_status(state, relay, &group_id, &pseudonym, now).await
         }
         // Calls and avatars come with slices 3 and 4.
         GroupOperationV1::CallToken | GroupOperationV1::GetAvatar | GroupOperationV1::PutAvatar => {
@@ -264,9 +264,13 @@ async fn claim_join_info(
 /// asks (the signature proves it), so this tells nobody anything about
 /// another; an unknown group and a pseudonym the group never saw get the
 /// same `unknown`, never `NotFound`, so a requester whose change was lost
-/// can tell it from a refusal. The per-pseudonym budget was spent above.
+/// can tell it from a refusal. Every answer takes the same two reads, so
+/// its timing doesn't tell a group that exists from one that doesn't, and
+/// `unknown` spends the relay's failure budget, so probing for groups slows
+/// as a stranger's requests do. The per-pseudonym budget was spent above.
 async fn request_status(
     state: &AppState,
+    relay: &str,
     group_id: &[u8; 32],
     pseudonym: &str,
     now: i64,
@@ -279,8 +283,14 @@ async fn request_status(
         };
         Ok(ok(now, body.canonical_bytes().map_err(AppError::internal)?))
     };
-    let Some((group, head)) = load_state(&state.pool, group_id, false).await? else {
-        return answer(GroupRequestStateV1::Unknown, None, None);
+    let found = load_state(&state.pool, group_id, false).await?;
+    let seen = was_member(&state.pool, group_id, pseudonym).await?;
+    let unknown = || {
+        limits::failed(relay);
+        answer(GroupRequestStateV1::Unknown, None, None)
+    };
+    let Some((group, head)) = found else {
+        return unknown();
     };
     if group.member(pseudonym).is_some() {
         return answer(GroupRequestStateV1::Member, None, None);
@@ -297,10 +307,10 @@ async fn request_status(
     }
     // Seen before (as a requester or a member) and neither now: denied, or
     // once in and out again.
-    if was_member(&state.pool, group_id, pseudonym).await? {
+    if seen {
         answer(GroupRequestStateV1::Denied, None, None)
     } else {
-        answer(GroupRequestStateV1::Unknown, None, None)
+        unknown()
     }
 }
 
@@ -803,14 +813,11 @@ async fn submit(
     if change.actor != pseudonym {
         return Ok(GroupResponseV1::refused("wrongActor", now));
     }
-    // Newcomers from a link, per relay server, before the change is checked:
-    // a server's users can't flood groups here with joins or requests.
-    if from_link(&change) {
-        let per_minute = crate::site_settings::chat_group_link_joins_per_relay(&state.pool).await?;
-        if !limits::link_join(relay, per_minute) {
-            return Ok(status(GroupResponseStatusV1::RateLimited, now));
-        }
-    }
+    let link_budgets = if from_link(&change) {
+        Some(crate::site_settings::chat_group_link_joins(&state.pool).await?)
+    } else {
+        None
+    };
     let mut tx = state.pool.begin().await?;
     let Some((current, head)) = load_state(&mut *tx, group_id, true).await? else {
         return Ok(status(GroupResponseStatusV1::NotFound, now));
@@ -821,6 +828,15 @@ async fn submit(
     // or "ended" tells them the group exists.
     if !admitted(&current, group_id, &change) {
         return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
+    // Newcomers from a link, once its password holds and before the change
+    // is checked: per relay server and group, and per relay server, so junk
+    // without the link spends nothing and one link's holders crowd only
+    // that group.
+    if let Some(budgets) = link_budgets {
+        if !limits::link_join(relay, group_id, budgets) {
+            return Ok(status(GroupResponseStatusV1::RateLimited, now));
+        }
     }
     let next = match check_change(&current, &head, &change, limits) {
         Ok(next) => next,

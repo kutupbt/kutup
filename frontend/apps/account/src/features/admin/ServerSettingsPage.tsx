@@ -30,12 +30,14 @@ export function ServerSettingsPage() {
   const update = useUpdateAdminSettings()
 
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
+  const linkJoins = z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange'))
   const schema = z.object({
     registrationMode: z.enum(['on', 'code', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
-    linkJoins: z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange')),
+    linkJoinsGroup: linkJoins,
+    linkJoinsRelay: linkJoins,
   })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -47,7 +49,8 @@ export function ServerSettingsPage() {
       quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
       mailboxDays: settings.data.chatMailboxRetentionDays,
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
-      linkJoins: settings.data.chatGroupLinkJoinsPerRelayPerMin,
+      linkJoinsGroup: settings.data.chatGroupLinkJoinsPerRelayGroupPerMin,
+      linkJoinsRelay: settings.data.chatGroupLinkJoinsPerRelayPerMin,
     })
   }, [settings.data, reset])
 
@@ -63,7 +66,8 @@ export function ServerSettingsPage() {
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
-        chatGroupLinkJoinsPerRelayPerMin: v.linkJoins,
+        chatGroupLinkJoinsPerRelayGroupPerMin: v.linkJoinsGroup,
+        chatGroupLinkJoinsPerRelayPerMin: v.linkJoinsRelay,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -106,8 +110,11 @@ export function ServerSettingsPage() {
               <Field label={t('admin.settings.mediaDays')} error={errors.mediaDays?.message} description={t('admin.settings.mediaDaysHint')} required>
                 {(field) => <Input {...field} {...register('mediaDays')} type="number" min={0} max={MAX_RETENTION_DAYS} step={1} inputMode="numeric" />}
               </Field>
-              <Field label={t('admin.settings.groupLinkJoins')} error={errors.linkJoins?.message} description={t('admin.settings.groupLinkJoinsHint')} required>
-                {(field) => <Input {...field} {...register('linkJoins')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
+              <Field label={t('admin.settings.groupLinkJoinsGroup')} error={errors.linkJoinsGroup?.message} description={t('admin.settings.groupLinkJoinsGroupHint')} required>
+                {(field) => <Input {...field} {...register('linkJoinsGroup')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
+              </Field>
+              <Field label={t('admin.settings.groupLinkJoinsRelay')} error={errors.linkJoinsRelay?.message} description={t('admin.settings.groupLinkJoinsRelayHint')} required>
+                {(field) => <Input {...field} {...register('linkJoinsRelay')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
               </Field>
             </CardContent>
           </Card>

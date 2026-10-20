@@ -1015,41 +1015,33 @@ fn a_requester_learns_where_its_request_stands() {
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 
-/// Sets the link-join budget per relay server (an administrator's setting),
-/// returning the one it replaced; `None` without an administrator.
-fn set_link_joins_per_relay(c: &Client, base: &str, per_minute: i64) -> Option<i64> {
-    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
-        eprintln!("KUTUP_LIVE_ADMIN unset; skipping");
-        return None;
+/// A newcomer's cancel built from what `GetRequestStatus` answered alone:
+/// the revision and head it named, not a state the newcomer never sees.
+fn cancel_from(
+    group_id: &[u8; 32],
+    status: &GroupRequestStatusV1,
+    key: &GroupKeyPair,
+) -> GroupChangeV1 {
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: encode_group_id(group_id),
+        revision: status.revision.expect("pending names its revision") + 1,
+        previous_hash: status.head.clone().expect("pending names its head"),
+        actor: b64(&key.public_key()),
+        actions: vec![GroupActionV1::CancelRequest],
+        resulting_state_hash: None,
+        signature: String::new(),
     };
-    let (name, password) = admin.split_once(':').unwrap();
-    let token = admin_token(c, base, password, name);
-    let before: Value = bearer(c.get(format!("{base}/api/admin/settings")), &token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let r = bearer(c.put(format!("{base}/api/admin/settings")), &token)
-        .json(&serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": per_minute }))
-        .send()
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    let settings: Value = r.json().unwrap();
-    assert_eq!(settings["chatGroupLinkJoinsPerRelayPerMin"], per_minute);
-    let r = bearer(c.put(format!("{base}/api/admin/settings")), &token)
-        .json(&serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": 0 }))
-        .send()
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
-    before["chatGroupLinkJoinsPerRelayPerMin"].as_i64()
+    change.signature = b64(&key.sign_change(&change.signed_bytes().unwrap()));
+    change
 }
 
-/// Joins and requests through links are budgeted per relay server, as the
-/// administrators set it, before the change is checked; other changes
-/// aren't. (The gate runs these tests one at a time, so the budget is this
-/// test's alone while it runs.)
+/// A requester cancels from its status alone, after the link was reset
+/// (so it can't build anything from the link); the cancel is done once:
+/// sent again it meets an unknown group, and the status says denied. A
+/// client that lost the answer to its cancel asks the status the same way.
 #[test]
-fn link_joins_are_budgeted_per_relay_server() {
+fn a_requester_cancels_from_its_status_after_a_link_reset() {
     let Some(base) = live() else { return };
     let c = crate::common::client();
     let alice = register(&c, &base);
@@ -1065,38 +1057,181 @@ fn link_joins_are_budgeted_per_relay_server() {
         &alice_key,
         kutup_chat_proto::group::AccessRequired::Administrator,
     );
-    let Some(before) = set_link_joins_per_relay(&c, &base, 3) else {
-        purge_accounts(&c, &base, &[&alice, &bob]);
+    let carol_key = GroupKeyPair::generate();
+    let asks = through_link(&group, &carol_key, &password, true);
+    let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &carol_key));
+    apply(&mut group, &home, &asked);
+    // Alice resets the link: the old password no longer reads anything.
+    let reset = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::ModifyInviteLink {
+            password: Some(b64(&random::<16>())),
+        }],
+    );
+    let reset = accepted(&submit(&c, &alice, &home, &group, &reset, &alice_key));
+    apply(&mut group, &home, &reset);
+
+    let pending = request_status(&c, &bob, &home, &group.id, &carol_key);
+    assert_eq!(pending.status, GroupRequestStateV1::Pending);
+    assert_eq!(pending.revision, Some(group.state.revision));
+    let cancel = cancel_from(&group.id, &pending, &carol_key);
+    let cancelled = accepted(&submit(&c, &bob, &home, &group, &cancel, &carol_key));
+    apply(&mut group, &home, &cancelled);
+    assert!(group.state.requesting.is_empty());
+
+    let again = cancel_from(&group.id, &pending, &carol_key);
+    assert_eq!(
+        submit(&c, &bob, &home, &group, &again, &carol_key).status,
+        GroupResponseStatusV1::NotFound
+    );
+    let after = request_status(&c, &bob, &home, &group.id, &carol_key);
+    assert_eq!(after.status, GroupRequestStateV1::Denied);
+    purge_accounts(&c, &base, &[&alice, &bob]);
+}
+
+/// An administrator's session, which puts the link-join budgets back to
+/// their configured first values when dropped (a failing test too).
+struct LinkJoinBudgets {
+    c: Client,
+    base: String,
+    token: String,
+}
+
+impl LinkJoinBudgets {
+    /// `None` without an administrator (`KUTUP_LIVE_ADMIN`).
+    fn take(c: &Client, base: &str) -> Option<Self> {
+        let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+            eprintln!("KUTUP_LIVE_ADMIN unset; skipping");
+            return None;
+        };
+        let (name, password) = admin.split_once(':').unwrap();
+        Some(Self {
+            c: c.clone(),
+            base: base.to_owned(),
+            token: admin_token(c, base, password, name),
+        })
+    }
+
+    fn put(&self, body: Value) -> (StatusCode, Value) {
+        let r = bearer(
+            self.c.put(format!("{}/api/admin/settings", self.base)),
+            &self.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        let status = r.status();
+        (status, r.json().unwrap_or(Value::Null))
+    }
+
+    /// Sets the budgets: per relay server and group, and per relay server.
+    fn set(&self, per_group: i64, per_relay: i64) {
+        let (status, settings) = self.put(serde_json::json!({
+            "chatGroupLinkJoinsPerRelayGroupPerMin": per_group,
+            "chatGroupLinkJoinsPerRelayPerMin": per_relay,
+        }));
+        assert_eq!(status, StatusCode::OK, "{settings}");
+        assert_eq!(settings["chatGroupLinkJoinsPerRelayGroupPerMin"], per_group);
+        assert_eq!(settings["chatGroupLinkJoinsPerRelayPerMin"], per_relay);
+    }
+}
+
+impl Drop for LinkJoinBudgets {
+    fn drop(&mut self) {
+        let (status, _) = self.put(serde_json::json!({
+            "chatGroupLinkJoinsPerRelayGroupPerMin": null,
+            "chatGroupLinkJoinsPerRelayPerMin": null,
+        }));
+        if status != StatusCode::OK && !std::thread::panicking() {
+            panic!("the link-join budgets were not reset: {status}");
+        }
+    }
+}
+
+/// Joins and requests through a link are budgeted per relay server and
+/// group, and per relay server, as administrators set them; charged once
+/// the link's password holds, so junk without it spends nothing, and one
+/// link's holders crowd only that group. (The gate runs these tests one at
+/// a time, so the budgets are this test's alone while it runs.)
+#[test]
+fn link_joins_are_budgeted_per_relay_server_and_group() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let Some(budgets) = LinkJoinBudgets::take(&c, &base) else {
         return;
     };
+    let (status, _) = budgets.put(serde_json::json!({ "chatGroupLinkJoinsPerRelayPerMin": 0 }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let mut first = create(&c, &alice, &home, &alice_key);
+    let first_password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut first,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    let mut second = create(&c, &alice, &home, &alice_key);
+    let second_password = link_on(
+        &c,
+        &alice,
+        &home,
+        &mut second,
+        &alice_key,
+        kutup_chat_proto::group::AccessRequired::Administrator,
+    );
+    budgets.set(3, 5);
     // Past the window of the joins earlier tests made through this relay.
     std::thread::sleep(std::time::Duration::from_secs(61));
 
-    for _ in 0..3 {
+    let ask = |group: &mut Group, password: &[u8; 16]| {
         let key = GroupKeyPair::generate();
-        let asks = through_link(&group, &key, &password, true);
-        let asked = accepted(&submit(&c, &bob, &home, &group, &asks, &key));
-        apply(&mut group, &home, &asked);
+        let change = through_link(group, &key, password, true);
+        let answer = submit(&c, &bob, &home, group, &change, &key);
+        if answer.status == GroupResponseStatusV1::Ok {
+            apply(group, &home, &accepted(&answer));
+        }
+        answer.status
+    };
+    for _ in 0..3 {
+        assert_eq!(ask(&mut first, &first_password), GroupResponseStatusV1::Ok);
     }
-    // The next one is refused before its change is checked: even a wrong
-    // password meets the budget, not an unknown group.
-    let key = GroupKeyPair::generate();
-    let wrong = through_link(&group, &key, &random::<16>(), false);
+    // The group's budget is spent: the right password meets it.
     assert_eq!(
-        submit(&c, &bob, &home, &group, &wrong, &key).status,
+        ask(&mut first, &first_password),
+        GroupResponseStatusV1::RateLimited
+    );
+    // A wrong password is an unknown group, as ever, and spends nothing.
+    assert_eq!(
+        ask(&mut first, &random::<16>()),
+        GroupResponseStatusV1::NotFound
+    );
+    // Another group has its own budget, under the relay's: 3 + 2 = 5.
+    for _ in 0..2 {
+        assert_eq!(
+            ask(&mut second, &second_password),
+            GroupResponseStatusV1::Ok
+        );
+    }
+    assert_eq!(
+        ask(&mut second, &second_password),
         GroupResponseStatusV1::RateLimited
     );
     // A member's own change isn't charged.
     let deny = author(
-        &group,
+        &first,
         &alice_key,
         vec![GroupActionV1::DenyRequest {
-            pseudonym: group.state.requesting[0].pseudonym.clone(),
+            pseudonym: first.state.requesting[0].pseudonym.clone(),
         }],
     );
-    accepted(&submit(&c, &alice, &home, &group, &deny, &alice_key));
-
-    set_link_joins_per_relay(&c, &base, before);
+    accepted(&submit(&c, &alice, &home, &first, &deny, &alice_key));
+    drop(budgets);
     purge_accounts(&c, &base, &[&alice, &bob]);
 }
 

@@ -3374,9 +3374,12 @@ a bad signature; the operations and answers are `GroupRequestV1` /
 relaying server (6000/min), per pseudonym (240/min), changes per pseudonym
 (30/min) and per group (60/min), link requests per group (30/min), and new
 groups per relaying server (600/hour). Joins from a link and requests to
-join are limited per relaying server too, as administrators set it
-(`chatGroupLinkJoinsPerRelayPerMin`, 120/min at first), charged before the
-change is checked. Group budgets are charged only for
+join are limited per relaying server and group, and per relaying server, as
+administrators set them (`chatGroupLinkJoinsPerRelayGroupPerMin`, 120/min,
+and `chatGroupLinkJoinsPerRelayPerMin`, 1200/min, at first): charged once the
+link's password holds and before the rest of the change is checked, so a
+change without the link spends nothing and one link's holders crowd only
+its group. Group budgets are charged only for
 valid changes and proven link requests; failed requests spend a separate
 budget per relaying server (600/min). A stranger, a removed member, or a
 newcomer whose claim, link password or request doesn't hold gets the same
@@ -3398,7 +3401,11 @@ where the signer's own request stands, as `GroupRequestStatusV1`:
 cancel names, so it works after a link reset too), `member` once approved,
 `denied` when banned, or when the group saw the pseudonym (as a requester or
 a member) and it is neither now, and `unknown` for a pseudonym the group never
-saw or an unknown group: never `notFound`. It spends the per-pseudonym budget.
+saw or an unknown group: never `notFound`. It spends the per-pseudonym budget,
+and an `unknown` answer also the relaying server's failure budget; every
+answer takes the same reads, so its timing doesn't tell whether the group
+exists. A cancel is done once: sent again it meets `notFound`, so a client
+that lost the answer to its cancel asks the status (`denied` then).
 
 ### GET /api/chat/group-list
 
@@ -4435,14 +4442,19 @@ Return current global server settings.
   "chatMediaDeliveryRetentionDays": 45,
   "nameHoldDays": 180,
   "oldAddressReceiveDays": 90,
-  "chatGroupLinkJoinsPerRelayPerMin": 120
+  "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
+  "chatGroupLinkJoinsPerRelayPerMin": 1200
 }
 ```
 
-`chatGroupLinkJoinsPerRelayPerMin` is how many joins from a group link and
-requests to join one relaying server's users may make, each minute, to the
-groups this server hosts (1 to 1000000; 400 otherwise). Until an administrator
-sets it, `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN` (default 120).
+The two link-join budgets limit how many joins from a group link and
+requests to join one relaying server's users may make each minute: to any
+one group this server hosts (`chatGroupLinkJoinsPerRelayGroupPerMin`), and to
+all of them together (`chatGroupLinkJoinsPerRelayPerMin`). Each is 1 to
+1000000 (`400` otherwise); `null` in a `PUT` drops the stored value, so the
+first value applies again: `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_GROUP_PER_MIN`
+(default 120) and `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN` (default
+1200).
 
 `defaultStorageQuotaBytes` is the storage quota new accounts get (registered,
 created by an administrator, or the bootstrap administrator); 10 GiB until an
