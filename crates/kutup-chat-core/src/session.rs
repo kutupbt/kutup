@@ -964,6 +964,16 @@ impl Session {
         self.store.db().load_contact(peer).await
     }
 
+    /// The first-seen identity pins waiting for their write (JSON).
+    pub(crate) async fn pins_due(&self) -> Result<Option<Vec<u8>>> {
+        self.store.pins_due().await
+    }
+
+    pub(crate) async fn save_pins_due(&mut self, state: Vec<u8>) -> Result<()> {
+        self.store.stage_pins_due(state);
+        self.store.commit().await
+    }
+
     /// Whether this device followed the account's contact list once, in full.
     pub(crate) async fn contact_list_followed(&self) -> Result<bool> {
         self.store.contact_list_followed().await

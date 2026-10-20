@@ -350,6 +350,13 @@ impl Engine {
             return Ok(report);
         }
         let now = self.now_ms();
+        // A block is due at once where the platform writes blocks at once:
+        // one whose first write failed goes on the next pass, not at a
+        // random moment later.
+        let immediate = self
+            .contact_list
+            .as_ref()
+            .is_some_and(|list| list.timing.block == BlockTiming::Immediate);
         let due: Vec<ContactRecord> = self
             .session
             .contacts()
@@ -357,7 +364,9 @@ impl Engine {
             .into_iter()
             .filter(|contact| match only {
                 Some(peer) => contact.peer == peer,
-                None => contact.list_due_at_ms.is_some_and(|at| all || at <= now),
+                None => contact.list_due_at_ms.is_some_and(|at| {
+                    all || at <= now || (immediate && contact.state == ContactState::Blocked)
+                }),
             })
             .collect();
         if due.is_empty() {
@@ -376,7 +385,11 @@ impl Engine {
             }
         }
         if let Some(list) = self.contact_list.as_mut() {
-            list.full = full;
+            // A flush of one contact can say the list is full, never that it
+            // no longer is: only a pass over everything due knows that.
+            if only.is_none() || full {
+                list.full = full;
+            }
         }
         Ok(report)
     }

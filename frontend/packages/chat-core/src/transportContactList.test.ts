@@ -67,8 +67,9 @@ describe('the contact list under the account head', () => {
     head.index = () => [['a', 5]]
     expect(await transport.storeContactEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe('conflict')
     expect(http.put).not.toHaveBeenCalled()
+    // Already at that revision: a conflict, so the engine reads and merges.
     head.index = () => [['a', 3]]
-    expect(await transport.storeContactEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe('stored')
+    expect(await transport.storeContactEntry({ id: 'a', baseRevision: 2, revision: 3, envelope: 'E' })).toBe('conflict')
   })
 
   it('says a full list is full, and nothing else', async () => {

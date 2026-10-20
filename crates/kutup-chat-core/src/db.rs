@@ -654,6 +654,9 @@ pub struct Pending {
     /// (docs/plans/chat-contacts-sync.md, "Reading"): until then its mailbox
     /// waits. Only ever set.
     pub(crate) contact_list_followed: bool,
+    /// First-seen identity pins waiting for their delayed write, as JSON
+    /// (peer → due ms), so a reload doesn't lose them.
+    pub(crate) pins_due: Option<Vec<u8>>,
 }
 
 impl Pending {
@@ -696,6 +699,7 @@ impl Pending {
             && self.last_cursor.is_none()
             && self.last_sent_seq.is_none()
             && !self.contact_list_followed
+            && self.pins_due.is_none()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -777,6 +781,8 @@ pub trait ChatDb {
     async fn load_last_sent_seq(&self) -> Result<Option<u64>>;
     /// Whether this device followed the account's contact list once, in full.
     async fn load_contact_list_followed(&self) -> Result<bool>;
+    /// The first-seen identity pins waiting for their write (JSON), if any.
+    async fn load_pins_due(&self) -> Result<Option<Vec<u8>>>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
     async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
 

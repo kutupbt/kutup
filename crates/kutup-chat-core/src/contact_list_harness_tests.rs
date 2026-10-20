@@ -335,6 +335,12 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
     // Meeting Bob and Carol wrote nothing yet: the pins wait their delay.
     assert_eq!(world.pin_writes.get(), 0);
     assert_eq!(alice.engine.pins_due.len(), 2);
+    // Kept with the device, so a reload doesn't lose them.
+    let stored: std::collections::BTreeMap<String, i64> = serde_json::from_slice(
+        &block_on(alice.engine.session().pins_due()).unwrap().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored.len(), 2);
     // Both in one write (as before signing out).
     assert_eq!(block_on(alice.engine.flush_identity_pins(true)).unwrap(), 2);
     assert_eq!(world.pin_writes.get(), 1);

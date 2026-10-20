@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (2, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
@@ -292,11 +292,12 @@ impl SqliteChatDb {
         // SQLite free pages after its logical row is removed.
         db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
-        // One schema version, created whole. A store from an older layout
+        // One schema version, created whole (3: contacts gained when their
+        // list entry is due, and the contact-list flag). A store from an older layout
         // (development builds only; no native app has shipped) is refused
         // rather than upgraded.
         let foreign: i64 = db(conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 2",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 3",
             [],
             |row| row.get(0),
         ))?;
@@ -499,6 +500,17 @@ impl ChatDb for SqliteChatDb {
             )
             .optional())?;
         Ok(value.map(|n| n as u64))
+    }
+
+    async fn load_pins_due(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'pins_due'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
     }
 
     async fn load_contact_list_followed(&self) -> Result<bool> {
@@ -1313,6 +1325,13 @@ impl ChatDb for SqliteChatDb {
                 ))?,
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
             };
+        }
+        if let Some(state) = &pending.pins_due {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('pins_due', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [state],
+            ))?;
         }
         if pending.contact_list_followed {
             db(tx.execute(

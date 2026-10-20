@@ -184,17 +184,17 @@ export class ApiChatTransport implements ChatTransportPort {
   /**
    * Stores the engine's next list with the next account head. `false` when
    * another app stored a list first (the engine reads it again and redoes its
-   * change); sent again on a new head when only another value moved; a
-   * write whose answer was lost is found in the index and counts as stored.
+   * change, or a revision it lists already); sent again on a new head when
+   * only another value moved.
    */
   async storeIdentityPins(write: { baseRevision: number; envelope: string; revision: number }): Promise<boolean> {
     let stored = false
     await (await accountHead(signedIn())).listedWrite('pins', (index) => {
       const listed = index.revision('pins') ?? 0
-      if (listed === write.revision) {
-        stored = true
-        return Promise.resolve(null)
-      }
+      // Already at this revision: perhaps ours (an answer that was lost),
+      // perhaps another device's at the same number. Not "stored": the
+      // engine reads again and merges, which settles either case.
+      if (listed === write.revision) return Promise.resolve(null)
       if (listed !== write.baseRevision) return Promise.resolve(null)
       return Promise.resolve({
         changes: [['pins', write.revision]] as const,
@@ -234,17 +234,17 @@ export class ApiChatTransport implements ChatTransportPort {
   /**
    * Stores one entry of the group list with the next account head. `false`
    * when the index lists another revision than `baseRevision` (another device
-   * wrote first; the engine reads the list again); a write whose answer was
-   * lost is found in the index and counts as stored.
+   * wrote first, or a revision the index lists already: the engine reads the
+   * list again and merges).
    */
   async storeGroupEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<boolean> {
     let stored = false
     await (await accountHead(signedIn())).listedWrite('chatGroups', (index) => {
       const listed = index.revision(write.id) ?? 0
-      if (listed === write.revision) {
-        stored = true
-        return Promise.resolve(null)
-      }
+      // Already at this revision: perhaps ours (an answer that was lost),
+      // perhaps another device's at the same number. Not "stored": the
+      // engine reads again and merges, which settles either case.
+      if (listed === write.revision) return Promise.resolve(null)
       if (listed !== write.baseRevision) return Promise.resolve(null)
       return Promise.resolve({
         changes: [[write.id, write.revision]] as const,
@@ -288,18 +288,17 @@ export class ApiChatTransport implements ChatTransportPort {
    * Stores one contact list entry with the next account head: `conflict`
    * when the index lists another revision than `baseRevision` (another
    * device wrote first), `full` when the list holds as many entries as it
-   * may (`contactListFull`); a write whose answer was lost is found in the
-   * index and counts as stored.
+   * may (`contactListFull`). A revision the index lists already is a
+   * conflict too (the engine reads again and merges).
    */
   async storeContactEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<'stored' | 'conflict' | 'full'> {
     let outcome: 'stored' | 'conflict' = 'conflict'
     try {
       await (await accountHead(signedIn())).listedWrite('chatContacts', (index) => {
         const listed = index.revision(write.id) ?? 0
-        if (listed === write.revision) {
-          outcome = 'stored'
-          return Promise.resolve(null)
-        }
+        // Already at this revision: ours (a lost answer) or another
+        // device's. A conflict, so the engine reads again and merges.
+        if (listed === write.revision) return Promise.resolve(null)
         if (listed !== write.baseRevision) return Promise.resolve(null)
         return Promise.resolve({
           changes: [[write.id, write.revision]] as const,

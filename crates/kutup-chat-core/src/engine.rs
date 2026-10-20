@@ -425,9 +425,12 @@ impl Engine {
                 // with whatever else is due, so two accounts meeting don't
                 // line up on the server.
                 let now = self.now_ms();
-                self.pins_due
-                    .entry(peer.to_string())
-                    .or_insert_with(|| crate::contact_list::fresh_due(now));
+                self.load_pins_due().await?;
+                if !self.pins_due.contains_key(peer) {
+                    self.pins_due
+                        .insert(peer.to_string(), crate::contact_list::fresh_due(now));
+                    self.save_pins_due().await?;
+                }
             }
         }
         Ok(())
@@ -436,6 +439,7 @@ impl Engine {
     /// Writes the first-seen pins that are due (all of them with `all`,
     /// before this device signs out), in one write. What fails stays due.
     pub async fn flush_identity_pins(&mut self, all: bool) -> Result<usize> {
+        self.load_pins_due().await?;
         let now = self.now_ms();
         let due: Vec<String> = self
             .pins_due
@@ -448,6 +452,7 @@ impl Engine {
         }
         let Some(mut sync) = self.identity_pins.take() else {
             self.pins_due.clear();
+            self.save_pins_due().await?;
             return Ok(0);
         };
         let mut trusts = Vec::new();
@@ -467,6 +472,7 @@ impl Engine {
                 for peer in &due {
                     self.pins_due.remove(peer);
                 }
+                self.save_pins_due().await?;
                 Ok(trusts.len())
             }
             Err(error) => Err(error),
@@ -2572,6 +2578,25 @@ impl Engine {
     /// or another tab does not start them over. Read before each check and
     /// each write: these events are rare, and another tab's engine may have
     /// recorded one since.
+    /// Merges the stored first-seen pins waiting for their write (another
+    /// tab's, or before a reload) into this engine's.
+    async fn load_pins_due(&mut self) -> Result<()> {
+        if let Some(bytes) = self.session.pins_due().await? {
+            let stored: BTreeMap<String, i64> = serde_json::from_slice(&bytes)
+                .map_err(|error| ChatError::Db(format!("decode due pins: {error}")))?;
+            for (peer, at) in stored {
+                self.pins_due.entry(peer).or_insert(at);
+            }
+        }
+        Ok(())
+    }
+
+    async fn save_pins_due(&mut self) -> Result<()> {
+        let bytes = serde_json::to_vec(&self.pins_due)
+            .map_err(|error| ChatError::Db(format!("encode due pins: {error}")))?;
+        self.session.save_pins_due(bytes).await
+    }
+
     pub(crate) async fn load_repair_limits(&mut self) -> Result<()> {
         if let Some(bytes) = self.session.repair_limits().await? {
             let stored: RepairLimits = serde_json::from_slice(&bytes)
