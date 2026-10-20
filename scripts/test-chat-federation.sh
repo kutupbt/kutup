@@ -150,6 +150,7 @@ KUTUP_LIVE_ADMIN="admina:federation-live-password" \
 # The account's group list (§5): sealed entries by keyed id, the revision
 # from each entry's header, the head's chatGroups scope, the limit.
 KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
+KUTUP_LIVE_ADMIN="admina:federation-live-password" \
   cargo test -p kutup-server --test chat_group_list_live -- --test-threads=1 --nocapture
 # The account's Chat contact list (docs/plans/chat-contacts-sync.md): the same
 # shape under its own scope, chatContacts, wherever Chat is.

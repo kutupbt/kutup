@@ -848,6 +848,17 @@ fn build_router(state: AppState) -> Router {
                     handlers::chat_contact_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
                 )),
         )
+        .route(
+            "/api/chat/group-capabilities",
+            put(handlers::chat_group_capabilities::change)
+                // Up to the limit's worth of base64 hashes each way.
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/group-capabilities/set",
+            post(handlers::chat_group_capabilities::set)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/api/chat/group-list", get(handlers::chat_group_list::list))
         .route(
             "/api/chat/group-list/:id",

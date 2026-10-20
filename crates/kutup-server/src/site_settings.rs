@@ -221,6 +221,33 @@ pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<AvatarLimits, sql
     Ok(limits.validate().unwrap_or(default))
 }
 
+/// How many group delivery capabilities one account may publish (one per
+/// group it is in; docs/plans/pairwise-groups.md, slice 2 §2), set under
+/// Administration → Server settings.
+pub const CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: &str = "chat_group_capabilities_per_account";
+pub const DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 1024;
+
+pub fn validate_chat_group_capabilities_per_account(value: i64) -> Result<i64, &'static str> {
+    if (1..=100_000).contains(&value) {
+        Ok(value)
+    } else {
+        Err("group capabilities per account must be between 1 and 100000")
+    }
+}
+
+/// The capability limit now: the stored one, else 1024.
+pub async fn chat_group_capabilities_per_account(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+            .bind(CHAT_GROUP_CAPABILITIES_PER_ACCOUNT)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|value| validate_chat_group_capabilities_per_account(value).ok())
+            .unwrap_or(DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +292,19 @@ mod tests {
             pending_seconds: 60,
         };
         assert_eq!(small.validate(), Ok(small));
+    }
+
+    #[test]
+    fn group_capabilities_per_account_are_bounded() {
+        assert_eq!(validate_chat_group_capabilities_per_account(1), Ok(1));
+        assert_eq!(
+            validate_chat_group_capabilities_per_account(
+                DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT
+            ),
+            Ok(1024)
+        );
+        assert!(validate_chat_group_capabilities_per_account(0).is_err());
+        assert!(validate_chat_group_capabilities_per_account(100_001).is_err());
     }
 
     #[test]

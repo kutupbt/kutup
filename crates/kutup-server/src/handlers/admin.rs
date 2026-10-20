@@ -818,6 +818,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let (link_joins_per_relay_group, link_joins_per_relay) =
         crate::site_settings::chat_group_link_joins(&state.pool).await?;
     let avatar = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+    let group_capabilities =
+        crate::site_settings::chat_group_capabilities_per_account(&state.pool).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
@@ -827,6 +829,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "oldAddressReceiveDays": old_address_receive_days,
         "chatGroupLinkJoinsPerRelayGroupPerMin": link_joins_per_relay_group,
         "chatGroupLinkJoinsPerRelayPerMin": link_joins_per_relay,
+        "chatGroupCapabilitiesPerAccount": group_capabilities,
         "chatGroupAvatarMaxBytes": avatar.max_bytes,
         "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
         "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
@@ -848,6 +851,8 @@ pub struct UpdateSettingsRequest {
     chat_group_link_joins_per_relay_group_per_min: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_link_joins_per_relay_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_capabilities_per_account: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_avatar_max_bytes: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
@@ -886,6 +891,7 @@ pub async fn update_settings(
         && req.old_address_receive_days.is_none()
         && req.chat_group_link_joins_per_relay_group_per_min.is_none()
         && req.chat_group_link_joins_per_relay_per_min.is_none()
+        && req.chat_group_capabilities_per_account.is_none()
         && req.chat_group_avatar_max_bytes.is_none()
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
         && req.chat_group_avatar_pending_seconds.is_none()
@@ -920,6 +926,10 @@ pub async fn update_settings(
     .flatten()
     {
         crate::site_settings::validate_chat_group_link_joins(value)
+            .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_capabilities_per_account {
+        crate::site_settings::validate_chat_group_capabilities_per_account(value)
             .map_err(AppError::bad_request)?;
     }
     // The avatar limits are checked together, each new value (or reset to
@@ -1009,6 +1019,10 @@ pub async fn update_settings(
             req.chat_group_link_joins_per_relay_per_min,
         ),
         (
+            crate::site_settings::CHAT_GROUP_CAPABILITIES_PER_ACCOUNT,
+            req.chat_group_capabilities_per_account,
+        ),
+        (
             crate::site_settings::CHAT_GROUP_AVATAR_MAX_BYTES,
             req.chat_group_avatar_max_bytes,
         ),
@@ -1056,6 +1070,7 @@ pub async fn update_settings(
             "oldAddressReceiveDays": req.old_address_receive_days,
             "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
+            "chatGroupCapabilitiesPerAccount": req.chat_group_capabilities_per_account,
             "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
             "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
@@ -2208,6 +2223,11 @@ pub async fn wipe_user(
         .execute(&state.pool)
         .await?;
     sqlx::query("DELETE FROM chat_delivery_capabilities WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    // The group capabilities go with the group list they were kept in.
+    sqlx::query("DELETE FROM chat_group_capabilities WHERE user_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;
