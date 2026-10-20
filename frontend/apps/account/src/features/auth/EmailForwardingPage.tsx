@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation } from 'react-router-dom'
 import api from '@kutup/session/client'
@@ -35,7 +35,11 @@ function linkProblem(error: unknown): 'invalid' | 'expired' | 'rateLimited' | nu
 export function EmailForwardingPage() {
   const { t } = useTranslation()
   const location = useLocation()
-  const token = location.hash.replace(/^#/, '').trim()
+  // Read once: the token then leaves the address bar and the history entry.
+  const [token] = useState(() => location.hash.replace(/^#/, '').trim())
+  useEffect(() => {
+    if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
+  }, [])
   const [done, setDone] = useState<'accepted' | 'declined' | null>(null)
   const forwarding = useQuery({
     queryKey: ['email-forwarding', token],

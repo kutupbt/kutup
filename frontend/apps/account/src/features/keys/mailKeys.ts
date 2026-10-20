@@ -221,7 +221,7 @@ export function useDeleteForwardingKey() {
 /** The forwardings of the caller's addresses, as far as this page needs them. */
 export function useEndToEndForwardings() {
   return useQuery({
-    queryKey: ['mail', 'forwardings'],
+    queryKey: ['mail-keys', 'end-to-end-forwardings'],
     queryFn: async () =>
       (await api.get<{ outgoing: { forwarderAddress: string; kind: string; state: string }[] }>('/mail/forwardings')).data.outgoing,
     select: (outgoing) => outgoing.filter((forwarding) => forwarding.kind === 'end_to_end' && forwarding.state !== 'rejected'),

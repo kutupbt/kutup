@@ -1358,13 +1358,17 @@ export async function sendDraft(
     for (const address of local) {
       try {
         const keys = await addressKeys(address)
-        if (options.encrypt) targets.set(address, keys.primary)
+        // An address that forwards outside takes its mail readable (sealed
+        // zero-access when it arrives), as its owner's key list says.
+        if (options.encrypt && !keys.encryptionDisabled) targets.set(address, keys.primary)
         else readable.push(address)
       } catch (error) {
         if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
         if (!(error instanceof GroupAddress)) throw error
         for (const member of await groupMembers(address)) {
-          if (member.address !== self.address && !targets.has(member.address)) targets.set(member.address, member.primary)
+          if (member.address === self.address || targets.has(member.address) || readable.includes(member.address)) continue
+          if (member.encryptionDisabled) readable.push(member.address)
+          else targets.set(member.address, member.primary)
         }
       }
     }

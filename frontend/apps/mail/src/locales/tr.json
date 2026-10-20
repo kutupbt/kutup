@@ -237,7 +237,8 @@
         "keysOpenpgp": "keys.openpgp.org'dan alınan bir anahtarla uçtan uca şifreli"
       },
       "readableKutup": "Bu ileti için uçtan uca şifreli değil: geldiğinde şifrelenir",
-      "readableOutside": "Bu ileti için şifreli değil: düz posta"
+      "readableOutside": "Bu ileti için şifreli değil: düz posta",
+      "encryptionDisabled": "Uçtan uca şifreli değil: bu adres postasını Kutup dışına yönlendiriyor, bu yüzden ulaştığında şifrelenir"
     },
     "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
     "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın.",
@@ -1131,6 +1132,8 @@
     },
     "errors": {
       "ownAddress": "Kendi adreslerinizden birine yönlendiremezsiniz.",
+      "unknown": "Bu sunucuda böyle bir adres yok.",
+      "kindChanged": "Bu adres siz kontrol ettikten sonra değişti. Kaydetmeden önce yeniden kontrol edin.",
       "group": "E-posta paylaşılan bir posta kutusuna veya listeye yönlendirilemez.",
       "unverified": "Bu adresin anahtarları doğrulanamadı, bu yüzden şu an ona yönlendirme yapılamaz.",
       "exists": "Bu adrese zaten yönlendiriyorsunuz.",

@@ -175,8 +175,10 @@ without changing any key.
 - **To anything else, another Kutup server included: outside, not
   end-to-end.** Setting it up sets `FLAG_EMAIL_NO_ENCRYPT` on the
   address's keys through a new signed key list, as Proton does.
-  - Kutup senders then seal to the address zero-access (the composer
-    already follows the flag), so the server can re-send everything.
+  - Kutup senders then send to the address readable, sealed zero-access
+    when it arrives, so the server can re-send everything (as built: the
+    composer reads the flag from the address's verified key list, never
+    the server's rows, and shows an open lock for it).
   - Mail from outside is readable at arrival anyway.
   - Deleting the last outside forwarding clears the flag again.
 - **Catch-all forwardees refused, as Proton.** No forwarding to an address
@@ -462,20 +464,30 @@ classic encryption while it lasts, and the person is told.
   - The kind follows the forwardee (`forwardingKindOf`): end to end for a
     person's verified Kutup address on this server, outside for anything
     else. The account's own addresses and shared mailboxes are refused
-    before asking the server.
+    before asking the server, and so is an address on this server's domain
+    the server says has no key (never taken as outside). The kind the user
+    confirmed goes with the request; a different kind at submit is refused.
   - Setup makes the material in WASM from the forwarder's primary key and
     the forwardee's verified primary key, binding a client-chosen id. Outside,
     while the address has no other outside forwarding, it brings the next
     key list with `EMAIL_NO_ENCRYPT` on every key.
   - Accepting checks the activation against the forwarder's verified key
-    list (never the server's word) before keeping the forwarding key.
+    list (never the server's word) before keeping the forwarding key, and
+    that its forwarder and forwardee addresses (folded) are the ones shown.
   - Re-enabling an outdated forwarding makes new material from the current
-    primary key.
+    primary key, after checking again that the forwarding is the address's
+    own and the forwardee is still a person's Kutup address here.
+  - The forwarder's primary key is the one its signed key list names.
 - `@kutup/mail-core/keyList` holds the key-list rules both apps share:
+  - every next list is built from the list the account signed, never the
+    server's key rows (docs/plans/mail-address-keys.md);
   - forwarding keys are in no list;
-  - while an address forwards outside, every list keeps `EMAIL_NO_ENCRYPT`;
-  - `keyListOwed` is settled with a list clearing it, by Mail once a session
-    and by the Account keys page.
+  - while an address forwards outside (its signed list says so), every list
+    keeps `EMAIL_NO_ENCRYPT`;
+  - `keyListOwed` is settled with a list clearing only that flag, by Mail
+    once a session and by the Account keys page, and only when the signed
+    list has it set: it runs without a click, so the server's word decides
+    nothing in it.
 - **Mail → Settings → Forwarding:**
   - "From me" / "To me", with state and kind badges, the conditions in
     words, `notice` and `skipped`, and the per-state actions of Proton's

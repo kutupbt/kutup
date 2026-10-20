@@ -81,6 +81,13 @@ export interface AddressKeys {
   primary: string
   /** Every key the newest list trusts for signatures (not marked compromised), primary first. */
   all: string[]
+  /**
+   * The owner's newest list says not to encrypt to the address
+   * (`EMAIL_NO_ENCRYPT` on its primary: it forwards outside Kutup). Mail to
+   * it goes readable and is sealed zero-access when it arrives, so the
+   * server can forward it (Proton's `encryptionDisabled`).
+   */
+  encryptionDisabled: boolean
 }
 
 /** The address is not a Kutup address (or has no key yet). */
@@ -295,6 +302,7 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
     primary: primary.publicKey,
     // A key its owner marked compromised no longer vouches for anything.
     all: [primary, ...kept.filter((k) => k !== primary)].filter((k) => k.flags & MAIL_KEY_FLAGS.notCompromised).map((k) => k.publicKey),
+    encryptionDisabled: (primary.flags & MAIL_KEY_FLAGS.emailNoEncrypt) !== 0,
   }
 }
 

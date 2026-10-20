@@ -1,5 +1,17 @@
-import { describe, expect, it } from 'vitest'
-import { forwardeeActions, forwarderActions, type MailForwarding } from './forwardings'
+import { describe, expect, it, vi } from 'vitest'
+import { NoKutupAddress } from './keys'
+
+vi.mock('./keys', async (original) => ({
+  ...(await original<typeof import('./keys')>()),
+  addressKeys: (email: string) => {
+    if (email === 'bob@kutup.test') return Promise.resolve({ address: email, accountRef: { server: 'kutup.test' }, primary: 'key' })
+    if (email === 'carol@other.test') return Promise.resolve({ address: email, accountRef: { server: 'other.test' }, primary: 'key' })
+    return Promise.reject(new NoKutupAddress(email))
+  },
+}))
+
+const { ForwardeeRefused, forwardeeActions, forwarderActions, forwardingKindOf } = await import('./forwardings')
+type MailForwarding = import('./forwardings').MailForwarding
 
 const forwarding = (state: MailForwarding['state'], kind: MailForwarding['kind']): MailForwarding => ({
   id: 'f',
@@ -31,5 +43,24 @@ describe('what each side may do, by state (Proton’s table)', () => {
     for (const state of ['active', 'paused', 'outdated'] as const) {
       expect(forwardeeActions(forwarding(state, 'end_to_end'))).toEqual(['delete'])
     }
+  })
+})
+
+describe('which kind a forwarding is', () => {
+  const account = { domain: 'kutup.test', isOwnAddress: (address: string | null | undefined) => address === 'alice@kutup.test' }
+
+  it('is end to end to a person here, outside elsewhere', async () => {
+    expect((await forwardingKindOf(account, 'bob@kutup.test')).kind).toBe('end_to_end')
+    expect((await forwardingKindOf(account, 'carol@other.test')).kind).toBe('outside')
+    expect((await forwardingKindOf(account, 'dave@example.com')).kind).toBe('outside')
+  })
+
+  it('never takes an address on this server without a key as outside', async () => {
+    await expect(forwardingKindOf(account, 'nobody@kutup.test')).rejects.toEqual(new ForwardeeRefused('unknown'))
+    await expect(forwardingKindOf(account, 'nobody@KUTUP.test')).rejects.toEqual(new ForwardeeRefused('unknown'))
+  })
+
+  it("refuses the account's own addresses", async () => {
+    await expect(forwardingKindOf(account, 'alice@kutup.test')).rejects.toEqual(new ForwardeeRefused('ownAddress'))
   })
 })

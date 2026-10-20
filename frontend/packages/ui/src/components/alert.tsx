@@ -32,7 +32,7 @@ export function Alert({
   title?: string
   children?: ReactNode
   className?: string
-} & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children' | 'className' | 'role'>) {
+} & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children' | 'className' | 'role' | 'dangerouslySetInnerHTML'>) {
   const Icon = variant === 'info' ? Info : AlertTriangle
   return (
     <div

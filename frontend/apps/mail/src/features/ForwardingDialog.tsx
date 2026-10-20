@@ -97,8 +97,9 @@ export function ForwardingDialog({
       )
       return
     }
+    if (!kind) return
     create.mutate(
-      { from, to: to.trim(), ...body },
+      { from, to: to.trim(), kind, ...body },
       {
         onSuccess: (made) => {
           toast.success(t(made.kind === 'outside' ? 'forwarding.createdOutside' : 'forwarding.created', { to: made.forwardeeEmail }))

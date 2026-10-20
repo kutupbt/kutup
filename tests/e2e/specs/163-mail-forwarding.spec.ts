@@ -1,15 +1,20 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { openWhenArrived } from '../fixtures/mail'
 
 // Mail forwarding (docs/plans/mail-forwarding.md), as Proton's:
 // - end to end to a Kutup address here: set up in Settings → Forwarding,
 //   accepted by the forwardee in theirs, then mail to the forwarder reaches
-//   the forwardee too and opens with the forwarding key; paused, resumed and
-//   deleted from the forwarder's side;
+//   the forwardee too (the forwarder keeps the original) and opens with the
+//   forwarding key, which the forwardee's key page shows as delete-only;
+//   paused (nothing forwarded meanwhile), resumed and deleted from the
+//   forwarder's side;
 // - outside: the confirmation step says end-to-end encryption goes off for
-//   the address, the address's key list says so while it lasts, and deleting
-//   the forwarding turns it back on.
+//   the address, the address's signed key list says so while it lasts (a
+//   sender's composer reads it from there), and deleting the forwarding
+//   turns it back on;
+// - the outside recipient's confirmation page needs no account, and drops
+//   the token from the address bar.
 
 const PASSWORD = 'Deneme123*MailForwardingPassword'
 
@@ -25,11 +30,12 @@ async function openForwarding(page: Page) {
   await expect(page.getByRole('heading', { name: 'Forwarding' })).toBeVisible({ timeout: 60_000 })
 }
 
-async function write(page: Page, to: string, subject: string) {
+async function write(page: Page, to: string, subject: string, beforeSending?: (composer: Locator) => Promise<void>) {
   await page.getByRole('button', { name: 'New message' }).first().click()
   const composer = page.getByRole('dialog', { name: 'New message' })
   await composer.getByRole('combobox', { name: 'To' }).fill(to)
   await composer.getByRole('combobox', { name: 'To' }).press('Enter')
+  await beforeSending?.(composer)
   await composer.getByRole('textbox', { name: 'Subject' }).fill(subject)
   await page.getByRole('textbox', { name: 'Message' }).fill(`${subject} gövdesi`)
   await page.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
@@ -96,12 +102,35 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await bobMail.goto(appUrl('mail', '/inbox'))
   await openWhenArrived(bobMail, new RegExp(forwarded))
   await expect(bobMail.frameLocator('iframe[title="Message"]').last().getByText(`${forwarded} gövdesi`)).toBeVisible({ timeout: 60_000 })
+  // Alice keeps the original.
+  await mail.goto(appUrl('mail', '/inbox'))
+  await openWhenArrived(mail, new RegExp(forwarded))
+  await expect(mail.frameLocator('iframe[title="Message"]').last().getByText(`${forwarded} gövdesi`)).toBeVisible({ timeout: 60_000 })
+  // Bob's key page shows the forwarding key apart: it can only be deleted.
+  const bobKeys = await bobContext.newPage()
+  await bobKeys.goto(appUrl('account', '/settings/keys'))
+  const forwardingKey = bobKeys.getByTestId('mail-forwarding-key')
+  await expect(forwardingKey).toBeVisible({ timeout: 60_000 })
+  await expect(forwardingKey.getByText('Forwarding', { exact: true })).toBeVisible()
+  await expect(forwardingKey.getByRole('button', { name: 'Delete', exact: true })).toBeVisible()
+  await expect(forwardingKey.getByRole('button', { name: /Download public key|More key actions/ })).toHaveCount(0)
+  await bobKeys.close()
 
   // Paused, nothing goes; resumed; deleted.
   await openForwarding(mail)
   const row = mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')
   await row.getByRole('button', { name: 'Pause' }).click()
   await expect(row).toHaveAttribute('data-state', 'paused', { timeout: 60_000 })
+  // Mail while paused reaches Alice alone.
+  const whilePaused = `Duraklatılmış ${tag}`
+  await write(carolMail, aliceAddress, whilePaused)
+  await openWhenArrived(mail, new RegExp(whilePaused))
+  // A forward is sent right after the copy is stored: give it time to (not) come.
+  await bobMail.waitForTimeout(5_000)
+  await bobMail.goto(appUrl('mail', '/inbox'))
+  await expect(bobMail.getByRole('link', { name: new RegExp(forwarded) }).first()).toBeVisible({ timeout: 60_000 })
+  await expect(bobMail.getByRole('link', { name: new RegExp(whilePaused) })).toHaveCount(0)
+  await openForwarding(mail)
   await row.getByRole('button', { name: 'Resume' }).click()
   await expect(row).toHaveAttribute('data-state', 'active', { timeout: 60_000 })
   await row.getByRole('button', { name: 'Delete' }).click()
@@ -120,6 +149,15 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   const keys = await aliceContext.newPage()
   await keys.goto(appUrl('account', '/settings/keys'))
   await expect(keys.getByTestId('mail-keys-encryption-off')).toBeVisible({ timeout: 60_000 })
+  // Carol's composer reads it from Alice's signed key list: an open lock, and
+  // the mail still reaches Alice (sealed when it arrives).
+  await carolMail.reload()
+  const readable = `Okunur ${tag}`
+  await write(carolMail, aliceAddress, readable, async (composer) => {
+    await expect(composer.getByTestId('recipient-encryption-disabled')).toBeVisible({ timeout: 60_000 })
+  })
+  await openWhenArrived(mail, new RegExp(readable))
+  await openForwarding(mail)
   const outsideRow = mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')
   await outsideRow.getByRole('button', { name: 'Delete' }).click()
   await mail.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click()
@@ -131,6 +169,24 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   }).toPass({ timeout: 60_000 })
   await keys.reload()
   await expect(keys.getByTestId('mail-keys-encryption-off')).toHaveCount(0, { timeout: 60_000 })
+  // The signed list has encryption on again: Carol's composer locks.
+  await carolMail.reload()
+  await expect(carolMail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
+  await carolMail.getByRole('button', { name: 'New message' }).first().click()
+  const composer = carolMail.getByRole('dialog', { name: 'New message' })
+  await composer.getByRole('combobox', { name: 'To' }).fill(aliceAddress)
+  await composer.getByRole('combobox', { name: 'To' }).press('Enter')
+  await expect(composer.getByRole('img', { name: 'End-to-end encrypted: a Kutup address' })).toBeVisible({ timeout: 60_000 })
+  await expect(composer.getByTestId('recipient-encryption-disabled')).toHaveCount(0)
+
+  // The outside recipient's page: no account needed; a link that isn't
+  // valid says so, and the token leaves the address bar.
+  const visitor = await browser.newContext()
+  const page = await visitor.newPage()
+  await page.goto(appUrl('account', `/email-forwarding#made-up-${tag}`))
+  await expect(page.getByTestId('email-forwarding-problem')).toContainText("This link isn't valid", { timeout: 60_000 })
+  expect(new URL(page.url()).hash).toBe('')
+  await visitor.close()
 
   await aliceContext.close()
   await bobContext.close()

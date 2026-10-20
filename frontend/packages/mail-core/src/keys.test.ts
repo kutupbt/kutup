@@ -60,13 +60,13 @@ import {
 import { acceptGroupKeys, addressKeys, forgetKeys, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
-async function lookupOf(master: string, binding: string, address: string, listed = address) {
+async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
   const key = await generateMailAddressKey(master, binding, address)
   const list = await signMailKeyList(master, {
     address: listed,
     sequence: 1,
     issuedAt: '2026-10-14T12:00:00Z',
-    keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }],
+    keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags }],
   })
   const identity = await deriveAccountIdentityKeys(master)
   return {
@@ -106,6 +106,16 @@ describe('an address’s keys', () => {
     await expect(verified('ada_l@kutup.dev', { ...lookup, server: 'other.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('bob@kutup.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('ada_l@other.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+
+  it('say encryption is off only when the signed list does', async () => {
+    const both = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
+    const off = await lookupOf(master, binding, 'ada_l@kutup.dev', 'ada_l@kutup.dev', both | MAIL_KEY_FLAGS.emailNoEncrypt)
+    await expect(verified('ada_l@kutup.dev', off)).resolves.toMatchObject({ encryptionDisabled: true })
+    // The server's row flags say nothing.
+    const on = await lookupOf(master, binding, 'ada_l@kutup.dev')
+    const flipped = { ...on, keys: on.keys.map((key) => ({ ...key, flags: both | MAIL_KEY_FLAGS.emailNoEncrypt })) }
+    await expect(verified('ada_l@kutup.dev', flipped)).resolves.toMatchObject({ encryptionDisabled: false })
   })
 })
 

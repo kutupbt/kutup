@@ -237,7 +237,8 @@
         "keysOpenpgp": "End-to-end encrypted with a key from keys.openpgp.org"
       },
       "readableKutup": "Not end-to-end encrypted for this message: encrypted when it arrives",
-      "readableOutside": "Not encrypted for this message: plain mail"
+      "readableOutside": "Not encrypted for this message: plain mail",
+      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives"
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
     "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
@@ -1131,6 +1132,8 @@
     },
     "errors": {
       "ownAddress": "You can't forward to one of your own addresses.",
+      "unknown": "There's no such address on this server.",
+      "kindChanged": "This address changed since you checked it. Check it again before you save.",
       "group": "Email can't be forwarded to a shared mailbox or a list.",
       "unverified": "This address's keys couldn't be verified, so nothing can be forwarded to it now.",
       "exists": "You already forward to this address.",

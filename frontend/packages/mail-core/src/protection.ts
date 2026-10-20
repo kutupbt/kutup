@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { fromBase64, inspectExternalMailKey } from '@kutup/crypto'
 import type { ContactEmailPgp, ContactKey } from '@kutup/contacts-core/model'
-import { outsideKey, type OutsideKey } from './keys'
+import { addressKeys, outsideKey, type OutsideKey } from './keys'
 
 // How mail to one recipient is protected (docs/plans/mail.md, C3;
 // docs/plans/contact-keys.md), decided as Proton decides it: Kutup
@@ -12,7 +12,8 @@ import { outsideKey, type OutsideKey } from './keys'
 // zero-access in Sent).
 
 export type Protection =
-  | { kind: 'kutup' }
+  /** `encryptionDisabled`: the address forwards outside, so its mail goes readable and is sealed when it arrives. */
+  | { kind: 'kutup'; encryptionDisabled?: boolean }
   | { kind: 'pinned'; publicKey: string; fingerprint: string }
   | { kind: 'found'; publicKey: string; fingerprint: string; source: OutsideKey['source'] }
   /** Trusted keys, none of which can be used any more: sending waits until one is trusted again or they are removed. */
@@ -46,7 +47,12 @@ export class KeyLookupFailed extends Error {
 
 export async function protectionFor(address: string, domain: string, pinned: Pinned | undefined): Promise<Protection> {
   const lower = address.toLowerCase()
-  if (lower.endsWith(`@${domain}`)) return { kind: 'kutup' }
+  if (lower.endsWith(`@${domain}`)) {
+    // Whether its owner's key list says not to encrypt; a lookup that fails
+    // here is reported when sending.
+    const keys = await addressKeys(lower).catch(() => null)
+    return keys?.encryptionDisabled ? { kind: 'kutup', encryptionDisabled: true } : { kind: 'kutup' }
+  }
   // The person chose not to encrypt to this address.
   if (pinned?.pgp.encrypt === false) return { kind: 'none' }
   const trusted = pinned?.keys ?? []
