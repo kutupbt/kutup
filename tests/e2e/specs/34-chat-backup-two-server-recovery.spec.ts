@@ -103,6 +103,13 @@ function backupRows(postgres: 'postgres-a' | 'postgres-b', username: string): nu
   return Number(compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql]))
 }
 
+/** How many entries the account's Chat contact list holds on its server. */
+function contactListEntries(postgres: 'postgres-a' | 'postgres-b', username: string): number {
+  const quoted = username.replaceAll("'", "''")
+  const sql = `SELECT COUNT(*) FROM chat_contact_list c JOIN users u ON u.id=c.user_id WHERE u.username='${quoted}'`
+  return Number(compose(['exec', '-T', postgres, 'psql', '-U', 'kutup', '-d', 'kutup', '-Atc', sql]))
+}
+
 function keyBinding(
   postgres: 'postgres-a' | 'postgres-b',
   username: string,
@@ -136,7 +143,8 @@ test.describe('two-server continuous backup recovery', () => {
   test.skip(!hasSecondaryServer(), 'set E2E_SECONDARY_APP_ORIGIN for the federation topology')
 
   test('both account-local histories survive total browser loss and server restart', async ({ browser }) => {
-    test.slow()
+    // Slow, plus up to eleven minutes for the contact lists' delayed writes.
+    test.setTimeout(3 * 120_000 + 11 * 60_000)
     const tag = Date.now().toString(36)
     const alice = newAccount('backupalice', PASSWORD, 'primary')
     const bob = newAccount('backupbob', PASSWORD, 'secondary')
@@ -234,6 +242,16 @@ test.describe('two-server continuous backup recovery', () => {
       media: aliceOwn.media + bobOwn.media,
       objects: aliceOwn.objects + bobOwn.objects,
     })
+    // Each account's contact list has the other (docs/plans/chat-contacts-sync.md):
+    // written at a random moment within ten minutes of the accept, so two
+    // accounts accepting each other don't line up on their servers.
+    await expect
+      .poll(() => [contactListEntries('postgres-a', alice.username), contactListEntries('postgres-b', bob.username)], {
+        timeout: 11 * 60_000,
+        intervals: [10_000],
+      })
+      .toEqual([1, 1])
+    recordSafeCheckpoint('two-server-recovery', 'contact-lists-written', { accounts: 2 })
     await sourceA.close()
     await sourceB.close()
     recordSafeCheckpoint('two-server-recovery', 'all-source-browsers-lost', { accounts: 2 })
@@ -315,10 +333,9 @@ test.describe('two-server continuous backup recovery', () => {
     const directAfterRestore = `direct-after-restore-${tag}`
     await say(restoredA, directAfterRestore)
     await arrives(restoredB, directAfterRestore)
-    // Contact states (accepted, blocked) don't come back with the history
-    // yet (docs/roadmap.md): after losing every browser, the two accept each
-    // other again, as people do today, before one invites the other.
-    await acceptRequest(restoredB)
+    // Their contact states came back from their contact lists: still
+    // contacts, no request to accept again, and one invites the other.
+    await expect(restoredB.getByRole('button', { name: 'Accept', exact: true })).toHaveCount(0)
     const answerAfterRestore = `answer-after-restore-${tag}`
     await say(restoredB, answerAfterRestore)
     await arrives(restoredA, answerAfterRestore)

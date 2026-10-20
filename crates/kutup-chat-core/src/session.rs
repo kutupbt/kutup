@@ -301,15 +301,13 @@ impl Session {
             }
         }
         let store = ChatStore::attach(db, local)?;
-        let mut session = Session {
+        Ok(Session {
             store,
             registration: None,
             account,
             address,
             group_decisions: Default::default(),
-        };
-        session.bootstrap_contacts().await?;
-        Ok(session)
+        })
     }
 
     /// Resume a fresh install whose exact registration payload was persisted
@@ -966,6 +964,59 @@ impl Session {
         self.store.db().load_contact(peer).await
     }
 
+    /// The first-seen identity pins waiting for their write (JSON).
+    pub(crate) async fn pins_due(&self) -> Result<Option<Vec<u8>>> {
+        self.store.pins_due().await
+    }
+
+    pub(crate) async fn save_pins_due(&mut self, state: Vec<u8>) -> Result<()> {
+        self.store.stage_pins_due(state);
+        self.store.commit().await
+    }
+
+    /// Whether this device followed the account's contact list once, in full.
+    pub(crate) async fn contact_list_followed(&self) -> Result<bool> {
+        self.store.contact_list_followed().await
+    }
+
+    /// Marks the account's contact list followed (after a full sync).
+    pub(crate) async fn mark_contact_list_followed(&mut self) -> Result<()> {
+        self.store.stage_contact_list_followed();
+        self.store.commit().await
+    }
+
+    /// Saves a contact as it is (its list entry's due moment, for one).
+    pub(crate) async fn save_contact(&mut self, contact: ContactRecord) -> Result<()> {
+        self.store.stage_contact(contact);
+        self.store.commit().await
+    }
+
+    /// Takes a contact from the account's contact list: its state, and its
+    /// profile key when this device has none for them yet.
+    pub(crate) async fn restore_contact(
+        &mut self,
+        contact: ContactRecord,
+        profile_key: Option<Vec<u8>>,
+    ) -> Result<()> {
+        if let Some(key) = profile_key {
+            if self.peer_profile(&contact.peer).await?.is_none() {
+                self.store.stage_peer_profile(PeerProfile {
+                    peer: contact.peer.clone(),
+                    key,
+                    display_name: None,
+                    avatar: None,
+                    avatar_content_type: None,
+                    about: None,
+                    // Revision zero: the profile is fetched with this key.
+                    revision: 0,
+                    source_device_id: 0,
+                });
+            }
+        }
+        self.store.stage_contact(contact);
+        self.store.commit().await
+    }
+
     pub async fn local_profile(&self) -> Result<Option<LocalProfile>> {
         self.store.db().load_local_profile().await
     }
@@ -1017,43 +1068,6 @@ impl Session {
         }
         profile.broadcast_pending = false;
         self.store.stage_local_profile(profile);
-        self.store.commit().await
-    }
-
-    /// Upgrade stores created before contact state existed without turning
-    /// established conversations into message requests after an application
-    /// update. Only peers already present in durable history are accepted.
-    pub(crate) async fn bootstrap_contacts(&mut self) -> Result<()> {
-        let existing = self.store.db().list_contacts().await?;
-        let known: std::collections::HashSet<String> =
-            existing.into_iter().map(|contact| contact.peer).collect();
-        let mut peers = std::collections::BTreeMap::<String, i64>::new();
-        for message in self.store.db().list_messages().await? {
-            peers
-                .entry(message.peer)
-                .and_modify(|time| *time = (*time).max(message.received_at))
-                .or_insert(message.received_at);
-        }
-        for message in self.store.db().list_sent_messages().await? {
-            peers
-                .entry(message.peer)
-                .and_modify(|time| *time = (*time).max(message.created_at))
-                .or_insert(message.created_at);
-        }
-        for (peer, updated_at_ms) in peers {
-            if peer != self.user() && !known.contains(&peer) {
-                self.store.stage_contact(ContactRecord {
-                    peer,
-                    state: ContactState::Accepted,
-                    previous_state: None,
-                    revision: 0,
-                    source_device_id: 0,
-                    updated_at_ms,
-                    sync_pending: false,
-                    sync_send_id: None,
-                });
-            }
-        }
         self.store.commit().await
     }
 
@@ -1191,6 +1205,11 @@ impl Session {
                 revision,
                 source_device_id,
             )),
+            list_due_at_ms: current.as_ref().and_then(|contact| contact.list_due_at_ms),
+        };
+        let record = ContactRecord {
+            list_due_at_ms: crate::contact_list::due_after_change(&record, now_millis()),
+            ..record
         };
         self.store.stage_contact(record.clone());
         if delete_messages {
@@ -1549,10 +1568,12 @@ impl Session {
                     ));
                 }
                 let current = self.contact(&control.peer.to_string()).await?;
-                let incoming_order = (control.revision, control.source_device_id);
-                let current_order = current
-                    .as_ref()
-                    .map(|contact| (contact.revision, contact.source_device_id));
+                let incoming_order = crate::contact_list::contact_order(
+                    control.revision,
+                    control.state,
+                    control.source_device_id,
+                );
+                let current_order = current.as_ref().map(crate::contact_list::order_of);
                 if current_order.is_none_or(|order| incoming_order > order) {
                     self.store.stage_contact(ContactRecord {
                         peer: control.peer.to_string(),
@@ -1563,6 +1584,10 @@ impl Session {
                         updated_at_ms: control.updated_at_ms,
                         sync_pending: false,
                         sync_send_id: None,
+                        // The device that made the change writes the list;
+                        // a write due here stays due (it writes only what
+                        // the list doesn't say yet).
+                        list_due_at_ms: current.as_ref().and_then(|contact| contact.list_due_at_ms),
                     });
                 }
                 contact_synced = true;
@@ -1862,12 +1887,21 @@ impl Session {
             revision: 0,
             source_device_id: 0,
         });
+        // A contact's new key goes into their list entry lazily: with the
+        // next write that is due anyway, or within the hour.
+        if let Some(mut contact) = self.contact(peer).await? {
+            if contact.state != ContactState::PendingIncoming && contact.list_due_at_ms.is_none() {
+                contact.list_due_at_ms = Some(crate::contact_list::lazy_due(now_millis()));
+                self.store.stage_contact(contact);
+            }
+        }
         Ok(true)
     }
 
     async fn stage_incoming_contact(&mut self, peer: &str, updated_at_ms: i64) -> Result<bool> {
         let current = self.contact(peer).await?;
         let Some(mut contact) = current else {
+            // An incoming request is the other person's: never in the list.
             self.store.stage_contact(ContactRecord {
                 peer: peer.to_string(),
                 state: ContactState::PendingIncoming,
@@ -1877,6 +1911,7 @@ impl Session {
                 updated_at_ms,
                 sync_pending: false,
                 sync_send_id: None,
+                list_due_at_ms: None,
             });
             return Ok(false);
         };
@@ -1911,6 +1946,10 @@ impl Session {
                     contact.revision,
                     contact.source_device_id,
                 ));
+                // The reply accepted the request: written, or the request
+                // would restore as pending for good.
+                contact.list_due_at_ms =
+                    crate::contact_list::due_after_change(&contact, now_millis());
                 self.store.stage_contact(contact);
                 Ok(false)
             }
@@ -1932,6 +1971,7 @@ impl Session {
                 updated_at_ms,
                 sync_pending: false,
                 sync_send_id: None,
+                list_due_at_ms: Some(crate::contact_list::fresh_due(now_millis())),
             }),
             Some(mut contact)
                 if matches!(
@@ -1950,6 +1990,8 @@ impl Session {
                 contact.updated_at_ms = updated_at_ms;
                 contact.sync_pending = false;
                 contact.sync_send_id = None;
+                contact.list_due_at_ms =
+                    crate::contact_list::due_after_change(&contact, now_millis());
                 self.store.stage_contact(contact);
             }
             Some(_) => {}
@@ -2978,6 +3020,7 @@ impl Session {
                 updated_at_ms,
                 sync_pending: false,
                 sync_send_id: None,
+                list_due_at_ms: Some(crate::contact_list::fresh_due(now_millis())),
             }),
             Some(mut contact) if contact.state == ContactState::Rejected => {
                 contact.revision = next_contact_revision(contact.revision)?;
@@ -2987,6 +3030,8 @@ impl Session {
                 contact.updated_at_ms = updated_at_ms;
                 contact.sync_pending = false;
                 contact.sync_send_id = None;
+                contact.list_due_at_ms =
+                    crate::contact_list::due_after_change(&contact, now_millis());
                 self.store.stage_contact(contact);
             }
             Some(contact)

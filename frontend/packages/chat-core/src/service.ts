@@ -112,6 +112,14 @@ const LINKED_DEVICE_CHECK_MS = 2 * 60_000
  * and one that only polls.
  */
 const PREKEY_CHECK_MS = 60 * 60_000
+/**
+ * How often the account's lists get their due writes when nothing arrives
+ * (reconcile does it too, but only when something does): the writes wait a
+ * random 0–10 minutes, and a quiet device must still make them.
+ */
+const ACCOUNT_LISTS_MS = 60_000
+/** The same in a hidden tab, where it only keeps the writes from waiting forever. */
+const ACCOUNT_LISTS_HIDDEN_MS = 5 * 60_000
 
 /**
  * `polling`: the live socket cannot be opened (a gateway that blocks
@@ -147,7 +155,33 @@ const DELETE_FOR_ME_BATCH = 64
 const PING_INTERVAL_MS = 25_000
 const PONG_TIMEOUT_MS = 10_000
 
-export type ChatServiceErrorCode = 'browserUnsupported' | 'serverUnsupported'
+export type ChatServiceErrorCode =
+  | 'browserUnsupported'
+  | 'serverUnsupported'
+  /** The account's contact list couldn't be read yet: the mailbox waits. */
+  | 'contactListUnconfirmed'
+  /** The server's contact list contradicts the account's verified state. */
+  | 'contactListIntegrity'
+
+/** What the account-head checks say when the server shows another history or list than the verified one. */
+const INTEGRITY_MARKERS = [
+  'not the verified',
+  "does not match the account's verified state",
+  'history on the server is not',
+  'contact list: an entry',
+] as const
+
+/**
+ * A failed open because the account's contact list couldn't be followed:
+ * its own code, so Chat says the messages are waiting rather than that it is
+ * broken, and a list that contradicts the account's verified state is said
+ * as such. Null for any other failure.
+ */
+export function contactListFailure(error: unknown): ChatServiceError | null {
+  const message = error instanceof Error ? error.message : String(error)
+  if (!message.includes('contact list unconfirmed')) return null
+  return new ChatServiceError(INTEGRITY_MARKERS.some((marker) => message.includes(marker)) ? 'contactListIntegrity' : 'contactListUnconfirmed')
+}
 
 export class ChatServiceError extends Error {
   constructor(readonly code: ChatServiceErrorCode) {
@@ -241,6 +275,7 @@ export class ChatService {
   private inviteTimer: ReturnType<typeof setInterval> | null = null
   private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private prekeyTimer: ReturnType<typeof setInterval> | null = null
+  private accountListsTimer: ReturnType<typeof setTimeout> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -429,13 +464,14 @@ export class ChatService {
       requestPersistentStorage()
       void service.maintainPrekeys()
       service.startPrekeyChecks()
+      service.startAccountListSync()
       void service.connectSocket()
       service.startInviteLinks()
       service.startLinkedDeviceChecks()
       return service
     } catch (error) {
       service.dispose()
-      throw error
+      throw contactListFailure(error) ?? error
     }
   }
 
@@ -1599,6 +1635,31 @@ export class ChatService {
     ])
   }
 
+  /**
+   * Before this browser signs out: the account's contact list gets the
+   * changes still waiting for their delayed write
+   * (docs/plans/chat-contacts-sync.md). Best effort, at most `waitMs`.
+   */
+  async flushContactList(waitMs = 3000): Promise<void> {
+    const client = this.client
+    if (!client.flushContactList) return
+    await Promise.race([
+      this.withLock(() => client.flushContactList!()).catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, waitMs)),
+    ])
+  }
+
+  /**
+   * Whether the account's contact list is full with nothing it may evict: a
+   * change (a block too) holds on this device but waits to be written, and
+   * the person is told.
+   */
+  async contactListFull(): Promise<boolean> {
+    const client = this.client
+    if (!client.contactListFull) return false
+    return await this.withLock(() => Promise.resolve(client.contactListFull!()))
+  }
+
   async leaveChatGroup(groupId: string): Promise<void> {
     await this.groupChange((client) => client.leaveGroup(groupId))
   }
@@ -1974,6 +2035,26 @@ export class ChatService {
     }, LINKED_DEVICE_CHECK_MS)
   }
 
+  /**
+   * Each pass waits about a minute (five in a hidden tab), give or take a
+   * fifth, so devices don't line up their list reads and writes.
+   */
+  private startAccountListSync(): void {
+    const client = this.client
+    if (this.accountListsTimer || !client.syncAccountLists) return
+    const next = () => {
+      if (this.disposed) return
+      const base = document.visibilityState === 'visible' ? ACCOUNT_LISTS_MS : ACCOUNT_LISTS_HIDDEN_MS
+      const delay = base * (0.8 + Math.random() * 0.4)
+      this.accountListsTimer = setTimeout(() => {
+        void this.withLock(() => client.syncAccountLists!())
+          .catch((error: unknown) => console.warn('chat: the account lists could not be synced', error))
+          .finally(next)
+      }, delay)
+    }
+    next()
+  }
+
   private startPrekeyChecks(): void {
     if (this.prekeyTimer) return
     this.prekeyTimer = setInterval(() => {
@@ -2079,6 +2160,7 @@ export class ChatService {
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
+    if (this.accountListsTimer) clearTimeout(this.accountListsTimer)
     this.engineLock.close()
     this.stopHeartbeat()
     this.socket?.close()

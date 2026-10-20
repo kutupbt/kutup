@@ -1589,6 +1589,9 @@ export interface ChatTransportPort {
   fetchGroupGateway(home: string, fromSequence: string): Promise<unknown>
   /** The account's group list, as the verified account head lists it. */
   fetchGroupList(): Promise<Array<{ id: string; revision: number; envelope: string }>>
+  fetchContactList(): Promise<Array<{ id: string; revision: number; envelope: string }>>
+  storeContactEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<'stored' | 'conflict' | 'full'>
+  deleteContactEntry(write: { id: string; baseRevision: number }): Promise<boolean>
   /** One group-list entry with the next account head: false when another device wrote first. */
   storeGroupEntry(write: { id: string; baseRevision: number; revision: number; envelope: string }): Promise<boolean>
   /** `POST /api/chat/groups/relay/{home}` with a sealed group request. */
@@ -2071,6 +2074,12 @@ export interface WasmChatClientHandle {
   leaveGroup?(groupId: string): Promise<void>
   /** Writes the due group list entries now (before signing out); how many. */
   flushGroupList?(): Promise<number>
+  /** Writes the due group and contact list entries and follows other devices' changes (a timer of its own). */
+  syncAccountLists?(): Promise<void>
+  /** Writes the due contact list entries now (before signing out); how many. */
+  flushContactList?(): Promise<number>
+  /** The contact list is full with nothing it may evict: changes (a block too) wait. */
+  contactListFull?(): boolean
   removeGroupMember?(groupId: string, pseudonym: string): Promise<void>
   setGroupMemberAdmin?(groupId: string, pseudonym: string, administrator: boolean): Promise<void>
   previewGroupLink?(fragment: string): Promise<ChatGroupLinkPreview>

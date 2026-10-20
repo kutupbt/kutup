@@ -7,6 +7,10 @@
     "description": "The address may be mistyped, or the page may have moved."
   },
   "chat": {
+    "contactListFull": {
+      "title": "Your contact list is full",
+      "body": "Your latest changes, a block among them, work on this device but aren't saved to your account yet, so a new device wouldn't have them. Unblocking people you no longer need to block makes room."
+    },
     "attachments": {
       "unavailableUntilAccepted": "Files, voice messages and stickers can be sent once {{name}} has accepted your message request.",
       "unavailableOnServer": "This server does not offer sealed delivery, so files, voice messages and stickers can be sent only to Note to Self and to groups.",
@@ -217,6 +221,8 @@
       "defaultDescription": "New chats and groups start with this disappearing-message timer when the first message is sent. It doesn't change chats you already have."
     },
     "errors": {
+      "contactListUnconfirmed": "Your contact list can't be confirmed yet, so your new messages are waiting on the server until it can. Nothing is lost. Try again in a moment.",
+      "contactListIntegrity": "The server's copy of your contact list doesn't match what your account last confirmed. Your messages are waiting on the server and nothing is lost, but Chat won't open them until this is resolved. Contact your administrator.",
       "browserUnsupported": "This browser cannot safely coordinate encrypted chat across tabs.",
       "serverUnsupported": "This server does not support the required secure chat protocol.",
       "capabilities": "Kutup could not check whether this server supports secure chat.",

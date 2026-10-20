@@ -33,6 +33,7 @@ import { Shortcuts } from './Shortcuts'
 import { forgetAccountHostTokens } from '../features/callLinks/hostTokens'
 import { closeChat, useChat } from './chatStore'
 import { useAccountHeadState } from '@kutup/session/useAccountHeadState'
+import { Alert } from '@kutup/ui/components/alert'
 import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
 
 /**
@@ -82,7 +83,16 @@ export function ChatShell() {
 
   return (
     <AppShell
-      banner={<HeadStateBanner {...accountHeadState} />}
+      banner={
+        <>
+          <HeadStateBanner {...accountHeadState} />
+          {chat.snapshot.contactListFull ? (
+            <Alert variant="warn" title={t('chat.contactListFull.title')} data-testid="chat-contact-list-full">
+              {t('chat.contactListFull.body')}
+            </Alert>
+          ) : null}
+        </>
+      }
       appName={t('apps.chat')}
       flush
       switcher={
@@ -157,8 +167,9 @@ export function ChatShell() {
             clearDrafts()
             // Nor does it host this account's meetings any more.
             forgetAccountHostTokens(session.userId)
-            // Joins and leaves still waiting for their list write go now.
-            void (chat.service?.flushGroupList() ?? Promise.resolve())
+            // Joins, leaves and contact changes still waiting for their list
+            // writes go now.
+            void Promise.all([chat.service?.flushGroupList(), chat.service?.flushContactList()])
               .then(() => disableWebPush(chat.service))
               .catch(() => undefined)
               .then(() => {

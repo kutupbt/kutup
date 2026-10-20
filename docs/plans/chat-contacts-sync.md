@@ -181,13 +181,18 @@ cost of the correlation; it does not remove it.
 
 ### Reading
 
-On a clean device (no contacts, no highest-seen account head):
-1. read the pin list and the contact list (`check_index` against the account
-   head);
-2. apply the contacts;
-3. only then drain the mailbox and process transcripts. The mailbox is
-   **held** until the list has been read, so nothing from a blocked person is
-   taken first.
+A device that never followed the contact list in full (a clean one, or one
+from before the list):
+1. reads the contact list (every entry `check_index` lists, at the listed
+   revision, or the read fails);
+2. applies the contacts, and marks the list followed (durably);
+3. only then drains the mailbox and processes transcripts. The mailbox is
+   **held** until the list has been followed, so nothing from a blocked
+   person is taken first.
+
+The pin list is not read ahead of the mailbox: it is consulted for each
+contact as Chat meets them (`sync_identity`), before anything is sealed to
+them, which is the point it decides anything.
 
 `bootstrap_contacts` goes. It marks every peer in the device's own message
 tables as Accepted at revision 0, which would run before the list and accept
@@ -238,6 +243,68 @@ following the main session's review of #252:
 - it refuses any size but 2048;
 - writes are listed by the account head;
 - account reset clears it.
+
+## As built (third session)
+
+- `kutup_chat_proto::contact_list::ChatContactEntryV1`: unknown fields kept in
+  a flattened map and written back; read from any valid JSON spelling (the
+  seal vouches for the bytes), written canonically. `previousState` may be
+  `pendingIncoming` (an unblock returns to the request), never `blocked`.
+- chat-core `contact_list`:
+  - `contact_order` is the one order (`(revision, blocked, sourceDeviceId)`),
+    used by the Note-to-Self contact control and the list alike.
+  - A contact record carries `list_due_at_ms` (SQLite column, IndexedDB
+    field): set at a random moment within ten minutes by every explicit and
+    implicit change except an incoming request; a profile-key-only change
+    within the hour (`lazy_due`).
+  - `flush_contact_list` reads the list, then per due contact takes the
+    list's newer entry, writes this device's newer one over the stored write
+    revision (a conflict reads again and merges once more), or clears the due
+    mark. A new entry on a full list evicts the oldest rejected, then the
+    oldest asked; never a block. With nothing to evict the entry stays due,
+    `contact_list_full()` turns on, and Chat shows a banner (en, tr).
+  - Every read checks that an entry's account re-derives its id.
+  - `sync_contact_list` takes what is newer in the list and applies the
+    standing rule; a running web device runs it every five minutes with its
+    due writes (`sync_contact_list_if_due`).
+  - `ContactListTiming { block: Immediate | Debounced }`: the web passes
+    `Immediate`, so a block is written before `block_contact` returns.
+  - `receive` on a device that never followed the list in full follows it
+    first and marks it followed (a durable flag); until it can, the mailbox
+    waits. `bootstrap_contacts` is gone.
+  - A read fails closed: every entry the account head lists must open at the
+    listed revision and name the account its id comes from. An entry of a
+    later version is kept as it is and never overwritten (the group list
+    reads the same way).
+  - First-seen identity pins are queued (`pins_due`) and written later and
+    together (`flush_identity_pins`, on the same tick and at sign-out); an
+    in-person verification is written at once. A queued pin lost to a reload
+    is queued again at the next contact.
+- Web: `ApiChatTransport.fetchContactList / storeContactEntry /
+  deleteContactEntry` under the account head's `chatContacts` scope; `full`
+  is the server's `contactListFull` code. Signing out flushes the contact
+  list (and the queued pins) with the group list.
+- A reject still waiting for its delayed write is dropped if the rejected
+  person writes again first: the contact is then an incoming request, which
+  is never written. Accepted: the list keeps what it said before, and the
+  account's devices agree through the contact control.
+- The account's lists also sync on a timer of their own (about a minute, five
+  in a hidden tab, give or take a fifth), not only when something arrives:
+  a quiet device still writes what is due.
+- An entry a later version wrote is kept as it is. So a block made on an
+  older device, for someone whose entry a later version wrote, isn't written
+  to the list: it reaches the account's other devices by the contact
+  control, and the later version writes it.
+- While the list is full, its due entries other than blocks are tried again
+  at most every 30 minutes; a block every pass.
+- First-seen pins waiting for their write are kept with the device; two tabs
+  each keep the earlier due moment of a pin they both queued, which at worst
+  writes it once more.
+- A pin list that can't be fetched leaves Chat's own pins in charge: a
+  contact the account quarantined in another app is then trusted on first use
+  here until the list is read (fail-open, as before the list existed).
+- Not yet: the native transport has no list routes, so `kutup-client-ffi`
+  doesn't enable the list.
 
 ## Decisions
 

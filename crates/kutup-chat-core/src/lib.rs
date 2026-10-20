@@ -16,6 +16,7 @@
 mod address;
 mod call_link;
 mod clock;
+mod contact_list;
 mod db;
 mod engine;
 mod error;
@@ -23,6 +24,8 @@ mod error;
 // native apps): unused in a native build until then. Invitations, claims and
 // message contexts are wired by the group messages part of slice 1
 // (docs/plans/pairwise-groups.md §10), which also drops this allowance.
+#[cfg(test)]
+mod contact_list_harness_tests;
 #[allow(dead_code)]
 mod group;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
