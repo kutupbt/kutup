@@ -136,6 +136,10 @@ pub(crate) struct World {
     pub(crate) contact_list_cap: Cell<usize>,
     /// The contact list can't be read (its server is down).
     pub(crate) contact_list_down: Cell<bool>,
+    /// Each account's identity pin list: (revision, envelope).
+    pub(crate) identity_pins: RefCell<BTreeMap<String, (u64, String)>>,
+    /// How many pin lists were written.
+    pub(crate) pin_writes: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
     /// How many whole states the group home was asked for.
@@ -244,6 +248,8 @@ impl World {
             contact_lists: RefCell::new(BTreeMap::new()),
             contact_list_cap: Cell::new(10_000),
             contact_list_down: Cell::new(false),
+            identity_pins: RefCell::new(BTreeMap::new()),
+            pin_writes: Cell::new(0),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
         })
@@ -968,6 +974,32 @@ impl ChatTransport for Client {
             return Ok(false);
         }
         entries.insert(id.to_string(), (revision, envelope.to_string()));
+        Ok(true)
+    }
+
+    async fn fetch_identity_pins(&self) -> Result<Option<crate::IdentityPinsRecord>> {
+        Ok(self
+            .world
+            .identity_pins
+            .borrow()
+            .get(&self.account)
+            .map(|(revision, envelope)| crate::IdentityPinsRecord {
+                revision: *revision,
+                envelope: envelope.clone(),
+            }))
+    }
+
+    async fn store_identity_pins(&self, write: &crate::IdentityPinsWrite) -> Result<bool> {
+        let mut pins = self.world.identity_pins.borrow_mut();
+        let listed = pins.get(&self.account).map_or(0, |(revision, _)| *revision);
+        if listed != write.base_revision {
+            return Ok(false);
+        }
+        pins.insert(
+            self.account.clone(),
+            (write.revision, write.envelope.clone()),
+        );
+        self.world.pin_writes.set(self.world.pin_writes.get() + 1);
         Ok(true)
     }
 

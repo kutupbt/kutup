@@ -318,3 +318,25 @@ fn contacts_a_full_list_evicts_a_rejection_but_never_drops_a_block() {
     assert_eq!(listed(&world, &alice).len(), 2);
     assert_eq!(flush(&mut alice).refused_full, 1);
 }
+
+#[test]
+fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let (seed, binding) = (alice.authority_seed, list_key(&alice).1);
+    alice
+        .engine
+        .enable_identity_pins(&[seed; 32], &binding)
+        .unwrap();
+    befriend(&mut alice, &mut bob);
+    befriend(&mut alice, &mut carol);
+    // Meeting Bob and Carol wrote nothing yet: the pins wait their delay.
+    assert_eq!(world.pin_writes.get(), 0);
+    assert_eq!(alice.engine.pins_due.len(), 2);
+    // Both in one write (as before signing out).
+    assert_eq!(block_on(alice.engine.flush_identity_pins(true)).unwrap(), 2);
+    assert_eq!(world.pin_writes.get(), 1);
+    assert!(alice.engine.pins_due.is_empty());
+}

@@ -539,6 +539,8 @@ impl Engine {
             self.sync_contact_list().await?;
         }
         self.flush_contact_list(false).await?;
+        // The pin list's first meetings go the same way.
+        self.flush_identity_pins(false).await?;
         Ok(())
     }
 

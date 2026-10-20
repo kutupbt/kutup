@@ -240,6 +240,10 @@ pub struct Engine {
     pub(crate) group_list: Option<crate::group_list::GroupListSync>,
     /// The account's Chat contact list (`enable_contact_list`).
     pub(crate) contact_list: Option<crate::contact_list::ContactListSync>,
+    /// First-seen identity pins waiting for their delayed write, by peer
+    /// (docs/plans/chat-contacts-sync.md, "The pin list follows the same
+    /// rule"). A pin lost to a reload is due again at the next contact.
+    pub(crate) pins_due: BTreeMap<String, i64>,
     /// The account's group keys (its self-authority and its pseudonyms),
     /// from its master key: no group is made or joined without them.
     pub(crate) group_keys: Option<crate::group::GroupAccountKeys>,
@@ -343,6 +347,7 @@ impl Engine {
             identity_pins: None,
             group_list: None,
             contact_list: None,
+            pins_due: BTreeMap::new(),
             group_keys: None,
         }
     }
@@ -410,11 +415,62 @@ impl Engine {
             Err(_) => return Ok(()),
         }
         if let Some(trust) = self.session.manifest_trust(peer).await? {
-            let now = (crate::clock::unix_millis().max(0) / 1000) as u64;
-            // Best effort: the list is written again at the next contact.
-            let _ = sync.record(&*self.transport, &trust, now).await;
+            if trust.trust == crate::db::AuthorityTrust::Verified {
+                // An in-person comparison is one-sided: written at once.
+                let now = (crate::clock::unix_millis().max(0) / 1000) as u64;
+                // Best effort: the list is written again at the next contact.
+                let _ = sync.record(&*self.transport, &trust, now).await;
+            } else {
+                // A first meeting is written later, at a random moment and
+                // with whatever else is due, so two accounts meeting don't
+                // line up on the server.
+                let now = self.now_ms();
+                self.pins_due
+                    .entry(peer.to_string())
+                    .or_insert_with(|| crate::contact_list::fresh_due(now));
+            }
         }
         Ok(())
+    }
+
+    /// Writes the first-seen pins that are due (all of them with `all`,
+    /// before this device signs out), in one write. What fails stays due.
+    pub async fn flush_identity_pins(&mut self, all: bool) -> Result<usize> {
+        let now = self.now_ms();
+        let due: Vec<String> = self
+            .pins_due
+            .iter()
+            .filter(|(_, at)| all || **at <= now)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let Some(mut sync) = self.identity_pins.take() else {
+            self.pins_due.clear();
+            return Ok(0);
+        };
+        let mut trusts = Vec::new();
+        for peer in &due {
+            if let Some(trust) = self.session.manifest_trust(peer).await? {
+                trusts.push(trust);
+            }
+        }
+        let seconds = (crate::clock::unix_millis().max(0) / 1000) as u64;
+        let result = sync.record_all(&*self.transport, &trusts, seconds).await;
+        self.identity_pins = Some(sync);
+        match result {
+            // Written, or one of them refused as another account's: none of
+            // them is due any more (the refused one is said at its next
+            // contact, when it is checked again).
+            Ok(()) | Err(ChatError::Trust(_)) => {
+                for peer in &due {
+                    self.pins_due.remove(peer);
+                }
+                Ok(trusts.len())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn own_device_list_version(&self) -> Result<Option<u64>> {

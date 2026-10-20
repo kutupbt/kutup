@@ -1470,6 +1470,8 @@ impl WasmChatClient {
             .flush_contact_list(true)
             .await
             .map_err(chat_error)?;
+        // And the pin list's first meetings still waiting.
+        let _ = self.engine.flush_identity_pins(true).await;
         Ok(u32::try_from(report.written).unwrap_or(u32::MAX))
     }
 
