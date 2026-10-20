@@ -715,6 +715,25 @@ impl Engine {
         accounts: &[AccountRef],
         fresh: &[AccountRef],
     ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>, Vec<AccountRef>)> {
+        let (keys, unconfirmed, cached) = self.authority_keys(accounts, fresh).await?;
+        let authority_of = |account: &AccountRef| keys.get(account).copied();
+        let members = group::members(record, &authority_of).map_err(group_error)?;
+        Ok((members, unconfirmed, cached))
+    }
+
+    /// The self-authority keys of `accounts` from their verified manifests
+    /// (kept ones, except for `fresh` accounts), the accounts whose manifest
+    /// couldn't be fetched, and those whose key was a kept one.
+    #[allow(clippy::type_complexity)]
+    pub(crate) async fn authority_keys(
+        &mut self,
+        accounts: &[AccountRef],
+        fresh: &[AccountRef],
+    ) -> Result<(
+        BTreeMap<AccountRef, [u8; 32]>,
+        Vec<AccountRef>,
+        Vec<AccountRef>,
+    )> {
         let now = crate::clock::unix_millis();
         let mut keys: BTreeMap<AccountRef, [u8; 32]> = BTreeMap::new();
         let mut unconfirmed = Vec::new();
@@ -767,9 +786,7 @@ impl Engine {
                 .insert(account_text, (now, authority));
             keys.insert(account, authority);
         }
-        let authority_of = |account: &AccountRef| keys.get(account).copied();
-        let members = group::members(record, &authority_of).map_err(group_error)?;
-        Ok((members, unconfirmed, cached))
+        Ok((keys, unconfirmed, cached))
     }
 
     /// Every group this device knows, with its title.

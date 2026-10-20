@@ -43,6 +43,7 @@ mod group_list;
 mod group_recover;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_send;
+mod group_settings;
 mod invite_link;
 mod keys;
 mod manifest;

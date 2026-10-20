@@ -981,12 +981,18 @@ pub fn accept_state(
         return Err(GroupError::Change(GroupChangeError::WrongGroup));
     }
     // Only a device with no verified state takes a whole state (it just
-    // joined, or is new), or one joining again: a member catches up through
-    // the log, so every change is checked, signatures and roles included. A
-    // rejoiner's kept state only sets the lowest revision it takes (its new
-    // pseudonym reads the log only from its claim on).
+    // joined, or is new), or one joining again (invited, or through the
+    // link: asking or approved): a member catches up through the log, so
+    // every change is checked, signatures and roles included. A rejoiner's
+    // kept state only sets the lowest revision it takes (its new pseudonym
+    // reads the log only from its join on).
     let kept = record.verified()?;
-    if kept.is_some() && !matches!(record.status, GroupStatus::Invited { .. }) {
+    if kept.is_some()
+        && !matches!(
+            record.status,
+            GroupStatus::Invited { .. } | GroupStatus::Requesting
+        )
+    {
         return Err(record_error("a member catches up through the log"));
     }
     // A rejoiner takes only a state newer than the one it kept, from a notary

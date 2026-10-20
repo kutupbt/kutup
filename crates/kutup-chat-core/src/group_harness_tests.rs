@@ -4225,3 +4225,244 @@ fn group_link_the_last_epoch_is_never_passed() {
     assert_eq!(record.join_epoch, crate::group::MAX_JOIN_EPOCHS - 1);
     assert_eq!(record.status, GroupStatus::Requesting);
 }
+
+fn details(person: &mut Person, group_id: &str) -> crate::group_settings::GroupDetails {
+    block_on(person.engine.group_details(group_id)).unwrap()
+}
+
+#[test]
+fn group_settings_reach_every_member() {
+    use kutup_chat_proto::group::AccessRequired;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    let r = &mut rng();
+    block_on(
+        alice
+            .engine
+            .set_group_description(&group_id, "  Plans\nand notes ", r),
+    )
+    .unwrap();
+    block_on(alice.engine.set_group_timer(&group_id, 3600, r)).unwrap();
+    block_on(alice.engine.set_group_access(
+        &group_id,
+        AccessRequired::Administrator,
+        AccessRequired::Administrator,
+        r,
+    ))
+    .unwrap();
+    block_on(
+        alice
+            .engine
+            .set_group_announcements_only(&group_id, true, r),
+    )
+    .unwrap();
+    assert!(block_on(
+        alice
+            .engine
+            .set_group_description(&group_id, &"x".repeat(481), r)
+    )
+    .is_err());
+    bob.receive();
+    bob.sync(&group_id);
+    let seen = details(&mut bob, &group_id);
+    assert_eq!(seen.description.as_deref(), Some("Plans\nand notes"));
+    assert_eq!(seen.timer_seconds, 3600);
+    assert!(seen.announcements_only);
+    assert_eq!(seen.access.attributes, AccessRequired::Administrator);
+    assert!(!seen.administrator);
+    // A member may no longer rename it.
+    assert!(block_on(bob.engine.set_group_title(&group_id, "Mine", r)).is_err());
+    block_on(alice.engine.set_group_timer(&group_id, 0, r)).unwrap();
+    bob.receive();
+    bob.sync(&group_id);
+    assert_eq!(details(&mut bob, &group_id).timer_seconds, 0);
+}
+
+#[test]
+fn group_settings_an_approved_request_joins() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+    assert_eq!(
+        block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap(),
+        GroupLinkJoin::Requested
+    );
+    alice.sync(&group_id);
+    let seen = details(&mut alice, &group_id);
+    assert_eq!(seen.requests.len(), 1);
+    let request = &seen.requests[0];
+    assert!(!request.banned);
+    assert_eq!(
+        request
+            .requester
+            .verified
+            .as_ref()
+            .unwrap()
+            .account
+            .to_string(),
+        dave.account
+    );
+    let pseudonym = request.requester.pseudonym.clone();
+    block_on(
+        alice
+            .engine
+            .approve_group_request(&group_id, &pseudonym, &mut rng()),
+    )
+    .unwrap();
+    // The change notice reaches the newcomer, now a member.
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    dave.sync(&group_id);
+    assert_eq!(dave.status(&group_id), GroupStatus::Member);
+    alice.send_text(&group_id, "approved");
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    assert_eq!(dave.group_texts(&group_id), vec!["approved".to_string()]);
+}
+
+#[test]
+fn group_settings_a_denied_account_stays_out_under_a_new_pseudonym() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+    block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    alice.sync(&group_id);
+    let first = details(&mut alice, &group_id).requests[0]
+        .requester
+        .pseudonym
+        .clone();
+    block_on(
+        alice
+            .engine
+            .deny_group_request(&group_id, &first, &mut rng()),
+    )
+    .unwrap();
+    let seen = details(&mut alice, &group_id);
+    assert!(seen.requests.is_empty());
+    assert_eq!(seen.bans.len(), 1);
+    assert_eq!(
+        seen.bans[0].account.as_ref().unwrap().to_string(),
+        dave.account
+    );
+    assert_eq!(seen.bans[0].pseudonyms, vec![first.clone()]);
+
+    // Asking again from the next epoch (as after a "denied" answer).
+    let mut record = block_on(dave.engine.load_group_record(&group_id)).unwrap();
+    record.status = GroupStatus::Gone;
+    block_on(dave.engine.save_group(&record)).unwrap();
+    assert_eq!(
+        block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap(),
+        GroupLinkJoin::Requested
+    );
+    alice.sync(&group_id);
+    let seen = details(&mut alice, &group_id);
+    assert_eq!(seen.requests.len(), 1);
+    assert!(seen.requests[0].banned);
+    let second = seen.requests[0].requester.pseudonym.clone();
+    assert_ne!(second, first);
+    assert!(block_on(
+        alice
+            .engine
+            .approve_group_request(&group_id, &second, &mut rng())
+    )
+    .is_err());
+
+    // Unbanning the account lifts its pseudonym's ban too.
+    let ban = seen.bans[0].clone();
+    block_on(alice.engine.unban_group(&group_id, &ban, &mut rng())).unwrap();
+    let seen = details(&mut alice, &group_id);
+    assert!(seen.bans.is_empty());
+    assert!(!seen.requests[0].banned);
+    block_on(
+        alice
+            .engine
+            .approve_group_request(&group_id, &second, &mut rng()),
+    )
+    .unwrap();
+    // The rejoiner, who kept the state from before, catches up as a member.
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    dave.sync(&group_id);
+    assert_eq!(dave.status(&group_id), GroupStatus::Member);
+}
+
+#[test]
+fn group_settings_a_ban_removes_resets_the_link_and_a_return_is_flagged() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+    block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    alice.sync(&group_id);
+    let daves = pseudonym_of(&mut alice, &group_id, &dave);
+
+    // With the link reset by default: the old link no longer works.
+    block_on(
+        alice
+            .engine
+            .ban_group_member(&group_id, &daves, true, &mut rng()),
+    )
+    .unwrap();
+    assert_eq!(
+        block_on(alice.engine.group_members(&group_id))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        block_on(dave.engine.preview_group_link(&fragment)).unwrap(),
+        Ok(None)
+    );
+
+    // Without the reset, the banned account can come back under a new
+    // pseudonym: every member sees it flagged, and one tap removes it.
+    let link = block_on(alice.engine.group_link(&group_id))
+        .unwrap()
+        .fragment
+        .unwrap();
+    let mut record = block_on(dave.engine.load_group_record(&group_id)).unwrap();
+    record.status = GroupStatus::Gone;
+    block_on(dave.engine.save_group(&record)).unwrap();
+    let joined = block_on(dave.engine.join_group_by_link(&link, &mut rng())).unwrap();
+    assert!(matches!(joined, GroupLinkJoin::Joined(_)), "{joined:?}");
+    alice.sync(&group_id);
+    let seen = details(&mut alice, &group_id);
+    assert_eq!(seen.banned_members.len(), 1);
+    assert_ne!(seen.banned_members[0], daves);
+    assert_eq!(
+        block_on(
+            alice
+                .engine
+                .remove_unverified_group_members(&group_id, &mut rng())
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        block_on(alice.engine.group_members(&group_id))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(details(&mut alice, &group_id).banned_members.is_empty());
+}
+
+#[test]
+fn group_settings_an_ended_group_takes_no_more_changes() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    block_on(alice.engine.end_group(&group_id, &mut rng())).unwrap();
+    bob.receive();
+    bob.sync(&group_id);
+    assert!(details(&mut bob, &group_id).terminated);
+    assert!(block_on(alice.engine.set_group_title(&group_id, "Again", &mut rng())).is_err());
+}

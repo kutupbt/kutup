@@ -274,7 +274,7 @@ pub struct GroupLinkSettings {
     pub fragment: Option<String>,
 }
 
-fn new_password<R: Rng + CryptoRng>(rng: &mut R) -> String {
+pub(crate) fn new_password<R: Rng + CryptoRng>(rng: &mut R) -> String {
     let mut password = [0u8; INVITE_LINK_PASSWORD_LEN];
     rng.fill_bytes(&mut password);
     let text = kutup_chat_proto::group::encode(&password);
