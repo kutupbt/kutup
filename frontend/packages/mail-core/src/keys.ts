@@ -382,5 +382,8 @@ export async function groupMembers(address: string): Promise<AddressKeys[]> {
     if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
-  return Promise.all(members.map(async (member) => pinned(await verified(member.address, member))))
+  // Each held to what this device has seen, as a lookup is: a replayed older
+  // list (one without EMAIL_NO_ENCRYPT, or with it) never decides how a
+  // member's mail goes.
+  return Promise.all(members.map(async (member) => pinned(await notRolledBack(member.address, await verified(member.address, member)))))
 }

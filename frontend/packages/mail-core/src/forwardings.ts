@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import { acceptMailForwarding, foldAddress, makeMailForwarding, toBase64, type SealedMailKey } from '@kutup/crypto'
+import { acceptMailForwarding, foldAddress, MAIL_KEY_FLAGS, makeMailForwarding, toBase64, type SealedMailKey } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { mailKey, useMailAccount, type MailAccount } from './api'
@@ -144,7 +144,7 @@ export async function forwardingKindOf(
     throw new ForwardeeRefused('unverified')
   }
   if (keys.group) throw new ForwardeeRefused('group')
-  if (keys.accountRef?.server !== account.domain) return { kind: 'outside' }
+  if (keys.accountRef?.server !== account.domain.toLowerCase()) return { kind: 'outside' }
   return { kind: 'end_to_end', keys }
 }
 
@@ -171,7 +171,9 @@ export interface NewForwarding {
 /** The address's primary key, as the key list this account signed names it, sealed. */
 function sealedPrimary(session: Pick<Session, 'masterKey' | 'envelopeBinding'>, address: CheckedAddress): SealedMailKey {
   if (!address.verifiedList) throw new KeyListNotSigned()
-  const entry = address.verifiedList.keys.find((key) => key.primary)
+  // Usable, as Mail's own primary must be: neither compromised nor obsolete.
+  const usable = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
+  const entry = address.verifiedList.keys.find((key) => key.primary && (key.flags & usable) === usable)
   // Its public key checked against the signed fingerprints (`listed`).
   const primary = entry && address.keys.find((key) => !key.forwarding && key.listed && key.fingerprint === entry.fingerprint)
   if (!primary) throw new Error(`${address.address} has no primary key`)

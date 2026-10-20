@@ -57,7 +57,7 @@ import {
   type GroupSignerHolder,
   type SignedMailKeyList,
 } from '@kutup/crypto'
-import { acceptGroupKeys, addressKeys, forgetKeys, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
+import { acceptGroupKeys, addressKeys, forgetKeys, groupMembers, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
@@ -186,6 +186,9 @@ describe('an address’s key lists against what this device has seen', () => {
     forgetKeys()
     get.mockResolvedValueOnce({ data: first })
     await expect(addressKeys('roll_back@kutup.dev')).rejects.toBeInstanceOf(UnverifiedKeys)
+    // Nor as a member of a list: a member's mail never goes by a replayed list.
+    get.mockResolvedValueOnce({ data: { members: [first] } })
+    await expect(groupMembers('team@kutup.dev')).rejects.toBeInstanceOf(UnverifiedKeys)
   })
 })
 
