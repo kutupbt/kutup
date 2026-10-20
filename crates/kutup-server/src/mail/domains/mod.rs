@@ -8,6 +8,7 @@
 //! - [`reconcile`]: Stalwart's domains and DKIM signatures follow the
 //!   database.
 
+pub mod check;
 pub mod dns;
 pub mod name;
 pub mod policy;
