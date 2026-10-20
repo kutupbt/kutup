@@ -106,6 +106,22 @@ compose exec -T stalwart curl -fsS -o /dev/null \
   -u "kutup-domains@$CHAT_SERVER_NAME:$MAIL_STALWART_DOMAINS_TOKEN" \
   http://127.0.0.1:8080/jmap/session \
   || { echo "the custom domains account can't sign in to Stalwart" >&2; exit 1; }
+# ... and manages domains and nothing else: through submission (2587) it can't
+# send, whatever sender it names. Stalwart must answer with a refusal (5xx to
+# AUTH, MAIL or RCPT), so a connection that failed for another reason can't
+# pass for one.
+if smtp_log="$(compose exec -T stalwart sh -c \
+  "printf 'Subject: x\r\n\r\nx\r\n' | curl -sv --max-time 20 smtp://127.0.0.1:2587 \
+     --mail-from postmaster@$CHAT_SERVER_NAME --mail-rcpt someone@outside.test \
+     -u 'kutup-domains@$CHAT_SERVER_NAME:$MAIL_STALWART_DOMAINS_TOKEN' -T - 2>&1")"; then
+  echo "the custom domains account sent mail through submission" >&2
+  exit 1
+fi
+if ! grep -Eq '^< 5[0-9][0-9]' <<<"$smtp_log"; then
+  echo "submission didn't refuse the custom domains account itself:" >&2
+  echo "$smtp_log" >&2
+  exit 1
+fi
 
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \

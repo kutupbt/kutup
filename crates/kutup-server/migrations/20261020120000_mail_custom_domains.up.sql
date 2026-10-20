@@ -40,7 +40,9 @@ CREATE TABLE mail_domains (
     stalwart_signature_key text,
     UNIQUE (user_id, name)
 );
--- One holder of a name at a time.
+-- One holder of a name at a time. Held means verified or warned, which
+-- includes a domain awaiting an administrator's approval: it holds its name
+-- (nobody else may prove it) though it takes no mail until approved.
 CREATE UNIQUE INDEX mail_domains_held ON mail_domains (name) WHERE state IN (1, 2);
 CREATE INDEX mail_domains_checked ON mail_domains (checked_at) WHERE removed_at IS NULL;
 

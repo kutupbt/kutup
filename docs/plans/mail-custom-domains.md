@@ -254,9 +254,11 @@ The server checks records in Proton's order and keeps every record's state.
 | DKIM | three CNAMEs (§4) | `DKIM_STATE` |
 | DMARC | `_dmarc` TXT `v=DMARC1; p=quarantine` (editable, as Proton) | `DMARC_STATE`; `RELAXED` when `adkim` isn't `s` |
 
-- **The resolver:** a validating resolver the server is configured with
-  (`MAIL_DNS_RESOLVER`). The compose files ship Unbound with DNSSEC
-  validation; Docker's embedded DNS doesn't validate.
+- **The resolver:** the backend validates DNSSEC itself (hickory), asking
+  `MAIL_DNS_RESOLVER` or the system's resolver, which must pass the DNSSEC
+  records through. Docker's embedded DNS forwards to the host's resolver,
+  which may strip them; self-hosting.md says to point `MAIL_DNS_RESOLVER` at
+  one that keeps them.
 - **Timing:**
   - every 6 hours for held domains, with jitter;
   - every 15 minutes for 2 hours after a domain is added;
@@ -423,8 +425,9 @@ shows as a different person with a changed key, never as inherited trust.
 - Adding the same name again gets the same code back (§Settled).
 
 **An `inactive` domain that its holder proves again** returns to `verified`.
-Its addresses, still the holder's, come back once they are rekeyed, since
-their keys were withdrawn from publication.
+Its addresses were freed when it went `inactive` (as for a transfer), so the
+holder makes them again, each with a new key; their old mail stays in the
+mailbox.
 
 **Mail in flight:** what arrives after addresses are freed is refused at RCPT
 (`550 5.1.1`). The sending server bounces it, as for any unknown address.
@@ -482,8 +485,8 @@ under the old master key, so those addresses come back as "Missing keys"
     records; the admin console shows them and their state.
 - **Nothing per customer domain on the operator's side:** no certificates
   (MX is our host), and no DNS API until per-domain keys (§4).
-- **The resolver:** Unbound in compose, or `MAIL_DNS_RESOLVER` pointing to a
-  validating one.
+- **The resolver:** the backend validates; `MAIL_DNS_RESOLVER` points to one
+  that passes DNSSEC records through (§3).
 
 ### 11. Web UI (third session, later)
 

@@ -1067,8 +1067,13 @@ DNS you publish once, under the server's own domain:
 
 Customers' MX points at `MAIL_HOSTNAME`, so receiving needs no certificate per
 domain. The checks ask `MAIL_DNS_RESOLVER` (an `ip:port`) or the system's
-resolver, and validate DNSSEC themselves. `MAIL_BACKUP_MX` names a backup MX
-you run, if any.
+resolver, and validate DNSSEC themselves, so that resolver must pass DNSSEC
+records (RRSIG, DNSKEY, DS) through. Docker's embedded resolver forwards to
+the host's, and some host setups strip those records: every check of a signed
+domain then comes back unknown and the domain never verifies. If yours does,
+point `MAIL_DNS_RESOLVER` at a resolver that keeps them (a local Unbound, or a
+public one such as `1.1.1.1:53`). `MAIL_BACKUP_MX` names a backup MX you run,
+if any.
 
 ---
 
