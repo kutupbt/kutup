@@ -203,6 +203,8 @@ export interface AdminSettings {
   chatMultiIpBytesPerMin: number
   chatGroupCapabilitySendsPerMin: number
   chatGroupCapabilitySendsPerDay: number
+  chatMultiOriginRequestsPerMin: number
+  chatMultiOriginBytesPerMin: number
   /** The largest group avatar blob hosted groups take (one of the avatar lengths). */
   chatGroupAvatarMaxBytes: number
   /** The most a hosted group's avatars may take, in bytes (at least twice the largest). */

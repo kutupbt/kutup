@@ -1828,6 +1828,14 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
+            "/api/fed/chat/sealed/multi",
+            post(handlers::chat_multi::deliver_federated)
+                .route_layer(DefaultBodyLimit::max(
+                    handlers::chat_multi::MAX_FEDERATED_BODY,
+                ))
+                .route_layer(from_fn(middleware::rate_limit_fed_multi)),
+        )
+        .route(
             "/api/fed/chat/sealed/batch",
             post(chat_federation::deliver_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(

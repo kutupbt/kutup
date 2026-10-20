@@ -776,9 +776,20 @@ capped at 4 MiB as well as by count. Connected devices are nudged
 (`drainMailbox`) rather than sent the message; an urgent send also wakes
 offline devices by web push. A `sendId` already stored for an account stores
 nothing again for it. The shared part goes once no row names it (after an ack,
-or the maintenance sweep). A destination on another server answers `503
-peerUnavailable` until the federated route exists: the client sends those
-members' copies one by one.
+or the maintenance sweep).
+
+For another server's members, this server forwards the send at once to that
+server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
+answer (the usual federation timeout) and relays it as it is: `200`, `409`,
+`410`, or the destination's `400`/`413`. A destination that is slow,
+unreachable or unwilling is `503 peerUnavailable`: nothing is queued and
+nothing of the body is kept, so the client sends those members' copies over
+the pairwise path, which is durable. The destination checks and stores the
+send as a local one, and budgets its origin per request and per byte a
+minute, all of the origin's users together (`chatMultiOriginRequestsPerMin`,
+6000, and `chatMultiOriginBytesPerMin`, 512 MiB, at first), never per stored
+recipient; before authentication, `RATE_LIMIT_FED_MULTI_IP_PER_MIN` (6000)
+per peer address.
 
 For another server, the origin queues each send exactly as a single sealed
 send (same outbox, sequence and `sendId` dedup), then flushes the

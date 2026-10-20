@@ -332,14 +332,33 @@ pub const CHAT_GROUP_CAPABILITY_SENDS_PER_DAY: NumericSetting = NumericSetting {
     min: 1,
     max: 10_000_000,
 };
+/// What one origin server may deliver here in multi-recipient sends a
+/// minute, all its users together: requests and bytes (never counted per
+/// stored recipient).
+pub const CHAT_MULTI_ORIGIN_REQUESTS_PER_MIN: NumericSetting = NumericSetting {
+    key: "chat_multi_origin_requests_per_min",
+    field: "chatMultiOriginRequestsPerMin",
+    default: 6_000,
+    min: 1,
+    max: 1_000_000,
+};
+pub const CHAT_MULTI_ORIGIN_BYTES_PER_MIN: NumericSetting = NumericSetting {
+    key: "chat_multi_origin_bytes_per_min",
+    field: "chatMultiOriginBytesPerMin",
+    default: 512 * 1024 * 1024,
+    min: 1024 * 1024,
+    max: 16 * 1024 * 1024 * 1024,
+};
 /// Every multi-recipient setting, as `/api/admin/settings` lists them.
-pub const CHAT_MULTI_SETTINGS: [NumericSetting; 6] = [
+pub const CHAT_MULTI_SETTINGS: [NumericSetting; 8] = [
     CHAT_MULTI_MAX_MESSAGE_BYTES,
     CHAT_MULTI_BASE_BYTES,
     CHAT_MULTI_MAX_RECIPIENTS,
     CHAT_MULTI_IP_BYTES_PER_MIN,
     CHAT_GROUP_CAPABILITY_SENDS_PER_MIN,
     CHAT_GROUP_CAPABILITY_SENDS_PER_DAY,
+    CHAT_MULTI_ORIGIN_REQUESTS_PER_MIN,
+    CHAT_MULTI_ORIGIN_BYTES_PER_MIN,
 ];
 
 /// The multi-recipient limits now.
@@ -351,6 +370,8 @@ pub struct MultiLimits {
     pub ip_bytes_per_min: i64,
     pub capability_sends_per_min: i64,
     pub capability_sends_per_day: i64,
+    pub origin_requests_per_min: i64,
+    pub origin_bytes_per_min: i64,
 }
 
 pub async fn chat_multi_limits(pool: &PgPool) -> Result<MultiLimits, sqlx::Error> {
@@ -361,6 +382,8 @@ pub async fn chat_multi_limits(pool: &PgPool) -> Result<MultiLimits, sqlx::Error
         ip_bytes_per_min: CHAT_MULTI_IP_BYTES_PER_MIN.load(pool).await?,
         capability_sends_per_min: CHAT_GROUP_CAPABILITY_SENDS_PER_MIN.load(pool).await?,
         capability_sends_per_day: CHAT_GROUP_CAPABILITY_SENDS_PER_DAY.load(pool).await?,
+        origin_requests_per_min: CHAT_MULTI_ORIGIN_REQUESTS_PER_MIN.load(pool).await?,
+        origin_bytes_per_min: CHAT_MULTI_ORIGIN_BYTES_PER_MIN.load(pool).await?,
     })
 }
 

@@ -35,6 +35,8 @@ const MULTI_SETTINGS = [
   { field: 'chatMultiIpBytesPerMin', min: 1_048_576, max: 1_073_741_824 },
   { field: 'chatGroupCapabilitySendsPerMin', min: 1, max: 100_000 },
   { field: 'chatGroupCapabilitySendsPerDay', min: 1, max: 10_000_000 },
+  { field: 'chatMultiOriginRequestsPerMin', min: 1, max: 1_000_000 },
+  { field: 'chatMultiOriginBytesPerMin', min: 1_048_576, max: 17_179_869_184 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** The server's bounds (site_settings::validate_chat_group_capabilities_per_account). */
 const MAX_GROUP_CAPABILITIES = 100_000

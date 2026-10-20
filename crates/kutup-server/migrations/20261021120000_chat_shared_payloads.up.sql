@@ -17,4 +17,4 @@ ALTER TABLE chat_anonymous_rate_counters DROP CONSTRAINT chat_anonymous_rate_cou
 ALTER TABLE chat_anonymous_rate_counters ADD CONSTRAINT chat_anonymous_rate_counters_scope_type_check
     CHECK (scope_type = ANY (ARRAY['capability_bundle', 'capability_minute', 'capability_day',
         'recipient', 'federation_origin', 'group_capability_minute', 'group_capability_day',
-        'ip_bytes']));
+        'ip_bytes', 'origin_multi_requests', 'origin_multi_bytes']));

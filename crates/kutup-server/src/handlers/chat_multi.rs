@@ -182,7 +182,8 @@ fn device_answers(
 
 /// `POST /api/chat/anonymous/messages/multi?server=` — one group message to
 /// member accounts of one server, sent once (docs/plans/pairwise-groups.md,
-/// slice 2). Anonymous, as the other sealed routes.
+/// slice 2). Anonymous, as the other sealed routes. Another server's
+/// members: forwarded to it at once, its answer relayed as it is.
 #[utoipa::path(
     post,
     path = "/api/chat/anonymous/messages/multi",
@@ -196,7 +197,7 @@ fn device_answers(
         (status = 410, description = "Devices whose registration changed (`stale`); nothing stored", body = SealedMultiResponseV1),
         (status = 413, description = "Too many recipients, or too large"),
         (status = 429, description = "Over this address's budget"),
-        (status = 503, description = "peerUnavailable: send these members' copies one by one"),
+        (status = 503, description = "peerUnavailable: the recipients' server didn't answer; send their copies one by one"),
     )
 )]
 pub async fn send_multi(
@@ -208,32 +209,50 @@ pub async fn send_multi(
 ) -> AppResult<Response> {
     let limits = crate::site_settings::chat_multi_limits(&state.pool).await?;
     let parsed = parse(&submission, &limits)?;
-    let local = &state.config.chat_server_name;
-    let server = query.server.as_deref().unwrap_or(local);
-    if server != local {
-        // Remote destinations come with the federated route; until then the
-        // client sends these members' copies one by one.
-        return Err(peer_unavailable());
-    }
-
-    let mut tx = state.pool.begin().await?;
     // This address's bytes a minute (the request itself was counted by the
-    // anonymous route's per-address limit).
+    // anonymous route's per-address limit), charged whatever the answer.
     let address =
         crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
     let address_digest: [u8; 32] =
         Sha256::digest([b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat())
             .into();
     let bytes = i64::try_from(submission.payload.len()).unwrap_or(i64::MAX);
-    if anonymous_count(&mut tx, "ip_bytes", &address_digest, bytes, 60).await?
-        > limits.ip_bytes_per_min
-    {
+    if charge(&state, "ip_bytes", &address_digest, bytes).await? > limits.ip_bytes_per_min {
         crate::telemetry::rate_limit_rejection("anonymous_ip");
         return Err(AppError::too_many_requests(
             "anonymous delivery rate limit exceeded",
         ));
     }
+    let local = &state.config.chat_server_name;
+    let server = query.server.as_deref().unwrap_or(local);
+    let (status, answer) = if server == local {
+        deliver(&state, &submission, parsed, &limits).await?
+    } else {
+        forward(&state, server, &submission).await?
+    };
+    Ok((status, Json(answer)).into_response())
+}
 
+/// Adds `amount` to a budget in a transaction of its own, so it counts
+/// whatever the send's answer (a refusal or a device mismatch is no free
+/// probe); the new count.
+async fn charge(state: &AppState, scope: &str, digest: &[u8; 32], amount: i64) -> AppResult<i64> {
+    let mut tx = state.pool.begin().await?;
+    let count = anonymous_count(&mut tx, scope, digest, amount, 60).await?;
+    tx.commit().await?;
+    Ok(count)
+}
+
+/// Delivers a checked send to this server's accounts: capabilities, then
+/// each capability's budget, then devices, then the store. The answer's
+/// status is `200`, `409` or `410`.
+async fn deliver(
+    state: &AppState,
+    submission: &SealedMultiSubmissionV1,
+    parsed: Parsed,
+    limits: &MultiLimits,
+) -> AppResult<(StatusCode, SealedMultiResponseV1)> {
+    let mut tx = state.pool.begin().await?;
     let mut answer = SealedMultiResponseV1::default();
     // 1. Capabilities: an account that isn't an active one here and a
     // capability that doesn't hold get one answer.
@@ -295,11 +314,11 @@ pub async fn send_multi(
     if !answer.devices.is_empty() {
         tx.rollback().await?;
         answer.stale.clear();
-        return Ok((StatusCode::CONFLICT, Json(answer)).into_response());
+        return Ok((StatusCode::CONFLICT, answer));
     }
     if !answer.stale.is_empty() {
         tx.rollback().await?;
-        return Ok((StatusCode::GONE, Json(answer)).into_response());
+        return Ok((StatusCode::GONE, answer));
     }
 
     // 4. Store: the shared part once (only if a device gets a new row), and
@@ -363,8 +382,157 @@ pub async fn send_multi(
     }
     tx.commit().await?;
     crate::telemetry::sealed_send_event("multi", "stored", stored.len() as u64);
-    nudge(&state, &stored, submission.urgent).await;
-    Ok(Json(answer).into_response())
+    nudge(state, &stored, submission.urgent).await;
+    Ok((StatusCode::OK, answer))
+}
+
+/// The response size a destination's answer may have (its lists of
+/// accounts and devices).
+const MAX_FORWARD_ANSWER_BYTES: usize = 1024 * 1024;
+
+/// Forwards a send to the recipients' server and waits for its answer
+/// (docs/plans/pairwise-groups.md, slice 2 §5): `200`, `409` and `410` are
+/// relayed as they are, a malformed or too large send as the destination
+/// said; a slow, unreachable or unwilling destination is `503
+/// peerUnavailable`. Nothing is queued and nothing of the body is kept: the
+/// client sends those members' copies over the durable pairwise path.
+async fn forward(
+    state: &AppState,
+    server: &str,
+    submission: &SealedMultiSubmissionV1,
+) -> AppResult<(StatusCode, SealedMultiResponseV1)> {
+    let federation = state.federation.as_deref().ok_or_else(peer_unavailable)?;
+    let body = serde_json::to_vec(submission)
+        .map_err(|error| AppError::internal(format!("encode multi send: {error}")))?;
+    let response = federation
+        .send(
+            server,
+            crate::federation::FederationRequestSpec {
+                feature: kutup_federation_proto::FederationFeature::ChatV2,
+                method: reqwest::Method::POST,
+                path: FEDERATED_PATH.into(),
+                query: None,
+                content_type: crate::chat_federation::JSON_CONTENT_TYPE.into(),
+                body,
+                request_id: Uuid::new_v4().to_string(),
+                extra_headers: Vec::new(),
+                response_limit: MAX_FORWARD_ANSWER_BYTES,
+            },
+        )
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::info!(error = %error, "multi send: the destination didn't answer");
+            return Err(peer_unavailable());
+        }
+    };
+    match response.status {
+        StatusCode::OK | StatusCode::CONFLICT | StatusCode::GONE => {
+            let answer: SealedMultiResponseV1 =
+                serde_json::from_slice(&response.body).map_err(|_| peer_unavailable())?;
+            Ok((response.status, answer))
+        }
+        StatusCode::BAD_REQUEST => Err(malformed(
+            "the recipients' server refused the send as malformed",
+        )),
+        StatusCode::PAYLOAD_TOO_LARGE => Err(too_large(
+            "the recipients' server refused the send as too large",
+        )),
+        _ => Err(peer_unavailable()),
+    }
+}
+
+/// The destination's endpoint for a forwarded multi-recipient send.
+pub(crate) const FEDERATED_PATH: &str = "/api/fed/chat/sealed/multi";
+
+/// The largest forwarded send a destination reads: the largest payload,
+/// base64, and its capabilities.
+pub(crate) const MAX_FEDERATED_BODY: usize =
+    kutup_chat_proto::MAX_SEALED_MULTI_PAYLOAD_BYTES * 4 / 3 + 256 * 1024;
+
+/// `POST /api/fed/chat/sealed/multi` — a multi-recipient send another
+/// server forwarded for this server's accounts, checked and stored as a
+/// local one. The origin is budgeted per request and per byte (all its
+/// users together), never per stored recipient.
+#[utoipa::path(
+    post,
+    path = "/api/fed/chat/sealed/multi",
+    tag = "federation",
+    request_body = SealedMultiSubmissionV1,
+    responses(
+        (status = 200, body = SealedMultiResponseV1),
+        (status = 400, description = "Malformed"),
+        (status = 401, description = "Invalid federation request signature or destination"),
+        (status = 409, body = SealedMultiResponseV1),
+        (status = 410, body = SealedMultiResponseV1),
+        (status = 413, description = "Too large"),
+        (status = 429, description = "Over the origin's budget"),
+    )
+)]
+pub async fn deliver_federated(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> AppResult<Response> {
+    if body.len() > MAX_FEDERATED_BODY {
+        return Err(too_large("the send is too large"));
+    }
+    let federation = state
+        .federation
+        .as_deref()
+        .ok_or_else(|| AppError::not_found("chat federation is not configured"))?;
+    let authenticated = federation
+        .authenticate_inbound(
+            &headers,
+            "POST",
+            FEDERATED_PATH,
+            None,
+            &body,
+            kutup_federation_proto::FederationFeature::ChatV2,
+        )
+        .await?;
+    let signed_error =
+        |error| crate::chat_federation::signed_app_error(federation, &authenticated, error);
+    if authenticated.destination() != federation.server_name() {
+        return signed_error(AppError::unauthorized("multi send destination mismatch"));
+    }
+    let Ok(submission) = serde_json::from_slice::<SealedMultiSubmissionV1>(&body) else {
+        return signed_error(malformed("invalid multi send"));
+    };
+    let limits = crate::site_settings::chat_multi_limits(&state.pool).await?;
+    let parsed = match parse(&submission, &limits) {
+        Ok(parsed) => parsed,
+        Err(error) => return signed_error(error),
+    };
+    let origin: [u8; 32] = Sha256::digest(
+        [
+            b"kutup/multi-origin/v1\0".as_slice(),
+            authenticated.origin().as_bytes(),
+        ]
+        .concat(),
+    )
+    .into();
+    let requests = charge(&state, "origin_multi_requests", &origin, 1).await?;
+    let bytes = charge(
+        &state,
+        "origin_multi_bytes",
+        &origin,
+        i64::try_from(body.len()).unwrap_or(i64::MAX),
+    )
+    .await?;
+    if requests > limits.origin_requests_per_min || bytes > limits.origin_bytes_per_min {
+        crate::telemetry::rate_limit_rejection("federation_origin");
+        return signed_error(AppError::too_many_requests(
+            "origin multi send budget exceeded",
+        ));
+    }
+    match deliver(&state, &submission, parsed, &limits).await {
+        Ok((status, answer)) => {
+            crate::chat_federation::signed_json(federation, &authenticated, status, &answer)
+        }
+        Err(error) => signed_error(error),
+    }
 }
 
 /// Tells each stored device there is mail: connected ones drain it (nothing
@@ -387,7 +555,7 @@ async fn nudge(state: &AppState, stored: &[(Uuid, i32)], urgent: bool) {
 fn peer_unavailable() -> AppError {
     AppError::new(
         StatusCode::SERVICE_UNAVAILABLE,
-        "the recipients' server can't take this send now; send their copies one by one",
+        "the recipients' server didn't take this send; send their copies one by one",
     )
     .with_details(serde_json::json!({ "code": "peerUnavailable" }))
 }
@@ -447,6 +615,8 @@ mod tests {
         ip_bytes_per_min: 32 * 1024 * 1024,
         capability_sends_per_min: 120,
         capability_sends_per_day: 10_000,
+        origin_requests_per_min: 6_000,
+        origin_bytes_per_min: 512 * 1024 * 1024,
     };
 
     /// A sent sealed-sender v2 message as libsignal lays it out: recipients

@@ -755,7 +755,11 @@
         "chatGroupCapabilitySendsPerMin": "Group messages per member and group (a minute)",
         "chatGroupCapabilitySendsPerMinHint": "How many group messages one member gets from one group each minute.",
         "chatGroupCapabilitySendsPerDay": "Group messages per member and group (a day)",
-        "chatGroupCapabilitySendsPerDayHint": "The same, each day."
+        "chatGroupCapabilitySendsPerDayHint": "The same, each day.",
+        "chatMultiOriginRequestsPerMin": "Group sends from another server (a minute)",
+        "chatMultiOriginRequestsPerMinHint": "How many group messages one other server may deliver here each minute, all its users together.",
+        "chatMultiOriginBytesPerMin": "Group sends from another server (bytes a minute)",
+        "chatMultiOriginBytesPerMinHint": "The same in bytes."
       },
       "groupCapabilities": "Groups an account may receive group messages for",
       "groupCapabilitiesHint": "Each group an account is in publishes one delivery key here; past this, it gets that group's messages one by one.",

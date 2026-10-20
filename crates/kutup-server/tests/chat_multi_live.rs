@@ -3,7 +3,10 @@
 //! capability, then budgets, then devices, stored once and drained by each
 //! device as its ordinary sealed envelope.
 //!
-//! Needs `KUTUP_LIVE_GROUPS_SERVER` (`CHAT_GROUPS=true` and federation). The
+//! Needs `KUTUP_LIVE_GROUPS_SERVER` (`CHAT_GROUPS=true` and federation). With
+//! `KUTUP_FEDERATION_SERVER_A` and `KUTUP_FEDERATION_SERVER_B` set, a send
+//! through A to B's members runs too, forwarded and answered at once; with
+//! `KUTUP_MULTI_PEER_DOWN` set (the gate stops B), A answers `503`. The
 //! server never decrypts, so the sends here are libsignal's sent layout with
 //! made-up key material and ciphertext; a real end-to-end send is the
 //! client's to test.
@@ -335,23 +338,155 @@ fn capabilities_then_devices_answer_each_account() {
     );
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // Another server's accounts: not yet; the client sends them one by one.
-    let r = c
-        .post(format!(
-            "{base}/api/chat/anonymous/messages/multi?server=elsewhere.example"
-        ))
-        .json(&submission(
-            &Uuid::new_v4().to_string(),
-            &sent(&[(&bob.account_id, &bob.devices, 1)], &shared),
-            &[(&bob, bob.capability)],
-        ))
-        .send()
-        .unwrap();
-    assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
     // Everything delivered is acked, so no shared part is left behind.
     for (device, _) in &bob.devices {
         let got = drain(&c, &base, &bob, *device);
         ack(&c, &base, &bob, *device, &got);
     }
     purge_accounts(&c, &base, &[&bob.user, &carol.user]);
+}
+
+fn server_name(c: &Client, base: &str) -> String {
+    let settings: Value = c
+        .get(format!("{base}/api/auth/settings"))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    settings["chat"]["serverName"].as_str().unwrap().to_owned()
+}
+
+fn federation() -> Option<(String, String)> {
+    match (
+        std::env::var("KUTUP_FEDERATION_SERVER_A"),
+        std::env::var("KUTUP_FEDERATION_SERVER_B"),
+    ) {
+        (Ok(a), Ok(b)) => Some((
+            a.trim_end_matches('/').to_owned(),
+            b.trim_end_matches('/').to_owned(),
+        )),
+        _ => {
+            eprintln!("KUTUP_FEDERATION_SERVER_A/B not set; skipping");
+            None
+        }
+    }
+}
+
+fn post_to(c: &Client, base: &str, server: &str, body: Value) -> (StatusCode, Value) {
+    let r = c
+        .post(format!(
+            "{base}/api/chat/anonymous/messages/multi?server={server}"
+        ))
+        .json(&body)
+        .send()
+        .unwrap();
+    let status = r.status();
+    (status, r.json().unwrap_or(Value::Null))
+}
+
+/// A send through A to B's members: forwarded at once and answered by B, a
+/// device mismatch relayed as it is, and B refusing an account that isn't
+/// one of its own (A's).
+#[test]
+fn a_send_to_another_servers_members_is_forwarded_and_answered() {
+    if std::env::var("KUTUP_MULTI_PEER_DOWN").is_ok() {
+        return;
+    }
+    let Some((a, b)) = federation() else { return };
+    let c = client();
+    let b_name = server_name(&c, &b);
+    let bob = member(&c, &b, &[51, 52]);
+    let carol = member(&c, &b, &[53]);
+    let alice = member(&c, &a, &[54]);
+    let shared = [0x7cu8; 200];
+
+    let payload = sent(
+        &[
+            (&bob.account_id, &bob.devices, 1),
+            (&carol.account_id, &carol.devices, 2),
+        ],
+        &shared,
+    );
+    let send_id = Uuid::new_v4().to_string();
+    let (status, answer) = post_to(
+        &c,
+        &a,
+        &b_name,
+        submission(
+            &send_id,
+            &payload,
+            &[(&bob, bob.capability), (&carol, carol.capability)],
+        ),
+    );
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["refused"], json!([]));
+    for (device, _) in &bob.devices {
+        let got = drain(&c, &b, &bob, *device);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["content"], received(1, &shared));
+        ack(&c, &b, &bob, *device, &got);
+    }
+    let got = drain(&c, &b, &carol, carol.devices[0].0);
+    assert_eq!(got[0]["content"], received(2, &shared));
+    ack(&c, &b, &carol, carol.devices[0].0, &got);
+
+    // Bob's second device left out: B's 409, relayed by A.
+    let one_device = [bob.devices[0]];
+    let payload = sent(&[(&bob.account_id, &one_device, 1)], &shared);
+    let (status, answer) = post_to(
+        &c,
+        &a,
+        &b_name,
+        submission(
+            &Uuid::new_v4().to_string(),
+            &payload,
+            &[(&bob, bob.capability)],
+        ),
+    );
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(
+        answer["devices"][0]["missingDevices"],
+        json!([bob.devices[1].0])
+    );
+
+    // A's own account sent to B: not one of B's, refused there.
+    let payload = sent(&[(&alice.account_id, &alice.devices, 3)], &shared);
+    let (status, answer) = post_to(
+        &c,
+        &a,
+        &b_name,
+        submission(
+            &Uuid::new_v4().to_string(),
+            &payload,
+            &[(&alice, alice.capability)],
+        ),
+    );
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["refused"], json!([alice.account_id]));
+}
+
+/// With B down, A answers at once that the send can't go: the client then
+/// sends those members' copies one by one. Nothing is queued.
+#[test]
+fn a_send_to_a_server_that_is_down_is_peer_unavailable() {
+    if std::env::var("KUTUP_MULTI_PEER_DOWN").is_err() {
+        return;
+    }
+    let Some((a, _)) = federation() else { return };
+    let c = client();
+    let b_name = std::env::var("KUTUP_MULTI_PEER_NAME").expect("B's server name");
+    let ghost = Uuid::new_v4().hyphenated().to_string();
+    let payload = sent(&[(&ghost, &[(1, 10)], 1)], &[0x11u8; 64]);
+    let (status, answer) = post_to(
+        &c,
+        &a,
+        &b_name,
+        json!({
+            "sendId": Uuid::new_v4().to_string(),
+            "payload": STANDARD.encode(&payload),
+            "capabilities": { ghost: STANDARD.encode([1u8; 16]) },
+        }),
+    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
+    assert_eq!(answer["code"], "peerUnavailable");
 }
