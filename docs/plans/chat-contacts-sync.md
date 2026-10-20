@@ -284,6 +284,13 @@ following the main session's review of #252:
   deleteContactEntry` under the account head's `chatContacts` scope; `full`
   is the server's `contactListFull` code. Signing out flushes the contact
   list (and the queued pins) with the group list.
+- A reject still waiting for its delayed write is dropped if the rejected
+  person writes again first: the contact is then an incoming request, which
+  is never written. Accepted: the list keeps what it said before, and the
+  account's devices agree through the contact control.
+- The account's lists also sync on a timer of their own (about a minute, five
+  in a hidden tab, give or take a fifth), not only when something arrives:
+  a quiet device still writes what is due.
 - Not yet: the native transport has no list routes, so `kutup-client-ffi`
   doesn't enable the list.
 

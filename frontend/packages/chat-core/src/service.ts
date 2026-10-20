@@ -113,6 +113,8 @@ const PREKEY_CHECK_MS = 60 * 60_000
  * random 0–10 minutes, and a quiet device must still make them.
  */
 const ACCOUNT_LISTS_MS = 60_000
+/** The same in a hidden tab, where it only keeps the writes from waiting forever. */
+const ACCOUNT_LISTS_HIDDEN_MS = 5 * 60_000
 
 /**
  * `polling`: the live socket cannot be opened (a gateway that blocks
@@ -242,7 +244,7 @@ export class ChatService {
   private inviteTimer: ReturnType<typeof setInterval> | null = null
   private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private prekeyTimer: ReturnType<typeof setInterval> | null = null
-  private accountListsTimer: ReturnType<typeof setInterval> | null = null
+  private accountListsTimer: ReturnType<typeof setTimeout> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -1897,14 +1899,24 @@ export class ChatService {
     }, LINKED_DEVICE_CHECK_MS)
   }
 
+  /**
+   * Each pass waits about a minute (five in a hidden tab), give or take a
+   * fifth, so devices don't line up their list reads and writes.
+   */
   private startAccountListSync(): void {
     const client = this.client
     if (this.accountListsTimer || !client.syncAccountLists) return
-    this.accountListsTimer = setInterval(() => {
+    const next = () => {
       if (this.disposed) return
-      void this.withLock(() => client.syncAccountLists!()).catch((error: unknown) =>
-        console.warn('chat: the account lists could not be synced', error))
-    }, ACCOUNT_LISTS_MS)
+      const base = document.visibilityState === 'visible' ? ACCOUNT_LISTS_MS : ACCOUNT_LISTS_HIDDEN_MS
+      const delay = base * (0.8 + Math.random() * 0.4)
+      this.accountListsTimer = setTimeout(() => {
+        void this.withLock(() => client.syncAccountLists!())
+          .catch((error: unknown) => console.warn('chat: the account lists could not be synced', error))
+          .finally(next)
+      }, delay)
+    }
+    next()
   }
 
   private startPrekeyChecks(): void {
@@ -2012,7 +2024,7 @@ export class ChatService {
     if (this.inviteTimer) clearInterval(this.inviteTimer)
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
-    if (this.accountListsTimer) clearInterval(this.accountListsTimer)
+    if (this.accountListsTimer) clearTimeout(this.accountListsTimer)
     this.engineLock.close()
     this.stopHeartbeat()
     this.socket?.close()
