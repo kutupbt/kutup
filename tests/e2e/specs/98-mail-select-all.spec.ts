@@ -1,12 +1,39 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { seedDrafts } from '../fixtures/mail'
+import { recordSafeCheckpoint } from '../safe-diagnostics'
 
 // Select all across pages (docs/plans/mail-parity.md, P3), as Proton's:
 // with a whole page checked, "Select all N in <place>"; actions then go to
 // every message of the place, each asked first.
 
 const PASSWORD = 'Deneme123*MailSelectAllPassword'
+
+/** The first number in `text`, or 0: what the banner and its button say, as counts. */
+function firstNumber(text: string | null): number {
+  return Number(/\d+/.exec(text ?? '')?.[0] ?? 0)
+}
+
+/**
+ * The banner says `selected` are chosen and offers all of the place; when it
+ * doesn't, where it stood goes to the sanitized CI diagnostics as numbers (no
+ * text): the rows shown, whether the banner is up, how many it says are
+ * selected, and the total its button offers.
+ */
+async function expectBanner(checkpoint: string, rows: Locator, banner: Locator, selected: number): Promise<void> {
+  try {
+    await expect(banner).toContainText(`You selected ${selected} conversations.`)
+  } catch (error) {
+    const shown = await banner.count()
+    recordSafeCheckpoint('mail-select-all', checkpoint, {
+      rows: await rows.count(),
+      banner: shown,
+      selected: shown ? firstNumber(await banner.locator('span').first().textContent()) : 0,
+      total: shown ? firstNumber(await banner.getByRole('button').textContent()) : 0,
+    })
+    throw error
+  }
+}
 
 test('select all: the banner, a label and read state for the whole place', async ({ browser }) => {
   test.slow()
@@ -49,10 +76,14 @@ test('select all: the banner, a label and read state for the whole place', async
   await expect(banner).toHaveCount(0, { timeout: 30_000 })
   await nav.getByRole('link', { name: `Toplu ${tag}` }).click()
   await expect(mail.getByRole('button', { name: 'Page 1 of 2' })).toBeVisible({ timeout: 30_000 })
+  // The label's first page shown before Select all, so it checks those rows.
+  await expect(rows).toHaveCount(50, { timeout: 30_000 })
 
   // In the label: all 51 unread, with Cancel first doing nothing.
   await mail.getByRole('checkbox', { name: 'Select all', exact: true }).check()
+  await expectBanner('label-page-checked', rows, banner, 50)
   await banner.getByRole('button', { name: /^Select all 51 in / }).click()
+  await expect(banner).toContainText('You selected 51 conversations.')
   await mail.getByRole('button', { name: 'Mark as unread' }).click()
   let mark = mail.getByRole('dialog', { name: 'Mark conversations as unread' })
   await expect(mark).toContainText('51 conversations will be marked as unread.')
@@ -71,7 +102,9 @@ test('select all: the banner, a label and read state for the whole place', async
     .toBe(51)
 
   // Unchecking a row ends select all.
+  await expect(rows).toHaveCount(50, { timeout: 30_000 })
   await mail.getByRole('checkbox', { name: 'Select all', exact: true }).check()
+  await expectBanner('label-unread-checked', rows, banner, 50)
   await banner.getByRole('button', { name: /^Select all 51 in / }).click()
   await mail.getByRole('checkbox', { name: new RegExp(`Select “Hepsi ${tag}`) }).first().uncheck({ force: true })
   await expect(banner).toHaveCount(0)
