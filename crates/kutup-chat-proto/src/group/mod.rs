@@ -128,10 +128,12 @@ pub struct GroupAttributesV1 {
     pub description: Option<String>,
     pub timer: Option<String>,
     pub avatar: Option<String>,
-    /// The avatar blob's SHA-256 (base64), in the clear beside the sealed
-    /// avatar (its key and type), so the home serves the blob and drops the
-    /// ones no state names (docs/plans/pairwise-groups.md §11). Present
-    /// exactly when `avatar` is.
+    /// The SHA-256 (base64) of the avatar blob **as the home stores it**:
+    /// sealed and padded, never the plaintext image, which would let the
+    /// home recognise a known picture across groups. In the clear beside the
+    /// sealed avatar (its key and type), so the home serves the blob and
+    /// drops the ones no state names (docs/plans/pairwise-groups.md §11).
+    /// Present exactly when `avatar` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_hash: Option<String>,
 }
@@ -383,8 +385,9 @@ pub enum GroupActionV1 {
     ModifyAttribute {
         attribute: GroupAttribute,
         value: Option<String>,
-        /// The avatar blob's SHA-256 (base64): only with `Avatar`, and
-        /// exactly when `value` is set.
+        /// The SHA-256 (base64) of the avatar blob as the home stores it
+        /// (sealed and padded, never the plaintext image): only with
+        /// `Avatar`, and exactly when `value` is set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         avatar_hash: Option<String>,
     },
