@@ -114,13 +114,9 @@ Left before the tag:
   (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
   routes and `chat_mls_*` tables are removed. The checklist's group-limit
   split and authority-quorum UI are obsolete with them.
-  Slice 1 (state engine, sender keys, sealed batches, basic UI) is built.
-  Still to come before groups ship, besides slices 2–5: a new device of a
-  member keeps their groups (the account head's `chatGroups` scope with each
-  group's key and pseudonym, and the member's binding signed again by the new
-  device). Until then a member who replaces their only device loses the
-  group, so `specs/38-chat-group-device-replaced.spec.ts` is out of the
-  chat-backup suite, and comes back with it.
+  Slice 1 (state engine, sender keys, sealed batches, basic UI) is built,
+  and a new device of a member keeps their groups (the account's
+  `chatGroups` group list, `specs/38-chat-group-device-replaced.spec.ts`).
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -652,6 +648,11 @@ arrival, and direct sending. Phases, each with its own plan before code:
   upstream PR or fork from us. End-to-end forwarding is built on v4
   independently ([`plans/mail-forwarding.md`](plans/mail-forwarding.md),
   in progress).
+- **Mail: DKIM2 for outside forwards.** Stalwart 0.16 can't ARC-seal (removed
+  in 0.16.0; ARC is moving to Historic), so outside forwards rely on the
+  sender's own DKIM signature surviving. Stalwart's DKIM2 (0.16.12+) is the
+  successor; turn it on once a major receiver verifies DKIM2
+  ([`plans/mail-forwarding.md`](plans/mail-forwarding.md), "ARC").
 - **D. Calendar** (next, decided 2026-10-19): starts once the work in
   flight is done (Chat groups slice 1, Mail forwarding, Chat contacts sync).
   Proton Calendar is the reference: per-calendar keys, sharing, iTIP
@@ -688,8 +689,13 @@ arrival, and direct sending. Phases, each with its own plan before code:
     alias inside sign-up forms comes later.
   Built on the address records groups introduce (an address owned by an
   account or a group). Its own plan before code.
-- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, custom domains, organisations
-  (which then own groups' storage, see the groups plan).
+- **Custom domains** (moved up, decided 2026-10-20): your own domain for
+  Mail addresses, following Proton: add the domain, verify ownership and its
+  MX, SPF, DKIM and DMARC records, addresses on it with their own keys,
+  catch-all. Runs beside Chat groups and Calendar. A plan note settled from
+  Proton's code comes first (`plans/mail-custom-domains.md`, to be written).
+- **E.** IMAP/SMTP and CalDAV/CardDAV bridge, organisations (which then own
+  groups' storage, see the groups plan).
 
 Sending is over IPv4 only (`95.217.238.230`, PTR `mail.kutup.dev`);
 outbound port 25 is open on the host (checked 2026-10-09).

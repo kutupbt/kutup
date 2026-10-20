@@ -192,18 +192,23 @@ targeted check (2026-10-17), not a complete survey.
   parts, and should be reviewed as such.
 
 **(e) Per-group pseudonymous member keys (recommended).**
-- **The keys.** Each member holds, per group, a random signing key pair: its
+- **The keys.** Each member holds, per group, a signing key pair: its
   pseudonym in that group.
-  - Its private key lives in the member's `chatGroups` entry, sealed under the
-    account master key, so all the member's devices can use it.
+  - **As built (2026-10-19):** derived, not random. Its seed is HKDF over the
+    account master key, the group id and a join epoch
+    (`docs/plans/pairwise-groups.md` §3), so any device of the account finds
+    it again even without the `chatGroups` entry. Unlinkability across
+    groups holds as long as the account key is safe; a leaked account key
+    already exposes the group list, which names every group.
   - Kutup's MLS code used the same device for owners: `owner_id = SHA-256(group-scoped key)`
     (`kutup-chat-proto/src/mls/conversation.rs:342-361`).
 - **The plain state the home keeps:** pseudonym public keys, roles, join
   revisions and pending slots. **No AccountRef appears in it.**
 - **The encrypted part, for members only:** for each pseudonym, the AccountRef,
-  the profile key, and a **binding** signed by one of the account's devices over
-  `(group id, pseudonym, AccountRef)`, checked against the account's verified
-  manifest.
+  the profile key, and a **binding** over `(group id, pseudonym, AccountRef)`,
+  checked against the account's verified manifest. **As built:** signed by the
+  account's self-authority rather than a device, so device changes never
+  unverify a member.
 - **What the home checks.** Every change and every read carries a signature by a
   member's pseudonym. The home checks it, and the pseudonym's role, exactly as
   the plan's server-side acceptance rule requires. The rule still holds, on

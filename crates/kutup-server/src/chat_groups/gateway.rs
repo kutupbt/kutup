@@ -15,9 +15,10 @@ use kutup_chat_proto::group::{
 use kutup_chat_proto::group_route::{
     GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1, GroupLogQueryV1,
     GroupNotaryV1, GroupOperationV1, GroupRequestAuthV1, GroupRequestV1, GroupResponseStatusV1,
-    GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS,
+    GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS, PSEUDONYM_USED,
 };
 use kutup_crypto::oblivious::ResponseContext;
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use super::keys;
@@ -30,6 +31,7 @@ use crate::AppState;
 /// envelope (base64 grows it by a third).
 const LOG_PAGE_BYTES: usize = 180 * 1024;
 const MAX_LOG_PAGE_CHANGES: i64 = 256;
+const SEEN_PSEUDONYM_DOMAIN: &[u8] = b"kutup/chat-group/seen-pseudonym/v1\0";
 
 /// What became of a sealed request.
 pub(crate) enum Opened {
@@ -94,10 +96,15 @@ async fn answer(
         return Ok(status(GroupResponseStatusV1::RateLimited, now));
     }
     let answer = answer_checked(state, federation, relay, request, now).await?;
-    if matches!(
-        answer.status,
-        GroupResponseStatusV1::NotFound | GroupResponseStatusV1::Refused
-    ) {
+    // A used pseudonym comes only after every proof passed: the client
+    // retries at its next epoch, which mustn't throttle its whole server.
+    let used = answer.code.as_deref() == Some(PSEUDONYM_USED);
+    if !used
+        && matches!(
+            answer.status,
+            GroupResponseStatusV1::NotFound | GroupResponseStatusV1::Refused
+        )
+    {
         limits::failed(relay);
     }
     Ok(answer)
@@ -394,6 +401,7 @@ async fn create(
         &notary_bytes,
     )
     .await?;
+    remember_newcomers(&mut tx, group_id, &genesis).await?;
     tx.commit().await?;
     let answer = GroupStateAnswerV1 {
         state: STANDARD.encode(&state_bytes),
@@ -619,6 +627,82 @@ fn link_password_holds(state: &GroupStateV1, offered: &str) -> bool {
         ) == 0
 }
 
+/// Whether `change` is a newcomer's way in: a claim, a join from the link or
+/// a request to join (not the cancelling of its own request).
+fn joins(change: &GroupChangeV1) -> bool {
+    matches!(
+        change.actions.as_slice(),
+        [GroupActionV1::Claim { .. }
+            | GroupActionV1::JoinFromLink { .. }
+            | GroupActionV1::RequestToJoin { .. }]
+    )
+}
+
+fn seen_hash(pseudonym: &str) -> AppResult<[u8; 32]> {
+    let key = decode_exact::<32>(pseudonym).ok_or_else(|| AppError::internal("pseudonym"))?;
+    Ok(Sha256::new()
+        .chain_update(SEEN_PSEUDONYM_DOMAIN)
+        .chain_update(key)
+        .finalize()
+        .into())
+}
+
+/// Whether the group has seen `pseudonym`: [`remember_newcomers`] recorded
+/// it as a member or a requester.
+async fn was_member(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: &[u8; 32],
+    pseudonym: &str,
+) -> AppResult<bool> {
+    let seen: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM chat_group_seen_pseudonyms
+                        WHERE group_id = $1 AND pseudonym_hash = $2)",
+    )
+    .bind(&group_id[..])
+    .bind(&seen_hash(pseudonym)?[..])
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(seen)
+}
+
+/// Records the pseudonyms `next` brought in, for good: the members who
+/// joined at its revision (the creator at genesis, a claim, a join from the
+/// link, an approved request) and the requests made at it. The log is
+/// pruned and the state forgets whoever left, so neither can answer later.
+async fn remember_newcomers(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: &[u8; 32],
+    next: &GroupStateV1,
+) -> AppResult<()> {
+    let joined = next
+        .members
+        .iter()
+        .filter(|member| member.joined_at_revision == next.revision)
+        .map(|member| &member.pseudonym);
+    let requested = next
+        .requesting
+        .iter()
+        .filter(|request| request.requested_at_revision == next.revision)
+        .map(|request| &request.pseudonym);
+    let hashes = joined
+        .chain(requested)
+        .map(|pseudonym| seen_hash(pseudonym).map(|hash| hash.to_vec()))
+        .collect::<AppResult<Vec<_>>>()?;
+    if hashes.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT INTO chat_group_seen_pseudonyms (group_id, pseudonym_hash)
+         SELECT $1, hash FROM unnest($2::bytea[]) AS hash
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(&group_id[..])
+    .bind(&hashes)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Drops the changes no current member can need: every member reads the log
 /// only from the revision it joined at, so revisions before the earliest of
 /// those are kept as the state alone. The latest change always stays (the
@@ -676,6 +760,12 @@ async fn submit(
         Ok(next) => next,
         Err(error) => return Ok(refused(&error, now)),
     };
+    // A newcomer under a pseudonym the group has had before would let the
+    // members link the two memberships; its signer is told so, and only
+    // now, with its claim or link proof and the change itself accepted.
+    if joins(&change) && was_member(&mut tx, group_id, pseudonym).await? {
+        return Ok(GroupResponseV1::refused(PSEUDONYM_USED, now));
+    }
     // Charged only for a valid change, so nobody can spend a group's budget
     // with changes that would be refused.
     if !limits::change(pseudonym, group_id) {
@@ -712,6 +802,7 @@ async fn submit(
     )
     .await?;
     prune_log(&mut tx, group_id, &next).await?;
+    remember_newcomers(&mut tx, group_id, &next).await?;
     tx.commit().await?;
     // The change with its notary: a member applies it to the state it has;
     // a newcomer whose request awaits approval learns nothing more.

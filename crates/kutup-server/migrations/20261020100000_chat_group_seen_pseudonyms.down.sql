@@ -1,0 +1,1 @@
+DROP TABLE chat_group_seen_pseudonyms;

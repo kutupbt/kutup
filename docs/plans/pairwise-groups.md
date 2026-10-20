@@ -291,12 +291,41 @@ cleared).
   original recipient. My older history comes from the chat backup, as for
   direct chats.
 
-**A device that lost its group list.** Every group message carries the master
-key, as Signal's does (§8). A device that gets a message for a group it doesn't
-know:
-1. verifies the group's state with that key;
-2. checks that its account is a member;
-3. writes the group back into the account's list.
+**A device that lost its group list.** A device whose list entry was never
+written (the only device went within the write's random delay, §5) finds the
+group again from the next member's send, built in `group_recover.rs`:
+1. The member's next send reaches the new device pairwise: its sender key
+   (the device isn't in the member's book), or the message itself when the
+   member's device list was out of date. Its context carries the master key
+   and home, as Signal's `GroupContextV2` does (§8), and on anything sent
+   pairwise to one account it names that account's pseudonym in the group
+   (`recipientPseudonym`). The member sends to it because bindings are the
+   account's (§3), not a device's.
+2. The list comes first: the device reads it if it hasn't this run. A group
+   it says the account left is never taken up this way; one it holds is taken
+   up from the list (its home, epoch and verified revision).
+3. The context's key must be its group's at the home it names (the id binds
+   the home), so nobody can name a home of their own. The named pseudonym
+   must be one the account key gives (join epochs 0 to 15). Only then does
+   the device ask the home, once, for that pseudonym. A stranger who doesn't
+   know it makes the device ask nothing. A list that can't be read stops it
+   (it may say the account left).
+4. The state is kept only when it holds this account's own binding, verified
+   under its own authority (no home can make one up), and the sender is a
+   verified member of it. Nothing is kept on failure, and nothing is signed
+   anew: the entry is the account's already. The list entry is written back
+   with the usual delay.
+- Once an hour per group, and at most ten groups an hour per device, across
+  reloads.
+- The home answers a pseudonym that isn't a member with the same status and
+  empty body as an unknown group; only the time differs a little (a known
+  group's state is read in full), and the device asks at most once per
+  named pseudonym.
+- **What is left:** if nobody in the group sends after the loss, the new
+  device gets the group back only once someone does. A resend request for
+  such groups is not built.
+- A recovered group's lowest acceptable state is unknown (`min_revision` 0):
+  the members' contexts show a home serving an older one (§3, forks).
 
 **State lag.** Every group message carries the group's revision and chain hash,
 as Signal's `GroupContextV2 {masterKey, revision, groupChange}` carries the
@@ -369,6 +398,24 @@ revision (`SignalService.proto:947-951`).
   the state key are derived. Signal derives `GroupSecretParams` the same way
   (`zkgroup/src/api/groups/group_params.rs:67-86`). Our derivation is HKDF in
   `kutup-crypto`, as every Kutup format is.
+  - **The id binds the home** (decided 2026-10-19, after the #268 review). A
+    member who keeps the master key after removal (it isn't rotated, as in
+    Signal) can't make the group live on a home of their own: there it is
+    another group id, which no member's binding names, and every record
+    checks that its key gives its id at its home.
+    - The id is HKDF-SHA256 over the master key, salt `kutup/chat-group/v1`,
+      info `kutup/chat-group/id/v2\0` ‖ the home digest (32 bytes).
+    - The home digest is SHA-256 of `kutup/chat-group/home/v1\0` ‖ the server
+      name (u16 big-endian length, then its bytes) ‖ the identity document
+      hash as the pin writes it (u16 length, then its bytes) ‖ the identity
+      sequence (u64 big-endian). A field that is empty or over 255 bytes is
+      refused, never cut. Vectors: `chat-group-id-v2.json`.
+    - The home is the pin made when the group was created (the genesis
+      names it), kept for the group's life. The home's federation identity
+      rotating later doesn't move the id: members follow the rotation from
+      the pin.
+    - The home is fixed (above), so a group never moves; a group on another
+      home would be a new group, with a new id.
 - **Roles: Signal's two, nothing more (the user, 2026-10-17).**
   `ADMINISTRATOR` and `DEFAULT`, with any number of administrators.
 - **Access rules.** `AccessControl {attributes, members, addFromInviteLink}`
@@ -387,11 +434,37 @@ to see members").**
   issuer's secret can verify (`zkcredential/src/lib.rs:25-29`;
   `presentation.rs:640-642`). That needs one operator, and doesn't work across
   federated servers.
-- **The pseudonym.** Each member holds, per group, a random signing key pair.
-  The group's server knows a member only by that public key.
-  - It is random per group, so pseudonyms can't be linked across groups.
-  - Its private key is in the member's `chatGroups` entry (§5), so all their
-    devices can use it.
+- **The pseudonym.** Each member holds, per group, a signing key pair. The
+  group's server knows a member only by that public key.
+  - It is derived from the account master key (decided 2026-10-19, after
+    spec 38 found a lost-list window): its Ed25519 seed is HKDF-SHA256 over
+    the master key, salt `kutup/chat-group-pseudonym/v1\0`, info the group id
+    then the **join epoch** (u32 big-endian), in `kutup_crypto::chat_group::
+    GroupPseudonymKey` with vectors in `chat-group-pseudonym-v1.json`.
+  - The join epoch counts the account's joins of the group: 0 at the first,
+    one more at each rejoin after leaving or removal (the device's record and
+    the list entry carry it), so a rejoin is a new pseudonym.
+  - **Which epoch a join takes:** one past the highest the device's own
+    record or the account's group list names for the group (an unclaimed
+    older invitation keeps its epoch). The list is read before an
+    invitation's epoch is derived, and again before the claim, so another
+    device's join or leave meanwhile counts.
+  - **Residual:** an account that joined, left, and lost every record of it
+    (the only device gone, and both list writes lost within their random
+    delay) can rejoin at an epoch it used before. The group's home would then
+    see a pseudonym it knew come back, linking the two memberships.
+    The home closes it on its side: it refuses such a claim or join with
+    `pseudonymUsed` (§3, "A pseudonym comes back only once"). The client's
+    retry at the next epoch (up to 64, with recovery searching as many) is
+    the third session's follow-up; until it lands, such a device gets the
+    refusal instead of rejoining.
+  - Without the account key the pseudonyms of one account in different
+    groups or epochs are unrelated, so they can't be linked across groups.
+    This holds as long as the account key is safe; a leaked key exposes the
+    group list anyway (§5), and with it every group and pseudonym.
+  - So every device of the account finds its pseudonym again from the group
+    id alone, even one whose list entry was never written (below, "A device
+    that lost its group list").
   - Kutup's MLS code used the same device for owners (`owner_id`,
     `kutup-chat-proto/src/mls/conversation.rs:342-361`).
 - **What the server reads, the plain part of the state:**
@@ -403,9 +476,18 @@ to see members").**
   **No AccountRef is in it.**
 - **What only members read, the part encrypted with the state key:**
   - for each pseudonym, the member's AccountRef, their profile key
-    (`Member.profileKey` in Signal) and a **binding**: a signature by one of the
-    account's devices over `(groupId, pseudonym, AccountRef)`. Members check it
-    against that account's verified manifest;
+    (`Member.profileKey` in Signal) and a **binding**: a signature by the
+    account's **self-authority** over `(groupId, pseudonym, AccountRef)`
+    (domain `kutup/chat-group/binding/v1\0`; decided 2026-10-19). Members
+    check it against the authority key of that account's verified manifest.
+    Every device derives the authority from the master key, so devices
+    coming and going (a revoked or repaired one) never make a member
+    unverified, and a new device needs to sign nothing;
+  - **a binding is a transferable proof:** any member can show an outsider a
+    signature by account X's long-lived authority saying X is in group G.
+    Membership is hidden from the home, not from what members choose to
+    show. Signal's zkgroup credentials avoid this; ours don't (it was as true
+    with device-signed bindings);
   - for each pending slot, the invited AccountRef;
   - the title, description, timer and avatar reference.
   - The limits are Signal's: a title of at most 1024 encrypted bytes and a
@@ -506,6 +588,18 @@ to see members").**
 - **Requests from non-members** (a link's join info, a join request) carry a
   proof of the link password instead of a member signature. They are limited
   per group and per relay server, so a link holder can't flood the group.
+- **A pseudonym comes back only once.** The home keeps a hash of every
+  pseudonym the group has seen, as a member or a requester (the log is
+  pruned and the state forgets who left, so neither can answer it). A claim, a join from the
+  link or a request to join whose pseudonym is among them is refused with
+  `pseudonymUsed` (`group_route::PSEUDONYM_USED`), so the members never see a
+  pseudonym they knew come back after a device lost its join epoch.
+  - The home answers it only once the claim's or the link's proof holds and
+    the change passes every other check; the request is signed by that
+    pseudonym, so only its own holder hears it, and it is no membership oracle.
+  - The client derives the next join epoch's pseudonym and tries again, up to
+    64 epochs (recovery searches as many). The refusal spends neither the
+    relay's failure budget nor the group's change budget.
 - **Abuse limits without identity:**
   - **The relay** knows its signed-in user and limits how many requests each
     user may relay per minute, without seeing their contents.
@@ -660,10 +754,9 @@ group, but acting in several groups at once would link them.
 - **Pseudonym signatures** verify for ever: a member's pseudonym key doesn't
   change while they are a member. So catching up after a long absence needs no
   manifest history for them.
-- **A binding** is checked once, when the member's claim or join is applied,
-  against the account's manifest then. A device that has since left that
-  manifest is checked against its manifest history
-  (`/api/chat/accounts/:id/manifest-history`), as verified from the pin today.
+- **A binding** is checked against the self-authority of the account's
+  verified manifest, which doesn't change with its devices, so no manifest
+  history is needed for it either.
 - **After the bound account's authority was reset**, its member re-signs the
   binding from the new manifest, as a profile-key-style change of their own.
   Until then, members see a safety-number notice for them, as for direct chats.
@@ -706,7 +799,7 @@ different branches, or hold changes back. The defences:
 The rules are Signal's, as the Desktop client applies them. The server checks
 them on pseudonyms (§3).
 - **Create.** The creator is the first administrator. Revision 0 is a signed
-  genesis change; the group id comes from the master key.
+  genesis change; the group id comes from the master key at its home.
 - **Who may do what** (Signal-Desktop):
   - edit the title, description, avatar and timer: administrators, or every
     member when `attributes` is `MEMBER` (`canEditGroupInfo.preload.ts:9-30`;
@@ -853,7 +946,8 @@ them on pseudonyms (§3).
   - the master key;
   - the group's server;
   - the joined revision;
-  - my pseudonym key pair for the group (§3);
+  - the join epoch my pseudonym is derived at (§3; the entry carries no key
+    of its own);
   - my current group capability;
   - the revision and chain hash it verified when it joined.
 - Writes go through `listedWrite`, so the server can neither drop a group from

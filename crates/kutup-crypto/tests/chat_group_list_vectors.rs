@@ -10,8 +10,15 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use kutup_crypto::chat_group::GroupMasterKey;
+use kutup_crypto::chat_group::{GroupHome, GroupMasterKey};
 use kutup_crypto::chat_group_list::{self, GroupListKey, SEALED_LEN};
+
+/// The vectors' group home (the id binds it).
+const HOME: GroupHome<'static> = GroupHome {
+    server: "home.example",
+    identity_sequence: 1,
+    identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -41,7 +48,7 @@ struct Vectors {
 
 fn sealed() -> Vec<u8> {
     let key = GroupListKey::derive(&[0x11u8; 32]);
-    let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32])
+    let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32], HOME)
         .unwrap()
         .group_id();
     key.seal_with_fixed_nonce(
@@ -57,7 +64,7 @@ fn sealed() -> Vec<u8> {
 fn computed() -> Vectors {
     let master = [0x11u8; 32];
     let key = GroupListKey::derive(&master);
-    let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32])
+    let group_id = GroupMasterKey::from_bytes(&[0x22u8; 32], HOME)
         .unwrap()
         .group_id();
     let sealed = sealed();

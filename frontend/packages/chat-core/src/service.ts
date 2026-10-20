@@ -1580,6 +1580,20 @@ export class ChatService {
     await this.groupChange((client) => client.declineGroupInvite(groupId))
   }
 
+  /**
+   * Before this browser signs out: the account's group list gets the joins
+   * and leaves still waiting for their delayed write
+   * (docs/plans/pairwise-groups.md §5). Best effort, at most `waitMs`.
+   */
+  async flushGroupList(waitMs = 3000): Promise<void> {
+    const client = this.client
+    if (this.capabilities.pairwiseGroups !== true || !client.flushGroupList) return
+    await Promise.race([
+      this.withLock(() => client.flushGroupList!()).catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, waitMs)),
+    ])
+  }
+
   async leaveChatGroup(groupId: string): Promise<void> {
     await this.groupChange((client) => client.leaveGroup(groupId))
   }

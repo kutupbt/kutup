@@ -1,4 +1,5 @@
 specs/33-chat-history-recovery.spec.ts
 specs/36-chat-local-groups.spec.ts
+specs/38-chat-group-device-replaced.spec.ts
 specs/40-chat-open-failures.spec.ts
 specs/90-load-retries.spec.ts
