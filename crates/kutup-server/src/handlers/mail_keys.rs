@@ -187,10 +187,11 @@ pub async fn list_addresses(
 ) -> AppResult<Json<Vec<OwnMailAddress>>> {
     let user_id = trusted_uuid(&user.user_id)?;
     // Read only: the rows come with the account and its renames. The current
-    // address first, then the old ones, newest first.
+    // address first, then its addresses on custom domains, then the old
+    // ones, newest first.
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT id, address FROM mail_addresses WHERE user_id = $1
-          ORDER BY state = 'active' DESC, created_at DESC",
+          ORDER BY state = 'active' DESC, domain_id IS NULL DESC, created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

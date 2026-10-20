@@ -47,6 +47,14 @@ output="$(mktemp)"
 gpg_home="$(mktemp -d /tmp/kutup-gpg.XXXXXX)"
 KUTUP_MAIL_KEYS_DIR="$(mktemp -d)"
 export KUTUP_MAIL_KEYS_DIR
+# Custom domains' zones, written by the live test, served by mail-dns.
+KUTUP_MAIL_DNS_DIR="$(mktemp -d)"
+chmod a+rx "$KUTUP_MAIL_DNS_DIR"
+export KUTUP_MAIL_DNS_DIR
+# The scoped Stalwart key custom domains are managed with (stalwart-setup
+# makes its account; the backend holds the same secret).
+MAIL_STALWART_DOMAINS_TOKEN="$(openssl rand -hex 32)"
+export MAIL_STALWART_DOMAINS_TOKEN
 
 compose() {
   docker compose \
@@ -67,7 +75,7 @@ cleanup() {
   fi
   compose down --volumes --remove-orphans
   gpgconf --homedir "$gpg_home" --kill gpg-agent 2>/dev/null
-  rm -rf "$output" "$gpg_home" "$KUTUP_MAIL_KEYS_DIR"
+  rm -rf "$output" "$gpg_home" "$KUTUP_MAIL_KEYS_DIR" "$KUTUP_MAIL_DNS_DIR"
   exit "$status"
 }
 trap cleanup EXIT
@@ -90,7 +98,7 @@ compose down --volumes --remove-orphans
 compose build backend stalwart-setup
 compose up --detach --wait \
   postgres seaweedfs-master seaweedfs-volume seaweedfs-filer seaweedfs-s3 seaweedfs-init \
-  backend stalwart mail-sink mail-keys
+  backend stalwart mail-sink mail-keys mail-dns
 compose run --rm stalwart-setup
 
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
@@ -103,6 +111,7 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_KEYS="http://127.0.0.1:$keys_port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_GPG_HOME="$gpg_home" \
+  KUTUP_LIVE_DNS_DIR="$KUTUP_MAIL_DNS_DIR" \
   cargo test -p kutup-server --test mail_inbound_live -- --nocapture --test-threads 1 \
   | tee "$output"
 
@@ -142,6 +151,23 @@ if grep -qi "^bcc:\|carol@outside.test" <<<"$(sed '/^$/q' <<<"$outside")"; then
   echo "outside copy shows its Bcc recipient" >&2
   exit 1
 fi
+# Mail from a custom domain's address left signed for that domain, with the
+# shared key behind its CNAMEs (docs/plans/mail-custom-domains.md §4).
+domain_id="$(grep -o 'DOMAIN-OUTSIDE-ID [^ ]*' "$output" | cut -d' ' -f2)"
+[[ -n "$domain_id" ]] || { echo "the custom domains test did not report its message" >&2; exit 1; }
+deadline=$((SECONDS + 60))
+until compose logs --no-log-prefix mail-sink | grep -q "Message-ID: <$domain_id>"; do
+  if (( SECONDS >= deadline )); then
+    echo "the custom domain's message never reached the sink" >&2
+    exit 1
+  fi
+  sleep 1
+done
+domain_message="$(compose logs --no-log-prefix mail-sink \
+  | awk -v id="<$domain_id>" '/^SINK-MESSAGE-BEGIN/ {m=""; next} /^SINK-MESSAGE-END/ {if (index(m, id)) print m; next} {m = m $0 "\n"}')"
+grep -q "^DKIM-Signature: v=1; a=rsa-sha256;.*d=customer.test" <<<"$(tr -d '\r' <<<"$domain_message" | sed ':a;N;$!ba;s/\n[ \t]\+/ /g')" \
+  || { echo "the custom domain's message is not signed for customer.test" >&2; exit 1; }
+echo "CUSTOM DOMAINS VERIFIED"
 # Mail to Dave reached the sink as PGP/MIME: no plaintext on the way, and
 # GnuPG opens it and checks Alice's signature.
 pgp_id="$(grep -o 'PGP-MESSAGE-ID [^ ]*' "$output" | cut -d' ' -f2)"
