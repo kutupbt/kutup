@@ -1,8 +1,10 @@
 //! Stalwart follows the database (docs/plans/mail-custom-domains.md §10):
 //! every usable custom domain has a Stalwart `Domain` and, once its DKIM was
 //! good, a `DkimSignature` with the active selector; nothing else of ours
-//! exists there. Only objects tagged as Kutup's (their description) are
-//! ever touched, so `MAIL_DOMAIN`'s own are left alone.
+//! exists there. Only domains tagged as Kutup's (their description) and the
+//! signatures under them are ever touched, so `MAIL_DOMAIN`'s own are left
+//! alone. A signature has no description, so the domain row records which
+//! Stalwart object signs with which key.
 //!
 //! [`plan`] is pure; [`apply`] runs a plan through a [`Stalwart`] (the
 //! management API, or a fake in tests). A single runner holds the advisory
@@ -17,11 +19,9 @@ pub fn tag(domain_id: &uuid::Uuid) -> String {
     format!("{TAG}{domain_id}")
 }
 
-/// The domain row an object of ours belongs to: a domain's description is
-/// the tag, a signature's the tag and its key id after a colon.
+/// The domain row a Stalwart domain of ours belongs to.
 fn tagged_id(description: &str) -> Option<uuid::Uuid> {
-    let rest = description.strip_prefix(TAG)?;
-    rest.split_once(':').map_or(rest, |(id, _)| id).parse().ok()
+    description.strip_prefix(TAG)?.parse().ok()
 }
 
 /// A domain as the database wants it in Stalwart.
@@ -32,6 +32,14 @@ pub struct Wanted {
     /// The signature to sign with: `None` until DKIM was good once, or while
     /// it is in `ERROR` or `DELEGATED`.
     pub signature: Option<Signature>,
+    /// The signature the row says Stalwart has: its object and key.
+    pub recorded: Option<Recorded>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorded {
+    pub object_id: String,
+    pub key_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +64,6 @@ pub struct StalwartSignature {
     pub object_id: String,
     pub domain_object_id: String,
     pub selector: String,
-    pub description: String,
 }
 
 /// One step of a plan, in the order to run it.
@@ -71,8 +78,8 @@ pub enum Step {
 
 /// The steps that make Stalwart's tagged objects match `wanted`. Deletes go
 /// first (signatures before their domains), then creates (domains before
-/// their signatures). A signature's description names the key, so a new
-/// key replaces it.
+/// their signatures). A signature is kept only when the row records it
+/// with the wanted key, so a new key replaces it.
 pub fn plan(
     wanted: &[Wanted],
     domains: &[StalwartDomain],
@@ -108,7 +115,7 @@ pub fn plan(
         let current: Vec<&StalwartSignature> = match existing {
             Some((object_id, _)) => signatures
                 .iter()
-                .filter(|s| &s.domain_object_id == object_id && tagged_id(&s.description).is_some())
+                .filter(|s| &s.domain_object_id == object_id)
                 .collect(),
             None => {
                 creates.push(Step::CreateDomain {
@@ -118,27 +125,23 @@ pub fn plan(
                 Vec::new()
             }
         };
-        let desired = want
-            .signature
-            .as_ref()
-            .map(|s| (s.selector.as_str(), signature_description(&want.id, &s.key_id)));
-        let mut keep = false;
+        // Kept only when the row's record names it, with the wanted key and
+        // selector: anything else under the domain goes.
+        let keep = match (&want.signature, &want.recorded) {
+            (Some(signature), Some(recorded)) if recorded.key_id == signature.key_id => current
+                .iter()
+                .find(|s| s.object_id == recorded.object_id && s.selector == signature.selector)
+                .map(|s| s.object_id.clone()),
+            _ => None,
+        };
         for signature in current {
-            let same = desired.as_ref().is_some_and(|(selector, description)| {
-                signature.selector == *selector && signature.description == *description
-            });
-            if same && !keep {
-                keep = true;
-            } else {
-                deletes.insert(
-                    0,
-                    Step::DeleteSignature {
-                        object_id: signature.object_id.clone(),
-                    },
-                );
+            if Some(&signature.object_id) != keep.as_ref() {
+                deletes.push(Step::DeleteSignature {
+                    object_id: signature.object_id.clone(),
+                });
             }
         }
-        if let (Some(signature), false) = (&want.signature, keep) {
+        if let (Some(signature), None) = (&want.signature, &keep) {
             creates.push(Step::CreateSignature {
                 wanted: want.id,
                 signature: signature.clone(),
@@ -149,10 +152,6 @@ pub fn plan(
     deletes.sort_by_key(|step| matches!(step, Step::DeleteDomain { .. }));
     creates.sort_by_key(|step| matches!(step, Step::CreateSignature { .. }));
     deletes.into_iter().chain(creates).collect()
-}
-
-pub fn signature_description(domain_id: &uuid::Uuid, key_id: &str) -> String {
-    format!("{}:{key_id}", tag(domain_id))
 }
 
 /// Stalwart's management API, as the reconcile needs it.
@@ -167,18 +166,27 @@ pub trait Stalwart: Send + Sync {
         domain_object_id: &str,
         selector: &str,
         private_key_pem: &str,
-        description: &str,
     ) -> anyhow::Result<String>;
     async fn delete_signature(&self, object_id: &str) -> anyhow::Result<()>;
 }
 
+/// What a run changed that the rows must record: a domain's new signature
+/// (its object and key), or none any more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Applied {
+    pub steps: usize,
+    pub recorded: Vec<(uuid::Uuid, Option<Recorded>)>,
+}
+
 /// Lists what is there, plans, and runs the plan. Stops at the first error:
-/// the next run starts from what is there then.
-pub async fn apply(stalwart: &dyn Stalwart, wanted: &[Wanted]) -> anyhow::Result<usize> {
+/// the next run starts from what is there then (a created signature not yet
+/// recorded is deleted and made again).
+pub async fn apply(stalwart: &dyn Stalwart, wanted: &[Wanted]) -> anyhow::Result<Applied> {
     let domains = stalwart.domains().await?;
     let signatures = stalwart.signatures().await?;
     let steps = plan(wanted, &domains, &signatures);
     let mut created: Vec<(uuid::Uuid, String)> = Vec::new();
+    let mut recorded: Vec<(uuid::Uuid, Option<Recorded>)> = Vec::new();
     let object_of = |id: &uuid::Uuid, created: &[(uuid::Uuid, String)]| {
         created
             .iter()
@@ -202,18 +210,29 @@ pub async fn apply(stalwart: &dyn Stalwart, wanted: &[Wanted]) -> anyhow::Result
             Step::CreateSignature { wanted, signature } => {
                 let domain = object_of(wanted, &created)
                     .ok_or_else(|| anyhow::anyhow!("no Stalwart domain for {wanted}"))?;
-                stalwart
-                    .create_signature(
-                        &domain,
-                        &signature.selector,
-                        &signature.private_key_pem,
-                        &signature_description(wanted, &signature.key_id),
-                    )
+                let object_id = stalwart
+                    .create_signature(&domain, &signature.selector, &signature.private_key_pem)
                     .await?;
+                recorded.push((
+                    *wanted,
+                    Some(Recorded {
+                        object_id,
+                        key_id: signature.key_id.clone(),
+                    }),
+                ));
             }
         }
     }
-    Ok(steps.len())
+    // A wanted domain without a signature records none.
+    for want in wanted {
+        if want.signature.is_none() && want.recorded.is_some() {
+            recorded.push((want.id, None));
+        }
+    }
+    Ok(Applied {
+        steps: steps.len(),
+        recorded,
+    })
 }
 
 #[cfg(test)]
@@ -270,7 +289,6 @@ mod tests {
             domain_object_id: &str,
             selector: &str,
             _private_key_pem: &str,
-            description: &str,
         ) -> anyhow::Result<String> {
             anyhow::ensure!(
                 self.domains.lock().unwrap().iter().any(|d| d.object_id == domain_object_id),
@@ -281,7 +299,6 @@ mod tests {
                 object_id: object_id.clone(),
                 domain_object_id: domain_object_id.into(),
                 selector: selector.into(),
-                description: description.into(),
             });
             Ok(object_id)
         }
@@ -291,15 +308,49 @@ mod tests {
         }
     }
 
-    fn wanted(id: uuid::Uuid, name: &str, key: Option<&str>) -> Wanted {
+    /// The rows: each domain's wanted key and what it records.
+    #[derive(Default)]
+    struct Rows(std::collections::BTreeMap<uuid::Uuid, (String, Option<String>, Option<Recorded>)>);
+
+    impl Rows {
+        fn set(&mut self, id: uuid::Uuid, name: &str, key: Option<&str>) {
+            let recorded = self.0.get(&id).and_then(|(_, _, r)| r.clone());
+            self.0.insert(id, (name.into(), key.map(str::to_owned), recorded));
+        }
+
+        fn wanted(&self) -> Vec<Wanted> {
+            self.0
+                .iter()
+                .map(|(id, (name, key, recorded))| Wanted {
+                    id: *id,
+                    name: name.clone(),
+                    signature: key.as_ref().map(|key| Signature {
+                        selector: "kutup1".into(),
+                        private_key_pem: format!("pem-{key}"),
+                        key_id: key.clone(),
+                    }),
+                    recorded: recorded.clone(),
+                })
+                .collect()
+        }
+
+        async fn run(&mut self, fake: &FakeStalwart) -> usize {
+            let applied = apply(fake, &self.wanted()).await.unwrap();
+            for (id, recorded) in applied.recorded {
+                if let Some(row) = self.0.get_mut(&id) {
+                    row.2 = recorded;
+                }
+            }
+            applied.steps
+        }
+    }
+
+    fn wanted(id: uuid::Uuid, name: &str) -> Wanted {
         Wanted {
             id,
             name: name.into(),
-            signature: key.map(|key| Signature {
-                selector: "kutup1".into(),
-                private_key_pem: format!("pem-{key}"),
-                key_id: key.into(),
-            }),
+            signature: None,
+            recorded: None,
         }
     }
 
@@ -316,37 +367,41 @@ mod tests {
         let fake = FakeStalwart::default();
         fake.domains.lock().unwrap().push(server_domain());
         let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let mut rows = Rows::default();
 
         // A new domain, no DKIM yet; another with its key.
-        let want = vec![wanted(a, "a.example", None), wanted(b, "b.example", Some("k1"))];
-        assert_eq!(apply(&fake, &want).await.unwrap(), 3);
+        rows.set(a, "a.example", None);
+        rows.set(b, "b.example", Some("k1"));
+        assert_eq!(rows.run(&fake).await, 3);
         assert_eq!(fake.domains.lock().unwrap().len(), 3);
         assert_eq!(fake.signatures.lock().unwrap().len(), 1);
         // Nothing to do the second time.
-        assert_eq!(apply(&fake, &want).await.unwrap(), 0);
+        assert_eq!(rows.run(&fake).await, 0);
 
-        // a's DKIM turns good; b's key rotates.
-        let want = vec![wanted(a, "a.example", Some("k1")), wanted(b, "b.example", Some("k2"))];
-        assert_eq!(apply(&fake, &want).await.unwrap(), 3);
-        let descriptions: Vec<String> = fake
-            .signatures
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|s| s.description.clone())
-            .collect();
-        assert!(descriptions.contains(&signature_description(&b, "k2")));
-        assert!(!descriptions.contains(&signature_description(&b, "k1")));
-        assert_eq!(apply(&fake, &want).await.unwrap(), 0);
+        // a's DKIM turns good; b's key rotates: its signature is replaced.
+        rows.set(a, "a.example", Some("k1"));
+        rows.set(b, "b.example", Some("k2"));
+        let before = rows.0[&b].2.clone().unwrap();
+        assert_eq!(rows.run(&fake).await, 3);
+        let after = rows.0[&b].2.clone().unwrap();
+        assert_eq!(after.key_id, "k2");
+        assert_ne!(after.object_id, before.object_id);
+        assert_eq!(fake.signatures.lock().unwrap().len(), 2);
+        assert_eq!(rows.run(&fake).await, 0);
+
+        // A signature made but never recorded (a crash between) is replaced.
+        rows.0.get_mut(&a).unwrap().2 = None;
+        assert_eq!(rows.run(&fake).await, 2);
+        assert_eq!(fake.signatures.lock().unwrap().len(), 2);
 
         // b goes inactive: its signature, then its domain; the server's own
         // domain is never touched.
-        let want = vec![wanted(a, "a.example", Some("k1"))];
-        assert!(apply(&fake, &want).await.unwrap() >= 2);
+        rows.0.remove(&b);
+        assert_eq!(rows.run(&fake).await, 2);
         let names: Vec<String> = fake.domains.lock().unwrap().iter().map(|d| d.name.clone()).collect();
-        assert_eq!(names.len(), 2);
-        assert!(names.contains(&"kutup.dev".to_string()) && names.contains(&"a.example".to_string()));
-        assert_eq!(apply(&fake, &[]).await.unwrap(), 2);
+        assert_eq!(names, vec!["kutup.dev".to_string(), "a.example".to_string()]);
+        rows.0.clear();
+        assert_eq!(rows.run(&fake).await, 2);
         assert_eq!(*fake.domains.lock().unwrap(), vec![server_domain()]);
     }
 
@@ -356,7 +411,6 @@ mod tests {
             object_id: "s".into(),
             domain_object_id: "server".into(),
             selector: "202601e".into(),
-            description: "Stalwart's own".into(),
         };
         assert!(plan(&[], &[server_domain()], &[signature]).is_empty());
     }
@@ -369,7 +423,7 @@ mod tests {
             name: "old.example".into(),
             description: tag(&id),
         };
-        let steps = plan(&[wanted(id, "new.example", None)], &[there], &[]);
+        let steps = plan(&[wanted(id, "new.example")], &[there], &[]);
         assert_eq!(
             steps,
             vec![
