@@ -1051,7 +1051,7 @@ them on pseudonyms (§3).
   - LiveKit's end-to-end encryption supports per-participant keys (its key
     provider with shared keys off), but setting a key per remote participant
     from our own messages needs **a key provider of our own**. Today's group
-    calls use one shared MLS key. Building it is part of slice 3.
+    calls use one shared MLS key. Building it is part of slice 4.
 - **When keys change.**
   - When a participant leaves the call, everyone draws a new key and sends it
     only to those still in it.
@@ -1221,7 +1221,8 @@ groups (`chat.pairwiseGroups`):
   so); administrators promote, demote and remove; anyone may rename it or
   invite contacts as the group's access allows; leaving as the last
   administrator names another first.
-- Group links stay MLS's until slice 2.
+- Pairwise groups get links in slice 3; until then they have none (the old
+  MLS groups keep theirs until slice 5 removes them).
 
 **Slice 1 builds usable groups first.** In it, group messages are sender-key
 ciphertexts sent as one sealed envelope per member device, over the existing
@@ -1321,6 +1322,158 @@ figures are from its review.
   twin are new. If it runs over, it pushes the rest out rather than being cut.
 
 `CHAT_GROUPS` turns on only after slice 5 and its gates, when the user decides.
+
+## 11. Build notes: slice 3, then slice 2 (2026-10-20)
+
+Order (the main session, 2026-10-20): slice 3 (links, requests, settings), then
+slice 2 (sending once), then calls, then MLS out. Groups stay off until all of
+them are done (the user, 2026-10-20: no early or partial launch).
+
+### Slice 3: what exists, and the formats
+
+**Already in place.** The shared checks (`kutup_chat_proto::group::check`)
+apply every slice-3 action: `JoinFromLink`, `RequestToJoin`, `CancelRequest`,
+`ApproveRequest`, `DenyRequest`, `ModifyAttribute`, `ModifyAccess`,
+`ModifyAnnouncementsOnly`, `ModifyInviteLink`, `Ban`, `Unban`,
+`ModifyBanList` and `Terminate`, with the link password compared in constant
+time. The home's gateway gates link join info by the link proof, and records
+requesters as seen pseudonyms (`pseudonymUsed`). The client handles all of
+them when it applies a change, but authors only slice 1's actions and the
+title.
+
+**The invite link.**
+- `https://chat.<server>/join#<base64url>`. The fragment is
+  `GroupInviteLinkV1`: version, the master key, the 16-byte password, and the
+  home pin (server, identity sequence, identity document hash), canonical
+  JSON, base64url without padding. The fragment never reaches a server: not in
+  the path or query, so not in logs or `Referer`.
+- The joiner derives the group id from the key and the pin and checks it as
+  any invitation is checked (`master_at`). Kept short for QR codes: the pin's
+  hash is the 64-character hex form, and the whole link stays under 300
+  characters.
+
+**Join info, joining and asking.**
+- Join info comes through the anonymous route under the link proof
+  (`GroupRequestV1::with_link_password`, a `RequestSigner` for the link). Its
+  sealed title, description and avatar open with the link's master key; the
+  member count and whether approval is needed are in the clear.
+- Joining (`ANY`) and asking (`ADMINISTRATOR`) are changes signed by a new
+  pseudonym, at the join epoch a claim would take, with the same
+  `pseudonymUsed` retry and the same 64-epoch bound. The change carries a
+  member entry sealed as `MemberEntry` (an approval moves it as it is).
+- A joiner then takes the whole state and announces, as after a claim. An
+  asker is saved as `Requesting`.
+
+**Requests are quiet: admins see them at their next sync** (the main session,
+2026-10-20, as proposed).
+- Every client syncs each pairwise group when the app opens and about every
+  ten minutes: one log read from its revision per group, jittered, paused while
+  the tab stays hidden past the usual hidden interval.
+- So administrators see a new request at their next sync. A push to them would
+  tell the home who the administrators are. The plan and the UI say this as it
+  is.
+- An approving administrator sends the usual `groupChange` pairwise to the
+  newcomer, whose binding now says who they are.
+- The requester asks about its own request with `GetRequestStatus` (the home,
+  signed by the requesting pseudonym, about that pseudonym only): `pending`
+  with the revision and head a cancel needs (so a cancel works after a link
+  reset too), `denied`, `member` or `unknown`.
+- Denying also bans the pseudonym from the link, as Signal does.
+
+**Bans, and what they can't do.**
+- The state keeps banned pseudonyms in the clear, which the home enforces, and
+  a ban list by account in the sealed part (`banList`, as built: one sealed
+  list of AccountRefs, up to 24 KiB, about 180 accounts), replaced in the same
+  change as the ban (`Ban` plus `ModifyBanList`).
+- The home sees only pseudonyms, so **it can't enforce a ban on an account**.
+  What holds:
+  - an administrator's client refuses to approve a request whose binding names
+    a banned account;
+  - the banned pseudonym itself is refused by the home;
+  - a banned account asking again at a new epoch is caught at approval by its
+    binding;
+  - with approval off (`ANY`), a banned account holding the link can join under
+    a new pseudonym. Every member's client then shows it as banned, and
+    administrators are asked to remove it. Banning resets the link password by
+    default, so the link it held stops working.
+
+**Attributes.**
+- Description: sealed text, up to its cap (as the title).
+- Timer: sealed `u32` seconds (Signal's `DisappearingMessagesTimer`); 0 is off.
+  Every sender applies it to group messages, as in direct chats.
+- **Avatar**: the attribute is `{hash, sealed}`.
+  - `hash` is the SHA-256 of the sealed blob, in the clear, so the home can
+    serve and clean up blobs.
+  - `sealed` (`Avatar`, up to 512 bytes) holds the blob's key and its content
+    type.
+  - The client pads the image to a size bucket (8, 16, 32 or 40 KiB) and seals
+    it under a fresh random key, so the same picture in two groups gives
+    unrelated hashes. It uploads it with `PutAvatar`, then makes the change.
+  - The home keeps the current blob and at most one pending upload per group
+    (the pending one goes after 24 hours), counts them against its own limits
+    for groups it hosts (not any account's pool, since the home doesn't know
+    who uploaded), and answers `GetAvatar` padded to one size, to members and
+    under the link proof for the current hash only.
+- Announcements-only: only administrators send; other members' messages are
+  refused on receipt, as in Signal.
+
+**Server parts** (the second session, agreed 2026-10-20):
+- the avatar operations and their storage (above);
+- `GetAvatar` under the link proof;
+- a per-relay-server budget for link joins and requests (about 120 a minute,
+  admin-settable), charged before the change is checked;
+- `GetRequestStatus`.
+
+**Client parts** (the third session):
+- the link format, its parser and the link request signer;
+- join, ask and cancel with the epoch retry;
+- approve, deny, access, link reset, announcements-only, ban and unban, end
+  the group, and "remove all unverified";
+- the description, timer and avatar formats;
+- the receiving rules (announcements-only, banned shown as such);
+- the periodic group sync;
+- per-change timeline lines;
+- the web: wasm and service, the link, request and settings screens moved off
+  their MLS versions, en and tr, specs on one and two servers.
+
+### Slice 2: client notes (for the server design)
+
+The design is §1 ("Sending once" and "Multi-recipient: a delivery capability
+per member"). What the client side settles:
+- **Encrypting.** libsignal's `sealed_sender_multi_recipient_encrypt` over
+  one destination server's member devices, with recipients as 16-byte service
+  ids (the account ids) and the content in `UnidentifiedSenderMessageContent`
+  with the group id. One request per destination server, through this
+  account's own server as today's sealed route.
+- **Capabilities.**
+  - Each member draws a random 16-byte capability per group and publishes its
+    `SHA-256` to its own server with today's capability publishing (per
+    account, no group id).
+  - It sends the capability to the other members in a hidden `groupDelivery`
+    content kind and keeps it in its group list entry, so its own devices hold
+    it.
+  - It replaces it in one step when a member is removed or leaves: publish the
+    new, unpublish the old, send the new.
+- **Sending.** One capability per recipient account in the request; a
+  recipient whose capability this sender doesn't hold yet goes by the
+  pairwise fallback (slice 1's path, which stays).
+- **Answers.**
+  - `409` and `410` per account: refetch that account's manifest, never a member
+    list from the server, rearrange the book, retry (as direct sends);
+  - `404` for a member at the sender's revision: that copy goes pairwise at
+    once, the group is refreshed, and the member is retried on the
+    multi-recipient route once its new capability arrives.
+- **Lifting the 64-member cap** on test stacks once this route carries group
+  messages.
+
+Questions for the server design (second session):
+- the request shape on the origin and the federated route;
+- how capabilities ride with the multi-recipient body;
+- shared-payload storage and per-device views (Signal-Server's
+  `MessagesCache`);
+- the sealed-send units per recipient;
+- the destination split;
+- the `409`/`410`/`404` answers per account inside one request.
 
 ## Decisions (the user, 2026-10-17)
 
