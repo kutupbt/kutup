@@ -2310,6 +2310,10 @@ fn build_router(state: AppState) -> Router {
                     post(handlers::mail_domains_admin::deactivate),
                 )
                 .route(
+                    "/api/admin/mail/domains/:id/unblock",
+                    post(handlers::mail_domains_admin::unblock),
+                )
+                .route(
                     "/api/admin/users/:id/mail-domains",
                     get(handlers::mail_domains_admin::overrides)
                         .put(handlers::mail_domains_admin::set_overrides),

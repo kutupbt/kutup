@@ -44,6 +44,14 @@ CREATE TABLE mail_domains (
 CREATE UNIQUE INDEX mail_domains_held ON mail_domains (name) WHERE state IN (1, 2);
 CREATE INDEX mail_domains_checked ON mail_domains (checked_at) WHERE removed_at IS NULL;
 
+-- Names an administrator deactivated (abuse): no account verifies or takes
+-- them over until an administrator lifts the block.
+CREATE TABLE mail_domain_blocks (
+    name text PRIMARY KEY CHECK (name = lower(name)),
+    blocked_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    blocked_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- An administrator's limits for one account over the site's
 -- (mail_domains.* site settings); null keeps the site's.
 CREATE TABLE mail_domain_overrides (

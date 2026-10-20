@@ -50,6 +50,8 @@ pub struct AdminDomain {
     pub dmarc_state: i16,
     pub approved: bool,
     pub stopped: bool,
+    /// Deactivated by an administrator: nobody may prove it until lifted.
+    pub blocked: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -81,6 +83,7 @@ struct AdminDomainRow {
     dmarc_state: i16,
     approved: bool,
     stopped: bool,
+    blocked: bool,
     created_at: OffsetDateTime,
 }
 
@@ -133,6 +136,7 @@ pub async fn list(
         "SELECT d.id, d.name, COALESCE(u.username, u.id::text) AS owner, d.state, d.verify_state,
                 d.mx_state, d.spf_state, d.dkim_state, d.dmarc_state,
                 d.approved_at IS NOT NULL AS approved, d.stopped_at IS NOT NULL AS stopped,
+                EXISTS (SELECT 1 FROM mail_domain_blocks b WHERE b.name = d.name) AS blocked,
                 d.created_at
            FROM mail_domains d JOIN users u ON u.id = d.user_id
           WHERE d.removed_at IS NULL
@@ -165,6 +169,7 @@ pub async fn list(
                 dmarc_state: r.dmarc_state,
                 approved: r.approved,
                 stopped: r.stopped,
+                blocked: r.blocked,
                 created_at: r.created_at,
             })
             .collect(),
@@ -252,7 +257,8 @@ pub async fn approve(
 }
 
 /// `POST /api/admin/mail/domains/{id}/deactivate` — an administrator ends a
-/// domain (abuse): inactive at once, its addresses freed, its owner told.
+/// domain (abuse): inactive at once, its addresses freed, its owner told,
+/// and its name blocked until `unblock`.
 #[utoipa::path(
     post,
     path = "/api/admin/mail/domains/{id}/deactivate",
@@ -267,11 +273,41 @@ pub async fn deactivate(
     Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
-    let name = store::deactivate(&state.pool, id).await?;
+    let admin_id =
+        Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("bad session"))?;
+    let name = store::deactivate(&state.pool, id, admin_id).await?;
     audit(
         &state.pool,
         &admin.user_id,
         "mail.domains.deactivate",
+        None,
+        json!({ "domain": name }),
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/admin/mail/domains/{id}/unblock` — lifts the block a
+/// deactivation put on the domain's name: it may be proven again.
+#[utoipa::path(
+    post,
+    path = "/api/admin/mail/domains/{id}/unblock",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("id" = String, Path)),
+    responses((status = 204), (status = 404))
+)]
+pub async fn unblock(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<String>,
+) -> AppResult<StatusCode> {
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
+    let name = store::unblock(&state.pool, id).await?;
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "mail.domains.unblock",
         None,
         json!({ "domain": name }),
     )

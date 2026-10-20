@@ -18,4 +18,5 @@ CREATE UNIQUE INDEX mail_addresses_live ON mail_addresses (folded) WHERE state <
 ALTER TABLE mail_domains DROP CONSTRAINT mail_domains_catch_all;
 ALTER TABLE mail_addresses DROP COLUMN domain_id;
 DROP TABLE mail_domain_overrides;
+DROP TABLE mail_domain_blocks;
 DROP TABLE mail_domains;

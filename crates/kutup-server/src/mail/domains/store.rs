@@ -16,6 +16,10 @@ use crate::security_events::{self, Kind};
 
 /// How long between a challenger's two checks before a held name moves.
 pub const TRANSFER_CONFIRM_SECS: i64 = 3600;
+/// The second check must come within this of the first, or the transfer
+/// starts over: two brief hijacks of the domain's DNS weeks apart never
+/// add up to one.
+pub const TRANSFER_CONFIRM_WINDOW_SECS: i64 = 48 * 3600;
 
 #[derive(Debug, Clone, FromRow)]
 pub struct Row {
@@ -97,6 +101,7 @@ pub enum AddRefusal {
     AccountLimit,
     DailyLimit,
     ServerFull,
+    Blocked,
 }
 
 impl AddRefusal {
@@ -106,6 +111,7 @@ impl AddRefusal {
             AddRefusal::AccountLimit => "domainLimit",
             AddRefusal::DailyLimit => "domainDailyLimit",
             AddRefusal::ServerFull => "serverDomainLimit",
+            AddRefusal::Blocked => "domainBlocked",
         }
     }
 }
@@ -158,6 +164,9 @@ pub async fn add(
         if row.removed_at.is_none() {
             return Ok(Ok(row.clone()));
         }
+    }
+    if blocked(&mut tx, name).await? {
+        return Ok(Err(AddRefusal::Blocked));
     }
     let (kept, today): (i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE removed_at IS NULL),
@@ -212,6 +221,16 @@ pub async fn add(
     Ok(Ok(row))
 }
 
+/// Whether an administrator blocked `name` (deactivated it for abuse).
+async fn blocked(tx: &mut Transaction<'_, Postgres>, name: &str) -> AppResult<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM mail_domain_blocks WHERE name = $1)")
+            .bind(name)
+            .fetch_one(&mut **tx)
+            .await?,
+    )
+}
+
 /// Who holds `name` now, other than `id`: the holder's row id, account and
 /// code.
 async fn holder(
@@ -231,8 +250,13 @@ async fn holder(
 
 /// Checks `row` now and saves what it found. A domain another account holds
 /// is verified only as a transfer: two checks at least
-/// [`TRANSFER_CONFIRM_SECS`] apart that find this account's code and not the
-/// holder's, then one transaction moves it and tells the holder.
+/// [`TRANSFER_CONFIRM_SECS`] and at most [`TRANSFER_CONFIRM_WINDOW_SECS`]
+/// apart that find this account's code and not the holder's, with no check
+/// in between that missed this account's code; then one transaction moves
+/// it and tells the holder. The DNS is read before the row is locked; if
+/// the row changed meanwhile (another check, an administrator), this check
+/// is dropped and the row returned as it is, so an old read never
+/// overwrites newer state.
 pub async fn check_and_save(
     pool: &PgPool,
     resolver: &dyn Resolver,
@@ -254,18 +278,37 @@ pub async fn check_and_save(
     let Some(current) = current else {
         return Err(AppError::not_found("no such domain"));
     };
-    let mut transfer_seen = current.transfer_seen_at;
+    if current.state != row.state || current.checked_at != row.checked_at {
+        tx.commit().await?;
+        return Ok((current, Change::None));
+    }
+    // The transfer's first sighting holds only while every check finds this
+    // account's code.
+    let mut transfer_seen = if checked.verify_state == records::verify::GOOD {
+        current.transfer_seen_at
+    } else {
+        None
+    };
     let becomes_held = matches!(change, Change::Verified | Change::Restored)
         && !matches!(current.state, state::VERIFIED | state::WARN);
-    if becomes_held {
+    // A name an administrator blocked is verified by nobody, nor taken over.
+    if becomes_held && blocked(&mut tx, &row.name).await? {
+        checked.status = current.domain().status;
+        change = Change::None;
+        transfer_seen = None;
+    } else if becomes_held {
         if let Some((holder_id, holder_user, holder_code)) =
             holder(&mut tx, &row.name, row.id).await?
         {
             let txt = resolver.txt(&row.name).await;
             let holder_gone = records::verify_state(&txt, &holder_code)
                 .is_some_and(|state| state != records::verify::GOOD);
+            // A first sighting too old to pair with this one starts over.
+            let seen = transfer_seen.filter(|seen| {
+                now - seen.unix_timestamp() <= super::scaled(TRANSFER_CONFIRM_WINDOW_SECS)
+            });
             let confirmed = holder_gone
-                && current.transfer_seen_at.is_some_and(|seen| {
+                && seen.is_some_and(|seen| {
                     now - seen.unix_timestamp() >= super::scaled(TRANSFER_CONFIRM_SECS)
                 });
             if confirmed {
@@ -273,12 +316,11 @@ pub async fn check_and_save(
                 transfer_seen = None;
             } else {
                 // Not yet (or not at all): pending, the holder untouched.
-                if holder_gone && current.transfer_seen_at.is_none() {
-                    transfer_seen = at(Some(now));
-                }
-                if !holder_gone {
-                    transfer_seen = None;
-                }
+                transfer_seen = if holder_gone {
+                    seen.or(at(Some(now)))
+                } else {
+                    None
+                };
                 checked.status = current.domain().status;
                 change = Change::None;
             }
@@ -443,7 +485,10 @@ pub async fn set_catch_all(
 
 /// An administrator ends a domain: inactive at once, its addresses freed,
 /// its owner told. The name of the domain it was.
-pub async fn deactivate(pool: &PgPool, id: Uuid) -> AppResult<String> {
+/// An administrator deactivates a domain (abuse): inactive at once, its
+/// addresses freed, its owner told, and its name blocked until an
+/// administrator lifts it ([`unblock`]), so no refresh brings it back.
+pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<String> {
     let mut tx = pool.begin().await?;
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "UPDATE mail_domains SET state = 0, failing_since = NULL, warned_at = NULL,
@@ -454,8 +499,30 @@ pub async fn deactivate(pool: &PgPool, id: Uuid) -> AppResult<String> {
     .fetch_optional(&mut *tx)
     .await?;
     let (user, name) = row.ok_or_else(|| AppError::not_found("no such domain"))?;
+    sqlx::query(
+        "INSERT INTO mail_domain_blocks (name, blocked_by) VALUES ($1, $2)
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .bind(&name)
+    .bind(admin)
+    .execute(&mut *tx)
+    .await?;
     free_addresses(&mut tx, id).await?;
     security_events::record_names(&mut tx, user, Kind::DomainLost, None, None, &name, None).await?;
     tx.commit().await?;
     Ok(name)
+}
+
+/// An administrator lifts the block on the name of domain `id`: its owner
+/// (or anyone) may prove it again.
+pub async fn unblock(pool: &PgPool, id: Uuid) -> AppResult<String> {
+    let name: Option<String> = sqlx::query_scalar(
+        "DELETE FROM mail_domain_blocks
+          WHERE name = (SELECT name FROM mail_domains WHERE id = $1)
+         RETURNING name",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    name.ok_or_else(|| AppError::not_found("no such blocked domain"))
 }
