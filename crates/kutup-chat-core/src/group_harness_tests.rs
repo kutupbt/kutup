@@ -1360,7 +1360,20 @@ pub(crate) fn deliver_all(people: &mut [&mut Person]) {
             return;
         }
     }
-    panic!("the mailboxes never emptied");
+    let left: Vec<(String, usize)> = people
+        .iter()
+        .map(|person| {
+            (
+                person.account.clone(),
+                person
+                    .client
+                    .world
+                    .mailbox(&person.account, person.device())
+                    .len(),
+            )
+        })
+        .collect();
+    panic!("the mailboxes never emptied: {left:?}");
 }
 
 /// `a` writes to `b`, who accepts the request: accepted contacts both ways,
@@ -4465,4 +4478,85 @@ fn group_settings_an_ended_group_takes_no_more_changes() {
     bob.sync(&group_id);
     assert!(details(&mut bob, &group_id).terminated);
     assert!(block_on(alice.engine.set_group_title(&group_id, "Again", &mut rng())).is_err());
+}
+
+fn try_send(person: &mut Person, group_id: &str, text: &str) -> crate::error::Result<()> {
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(person.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(
+        &send_id,
+        crate::clock::rfc3339(crate::clock::unix_millis()),
+        seq,
+        text,
+    );
+    block_on(
+        person
+            .engine
+            .send_group_message(group_id, &send_id, content, &mut rng()),
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn group_rules_announcements_only_and_an_ended_group_hold_on_both_ends() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    // Bob's message is on its way when announcements-only goes on.
+    bob.send_text(&group_id, "late");
+    block_on(
+        alice
+            .engine
+            .set_group_announcements_only(&group_id, true, &mut rng()),
+    )
+    .unwrap();
+    carol.sync(&group_id);
+    carol.receive();
+    assert!(carol.group_texts(&group_id).is_empty());
+    // Bob's own client won't send now; Alice, an administrator, still does.
+    bob.receive();
+    bob.sync(&group_id);
+    assert!(try_send(&mut bob, &group_id, "no").is_err());
+    alice.send_text(&group_id, "news");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    assert_eq!(carol.group_texts(&group_id), vec!["news".to_string()]);
+
+    block_on(
+        alice
+            .engine
+            .set_group_announcements_only(&group_id, false, &mut rng()),
+    )
+    .unwrap();
+    // Bob caught up a moment ago, so its next catch-up waits: he syncs.
+    bob.sync(&group_id);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    bob.send_text(&group_id, "free");
+    block_on(alice.engine.end_group(&group_id, &mut rng())).unwrap();
+    carol.sync(&group_id);
+    carol.receive();
+    assert!(!carol.group_texts(&group_id).contains(&"free".to_string()));
+    assert!(try_send(&mut alice, &group_id, "after the end").is_err());
+}
+
+#[test]
+fn group_rules_the_timer_goes_on_every_message() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    block_on(alice.engine.set_group_timer(&group_id, 300, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob]);
+    bob.sync(&group_id);
+    bob.send_text(&group_id, "brief");
+    alice.receive();
+    let timers: Vec<Option<u32>> = block_on(alice.engine.session().history())
+        .unwrap()
+        .iter()
+        .filter_map(|message| serde_json::from_slice::<ChatContent>(&message.content).ok())
+        .filter(|content| content.as_text().is_some() && content.group_context().is_some())
+        .map(|content| content.disappearing_after_seconds().unwrap())
+        .collect();
+    assert_eq!(timers, vec![Some(300)]);
 }

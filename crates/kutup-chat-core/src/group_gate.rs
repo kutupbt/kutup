@@ -177,9 +177,25 @@ pub(crate) struct GroupMembership {
     pub head: Option<String>,
     pub verified: Vec<String>,
     pub unconfirmed: Vec<String>,
+    /// The verified administrators' accounts.
+    pub administrators: Vec<String>,
+    pub announcements_only: bool,
+    pub terminated: bool,
 }
 
 impl GroupMembership {
+    /// Whether content of `kind` from `account` is dropped on receipt (as
+    /// Signal): nothing but change notices once the group ended, and only
+    /// administrators' messages while it is announcements-only.
+    pub(crate) fn silences(&self, account: &str, kind: &str) -> bool {
+        if kind == kutup_chat_proto::content::kind::GROUP_CHANGE {
+            return false;
+        }
+        self.terminated
+            || (self.announcements_only
+                && !self.administrators.iter().any(|admin| admin == account))
+    }
+
     pub(crate) fn standing(&self, account: &str) -> Standing {
         if self.verified.iter().any(|member| member == account) {
             Standing::Member
@@ -315,6 +331,10 @@ impl Engine {
         }
         let (members, unconfirmed) = self.group_members_checked(group_id).await?;
         let unconfirmed: Vec<String> = unconfirmed.iter().map(ToString::to_string).collect();
+        let state = record
+            .verified()
+            .map_err(group_error)?
+            .map(|(state, _)| state);
         let (failures, wait) = if unconfirmed.is_empty() {
             (0, crate::engine::KNOWN_DEVICES_TTL_MS)
         } else {
@@ -324,11 +344,18 @@ impl Engine {
             recheck_at_ms: now.saturating_add(wait),
             failures,
             head: record.head.clone(),
+            administrators: members
+                .iter()
+                .filter(|member| member.role == kutup_chat_proto::group::GroupRole::Administrator)
+                .filter_map(|member| member.verified.as_ref().map(|v| v.account.to_string()))
+                .collect(),
             verified: members
                 .into_iter()
                 .filter_map(|member| member.verified.map(|verified| verified.account.to_string()))
                 .collect(),
             unconfirmed,
+            announcements_only: state.as_ref().is_some_and(|state| state.announcements_only),
+            terminated: state.as_ref().is_some_and(|state| state.terminated),
         };
         self.group_members_seen
             .insert(group_id.to_string(), membership.clone());
@@ -533,15 +560,13 @@ impl Engine {
                     return Ok(dropped());
                 }
             };
-            let standing = self
-                .group_membership(&group_id)
-                .await?
-                .standing(&inspection.sender);
+            let membership = self.group_membership(&group_id).await?;
+            let standing = membership.standing(&inspection.sender);
             let catch_ups = self.group_catch_ups.get(&group_id).copied();
             let now = self.now_ms();
             let verified = verified_revision(&record);
             let seen = RefCell::new(None);
-            let gate = |context: &GroupContextV1| {
+            let gate = |context: &GroupContextV1, kind: &str| {
                 let Some(check) = context_check(&record, context) else {
                     return GroupGate::Refuse;
                 };
@@ -552,7 +577,10 @@ impl Engine {
                         .is_none_or(|state| state.allows(now, Some(context.revision), verified)),
                     readable: true,
                 };
-                let gate = gate_for(Some(check), standing, reading);
+                let mut gate = gate_for(Some(check), standing, reading);
+                if gate == GroupGate::Accept && membership.silences(&inspection.sender, kind) {
+                    gate = GroupGate::Refuse;
+                }
                 *seen.borrow_mut() = Some((check, gate, context.clone()));
                 gate
             };
@@ -626,6 +654,17 @@ impl Engine {
         if message.group_context().is_some() {
             // A change notice says only that the group moved on.
             if message.kind == kutup_chat_proto::content::kind::GROUP_CHANGE {
+                return Ok(GroupContentOutcome::Ignored);
+            }
+            let group_id = message
+                .group_context()
+                .map(|context| context.group_id.clone())
+                .unwrap_or_default();
+            if self
+                .group_membership(&group_id)
+                .await?
+                .silences(&sender, &message.kind)
+            {
                 return Ok(GroupContentOutcome::Ignored);
             }
             self.session

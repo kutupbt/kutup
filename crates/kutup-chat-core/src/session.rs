@@ -4007,7 +4007,7 @@ impl Session {
         envelope: &DeliveredEnvelope,
         inspection: &SealedEnvelopeInspection,
         validating_root: &PublicKey,
-        gate: &dyn Fn(&kutup_chat_proto::group::GroupContextV1) -> GroupGate,
+        gate: &dyn Fn(&kutup_chat_proto::group::GroupContextV1, &str) -> GroupGate,
     ) -> Result<ReceiveOutcome> {
         let group_id = inspection
             .group_id
@@ -4056,7 +4056,7 @@ impl Session {
                     content.kind
                 )));
             }
-            let gate = gate(&context);
+            let gate = gate(&context, &content.kind);
             if gate == GroupGate::Accept && !change {
                 self.store.stage_message(InboxMessage {
                     id: envelope.id.clone(),
@@ -5154,7 +5154,7 @@ mod sealed_tests {
                     &envelope,
                     &inspection,
                     &trust_root.public_key,
-                    &|_| GroupGate::CatchUp,
+                    &|_, _| GroupGate::CatchUp,
                 ))
                 .unwrap();
                 assert!(matches!(outcome, ReceiveOutcome::GroupCatchUp));
@@ -5164,7 +5164,7 @@ mod sealed_tests {
                 &envelope,
                 &inspection,
                 &trust_root.public_key,
-                &|_| GroupGate::Accept,
+                &|_, _| GroupGate::Accept,
             ))
             .unwrap() else {
                 panic!("a group message is a message")
@@ -5190,7 +5190,7 @@ mod sealed_tests {
                     &envelope,
                     &inspection,
                     &trust_root.public_key,
-                    &|_| GroupGate::Accept,
+                    &|_, _| GroupGate::Accept,
                 )) else {
                     panic!("a message under a key never held can't be read")
                 };
@@ -5233,7 +5233,7 @@ mod sealed_tests {
                 &envelope,
                 &inspection,
                 &trust_root.public_key,
-                &|_| GroupGate::Accept,
+                &|_, _| GroupGate::Accept,
             )),
             Err(ChatError::Trust(_))
         ));
@@ -5270,7 +5270,7 @@ mod sealed_tests {
                 &envelope,
                 &inspection,
                 &trust_root.public_key,
-                &|_| GroupGate::Refuse,
+                &|_, _| GroupGate::Refuse,
             ))
             .unwrap(),
             ReceiveOutcome::Suppressed { .. }

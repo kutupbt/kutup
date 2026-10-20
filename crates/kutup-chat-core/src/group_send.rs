@@ -452,6 +452,27 @@ impl Engine {
                 "this account isn't a member of the group".into(),
             ));
         }
+        let mut content = content;
+        if let Some((state, _)) = record.verified().map_err(group_err)? {
+            // What every member's client drops on receipt is never sent.
+            if state.terminated {
+                return Err(ChatError::Invalid("the group has ended".into()));
+            }
+            let me = record.pseudonym_text().map_err(group_err)?;
+            if state.announcements_only && !state.is_administrator(&me) {
+                return Err(ChatError::Invalid(
+                    "only administrators send in this group".into(),
+                ));
+            }
+            // The group's timer goes on every visible message, as Signal's
+            // `expireTimer`: a receiver keeps each message's own.
+            let seconds = crate::group_settings::timer_seconds(&record);
+            if seconds > 0 && content.disappearing_after_seconds().is_ok() {
+                if let Ok(timed) = content.clone().with_disappearing_after(seconds) {
+                    content = timed;
+                }
+            }
+        }
         self.send_group_content(&mut record, send_id, content, rng)
             .await
     }
