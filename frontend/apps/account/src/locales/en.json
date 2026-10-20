@@ -472,6 +472,8 @@
       "none": "No key yet. It is created the next time you sign in.",
       "createFailed": "Your key could not be created. It will be tried again the next time you sign in.",
       "signedByAccount": "Signed by your account (key list {{sequence}})",
+      "notInList": "Not in your key list",
+      "notInListHint": "The server lists this key, but the key list your account signed doesn't have it. It is never added to your next key list. Contact your administrator.",
       "notSigned": "This key list is not signed by your account. Do not trust these keys and contact your administrator.",
       "algorithm": "Curve25519 (Ed25519 and X25519)",
       "primary": "Primary",

@@ -150,6 +150,16 @@ manifest, signed with Ed25519 by the account authority:
   primary and flags, a QR-free fingerprint display for out-of-band checks,
   and "Download public key" (armored). Key import, export, rotation, and
   marking obsolete or compromised came with Mail (docs/plans/mail.md, C3e).
+- **Every next key list is built from the last list this account signed**
+  (`@kutup/mail-core/keyList`), never from the server's key rows: adding a
+  key appends only that key, and a change touches only the chosen key (or,
+  for a new primary, only the primary bits). The server's rows say which
+  keys exist and carry their envelopes, but a key the server lists and the
+  signed list lacks (or lists under another SHA-256 fingerprint) is shown as
+  "not in your key list", can't be changed, and is never signed into a list;
+  a primary or flag the server changes on its own is shown and signed as the
+  list has it. Otherwise a server could add a key it holds as primary and
+  have the account's next change sign it in.
 - The fork list gains `mail`, `calendar` and `contacts` with their app
   origins when those apps exist, not before.
 
