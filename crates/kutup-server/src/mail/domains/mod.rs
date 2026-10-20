@@ -23,6 +23,22 @@ pub mod sweep;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+/// Whether `domain` is a custom domain held here that takes mail now.
+pub async fn held_here(state: &crate::AppState, domain: &str) -> Result<bool, sqlx::Error> {
+    if !sweep::configured(state) {
+        return Ok(false);
+    }
+    let settings = settings::Settings::load(&state.pool).await?;
+    let row: Option<store::Row> = sqlx::query_as(&format!(
+        "SELECT {} FROM mail_domains WHERE name = $1 AND state IN (1, 2) AND removed_at IS NULL",
+        store::COLUMNS
+    ))
+    .bind(domain.to_ascii_lowercase())
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.is_some_and(|row| row.usable(&settings)))
+}
+
 /// Whether `domain`'s catch-all may take one more message today, within
 /// `per_day` (the site setting); past it, RCPT answers as for an unknown
 /// name, and senders retry or give up. Counted in memory: a restart only

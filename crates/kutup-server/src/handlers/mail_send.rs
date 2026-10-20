@@ -1164,14 +1164,21 @@ pub(crate) async fn deliver(
             .rsplit_once('@')
             .map(|(_, d)| d)
             .unwrap_or_default();
-        if !domain.eq_ignore_ascii_case(server_name) {
+        let own_domain = domain.eq_ignore_ascii_case(server_name);
+        // An address on a custom domain held here is a Kutup address too:
+        // its mail stays end-to-end (docs/plans/mail-custom-domains.md §5).
+        if !own_domain && !crate::mail::domains::held_here(&state, domain).await? {
             external.push(mailbox.address.clone());
             continue;
         }
-        // A distribution list: its members' key packets come below.
-        if let Some(group) =
+        // A distribution list (on the server's own domain only): its
+        // members' key packets come below.
+        let group = if own_domain {
             crate::mail::groups::find(&state.pool, &mailbox.address.to_ascii_lowercase()).await?
-        {
+        } else {
+            None
+        };
+        if let Some(group) = group {
             if readable_to.contains(&mailbox.address.to_ascii_lowercase()) {
                 return Err(AppError::bad_request(
                     "lists and shared mailboxes get end-to-end mail only",
