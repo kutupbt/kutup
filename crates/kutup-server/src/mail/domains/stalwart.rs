@@ -1,8 +1,9 @@
 //! [`Stalwart`] over Stalwart 0.16's management API: JMAP at `/jmap` with
 //! its registry methods (`x:Domain/get|set`, `x:DkimSignature/get|set`,
-//! capability `urn:stalwart:jmap`), the same API `stalwart-cli` uses. The
-//! credential is a dedicated account's API key that may manage only domains
-//! and DKIM signatures (docs/plans/mail-custom-domains.md §10).
+//! capability `urn:stalwart:jmap`), the same API `stalwart-cli` uses. It
+//! signs in as a dedicated account (`kutup-domains`, made by
+//! stalwart-setup) whose permissions are replaced by managing domains and
+//! DKIM signatures only (docs/plans/mail-custom-domains.md §10).
 
 use anyhow::{anyhow, bail, Context, Result};
 use axum::async_trait;
@@ -11,6 +12,8 @@ use serde_json::{json, Value};
 use super::reconcile::{Stalwart, StalwartDomain, StalwartSignature};
 
 const USING: [&str; 2] = ["urn:ietf:params:jmap:core", "urn:stalwart:jmap"];
+/// The account stalwart-setup makes for this (stalwart/plan-domains.ndjson).
+const ACCOUNT: &str = "kutup-domains";
 
 pub struct StalwartApi {
     http: reqwest::Client,
@@ -33,7 +36,7 @@ impl StalwartApi {
         let session: Value = self
             .http
             .get(format!("{}/jmap/session", self.base))
-            .bearer_auth(&self.token)
+            .basic_auth(ACCOUNT, Some(&self.token))
             .send()
             .await?
             .error_for_status()?
@@ -58,7 +61,7 @@ impl StalwartApi {
         let answer: Value = self
             .http
             .post(format!("{}/jmap", self.base))
-            .bearer_auth(&self.token)
+            .basic_auth(ACCOUNT, Some(&self.token))
             .json(&body)
             .send()
             .await?

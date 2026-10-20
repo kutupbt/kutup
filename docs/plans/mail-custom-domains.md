@@ -463,9 +463,12 @@ under the old master key, so those addresses come back as "Missing keys"
   - **Disabling** refuses at the RCPT hook and in the send checks first, and
     only then removes the Stalwart objects.
   - A Stalwart volume restored from backup catches up on the next run.
-- **A scoped credential:** a dedicated Stalwart account whose API key may
-  only manage domains and DKIM signatures (`SysDomain*`,
-  `SysDkimSignature*`), with `allowed_ips` set to the backend.
+- **A scoped credential:** a dedicated Stalwart account, `kutup-domains`,
+  whose permissions are replaced by `authenticate` and managing domains and
+  DKIM signatures (`sysDomain*`, `sysDkimSignature*`), signing in with a
+  password (`MAIL_STALWART_DOMAINS_TOKEN`; Stalwart sets an API key's secret
+  itself, so a plan can't share one with the backend). Its management port
+  (8080) is never published, so only the internal network reaches it.
   - **Residual risk:** a compromised backend can still add a domain to
     Stalwart, and so make it accept relaying for that domain. The loop only
     ever touches objects carrying its tag, so it can't repair other drift.

@@ -15,9 +15,10 @@ if ! printf '%s' "$MAIL_INBOUND_TOKEN" | grep -Eq '^[A-Za-z0-9_-]{32,}$'; then
   echo "MAIL_INBOUND_TOKEN must be 32 or more letters, digits, _ or - (openssl rand -hex 32)" >&2
   exit 1
 fi
-# Custom domains (docs/plans/mail-custom-domains.md §10): an account whose
-# API key, this secret, may manage only domains and DKIM signatures; the
-# backend holds the same secret. Spliced into the plan too.
+# Custom domains (docs/plans/mail-custom-domains.md §10): an account,
+# kutup-domains, whose password is this secret and whose permissions are
+# replaced by managing domains and DKIM signatures only; the backend signs
+# in with it. Spliced into the plan too.
 MAIL_STALWART_DOMAINS_TOKEN="${MAIL_STALWART_DOMAINS_TOKEN:-}"
 if [ -n "$MAIL_STALWART_DOMAINS_TOKEN" ] \
   && ! printf '%s' "$MAIL_STALWART_DOMAINS_TOKEN" | grep -Eq '^[A-Za-z0-9_-]{32,}$'; then

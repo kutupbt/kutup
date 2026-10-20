@@ -1046,8 +1046,9 @@ Accounts can bring their own domains, as with Proton, once the server has:
 - `MAIL_DKIM_KEYS`: the keys the shared DKIM keys are sealed under, in the
   `MAIL_FORWARDING_KEYS` form (`1:$(openssl rand -base64 32)`). The DKIM keys
   live in Kutup's database, so a Stalwart restore keeps signing.
-- `MAIL_STALWART_DOMAINS_TOKEN`: a Stalwart API key that may manage only
-  domains and DKIM signatures, made by `stalwart-setup`
+- `MAIL_STALWART_DOMAINS_TOKEN` (`openssl rand -hex 32`): the password of a
+  Stalwart account, `kutup-domains`, that `stalwart-setup` makes with its
+  permissions replaced by managing domains and DKIM signatures only
   (`MAIL_STALWART_URL` defaults to `http://stalwart:8080`). Kutup keeps
   Stalwart's custom domains in step with its own; it never touches the
   server's own domain.

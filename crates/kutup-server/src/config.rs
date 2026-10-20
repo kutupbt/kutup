@@ -112,7 +112,7 @@ pub struct Config {
     /// whose first MX is it counts as reaching us (Proton's `BACKUP`).
     pub mail_backup_mx: Option<String>,
     /// Stalwart's management API for custom domains (`MAIL_STALWART_URL`)
-    /// and the scoped API key that may manage only domains and DKIM
+    /// and the password of the scoped account that may manage only domains and DKIM
     /// signatures (`MAIL_STALWART_DOMAINS_TOKEN`). Without the key, custom
     /// domains are off: Stalwart couldn't take their mail.
     pub mail_stalwart_url: String,
