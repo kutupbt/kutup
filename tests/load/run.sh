@@ -19,10 +19,15 @@ export COMPOSE_FILE="$root_dir/docker-compose.yml:$root_dir/tests/e2e/docker-com
 gen_cpus="${KUTUP_LOAD_GEN_CPUS:-2-5}"
 results="${KUTUP_LOAD_RESULTS:?set KUTUP_LOAD_RESULTS to a directory for results}/$label"
 mkdir -p "$results"
+# Each run starts from an empty stack, its stored blobs in a directory of its
+# own, so no run inherits the last one's data or in-memory rate limits.
+export KUTUP_E2E_DATA_DIR="${KUTUP_E2E_DATA_DIR:?}/$label"
+mkdir -p "$KUTUP_E2E_DATA_DIR"
 
 compose() { docker compose "$@"; }
 
 echo "stack cpus ${KUTUP_LOAD_STACK_CPUS:-0,1}, store cpus ${KUTUP_LOAD_STORE_CPUS:-6,7}, generator cpus $gen_cpus" | tee "$results/setup.txt"
+compose down -v --remove-orphans
 compose up -d --wait backend postgres
 backend_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(compose ps -q backend)")"
 server="http://$backend_ip:3000"
@@ -57,7 +62,7 @@ pg_pid=$!
   done
 ) > "$results/generator.csv" &
 gen_pid=$!
-trap 'kill "$stats_pid" "$pg_pid" "$gen_pid" 2>/dev/null || true' EXIT
+trap 'kill "$stats_pid" "$pg_pid" "$gen_pid" 2>/dev/null || true; compose down -v --remove-orphans' EXIT
 
 status=0
 taskset -c "$gen_cpus" "$root_dir/crates/kutup-loadtest/target/release/kutup-loadtest" \
