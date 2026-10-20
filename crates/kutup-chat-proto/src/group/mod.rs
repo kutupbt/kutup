@@ -310,6 +310,15 @@ impl GroupStateV1 {
         self.member(pseudonym)
             .is_some_and(|member| member.role == GroupRole::Administrator)
     }
+
+    /// Whether `pseudonym` is a member that `access.attributes` lets change
+    /// the title, description, avatar and timer (the rule a
+    /// `ModifyAttribute` change is checked by; the home checks an avatar
+    /// upload with it too).
+    pub fn may_modify_attributes(&self, pseudonym: &str) -> bool {
+        self.member(pseudonym).is_some()
+            && check::allowed(self.access.attributes, self.is_administrator(pseudonym))
+    }
 }
 
 /// One action of a change (`Groups.proto` `GroupChange.Actions`, with

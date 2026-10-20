@@ -194,6 +194,10 @@ export interface AdminSettings {
   chatGroupLinkJoinsPerRelayGroupPerMin: number
   /** The same, per minute per relay server across all groups. */
   chatGroupLinkJoinsPerRelayPerMin: number
+  /** The largest group avatar blob hosted groups take (one of the avatar lengths). */
+  chatGroupAvatarMaxBytes: number
+  /** The most a hosted group's avatars may take, in bytes. */
+  chatGroupAvatarStoragePerGroupBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

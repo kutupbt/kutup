@@ -817,6 +817,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         crate::site_settings::name_holds(&state.pool, &state.config).await?;
     let (link_joins_per_relay_group, link_joins_per_relay) =
         crate::site_settings::chat_group_link_joins(&state.pool).await?;
+    let (avatar_max_bytes, avatar_storage_bytes) =
+        crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
     Ok(Json(json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
@@ -826,6 +828,8 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "oldAddressReceiveDays": old_address_receive_days,
         "chatGroupLinkJoinsPerRelayGroupPerMin": link_joins_per_relay_group,
         "chatGroupLinkJoinsPerRelayPerMin": link_joins_per_relay,
+        "chatGroupAvatarMaxBytes": avatar_max_bytes,
+        "chatGroupAvatarStoragePerGroupBytes": avatar_storage_bytes,
     }))
     .into_response())
 }
@@ -844,6 +848,10 @@ pub struct UpdateSettingsRequest {
     chat_group_link_joins_per_relay_group_per_min: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_link_joins_per_relay_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_max_bytes: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_storage_per_group_bytes: Option<Option<i64>>,
 }
 
 /// A field that is present: `Some(None)` for `null`, so a missing field
@@ -876,6 +884,8 @@ pub async fn update_settings(
         && req.old_address_receive_days.is_none()
         && req.chat_group_link_joins_per_relay_group_per_min.is_none()
         && req.chat_group_link_joins_per_relay_per_min.is_none()
+        && req.chat_group_avatar_max_bytes.is_none()
+        && req.chat_group_avatar_storage_per_group_bytes.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -907,6 +917,14 @@ pub async fn update_settings(
     .flatten()
     {
         crate::site_settings::validate_chat_group_link_joins(value)
+            .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_avatar_max_bytes {
+        crate::site_settings::validate_chat_group_avatar_max_bytes(value)
+            .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_avatar_storage_per_group_bytes {
+        crate::site_settings::validate_chat_group_avatar_storage_bytes(value)
             .map_err(AppError::bad_request)?;
     }
     // The two holds are checked together, each against the other's new or
@@ -962,6 +980,14 @@ pub async fn update_settings(
             crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY,
             req.chat_group_link_joins_per_relay_per_min,
         ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_MAX_BYTES,
+            req.chat_group_avatar_max_bytes,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_STORAGE_BYTES,
+            req.chat_group_avatar_storage_per_group_bytes,
+        ),
     ] {
         match value {
             None => {}
@@ -998,6 +1024,8 @@ pub async fn update_settings(
             "oldAddressReceiveDays": req.old_address_receive_days,
             "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
+            "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
+            "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
         }),
     )
     .await;
