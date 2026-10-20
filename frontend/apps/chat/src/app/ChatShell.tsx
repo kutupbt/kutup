@@ -157,7 +157,9 @@ export function ChatShell() {
             clearDrafts()
             // Nor does it host this account's meetings any more.
             forgetAccountHostTokens(session.userId)
-            void disableWebPush(chat.service)
+            // Joins and leaves still waiting for their list write go now.
+            void (chat.service?.flushGroupList() ?? Promise.resolve())
+              .then(() => disableWebPush(chat.service))
               .catch(() => undefined)
               .then(() => {
                 closeChat()

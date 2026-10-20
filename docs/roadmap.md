@@ -114,13 +114,9 @@ Left before the tag:
   (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
   routes and `chat_mls_*` tables are removed. The checklist's group-limit
   split and authority-quorum UI are obsolete with them.
-  Slice 1 (state engine, sender keys, sealed batches, basic UI) is built.
-  Still to come before groups ship, besides slices 2–5: a new device of a
-  member keeps their groups (the account head's `chatGroups` scope with each
-  group's key and pseudonym, and the member's binding signed again by the new
-  device). Until then a member who replaces their only device loses the
-  group, so `specs/38-chat-group-device-replaced.spec.ts` is out of the
-  chat-backup suite, and comes back with it.
+  Slice 1 (state engine, sender keys, sealed batches, basic UI) is built,
+  and a new device of a member keeps their groups (the account's
+  `chatGroups` group list, `specs/38-chat-group-device-replaced.spec.ts`).
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the

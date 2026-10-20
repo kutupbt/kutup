@@ -212,6 +212,11 @@ pub(crate) enum ReceiveOutcome {
         group_id: String,
         sender: String,
         context: Option<kutup_chat_proto::group::GroupContextV1>,
+        /// The recipient's pseudonym the content's context names
+        /// (`recipientPseudonym`, on content sent pairwise to this account):
+        /// what a device that lost the group recovers it by
+        /// (group_recover.rs).
+        named: Option<String>,
     },
     /// Group content that can't be confirmed now: nothing was kept, and the
     /// envelope stays queued for a later pass.
@@ -422,19 +427,6 @@ impl Session {
     /// This account, as groups name it.
     pub(crate) fn account_ref(&self) -> &kutup_crypto::account_ref::AccountRef {
         &self.address.account
-    }
-
-    /// Signs `bytes` with this device's identity key (XEdDSA), as a group
-    /// binding is signed (docs/plans/pairwise-groups.md §3).
-    pub(crate) fn sign_with_identity(&self, bytes: &[u8]) -> Result<Vec<u8>> {
-        let mut rng = rand::rng();
-        crate::error::crypto(
-            self.store
-                .local_identity_key_pair()
-                .private_key()
-                .calculate_signature(bytes, &mut rng),
-        )
-        .map(|signature| signature.to_vec())
     }
 
     pub(crate) fn local_identity_public_key(&self) -> PublicKey {
@@ -1426,10 +1418,14 @@ impl Session {
                 (None, group) => {
                     self.store.discard();
                     let (group_id, context) = group.unwrap_or_default();
+                    let named = context
+                        .as_ref()
+                        .and_then(|context| context.recipient_pseudonym.clone());
                     return Ok(ReceiveOutcome::GroupCheck {
                         group_id,
                         sender,
                         context,
+                        named,
                     });
                 }
             }
@@ -5048,6 +5044,7 @@ mod sealed_tests {
             },
             revision: 1,
             chain_hash: kutup_chat_proto::group::encode(&[7u8; 32]),
+            recipient_pseudonym: None,
         };
         let delivered = |id: &str, content: &str| DeliveredEnvelope {
             id: id.into(),

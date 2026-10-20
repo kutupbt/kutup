@@ -21,25 +21,40 @@
 use kutup_chat_proto::group::{
     check_change, check_genesis, decode_exact, decode_group_id, encode, encode_group_id,
     resulting_genesis_state, resulting_state, GroupActionV1, GroupAttribute, GroupChangeError,
-    GroupChangeV1, GroupHomePinV1, GroupInviteV1, GroupLimits, GroupMemberEntryV1, GroupRole,
-    GroupSlotEntryV1, GroupStateV1, GROUP_FORMAT_VERSION,
+    GroupChangeV1, GroupHomePinV1, GroupInviteV1, GroupLimits, GroupListStatus, GroupMemberEntryV1,
+    GroupRole, GroupSlotEntryV1, GroupStateV1, GROUP_FORMAT_VERSION,
 };
 use kutup_chat_proto::group_route::GroupNotaryV1;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_group::{
-    binding_signed_bytes, GroupKeyPair, GroupMasterKey, GroupStateKey, SealedField, HASH_LEN,
-    SLOT_ID_LEN,
+    GroupKeyPair, GroupMasterKey, GroupStateKey, SealedField, HASH_LEN, SLOT_ID_LEN,
 };
 use kutup_federation_proto::FederationIdentityDocumentV1;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-/// Signs a binding's bytes with this device's identity key (the session's).
-pub type SignBinding<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>, String> + 'a;
+/// The self-authority public key of an account's verified manifest, which
+/// its members' bindings are checked against (the session's); `None` for an
+/// account whose manifest isn't verified now.
+pub type AuthorityOf<'a> = dyn Fn(&AccountRef) -> Option<[u8; 32]> + 'a;
 
-/// Checks a binding: `(account, device_id, signed_bytes, signature)`, against
-/// the account's verified manifest (the session's).
-pub type VerifyBinding<'a> = dyn Fn(&AccountRef, u32, &[u8], &[u8]) -> bool + 'a;
+/// What this account brings to its groups, from its master key: the
+/// self-authority that signs its bindings, and where its pseudonyms come
+/// from (`kutup_crypto::chat_group::GroupPseudonymKey`), so any of its
+/// devices finds its place in a group again.
+pub struct GroupAccountKeys {
+    pub authority: crate::manifest::AccountAuthority,
+    pub pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey,
+}
+
+impl GroupAccountKeys {
+    pub fn derive(master_key: &[u8; 32]) -> crate::error::Result<Self> {
+        Ok(Self {
+            authority: crate::manifest::AccountAuthority::derive(master_key)?,
+            pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(master_key),
+        })
+    }
+}
 
 /// A secret kept as text (base64): stored as it is, never printed.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +120,18 @@ pub struct GroupRecordV1 {
     /// invitation), milliseconds: where it sorts before its first message.
     #[serde(default)]
     pub known_since_ms: Option<i64>,
+    /// What the account's group list says of the group, as this device last
+    /// wrote or read it: a write is due when the group's status differs.
+    #[serde(default)]
+    pub listed_status: Option<kutup_chat_proto::group::GroupListStatus>,
+    /// When this device writes the group's list entry (milliseconds): a
+    /// random moment after the change that made it due (§5's write pattern).
+    #[serde(default)]
+    pub list_due_at_ms: Option<i64>,
+    /// Which of this account's joins of the group this is (0 for the first):
+    /// its pseudonym is derived at this epoch.
+    #[serde(default)]
+    pub join_epoch: u32,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -242,10 +269,37 @@ fn record_error(error: impl ToString) -> GroupError {
     GroupError::Record(error.to_string())
 }
 
+/// A home pin as the group id binds it (`kutup_crypto::chat_group::GroupHome`).
+pub fn home_of(pin: &GroupHomePinV1) -> kutup_crypto::chat_group::GroupHome<'_> {
+    kutup_crypto::chat_group::GroupHome {
+        server: &pin.server,
+        identity_sequence: pin.identity_sequence,
+        identity_document_hash: &pin.identity_document_hash,
+    }
+}
+
+/// The master key `master_key` (base64) of the group `group_id` at `home`:
+/// refused unless the key at that home is that group's. A member who keeps
+/// the key can't move the group to a home of theirs.
+pub fn master_at(
+    master_key: &str,
+    group_id: &str,
+    home: &GroupHomePinV1,
+) -> Result<GroupMasterKey, GroupError> {
+    let bytes = Zeroizing::new(decode_exact::<32>("masterKey", master_key).map_err(record_error)?);
+    let master = GroupMasterKey::from_bytes(bytes.as_ref(), home_of(home)).map_err(record_error)?;
+    let id = decode_group_id(group_id).map_err(record_error)?;
+    if master.group_id() != id {
+        return Err(record_error("the key is not this group's at this home"));
+    }
+    Ok(master)
+}
+
 impl GroupRecordV1 {
+    /// The group's master key, at the record's home: refused unless that is
+    /// the group's id there.
     pub fn master(&self) -> Result<GroupMasterKey, GroupError> {
-        let bytes = decode_exact::<32>("masterKey", &self.master_key.0).map_err(record_error)?;
-        GroupMasterKey::from_bytes(&bytes).map_err(record_error)
+        master_at(&self.master_key.0, &self.group_id, &self.home)
     }
 
     pub fn pseudonym(&self) -> Result<GroupKeyPair, GroupError> {
@@ -357,22 +411,19 @@ fn base64_decode(value: &str) -> Result<Vec<u8>, GroupError> {
 }
 
 /// Seals this account's entry for `pseudonym`: who it is, its profile key,
-/// and the binding `sign_binding` makes with the device's identity key.
+/// and the binding its self-authority signs.
 pub fn seal_member_entry(
     key: &GroupStateKey,
     group_id: &[u8; 32],
     pseudonym: &[u8; 32],
     me: &AccountRef,
-    device_id: u32,
     profile_key: &[u8; 32],
-    sign_binding: &SignBinding<'_>,
+    authority: &crate::manifest::AccountAuthority,
 ) -> Result<String, GroupError> {
-    let signature =
-        sign_binding(&binding_signed_bytes(group_id, pseudonym, me)).map_err(record_error)?;
+    let signature = authority.sign_group_binding(group_id, pseudonym, me);
     let entry = GroupMemberEntryV1 {
         version: GROUP_FORMAT_VERSION,
         account: me.clone(),
-        device_id,
         profile_key: encode(profile_key),
         binding_signature: encode(&signature),
     };
@@ -387,25 +438,25 @@ pub fn seal_member_entry(
 pub struct NewGroup<'a> {
     pub home: GroupHomePinV1,
     pub me: &'a AccountRef,
-    pub device_id: u32,
     pub profile_key: &'a [u8; 32],
-    pub sign_binding: &'a SignBinding<'a>,
+    pub keys: &'a GroupAccountKeys,
 }
 
 /// A new group: its record (not yet verified by the home) and its genesis,
 /// to send with `Create`.
 pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1), GroupError> {
-    let master = GroupMasterKey::generate();
-    let pseudonym = GroupKeyPair::generate();
+    let master = GroupMasterKey::generate(home_of(&new.home)).map_err(record_error)?;
     let group_id = master.group_id();
+    // The creator's first join.
+    let join_epoch = 0;
+    let pseudonym = new.keys.pseudonyms.pseudonym(&group_id, join_epoch);
     let entry = seal_member_entry(
         &master.state_key(),
         &group_id,
         &pseudonym.public_key(),
         new.me,
-        new.device_id,
         new.profile_key,
-        new.sign_binding,
+        &new.keys.authority,
     )?;
     let mut change = GroupChangeV1 {
         version: GROUP_FORMAT_VERSION,
@@ -441,6 +492,9 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         fork_at_revision: None,
         fork_sender: None,
         known_since_ms: None,
+        listed_status: None,
+        list_due_at_ms: None,
+        join_epoch,
     };
     Ok((record, change))
 }
@@ -541,28 +595,43 @@ pub struct ClaimBasis {
 }
 
 /// The record an invitation from `inviter` starts: the group's key and home,
-/// a fresh pseudonym, and the slot's claim key, kept in the `Invited` status
-/// until the claim is accepted. The invitation is consumed.
+/// this account's pseudonym for the join, and the slot's claim key, kept in
+/// the `Invited` status until the claim is accepted. The invitation is
+/// consumed.
 ///
 /// `previous` is the record of a membership that ended (declined, left or
 /// removed), or of an older invitation (its slot perhaps revoked): its
 /// verified state is kept, so no older one is taken later, and only an
 /// invitation made after it starts the new one.
+///
+/// The pseudonym is derived at the join epoch after the last one this
+/// account used: one more than an ended membership's (here, or `listed` in
+/// the account's group list), the same as an older invitation's (never
+/// claimed), 0 for a group the account never was in. So a rejoin is a new
+/// pseudonym.
 pub fn record_from_invite(
     invite: GroupInviteV1,
     inviter: &str,
     previous: Option<&GroupRecordV1>,
+    listed: Option<(GroupListStatus, u32)>,
+    keys: &GroupAccountKeys,
 ) -> Result<GroupRecordV1, GroupError> {
     invite.validate().map_err(record_error)?;
-    let master = GroupMasterKey::from_bytes(
-        &decode_exact::<32>("masterKey", &invite.master_key).map_err(record_error)?,
-    )
-    .map_err(record_error)?;
+    // The key must be the group's at the home the invitation names.
+    master_at(&invite.master_key, &invite.group_id, &invite.home)
+        .map_err(|_| record_error("the invitation's key is not its group's"))?;
     let group_id = decode_group_id(&invite.group_id).map_err(record_error)?;
-    if master.group_id() != group_id {
-        return Err(record_error("the invitation's key is not its group's"));
-    }
-    let pseudonym = GroupKeyPair::generate();
+    let after = |status: &GroupStatus, epoch: u32| match status {
+        GroupStatus::Invited { .. } | GroupStatus::Requesting => epoch,
+        GroupStatus::Member | GroupStatus::Gone => epoch.saturating_add(1),
+    };
+    let join_epoch = previous
+        .map(|previous| after(&previous.status, previous.join_epoch))
+        .into_iter()
+        .chain(rejoin_epoch(listed))
+        .max()
+        .unwrap_or(0);
+    let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
     let mut record = GroupRecordV1 {
         version: GROUP_FORMAT_VERSION,
         group_id: invite.group_id.clone(),
@@ -588,6 +657,9 @@ pub fn record_from_invite(
         fork_at_revision: None,
         fork_sender: None,
         known_since_ms: None,
+        listed_status: None,
+        list_due_at_ms: None,
+        join_epoch,
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {
@@ -617,6 +689,12 @@ pub fn record_from_invite(
     Ok(record)
 }
 
+/// The join epoch after the one the account's group list names for a group
+/// (a membership there, ended or not, is past).
+pub fn rejoin_epoch(listed: Option<(GroupListStatus, u32)>) -> Option<u32> {
+    listed.map(|(_, epoch)| epoch.saturating_add(1))
+}
+
 /// The claim key of an invited record: what signs the join-info request a
 /// claimant needs before its claim.
 pub fn claim_key_seed(record: &GroupRecordV1) -> Result<[u8; 32], GroupError> {
@@ -636,9 +714,8 @@ pub fn claim(
     record: &mut GroupRecordV1,
     basis: &ClaimBasis,
     me: &AccountRef,
-    device_id: u32,
     profile_key: &[u8; 32],
-    sign_binding: &SignBinding<'_>,
+    authority: &crate::manifest::AccountAuthority,
 ) -> Result<GroupChangeV1, GroupError> {
     let GroupStatus::Invited {
         slot_id: slot_text,
@@ -659,9 +736,8 @@ pub fn claim(
         &group_id,
         &pseudonym.public_key(),
         me,
-        device_id,
         profile_key,
-        sign_binding,
+        authority,
     )?;
     let claim_signature =
         claim_key.sign_claim(&group_id, &slot_id, slot_revision, &pseudonym.public_key());
@@ -763,10 +839,20 @@ pub fn accept_state(
         return Err(GroupError::Change(GroupChangeError::WrongGroup));
     }
     // Only a device with no verified state takes a whole state (it just
-    // joined, or is new): a member catches up through the log, so every change
-    // is checked, signatures and roles included.
-    if record.verified()?.is_some() {
+    // joined, or is new), or one joining again: a member catches up through
+    // the log, so every change is checked, signatures and roles included. A
+    // rejoiner's kept state only sets the lowest revision it takes (its new
+    // pseudonym reads the log only from its claim on).
+    let kept = record.verified()?;
+    if kept.is_some() && !matches!(record.status, GroupStatus::Invited { .. }) {
         return Err(record_error("a member catches up through the log"));
+    }
+    // A rejoiner takes only a state newer than the one it kept, from a notary
+    // no older than the one it took last: never a rollback.
+    if let Some((kept, _)) = &kept {
+        if state.revision <= kept.revision {
+            return Err(GroupError::Change(GroupChangeError::WrongRevision));
+        }
     }
     if state.revision < record.min_revision {
         return Err(GroupError::Change(GroupChangeError::WrongRevision));
@@ -780,7 +866,7 @@ pub fn accept_state(
     notary
         .verify(
             history,
-            None,
+            kept.as_ref().and(record.notary_sequence),
             &group_id,
             state.revision,
             &change_hash,
@@ -826,11 +912,11 @@ pub fn compare_context(
 }
 
 /// The members of the last verified state, each entry opened and its binding
-/// checked by `verify_binding(account, device_id, signed_bytes, signature)`
-/// against the account's verified manifest.
+/// checked against the self-authority of the account's verified manifest
+/// (`authority_of`): devices coming and going never touch it.
 pub fn members(
     record: &GroupRecordV1,
-    verify_binding: &VerifyBinding<'_>,
+    authority_of: &AuthorityOf<'_>,
 ) -> Result<Vec<GroupMemberView>, GroupError> {
     let Some((state, _)) = record.verified()? else {
         return Ok(Vec::new());
@@ -847,7 +933,7 @@ pub fn members(
                 &group_id,
                 &member.pseudonym,
                 &member.entry,
-                verify_binding,
+                authority_of,
             )
             // The same account twice (added twice): only the first counts.
             .filter(|verified| seen.insert(verified.account.clone()));
@@ -866,7 +952,7 @@ fn open_member(
     group_id: &[u8; 32],
     pseudonym_text: &str,
     sealed: &str,
-    verify_binding: &VerifyBinding<'_>,
+    authority_of: &AuthorityOf<'_>,
 ) -> Option<VerifiedMember> {
     let pseudonym = decode_exact::<32>("pseudonym", pseudonym_text).ok()?;
     let sealed = base64_decode(sealed).ok()?;
@@ -875,14 +961,65 @@ fn open_member(
         .ok()?;
     let entry = GroupMemberEntryV1::from_canonical_bytes(&plain).ok()?;
     let signature = decode_exact::<64>("bindingSignature", &entry.binding_signature).ok()?;
-    let signed = binding_signed_bytes(group_id, &pseudonym, &entry.account);
-    if !verify_binding(&entry.account, entry.device_id, &signed, &signature) {
-        return None;
-    }
+    let authority = authority_of(&entry.account)?;
+    kutup_crypto::chat_group::verify_binding(
+        &authority,
+        group_id,
+        &pseudonym,
+        &entry.account,
+        &signature,
+    )
+    .ok()?;
     Some(VerifiedMember {
         profile_key: decode_exact::<32>("profileKey", &entry.profile_key).ok()?,
         account: entry.account,
     })
+}
+
+/// This account's own entry in the last verified state, opened: who it
+/// names, its binding and the profile key it gives the group. `None` when
+/// this account isn't a member of that state.
+pub fn own_entry(record: &GroupRecordV1) -> Result<Option<GroupMemberEntryV1>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(None);
+    };
+    let me = record.pseudonym_text()?;
+    let Some(member) = state.member(&me) else {
+        return Ok(None);
+    };
+    let pseudonym = decode_exact::<32>("pseudonym", &member.pseudonym).map_err(record_error)?;
+    let sealed = base64_decode(&member.entry)?;
+    let plain = record
+        .master()?
+        .state_key()
+        .open(SealedField::MemberEntry, &pseudonym, &sealed)
+        .map_err(record_error)?;
+    GroupMemberEntryV1::from_canonical_bytes(&plain)
+        .map(Some)
+        .map_err(record_error)
+}
+
+/// A new own entry for `record`, bound by this account's self-authority and
+/// carrying `profile_key`: what `ModifyOwnEntry` sends when the binding
+/// doesn't verify under the account's current authority, or the profile key
+/// changed.
+pub fn renewed_own_entry(
+    record: &GroupRecordV1,
+    me: &AccountRef,
+    profile_key: &[u8; 32],
+    authority: &crate::manifest::AccountAuthority,
+) -> Result<GroupActionV1, GroupError> {
+    let pseudonym = record.pseudonym()?;
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let entry = seal_member_entry(
+        &record.master()?.state_key(),
+        &group_id,
+        &pseudonym.public_key(),
+        me,
+        profile_key,
+        authority,
+    )?;
+    Ok(GroupActionV1::ModifyOwnEntry { entry })
 }
 
 /// The accounts the last verified state's entries name, unverified: whose

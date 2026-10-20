@@ -350,6 +350,29 @@ extern "C" {
         home: &str,
         sealed: &[u8],
     ) -> std::result::Result<JsValue, JsValue>;
+
+    /// The account's group list, as the verified account head lists it:
+    /// `[{id, revision, envelope}]`.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupList)]
+    async fn js_fetch_group_list(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
+
+    /// One entry with the next account head (`{id, baseRevision, revision,
+    /// envelope}`; `revision` is the sealed header's, for the account head
+    /// only): `false` when another device wrote first.
+    #[wasm_bindgen(method, catch, js_name = storeGroupEntry)]
+    async fn js_store_group_entry(
+        this: &JsChatTransport,
+        write: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupEntryWrite<'a> {
+    id: &'a str,
+    base_revision: u64,
+    revision: u64,
+    envelope: &'a str,
 }
 
 struct BrowserTransport {
@@ -417,6 +440,36 @@ impl ChatTransport for BrowserTransport {
             BrowserRelayOutcome::Unreachable => Outcome::Unreachable,
             BrowserRelayOutcome::GroupsOff => Outcome::GroupsOff,
         })
+    }
+
+    async fn fetch_group_list(&self) -> Result<Vec<crate::GroupListItem>> {
+        from_transport(
+            self.js
+                .js_fetch_group_list()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn store_group_entry(
+        &self,
+        id: &str,
+        base_revision: u64,
+        revision: u64,
+        envelope: &str,
+    ) -> Result<bool> {
+        let write = GroupEntryWrite {
+            id,
+            base_revision,
+            revision,
+            envelope,
+        };
+        from_transport(
+            self.js
+                .js_store_group_entry(to_transport(&write)?)
+                .await
+                .map_err(transport_error)?,
+        )
     }
 
     async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32> {
@@ -1097,6 +1150,9 @@ impl WasmChatClient {
         engine
             .enable_identity_pins(&master_key, &binding)
             .map_err(chat_error)?;
+        engine
+            .enable_group_list(&master_key, &binding)
+            .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
         engine
             .sync_own_manifest(&authority, now_rfc3339())
@@ -1187,9 +1243,10 @@ impl WasmChatClient {
     /// sinceMs}` or `{kind: "gone"}`.
     #[wasm_bindgen(js_name = syncGroup)]
     pub async fn sync_group(&mut self, group_id: String) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
         let outcome = self
             .engine
-            .sync_group(&group_id)
+            .maintain_group(&group_id, &mut rng)
             .await
             .map_err(chat_error)?;
         to_output(&GroupSyncView::from(outcome))
@@ -1310,6 +1367,19 @@ impl WasmChatClient {
             .leave_group(&group_id, &mut rng)
             .await
             .map_err(chat_error)
+    }
+
+    /// Writes this device's due group list entries now: before it signs out
+    /// or unlinks itself, so a group just joined or left isn't missing from
+    /// the account's list (docs/plans/pairwise-groups.md §5).
+    #[wasm_bindgen(js_name = flushGroupList)]
+    pub async fn flush_group_list(&mut self) -> std::result::Result<u32, JsValue> {
+        let written = self
+            .engine
+            .flush_group_list(true)
+            .await
+            .map_err(chat_error)?;
+        Ok(u32::try_from(written).unwrap_or(u32::MAX))
     }
 
     #[wasm_bindgen(js_name = listGroups)]
@@ -3563,6 +3633,9 @@ impl WasmChatClient {
                 ));
             }
         }
+        // The account's group list, every so often: groups another device
+        // joined or left (best effort).
+        let _ = self.engine.sync_group_list_if_due(&mut rng).await;
         let mut report = self.engine.receive(&mut rng).await.map_err(chat_error)?;
         // A reply can promote pending-outgoing to accepted (or a new message
         // can supersede a prior rejection). Publish that newer revision after
