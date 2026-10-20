@@ -126,9 +126,10 @@ pub struct Recipient {
     pub(crate) user_id: Uuid,
     pub(crate) address_id: Uuid,
     pub(crate) public_key: Vec<u8>,
-    /// Taken by a custom domain's catch-all: never forwarded outside, so a
-    /// catch-all can't relay mail for any name to anywhere.
-    pub(crate) caught: bool,
+    /// Taken by a custom domain's catch-all (its domain and the owner's
+    /// daily cap): never forwarded outside, so a catch-all can't relay mail
+    /// for any name to anywhere, and counted once when stored.
+    pub(crate) caught: Option<(Uuid, i64)>,
 }
 
 pub(crate) fn unknown() -> Reply {
@@ -159,14 +160,14 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
             own_domain_row(state, &address)
                 .await
                 .map_err(lookup_failed)?,
-            false,
+            None,
         ),
         None => match custom_domain_row(state, recipient)
             .await
             .map_err(lookup_failed)?
         {
-            CustomDomain::Address(row) => (row, false),
-            CustomDomain::Caught(row) => (row, true),
+            CustomDomain::Address(row) => (row, None),
+            CustomDomain::Caught(row, cap) => (row, Some(cap)),
             CustomDomain::OverCap => {
                 return Err(Reply::new(452, "4.2.2", "mailbox full, try again later"))
             }
@@ -194,8 +195,8 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
 /// What a custom domain's recipient is.
 enum CustomDomain {
     Address(Option<RecipientRow>),
-    /// The catch-all took it.
-    Caught(Option<RecipientRow>),
+    /// The catch-all took it: its domain and the owner's daily cap.
+    Caught(Option<RecipientRow>, (Uuid, i64)),
     /// The catch-all's day is full.
     OverCap,
 }
@@ -235,23 +236,30 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
         .map_or(local, |(base, _)| base)
         .to_lowercase();
     let domain = domain.to_lowercase();
-    let settings = domains::settings::Settings::load(&state.pool).await?;
-    if settings.mode == domains::settings::Mode::Off || !domains::sweep::configured(state) {
+    if !domains::sweep::configured(state) {
         return Ok(CustomDomain::Address(None));
     }
-    let held: Option<(Uuid, Option<Uuid>, bool)> = sqlx::query_as(
-        "SELECT id, catch_all_address_id, approved_at IS NOT NULL FROM mail_domains
+    let held: Option<domains::store::Row> = sqlx::query_as(&format!(
+        "SELECT {} FROM mail_domains
           WHERE name = $1 AND state IN (1, 2) AND stopped_at IS NULL AND removed_at IS NULL",
-    )
+        domains::store::COLUMNS
+    ))
     .bind(&domain)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((domain_id, catch_all, approved)) = held else {
+    let Some(held) = held else {
         return Ok(CustomDomain::Address(None));
     };
-    if settings.mode == domains::settings::Mode::AdminsApprove && !approved {
+    // The owner's settings: the site's, with an administrator's overrides
+    // for this account (the catch-all among them).
+    let settings = domains::settings::Settings::load(&state.pool)
+        .await?
+        .for_user(&state.pool, held.user_id)
+        .await?;
+    if !held.usable(&settings) {
         return Ok(CustomDomain::Address(None));
     }
+    let (domain_id, catch_all) = (held.id, held.catch_all_address_id);
     const SELECT: &str =
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
@@ -270,7 +278,7 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     let Some(catch_all) = catch_all.filter(|_| settings.catch_all) else {
         return Ok(CustomDomain::Address(None));
     };
-    if !domains::catch_all_allows(domain_id, settings.catch_all_per_day) {
+    if !domains::catch_all_has_room(&state.pool, domain_id, settings.catch_all_per_day).await? {
         return Ok(CustomDomain::OverCap);
     }
     let row: Option<RecipientRow> = sqlx::query_as(&format!(
@@ -280,7 +288,10 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     .bind(domain_id)
     .fetch_optional(&state.pool)
     .await?;
-    Ok(CustomDomain::Caught(row))
+    Ok(CustomDomain::Caught(
+        row,
+        (domain_id, settings.catch_all_per_day),
+    ))
 }
 
 /// Where mail to an address goes: one account, or a group's receivers.
@@ -402,6 +413,13 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
             return Ok(Reply::new(250, "2.0.0", "already delivered"));
         }
     }
+    // A caught message counts against its catch-all's day once, here; the
+    // day may have filled since RCPT on another backend.
+    if let Some((domain, per_day)) = recipient.caught {
+        if !crate::mail::domains::count_catch_all(&state.pool, domain, per_day).await? {
+            return Ok(Reply::new(452, "4.2.2", "mailbox full, try again later"));
+        }
+    }
 
     let id = Uuid::new_v4();
     let key = object_key(recipient.user_id, id);
@@ -422,7 +440,7 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                         object_key: key.clone(),
                         object_version: version.clone(),
                         readable: readable.clone(),
-                        may_forward: !recipient.caught
+                        may_forward: recipient.caught.is_none()
                             && forwarding::may_forward(&state.config.mail_forwarding_keys, raw),
                         plaintext: Some(std::sync::Arc::new(raw.to_vec())),
                     },

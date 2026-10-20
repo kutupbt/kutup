@@ -85,6 +85,13 @@ pub async fn run(state: &AppState) -> AppResult<()> {
 }
 
 async fn drop_stale(state: &AppState, settings: &Settings) -> AppResult<()> {
+    // Catch-all days past: only today's count limits anything.
+    sqlx::query(
+        "DELETE FROM mail_domain_catch_all_days
+          WHERE day < (now() AT TIME ZONE 'UTC')::date - 1",
+    )
+    .execute(&state.pool)
+    .await?;
     sqlx::query(
         "DELETE FROM mail_domains
           WHERE verified_at IS NULL AND state = 0 AND removed_at IS NULL

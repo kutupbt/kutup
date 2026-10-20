@@ -20,9 +20,7 @@ pub mod stalwart;
 pub mod store;
 pub mod sweep;
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 static TIME_SCALE: AtomicI64 = AtomicI64::new(1);
 
@@ -54,34 +52,45 @@ pub async fn held_here(state: &crate::AppState, domain: &str) -> Result<bool, sq
     Ok(row.is_some_and(|row| row.usable(&settings)))
 }
 
-/// Whether `domain`'s catch-all may take one more message today, within
-/// `per_day` (the site setting); past it, RCPT answers as for an unknown
-/// name, and senders retry or give up. Counted in memory: a restart only
-/// starts the day's count over.
-pub fn catch_all_allows(domain: uuid::Uuid, per_day: i64) -> bool {
-    static COUNTS: OnceLock<Mutex<HashMap<uuid::Uuid, (i64, i64)>>> = OnceLock::new();
-    let today = time::OffsetDateTime::now_utc().unix_timestamp() / 86_400;
-    let mut counts = COUNTS
-        .get_or_init(Default::default)
-        .lock()
-        .expect("catch-all counts");
-    counts.retain(|_, (day, _)| *day == today);
-    let (_, count) = counts.entry(domain).or_insert((today, 0));
-    if *count >= per_day {
-        return false;
-    }
-    *count += 1;
-    true
+/// Whether `domain`'s catch-all has room for one more message today,
+/// within `per_day` (the owner's setting): read at RCPT, so a full day
+/// answers `452` before any data. Nothing is counted here.
+pub async fn catch_all_has_room(
+    pool: &sqlx::PgPool,
+    domain: uuid::Uuid,
+    per_day: i64,
+) -> Result<bool, sqlx::Error> {
+    let taken: Option<i32> = sqlx::query_scalar(
+        "SELECT count FROM mail_domain_catch_all_days
+          WHERE domain_id = $1 AND day = (now() AT TIME ZONE 'UTC')::date",
+    )
+    .bind(domain)
+    .fetch_optional(pool)
+    .await?;
+    Ok(i64::from(taken.unwrap_or(0)) < per_day)
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn a_catch_all_takes_its_daily_cap_and_no_more() {
-        let domain = uuid::Uuid::new_v4();
-        assert!((0..3).all(|_| super::catch_all_allows(domain, 3)));
-        assert!(!super::catch_all_allows(domain, 3));
-        assert!(super::catch_all_allows(uuid::Uuid::new_v4(), 3));
-        assert!(!super::catch_all_allows(uuid::Uuid::new_v4(), 0));
+/// Counts one caught message stored today, if the day has room: false when
+/// it is full (another backend took the last place since RCPT).
+pub async fn count_catch_all(
+    pool: &sqlx::PgPool,
+    domain: uuid::Uuid,
+    per_day: i64,
+) -> Result<bool, sqlx::Error> {
+    if per_day <= 0 {
+        return Ok(false);
     }
+    let counted: Option<i32> = sqlx::query_scalar(
+        "INSERT INTO mail_domain_catch_all_days (domain_id, day, count)
+         VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 1)
+         ON CONFLICT (domain_id, day) DO UPDATE
+            SET count = mail_domain_catch_all_days.count + 1
+          WHERE mail_domain_catch_all_days.count < $2
+         RETURNING count",
+    )
+    .bind(domain)
+    .bind(per_day)
+    .fetch_optional(pool)
+    .await?;
+    Ok(counted.is_some())
 }

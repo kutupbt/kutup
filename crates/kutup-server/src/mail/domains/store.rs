@@ -87,8 +87,11 @@ impl Row {
     }
 
     /// Mail flows: held, not stopped, approved where approval is asked.
+    /// Whether the domain takes and sends mail now: held, not removed,
+    /// approved where approval is on, and custom domains not turned off.
     pub fn usable(&self, settings: &Settings) -> bool {
-        self.removed_at.is_none()
+        settings.mode != Mode::Off
+            && self.removed_at.is_none()
             && self.domain().status.usable()
             && (settings.mode != Mode::AdminsApprove || self.approved_at.is_some())
     }

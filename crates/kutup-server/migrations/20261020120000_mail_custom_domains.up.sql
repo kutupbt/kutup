@@ -44,6 +44,15 @@ CREATE TABLE mail_domains (
 CREATE UNIQUE INDEX mail_domains_held ON mail_domains (name) WHERE state IN (1, 2);
 CREATE INDEX mail_domains_checked ON mail_domains (checked_at) WHERE removed_at IS NULL;
 
+-- Mail a domain's catch-all took each day (UTC), shared by every backend:
+-- counted once, when a caught message is stored, within the day's cap.
+CREATE TABLE mail_domain_catch_all_days (
+    domain_id uuid NOT NULL REFERENCES mail_domains(id) ON DELETE CASCADE,
+    day date NOT NULL,
+    count integer NOT NULL,
+    PRIMARY KEY (domain_id, day)
+);
+
 -- Names an administrator deactivated (abuse): no account verifies or takes
 -- them over until an administrator lifts the block.
 CREATE TABLE mail_domain_blocks (
