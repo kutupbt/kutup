@@ -1,5 +1,5 @@
-import { Ban, DoorOpen, Pencil, Shield, ShieldAlert, UserMinus, UserPlus } from 'lucide-react'
-import { useEffect, useId, useMemo, useState, type FormEvent } from 'react'
+import { Ban, DoorOpen, ImageMinus, ImagePlus, Pencil, Shield, ShieldAlert, UserMinus, UserPlus } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { ChatGroupAccessRequired, ChatGroupDetails as Details, ChatGroupMember, ChatGroupSummary } from '@kutup/chat-core/types'
@@ -18,6 +18,7 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
+import { normalizeAvatar, PAIRWISE_GROUP_AVATAR } from '@kutup/ui/lib/avatar'
 import { refreshChat, useChat } from '../../app/chatStore'
 import { chatErrorMessage } from '../../lib/errors'
 import { personName } from '../../lib/names'
@@ -58,6 +59,7 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
   const [membersFailed, setMembersFailed] = useState(false)
   const [details, setDetails] = useState<Details | null>(null)
   const [banning, setBanning] = useState<{ member: ChatGroupMember; name: string } | null>(null)
+  const pictureInput = useRef<HTMLInputElement>(null)
   // A removal or a demotion, asked before it is done.
   const [confirming, setConfirming] = useState<{ kind: 'remove' | 'demote'; member: ChatGroupMember; name: string } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -132,6 +134,25 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
     (a, b) => Number(b.account === selfKey) - Number(a.account === selfKey) || Number(b.administrator) - Number(a.administrator),
   )
   const id = group.groupId
+
+  /** A picture chosen here: its centre square, scaled down on this device, then sealed and sent. */
+  async function choosePicture(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !service) return
+    let image: Uint8Array
+    let contentType: string
+    try {
+      const normalized = await normalizeAvatar(file, PAIRWISE_GROUP_AVATAR)
+      image = Uint8Array.from(atob(normalized.base64), (c) => c.charCodeAt(0))
+      contentType = normalized.contentType
+    } catch {
+      toast.error(t('chat.chatGroup.pictureUnreadable'))
+      return
+    }
+    await run(() => service.setChatGroupAvatar(id, image, contentType), t('chat.chatGroup.pictureSaved'))
+  }
+
   return (
     <>
       {ended ? (
@@ -140,11 +161,35 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
         </p>
       ) : null}
       {canRename ? (
-        <section className="flex justify-center px-6 pb-2">
+        <section className="flex flex-wrap justify-center gap-2 px-6 pb-2">
           <Button variant="outline" size="sm" onClick={() => setRenaming(true)} disabled={busy} data-testid="chat-group-rename">
             <Pencil />
             {t('chat.chatGroup.rename')}
           </Button>
+          <Button variant="outline" size="sm" onClick={() => pictureInput.current?.click()} disabled={busy} data-testid="chat-group-picture">
+            <ImagePlus />
+            {t('chat.chatGroup.changePicture')}
+          </Button>
+          {details?.hasAvatar ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => void run(() => service!.removeChatGroupAvatar(id), t('chat.chatGroup.pictureRemoved'))}
+              data-testid="chat-group-picture-remove"
+            >
+              <ImageMinus />
+              {t('chat.chatGroup.removePicture')}
+            </Button>
+          ) : null}
+          <input
+            ref={pictureInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(event) => void choosePicture(event)}
+            data-testid="chat-group-picture-input"
+          />
         </section>
       ) : null}
       {details ? (

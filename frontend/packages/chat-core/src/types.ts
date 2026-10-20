@@ -448,6 +448,7 @@ export interface ChatGroupDetails {
   bannedMembers: string[]
   /** No room on the ban list for another account: a ban or denial holds for the pseudonym only. */
   banListFull: boolean
+  hasAvatar: boolean
 }
 
 /** How a catch-up with a group's home ended. */
@@ -2095,6 +2096,8 @@ export interface WasmChatClientHandle {
   previewGroupLink?(fragment: string): Promise<ChatGroupLinkPreview>
   joinGroupByLink?(fragment: string): Promise<ChatGroupLinkJoin>
   groupDetails?(groupId: string): Promise<ChatGroupDetails>
+  setGroupAvatar?(groupId: string, image: Uint8Array, contentType: string): Promise<void>
+  removeGroupAvatar?(groupId: string): Promise<void>
   checkGroupRequest?(groupId: string): Promise<ChatGroupRequestOutcome>
   cancelGroupRequest?(groupId: string): Promise<ChatGroupRequestOutcome>
   setGroupLink?(groupId: string, mode: ChatGroupLinkMode): Promise<void>

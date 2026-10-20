@@ -58,6 +58,7 @@ function settings(over: Partial<Details> = {}): Details {
     bans: [],
     bannedMembers: [],
     banListFull: false,
+    hasAvatar: false,
     ...over,
   }
 }

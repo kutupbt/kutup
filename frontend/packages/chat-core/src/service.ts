@@ -174,6 +174,42 @@ export type ChatServiceErrorCode =
   | 'contactListUnconfirmed'
   /** The server's contact list contradicts the account's verified state. */
   | 'contactListIntegrity'
+  /** A group change refused, by the home or by this device's own check. */
+  | 'groupNotAllowed'
+  | 'groupLastAdministrator'
+  | 'groupLimitReached'
+  | 'groupEnded'
+  | 'groupBanned'
+  | 'groupAvatarTooLarge'
+  | 'groupAvatarStorageFull'
+  | 'groupAvatarMissing'
+  | 'groupRefused'
+  /** The group's home couldn't be reached. */
+  | 'groupUnreachable'
+
+const GROUP_REFUSALS: Record<string, ChatServiceErrorCode> = {
+  notAllowed: 'groupNotAllowed',
+  lastAdministrator: 'groupLastAdministrator',
+  limitReached: 'groupLimitReached',
+  terminated: 'groupEnded',
+  banned: 'groupBanned',
+  avatarTooLarge: 'groupAvatarTooLarge',
+  avatarStorageFull: 'groupAvatarStorageFull',
+  avatarMissing: 'groupAvatarMissing',
+}
+
+/**
+ * A failed group action, said as what it was: a refusal by its code (the
+ * home's, or this device's own check before sending), or the home out of
+ * reach. Anything else stays as it was.
+ */
+export function groupFailure(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error)
+  const refused = /refused(?: the change)?: (\w+)/.exec(message)
+  if (refused) return new ChatServiceError(GROUP_REFUSALS[refused[1]!] ?? 'groupRefused')
+  if (message.includes("group's server can't be reached")) return new ChatServiceError('groupUnreachable')
+  return error
+}
 
 /** What the account-head checks say when the server shows another history or list than the verified one. */
 const INTEGRITY_MARKERS = [
@@ -1701,7 +1737,8 @@ export class ChatService {
     | 'previewGroupLink' | 'joinGroupByLink' | 'groupDetails' | 'setGroupLink' | 'resetGroupLink'
     | 'setGroupDescription' | 'setGroupTimer' | 'setGroupAccess' | 'setGroupAnnouncementsOnly'
     | 'approveGroupRequest' | 'denyGroupRequest' | 'banGroupMember' | 'unbanGroup' | 'endGroup'
-    | 'removeUnverifiedGroupMembers' | 'checkGroupRequest' | 'cancelGroupRequest'>> {
+    | 'removeUnverifiedGroupMembers' | 'checkGroupRequest' | 'cancelGroupRequest'
+    | 'setGroupAvatar' | 'removeGroupAvatar'>> {
     this.groupClient()
     const client = this.client
     if (!client.previewGroupLink || !client.joinGroupByLink || !client.groupDetails
@@ -1709,7 +1746,8 @@ export class ChatService {
       || !client.setGroupTimer || !client.setGroupAccess || !client.setGroupAnnouncementsOnly
       || !client.approveGroupRequest || !client.denyGroupRequest || !client.banGroupMember
       || !client.unbanGroup || !client.endGroup || !client.removeUnverifiedGroupMembers
-      || !client.checkGroupRequest || !client.cancelGroupRequest) {
+      || !client.checkGroupRequest || !client.cancelGroupRequest
+      || !client.setGroupAvatar || !client.removeGroupAvatar) {
       throw new ChatServiceError('serverUnsupported')
     }
     return client as never
@@ -1796,6 +1834,15 @@ export class ChatService {
     await this.groupSettingsChange((client) => client.unbanGroup(groupId, ban))
   }
 
+  /** Sets the group's picture: `image` already scaled down on this device. */
+  async setChatGroupAvatar(groupId: string, image: Uint8Array, contentType: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupAvatar(groupId, image, contentType))
+  }
+
+  async removeChatGroupAvatar(groupId: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.removeGroupAvatar(groupId))
+  }
+
   /** Ends the group for everyone. */
   async endChatGroup(groupId: string): Promise<void> {
     await this.groupSettingsChange((client) => client.endGroup(groupId))
@@ -1814,13 +1861,21 @@ export class ChatService {
     change: (client: ReturnType<ChatService['groupSettingsClient']>) => Promise<void>,
   ): Promise<void> {
     const client = this.groupSettingsClient()
-    await this.withLock(() => change(client))
+    try {
+      await this.withLock(() => change(client))
+    } catch (error) {
+      throw groupFailure(error)
+    }
     this.notifyPeers()
   }
 
   private async groupChange(change: (client: ReturnType<ChatService['groupClient']>) => Promise<void>): Promise<void> {
     const client = this.groupClient()
-    await this.withLock(() => change(client))
+    try {
+      await this.withLock(() => change(client))
+    } catch (error) {
+      throw groupFailure(error)
+    }
     this.notifyPeers()
   }
 

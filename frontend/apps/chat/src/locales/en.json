@@ -231,7 +231,17 @@
       "groupSend": "The message could not be sent to the group. Try again.",
       "notFound": "No Kutup account has this address.",
       "renamed": "{{address}} is now {{now}}.",
-      "lookupFailed": "This address could not be looked up. Try again."
+      "lookupFailed": "This address could not be looked up. Try again.",
+      "groupNotAllowed": "Only administrators can do that in this group.",
+      "groupLastAdministrator": "Make someone else an administrator first: a group needs one.",
+      "groupLimitReached": "The group has reached one of its limits.",
+      "groupEnded": "This group has ended.",
+      "groupBanned": "This person is banned from the group.",
+      "groupAvatarTooLarge": "That picture is too large for this group's server.",
+      "groupAvatarStorageFull": "This group's server has no room for another picture right now. Try again later.",
+      "groupAvatarMissing": "The picture didn't reach the group's server. Try again.",
+      "groupRefused": "The group's server didn't accept that change.",
+      "groupUnreachable": "The group's server can't be reached now. Try again later."
     },
     "mutations": {
       "edit": "Edit message",
@@ -637,7 +647,12 @@
       "removeUnverified_other": "Remove {{count}} unverified or banned members",
       "unverifiedRemoved_one": "1 member removed.",
       "unverifiedRemoved_other": "{{count}} members removed.",
-      "banListFull": "The ban list is full (about 150 accounts). Until you lift a ban, a new ban or denial holds only for the person's current identity in this group: they could come back under a new one."
+      "banListFull": "The ban list is full (about 150 accounts). Until you lift a ban, a new ban or denial holds only for the person's current identity in this group: they could come back under a new one.",
+      "changePicture": "Change picture",
+      "removePicture": "Remove picture",
+      "pictureSaved": "Group picture changed.",
+      "pictureRemoved": "Group picture removed.",
+      "pictureUnreadable": "That picture couldn't be read. Try a PNG, JPEG or WebP image."
     },
     "groupInvitations": {
       "title_one": "{{count}} group invitation",

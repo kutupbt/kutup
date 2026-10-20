@@ -1247,6 +1247,7 @@ struct GroupDetailsView {
     banned_members: Vec<String>,
     /// No room on the ban list for another account: bans hold by pseudonym.
     ban_list_full: bool,
+    has_avatar: bool,
 }
 
 impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
@@ -1284,6 +1285,7 @@ impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
                 .collect(),
             banned_members: details.banned_members,
             ban_list_full: details.ban_list_full,
+            has_avatar: details.has_avatar,
         }
     }
 }
@@ -1893,6 +1895,34 @@ impl WasmChatClient {
         let mut rng = OsRng.unwrap_err();
         self.engine
             .unban_group(&group_id, &ban, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Sets the group's avatar: `image` already scaled down (JPEG, PNG or
+    /// WebP, under 40 KiB).
+    #[wasm_bindgen(js_name = setGroupAvatar)]
+    pub async fn set_group_avatar(
+        &mut self,
+        group_id: String,
+        image: Vec<u8>,
+        content_type: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_avatar(&group_id, &image, &content_type, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = removeGroupAvatar)]
+    pub async fn remove_group_avatar(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .remove_group_avatar(&group_id, &mut rng)
             .await
             .map_err(chat_error)
     }

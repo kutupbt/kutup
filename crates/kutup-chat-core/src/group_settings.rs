@@ -56,6 +56,8 @@ pub struct GroupDetails {
     /// denial now holds for the person's pseudonym only, until a ban is
     /// lifted.
     pub ban_list_full: bool,
+    /// The group has an avatar.
+    pub has_avatar: bool,
 }
 
 fn text_attribute(record: &GroupRecordV1, attribute: GroupAttribute) -> Option<String> {
@@ -129,6 +131,7 @@ impl Engine {
                 })
                 .collect(),
             ban_list_full: group::ban_list_full(&bans),
+            has_avatar: state.attributes.avatar.is_some(),
             bans: ban_views(&state, &bans),
             banned_members,
         })
