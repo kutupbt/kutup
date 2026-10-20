@@ -61,7 +61,7 @@ book's contacts (the Contacts app's own scope). It is built like `chatGroups`:
 - **Entry id**: `HMAC-SHA256(id key, "kutup/chat-contact-list/id/v1\0" ‖
   AccountRef::bytes())`, exactly those bytes, base64url without padding.
 - **Sealed entry**: the group list's layout with its own magic
-  (`"KUTPCL1\0"`), suite 1, the write revision in the authenticated header,
+  (`"KUTPCC1\0"`), suite 1, the write revision in the authenticated header,
   and the AAD binding the account's key binding and the entry id.
 - **Size**: every sealed entry is exactly **2048 bytes**, padded as the group
   list's are.

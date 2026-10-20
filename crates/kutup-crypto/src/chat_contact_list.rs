@@ -34,7 +34,7 @@ const ID_KEY_INFO: &[u8] = b"kutup/chat-contact-list/id-key/v1\0";
 const SEAL_KEY_INFO: &[u8] = b"kutup/chat-contact-list/seal-key/v1\0";
 const ID_DOMAIN: &[u8] = b"kutup/chat-contact-list/id/v1\0";
 
-const MAGIC: &[u8; 8] = b"KUTPCL1\0";
+const MAGIC: &[u8; 8] = b"KUTPCC1\0";
 /// XChaCha20-Poly1305 under the list's seal key.
 pub const SUITE_V1: u16 = 1;
 pub const ENTRY_ID_LEN: usize = 32;
@@ -150,6 +150,13 @@ impl ContactListKey {
     /// Opens an entry; fails unless it was sealed for `entry_id` under this
     /// account's `binding` (so the server can't move an entry, or change its
     /// revision).
+    ///
+    /// What it can't check, and the client must:
+    /// - that the plaintext's contact re-derives to `entry_id` ([`Self::entry_id`]),
+    ///   so a writer's mistake can't file one contact under another's id;
+    /// - that the revision isn't below the highest this device saw for the
+    ///   id (with the account head's `chatContacts` scope), since the server
+    ///   could serve an older entry under the same id.
     pub fn open(
         &self,
         binding: &str,
@@ -260,7 +267,7 @@ mod tests {
         let other = ContactListKey::derive(&[2u8; 32]);
         let contact = account("00000000-0000-4000-8000-0000000000b2");
         let id = key.entry_id(&contact);
-        // The id is per account and is never the group id itself.
+        // The id differs per account, and is the same for one account.
         assert_ne!(id, other.entry_id(&contact));
         assert_eq!(id, ContactListKey::derive(&[1u8; 32]).entry_id(&contact));
 
@@ -421,6 +428,16 @@ mod tests {
                 assert!(!ours.starts_with(theirs) && !theirs.starts_with(ours));
             }
         }
+    }
+
+    /// A Chat attachment ledger envelope of this size (once the same magic)
+    /// is no contact entry.
+    #[test]
+    fn a_ledger_envelope_is_no_contact_entry() {
+        let mut ledger = vec![0u8; SEALED_LEN];
+        ledger[..8].copy_from_slice(b"KUTPCL1\0");
+        ledger[9] = 1;
+        assert!(inspect(&ledger).is_err());
     }
 
     /// The group list's entries and the contact list's are different sizes
