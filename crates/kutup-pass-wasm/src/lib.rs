@@ -18,6 +18,37 @@ fn js_error(message: impl std::fmt::Display) -> JsValue {
     JsError::new(&message.to_string()).into()
 }
 
+/// A vault that didn't open: its kind first (`wrongKey`, `unsupported`,
+/// `damaged`, `keyFile`, `emptyKey`), so the page says why.
+fn open_error(error: kutup_pass::kdbx::KdbxError) -> JsValue {
+    js_error(format!("{}: {error}", error.kind()))
+}
+
+/// What a file is, from its header alone: `{ kind: "supported", version:
+/// "4.1", upgrade }`, `{ kind: "unsupported", version }` or `{ kind:
+/// "notKeePass" }`.
+#[wasm_bindgen(js_name = probeVault)]
+pub fn probe_vault(contents: &[u8]) -> Result<JsValue, JsValue> {
+    #[derive(Serialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    enum Probe {
+        Supported { version: String, upgrade: bool },
+        Unsupported { version: String },
+        NotKeePass,
+    }
+    use kutup_pass::kdbx::VaultFormat;
+    to_js(&match kutup_pass::kdbx::probe(contents) {
+        VaultFormat::Supported { version, upgrade } => Probe::Supported {
+            version: format!("{}.{}", version.0, version.1),
+            upgrade,
+        },
+        VaultFormat::Unsupported { version } => Probe::Unsupported {
+            version: format!("{}.{}", version.0, version.1),
+        },
+        VaultFormat::NotKeePass => Probe::NotKeePass,
+    })
+}
+
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     // `null`, not `undefined`, for what is missing.
     value
@@ -110,7 +141,7 @@ impl Vault {
             Some(_) => return Err(js_error("give the password or its hash, not both")),
             None => key(password, key_file)?,
         };
-        let db = kutup_pass::open(contents, &key).map_err(js_error)?;
+        let db = kutup_pass::open(contents, &key).map_err(open_error)?;
         Ok(Vault {
             db,
             key,
@@ -187,7 +218,7 @@ impl Vault {
             Ok(db) => (db, None),
             Err(_) if theirs_password.is_some() || theirs_key_file.is_some() => {
                 let other = key(theirs_password, theirs_key_file)?;
-                let db = kutup_pass::open(theirs, &other).map_err(js_error)?;
+                let db = kutup_pass::open(theirs, &other).map_err(open_error)?;
                 (db, Some(other))
             }
             Err(error) => return Err(js_error(error)),
