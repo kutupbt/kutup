@@ -7116,6 +7116,7 @@ fn custom_domains() {
         (status, r.json::<Value>().unwrap_or(Value::Null))
     };
     let bob = register(&c, &base);
+    set_up_address(&c, &base, &bob);
     let bobs_own = self::address_id(&c, &base, &bob);
     let (status, body) = send_as(&alice, &bobs_own, "info@customer.test");
     assert_eq!(
@@ -7124,7 +7125,11 @@ fn custom_domains() {
         "{body}"
     );
     let (status, body) = send_as(&alice, &address_id, "boss@customer.test");
-    assert_eq!(status, 400, "another From in the MIME: {body}");
+    assert_eq!(
+        (status, &body["code"]),
+        (400, &json!("mimeMismatch")),
+        "another From in the MIME: {body}"
+    );
     let alices_key: Value = bearer(
         c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
         &alice.token,
@@ -7166,18 +7171,28 @@ fn custom_domains() {
         "while Alice's code is published too"
     );
     // Only Bob's code: one check never moves it (the sweep leaves Bob's row
-    // alone for 15 minutes after his own checks); one a (scaled) hour
-    // later does.
+    // alone for 15 minutes after his own checks). The clock is stepped by
+    // hand, each step two seconds (two scaled hours, past the one-hour
+    // confirmation).
+    let bob_state = || domain(&c, &base, &bob, &bob_id, true)["state"].clone();
+    let step = || std::thread::sleep(Duration::from_secs(2));
     write_zone(&zones, customer, &zone_for(&bob_code));
-    std::thread::sleep(Duration::from_secs(2));
-    assert_eq!(
-        domain(&c, &base, &bob, &bob_id, true)["state"],
-        0,
-        "a single check never transfers"
-    );
+    step();
+    assert_eq!(bob_state(), 0, "a single check never transfers");
+    // A check that misses Bob's code clears that first sighting...
+    write_zone(&zones, customer, &zone_for(&alice_code));
+    step();
+    assert_eq!(bob_state(), 0);
+    // ... so the next one to find it is a first sighting again.
+    write_zone(&zones, customer, &zone_for(&bob_code));
+    step();
+    assert_eq!(bob_state(), 0, "the sighting before the gap was cleared");
+    // A first sighting older than 48 (scaled) hours pairs with nothing.
+    std::thread::sleep(Duration::from_secs(50));
+    assert_eq!(bob_state(), 0, "an expired sighting starts over");
     assert_eq!(domain(&c, &base, &alice, &id, false)["state"], 1);
-    std::thread::sleep(Duration::from_secs(2));
-    assert_eq!(domain(&c, &base, &bob, &bob_id, true)["state"], 1);
+    step();
+    assert_eq!(bob_state(), 1);
     assert_eq!(
         domain(&c, &base, &alice, &id, false)["state"],
         0,
@@ -7283,4 +7298,174 @@ fn custom_domains() {
         |rcpt| *rcpt >= 500,
     );
     put_settings(json!({ "mail_domains.grace_warn_days": "14" }));
+    // Bob is told in his inbox that the domain lapsed.
+    eventually(
+        "Bob was never told the domain lapsed",
+        30,
+        || messages(&c, &base, &bob.token),
+        |rows| {
+            rows.iter()
+                .any(|m| m["subject"] == "You no longer hold customer.test")
+        },
+    );
+
+    // Bob proves it again, and makes info@ again with a new key.
+    write_zone(&zones, customer, &zone_for(&bob_code));
+    eventually(
+        "Bob's domain never came back",
+        30,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 1,
+    );
+    let make_info = |user: &User| -> (String, Address) {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/domains/addresses")),
+            &user.token,
+        )
+        .json(&json!({ "local": "info", "domainId": bob_id }))
+        .send()
+        .unwrap();
+        assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+        let id = r.json::<Value>().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let key = add_address_key(&c, &base, user, &id, "info@customer.test");
+        (id, key)
+    };
+    let (bob_info_id, _) = make_info(&bob);
+    let lookup = |token: &str| {
+        bearer(
+            c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+            token,
+        )
+        .send()
+        .unwrap()
+        .status()
+        .as_u16()
+    };
+    assert_eq!(lookup(&alice.token), 200);
+    let rcpt_to_info = || {
+        smtp_send(
+            &smtp,
+            "info@customer.test",
+            &message(
+                "info@customer.test",
+                &format!("{}@sender.test", uuid::Uuid::new_v4().simple()),
+            ),
+        )
+        .0
+    };
+    eventually(
+        "Stalwart never took mail for the domain again",
+        60,
+        rcpt_to_info,
+        |rcpt| *rcpt == 250,
+    );
+
+    // Custom domains turned off: no keys served, mail refused at RCPT (the
+    // reconcile drops the domain from Stalwart); turned on, all comes back.
+    put_settings(json!({ "mail_domains.mode": "off" }));
+    assert_eq!(lookup(&alice.token), 404, "no keys while off");
+    eventually(
+        "RCPT still took mail with custom domains off",
+        60,
+        rcpt_to_info,
+        |rcpt| *rcpt >= 500,
+    );
+    put_settings(json!({ "mail_domains.mode": "everyone" }));
+    assert_eq!(lookup(&alice.token), 200);
+    eventually(
+        "RCPT never took mail again once custom domains were on",
+        60,
+        rcpt_to_info,
+        |rcpt| *rcpt == 250,
+    );
+
+    // An administrator wipes Bob's account: info@ closes (its keys were
+    // sealed under the old master key), then Bob, set up again, makes it
+    // again with a new key, and it receives.
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let grant =
+        common::admin_reset_grant(&c, &base, &admin_token, admin_name, admin_password, &bob.id);
+    let mut setup = common::temp_registration(
+        &c,
+        &base,
+        "Temporary*Password123",
+        &admin_token,
+        Some(&grant),
+    );
+    setup["grant"] = json!(grant);
+    let r = bearer(
+        c.post(format!("{base}/api/admin/users/{}/wipe", bob.id)),
+        &admin_token,
+    )
+    .json(&setup)
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "wipe: {}", r.status());
+    let first = common::sign_in(&c, &base, &bob.username, "Temporary*Password123");
+    let bob = common::set_up_again(&c, &base, &first, &bob, "Another*Password456");
+    assert_eq!(lookup(&alice.token), 404, "a closed address serves no keys");
+    eventually(
+        "RCPT still took mail for a closed address",
+        30,
+        rcpt_to_info,
+        |rcpt| *rcpt >= 500,
+    );
+    let (reopened_id, new_key) = make_info(&bob);
+    assert_eq!(reopened_id, bob_info_id, "the same address, reopened");
+    let after_reset = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "info@customer.test",
+            &message("info@customer.test", &after_reset)
+        ),
+        (250, 250)
+    );
+    let row = wait_for(&c, &base, &bob, &after_reset);
+    assert!(open_row(&c, &base, &bob, &new_key, &row).contains("for info@customer.test"));
+
+    // An administrator deactivates the domain: its name and the names under
+    // it are blocked until lifted, whatever DNS says.
+    let r = bearer(
+        c.post(format!("{base}/api/admin/mail/domains/{bob_id}/deactivate")),
+        &admin_token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "blocked"
+    );
+    let blocks: Value = bearer(
+        c.get(format!("{base}/api/admin/mail/domains/blocks")),
+        &admin_token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(blocks[0]["name"], customer, "{blocks}");
+    let r = bearer(c.post(format!("{base}/api/mail/domains")), &alice.token)
+        .json(&json!({ "name": "mail.customer.test" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "domainBlocked");
+    let r = bearer(
+        c.delete(format!("{base}/api/admin/mail/domains/blocks/{customer}")),
+        &admin_token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        1,
+        "lifted: proven again"
+    );
 }

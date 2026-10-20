@@ -2447,7 +2447,9 @@ async fn clear_account_values(
         "DELETE FROM mail_key_lists WHERE address_id IN
             (SELECT id FROM mail_addresses
               WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
-        "UPDATE mail_address_keys SET is_primary = false WHERE address_id IN
+        // Obsolete as well (Proton's FLAG_NOT_OBSOLETE cleared): nobody can
+        // open mail encrypted to them now.
+        "UPDATE mail_address_keys SET is_primary = false, flags = flags & ~2 WHERE address_id IN
             (SELECT id FROM mail_addresses
               WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
         "UPDATE mail_addresses SET state = 'closed'

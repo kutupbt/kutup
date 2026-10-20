@@ -2310,8 +2310,12 @@ fn build_router(state: AppState) -> Router {
                     post(handlers::mail_domains_admin::deactivate),
                 )
                 .route(
-                    "/api/admin/mail/domains/:id/unblock",
-                    post(handlers::mail_domains_admin::unblock),
+                    "/api/admin/mail/domains/blocks",
+                    get(handlers::mail_domains_admin::blocks),
+                )
+                .route(
+                    "/api/admin/mail/domains/blocks/:name",
+                    delete(handlers::mail_domains_admin::unblock),
                 )
                 .route(
                     "/api/admin/users/:id/mail-domains",

@@ -82,6 +82,7 @@ Specific codes, where an app does something particular (a test in
 | `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
 | `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
 | `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
+| `mimeMismatch` | 400 | `POST /api/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
 | `checkTimedOut` | 503 | `GET /api/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail_domains.check_timeout_seconds`); nothing changed |
 | `domainBlocked` | 409 | `POST /api/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
 | `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
@@ -1830,14 +1831,27 @@ an error). A pending
 DKIM key signs only once its TXT (`*.kutupN._dk.<server>`) has been in DNS for
 a day. `PUT` takes any of the settings, each checked against its range
 (`400` otherwise), applies at once and is audited (`mail.domains.settings`).
+The mode `off` stops every custom domain at once: no new ones, and held ones
+neither send nor receive; the reconcile then removes them from Stalwart, so
+mail to them is refused at RCPT (`5xx`, the sender bounces it) rather than
+deferred. Turning the mode back on restores held domains that still prove
+themselves; their addresses keep working as before.
 
-### POST /api/admin/mail/domains/{id}/approve · /deactivate · /unblock
+### POST /api/admin/mail/domains/{id}/approve · /deactivate
 
 Administrators only. `approve` lets a verified domain take mail in the
 `approve` mode; `deactivate` ends a domain at once (its addresses freed, its
-owner told in its inbox and its security events) and blocks its name, so no
-account proves or takes it over until `unblock` lifts the block. All
-audited.
+owner told in its inbox and its security events) and blocks its name and
+every name under it (`mail.<name>` too), so no account proves or takes any of
+them over until the block is lifted. Both audited.
+
+### GET /api/admin/mail/domains/blocks · DELETE /api/admin/mail/domains/blocks/{name}
+
+Administrators only. `GET`: the blocked names, newest first, `[{ "name",
+"blockedAt", "blockedBy" }]` (`blockedBy` null once that administrator's
+account is gone), whether or not a domain row is left for them. `DELETE`
+lifts one by its name (`204`; `404` for a name not blocked), audited
+(`mail.domains.unblock`).
 
 ### GET · PUT /api/admin/users/{id}/mail-domains
 

@@ -107,11 +107,12 @@ impl StalwartApi {
         }
     }
 
-    async fn get(&self, object: &str, properties: &[&str]) -> Result<Vec<Value>> {
+    /// Every object of the kind, with every property.
+    async fn get(&self, object: &str) -> Result<Vec<Value>> {
         let answer = self
             .call(
                 &format!("x:{object}/get"),
-                json!({ "ids": null, "properties": properties }),
+                json!({ "ids": null, "properties": null }),
             )
             .await?;
         Ok(answer["list"].as_array().cloned().unwrap_or_default())
@@ -155,26 +156,28 @@ fn text(value: &Value, field: &str) -> String {
 impl Stalwart for StalwartApi {
     async fn domains(&self) -> Result<Vec<StalwartDomain>> {
         Ok(self
-            .get("Domain", &["id", "name", "description"])
+            .get("Domain")
             .await?
             .iter()
             .map(|d| StalwartDomain {
                 object_id: text(d, "id"),
                 name: text(d, "name"),
                 description: text(d, "description"),
+                content: digest(d),
             })
             .collect())
     }
 
     async fn signatures(&self) -> Result<Vec<StalwartSignature>> {
         Ok(self
-            .get("DkimSignature", &["id", "domainId", "selector"])
+            .get("DkimSignature")
             .await?
             .iter()
             .map(|s| StalwartSignature {
                 object_id: text(s, "id"),
                 domain_object_id: text(s, "domainId"),
                 selector: text(s, "selector"),
+                content: digest(s),
             })
             .collect())
     }
@@ -220,4 +223,26 @@ impl Stalwart for StalwartApi {
     async fn delete_signature(&self, object_id: &str) -> Result<()> {
         self.destroy("DkimSignature", object_id).await
     }
+}
+
+/// A digest of `value` with its keys sorted at every level, whatever order
+/// Stalwart lists them in.
+fn digest(value: &Value) -> String {
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                Value::Object(
+                    keys.into_iter()
+                        .map(|k| (k.clone(), sorted(&map[k])))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    use sha2::Digest as _;
+    hex::encode(sha2::Sha256::digest(sorted(value).to_string().as_bytes()))
 }

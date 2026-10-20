@@ -1305,7 +1305,8 @@ pub(crate) async fn deliver(
             if !same_message(mime, &sender.address, readable) {
                 return Err(AppError::bad_request(
                     "mime must be the same message: From you, the same Message-ID, no Bcc header",
-                ));
+                )
+                .with_details(json!({ "code": "mimeMismatch" })));
             }
             Some(mime)
         }

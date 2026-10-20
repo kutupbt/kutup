@@ -68,6 +68,9 @@ pub struct StalwartDomain {
     pub object_id: String,
     pub name: String,
     pub description: String,
+    /// A digest of the whole object as listed (every property), so the
+    /// drift fingerprint sees any change to it.
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +78,8 @@ pub struct StalwartSignature {
     pub object_id: String,
     pub domain_object_id: String,
     pub selector: String,
+    /// A digest of the whole object as listed, its key among it.
+    pub content: String,
 }
 
 /// One step of a plan, in the order to run it.
@@ -193,15 +198,20 @@ pub fn untagged_fingerprint(
         .collect();
     let mut lines: Vec<String> = untagged
         .iter()
-        .map(|d| format!("domain\0{}\0{}\0{}", d.object_id, d.name, d.description))
+        .map(|d| {
+            format!(
+                "domain\0{}\0{}\0{}\0{}",
+                d.object_id, d.name, d.description, d.content
+            )
+        })
         .chain(
             signatures
                 .iter()
                 .filter(|s| untagged.iter().any(|d| d.object_id == s.domain_object_id))
                 .map(|s| {
                     format!(
-                        "signature\0{}\0{}\0{}",
-                        s.object_id, s.domain_object_id, s.selector
+                        "signature\0{}\0{}\0{}\0{}",
+                        s.object_id, s.domain_object_id, s.selector, s.content
                     )
                 }),
         )
@@ -331,6 +341,7 @@ mod tests {
         async fn create_domain(&self, name: &str, description: &str) -> anyhow::Result<String> {
             let object_id = self.id();
             self.domains.lock().unwrap().push(StalwartDomain {
+                content: String::new(),
                 object_id: object_id.clone(),
                 name: name.into(),
                 description: description.into(),
@@ -366,6 +377,7 @@ mod tests {
             );
             let object_id = self.id();
             self.signatures.lock().unwrap().push(StalwartSignature {
+                content: String::new(),
                 object_id: object_id.clone(),
                 domain_object_id: domain_object_id.into(),
                 selector: selector.into(),
@@ -430,6 +442,7 @@ mod tests {
 
     fn server_domain() -> StalwartDomain {
         StalwartDomain {
+            content: String::new(),
             object_id: "server".into(),
             name: "kutup.dev".into(),
             description: "the server's own".into(),
@@ -491,6 +504,7 @@ mod tests {
     #[test]
     fn untagged_objects_are_never_in_a_plan() {
         let signature = StalwartSignature {
+            content: String::new(),
             object_id: "s".into(),
             domain_object_id: "server".into(),
             selector: "202601e".into(),
@@ -502,11 +516,13 @@ mod tests {
     fn a_rotation_creates_the_new_signature_before_deleting_the_old() {
         let id = uuid::Uuid::new_v4();
         let domain = StalwartDomain {
+            content: String::new(),
             object_id: "d".into(),
             name: "example.com".into(),
             description: tag(&id),
         };
         let old = StalwartSignature {
+            content: String::new(),
             object_id: "old".into(),
             domain_object_id: "d".into(),
             selector: "kutup1".into(),
@@ -545,6 +561,7 @@ mod tests {
     fn the_untagged_fingerprint_follows_only_untagged_objects() {
         let server = server_domain();
         let ours = StalwartDomain {
+            content: String::new(),
             object_id: "k".into(),
             name: "customer.test".into(),
             description: tag(&uuid::Uuid::new_v4()),
@@ -555,6 +572,7 @@ mod tests {
             base
         );
         let server_signature = StalwartSignature {
+            content: String::new(),
             object_id: "s".into(),
             domain_object_id: server.object_id.clone(),
             selector: "202601e".into(),
@@ -564,6 +582,7 @@ mod tests {
             base
         );
         let renamed = StalwartDomain {
+            content: String::new(),
             name: "elsewhere.test".into(),
             ..server
         };
@@ -574,6 +593,7 @@ mod tests {
     fn a_renamed_row_is_replaced_not_kept() {
         let id = uuid::Uuid::new_v4();
         let there = StalwartDomain {
+            content: String::new(),
             object_id: "o1".into(),
             name: "old.example".into(),
             description: tag(&id),

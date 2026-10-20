@@ -733,7 +733,9 @@ async fn public_keys(
     .bind(address_id)
     .fetch_all(&state.pool)
     .await?;
-    if keys.is_empty() {
+    // An address without a primary key (closed by an account reset and
+    // reopened, not yet rekeyed) offers nothing to encrypt to.
+    if !keys.iter().any(|(_, _, _, primary, _)| *primary) {
         return Ok(None);
     }
     Ok(Some((

@@ -142,7 +142,8 @@ pub async fn list(
         "SELECT d.id, d.name, COALESCE(u.username, u.id::text) AS owner, d.state, d.verify_state,
                 d.mx_state, d.spf_state, d.dkim_state, d.dmarc_state,
                 d.approved_at IS NOT NULL AS approved, d.stopped_at IS NOT NULL AS stopped,
-                EXISTS (SELECT 1 FROM mail_domain_blocks b WHERE b.name = d.name) AS blocked,
+                EXISTS (SELECT 1 FROM mail_domain_blocks b
+                         WHERE b.name = d.name OR d.name LIKE '%.' || b.name) AS blocked,
                 d.created_at
            FROM mail_domains d JOIN users u ON u.id = d.user_id
           WHERE d.removed_at IS NULL
@@ -308,23 +309,60 @@ pub async fn deactivate(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /api/admin/mail/domains/{id}/unblock` — lifts the block a
-/// deactivation put on the domain's name: it may be proven again.
+/// A name an administrator blocked.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainBlock {
+    pub name: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub blocked_at: OffsetDateTime,
+    /// The administrator who blocked it, while their account exists.
+    pub blocked_by: Option<String>,
+}
+
+/// `GET /api/admin/mail/domains/blocks` — the blocked names (each covers
+/// the names under it), whether or not a domain row is left for them.
 #[utoipa::path(
-    post,
-    path = "/api/admin/mail/domains/{id}/unblock",
+    get,
+    path = "/api/admin/mail/domains/blocks",
     tag = "admin",
     security(("BearerAuth" = [])),
-    params(("id" = String, Path)),
+    responses((status = 200, body = Vec<DomainBlock>))
+)]
+pub async fn blocks(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> AppResult<Json<Vec<DomainBlock>>> {
+    Ok(Json(
+        store::blocks(&state.pool)
+            .await?
+            .into_iter()
+            .map(|(name, blocked_at, blocked_by)| DomainBlock {
+                name,
+                blocked_at,
+                blocked_by,
+            })
+            .collect(),
+    ))
+}
+
+/// `DELETE /api/admin/mail/domains/blocks/{name}` — lifts a block: the name
+/// and those under it may be proven again.
+#[utoipa::path(
+    delete,
+    path = "/api/admin/mail/domains/blocks/{name}",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    params(("name" = String, Path)),
     responses((status = 204), (status = 404))
 )]
 pub async fn unblock(
     State(state): State<AppState>,
     admin: AdminUser,
-    Path(id): Path<String>,
+    Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
-    let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
-    let name = store::unblock(&state.pool, id).await?;
+    let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
+    store::unblock(&state.pool, &name).await?;
     audit(
         &state.pool,
         &admin.user_id,

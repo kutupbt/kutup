@@ -227,11 +227,23 @@ pub async fn add(
 /// Whether an administrator blocked `name` (deactivated it for abuse).
 async fn blocked(tx: &mut Transaction<'_, Postgres>, name: &str) -> AppResult<bool> {
     Ok(
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM mail_domain_blocks WHERE name = $1)")
-            .bind(name)
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM mail_domain_blocks WHERE name = ANY($1))")
+            .bind(blocked_names(name))
             .fetch_one(&mut **tx)
             .await?,
     )
+}
+
+/// The names whose block covers `name`: itself and every parent, so a
+/// blocked `evil.com` can't come back as `mail.evil.com`.
+pub fn blocked_names(name: &str) -> Vec<String> {
+    let mut names = vec![name.to_owned()];
+    let mut rest = name;
+    while let Some((_, parent)) = rest.split_once('.') {
+        names.push(parent.to_owned());
+        rest = parent;
+    }
+    names
 }
 
 /// Who holds `name` now, other than `id`: the holder's row id, account and
@@ -271,10 +283,19 @@ pub async fn check_and_save(
     // A whole check within its time, however many lookups (SPF includes
     // among them) it takes; one that runs out changes nothing.
     let timeout = std::time::Duration::from_secs(settings.check_timeout_seconds.max(1) as u64);
-    let (mut checked, mut change) = tokio::time::timeout(
-        timeout,
-        check::check(resolver, server, &row.domain(), settings.grace(), now),
-    )
+    // With the domain's TXT records again when it would become held: they
+    // tell whether another holder's code is gone, read before any row is
+    // locked.
+    let (mut checked, mut change, name_txt) = tokio::time::timeout(timeout, async {
+        let (checked, change) =
+            check::check(resolver, server, &row.domain(), settings.grace(), now).await;
+        let name_txt = if matches!(change, Change::Verified | Change::Restored) {
+            Some(resolver.txt(&row.name).await)
+        } else {
+            None
+        };
+        (checked, change, name_txt)
+    })
     .await
     .map_err(|_| {
         AppError::new(
@@ -298,10 +319,10 @@ pub async fn check_and_save(
         tx.commit().await?;
         return Ok((current, Change::None, None));
     }
-    // The transfer's first sighting holds only while every check finds this
-    // account's code.
     // The account that lost the domain to this one, to be told.
     let mut lost_holder = None;
+    // The transfer's first sighting holds only while every check finds this
+    // account's code.
     let mut transfer_seen = if checked.verify_state == records::verify::GOOD {
         current.transfer_seen_at
     } else {
@@ -318,8 +339,9 @@ pub async fn check_and_save(
         if let Some((holder_id, holder_user, holder_code)) =
             holder(&mut tx, &row.name, row.id).await?
         {
-            let txt = resolver.txt(&row.name).await;
-            let holder_gone = records::verify_state(&txt, &holder_code)
+            let holder_gone = name_txt
+                .as_ref()
+                .and_then(|txt| records::verify_state(txt, &holder_code))
                 .is_some_and(|state| state != records::verify::GOOD);
             // A first sighting too old to pair with this one starts over.
             let seen = transfer_seen.filter(|seen| {
@@ -533,16 +555,40 @@ pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<(Uuid
     Ok((user, name))
 }
 
-/// An administrator lifts the block on the name of domain `id`: its owner
-/// (or anyone) may prove it again.
-pub async fn unblock(pool: &PgPool, id: Uuid) -> AppResult<String> {
-    let name: Option<String> = sqlx::query_scalar(
-        "DELETE FROM mail_domain_blocks
-          WHERE name = (SELECT name FROM mail_domains WHERE id = $1)
-         RETURNING name",
+/// An administrator lifts the block on `name` (as listed): it, and the
+/// names under it, may be proven again.
+pub async fn unblock(pool: &PgPool, name: &str) -> AppResult<()> {
+    let lifted = sqlx::query("DELETE FROM mail_domain_blocks WHERE name = $1")
+        .bind(name)
+        .execute(pool)
+        .await?
+        .rows_affected();
+    if lifted == 0 {
+        return Err(AppError::not_found("no such block"));
+    }
+    Ok(())
+}
+
+/// The blocked names, newest first: name, when, by whom (an administrator
+/// account since deleted shows none).
+pub async fn blocks(pool: &PgPool) -> AppResult<Vec<(String, OffsetDateTime, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT b.name, b.blocked_at, u.username FROM mail_domain_blocks b
+           LEFT JOIN users u ON u.id = b.blocked_by
+          ORDER BY b.blocked_at DESC",
     )
-    .bind(id)
-    .fetch_optional(pool)
-    .await?;
-    name.ok_or_else(|| AppError::not_found("no such blocked domain"))
+    .fetch_all(pool)
+    .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_block_covers_the_name_and_its_parents() {
+        assert_eq!(
+            super::blocked_names("mail.evil.com"),
+            ["mail.evil.com", "evil.com", "com"]
+        );
+        assert_eq!(super::blocked_names("evil.com"), ["evil.com", "com"]);
+    }
 }

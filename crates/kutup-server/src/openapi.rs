@@ -113,6 +113,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::mail_domains_admin::set_settings,
         crate::handlers::mail_domains_admin::approve,
         crate::handlers::mail_domains_admin::deactivate,
+        crate::handlers::mail_domains_admin::blocks,
         crate::handlers::mail_domains_admin::unblock,
         crate::handlers::mail_domains_admin::overrides,
         crate::handlers::mail_domains_admin::set_overrides,
