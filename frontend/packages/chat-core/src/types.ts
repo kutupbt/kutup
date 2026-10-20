@@ -438,6 +438,8 @@ export interface ChatGroupDetails {
   bans: ChatGroupBan[]
   /** Members whose account is banned (back through the link): administrators remove them. */
   bannedMembers: string[]
+  /** No room on the ban list for another account: a ban or denial holds for the pseudonym only. */
+  banListFull: boolean
 }
 
 /** How a catch-up with a group's home ended. */

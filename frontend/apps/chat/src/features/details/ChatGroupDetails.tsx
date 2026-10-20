@@ -252,6 +252,7 @@ export function ChatGroupDetails({ group }: { group: ChatGroupSummary }) {
       <BanDialog
         name={banning?.name ?? null}
         linkOn={details?.link.mode !== undefined && details.link.mode !== 'off'}
+        listFull={details?.banListFull === true}
         busy={busy}
         onOpenChange={(open) => !open && setBanning(null)}
         onBan={(resetLink) => {

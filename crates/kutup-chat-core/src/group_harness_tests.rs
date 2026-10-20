@@ -4801,3 +4801,67 @@ fn group_list_an_older_entry_served_under_the_listed_revision_is_refused() {
     assert!(block_on(bob2.engine.sync_group_list(&mut rng())).is_err());
     assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
 }
+
+#[test]
+fn group_settings_a_full_ban_list_says_so_and_bans_hold_by_pseudonym() {
+    use crate::group_link::GroupLinkMode;
+    use kutup_chat_proto::group::{GroupActionV1, GroupBanListV1};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+    // A list filled up to its cap.
+    let mut full = GroupBanListV1 {
+        version: kutup_chat_proto::group::GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    // Up to the last account that still fits: no room for Dave's.
+    for i in 0u32.. {
+        let mut next = full.clone();
+        next.ban(
+            &kutup_crypto::account_ref::AccountRef::new(
+                "a.test",
+                &format!("00000000-0000-4000-8000-{i:012x}"),
+            )
+            .unwrap(),
+            Some(&kutup_chat_proto::group::encode(&[(i % 251) as u8; 32])),
+        );
+        if crate::group::seal_ban_list(&record, &next).is_err() {
+            break;
+        }
+        full = next;
+    }
+    let value = crate::group::seal_ban_list(&record, &full).unwrap();
+    block_on(alice.engine.change_group(
+        &group_id,
+        vec![GroupActionV1::ModifyBanList { value }],
+        &mut rng(),
+    ))
+    .unwrap();
+    assert!(details(&mut alice, &group_id).ban_list_full);
+
+    block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    alice.sync(&group_id);
+    let daves = details(&mut alice, &group_id).requests[0]
+        .requester
+        .pseudonym
+        .clone();
+    block_on(
+        alice
+            .engine
+            .deny_group_request(&group_id, &daves, &mut rng()),
+    )
+    .unwrap();
+    let seen = details(&mut alice, &group_id);
+    assert!(seen.requests.is_empty());
+    assert!(seen
+        .bans
+        .iter()
+        .any(|ban| ban.account.is_none() && ban.pseudonyms == vec![daves.clone()]));
+    assert!(!seen
+        .bans
+        .iter()
+        .any(|ban| ban.account.as_ref().map(ToString::to_string) == Some(dave.account.clone())));
+}

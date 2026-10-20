@@ -1278,6 +1278,33 @@ pub fn ban_list(record: &GroupRecordV1) -> Result<GroupBanListV1, GroupError> {
     GroupBanListV1::from_canonical_bytes(&plain).map_err(GroupError::Sealed)
 }
 
+/// Whether `list` has no room for one more account (the longest an account
+/// reference can be, with one pseudonym) under the sealed cap.
+pub fn ban_list_full(list: &GroupBanListV1) -> bool {
+    let mut next = list.clone();
+    let longest = AccountRef::new(
+        &format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        ),
+        "ffffffff-ffff-4fff-bfff-ffffffffffff",
+    );
+    let Ok(account) = longest else {
+        return false;
+    };
+    if next.get(&account).is_some() {
+        return false;
+    }
+    next.ban(&account, Some(&encode(&[0xff; 32])));
+    next.canonical_bytes().map_or(true, |bytes| {
+        kutup_crypto::chat_group::sealed_len(bytes.len())
+            > kutup_chat_proto::group::MAX_SEALED_BAN_LIST_BYTES
+    })
+}
+
 /// Seals a ban list for a `ModifyBanList` action: `None` when it is empty.
 pub fn seal_ban_list(
     record: &GroupRecordV1,

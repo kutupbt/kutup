@@ -417,6 +417,11 @@ export function GroupBansSection({
   if (details.bans.length === 0) return null
   return (
     <Section title={t('chat.chatGroup.bans', { count: details.bans.length })} testId="chat-group-bans">
+      {details.banListFull ? (
+        <p className="mb-2 rounded-md bg-status-warn/10 px-3 py-2 text-sm text-status-warn" role="status" data-testid="chat-group-ban-list-full">
+          {t('chat.chatGroup.banListFull')}
+        </p>
+      ) : null}
       <ul className="space-y-1">
         {details.bans.map((ban) => {
           const name = ban.account ? nameOf(ban.account) : t('chat.chatGroup.unverifiedRequester')
@@ -478,12 +483,14 @@ export function GroupEndSection({ busy, run, onEnd }: { busy: boolean; run: Grou
 export function BanDialog({
   name,
   linkOn,
+  listFull,
   busy,
   onOpenChange,
   onBan,
 }: {
   name: string | null
   linkOn: boolean
+  listFull: boolean
   busy: boolean
   onOpenChange: (open: boolean) => void
   onBan: (resetLink: boolean) => void
@@ -500,6 +507,9 @@ export function BanDialog({
           <DialogTitle>{t('chat.chatGroup.banTitle', { name: name ?? '' })}</DialogTitle>
           <DialogDescription>{t('chat.chatGroup.banBody')}</DialogDescription>
         </DialogHeader>
+        {listFull ? (
+          <p className="rounded-md bg-status-warn/10 px-3 py-2 text-sm text-status-warn" role="status">{t('chat.chatGroup.banListFull')}</p>
+        ) : null}
         {linkOn ? (
           <div className="flex items-start gap-3">
             <Checkbox id="chat-group-ban-reset" checked={resetLink} onCheckedChange={(on) => setResetLink(on === true)} data-testid="chat-group-ban-reset" />

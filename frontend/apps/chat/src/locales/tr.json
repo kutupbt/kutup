@@ -636,7 +636,8 @@
       "removeUnverified_one": "Doğrulanmamış ya da yasaklı 1 üyeyi çıkar",
       "removeUnverified_other": "Doğrulanmamış ya da yasaklı {{count}} üyeyi çıkar",
       "unverifiedRemoved_one": "1 üye çıkarıldı.",
-      "unverifiedRemoved_other": "{{count}} üye çıkarıldı."
+      "unverifiedRemoved_other": "{{count}} üye çıkarıldı.",
+      "banListFull": "Yasak listesi dolu (yaklaşık 150 hesap). Bir yasağı kaldırana kadar yeni bir yasak ya da ret, kişinin bu gruptaki yalnızca şu anki kimliği için geçerli olur: yeni bir kimlikle geri dönebilir."
     },
     "groupInvitations": {
       "title_one": "{{count}} grup daveti",

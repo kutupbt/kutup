@@ -57,6 +57,7 @@ function settings(over: Partial<Details> = {}): Details {
     requests: [],
     bans: [],
     bannedMembers: [],
+    banListFull: false,
     ...over,
   }
 }
@@ -164,6 +165,15 @@ describe('a pairwise group’s members', () => {
     expect(screen.getByTestId('chat-group-ban-reset')).toBeChecked()
     fireEvent.click(screen.getByTestId('chat-group-ban-confirm'))
     await waitFor(() => expect(service.banChatGroupMember).toHaveBeenCalledWith('G'.repeat(43), 'p-bob', true))
+  })
+
+  it('says plainly when the ban list is full', async () => {
+    members = Promise.resolve([member(SELF, true, 'p-self'), member(BOB, false, 'p-bob')])
+    details = settings({ banListFull: true, bans: [{ account: CAROL, pseudonyms: ['p-carol'] }] })
+    render(<ChatGroupDetails group={group()} />)
+    expect(await screen.findByTestId('chat-group-ban-list-full')).toHaveTextContent('The ban list is full')
+    fireEvent.click(await screen.findByTestId('chat-group-member-ban'))
+    expect(screen.getByTestId('chat-group-ban-dialog')).toHaveTextContent('The ban list is full')
   })
 
   it('offers nothing to change once the group has ended', async () => {

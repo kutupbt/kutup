@@ -636,7 +636,8 @@
       "removeUnverified_one": "Remove 1 unverified or banned member",
       "removeUnverified_other": "Remove {{count}} unverified or banned members",
       "unverifiedRemoved_one": "1 member removed.",
-      "unverifiedRemoved_other": "{{count}} members removed."
+      "unverifiedRemoved_other": "{{count}} members removed.",
+      "banListFull": "The ban list is full (about 150 accounts). Until you lift a ban, a new ban or denial holds only for the person's current identity in this group: they could come back under a new one."
     },
     "groupInvitations": {
       "title_one": "{{count}} group invitation",

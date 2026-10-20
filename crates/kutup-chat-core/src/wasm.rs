@@ -1217,6 +1217,8 @@ struct GroupDetailsView {
     requests: Vec<GroupRequestWasmView>,
     bans: Vec<GroupBanWasmView>,
     banned_members: Vec<String>,
+    /// No room on the ban list for another account: bans hold by pseudonym.
+    ban_list_full: bool,
 }
 
 impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
@@ -1253,6 +1255,7 @@ impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
                 })
                 .collect(),
             banned_members: details.banned_members,
+            ban_list_full: details.ban_list_full,
         }
     }
 }

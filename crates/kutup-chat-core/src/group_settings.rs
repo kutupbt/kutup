@@ -52,6 +52,10 @@ pub struct GroupDetails {
     /// Members whose account is banned (back through the link under a new
     /// pseudonym): administrators are asked to remove them.
     pub banned_members: Vec<String>,
+    /// The sealed ban list has no room for another account: a ban or a
+    /// denial now holds for the person's pseudonym only, until a ban is
+    /// lifted.
+    pub ban_list_full: bool,
 }
 
 fn text_attribute(record: &GroupRecordV1, attribute: GroupAttribute) -> Option<String> {
@@ -124,6 +128,7 @@ impl Engine {
                     requester,
                 })
                 .collect(),
+            ban_list_full: group::ban_list_full(&bans),
             bans: ban_views(&state, &bans),
             banned_members,
         })
@@ -302,7 +307,7 @@ impl Engine {
             },
         ];
         if let Some(verified) = &requester.verified {
-            actions.push(banned_list_action(&record, &verified.account, pseudonym)?);
+            actions.extend(banned_list_action(&record, &verified.account, pseudonym)?);
         }
         self.change_group(group_id, actions, rng).await
     }
@@ -332,7 +337,7 @@ impl Engine {
             pseudonym: pseudonym.to_string(),
         }];
         if let Some(account) = &account {
-            actions.push(banned_list_action(&record, account, pseudonym)?);
+            actions.extend(banned_list_action(&record, account, pseudonym)?);
         }
         if reset_link && state.invite_link_password.is_some() {
             actions.push(GroupActionV1::ModifyInviteLink {
@@ -431,22 +436,27 @@ impl Engine {
     }
 }
 
-/// The ban list with `account` (and `pseudonym`) added, as an action.
+/// The ban list with `account` (and `pseudonym`) added, as an action;
+/// `None` when it has no room left ([`GroupDetails::ban_list_full`] says so
+/// beforehand): the ban then holds for the pseudonym only, which the home
+/// enforces.
 fn banned_list_action(
     record: &GroupRecordV1,
     account: &AccountRef,
     pseudonym: &str,
-) -> Result<GroupActionV1> {
+) -> Result<Option<GroupActionV1>> {
     let mut bans = group::ban_list(record).map_err(group_error)?;
     bans.ban(account, Some(pseudonym));
     if bans.get(account).is_some_and(|banned| {
         banned.pseudonyms.len() > kutup_chat_proto::group::entry::MAX_BANNED_PSEUDONYMS_PER_ACCOUNT
     }) {
-        return Err(limit_reached());
+        return Ok(None);
     }
-    Ok(GroupActionV1::ModifyBanList {
-        value: group::seal_ban_list(record, &bans).map_err(group_error)?,
-    })
+    match group::seal_ban_list(record, &bans) {
+        Ok(value) => Ok(Some(GroupActionV1::ModifyBanList { value })),
+        Err(group::GroupError::Change(GroupChangeError::LimitReached)) => Ok(None),
+        Err(error) => Err(group_error(error)),
+    }
 }
 
 /// The bans: each account on the list, then each banned pseudonym no
