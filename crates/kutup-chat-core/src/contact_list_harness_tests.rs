@@ -337,7 +337,9 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
     assert_eq!(alice.engine.pins_due.len(), 2);
     // Kept with the device, so a reload doesn't lose them.
     let stored: std::collections::BTreeMap<String, i64> = serde_json::from_slice(
-        &block_on(alice.engine.session().pins_due()).unwrap().unwrap(),
+        &block_on(alice.engine.session().pins_due())
+            .unwrap()
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(stored.len(), 2);

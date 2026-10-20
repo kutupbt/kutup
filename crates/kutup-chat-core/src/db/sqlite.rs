@@ -505,11 +505,9 @@ impl ChatDb for SqliteChatDb {
     async fn load_pins_due(&self) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'pins_due'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT value FROM meta WHERE key = 'pins_due'", [], |row| {
+                row.get(0)
+            })
             .optional())
     }
 
