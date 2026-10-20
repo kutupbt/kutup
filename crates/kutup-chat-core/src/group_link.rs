@@ -7,7 +7,10 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::group::link::GroupInviteLinkV1;
-use kutup_chat_proto::group::{decode_exact, decode_group_id};
+use kutup_chat_proto::group::{
+    decode_exact, decode_group_id, AccessRequired, GroupAccessV1, GroupActionV1,
+    INVITE_LINK_PASSWORD_LEN,
+};
 use kutup_chat_proto::group_route::{
     GroupJoinInfoV1, GroupOperationV1, GroupResponseStatusV1, GroupResponseV1, PSEUDONYM_USED,
 };
@@ -47,11 +50,25 @@ pub enum GroupLinkJoin {
     Unreachable(RouteFailure),
 }
 
-fn opened_text(record: &GroupRecordV1, field: SealedField, value: &Option<String>) -> Option<String> {
+fn opened_text(
+    record: &GroupRecordV1,
+    field: SealedField,
+    value: &Option<String>,
+) -> Option<String> {
     let value = value.as_ref()?;
     let key = record.master().ok()?.state_key();
     let plain = key.open(field, b"", &STANDARD.decode(value).ok()?).ok()?;
     String::from_utf8(plain.to_vec()).ok()
+}
+
+/// The group a link names.
+fn link_group_id(link: &GroupInviteLinkV1) -> Result<String> {
+    let master = kutup_crypto::chat_group::GroupMasterKey::from_bytes(
+        &link.master_key,
+        group::home_of(&link.home),
+    )
+    .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    Ok(kutup_chat_proto::group::encode_group_id(&master.group_id()))
 }
 
 fn used_pseudonym(response: &GroupResponseV1) -> bool {
@@ -66,14 +83,7 @@ impl Engine {
         // The list says which epoch a join goes past, and whether another
         // device is in already.
         self.reread_group_list().await;
-        let group_id = {
-            let master = kutup_crypto::chat_group::GroupMasterKey::from_bytes(
-                &link.master_key,
-                group::home_of(&link.home),
-            )
-            .map_err(|error| ChatError::Invalid(error.to_string()))?;
-            kutup_chat_proto::group::encode_group_id(&master.group_id())
-        };
+        let group_id = link_group_id(&link)?;
         let previous = self.session.db().load_group(&group_id).await?;
         let record = group::record_from_link(
             &link,
@@ -125,8 +135,19 @@ impl Engine {
         &mut self,
         fragment: &str,
     ) -> Result<std::result::Result<Option<GroupLinkPreview>, RouteFailure>> {
-        let (link, mut record) = self.link_record(fragment).await?;
-        let existing = self.session.db().load_group(&record.group_id).await?;
+        let link = GroupInviteLinkV1::from_fragment(fragment).map_err(ChatError::Invalid)?;
+        let existing = self.session.db().load_group(&link_group_id(&link)?).await?;
+        // A member reads the join info under the link too (what anyone with
+        // it sees), with its own record's gateway; no record is made.
+        let (link, mut record) = match &existing {
+            Some(existing) if existing.status == GroupStatus::Member => {
+                if existing.home != link.home {
+                    return Err(ChatError::Invalid("the link names another group".into()));
+                }
+                (link, existing.clone())
+            }
+            _ => self.link_record(fragment).await?,
+        };
         let info = match self.link_join_info(&mut record, &link).await? {
             Ok(Some(info)) => info,
             Ok(None) => return Ok(Ok(None)),
@@ -222,5 +243,127 @@ impl Engine {
         record.pseudonym_seed =
             group::SecretText(kutup_chat_proto::group::encode(pseudonym.seed()));
         self.save_group(record).await
+    }
+}
+
+/// What a group's invite link does (Signal's `addFromInviteLink`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupLinkMode {
+    Off,
+    /// Anyone with the link joins.
+    Join,
+    /// Anyone with the link asks; an administrator approves.
+    Approve,
+}
+
+impl GroupLinkMode {
+    fn access(self) -> AccessRequired {
+        match self {
+            Self::Off => AccessRequired::Unsatisfiable,
+            Self::Join => AccessRequired::Any,
+            Self::Approve => AccessRequired::Administrator,
+        }
+    }
+}
+
+/// The link as the group's last verified state has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupLinkSettings {
+    pub mode: GroupLinkMode,
+    /// The URL fragment to share, while the link is on.
+    pub fragment: Option<String>,
+}
+
+fn new_password<R: Rng + CryptoRng>(rng: &mut R) -> String {
+    let mut password = [0u8; INVITE_LINK_PASSWORD_LEN];
+    rng.fill_bytes(&mut password);
+    let text = kutup_chat_proto::group::encode(&password);
+    zeroize::Zeroize::zeroize(&mut password);
+    text
+}
+
+impl Engine {
+    /// The group's link, from the last verified state.
+    pub async fn group_link(&self, group_id: &str) -> Result<GroupLinkSettings> {
+        let record = self.load_group_record(group_id).await?;
+        let Some((state, _)) = record.verified().map_err(group_error)? else {
+            return Ok(GroupLinkSettings {
+                mode: GroupLinkMode::Off,
+                fragment: None,
+            });
+        };
+        let mode = match state.access.add_from_invite_link {
+            AccessRequired::Any => GroupLinkMode::Join,
+            AccessRequired::Administrator => GroupLinkMode::Approve,
+            _ => GroupLinkMode::Off,
+        };
+        let fragment = match (&state.invite_link_password, mode) {
+            (Some(password), GroupLinkMode::Join | GroupLinkMode::Approve) => {
+                let master = record.master().map_err(group_error)?;
+                let link = GroupInviteLinkV1 {
+                    master_key: *master.as_bytes(),
+                    password: decode_exact::<INVITE_LINK_PASSWORD_LEN>(
+                        "inviteLinkPassword",
+                        password,
+                    )
+                    .map_err(ChatError::Invalid)?,
+                    home: record.home.clone(),
+                };
+                Some(link.to_fragment().map_err(ChatError::Invalid)?)
+            }
+            _ => None,
+        };
+        Ok(GroupLinkSettings { mode, fragment })
+    }
+
+    /// Turns the link on (with a password, the first time), switches
+    /// between joining and asking, or turns it off; as Signal, off keeps
+    /// the password, so turning it on again gives the same link.
+    pub async fn set_group_link<R: Rng + CryptoRng>(
+        &mut self,
+        group_id: &str,
+        mode: GroupLinkMode,
+        rng: &mut R,
+    ) -> Result<()> {
+        let record = self.load_group_record(group_id).await?;
+        let (state, _) = record
+            .verified()
+            .map_err(group_error)?
+            .ok_or_else(|| ChatError::Invalid("the group isn't caught up".into()))?;
+        let mut actions = Vec::new();
+        if mode != GroupLinkMode::Off && state.invite_link_password.is_none() {
+            actions.push(GroupActionV1::ModifyInviteLink {
+                password: Some(new_password(rng)),
+            });
+        }
+        if state.access.add_from_invite_link != mode.access() {
+            actions.push(GroupActionV1::ModifyAccess {
+                access: GroupAccessV1 {
+                    add_from_invite_link: mode.access(),
+                    ..state.access
+                },
+            });
+        }
+        if actions.is_empty() {
+            return Ok(());
+        }
+        self.change_group(group_id, actions, rng).await
+    }
+
+    /// A new password: the old link stops working (Signal's "Reset link").
+    pub async fn reset_group_link<R: Rng + CryptoRng>(
+        &mut self,
+        group_id: &str,
+        rng: &mut R,
+    ) -> Result<()> {
+        let password = new_password(rng);
+        self.change_group(
+            group_id,
+            vec![GroupActionV1::ModifyInviteLink {
+                password: Some(password),
+            }],
+            rng,
+        )
+        .await
     }
 }

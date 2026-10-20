@@ -16,8 +16,8 @@ use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 use futures_executor::block_on;
 use kutup_chat_proto::group::{
-    check_change, check_genesis, decode_exact, GroupActionV1, GroupChangeError, GroupChangeV1,
-    GroupContextV1, GroupLimits, GroupStateV1,
+    check_change, check_genesis, decode_exact, AccessRequired, GroupActionV1, GroupChangeError,
+    GroupChangeV1, GroupContextV1, GroupLimits, GroupStateV1,
 };
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupJoinInfoV1, GroupLogEntryV1, GroupLogPageV1,
@@ -143,6 +143,8 @@ pub(crate) struct World {
     pub(crate) group_list_down: Cell<bool>,
     /// The home calls every newcomer's pseudonym used.
     pub(crate) every_pseudonym_used: Cell<bool>,
+    /// The home calls the next this many newcomers' pseudonyms used.
+    pub(crate) next_pseudonyms_used: Cell<usize>,
     /// How many claims the home refused as a used pseudonym.
     pub(crate) pseudonyms_used: Cell<usize>,
     /// How many times a group list was read.
@@ -241,6 +243,7 @@ impl World {
             group_changes: Cell::new(0),
             group_list_down: Cell::new(false),
             every_pseudonym_used: Cell::new(false),
+            next_pseudonyms_used: Cell::new(0),
             pseudonyms_used: Cell::new(0),
             list_reads: Cell::new(0),
             batch_answers: RefCell::new(Vec::new()),
@@ -507,6 +510,49 @@ impl World {
         .unwrap()
     }
 
+    /// A link-proven request, as the gateway's `link_join_info`: join info
+    /// only, with the link on and its password proven; anything else is
+    /// "not found".
+    fn answer_link(&self, request: &GroupRequestV1, group_id: &[u8; 32]) -> GroupResponseV1 {
+        if request.operation != GroupOperationV1::GetJoinInfo {
+            return Self::status(GroupResponseStatusV1::NotFound);
+        }
+        let groups = self.groups.borrow();
+        let Some(group) = groups.get(group_id) else {
+            return Self::status(GroupResponseStatusV1::NotFound);
+        };
+        let access = group.state.access.add_from_invite_link;
+        let Some(password) = group
+            .state
+            .invite_link_password
+            .as_ref()
+            .and_then(|password| STANDARD.decode(password).ok())
+        else {
+            return Self::status(GroupResponseStatusV1::NotFound);
+        };
+        if access == AccessRequired::Unsatisfiable
+            || !request.verify_link_password(&password).unwrap_or(false)
+        {
+            return Self::status(GroupResponseStatusV1::NotFound);
+        }
+        if !self.nonces.borrow_mut().insert(request.nonce.clone()) {
+            return Self::status(GroupResponseStatusV1::Replayed);
+        }
+        Self::ok(
+            GroupJoinInfoV1 {
+                revision: group.state.revision,
+                head: STANDARD.encode(group.head),
+                member_count: group.state.members.len() as u16,
+                title: group.state.attributes.title.clone(),
+                description: group.state.attributes.description.clone(),
+                avatar: None,
+                requires_approval: Some(access == AccessRequired::Administrator),
+            }
+            .canonical_bytes()
+            .unwrap(),
+        )
+    }
+
     /// What the home answers, as `chat_groups/gateway.rs` does.
     fn answer(&self, request: &GroupRequestV1) -> GroupResponseV1 {
         if request.home != SERVER {
@@ -519,8 +565,7 @@ impl World {
             return GroupResponseV1::refused("malformed", now());
         };
         let GroupRequestAuthV1::Pseudonym { pseudonym, .. } = &request.auth else {
-            // Links come with a later slice of these tests.
-            return Self::status(GroupResponseStatusV1::NotFound);
+            return self.answer_link(request, &group_id);
         };
         if request.verify_pseudonym().is_err() {
             return Self::status(GroupResponseStatusV1::NotFound);
@@ -649,8 +694,12 @@ impl World {
                 // As the server: valid in every way, but this pseudonym was
                 // a member before.
                 if change.is_newcomers_change()
-                    && (self.every_pseudonym_used.get() || group.seen.contains(&change.actor))
+                    && (self.every_pseudonym_used.get()
+                        || self.next_pseudonyms_used.get() > 0
+                        || group.seen.contains(&change.actor))
                 {
+                    self.next_pseudonyms_used
+                        .set(self.next_pseudonyms_used.get().saturating_sub(1));
                     self.pseudonyms_used.set(self.pseudonyms_used.get() + 1);
                     return GroupResponseV1::refused(
                         kutup_chat_proto::group_route::PSEUDONYM_USED,
@@ -745,6 +794,12 @@ fn admitted(state: &GroupStateV1, group_id: &[u8; 32], change: &GroupChangeV1) -
             .is_ok()
         }
         [GroupActionV1::CancelRequest] => state.requesting.iter().any(|r| r.pseudonym == actor),
+        // As the gateway's `link_password_holds`: the link on, its password.
+        [GroupActionV1::JoinFromLink { password, .. }
+        | GroupActionV1::RequestToJoin { password, .. }] => {
+            state.access.add_from_invite_link != AccessRequired::Unsatisfiable
+                && state.invite_link_password.as_deref() == Some(password.as_str())
+        }
         _ => false,
     }
 }
@@ -3984,4 +4039,189 @@ fn group_list_a_rotated_profile_key_reaches_the_group() {
     assert!(bob
         .group_texts(&group_id)
         .contains(&"after the rotation".to_string()));
+}
+
+/// Alice's group with Bob, its link on in `mode`: the group and the link.
+fn group_with_link(
+    alice: &mut Person,
+    bob: &mut Person,
+    mode: crate::group_link::GroupLinkMode,
+) -> (String, String) {
+    let group_id = group_of(alice, &mut [bob]);
+    block_on(alice.engine.set_group_link(&group_id, mode, &mut rng())).unwrap();
+    let link = block_on(alice.engine.group_link(&group_id)).unwrap();
+    assert_eq!(link.mode, mode);
+    (group_id, link.fragment.expect("the link is on"))
+}
+
+#[test]
+fn group_link_a_stranger_previews_joins_and_messages() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+
+    let preview = block_on(dave.engine.preview_group_link(&fragment))
+        .unwrap()
+        .unwrap()
+        .expect("the link works");
+    assert_eq!(preview.group_id, group_id);
+    assert_eq!(preview.title.as_deref(), Some("Team"));
+    assert_eq!(preview.member_count, 2);
+    assert!(!preview.requires_approval);
+    assert_eq!(preview.status, None);
+    // A preview changes nothing.
+    assert!(block_on(dave.engine.session().db().load_group(&group_id))
+        .unwrap()
+        .is_none());
+
+    let joined = block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    assert!(
+        matches!(joined, GroupLinkJoin::Joined(GroupSync::Current { .. })),
+        "{joined:?}"
+    );
+    assert_eq!(dave.status(&group_id), GroupStatus::Member);
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    alice.sync(&group_id);
+    assert_eq!(
+        block_on(alice.engine.group_members(&group_id))
+            .unwrap()
+            .len(),
+        3
+    );
+    alice.send_text(&group_id, "welcome");
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    assert_eq!(dave.group_texts(&group_id), vec!["welcome".to_string()]);
+    dave.send_text(&group_id, "thanks");
+    deliver_all(&mut [&mut alice, &mut bob, &mut dave]);
+    assert!(bob.group_texts(&group_id).contains(&"thanks".to_string()));
+
+    // In already: the link says so, and joining again is refused here.
+    let again = block_on(dave.engine.preview_group_link(&fragment))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.status, Some(GroupStatus::Member));
+    assert!(block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).is_err());
+}
+
+#[test]
+fn group_link_with_approval_asks_and_waits() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Approve);
+
+    let preview = block_on(dave.engine.preview_group_link(&fragment))
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(preview.requires_approval);
+    let asked = block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    assert_eq!(asked, GroupLinkJoin::Requested);
+    assert_eq!(dave.status(&group_id), GroupStatus::Requesting);
+    // The administrators see the request at their next sync; nobody joined.
+    alice.sync(&group_id);
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    let (state, _) = record.verified().unwrap().unwrap();
+    assert_eq!(state.requesting.len(), 1);
+    assert_eq!(state.members.len(), 2);
+}
+
+#[test]
+fn group_link_reset_or_off_stops_the_old_link() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+
+    // Off keeps the password: on again, the same link works again.
+    block_on(
+        alice
+            .engine
+            .set_group_link(&group_id, GroupLinkMode::Off, &mut rng()),
+    )
+    .unwrap();
+    let off = block_on(alice.engine.group_link(&group_id)).unwrap();
+    assert_eq!((off.mode, off.fragment), (GroupLinkMode::Off, None));
+    assert_eq!(
+        block_on(dave.engine.preview_group_link(&fragment)).unwrap(),
+        Ok(None)
+    );
+    block_on(
+        alice
+            .engine
+            .set_group_link(&group_id, GroupLinkMode::Join, &mut rng()),
+    )
+    .unwrap();
+    let on = block_on(alice.engine.group_link(&group_id)).unwrap();
+    assert_eq!(on.fragment.as_deref(), Some(fragment.as_str()));
+
+    // A reset: the old link reads as gone, and joins as invalid.
+    block_on(alice.engine.reset_group_link(&group_id, &mut rng())).unwrap();
+    let reset = block_on(alice.engine.group_link(&group_id)).unwrap();
+    assert_ne!(reset.fragment.as_deref(), Some(fragment.as_str()));
+    assert_eq!(
+        block_on(dave.engine.preview_group_link(&fragment)).unwrap(),
+        Ok(None)
+    );
+    let changes = world.group_changes.get();
+    assert_eq!(
+        block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap(),
+        GroupLinkJoin::LinkInvalid
+    );
+    assert_eq!(world.group_changes.get(), changes);
+    // The new link works.
+    let joined = block_on(
+        dave.engine
+            .join_group_by_link(reset.fragment.as_deref().unwrap(), &mut rng()),
+    )
+    .unwrap();
+    assert!(matches!(joined, GroupLinkJoin::Joined(_)), "{joined:?}");
+}
+
+#[test]
+fn group_link_a_used_pseudonym_moves_to_the_next_epoch() {
+    use crate::group_link::{GroupLinkJoin, GroupLinkMode};
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+
+    world.next_pseudonyms_used.set(2);
+    let joined = block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).unwrap();
+    assert!(matches!(joined, GroupLinkJoin::Joined(_)), "{joined:?}");
+    assert_eq!(world.pseudonyms_used.get(), 2);
+    let record = block_on(dave.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, 2);
+    assert_eq!(record.status, GroupStatus::Member);
+}
+
+#[test]
+fn group_link_the_last_epoch_is_never_passed() {
+    use crate::group_link::GroupLinkMode;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut dave = world.person(0xd4);
+    let (group_id, fragment) = group_with_link(&mut alice, &mut bob, GroupLinkMode::Join);
+
+    world.every_pseudonym_used.set(true);
+    let changes = world.group_changes.get();
+    assert!(block_on(dave.engine.join_group_by_link(&fragment, &mut rng())).is_err());
+    assert_eq!(
+        world.pseudonyms_used.get(),
+        crate::group::MAX_JOIN_EPOCHS as usize
+    );
+    assert_eq!(world.group_changes.get(), changes);
+    let record = block_on(dave.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.join_epoch, crate::group::MAX_JOIN_EPOCHS - 1);
+    assert_eq!(record.status, GroupStatus::Requesting);
 }

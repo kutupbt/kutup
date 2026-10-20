@@ -166,7 +166,12 @@ impl RequestSigner<'_> {
                     return Err("a link-proven request carries no body".into());
                 }
                 GroupRequestV1::with_link_password(
-                    home, group_id, operation, timestamp, nonce, &password[..],
+                    home,
+                    group_id,
+                    operation,
+                    timestamp,
+                    nonce,
+                    &password[..],
                 )
             }
         }
