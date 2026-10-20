@@ -345,6 +345,12 @@ The user's answers (2026-10-19, relayed by the main session):
   - eviction never drops a block.
 - Browser: spec 34's restored pair is mutual contacts again with no
   re-accept, and a block made before the loss holds after it.
+- **The gate for any change to contacts or identity pins** (who is met,
+  when a pin is written, how it is dated): specs 34 and 164 (chat-backup
+  suite) **and spec 160** (username renames, in the account suite). Run
+  spec 160 locally before such a PR: in CI the account suite runs only
+  after the mail specs, on master, so a pin change that breaks it got past
+  #279's checks (master CI on e43bb82c).
 
 ## Order
 
