@@ -21,6 +21,7 @@ import {
   type UnlockedCalendar,
 } from '@kutup/crypto/calendar'
 import type { SealedMailKey } from '@kutup/crypto/mailKey'
+import { OlderThanSeenError, revisionGuard } from '@kutup/crypto/revisionGuard'
 import { useMailAccount, type MailAccount } from '@kutup/mail-core/api'
 import { accountHead, HeadBlockedError, NotInVerifiedIndexError, type ListedEdit, type VerifiedIndex } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
@@ -28,6 +29,20 @@ import { useRequiredSession, type Session } from '@kutup/session/store'
 
 /** The account head's scope of the calendars the account holds. */
 const HEAD_SCOPE = 'calendars'
+/** This browser's revision guard scope: the highest revision of each calendar seen here. */
+const GUARD_SCOPE = 'calendar'
+/**
+ * What the guard remembers of a deleted calendar: higher than any revision,
+ * so a server bringing it back is refused. Calendar ids are drawn fresh
+ * (UUID v4), never reused.
+ */
+const DELETED = Number.MAX_SAFE_INTEGER
+/**
+ * The most pages one window's events are read in, against a server that
+ * never ends a listing: far above what the largest calendar a server allows
+ * (`calendarEventsPerCalendar`) needs at the smallest page it allows.
+ */
+const MAX_EVENT_PAGES = 1000
 
 /** Proton's permission bits (`CALENDAR_PERMISSIONS`). */
 export const PERMISSION = { superOwner: 1, owner: 2, write: 16, read: 32 } as const
@@ -155,6 +170,10 @@ async function listed<T>(session: Session, edit: (index: VerifiedIndex) => Promi
  * The account's calendars, opened. The list and the head's index are two
  * reads: a write landing between them is read again once before the list
  * counts as one the head does not vouch for (then nothing of it is shown).
+ * Every calendar is also held to this browser's revision guard, which is
+ * all that holds it while the app is blocked: a calendar rolled back, or
+ * brought back after this browser saw it deleted, refuses the list as the
+ * head would.
  */
 export async function loadCalendars(session: Session, account: MailAccount): Promise<{ calendars: Calendar[]; unreadable: number }> {
   for (let attempt = 0; ; attempt++) {
@@ -176,6 +195,7 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
           // A name its owner didn't sign is never shown: the calendar counts
           // as unreadable.
           if (!metadata.verified) throw new Error('the calendar name is not signed by its owner')
+          await revisionGuard(session).accept(GUARD_SCOPE, row.id, row.revision)
           calendars.push({
             id: row.id,
             name: metadata.name,
@@ -186,13 +206,15 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
             revision: row.revision,
             unlocked: key,
           })
-        } catch {
+        } catch (error) {
+          if (error instanceof OlderThanSeenError) throw error
           unreadable++
         }
       }
       return { calendars, unreadable }
     } catch (error) {
-      if (!(error instanceof NotInVerifiedIndexError) || attempt > 0) throw error
+      const refused = error instanceof NotInVerifiedIndexError || error instanceof OlderThanSeenError
+      if (!refused || attempt > 0) throw error
     }
   }
 }
@@ -227,6 +249,7 @@ export async function createCalendar(session: Session, account: MailAccount, nam
           },
     ),
   )
+  await revisionGuard(session).accept(GUARD_SCOPE, id, 1)
   return id
 }
 
@@ -278,6 +301,7 @@ export async function updateCalendar(session: Session, account: MailAccount, cal
     if (isAxiosError(error) && (error.response?.data as { code?: string } | undefined)?.code === 'revision_conflict') throw new CalendarChangedError()
     throw error
   }
+  await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, revision)
 }
 
 /** Deletes a calendar and its events (owner only). */
@@ -294,6 +318,7 @@ export async function deleteCalendar(session: Session, calendar: Calendar): Prom
           },
     ),
   )
+  await revisionGuard(session).accept(GUARD_SCOPE, calendar.id, DELETED)
 }
 
 /** The instant a time names, as the server converts it (the same time zone database). */
@@ -307,24 +332,42 @@ function sameInstant(a: string, b: string): boolean {
   return Date.parse(a) === Date.parse(b)
 }
 
+/** The day after an all-day `date` (`yyyy-MM-dd`). */
+function nextDay(date: string): string {
+  const day = new Date(`${date}T00:00:00Z`)
+  day.setUTCDate(day.getUTCDate() + 1)
+  return day.toISOString().slice(0, 10)
+}
+
+/**
+ * An event's times from its signed fields, as the server reads them: a
+ * missing end is RFC 5545's (a date lasts one day, a time has no length).
+ */
+export async function timesOf(fields: EventFields): Promise<{ startUtc: string; endUtc: string; fullDay: boolean }> {
+  const startUtc = await instantOf(fields.start)
+  const fullDay = 'date' in fields.start
+  const end = fields.end ?? ('date' in fields.start ? { date: nextDay(fields.start.date) } : fields.start)
+  return { startUtc, endUtc: await instantOf(end), fullDay }
+}
+
 /**
  * Opens an event with its calendar's key and checks it: every part signed by
- * the author (one of the account's addresses in E1), and the times the
- * server read the ones signed.
+ * the author (one of the account's addresses in E1). Its times are drawn
+ * from the signed fields only; the server's are compared, and an event whose
+ * server times differ is shown as unverified.
  */
 export async function openEvent(account: MailAccount, calendar: Calendar, row: EventRow): Promise<CalendarEvent> {
   const opened = calendar.unlocked.openEvent(row.event, account.ownPublicKeys)
-  const start = await instantOf(opened.fields.start)
+  const times = await timesOf(opened.fields)
   const ownAuthor = row.authorAddress !== null && account.isOwnAddress(row.authorAddress)
+  const asServed = sameInstant(times.startUtc, row.startUtc) && sameInstant(times.endUtc, row.endUtc) && times.fullDay === row.fullDay
   return {
     id: row.id,
     calendarId: row.calendarId,
     fields: opened.fields,
-    startUtc: row.startUtc,
-    endUtc: row.endUtc,
-    fullDay: row.fullDay,
+    ...times,
     revision: row.revision,
-    verified: opened.verified && ownAuthor && sameInstant(start, row.startUtc),
+    verified: opened.verified && ownAuthor && asServed,
   }
 }
 
@@ -332,6 +375,13 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
 interface EventCursor {
   afterStart: string
   afterId: string
+}
+
+/** `next` comes after `previous` in the (start, id) order pages follow. */
+function cursorAfter(next: EventCursor, previous: EventCursor): boolean {
+  const a = Date.parse(next.afterStart)
+  const b = Date.parse(previous.afterStart)
+  return a > b || (a === b && next.afterId > previous.afterId)
 }
 
 /** The events of `calendar` that meet [start, end), every page, opened (unreadable ones counted). */
@@ -343,8 +393,10 @@ export async function loadEvents(
 ): Promise<{ events: CalendarEvent[]; unreadable: number }> {
   const events: CalendarEvent[] = []
   let unreadable = 0
-  // The cursor is the last event's (start, id), the client's to hold.
-  for (let after: EventCursor | null = null; ; ) {
+  // The cursor is the last event's (start, id), the client's to hold; a
+  // server's next cursor must move forward, and a window ends within
+  // MAX_EVENT_PAGES pages.
+  for (let after: EventCursor | null = null, pages = 1; ; pages++) {
     const response: { data: { events: EventRow[]; next: EventCursor | null } } = await api.get(`/calendar/calendars/${calendar.id}/events`, {
       params: { start, end, ...after },
     })
@@ -357,6 +409,8 @@ export async function loadEvents(
       }
     }
     if (!data.next) break
+    if (pages >= MAX_EVENT_PAGES) throw new Error('the server never ends this listing')
+    if (after && !cursorAfter(data.next, after)) throw new Error('the server repeats a page')
     after = data.next
   }
   return { events, unreadable }
@@ -393,13 +447,23 @@ async function syncOne(calendar: Calendar, addressId: string, change: unknown): 
   return result.event
 }
 
+/**
+ * The account head, verified, before an event write: a blocked app writes
+ * nothing (the banner says why), as listed writes refuse.
+ */
+async function beforeEventWrite(session: Session): Promise<void> {
+  await (await accountHead(session)).verifiedHead()
+}
+
 /** Saves an event's fields to `calendar`: a new event, or `existing` (as opened) changed. */
 export async function saveEvent(
+  session: Session,
   account: MailAccount,
   calendar: Calendar,
   fields: EventFields,
   existing?: Pick<CalendarEvent, 'id' | 'revision'>,
 ): Promise<string> {
+  await beforeEventWrite(session)
   const addressId = await activeAddressId(account)
   const event = sealCalendarEvent(calendar.unlocked, account.key, fields)
   const stored = await syncOne(
@@ -411,7 +475,13 @@ export async function saveEvent(
 }
 
 /** Deletes `existing` (as opened): refused when another device changed it since. */
-export async function deleteEvent(account: MailAccount, calendar: Calendar, existing: Pick<CalendarEvent, 'id' | 'revision'>): Promise<void> {
+export async function deleteEvent(
+  session: Session,
+  account: MailAccount,
+  calendar: Calendar,
+  existing: Pick<CalendarEvent, 'id' | 'revision'>,
+): Promise<void> {
+  await beforeEventWrite(session)
   const addressId = await activeAddressId(account)
   await syncOne(calendar, addressId, { delete: { id: existing.id, baseRevision: existing.revision } })
 }

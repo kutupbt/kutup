@@ -14,6 +14,7 @@ import {
 import { addDays, timeOf, type CivilDate } from '@kutup/calendar-core/time'
 import { timeZones, type EventFields } from '@kutup/crypto/calendar'
 import { useMailAccount } from '@kutup/mail-core/api'
+import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
@@ -124,6 +125,7 @@ export function EventDialog() {
   const { t } = useTranslation()
   const target = useEditorTarget()
   const prefs = useCalendarPrefs()
+  const session = useRequiredSession()
   const account = useMailAccount()
   const calendars = useCalendars()
   const writable = useMemo(
@@ -145,12 +147,12 @@ export function EventDialog() {
   const save = useCalendarMutation(async (next: Draft) => {
     const calendar = writable.find((c) => c.id === next.calendarId)
     if (!account.data || !calendar) throw new Error('no calendar')
-    return saveEvent(account.data, calendar, fieldsOf(next, account.data.domain, existing), existing)
+    return saveEvent(session, account.data, calendar, fieldsOf(next, account.data.domain, existing), existing)
   })
   const remove = useCalendarMutation(async () => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)
     if (!account.data || !calendar || !existing) throw new Error('no calendar')
-    await deleteEvent(account.data, calendar, existing)
+    await deleteEvent(session, account.data, calendar, existing)
   })
 
   const close = () => openEditor(null)
