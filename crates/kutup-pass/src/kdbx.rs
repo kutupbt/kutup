@@ -191,10 +191,18 @@ pub fn probe(contents: &[u8]) -> VaultFormat {
             version: (3, 1),
             upgrade: true,
         },
-        Ok(DatabaseVersion::KDB(minor)) => VaultFormat::Unsupported { version: (1, minor) },
-        Ok(DatabaseVersion::KDB2(minor)) => VaultFormat::Unsupported { version: (2, minor) },
-        Ok(DatabaseVersion::KDB3(minor)) => VaultFormat::Unsupported { version: (3, minor) },
-        Ok(DatabaseVersion::KDB4(minor)) => VaultFormat::Unsupported { version: (4, minor) },
+        Ok(DatabaseVersion::KDB(minor)) => VaultFormat::Unsupported {
+            version: (1, minor),
+        },
+        Ok(DatabaseVersion::KDB2(minor)) => VaultFormat::Unsupported {
+            version: (2, minor),
+        },
+        Ok(DatabaseVersion::KDB3(minor)) => VaultFormat::Unsupported {
+            version: (3, minor),
+        },
+        Ok(DatabaseVersion::KDB4(minor)) => VaultFormat::Unsupported {
+            version: (4, minor),
+        },
         Err(_) => VaultFormat::NotKeePass,
     }
 }
@@ -384,12 +392,16 @@ mod tests {
         );
         assert_eq!(probe(b"not a vault at all"), VaultFormat::NotKeePass);
         // KeePass 1: its own signature.
-        let mut kdb = vec![0x03, 0xd9, 0xa2, 0x9a, 0x65, 0xfb, 0x4b, 0xb5, 0x01, 0x00, 0x03, 0x00];
+        let mut kdb = vec![
+            0x03, 0xd9, 0xa2, 0x9a, 0x65, 0xfb, 0x4b, 0xb5, 0x01, 0x00, 0x03, 0x00,
+        ];
         kdb.resize(124, 0);
-        assert!(matches!(probe(&kdb), VaultFormat::Unsupported { version: (1, _) }));
+        assert!(matches!(
+            probe(&kdb),
+            VaultFormat::Unsupported { version: (1, _) }
+        ));
         // A wrong key is said as such.
         let wrong = open(&saved, &VaultKey::new().with_password("not it")).unwrap_err();
         assert_eq!(wrong.kind(), "wrongKey");
     }
 }
-
