@@ -2282,15 +2282,15 @@ caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
 ### POST /api/calendar/calendars/{id}/events/sync
 
 `{ addressId, changes: [{"create": SealedEventV1} | {"update": {id,
-baseRevision, event}} | {"delete": {id}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
+baseRevision, event}} | {"delete": {id, baseRevision}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
 alone (Proton's sync): `{ results: [{ status, event?, code?, error? }] }` in
 the order sent. A created or changed event's signed parts must be signed by
 one of the address's keys, its key packets be to the calendar key, and it
 must keep its UID; E1 refuses `RRULE`, `RECURRENCE-ID`, `EXDATE` and
 `ORGANIZER` (recurrence comes in E2, invitations in E4). `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
-`calendarEventsPerCalendar` (25,000). An update names the event's
-`revision` it was made from: another one is `409 revision_conflict` (with
+`calendarEventsPerCalendar` (25,000). An update or a delete names
+the event's `revision` it was made from: another one is `409 revision_conflict` (with
 the stored `revision`), so a replayed or older change never overwrites a
 newer one; a `SEQUENCE` lower than the stored one is `409 sequenceBehind`.
 An event starts at revision 1 and each update adds one. The caller's

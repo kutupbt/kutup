@@ -62,7 +62,8 @@ struct Names {
 }
 
 /// Makes a calendar owned by the signed-in member's address key, under the
-/// id the client drew: its key, its passphrase sealed to that key and
+/// id the client drew: its key, its passphrase sealed to that key (the
+/// public key derived from the secret just opened, never one given) and
 /// signed, and its sealed name and description bound to the id and key.
 #[wasm_bindgen(js_name = createCalendar)]
 #[allow(clippy::too_many_arguments)]
@@ -72,7 +73,6 @@ pub fn create_calendar(
     address: &str,
     envelope_base64: &str,
     fingerprint_hex: &str,
-    owner_public_key_base64: &str,
     calendar_id: &str,
     names: JsValue,
     created_at_secs: u32,
@@ -84,13 +84,11 @@ pub fn create_calendar(
         envelope_base64,
         fingerprint_hex,
     )?;
-    let owner_public = decode_canonical_base64(owner_public_key_base64, "owner public key")?;
     let names: Names = from_js(names, "names")?;
     let passphrase = Passphrase::generate();
     let key =
         calendar::generate_calendar_key(&passphrase, created_at_secs).map_err(crypto_error)?;
-    let sealed = calendar::seal_passphrase(&passphrase, &[&owner_public], &owner_secret)
-        .map_err(crypto_error)?;
+    let sealed = calendar::seal_passphrase(&passphrase, &owner_secret).map_err(crypto_error)?;
     let metadata = key
         .unlocked
         .seal_metadata(calendar_id, &names.name, &names.description, &owner_secret)

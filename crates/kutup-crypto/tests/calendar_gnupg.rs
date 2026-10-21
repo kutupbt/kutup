@@ -8,9 +8,9 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use kutup_crypto::calendar::testing::{encrypt_data_packet, key_packet_to};
 use kutup_crypto::calendar::{
-    decrypt_data_packet, encrypt_data_packet, generate_calendar_key, key_packet_to,
-    unlock_calendar_key, Passphrase, SessionKey,
+    decrypt_data_packet, generate_calendar_key, unlock_calendar_key, Passphrase, SessionKey,
 };
 use kutup_crypto::mail_key::{armor_public_key, packet_extent};
 

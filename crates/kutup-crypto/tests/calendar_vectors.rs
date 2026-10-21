@@ -11,9 +11,9 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use kutup_crypto::calendar::{
-    check_signed_parts, generate_calendar_key, inspect_calendar_public_key, key_packet_to,
-    open_passphrase, seal_passphrase, unlock_calendar_key, EventPart, EventParts, Passphrase,
-    SealedEvent, SealedMetadata, SessionKey,
+    check_signed_parts, generate_calendar_key, inspect_calendar_public_key, open_passphrase,
+    seal_passphrase, unlock_calendar_key, EventPart, EventParts, Passphrase, SealedEvent,
+    SealedMetadata, SessionKey,
 };
 use kutup_crypto::calendar_event::{
     CalendarEncrypted, CalendarSigned, EventFieldsV1, EventTime, SharedEncrypted, SharedSigned,
@@ -197,7 +197,7 @@ fn write_vectors() {
     let stranger = generate_address_key("eve@kutup.dev", 1_790_000_000).unwrap();
     let passphrase = Passphrase::generate();
     let calendar = generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
-    let sealed = seal_passphrase(&passphrase, &[&owner_public], &owner_secret).unwrap();
+    let sealed = seal_passphrase(&passphrase, &owner_secret).unwrap();
     let calendar_id = "6f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d";
     let sealed_metadata = calendar
         .unlocked
@@ -239,8 +239,11 @@ fn write_vectors() {
     refused.push(("a part not in its canonical form, signed", respelled));
     // A key packet to another key: the calendar can't open it.
     let mut elsewhere = event.clone();
-    elsewhere.shared_key_packet =
-        key_packet_to(&SessionKey::generate(), &stranger.public_key).unwrap();
+    elsewhere.shared_key_packet = kutup_crypto::calendar::testing::key_packet_to(
+        &SessionKey::generate(),
+        &stranger.public_key,
+    )
+    .unwrap();
     refused.push(("a key packet for another key", elsewhere));
 
     let text = |part: &EventPart| String::from_utf8(part.data.clone()).unwrap();

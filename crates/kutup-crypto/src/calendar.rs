@@ -400,7 +400,7 @@ pub fn unlock_calendar_key(
 /// A key packet carrying `session_key` to `public_key`'s encryption subkey
 /// (version 3, as the address keys use): a member's copy of a calendar's
 /// passphrase, or an event's key packet to its calendar.
-pub fn key_packet_to(session_key: &SessionKey, public_key: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn key_packet_to(session_key: &SessionKey, public_key: &[u8]) -> Result<Vec<u8>> {
     let recipient = parse_recipient(public_key)?;
     let subkey = encryption_subkey(&recipient)?;
     let raw = session_key.0.to_vec().into();
@@ -455,7 +455,7 @@ pub fn open_key_packet(key_packet: &[u8], secret_key: &[u8]) -> Result<SessionKe
 
 /// A data packet: `plaintext` as a binary literal, encrypted with
 /// `session_key` (SEIPDv1, AES-256), and nothing else.
-pub fn encrypt_data_packet(session_key: &SessionKey, plaintext: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn encrypt_data_packet(session_key: &SessionKey, plaintext: &[u8]) -> Result<Vec<u8>> {
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
         .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
     builder
@@ -513,9 +513,23 @@ pub struct SealedPassphrase {
     pub key_packets: Vec<Vec<u8>>,
 }
 
-/// Seals `passphrase` for `member_public_keys` (each member's primary
-/// address key), signed by the owner's unlocked address key.
+/// Seals a new calendar's `passphrase` for its owner, signed by the owner's
+/// unlocked address key: the one key packet is to the public key derived
+/// from that secret, never to one a server hands over (#307 review N1).
 pub fn seal_passphrase(
+    passphrase: &Passphrase,
+    owner_secret_key: &[u8],
+) -> Result<SealedPassphrase> {
+    let owner = SignedSecretKey::from_bytes(owner_secret_key)
+        .map_err(|_| CryptoError::InvalidInput("secret key does not parse".into()))?;
+    let owner_public = SignedPublicKey::from(owner).to_bytes().map_err(backend)?;
+    seal_passphrase_to(passphrase, &[&owner_public], owner_secret_key)
+}
+
+/// Seals `passphrase` for `member_public_keys` (each member's primary
+/// address key, verified by the caller), signed by the owner's unlocked
+/// address key. Sharing (E3) adds members through it.
+pub(crate) fn seal_passphrase_to(
     passphrase: &Passphrase,
     member_public_keys: &[&[u8]],
     owner_secret_key: &[u8],
@@ -938,6 +952,25 @@ impl SealedMetadataV1 {
     }
 }
 
+/// The packet builders, for this crate's tests and the server's live tests
+/// that make malformed or misaddressed values (feature `test-vectors`, never
+/// on for a client): a client seals only through [`UnlockedCalendarKey`] and
+/// [`seal_passphrase`].
+#[cfg(feature = "test-vectors")]
+pub mod testing {
+    use super::{Result, SessionKey};
+
+    /// A key packet carrying `session_key` to `public_key`.
+    pub fn key_packet_to(session_key: &SessionKey, public_key: &[u8]) -> Result<Vec<u8>> {
+        super::key_packet_to(session_key, public_key)
+    }
+
+    /// A data packet of `plaintext` under `session_key`.
+    pub fn encrypt_data_packet(session_key: &SessionKey, plaintext: &[u8]) -> Result<Vec<u8>> {
+        super::encrypt_data_packet(session_key, plaintext)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -989,7 +1022,7 @@ mod tests {
         let member = generate_address_key("bob@example.org", 1_760_000_000).unwrap();
         let stranger = generate_address_key("eve@example.org", 1_760_000_000).unwrap();
         let passphrase = Passphrase::generate();
-        let sealed = seal_passphrase(
+        let sealed = seal_passphrase_to(
             &passphrase,
             &[&owner.public_key, &member.public_key],
             &owner.secret_key,
@@ -1140,6 +1173,31 @@ mod tests {
         assert!(servers_unlocked
             .open_metadata(&metadata, "c1", &[&author.public_key])
             .is_err());
+    }
+
+    /// A new calendar's passphrase is to the owner's own key, derived from
+    /// the secret that signs it: there is no public key to substitute.
+    #[test]
+    fn the_passphrase_is_sealed_to_the_owners_own_key() {
+        let owner = generate_address_key("ada@example.org", 1_760_000_000).unwrap();
+        let servers = generate_address_key("eve@example.org", 1_760_000_000).unwrap();
+        let passphrase = Passphrase::generate();
+        let sealed = seal_passphrase(&passphrase, &owner.secret_key).unwrap();
+        assert_eq!(sealed.key_packets.len(), 1);
+        assert_eq!(
+            key_packet_key_id(&sealed.key_packets[0]).unwrap(),
+            encryption_key_id(&owner.public_key).unwrap()
+        );
+        let opened = open_passphrase(
+            &sealed.key_packets[0],
+            &sealed.data_packet,
+            sealed.signature.as_bytes(),
+            &owner.secret_key,
+            &[&owner.public_key],
+        )
+        .unwrap();
+        assert_eq!(opened.as_str(), passphrase.as_str());
+        assert!(open_key_packet(&sealed.key_packets[0], &servers.secret_key).is_err());
     }
 
     /// Only a key locked as this crate locks one unlocks: no other S2K, so a

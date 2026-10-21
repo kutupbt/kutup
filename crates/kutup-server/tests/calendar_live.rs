@@ -84,8 +84,7 @@ fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalend
     let id = uuid::Uuid::new_v4();
     let passphrase = Passphrase::generate();
     let key = cal::generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
-    let sealed =
-        cal::seal_passphrase(&passphrase, &[&owner.public_key], &owner.secret_key).unwrap();
+    let sealed = cal::seal_passphrase(&passphrase, &owner.secret_key).unwrap();
     let metadata = key
         .unlocked
         .seal_metadata(&id.to_string(), name, "Family", &owner.secret_key)
@@ -367,7 +366,7 @@ fn calendars_and_events() {
     ))
     .unwrap();
     elsewhere.shared_key_packet =
-        b64(&cal::key_packet_to(&SessionKey::generate(), &eve.public_key).unwrap());
+        b64(&cal::testing::key_packet_to(&SessionKey::generate(), &eve.public_key).unwrap());
     let mut repeating = fields(
         "e3@kutup.test",
         "2026-10-30T09:00:00",
@@ -543,12 +542,12 @@ fn calendars_and_events() {
         c.post(format!("{base}/api/calendar/calendars/{id}/events/sync")),
         &eve.user.token,
     )
-    .json(&json!({ "addressId": eve.address_id, "changes": [{ "delete": { "id": event_id } }] }))
+    .json(&json!({ "addressId": eve.address_id, "changes": [{ "delete": { "id": event_id, "baseRevision": 3 } }] }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
     let eleven: Vec<Value> = (0..11)
-        .map(|_| json!({ "delete": { "id": event_id } }))
+        .map(|_| json!({ "delete": { "id": event_id, "baseRevision": 3 } }))
         .collect();
     let r = bearer(
         c.post(format!("{base}/api/calendar/calendars/{id}/events/sync")),
@@ -578,13 +577,22 @@ fn calendars_and_events() {
     .unwrap();
     assert_eq!(r.status(), StatusCode::CONFLICT);
 
+    // A delete from an older revision: refused, the event kept.
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "delete": { "id": event_id, "baseRevision": 2 } }]),
+    );
+    assert_eq!(results[0]["code"], "revision_conflict", "{results:?}");
     // Deleted with its events; the storage goes back.
     let results = sync(
         &c,
         &base,
         &ada,
         &id,
-        json!([{ "delete": { "id": event_id } }]),
+        json!([{ "delete": { "id": event_id, "baseRevision": 3 } }]),
     );
     assert_eq!(results[0]["status"], 200);
     let r = bearer(

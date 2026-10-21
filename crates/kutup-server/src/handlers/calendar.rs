@@ -835,7 +835,8 @@ pub async fn event(
 }
 
 /// One change in an events sync (Proton's `SyncMultipleEvents`):
-/// `{"create": event}`, `{"update": {"id", "event"}}` or `{"delete": {"id"}}`.
+/// `{"create": event}`, `{"update": {"id", "baseRevision", "event"}}` or
+/// `{"delete": {"id", "baseRevision"}}`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum EventChange {
@@ -848,8 +849,12 @@ pub enum EventChange {
         base_revision: i64,
         event: SealedEventV1,
     },
+    /// Names the revision it was made from, as an update does, so a delete
+    /// never removes a change another device just saved.
+    #[serde(rename_all = "camelCase")]
     Delete {
         id: Uuid,
+        base_revision: i64,
     },
 }
 
@@ -1151,15 +1156,28 @@ async fn apply(
             .await?;
             Some(*id)
         }
-        EventChange::Delete { id } => {
-            let bytes: Option<i64> = sqlx::query_scalar(
-                "DELETE FROM calendar_events WHERE id = $1 AND calendar_id = $2 RETURNING bytes",
+        EventChange::Delete { id, base_revision } => {
+            let current: Option<(i64, i64)> = sqlx::query_as(
+                "SELECT revision, bytes FROM calendar_events
+                  WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
             )
             .bind(id)
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let bytes = bytes.ok_or_else(|| AppError::not_found("not found"))?;
+            let Some((revision, bytes)) = current else {
+                return Err(AppError::not_found("not found"));
+            };
+            if revision != *base_revision {
+                return Err(revisions::conflict(
+                    "this event was changed elsewhere",
+                    revision,
+                ));
+            }
+            sqlx::query("DELETE FROM calendar_events WHERE id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             charge(&mut tx, owner, -bytes).await?;
             None
         }
