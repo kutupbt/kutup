@@ -760,6 +760,7 @@ fn several_entries_move_together_and_a_bad_one_moves_none() {
         ),
         Err(EditError::NotFound("entry"))
     ));
+    assert_eq!(shown(&db), before, "a refused move changes nothing");
     run(&mut db, Op::DeleteEntry { id: c.clone() }, 5);
     let bin = view::view(&db).recycle_bin_id.unwrap();
     let before_bin = shown(&db);
@@ -901,4 +902,118 @@ fn batch_operations_read_from_the_websites_json() {
             ids: vec!["a".into()]
         }
     );
+}
+
+#[test]
+fn a_move_records_where_each_entry_was_and_when() {
+    let mut db = vault();
+    let root = view::view(&db).root_group_id;
+    let work = group(&mut db, &root, "İş", 1);
+    let a = add(&mut db, "a", 2);
+    run(
+        &mut db,
+        Op::MoveEntries {
+            ids: vec![a.clone()],
+            group_id: work.clone(),
+        },
+        3,
+    );
+    let entry = &db.entries[&eid(&a)];
+    assert_eq!(entry.times.location_changed, Some(at(3)));
+    assert_eq!(
+        entry.previous_parent_group.map(|g| g.uuid().to_string()),
+        Some(root.clone())
+    );
+    run(
+        &mut db,
+        Op::DeleteEntries {
+            ids: vec![a.clone()],
+        },
+        4,
+    );
+    let entry = &db.entries[&eid(&a)];
+    assert_eq!(entry.times.location_changed, Some(at(4)));
+    assert_eq!(
+        entry.previous_parent_group.map(|g| g.uuid().to_string()),
+        Some(work)
+    );
+}
+
+#[test]
+fn several_deleted_with_no_bin_yet_make_one_bin() {
+    let mut db = vault();
+    let (a, b) = (add(&mut db, "a", 1), add(&mut db, "b", 2));
+    assert_eq!(view::view(&db).recycle_bin_id, None);
+    run(
+        &mut db,
+        Op::DeleteEntries {
+            ids: vec![a.clone(), b.clone()],
+        },
+        3,
+    );
+    let v = view::view(&db);
+    assert_eq!(v.groups.iter().filter(|g| g.is_recycle_bin).count(), 1);
+    assert!(entry(&v, &a).in_recycle_bin && entry(&v, &b).in_recycle_bin);
+}
+
+#[test]
+fn with_the_bin_off_deleting_is_for_good_and_recycling_is_refused() {
+    let mut db = vault();
+    let (a, b, c) = (
+        add(&mut db, "a", 1),
+        add(&mut db, "b", 2),
+        add(&mut db, "c", 3),
+    );
+    // The bin made, then switched off (KeePassXC leaves the group there).
+    run(
+        &mut db,
+        Op::DeleteEntries {
+            ids: vec![c.clone()],
+        },
+        4,
+    );
+    db.meta.recyclebin_enabled = Some(false);
+    assert!(view::view(&db).recycle_bin_id.is_some());
+
+    // Recycling (a drag onto the bin) never deletes for good: refused whole.
+    let before = shown(&db);
+    assert!(apply(
+        &mut db,
+        &Op::RecycleEntries {
+            ids: vec![a.clone()]
+        },
+        at(5)
+    )
+    .is_err());
+    assert_eq!(shown(&db), before);
+
+    // Deleting, asked first in the website, is for good.
+    run(
+        &mut db,
+        Op::DeleteEntries {
+            ids: vec![a.clone()],
+        },
+        6,
+    );
+    assert!(view::view(&db).entries.iter().all(|e| e.id != a));
+    assert!(db.deleted_objects.contains_key(&eid(&a).uuid()));
+
+    // Back on: recycled, but not what is in the bin already.
+    db.meta.recyclebin_enabled = Some(true);
+    assert!(apply(
+        &mut db,
+        &Op::RecycleEntries {
+            ids: vec![b.clone(), c.clone()]
+        },
+        at(7)
+    )
+    .is_err());
+    run(
+        &mut db,
+        Op::RecycleEntries {
+            ids: vec![b.clone()],
+        },
+        8,
+    );
+    assert!(entry(&view::view(&db), &b).in_recycle_bin);
 }

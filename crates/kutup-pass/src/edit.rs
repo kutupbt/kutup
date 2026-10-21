@@ -73,6 +73,13 @@ pub enum Op {
     DeleteEntries {
         ids: Vec<String>,
     },
+    /// Moves several entries into the recycle bin, as one edit, and nothing
+    /// else: refused when recycling is off or an entry is in the bin
+    /// already, so it never deletes for good (a drag onto the bin). All or
+    /// nothing.
+    RecycleEntries {
+        ids: Vec<String>,
+    },
     /// Takes entries out of the recycle bin, each back to the group it was
     /// in (KDBX's previous parent group), or to the top group when that one
     /// is gone or itself in the bin. All or nothing.
@@ -323,6 +330,27 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
                 changed |= delete_entry(db, id, now).changed;
             }
             Applied { id: None, changed }
+        }
+        Op::RecycleEntries { ids } => {
+            let ids = entry_ids(db, ids)?;
+            if !recycle(db) {
+                return Err(invalid(
+                    "the recycle bin is off: entries would be deleted for good",
+                ));
+            }
+            if ids
+                .iter()
+                .any(|id| group_in_recycle_bin(db, db.entries[id].parent))
+            {
+                return Err(invalid("an entry is in the recycle bin already"));
+            }
+            for &id in &ids {
+                delete_entry(db, id, now);
+            }
+            Applied {
+                id: None,
+                changed: !ids.is_empty(),
+            }
         }
         Op::RestoreEntries { ids } => {
             let ids = entry_ids(db, ids)?;

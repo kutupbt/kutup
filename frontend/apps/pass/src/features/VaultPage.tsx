@@ -341,7 +341,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 <button
                   type="button"
                   onClick={() => selectGroup(bin)}
-                  {...dropProps({ id: bin, name: t('groups.recycleBin'), bin: true })}
+                  {...(view.recycleBinEnabled ? dropProps({ id: bin, name: t('groups.recycleBin'), bin: true }) : {})}
                   className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', dropHere, viewingBin && 'bg-accent font-medium')}
                 >
                   <Trash className="size-4 shrink-0" aria-hidden />

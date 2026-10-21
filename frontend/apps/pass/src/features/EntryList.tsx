@@ -68,7 +68,11 @@ export function EntryList({
   const remove = () => {
     const count = selected.length
     setConfirming(null)
-    void run({ op: 'deleteEntries', ids: selected }, t(forGood ? 'bulk.deletedForGood' : 'bulk.recycled', { count }))
+    // Emptied meanwhile (another device's save): nothing to delete.
+    if (count === 0) return
+    // Recycling never turns into a delete for good (the bin switched off
+    // meanwhile on another device): the core refuses it instead.
+    void run(forGood ? { op: 'deleteEntries', ids: selected } : { op: 'recycleEntries', ids: selected }, t(forGood ? 'bulk.deletedForGood' : 'bulk.recycled', { count }))
   }
 
   const click = (event: MouseEvent, id: string) => {
@@ -143,7 +147,6 @@ export function EntryList({
               className={cn('group/entry flex items-center border-b border-border', checked && 'bg-accent/40')}
               draggable={editable}
               onDragStart={editable ? (event) => dragStart(event, e.id) : undefined}
-              onKeyDown={keys}
             >
               {editable ? (
                 <span className="flex pl-3">

@@ -109,6 +109,8 @@ export type Op =
   | { op: 'deleteEntries'; ids: string[] }
   /** Entries out of the recycle bin, each back to the group it was in (or the top group). */
   | { op: 'restoreEntries'; ids: string[] }
+  /** Several entries into the recycle bin and nothing else: refused when it is off (a drag never deletes for good). */
+  | { op: 'recycleEntries'; ids: string[] }
   | { op: 'restoreHistory'; id: string; index: number }
   | { op: 'clearReview'; id: string }
   | { op: 'addAttachment'; entryId: string; name: string; data: string }

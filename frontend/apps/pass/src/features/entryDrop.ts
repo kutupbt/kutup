@@ -43,7 +43,7 @@ export function useEntryDrop(session: VaultSession, onDone: (message: string) =>
             })
             if (moving.length === 0) return
             void session
-              .apply(target.bin ? { op: 'deleteEntries', ids: moving } : { op: 'moveEntries', ids: moving, groupId: target.id })
+              .apply(target.bin ? { op: 'recycleEntries', ids: moving } : { op: 'moveEntries', ids: moving, groupId: target.id })
               .then(
                 () => onDone(target.bin ? t('bulk.recycled', { count: moving.length }) : t('bulk.moved', { count: moving.length, group: target.name })),
                 () => toast.error(t('entry.saveFailed')),

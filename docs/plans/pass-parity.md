@@ -132,8 +132,9 @@ but offers no way to see or change it.
 Verified in `features/EntryList.tsx` (the list, its selection and the
 selection bar), `features/entryDrop.ts` (groups as drop targets) and
 `features/EntryDetail.tsx` (one entry). Several entries change as one edit
-(one save, one merge step): `moveEntries`, `deleteEntries` and
-`restoreEntries` in `crates/kutup-pass/src/edit.rs`, all or nothing. A
+(one save, one merge step): `moveEntries`, `deleteEntries`,
+`recycleEntries` (never for good) and `restoreEntries` in
+`crates/kutup-pass/src/edit.rs`, all or nothing. A
 read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
@@ -147,7 +148,7 @@ read-only vault has no selection and no dragging.
 | Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
 | Clone several | Clone | ❌ | |
-| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group or the recycle bin, never deleting for good; not groups into groups, no Ctrl to copy |
+| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group, or onto the recycle bin while it is on (`recycleEntries`, which refuses rather than delete for good); not groups into groups, no Ctrl to copy |
 | Sort the list | click a column | ❌ | always by title, A–Z (natural order); no other order |
 | Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ❌ | each row shows the icon, title and user name (else URL) |
 | Move entries up and down (manual order) | Entries → Move up/down | ❌ | |
